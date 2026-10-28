@@ -68,13 +68,17 @@ describe("external quality integration configuration", () => {
     const parsed = JSON.parse(sources.packageJson);
     parsed.devDependencies.fallow = "3.9.1";
     expect(findings({ packageJson: JSON.stringify(parsed) })).toContain(
-      "fallow must be pinned to 3.34.0",
+      "fallow must be pinned to 3.35.0",
     );
   });
 
   it("rejects exclusions, baselines, or weakened semantic duplication configuration", () => {
     for (const change of [
       { ignore: ["**/*"] },
+      { ignoreDefaults: true },
+      { ignoreDefaults: undefined },
+      { ignore: undefined },
+      { ignoredClones: undefined },
       { ignoredClones: ["dup:12345678:2"] },
       { minOccurrences: 3 },
       { minTokens: 101 },
@@ -111,7 +115,7 @@ describe("external quality integration configuration", () => {
     parsed.scripts["check:semantic-duplication"] = "true";
     expect(findings({ packageJson: JSON.stringify(parsed) })).toEqual(
       expect.arrayContaining([
-        "fallow must be pinned to 3.34.0",
+        "fallow must be pinned to 3.35.0",
         "yaml must be pinned to 2.9.1 for semantic reviewer-policy validation",
         "check:external-quality-config script is missing or redirected",
         "check:review-bot-suppression script is missing or redirected",

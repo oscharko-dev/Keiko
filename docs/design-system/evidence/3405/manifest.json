@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-10-19T09:02:15.177Z",
+  "generatedAt": "2026-10-24T20:35:14.536Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [
@@ -29,16 +29,109 @@
     "sessionStarts": 2,
     "remediationActions": 1
   },
-  "sourceSha256": {
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "d29322b199f0194ab798874e4426c3fd2a8764ede31c9c58869291d90b055c61",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "5c2f42e25ec35b7ab63fa95976b9d677f99ec3e78eb8d43eb0a1e6ae8122c4db",
-    "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
-    "packages/keiko-ui/src/app/globals.css": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
-    "packages/keiko-ui/src/lib/api.ts": "11aec68cb1c7dc2620d1eb4cf9781571fdb02e775445b4f5f8a807c8dd8f00e1",
-    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "31bf6a271566d08c7b7d90c2722a18c5be82f72b7b0fc0913c082951a1a216b7",
-    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "d977e271648dd69865ea517d9568e6db464555992e92f57216eb28eec7a5af1c"
-  },
+  "sourceProvenanceVersion": 2,
+  "sourceFiles": [
+    {
+      "path": "scripts/lib/update-ui-evidence-sources.json",
+      "sha256": "03f2dee4e8c4109fdcb7e5327e88c3f15d4039f4d10a7f376d6bd26e6b77b351"
+    },
+    {
+      "path": "design-system/product-token-bindings.json",
+      "sha256": "0c0aae52aba97d91f8b4d033ca21ddc35171561129d94c8becf65659bb3d8584"
+    },
+    {
+      "path": "design-system/keiko-tokens.css",
+      "sha256": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d"
+    },
+    {
+      "path": "design-system/keiko-semantic-tokens.css",
+      "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
+    },
+    {
+      "path": "design-system/keiko-editor-tokens.css",
+      "sha256": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
+    },
+    {
+      "path": "design-system/keiko-ai.css",
+      "sha256": "182e1bf6a116ae9f2cc94006214a64d3c0b710b495090bd13bc72adc8dd9c2da"
+    },
+    {
+      "path": "design-system/keiko-data.css",
+      "sha256": "19182f9152d143b309b2fbf144281d209471808e4c366a936a6b805ff8888270"
+    },
+    {
+      "path": "design-system/keiko-dataviz.css",
+      "sha256": "18d86a59ff212192ab553e80c127b1c6c6a996d7a950c8d9744f1b666d5081b1"
+    },
+    {
+      "path": "design-system/keiko-inputs.css",
+      "sha256": "1051fad455b2a230e130054e6e36bc6f06a8600799a71139bba3a17b13a81408"
+    },
+    {
+      "path": "design-system/keiko-nav.css",
+      "sha256": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
+    },
+    {
+      "path": "packages/keiko-ui/design-tokens.mjs",
+      "sha256": "a9421356f4bc74d96a7863a18c36817098bce72ab2e40464fd9a5ced32ed944c"
+    },
+    {
+      "path": "packages/keiko-ui/read-stylesheet.mjs",
+      "sha256": "6a852d3ecd88fc78cd3881f7e609e03d8da1f11bd7154d7025a752cb269949cc"
+    },
+    {
+      "path": "packages/keiko-ui/next.config.mjs",
+      "sha256": "5d2f34ac59dbccc52eb1b485b399caac66dd11b70906d3bea9337e097283191e"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
+      "sha256": "f871071c366e4caa1c9f73d678a5072c152141e1bbcad1e870e6dc1a563e6084"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
+      "sha256": "20cc4f1aabe0db16174f7fb1374ef0a6249c7d03cea64f21b0c42ea810e43a19"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
+      "sha256": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
+      "sha256": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",
+      "sha256": "aab4708993761c799c966f08002759a330910ac5a005a727cecb4ccd453452b8"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/globals.css",
+      "sha256": "b4db5a8c3b03e43a4a518a26bf2ada6aef94e0b33f31a5e86a8a444b58e1aa90"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/api.ts",
+      "sha256": "d54530be5054c1ca507daf901edf8e906a6076ca80184d8b5f002b01d75414c0"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
+      "sha256": "fbf21781319cd4908ee21c437f553e31af12c013315623beb91fe54e611422aa"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
+      "sha256": "638ed6162d8336b6a25b0f484899ccd0c0f62cfb0e13b5c9633255969b4c7181"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
+      "sha256": "b60db347b57efec1a8d6d08c91a31e87fa36c53bea0e894234b55636a8049550"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
+      "sha256": "1e4022b0e92ac4f3f9f2707dad38dfaa6944899e6b57b6a5efb89ffb1f419d41"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
+      "sha256": "48a5b89217f4e144af6b385199e1803cde0389649d363c9268e30120a02e3b46"
+    }
+  ],
   "harnessProvenanceSha256": {
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
     "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",

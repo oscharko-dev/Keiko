@@ -701,3 +701,42 @@ for (const surface of ["source", "public"] as const) {
     ]);
   });
 }
+
+describe("native permission requests (#3897)", () => {
+  const nativeEvent = (permissionRequest: Record<string, unknown>): unknown => ({
+    schemaVersion: "1",
+    eventId: "event-1",
+    runId: "run-1",
+    occurredAt: "2026-10-23T12:00:00.000Z",
+    kind: "permission-requested",
+    permissionRequest: {
+      requestId: "permission-91",
+      kind: "workspace-write",
+      actionClass: "workspace-write",
+      reasonCode: "approval-required",
+      expiresAt: "2026-10-23T12:01:00.000Z",
+      ...permissionRequest,
+    },
+  });
+
+  it("admits an edit ask that names its OpenCode permission without a command label", () => {
+    expect(validateCodingWorkbenchRuntimeEvent(nativeEvent({ nativePermission: "edit" })).ok).toBe(
+      true,
+    );
+    expect(
+      validateCodingWorkbenchRuntimeEvent(nativeEvent({ nativePermission: "external_directory" }))
+        .ok,
+    ).toBe(true);
+  });
+
+  it("refuses a malformed permission name and a native permission beside a supervised kind", () => {
+    for (const nativePermission of ["", "Edit", "edit now", "x".repeat(40), 42]) {
+      expect(validateCodingWorkbenchRuntimeEvent(nativeEvent({ nativePermission })).ok).toBe(false);
+    }
+    expect(
+      validateCodingWorkbenchRuntimeEvent(
+        nativeEvent({ nativePermission: "edit", actionKind: "file-edit" }),
+      ).ok,
+    ).toBe(false);
+  });
+});

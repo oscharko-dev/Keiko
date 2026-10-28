@@ -142,7 +142,7 @@ function validatePackage(packageJson) {
   if (parsed.value === undefined) return parsed.problems;
   const duplicationCommand = "node scripts/check-semantic-duplication.mjs";
   const checks = [
-    [parsed.value.devDependencies?.fallow, "3.34.0", "fallow must be pinned to 3.34.0"],
+    [parsed.value.devDependencies?.fallow, "3.35.0", "fallow must be pinned to 3.35.0"],
     [
       parsed.value.devDependencies?.yaml,
       "2.9.1",

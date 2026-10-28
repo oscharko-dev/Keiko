@@ -18,7 +18,12 @@ import {
 // The symbol-relation vocabulary is owned by keiko-workspace (repoSearchPolicy.ts), where the
 // retrieval ranker applies the same source-over-prose bias to the same question shape. One
 // definition, imported inward, so planner classification and candidate ranking cannot drift.
-import { hasSymbolRelationshipQuery, type SearchLimits } from "@oscharko-dev/keiko-workspace";
+import {
+  hasSymbolRelationshipQuery,
+  hasSourceAdviceAttribution,
+  isSourceAdviceNoun,
+  type SearchLimits,
+} from "@oscharko-dev/keiko-workspace";
 
 import {
   extractAnchors,
@@ -767,19 +772,11 @@ const GENERAL_ADVICE_QUESTION_PATTERNS = [
   /^how (?:should|could|can) (?:a|an|one|we) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu,
   /^wie (?:sollte|könnte|kann) (?:man|wir|ein|eine) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu,
 ];
-const SOURCE_ADVICE_ATTRIBUTION_RE =
-  /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b/iu;
 const SOURCE_ADVICE_DETERMINER_PATTERNS = [
   /^(?:the|this|these|that|those|our|my|your|his|her|its|their)$/iu,
   /^(?:der|die|das|den|dem|des|dies(?:e|en|em|er|es))$/iu,
   /^(?:(?:unser|mein|dein|sein|ihr)(?:e|en|em|er|es)?)$/iu,
   /^(?:euer(?:e|en|em|er|es)?|eur(?:e|en|em|er|es))$/iu,
-];
-const SOURCE_ADVICE_NOUN_PATTERNS = [
-  /^(?:sources?|manuals?|documents?|files?|folders?)$/iu,
-  /^(?:repositor(?:y|ies)|evidence|codes?|implementations?)$/iu,
-  /^(?:handbuch(?:e?s)?|handbüchern?|quellen?|datei(?:en)?|ordner[sn]?)$/iu,
-  /^(?:dokument(?:e[sn]?|s)?|repositorys?|implementierung(?:en)?)$/iu,
 ];
 const SOURCE_ADVICE_TOKEN_RE =
   /[\p{L}\p{M}\p{N}_-]+(?:['’][\p{L}\p{M}\p{N}_-]+)*|[^\p{L}\p{M}\p{N}\s_-]/gu;
@@ -793,11 +790,11 @@ const SOURCE_ADVICE_BOUNDARY_PATTERNS = [
 
 /** Source modifiers stay inside their noun phrase, never across a predicate or preposition. */
 function sourceConstrainedAdvice(clause: string): boolean {
-  if (SOURCE_ADVICE_ATTRIBUTION_RE.test(clause)) return true;
+  if (hasSourceAdviceAttribution(clause)) return true;
   let determined = false;
   for (const match of clause.toLowerCase().matchAll(SOURCE_ADVICE_TOKEN_RE)) {
     const token = match[0];
-    if (determined && matchesQueryPattern(token, SOURCE_ADVICE_NOUN_PATTERNS)) return true;
+    if (determined && isSourceAdviceNoun(token)) return true;
     if (matchesQueryPattern(token, SOURCE_ADVICE_DETERMINER_PATTERNS) || /['’]s$/u.test(token))
       determined = true;
     else if (sourceAdviceBoundary(token)) determined = false;

@@ -25,15 +25,15 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
-import {
-  STREAMING,
-  type HandlerOutcome,
-  type RouteContext,
-  type RouteDefinition,
-  type RouteResult,
-} from "../routes.js";
+import { STREAMING } from "../route-outcome.js";
+import type { HandlerOutcome, RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
-import { createSessionStreamWriter, createSessionStreamTransport } from "./sessionStreamWriter.js";
+import {
+  CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS,
+  createSessionStreamWriter,
+  writeContentFreeSessionStream,
+  type SessionStreamFlowCounts,
+} from "./sessionStreamWriter.js";
 import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
 import {
   APP_SESSION_ACTIVE_COOKIE_COUNT,
@@ -45,7 +45,7 @@ import {
 } from "./sessionCookie.js";
 
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
-export const CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS = 1_000;
+export { CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS };
 
 const CODING_APP_SESSION_CHANNEL_OPENED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -63,6 +63,12 @@ const CODING_APP_SESSION_CHANNEL_OPENED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// The live stream's flow counts (ADR-0141 D6), recorded on its closed line.
+const SESSION_STREAM_FLOW_FIELDS = {
+  drainWaitCount: { type: "integer", dataClass: "count", required: true },
+  coalescedSnapshotCount: { type: "integer", dataClass: "count", required: true },
+} as const;
+
 const CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -70,7 +76,7 @@ const CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.channelOpened.close",
-  fields: {},
+  fields: SESSION_STREAM_FLOW_FIELDS,
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -129,7 +135,7 @@ const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionRotate",
-  fields: {},
+  fields: { cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true } },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -195,7 +201,7 @@ function channelOpened(
   activityLog: ServerLogSink,
   correlationId: string | undefined,
   live: boolean,
-): () => void {
+): (flow: SessionStreamFlowCounts) => void {
   const openedAt = Date.now();
   const correlation = correlationId ?? UNKNOWN_CORRELATION_ID;
   activityLog.write(
@@ -205,7 +211,7 @@ function channelOpened(
       { live },
     ),
   );
-  return (): void => {
+  return (flow): void => {
     activityLog.write(
       activityLogEvent(
         CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION,
@@ -214,7 +220,10 @@ function channelOpened(
           correlationId: correlation,
           durationMs: Date.now() - openedAt,
         },
-        {},
+        {
+          drainWaitCount: flow.drainWaitCount,
+          coalescedSnapshotCount: flow.coalescedSnapshotCount,
+        },
       ),
     );
   };
@@ -363,6 +372,22 @@ export function handleCodingAppSessionChannelStream(
   return STREAMING;
 }
 
+// End a stream and keep its flush bounded: a peer that never drains what is still buffered is
+// destroyed after the same bound a live stream's frames get.
+function endWithinDrainBound(res: ServerResponse): void {
+  if (res.writableEnded || res.destroyed) return;
+  const timer = setTimeout(() => {
+    if (!res.destroyed && !res.writableFinished) res.destroy();
+  }, CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS);
+  timer.unref();
+  const settled = (): void => {
+    clearTimeout(timer);
+  };
+  res.once("finish", settled);
+  res.once("close", settled);
+  res.end();
+}
+
 function bindLiveStreamDrain(
   res: ServerResponse,
   req: IncomingMessage,
@@ -399,6 +424,22 @@ function bindLiveStreamDrain(
   return drain;
 }
 
+// No composed channel: the same content-free stream an unpaired reader gets (ADR-0141 D6).
+function openContentFreeSessionStream(
+  res: ServerResponse,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
+): void {
+  channelOpened(activityLog, correlationId, false);
+  writeContentFreeSessionStream(
+    res,
+    contentFreeCodingAppSessionChannelSnapshot(),
+    correlationId,
+    diagnostics,
+  );
+}
+
 export function openCodingAppSessionStream(
   res: ServerResponse,
   req: IncomingMessage,
@@ -409,36 +450,39 @@ export function openCodingAppSessionStream(
   activityLog: ServerLogSink = processServerLogSink(),
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  const transport = createSessionStreamTransport(res, correlationId, diagnostics);
   if (channel === undefined) {
-    channelOpened(activityLog, correlationId, false);
-    transport.write(contentFreeCodingAppSessionChannelSnapshot());
-    if (!res.writableEnded && !res.destroyed) res.end();
+    openContentFreeSessionStream(res, activityLog, correlationId, diagnostics);
     return;
   }
   let closeStream = (): void => undefined;
-  const writer = createSessionStreamWriter(
+  let reportStall = (): void => undefined;
+  const writer = createSessionStreamWriter({
     res,
-    () => {
+    correlationId,
+    diagnostics,
+    close: () => {
       closeStream();
     },
-    correlationId,
-  );
+    onStalled: () => {
+      reportStall();
+    },
+  });
   const subscription = channel.subscribe(cookieToken, writer.publish, {
     deferAdmissionReleaseOnBackpressure: true,
   });
-  if (writer.isClosing() || !transport.write(subscription.snapshot) || !subscription.live) {
+  reportStall = subscription.reportBackpressure;
+  if (writer.isClosing() || !writer.writeInitial(subscription.snapshot) || !subscription.live) {
     channelOpened(activityLog, correlationId, false);
     subscription.detach();
-    if (!res.writableEnded && !res.destroyed) res.end();
+    endWithinDrainBound(res);
     return;
   }
   const closed = channelOpened(activityLog, correlationId, true);
   const detach = (): void => {
     subscription.detach();
-    closed();
+    closed(writer.flowCounts());
   };
-  const heartbeat = setInterval(transport.heartbeat, 15_000);
+  const heartbeat = setInterval(writer.heartbeat, 15_000);
   heartbeat.unref();
   closeStream = bindLiveStreamDrain(res, req, subscription.stop, detach, heartbeat);
 }
@@ -455,14 +499,15 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
     });
     return ackResult();
   }
+  const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_ROTATED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      {},
+      { cookieMaxAgeSeconds: maxAgeSeconds },
     ),
   );
-  return ackResult(issuedCookie(ctx.req, result.cookieToken));
+  return ackResult(issuedCookie(ctx.req, result.cookieToken, maxAgeSeconds));
 }
 
 /** POST /sign-out — revoke the presented session and clear the cookie. */

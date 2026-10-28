@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded browser recovery, diagnostic context and concurrent chat creation repairs; no whole browser/updater/skill acceptance",
+  "parentHead": "ed455489d2a05efce20d182aecefde20be105a4e",
+  "sourceFreezeSha256": "4d2595c62cc69051b82a4088afdb99a0bb4bb9a994c85d93a48fac4cd1832eb4",
+  "sourceDigests": {
+    "docs/adr/ADR-0114-per-conversation-chat-sessions.md": "70ff3a987e727c4ab5f0cb2f2cd07f614494920ece944aa64b9546cd0155bc30",
+    "docs/observability/failure-surface-inventory.generated.json": "226f296ec3e942fabc7b8a900a93b3fb8a7c19fb4723275dd55911a30f0b6d03",
+    "docs/observability/op-catalog.generated.json": "99cb584e2191913b6ef06299fed713d2dd82340babf258cd6190f9691f189d42",
+    "packages/keiko-contracts/src/activity-log-operations.generated.ts": "c7b05255e86af4b08f7deec4bcdf4e3d0292efe8e5e7c5e4afaa178df58190d2",
+    "packages/keiko-contracts/src/activity-log-registry.generated.ts": "902770e83f6441a3fd78ca93ac1ec9707bb72c2b8bf063847c3cd259aca1ea4d",
+    "packages/keiko-contracts/src/client-defect-signature.ts": "08499bac1ee11e188dfa7476253147c62a140bb50b7f2aab7ff7d8c6e8642625",
+    "packages/keiko-contracts/src/diagnostics.test.ts": "ca01c2c433bbe6a48f2dd82aa8d67d7f0ad13fff15c95f7421efe4fd8043b3ec",
+    "packages/keiko-contracts/src/diagnostics.ts": "bfe9c856458d74a696ca82598715507e87ccb07ddf06d776cd2ed091895ceb96",
+    "packages/keiko-server/src/chat-handlers.ts": "1558f769dfe32ae8472a19727c60742e1bd35ac14c3c4deda4e982e53b7854af",
+    "packages/keiko-server/src/desktop-chat-handlers.test.ts": "73647f826bfb45a2a0d627765161fd4dcbcb02c19e9ce83aea555d32a350b145",
+    "packages/keiko-ui/src/app/components/desktop/AppShell.startup-notices.loading.test.tsx": "90da6500bf70317d65f41b933ed96bc43a50612e541ee8088b47d1b4e84df0ec",
+    "packages/keiko-ui/src/app/components/desktop/AppShell.startup-notices.test.tsx": "b902d67350efd513aa9174dfac26a773ecf1778153c50c6d257b4d8b5e6c1e5b",
+    "packages/keiko-ui/src/app/components/desktop/AppShell.tsx": "8b807944c31a16ab1a7dedb1a9a1303eba6e3b6fada7efb96b805f0dcb3fe7ef",
+    "packages/keiko-ui/src/app/components/desktop/browser/useBrowserApproval.test.tsx": "f4fd42395ff7e76a3c3d21d413b86952802260f7ef7aff4079187d637c0be7d5",
+    "packages/keiko-ui/src/app/components/desktop/browser/useBrowserApproval.ts": "8772201b1de9307637ed39673a6b85ecedbc371494b27d76b565dd0b08db0af8",
+    "packages/keiko-ui/src/lib/client-diagnostics.test.ts": "6e6cf77b610dc832829fcc48807da2227d801ce1b3637fa384d16675ee201820"
+  },
+  "modelAgnostic": true,
+  "promptsSkillsAndModelGrantsChanged": false,
+  "physicalModelCalls": 0,
+  "browserOwnerControls": {
+    "scope": "Actual installed Next App Router lazy implementation, React and AppShellFrame with inert notice imports/client transports; not a full mounted desktop/native browser acceptance",
+    "instrumentation": "The exact published parent AppShell has only two internal dynamic component consts exported for mounting in its actual AppShellFrame. Tests use the installed Next App Router implementation and inert notice-import/client ports.",
+    "beforeFailed": 4,
+    "beforeHealthy": 5,
+    "afterPassed": 9,
+    "cases": [
+      "owned begin cancellation",
+      "owned completion cancellation",
+      "superseded completion cannot overwrite the next accepted request",
+      "real begin and completion failures remain visible",
+      "an AbortError name without owned signal cancellation remains an error",
+      "both failed optional startup modules retain the desktop and body-free diagnoses",
+      "healthy lazy notices retain their props and update action"
+    ],
+    "predeclaredSha256": "30fa24927ddda850e93c62294f7ac0a49e38e85414754e34bb39b914ebe87bec",
+    "resultSha256": "c024539724bd50f365c2e5e8938b18f9bf00e184418fa0203dc1be2fb540397a",
+    "rows": [
+      {
+        "version": "before",
+        "exitCode": 1,
+        "failed": 4,
+        "passed": 5,
+        "total": 9,
+        "reportSha256": "20ba39f5cc96c33cd548612a0cc5e564d4fc472a567eadc423632c3434e86bee",
+        "ownerSha256": {
+          "src/app/components/desktop/AppShell.tsx": "e4ef360c14bf61615d659d4b20bc46a99a4af1d09d5d323eb2a967a9bb7cb4dc",
+          "src/app/components/desktop/browser/useBrowserApproval.ts": "bac5bb44608a58359f681741c1db74721198983b6c10a4d541ba6a7f491a581a"
+        }
+      },
+      {
+        "version": "after",
+        "exitCode": 0,
+        "failed": 0,
+        "passed": 9,
+        "total": 9,
+        "reportSha256": "4f2ce8ae09678da0d4fe4781fee6a873f8e6b485b0add5fcf21250b418b7b2d9",
+        "ownerSha256": {
+          "src/app/components/desktop/AppShell.tsx": "8b807944c31a16ab1a7dedb1a9a1303eba6e3b6fada7efb96b805f0dcb3fe7ef",
+          "src/app/components/desktop/browser/useBrowserApproval.ts": "8772201b1de9307637ed39673a6b85ecedbc371494b27d76b565dd0b08db0af8"
+        }
+      }
+    ]
+  },
+  "readinessCreationControls": {
+    "scope": "Actual buildUiHandlerDeps, mounted loopback HTTP route and initialized readiness queue/join. The provider fetch port is controlled; concurrent durable acceptance uses the actual private UiStore, not a claimed second native browser or process.",
+    "beforeOwnerSha256": "30cf369952e4bb39cadda46c581ac87f2b4dda43c6fd202d53cccaba87a3c78c",
+    "candidateOwnerSha256": "1558f769dfe32ae8472a19727c60742e1bd35ac14c3c4deda4e982e53b7854af",
+    "identicalFinalTestSha256": "73647f826bfb45a2a0d627765161fd4dcbcb02c19e9ce83aea555d32a350b145",
+    "beforeFailed": 2,
+    "beforeHealthy": 2,
+    "beforeActualReportSha256": "d65f528814b8bc92872492a9878c4d4dac1781bf8d3dbfc91c440cfb7b8c8f24",
+    "afterPassed": 4,
+    "afterFullOwningRun": {
+      "passed": 443,
+      "suites": 4,
+      "logSha256": "a85fb2b0264d60fff658875b5d178d7aba579db22c79c801ba4439fd549f2eee"
+    },
+    "invariants": [
+      "Accepted explicit-model creation replays after that model is removed during readiness.",
+      "Changed accepted parameters still conflict after the join.",
+      "Accepted automatic selection replays its original model.",
+      "A fresh request for a removed explicit model remains refused."
+    ],
+    "activityOwner": "Existing chat.creation.intent records the actual reused/refused durable decision under the request correlation."
+  },
+  "diagnosticContext": {
+    "closedModules": ["browser-approval", "update-startup"],
+    "canonicalOwner": "The existing incident-context predicate reads the canonical closed module vocabulary lazily; no second module allowlist or eager read through the existing import cycle.",
+    "initialFullUiFailed": 2,
+    "initialFullUiPassed": 10785,
+    "initialFullUiLogSha256": "dca55523a494477ab9794daae1cb5dcd21e31adb8eef543fffb796dfe789ce0f",
+    "retainedEagerCycleFailure": {
+      "uiLogSha256": "906c674f3a7383392fa190030d5f44ec85829c26b9dddf728a74816ee10fdfcd",
+      "contractLogSha256": "0916d3a1141d4ec21d460bff23b35db0bded40836a9dc4f91d7bb3527ea5a9cf"
+    },
+    "correctedTargetedUiPassed": 33,
+    "correctedCanonicalContractPassed": 404,
+    "correctedTargetedUiLogSha256": "8e36898400994bf6471d85fe26caa47e4a97b77a2007b487332304cf6cb28289",
+    "correctedContractLogSha256": "141c8569b93277ce7f35cd8af6900f8a932071c07453944054c847e4e09939c1"
+  },
+  "finalFullUi": {
+    "suitesPassed": 562,
+    "testsPassed": 10787,
+    "existingSkipped": 1,
+    "logSha256": "75bf1da36a37c0bc027ba44ce0d3f47cd46e0dbc08a0ea550a9a5bf30de8e801"
+  },
+  "limits": [
+    "Framework/provider ports are inert; these are not native Chrome, Firefox or Safari process/profile/SSD journeys.",
+    "The existing CI footer pointer-interception failure has not been diagnosed or repaired by these controls.",
+    "No skill benefit, installed update transition, original96 closeout, required exact-head CI clearance or merge is claimed.",
+    "Initial fixture setup/typing/lint mistakes and the eager-cycle candidate remain retained; only named final causal/functional outcomes receive credit."
+  ]
+}

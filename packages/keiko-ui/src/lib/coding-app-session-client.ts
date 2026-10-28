@@ -69,17 +69,41 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
         },
         { ...WITHOUT_SESSION_REPAIR, correlationId },
       ),
-    postLocalSession: (correlationId: string): Promise<unknown> =>
-      bffFetchJson(
+    postLocalSession: async (correlationId: string): Promise<unknown> => {
+      const signal = AbortSignal.timeout(LOCAL_SESSION_TIMEOUT_MS);
+      const response = await bffFetchJson(
         LOCAL_SESSION_PATH,
         {
           method: "POST",
           cache: "no-store",
-          signal: AbortSignal.timeout(LOCAL_SESSION_TIMEOUT_MS),
+          signal,
         },
         { ...WITHOUT_SESSION_REPAIR, correlationId },
-      ),
+      );
+      await restoreRememberedBrowserSession(correlationId, signal);
+      return response;
+    },
   };
+}
+
+async function restoreRememberedBrowserSession(
+  correlationId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    const { createLocalBrowserApprovalClient } = await waitForSharedSessionWork(
+      import("./browser-approval-client"),
+      signal,
+    );
+    await waitForSharedSessionWork(createLocalBrowserApprovalClient().restore(signal), signal);
+  } catch (error) {
+    // i18n-exempt: body-free diagnostic; an optional restore failure does not change acknowledgement semantics.
+    reportClientDiagnostic(`Browser session restoration failed: ${clientErrorSummary(error)}`, {
+      correlationId,
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+  }
 }
 
 /**
@@ -148,6 +172,8 @@ async function localSessionOutcome(
       },
     );
     return { repaired: false, errorKind };
+  } finally {
+    publishSessionCheck();
   }
 }
 
@@ -167,7 +193,7 @@ export interface LocalCodingAppSessionRepair {
 
 let localSessionRepair: Promise<LocalCodingAppSessionRepair> | undefined;
 
-function waitForSharedSessionWork<T>(
+export function waitForSharedSessionWork<T>(
   repair: Promise<T>,
   signal: AbortSignal | undefined,
 ): Promise<T> {
@@ -317,6 +343,27 @@ export function codingAppSessionPairingSettled(signal?: AbortSignal): Promise<bo
 // included. The boot redemption is not counted: every read already waits for it.
 let navigationRedemptions = 0;
 const redemptionListeners = new Set<() => void>();
+let sessionChecks = 0;
+const sessionCheckListeners = new Set<() => void>();
+
+function publishSessionCheck(): void {
+  sessionChecks += 1;
+  for (const listener of sessionCheckListeners) listener();
+}
+
+/** A repair acknowledgement prompts a fresh inspection; it never establishes authentication. */
+export function useCodingAppSessionChecks(): number {
+  return useSyncExternalStore(
+    (listener): (() => void) => {
+      sessionCheckListeners.add(listener);
+      return (): void => {
+        sessionCheckListeners.delete(listener);
+      };
+    },
+    () => sessionChecks,
+    () => 0,
+  );
+}
 
 function subscribeToRedemptions(listener: () => void): () => void {
   redemptionListeners.add(listener);
@@ -336,6 +383,15 @@ function publishSessionRefresh(): void {
 
 /** Notify readers that the browser session was restored without a page load. */
 export function notifyCodingAppSessionChanged(): void {
+  publishSessionRefresh();
+}
+
+/**
+ * A run control refused with the existence-concealing not-found result (ADR-0141 D6) may mean the
+ * app session was revoked. Every session-dependent read runs again so the honest pairing state
+ * surfaces (#2478); it only inspects and never establishes authentication.
+ */
+export function requestCodingAppSessionReinspection(): void {
   publishSessionRefresh();
 }
 

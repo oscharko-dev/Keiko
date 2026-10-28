@@ -4,11 +4,14 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  CodingRuntimeAgentUnsupportedError,
+  CodingRuntimeInputsUnsupportedError,
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
   classifyLaunchRejection,
   launchModelRefusalReason,
   launchRejectionDiagnosticReason,
+  refusedLaunch,
 } from "./launchFailure.js";
 
 // #3603: a start refused because the chosen model's window cannot hold a coding run's prompt, or
@@ -47,6 +50,25 @@ describe("launchModelRefusalReason", () => {
 });
 
 describe("classifyLaunchRejection", () => {
+  it("answers a primary agent the runtime cannot honour as an invalid intent with a closed reason", () => {
+    const rejection = new CodingRuntimeAgentUnsupportedError("plan");
+    expect(rejection.agent).toBe("plan");
+    expect(rejection.message).toBe("agent-unsupported");
+    expect(classifyLaunchRejection(rejection)).toBe("invalid-intent");
+    expect(launchRejectionDiagnosticReason(rejection)).toBe("agent-unsupported");
+    expect(launchModelRefusalReason(rejection)).toBeUndefined();
+  });
+
+  it("answers first-prompt inputs the runtime cannot take as an invalid intent with a closed reason", () => {
+    const rejection = new CodingRuntimeInputsUnsupportedError();
+    expect(rejection.message).toBe("inputs-unsupported");
+    expect(rejection.name).toBe("CodingRuntimeInputsUnsupportedError");
+    expect(classifyLaunchRejection(rejection)).toBe("invalid-intent");
+    expect(launchRejectionDiagnosticReason(rejection)).toBe("inputs-unsupported");
+    expect(launchModelRefusalReason(rejection)).toBeUndefined();
+    expect(refusedLaunch(rejection)).toEqual({ ok: false, failureCode: "invalid-intent" });
+  });
+
   it("maps an adapter profile mismatch to the source-drift code the contract already defines", () => {
     const rejection = new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
     expect(classifyLaunchRejection(rejection)).toBe("source-drift");

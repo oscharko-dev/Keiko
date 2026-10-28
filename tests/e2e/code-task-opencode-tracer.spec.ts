@@ -3,11 +3,11 @@
 // the real buildUiHandlerDeps/createUiServer wiring with the scripted OpenCode harness injected at
 // the production `codingRuntimeResolver` seam; the browser drives the real routes end to end:
 //
-//   bind an existing local git checkout through the new "Code setup" section → reconcile the fresh
-//   binding through the #447 reconciliation route (stamps the verified head the runtime authority
-//   requires) → start a run → observe live SSE timeline events from the scripted runtime → assert
-//   the contained edit landed in the managed worktree and the vetted verification was summarized →
-//   settle the run through Stop.
+//   pair the app session through the launcher (#2802) → bind the registered checkout by choosing a
+//   new managed worktree, which reconciles the verified head the runtime authority requires → start
+//   a run → observe live SSE timeline events from the scripted runtime → assert the contained edit
+//   landed in the managed worktree and the vetted verification was summarized → settle the run
+//   through Stop.
 //
 // The negative test proves the surface is live, not static: intercepting only the readiness route
 // with a contract-valid `runtimeAvailable: false` body must flip the workbench to "Runtime not
@@ -18,7 +18,11 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
+
 import {
+  TRACER_APP_SESSION_LAUNCHER_SECRET,
   TRACER_EDITED_CONTENT,
   TRACER_TARGET_RELATIVE_PATH,
   tracerManagedWorkspaceRoot,
@@ -34,8 +38,22 @@ function workbench(page: Page): Locator {
   return page.locator('section[aria-label="Coding Workbench"][data-state]');
 }
 
-async function openWorkbench(page: Page): Promise<void> {
-  await page.goto("/");
+function launcherPairingFragment(): string {
+  return encodeCodingAppSessionPairingFragment(
+    mintLauncherPairingAttestation({
+      secret: TRACER_APP_SESSION_LAUNCHER_SECRET,
+      requestId: `req_tracer-${String(Date.now())}-${Math.random().toString(36).slice(2, 10)}`,
+      issuedAtMs: Date.now(),
+    }),
+  );
+}
+
+async function openWorkbench(page: Page, pairingFragment?: string): Promise<void> {
+  await page.goto(pairingFragment === undefined ? "/" : `/${pairingFragment}`);
+  if (pairingFragment !== undefined) {
+    // Bearer hygiene: the pairing fragment leaves the address bar before the Workbench opens.
+    await expect.poll(() => page.url()).not.toContain("keiko-app-session");
+  }
   await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Coding Workbench", exact: true })).toBeVisible();
 }
@@ -53,28 +71,32 @@ async function registerFixtureRepositoryProject(page: Page): Promise<void> {
   expect(response.ok()).toBe(true);
 }
 
-// Drives the #2385/#2476 "Code setup" section end to end through UI interactions only: binding the
-// fixture checkout now provisions, runs the #447 reconciliation pass that stamps the verified head the
-// runtime launch authority requires, and only then activates — no out-of-band `page.request`
-// reconciliation call (#2476 AC1). The section yields to the task-start flow once the verified binding
-// lands, which is the signal the whole sequence succeeded.
+// #3685: the registered fixture is the sole repository, so the product selects it and its branch
+// automatically and the separate "Code setup" card no longer appears. Choosing the "Work in"
+// location provisions the managed worktree, reconciles its verified head and activates it, the
+// same UI-only path the #2386 authority journey drives.
 async function bindFixtureWorkspace(page: Page): Promise<void> {
-  await registerFixtureRepositoryProject(page);
-  const setup = page.getByRole("region", { name: "Code setup" });
-  await expect(setup).toBeVisible();
-  await setup.getByRole("combobox", { name: "Choose coding repository" }).click();
+  const controls = workbench(page);
+  await expect(controls.getByRole("combobox", { name: "Choose coding repository" })).toContainText(
+    TRACER_PROJECT_NAME,
+  );
+  await expect(controls.getByRole("combobox", { name: "Choose coding branch" })).toContainText(
+    "main",
+  );
+  await controls.getByRole("combobox", { name: "Work in" }).click();
+  const activation = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/task-workspaces/active" &&
+      response.request().method() === "POST",
+  );
   await page
-    .getByRole("listbox", { name: "Choose coding repository" })
-    .getByRole("option", { name: TRACER_PROJECT_NAME, exact: true })
+    .getByRole("listbox", { name: "Work in" })
+    .getByRole("option", { name: "New local worktree", exact: true })
     .click();
-  await setup.getByRole("combobox", { name: "Choose coding branch" }).click();
-  await page
-    .getByRole("listbox", { name: "Choose coding branch" })
-    .getByRole("option", { name: "main", exact: true })
-    .click();
-  await setup.getByRole("button", { name: "Bind workspace" }).click();
-  // The bind performs real filesystem + git reconciliation before it yields, so allow for that IO.
-  await expect(setup).toHaveCount(0, { timeout: 30_000 });
+  expect((await activation).ok()).toBe(true);
+  await expect(controls.getByRole("combobox", { name: "Work in" })).toContainText(
+    "New local worktree",
+  );
 }
 
 // Locates the file the scripted runtime edited inside the Keiko-managed worktree root. The worktree
@@ -122,6 +144,7 @@ test("#2385 tracer: the workbench readiness surface is live, not static", async 
         effectiveMode: "governed-assist",
         runtimeAvailable: false,
         runtimeUnavailableReason: "platform-unqualified",
+        selectableAgents: ["build"],
       }),
     }),
   );
@@ -140,7 +163,10 @@ test("#2385 tracer: the workbench readiness surface is live, not static", async 
 test("#2385 tracer: bind, run, observe live SSE activity, and settle against the real runtime", async ({
   page,
 }) => {
-  await openWorkbench(page);
+  // Registered before the Workbench reads Git's catalog: the client serves that catalog from a
+  // short-lived cache that only its own registration flow invalidates (#3625 registration).
+  await registerFixtureRepositoryProject(page);
+  await openWorkbench(page, launcherPairingFragment());
   await bindFixtureWorkspace(page);
 
   // #2644 moved the autonomy selector into Settings -> Security; the Workbench reports the mode the
@@ -159,6 +185,10 @@ test("#2385 tracer: bind, run, observe live SSE activity, and settle against the
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
   const runId = await currentRunId(page);
   const timeline = page.getByRole("list", { name: "Coding run event timeline" });
+  // #3561: run lifecycle events are listed under the collapsed "Run details" disclosure.
+  const runDetails = workbench(page).getByRole("button", { name: "Run details" });
+  await runDetails.click();
+  await expect(runDetails).toHaveAttribute("aria-expanded", "true");
   await expect(timeline.getByText("Runtime started", { exact: true })).toBeVisible({
     timeout: 90_000,
   });
@@ -171,10 +201,11 @@ test("#2385 tracer: bind, run, observe live SSE activity, and settle against the
   expect(edited).toHaveLength(1);
   expect(readFileSync(edited[0] ?? "", "utf8")).toBe(TRACER_EDITED_CONTENT);
 
-  // Settle through Stop: the real orchestrator releases the active slot (workbench returns to
-  // idle) and the durable per-run snapshot records the terminal cancelled state.
+  // Settle through Stop: the real orchestrator releases the active slot and the durable per-run
+  // snapshot records the terminal cancelled state, which the Workbench keeps showing until the
+  // operator starts a new task (#3394).
   await page.getByRole("button", { name: "Stop run" }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "idle");
+  await expect(workbench(page)).toHaveAttribute("data-state", "cancelled");
   const settled = await page.request.get(`/api/coding-workbench/runtime/runs/${runId}`);
   expect(settled.ok()).toBe(true);
   expect(((await settled.json()) as { readonly state?: string }).state).toBe("cancelled");

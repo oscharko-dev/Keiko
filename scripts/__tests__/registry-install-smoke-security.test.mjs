@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareRuntimeStagingPlan } from "../stage-publish-package.mjs";
 
 import {
   assertProductiveTypeScriptRuntime,
@@ -79,6 +80,7 @@ import {
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+const CANVAS_VERSION = ROOT_MANIFEST.overrides["@napi-rs/canvas"];
 
 const SMOKE_INVOCATION = /npm run smoke:install(?::optional)?/u;
 // This proof copies and archives the complete staged product. The synchronous npm child cannot
@@ -633,13 +635,20 @@ describe("installable package smoke optional-dependency coverage", () => {
       try {
         artifact = packRoot();
         expect(existsSync(artifact.tarballPath)).toBe(true);
-        // The tarball bundles the root's runtime workspaces and nothing else (#3565): 1.1.2
-        // extended the bundle with the external runtime closure, which doubled the artefact and
-        // embedded 20 third-party packages, and a customer's repository firewall refused to
-        // evaluate it. Third-party runtime dependencies are declared, never embedded.
-        expect([...artifact.manifest.bundleDependencies].sort()).toEqual(
+        // Preserve #3565's exact private inventory and prohibition on a complete external bundle.
+        // ADR-0021 D1 permits only the affected reviewed-override ancestors: root overrides do
+        // not apply to dependencies of a customer installation. Unchanged children stay external.
+        const bundled = [...artifact.manifest.bundleDependencies];
+        expect(bundled.filter((name) => name.startsWith("@oscharko-dev/")).sort()).toEqual(
           [...ROOT_MANIFEST.bundleDependencies].sort(),
         );
+        expect(bundled.filter((name) => !name.startsWith("@oscharko-dev/")).sort()).toEqual([
+          "@chevrotain/cst-dts-gen",
+          "@chevrotain/gast",
+          "chevrotain",
+          "chevrotain-allstar",
+          "java-parser",
+        ]);
       } finally {
         artifact?.cleanup();
         if (previous === undefined) delete process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS;
@@ -1499,7 +1508,12 @@ describe("installable package smoke optional-dependency coverage", () => {
       new Map([
         [
           name,
-          new Map([["1.0.9", { manifest: stubManifest(name, "1.0.9"), name, version: "1.0.9" }]]),
+          new Map([
+            [
+              CANVAS_VERSION,
+              { manifest: stubManifest(name, CANVAS_VERSION), name, version: CANVAS_VERSION },
+            ],
+          ]),
         ],
       ]);
     try {
@@ -1516,7 +1530,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
       // A binding for a platform this host is not: still shareable, still published.
       const foreign = written(stubbed("@napi-rs/canvas-android-arm64"));
-      expect(foreign["@napi-rs/canvas-android-arm64"]?.["1.0.9"]).toBeDefined();
+      expect(foreign["@napi-rs/canvas-android-arm64"]?.[CANVAS_VERSION]).toBeDefined();
 
       // And this host's own binding, which the lockfile pins to this platform.
       const own = `@napi-rs/canvas${hostBindingSuffixes().at(-1)}`;
@@ -1662,7 +1676,12 @@ describe("installable package smoke optional-dependency coverage", () => {
       new Map([
         [
           name,
-          new Map([["1.0.9", { manifest: stubManifest(name, "1.0.9"), name, version: "1.0.9" }]]),
+          new Map([
+            [
+              CANVAS_VERSION,
+              { manifest: stubManifest(name, CANVAS_VERSION), name, version: CANVAS_VERSION },
+            ],
+          ]),
         ],
       ]);
 
@@ -3363,13 +3382,24 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(names).not.toContain(bundled[0]);
     expect(names.length).toBeGreaterThan(0);
 
+    // Registry requirements follow the actual producer's delivery graph. Reviewed ancestors
+    // are archive-delivered rather than fetched with their unchanged upstream constraints.
+    // Actual archive bytes/peer edges are pinned by stage-publish-package.test; real consumers
+    // separately prove the published runtime. This test retains the installed-closure oracle.
+    const plan = prepareRuntimeStagingPlan(ROOT);
     const { packages, stubs, missing } = resolveVendorClosure(
       join(ROOT, "node_modules"),
-      ROOT_MANIFEST,
+      plan.rootManifest,
     );
     expect(missing).toEqual([]);
     const resolvedNames = packages.map((entry) => entry.name);
-    const availableNames = [...packages, ...stubs].map((entry) => entry.name);
+    const archives = plan.packages
+      .filter((record) => record.external)
+      .map((record) => {
+        expect(existsSync(join(record.packageRoot, "package.json"))).toBe(true);
+        return { name: record.manifest.name };
+      });
+    const availableNames = [...packages, ...stubs, ...archives].map((entry) => entry.name);
     // A clean npm install may omit a portable package when its platform binding is unavailable.
     // The closure remains complete only when that optional descriptor has an inert registry stub.
     for (const name of names) expect(availableNames).toContain(name);

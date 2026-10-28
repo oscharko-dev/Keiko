@@ -36,6 +36,7 @@ export interface ScoredLine {
   readonly endLine: number;
   readonly score: number;
   readonly queryGroupKey?: string | undefined;
+  readonly sourceDescriptorMatch?: true | undefined;
 }
 
 /** Two or more matched query groups can support bounded same-query source diversity. */
@@ -55,10 +56,15 @@ function withQueryGroupIdentity(
   lines: readonly string[],
   matcher: LineMatcher,
 ): ScoredLine {
-  if (matcher.matchedQueryGroups === undefined) return match;
+  if (matcher.matchedQueryGroups === undefined && matcher.matchesSourceDescriptor === undefined)
+    return match;
   const content = lines.slice(match.startLine - 1, match.endLine).join("\n");
-  const key = lexicalQueryGroupKey(matcher.matchedQueryGroups(content));
-  return key === undefined ? match : { ...match, queryGroupKey: key };
+  const key = lexicalQueryGroupKey(matcher.matchedQueryGroups?.(content) ?? []);
+  return {
+    ...match,
+    ...(key === undefined ? {} : { queryGroupKey: key }),
+    ...(matcher.matchesSourceDescriptor?.(content) === true ? { sourceDescriptorMatch: true } : {}),
+  };
 }
 
 class ScoredLineCollector {

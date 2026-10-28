@@ -8,17 +8,29 @@ import type {
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeMcpChannelPayload,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
+  CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeResearchChannelPayload,
   CodingWorkbenchRuntimeSkillsChannelPayload,
+  CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  unpairedCodingWorkbenchRuntimeCommandsChannelPayload,
+  unpairedCodingWorkbenchRuntimeInboxChannelPayload,
+  unpairedCodingWorkbenchRuntimeRevertChannelPayload,
+  type CodingWorkbenchRuntimeCommandsChannelPayload,
+  type CodingWorkbenchRuntimeInboxChannelPayload,
+  type CodingWorkbenchRuntimeRevertChannelPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
+import { unpairedCodingWorkbenchRuntimeMcpChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { unpairedCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 import {
@@ -27,6 +39,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
+import { holdAppSessionForCodingRun } from "../coding-app-session/codingRunSessionLease.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -41,6 +54,8 @@ import {
 import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
+import { openCodeSelectableAgents } from "./opencodeAgents.js";
+import { openCodePromptInputs } from "./opencodePromptInputs.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -59,8 +74,11 @@ const RUNTIME_MUTATION_OPERATIONS = [
   "resume",
   "research-revoke",
   "follow-up",
+  "revert",
+  "inbox",
   "answer",
   "reject",
+  "mcp-authorization",
 ] as const;
 
 type RuntimeMutationOperationName = (typeof RUNTIME_MUTATION_OPERATIONS)[number];
@@ -201,8 +219,34 @@ function requireRuntime(deps: UiHandlerDeps, correlationId?: string): RuntimeDep
   return { orchestrator: deps.codingRuntimeOrchestrator, eventHub: deps.codingRuntimeEventHub };
 }
 
-function isRouteResult(value: RuntimeDeps | RouteResult): value is RouteResult {
+function isRouteResult(value: RuntimeDeps | RunChannelRead | RouteResult): value is RouteResult {
   return "status" in value;
+}
+
+interface RunChannelRead {
+  readonly orchestrator: RuntimeDeps["orchestrator"];
+  readonly runId: string;
+}
+
+/**
+ * The live run a read of one of its Workbench channels addresses. An unpaired caller receives the
+ * channel's one constant payload BEFORE any run resolution, so no read is an existence oracle
+ * (ADR-0141 D6); an unknown run is not found. Reading consumes no revision and no request id.
+ */
+function runChannelRead(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  unpaired: () => unknown,
+): RunChannelRead | RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpaired() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  return { orchestrator: required.orchestrator, runId };
 }
 
 function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
@@ -394,6 +438,18 @@ function requireMutationAuthority(
     : notFound(ctx.correlationId);
 }
 
+// An admitted mutation that leaves its run active keeps the requesting session active for the run
+// (ADR-0141 D5): a quiet model turn must not unpair the window that started it.
+function admittedMutation(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  orchestrator: CodingRuntimeOrchestrator,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+): RouteResult {
+  holdAppSessionForCodingRun(deps, ctx.req, snapshot, (id) => orchestrator.getSnapshot(id)?.state);
+  return { status: 200, body: snapshot };
+}
+
 async function mutation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -428,7 +484,7 @@ async function mutation(
         return failureResult("invalid-intent", ctx.correlationId);
       }
       const result = await invoke(required.orchestrator, body, ctx.correlationId);
-      if (result.ok) return { status: 200, body: result.snapshot };
+      if (result.ok) return admittedMutation(deps, ctx, required.orchestrator, result.snapshot);
       // The refusal line names the run the refusal happened under, so this request-scoped line joins
       // the run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId). The
       // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
@@ -467,6 +523,22 @@ export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps
   return isRouteResult(required) ? required : { status: 200, body: required.orchestrator.status() };
 }
 
+/**
+ * What the composed OpenCode tool profile can honour, from the same registry the backend takes its
+ * profile from. An unthreaded registry fails closed to the baseline: `plan` is never advertised for
+ * a runtime nobody has shown can run it read-only (#3897), and no prompt input is offered for one
+ * nobody has shown can govern it (ADR-0137 D10: Send now, Queue and the `@` file picker).
+ */
+function composedProfileReadiness(
+  deps: UiHandlerDeps,
+): Pick<CodingWorkbenchRuntimeReadiness, "selectableAgents" | "promptInputs"> {
+  const profile = deps.openCodeGatewayReadinessRegistry?.toolProfile ?? "direct";
+  return {
+    selectableAgents: openCodeSelectableAgents(profile),
+    promptInputs: openCodePromptInputs(profile),
+  };
+}
+
 export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const values = ctx.url.searchParams.getAll("requestedMode");
   const parsed = parseCodingWorkbenchRuntimeReadinessRequest({ requestedMode: values[0] });
@@ -496,10 +568,15 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
         ? {
             runtimeEvidenceClass:
               deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
+            // #3904 AC4: only what the activation verified; an unthreaded value is not reported.
+            ...(deps.codingRuntimeVersion === undefined
+              ? {}
+              : { runtimeVersion: deps.codingRuntimeVersion }),
           }
         : {
             runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
           }),
+      ...composedProfileReadiness(deps),
     },
   };
 }
@@ -637,9 +714,11 @@ export function handleCodingRuntimeResearchRevoke(
       );
 }
 
-// Inline follow-up: a drafted message is admitted only while the run is running; the
+// Inline follow-up: a drafted message is admitted while the run is running or paused; the
 // orchestrator's operation coordinator enforces the revision and one-use request-id serial
-// admission, so exactly one turn is admitted per revision and no hidden prompt queue is possible.
+// admission, so exactly one turn is admitted per revision. A message that carries `delivery`
+// (ADR-0137 D10) starts no turn: it joins the one in flight, and the only queue is the runtime's
+// own inbox for that turn, filled one admitted message per revision.
 export function handleCodingRuntimeFollowUp(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -650,6 +729,200 @@ export function handleCodingRuntimeFollowUp(
     : mutation(ctx, deps, runId, "follow-up", (runtime, body, correlationId) =>
         runtime.submitFollowUp(runId, body, correlationId),
       );
+}
+
+/**
+ * Undo or restore of the run's newest turn (B3, S04). The orchestrator's operation coordinator
+ * admits it exactly like a follow-up: revision and one-use request id, a live run, the live
+ * authority guard in the dispatcher. It is a workspace write the human asked for, so the click is
+ * the approval in every mode; it never reaches outside the run's task workspace.
+ */
+export function handleCodingRuntimeRevert(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "revert", (runtime, body, correlationId) =>
+        runtime.submitRevert(runId, body, correlationId),
+      );
+}
+
+/**
+ * Withdraws or promotes a message the operator sent into the running turn and the runtime has not
+ * handed to the model yet (S07, ADR-0137 D10). The orchestrator's operation coordinator admits it
+ * exactly like an undo: revision and one-use request id, a running run, the live authority guard in
+ * the dispatcher. It changes only the runtime's own inbox, for a message the operator delivered
+ * themselves; the run port proves that and answers one the runtime already took as delivered.
+ */
+export function handleCodingRuntimeInboxAction(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "inbox", (runtime, body, correlationId) =>
+        runtime.submitInboxAction(runId, body, correlationId),
+      );
+}
+
+/**
+ * The messages the operator sent into the running turn that the runtime has not handed to the model
+ * yet: the id, the delivery and the operator's own one-line preview, in the order the model will
+ * receive them. Absent `items` means the run offers none (a mapped profile, a run whose turn is not
+ * running, a listing the runtime could not give). Reading consumes no revision and no request id. An
+ * unpaired caller receives the one constant payload before any run resolution, so this read is never
+ * an existence oracle (ADR-0141 D6).
+ */
+export async function handleCodingRuntimeInbox(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeInboxChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const items = await orchestrator.listInbox(runId, ctx.correlationId);
+  const payload: CodingWorkbenchRuntimeInboxChannelPayload = {
+    session: "active",
+    ...(items === undefined ? {} : { items }),
+  };
+  return { status: 200, body: payload };
+}
+
+/**
+ * The counts behind the undo control: what the newest turn changed, or what a staged undo
+ * restored. Counts only, never a path. An unpaired caller receives the one constant payload before
+ * any run resolution (ADR-0141 D6), so this read is never an existence oracle.
+ */
+export async function handleCodingRuntimeRevertState(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeRevertChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const revert = await orchestrator.revertState(runId);
+  const payload: CodingWorkbenchRuntimeRevertChannelPayload = {
+    session: "active",
+    ...(revert === undefined ? {} : { revert }),
+  };
+  return { status: 200, body: payload };
+}
+
+/**
+ * The slash commands the run's runtime lists right now (C02, ADR-0137 D10): the names and one-line
+ * descriptions the Workbench's `/` menu shows. Both are the runtime's own untrusted display text,
+ * bounded by the contract; the templates behind them never leave the runtime. Absent `commands`
+ * means the run offers none (a mapped profile, a run that is not live, a listing the runtime could
+ * not give). Reading consumes no revision and no request id. An unpaired caller receives the one
+ * constant payload before any run resolution, so this read is never an existence oracle (ADR-0141 D6).
+ */
+export async function handleCodingRuntimeCommands(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeCommandsChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const [commands, mentionables] = await Promise.all([
+    orchestrator.listCommands(runId, ctx.correlationId),
+    orchestrator.listMentions(runId, ctx.correlationId),
+  ]);
+  const payload: CodingWorkbenchRuntimeCommandsChannelPayload = {
+    session: "active",
+    ...(commands === undefined ? {} : { commands }),
+    ...(mentionables === undefined
+      ? {}
+      : {
+          agents: mentionables.agents,
+          skills: mentionables.skills,
+          ...(mentionables.primaryAgents === undefined
+            ? {}
+            : { primaryAgents: mentionables.primaryAgents }),
+        }),
+  };
+  return { status: 200, body: payload };
+}
+
+/**
+ * A live native run's MCP servers (#3903 AC3): each admitted server's name, a closed status and
+ * whether it authorizes through OAuth. The runtime's error text never leaves the server. Reading
+ * consumes no revision and no request id; an unpaired caller receives the one constant payload
+ * before any run resolution, so this read is never an existence oracle (ADR-0141 D6).
+ */
+export async function handleCodingRuntimeMcpServers(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeMcpChannelPayload);
+  if (isRouteResult(read)) return read;
+  const servers = await read.orchestrator.listMcpServers(read.runId, ctx.correlationId);
+  const payload: CodingWorkbenchRuntimeMcpChannelPayload = {
+    session: "active",
+    ...(servers === undefined ? {} : { servers }),
+  };
+  return { status: 200, body: payload };
+}
+
+/**
+ * The human's OAuth authorization of one MCP server of a live native run (#3903 AC3): start the
+ * runtime's own attempt and receive its validated authorization URL, then read or cancel that
+ * attempt. Each is a paired-session action on the run's own runtime; the run port admits only a
+ * server with a validated issuer and only a URL that addresses that issuer's endpoint.
+ */
+export function handleCodingRuntimeMcpAuthorization(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return mcpAuthorizationRoute(ctx, deps, (orchestrator, runId, body) =>
+    orchestrator.startMcpAuthorization(runId, body, ctx.correlationId),
+  );
+}
+
+export function handleCodingRuntimeMcpAuthorizationStatus(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return mcpAuthorizationRoute(ctx, deps, async (orchestrator, runId, body) => ({
+    state: await orchestrator.mcpAuthorizationStatus(runId, body, false, ctx.correlationId),
+  }));
+}
+
+export function handleCodingRuntimeMcpAuthorizationCancel(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return mcpAuthorizationRoute(ctx, deps, async (orchestrator, runId, body) => ({
+    state: await orchestrator.mcpAuthorizationStatus(runId, body, true, ctx.correlationId),
+  }));
+}
+
+// The paired-session gate and the run's existence, as every runtime mutation; the orchestrator
+// reads the body, so a malformed one is refused with the same closed answer as an unknown server.
+async function mcpAuthorizationRoute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  act: (orchestrator: CodingRuntimeOrchestrator, runId: string, body: unknown) => Promise<unknown>,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  const denied = requireMutationAuthority(ctx, deps, runId);
+  if (denied !== undefined) {
+    logMutationRefusal(deps, ctx, "mcp-authorization", undefined, "authority-resolution-failed");
+    return denied;
+  }
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (runId === undefined || !required.orchestrator.getSnapshot(runId))
+    return notFound(ctx.correlationId);
+  return withBody(
+    async () => ({
+      status: 200,
+      body: await act(required.orchestrator, runId, await readBody(ctx.req)),
+    }),
+    ctx.correlationId,
+  );
 }
 
 // Required-question surface. Question text is browser-rendered untrusted content: it never enters
@@ -712,22 +985,13 @@ export function handleCodingRuntimeQuestionList(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return Promise.resolve({
-      status: 200,
-      body: unpairedCodingWorkbenchRuntimeQuestionsChannelPayload(),
-    });
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return Promise.resolve(notFound(ctx.correlationId));
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return Promise.resolve(required);
-  if (!required.orchestrator.getSnapshot(runId))
-    return Promise.resolve(notFound(ctx.correlationId));
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeQuestionsChannelPayload);
+  if (isRouteResult(read)) return Promise.resolve(read);
+  const { orchestrator, runId } = read;
   return withBody(async () => {
     const body = await readBody(ctx.req);
     if (body === undefined) return failureResult("invalid-intent", ctx.correlationId);
-    const result = await required.orchestrator.listQuestions(runId, body, ctx.correlationId);
+    const result = await orchestrator.listQuestions(runId, body, ctx.correlationId);
     if (!result.ok) return failureResult(result.failureCode, ctx.correlationId);
     const payload: CodingWorkbenchRuntimeQuestionsChannelPayload = {
       session: "active",
@@ -744,16 +1008,11 @@ export function handleCodingRuntimeQuestionList(
  * — never a distinct auth error or an existence oracle (ADR-0141 D6).
  */
 export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeResearchChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const pending = required.orchestrator.pendingResearchAsk(runId);
-  const grant = required.orchestrator.researchGrant(runId);
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeResearchChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const pending = orchestrator.pendingResearchAsk(runId);
+  const grant = orchestrator.researchGrant(runId);
   const payload: CodingWorkbenchRuntimeResearchChannelPayload = {
     session: "active",
     ...(pending === undefined ? {} : { pending }),
@@ -770,15 +1029,10 @@ export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDe
  * a composed runtime host simply carries no skills.
  */
 export function handleCodingRuntimeSkills(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeSkillsChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const skills = required.orchestrator.approvedSkills(runId);
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeSkillsChannelPayload);
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const skills = orchestrator.approvedSkills(runId);
   const payload: CodingWorkbenchRuntimeSkillsChannelPayload = {
     session: "active",
     ...(skills === undefined ? {} : { skills }),
@@ -798,15 +1052,14 @@ export function handleCodingRuntimeApprovalReview(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return { status: 200, body: unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload() };
-  }
-  const runId = ctx.params.runId;
-  if (runId === undefined) return notFound(ctx.correlationId);
-  const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const pending = required.orchestrator.pendingApprovalReview(runId);
+  const read = runChannelRead(
+    ctx,
+    deps,
+    unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  );
+  if (isRouteResult(read)) return read;
+  const { orchestrator, runId } = read;
+  const pending = orchestrator.pendingApprovalReview(runId);
   const payload: CodingWorkbenchRuntimeApprovalReviewChannelPayload = {
     session: "active",
     ...(pending === undefined ? {} : { pending }),
@@ -996,6 +1249,51 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs/:runId/follow-up",
     handler: handleCodingRuntimeFollowUp,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/revert",
+    handler: handleCodingRuntimeRevert,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/revert",
+    handler: handleCodingRuntimeRevertState,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/commands",
+    handler: handleCodingRuntimeCommands,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/mcp",
+    handler: handleCodingRuntimeMcpServers,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/mcp/authorization",
+    handler: handleCodingRuntimeMcpAuthorization,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/mcp/authorization/status",
+    handler: handleCodingRuntimeMcpAuthorizationStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/mcp/authorization/cancel",
+    handler: handleCodingRuntimeMcpAuthorizationCancel,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/inbox",
+    handler: handleCodingRuntimeInboxAction,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/inbox",
+    handler: handleCodingRuntimeInbox,
   },
   {
     method: "POST",

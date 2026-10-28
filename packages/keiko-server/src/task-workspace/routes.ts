@@ -433,9 +433,10 @@ export async function handleSetActiveTaskWorkspace(
       }
       // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
       assertSafeFieldValue(requestedBy, "requestedBy");
-      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
-        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
+      if (!guard.listAll().some((instance) => instance.workspaceId === workspaceId)) {
+        throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
       }
+      await admitWorkspaceSelection(deps);
       const result = await guard.setActive({
         workspaceId,
         requestedBy,
@@ -448,6 +449,17 @@ export async function handleSetActiveTaskWorkspace(
       };
     },
   );
+}
+
+/**
+ * A selection ends a settled run's held undo window first (r4368730403); a run that is still live
+ * keeps the workspace bound and the selection is refused.
+ */
+async function admitWorkspaceSelection(deps: UiHandlerDeps): Promise<void> {
+  const orchestrator = deps.codingRuntimeOrchestrator;
+  if (orchestrator !== undefined && !(await orchestrator.admitWorkspaceSelection())) {
+    throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
+  }
 }
 
 // The Workbench's Local choice binds the registered checkout itself. Git's ordinary safety checks
@@ -468,14 +480,12 @@ export async function handleSelectLocalCheckout(
       correlationId: ctx.correlationId,
     },
     async () => {
-      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
-        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
-      }
       const body = await readJsonObject(ctx.req);
       const root = requireSafeField(body.root, "root");
       const branch = requireSafeField(body.branch, "branch");
       const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
       const resolved = await resolveRoot(deps.store, root, deps.redactor);
+      await admitWorkspaceSelection(deps);
       // Body parsing and root resolution yield to other requests. Recheck immediately before the
       // synchronous checkout mutation so a run started meanwhile cannot lose its bound branch.
       if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {

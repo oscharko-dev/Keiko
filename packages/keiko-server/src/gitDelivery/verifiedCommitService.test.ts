@@ -36,6 +36,7 @@ import type {
   VerificationReport,
   GitDeliveryApprovalClaim,
   GitCommitMessageValidation,
+  CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
@@ -105,6 +106,23 @@ let options: VerifiedCommitServiceOptions;
 let events: ServerLogEvent[];
 let evidence: Map<string, string>;
 const DIGEST = "a".repeat(64);
+function commitPermissionEvent(): {
+  readonly request: Promise<string>;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+} {
+  let accept!: (requestId: string) => void;
+  const request = new Promise<string>((resolve) => {
+    accept = resolve;
+  });
+  return {
+    request,
+    onRuntimeEvent: (event): void => {
+      if (event.kind === "permission-requested" && event.permissionRequest?.actionKind === "commit")
+        accept(event.permissionRequest.requestId);
+    },
+  };
+}
+
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], {
     cwd: root,
@@ -538,6 +556,8 @@ describe("verified Code-task commit service", () => {
     const proposalId = await verifiedProposal();
     const verification = events.filter((event) => event.extra?.phase === "verification").at(-1);
     expect(verification).toMatchObject({ extra: { passed: true, checkCount: 2 } });
+    expect(verification?.extra).not.toHaveProperty("reason");
+    expect(verification?.extra).not.toHaveProperty("untrackedCount");
     const stored: unknown = JSON.parse(
       evidence.get(String(verification?.extra?.verificationEvidenceId)) ?? "null",
     );
@@ -554,6 +574,33 @@ describe("verified Code-task commit service", () => {
       },
     });
     expect(stored).not.toHaveProperty(["checks", "records", 0, "stagedTreeDigest"]);
+  });
+  // PR #4095: on Linux the verification sandbox left untracked files in the worktree, and the line
+  // read only `passed: false` beside zero failed checks. It now names the cause and its counts.
+  it("names a candidate that changed during its verification on the verification line", async () => {
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    writeFileSync(join(root, "left-behind.log"), "debug log\n");
+    expect(await service.completeVerification(ticket, report())).toBe(false);
+    expect(events.filter((event) => event.extra?.phase === "verification").at(-1)).toMatchObject({
+      extra: {
+        passed: false,
+        reason: "candidate-drift",
+        unstagedCount: 0,
+        untrackedCount: 1,
+        failedCheckCount: 0,
+      },
+    });
+  });
+  it("names a failed verification report on the verification line", async () => {
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report(false))).toBe(false);
+    const line = events.filter((event) => event.extra?.phase === "verification").at(-1);
+    expect(line).toMatchObject({
+      extra: { passed: false, reason: "verification-failed", failedCheckCount: 1 },
+    });
+    expect(line?.extra).not.toHaveProperty("untrackedCount");
   });
   it("starts a new run's verification history empty", async () => {
     let runId = "run-1";
@@ -829,18 +876,25 @@ describe("verified Code-task commit service", () => {
   });
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "routes actual verification, review, approval and commit through the runtime facade in %s",
-    // eslint-disable-next-line complexity -- this is the exhaustive three-mode behavior matrix
     async (mode) => {
       service = createVerifiedCommitService({
         ...options,
         policyAllowsWithoutApproval: (): boolean => mode === "autonomous-delivery",
       });
+      const permission = commitPermissionEvent();
       const {
         facade,
         bridge,
         events: runtimeEvents,
         verification,
-      } = commitFacadeFixture({ service, root, mode, live: () => live, report });
+      } = commitFacadeFixture({
+        service,
+        root,
+        mode,
+        live: () => live,
+        report,
+        onRuntimeEvent: permission.onRuntimeEvent,
+      });
       const invoke = (body: unknown): ReturnType<typeof facade.execute> =>
         facade.execute({ capability: "server-capability", body: JSON.stringify(body) });
       expect((await invoke(verification)).status).toBe("completed");
@@ -853,11 +907,12 @@ describe("verified Code-task commit service", () => {
         message: "feat: reviewed runtime commit",
       });
       if (mode !== "autonomous-delivery") {
-        await vi.waitFor(() => {
-          expect(runtimeEvents.at(-1)?.permissionRequest?.actionKind).toBe("commit");
-        });
-        const pendingId = runtimeEvents.at(-1)?.permissionRequest?.requestId;
-        if (pendingId === undefined) throw new Error("commit permission missing");
+        const pendingId = await Promise.race([
+          permission.request,
+          pendingProposal.then(() => {
+            throw new Error("commit permission missing");
+          }),
+        ]);
         expect(bridge.issueCommit?.("run-1", pendingId)).toBeDefined();
       }
       const proposed = await pendingProposal;
@@ -1056,6 +1111,90 @@ describe("productive runtime status/diff/stage lane", () => {
     );
     expect(persisted).toMatchObject({ phase: "stage-propose", state: "ready", pathCount: 2 });
   });
+
+  // #3902 AC2 (PR #4064 review 4372101954): an unstage proposal carries the head, base and staged tree
+  // it reviewed to the index effect. A change that lands after the service's own check, while the
+  // effect runs, is never accepted as the effect's new snapshot: in every mode, after an approval.
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "binds the unstage effect to the reviewed head, base and staged tree in %s",
+    async (mode) => {
+      // The clock is read again inside the governed mutation, after the service's own drift check
+      // and before the index effect; the head moves exactly there, as in the review's scheduling hook.
+      let index: string | undefined;
+      const gitService = new RuntimeGitService({
+        ...options,
+        execution: {
+          ...options.execution,
+          now: (): number => {
+            if (index === undefined && new Error().stack?.includes("runGitMutation") === true) {
+              const moved = git([
+                "commit-tree",
+                "--no-gpg-sign",
+                "-p",
+                "HEAD",
+                "-m",
+                "x",
+                "HEAD^{tree}",
+              ]);
+              git(["update-ref", "refs/heads/codex/task", moved]);
+              index = git(["ls-files", "--stage"]);
+            }
+            return now;
+          },
+        },
+        mode: (): typeof mode => mode,
+        invalidateVerification: (): void => {
+          service.invalidate();
+        },
+      });
+      const request = {
+        action: "git",
+        idempotencyKey: `unstage-${mode}`,
+        operation: "unstage",
+        paths: ["code.js"],
+      } as const;
+      const proposed = await gitService.execute(
+        { ...request, actionId: "unstage-propose", phase: "propose" },
+        { check: () => true },
+      );
+      if (proposed.kind !== "unstage") throw new Error("unstage proposal unavailable");
+      const proposal = gitService.review(proposed.proposalId);
+      expect(proposal?.command).toMatchObject({
+        kind: "unstage",
+        pathspecs: ["code.js"],
+        verified: {
+          headSha: proposal?.binding.headSha,
+          baseSha: proposal?.binding.baseSha,
+          stagedTreeDigest: proposal?.binding.stagedTreeDigest,
+          branchName: "codex/task",
+          baseRef: "dev",
+        },
+      });
+      if (mode === "governed-assist")
+        expect(gitService.issueApproval(proposed.proposalId)).toBeDefined();
+      const lease =
+        mode === "governed-assist" ? gitService.consumeApproval(proposed.proposalId) : undefined;
+      const result = await gitService.execute(
+        {
+          ...request,
+          actionId: "unstage-execute",
+          phase: "execute",
+          proposalId: proposed.proposalId,
+        },
+        {
+          check: (): boolean => true,
+          ...(lease === undefined ? {} : { stageApproval: lease }),
+        },
+      );
+      expect(index).toBeDefined();
+      // Never a success: the effect refused, and the governed mutation reports the moved head.
+      expect(result).toMatchObject({ kind: "unstage" });
+      expect(["failed", "recovery-required"]).toContain(
+        result.kind === "unstage" ? result.status : undefined,
+      );
+      expect(git(["ls-files", "--stage"])).toBe(index);
+    },
+  );
 
   it("does not admit missing paths as already-staged no-ops", async () => {
     const index = git(["write-tree"]);

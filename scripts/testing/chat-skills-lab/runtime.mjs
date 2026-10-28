@@ -12,6 +12,7 @@ import { createChaosProxy, createChaosState } from "../coding-workbench-lab/chao
 import { openApiSession, importBuilt } from "../coding-workbench-lab/lab-common.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
+const BFF_STOP_TIMEOUT_MS = 5000;
 export const MODEL = "gemma-4-31b-it";
 export const digest = (text) => createHash("sha256").update(text).digest("hex");
 
@@ -77,6 +78,30 @@ async function localProvider(contextWindow) {
   };
 }
 
+function sourceWitnessObservations(contents, markers) {
+  if (
+    !Array.isArray(markers) ||
+    markers.length > 32 ||
+    Array.from(markers).some(
+      (marker) => typeof marker !== "string" || marker.length === 0 || marker.length > 4096,
+    )
+  )
+    throw new TypeError("source-witness-list-invalid");
+  return markers.map((marker) => ({
+    digest: digest(marker),
+    present: contents.some((text) => text.includes(marker)),
+  }));
+}
+
+function sourceObservation(contents, scope) {
+  const sourceComplete = scope.source ? contents.some((text) => text.includes(scope.source)) : null;
+  if (scope.sourceWitnesses === undefined) return { sourceComplete };
+  return {
+    sourceComplete,
+    sourceWitnesses: sourceWitnessObservations(contents, scope.sourceWitnesses),
+  };
+}
+
 export function requestObservation(payload, bytes, body, scope) {
   const contents = (payload.messages ?? []).map((message) =>
     typeof message.content === "string" ? message.content : JSON.stringify(message.content),
@@ -95,7 +120,7 @@ export function requestObservation(payload, bytes, body, scope) {
     messageCount: contents.length,
     skillOccurrences,
     skillDigest: skillOccurrences > 0 ? digest(scope.skillBody) : null,
-    sourceComplete: scope.source ? contents.some((text) => text.includes(scope.source)) : null,
+    ...sourceObservation(contents, scope),
     operation: compaction ? "compaction" : "conversation",
     caseRequest:
       !compaction && !!scope.question && contents.some((text) => text.includes(scope.question)),
@@ -260,22 +285,93 @@ async function runtimeEnvironment(dir, port, provider, contextWindow) {
 
 function waitForReady(child) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("bff-start-timeout")), 45000);
-    child.once("exit", () => {
+    const finish = (error, message) => {
       clearTimeout(timer);
-      reject(new Error("bff-start-failed"));
-    });
-    child.once("message", (message) => {
-      clearTimeout(timer);
-      resolve(message);
-    });
+      child.off("error", onError);
+      child.off("exit", onExit);
+      child.off("message", onMessage);
+      if (error) reject(error);
+      else resolve(message);
+    };
+    const onError = (error) => finish(error);
+    const onExit = () => finish(new Error("bff-start-failed"));
+    const onMessage = (message) => finish(undefined, message);
+    const timer = setTimeout(() => finish(new Error("bff-start-timeout")), 45000);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    child.once("message", onMessage);
   });
 }
 
+function observeBffChild(child) {
+  const state = { child, error: undefined };
+  child.on("error", (error) => {
+    state.error ??= error;
+  });
+  return state;
+}
+
+function stopBffChild(child) {
+  if (!child || child.pid === undefined || child.exitCode !== null || child.signalCode !== null)
+    return;
+  return new Promise((resolve, reject) => {
+    const deadline = globalThis.performance.now() + BFF_STOP_TIMEOUT_MS;
+    let forced = false;
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("error", onError);
+      child.off("exit", onExit);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onError = (error) => finish(error);
+    const onExit = () =>
+      finish(
+        forced || globalThis.performance.now() >= deadline
+          ? new Error("bff-stop-timeout")
+          : undefined,
+      );
+    let timer = setTimeout(() => {
+      forced = true;
+      timer = setTimeout(() => finish(new Error("bff-stop-reap-timeout")), BFF_STOP_TIMEOUT_MS);
+      try {
+        child.kill("SIGKILL");
+      } catch (error) {
+        finish(new AggregateError([new Error("bff-stop-timeout"), error], "bff-stop-force-failed"));
+      }
+    }, BFF_STOP_TIMEOUT_MS);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    try {
+      child.kill("SIGTERM");
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
+async function stopObservedBffChild(state) {
+  const [completion] = await Promise.allSettled([stopBffChild(state?.child)]);
+  const lifetimeError = state?.error;
+  if (state) state.error = undefined;
+  if (completion.status === "rejected") {
+    if (lifetimeError && lifetimeError !== completion.reason)
+      throw new AggregateError([lifetimeError, completion.reason], "bff-lifetime-and-stop-failed", {
+        cause: lifetimeError,
+      });
+    throw completion.reason;
+  }
+  if (lifetimeError) throw lifetimeError;
+}
+
 function bffProcess(dir, env) {
-  let child, session, baseUrl;
+  let state, session, baseUrl;
   async function start() {
     const fd = openSync(join(dir, "server.private.log"), "a", 0o600);
+    let child;
     try {
       child = fork(fileURLToPath(new URL("./serve.mjs", import.meta.url)), [], {
         cwd: root,
@@ -286,20 +382,22 @@ function bffProcess(dir, env) {
     } finally {
       closeSync(fd);
     }
-    const ready = await waitForReady(child);
-    baseUrl = `http://127.0.0.1:${ready.port}`;
-    session = await openApiSession(baseUrl, env);
-  }
-  async function stop() {
-    if (child?.exitCode === null)
-      await new Promise((resolve) => {
-        child.once("exit", resolve);
-        child.kill("SIGTERM");
-      });
+    const observed = observeBffChild(child);
+    state = observed;
+    try {
+      const ready = await waitForReady(child);
+      baseUrl = `http://127.0.0.1:${ready.port}`;
+      session = await openApiSession(baseUrl, env);
+      if (observed.error) throw observed.error;
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error("bff-start-failed");
+    } catch (error) {
+      if (observed.error === error) observed.error = undefined;
+      throw error;
+    }
   }
   return {
     start,
-    stop,
+    stop: () => stopObservedBffChild(state),
     get baseUrl() {
       return baseUrl;
     },
@@ -307,17 +405,30 @@ function bffProcess(dir, env) {
   };
 }
 
-async function startObservedBff(dir, proxy, provider, contextWindow) {
+export async function startObservedBff(
+  dir,
+  proxy,
+  provider,
+  contextWindow,
+  prepareEnvironment = runtimeEnvironment,
+) {
   let bff;
   const close = async () => {
-    await bff?.stop();
-    await new Promise((resolve) => {
-      proxy.close(resolve);
-      proxy.closeAllConnections();
-    });
+    const stopped = await Promise.allSettled([bff?.stop()]);
+    const closed = await Promise.allSettled([
+      new Promise((resolve, reject) => {
+        proxy.close((error) => (error ? reject(error) : resolve()));
+      }),
+      Promise.resolve().then(() => proxy.closeAllConnections()),
+    ]);
+    const failures = [...stopped, ...closed]
+      .filter((result) => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "runtime-cleanup-failed");
   };
   try {
-    const { project, env } = await runtimeEnvironment(
+    const { project, env } = await prepareEnvironment(
       dir,
       proxy.address().port,
       provider,
@@ -327,7 +438,12 @@ async function startObservedBff(dir, proxy, provider, contextWindow) {
     await bff.start();
     return { bff, project, env, close };
   } catch (error) {
-    await close();
+    const [cleanup] = await Promise.allSettled([close()]);
+    if (cleanup.status === "rejected") {
+      throw new AggregateError([error, cleanup.reason], "runtime-start-and-cleanup-failed", {
+        cause: error,
+      });
+    }
     throw error;
   }
 }
@@ -344,24 +460,59 @@ async function canonicalCompactionPrompts() {
   return new Set([SUMMARY_SYSTEM_PROMPT, PROMPT_COMPACTION_SYSTEM]);
 }
 
-export async function startRuntime(
-  dir,
-  { contextWindow = 131072, skillBody = "", source = "" } = {},
-) {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const provider = await localProvider(contextWindow),
-    physical = [],
-    state = createChaosState(),
-    compactionPrompts = await canonicalCompactionPrompts();
-  let scope = { id: "setup", question: "", skillBody, source, compactionPrompts };
+function createObservedProxy(provider, state, physical, getScope) {
   const proxy = createChaosProxy({
     upstream: provider.upstream,
     state,
     log: () => undefined,
-    logError: () => physical.push({ caseId: scope.id, error: "proxy-upstream-failed" }),
+    logError: () => physical.push({ caseId: getScope().id, error: "proxy-upstream-failed" }),
   });
-  observeProxy(proxy, physical, () => scope);
-  await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  proxy.on("error", () => physical.push({ caseId: getScope().id, error: "proxy-server-failed" }));
+  observeProxy(proxy, physical, getScope);
+  return proxy;
+}
+
+export function listenProxy(proxy) {
+  return new Promise((resolve, reject) => {
+    const failed = (error) => {
+      proxy.off("error", failed);
+      proxy.off("listening", ready);
+      reject(error);
+    };
+    const ready = () => {
+      proxy.off("error", failed);
+      proxy.off("listening", ready);
+      resolve();
+    };
+    proxy.once("error", failed);
+    try {
+      proxy.listen(0, "127.0.0.1", ready);
+    } catch (error) {
+      failed(error);
+    }
+  });
+}
+
+export async function startRuntime(
+  dir,
+  {
+    contextWindow = 131072,
+    skillBody = "",
+    source = "",
+    sourceWitnesses,
+    physicalRecorder = [],
+  } = {},
+) {
+  if (!Array.isArray(physicalRecorder))
+    throw new TypeError("caller-owned-physical-recorder-required");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const physical = physicalRecorder;
+  const provider = await localProvider(contextWindow),
+    state = createChaosState(),
+    compactionPrompts = await canonicalCompactionPrompts();
+  let scope = { id: "setup", question: "", skillBody, source, sourceWitnesses, compactionPrompts };
+  const proxy = createObservedProxy(provider, state, physical, () => scope);
+  await listenProxy(proxy);
   const { project, env, bff, close } = await startObservedBff(
     realpathSync(dir),
     proxy,
@@ -380,7 +531,7 @@ export async function startRuntime(
       return bff.baseUrl;
     },
     setActive: (id, question = "") => {
-      scope = { id, question, skillBody, source, compactionPrompts };
+      scope = { id, question, skillBody, source, sourceWitnesses, compactionPrompts };
     },
     request: bff.request,
     drain: () => drainPhysicalRequests(physical),
@@ -391,4 +542,26 @@ export async function startRuntime(
     },
     close,
   };
+}
+
+export async function finalizeRuntime(runtime, save) {
+  const results = [];
+  for (const operation of [() => runtime?.drain(), () => runtime?.close()]) {
+    const [result] = await Promise.allSettled([Promise.resolve().then(operation)]);
+    results.push(result);
+  }
+  const failures = results
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  const completedStatus = runtime ? "completed" : "not-started";
+  const finalization = {
+    status: failures.length > 0 ? "failed" : completedStatus,
+    drain: runtime ? results[0].status : "not-started",
+    close: runtime ? results[1].status : "not-started",
+  };
+  const [saved] = await Promise.allSettled([Promise.resolve().then(() => save(finalization))]);
+  if (saved.status === "rejected") failures.push(saved.reason);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(failures, "qualification-finalization-failed", { cause: failures[0] });
 }

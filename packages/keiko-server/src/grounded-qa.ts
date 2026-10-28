@@ -1,4 +1,10 @@
+import {
+  deploymentContentPolicy,
+  currentContentRedactor,
+  withChatContentPolicy,
+} from "./content-redactor.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
+import { promptFitRedactor } from "./grounded-prompt-redactor.js";
 import {
   parseExpectedSkillSelectionRevision,
   markdownSkillSelectionRefusal,
@@ -124,7 +130,7 @@ import {
   type GroundedAnswerEvidenceDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
-import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { ContentRedactionPolicy, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
   DEFAULT_CONTEXT_PROFILE,
@@ -930,6 +936,8 @@ export function groundedPromptInputTokensForCapability(
 export interface GroundedGatewayPromptOptions {
   readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly ownAssessmentPolicy?: OwnAssessmentPolicy | undefined;
+  /** #4098: the Chat content policy the system prompt states; absent keeps the default prompt. */
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
   readonly modelInputTokensMax?: number | undefined;
   readonly callerInputTokensMax?: number | undefined;
   readonly tokenAccounting?: ContextProfile["tokenAccounting"];
@@ -1289,23 +1297,24 @@ function fitGroundedPrompt(
 ): FittedPromptPack {
   const modelPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
   const budgetedPack = withCallerPromptInputBudget(modelPack, options.callerInputTokensMax);
+  const fitRedactor = promptFitRedactor(redactor, budgetedPack.budget.excerptBytesMax);
   const fitOptions = { ...options, modelInputTokensMax: modelPack.budget.modelInputTokensMax };
   const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
   const fits = (candidate: readonly GatewayChatMessage[]): boolean =>
     promptByteLength(candidate) <= limit &&
     countGatewayPromptTokens({ messages: candidate }, options.tokenAccounting) <=
       budgetedPack.budget.modelInputTokensMax;
-  const messages = build(question, budgetedPack, redactor);
+  const messages = build(question, budgetedPack, fitRedactor);
   if (fits(messages)) return { messages, pack: budgetedPack, omissionPathBytes: limit };
   const metadataFit = fitPromptOmissionMetadata(
-    (bytes) => build(question, budgetedPack, redactor, bytes),
+    (bytes) => build(question, budgetedPack, fitRedactor, bytes),
     fits,
     limit,
   );
   if (metadataFit !== undefined) return { ...metadataFit, pack: budgetedPack };
 
   const render = (candidate: ConnectedContextPack): readonly GatewayChatMessage[] =>
-    build(question, candidate, redactor, 0);
+    build(question, candidate, fitRedactor, 0);
   // Adding uncertainty when a hint is clipped can make prompt cost nonmonotonic. Find the
   // source window with stable metadata first, then admit only its truthful, re-rendered form.
   const optimistic = fitExcerptPromptWindow(
@@ -1430,6 +1439,7 @@ export function fittedGroundedGatewayPrompt(
       -1,
       options?.ownAssessmentPolicy,
       options?.protectedSkill,
+      options?.contentRedaction,
     ),
     sentReferenceCount: promptExcerptCount([fitted.pack]),
     availableReferenceCount: promptExcerptCount([pack]),
@@ -1457,11 +1467,12 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
   const lines: string[] = [];
   for (const file of pack.files) {
     lines.push(`File: ${redactedString(redactor, file.scopePath)}`);
-    if (file.excerpts.length === 0) {
+    const excerpts = file.excerpts.filter((excerpt) => excerpt.content.length > 0);
+    if (excerpts.length === 0) {
       lines.push("- No excerpt content was available for this selected file.");
       continue;
     }
-    for (const excerpt of file.excerpts) {
+    for (const excerpt of excerpts) {
       const citation = formatLineRange({
         scopePath: excerpt.atom.scopePath,
         lineRange: excerpt.atom.lineRange,
@@ -1612,6 +1623,7 @@ function buildRawGroundedGatewayMessages(
   omissionPathBytes?: number,
   ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
   protectedSkill?: MarkdownSkillDocument,
+  contentRedaction?: ContentRedactionPolicy,
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
@@ -1635,7 +1647,10 @@ function buildRawGroundedGatewayMessages(
     safeQuestion,
   ].join("\n");
   return [
-    { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
+    {
+      role: "system",
+      content: groundedSystemPrompt(ownAssessmentPolicy, "file", contentRedaction),
+    },
     { role: "user", content: withMarkdownSkillInstructions(userContent, protectedSkill) },
   ];
 }
@@ -1658,6 +1673,7 @@ function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): Grounded
       omissionPathBytes,
       options?.ownAssessmentPolicy,
       options?.protectedSkill,
+      options?.contentRedaction,
     );
 }
 
@@ -1812,7 +1828,7 @@ async function groundedGatewayAttempt(
     throw new CallerAttemptAdmissionError("Grounded synthesis attempt allowance exhausted");
   const remaining = groundedRemainingOptions(ctx, pack, options);
   const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, ctx.tokenAccounting);
-  const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {
+  const sent = fittedGroundedGatewayPrompt(question, pack, currentContentRedactor(ctx.deps), {
     ...promptOptions,
     protectedSkill:
       ctx.userMessageId === undefined
@@ -1907,6 +1923,7 @@ export function groundedPromptOptions(
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   return {
     ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
+    contentRedaction: deploymentContentPolicy(deps),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
   };
@@ -1931,7 +1948,12 @@ function resolveGroundedAnswerModel(
   if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
+  return withConversationReadinessAdmission(
+    withChatContentPolicy(deps, resolvedModel),
+    modelId,
+    readinessAdmission,
+    deps,
+  );
 }
 
 interface DefaultRunnerContext {
@@ -1948,6 +1970,25 @@ interface DefaultRunnerContext {
 
 // Split out of defaultRunner to keep it within the line budget: the actual GroundedRunner closure
 // invoked once per exploration input.
+/** The deployment policies one grounded exploration runs under, all read from this deps graph. */
+function groundedExplorationPolicies(deps: UiHandlerDeps): {
+  readonly ownAssessmentPolicy: ReturnType<typeof currentOwnAssessmentPolicy>;
+  readonly contentRedaction: ContentRedactionPolicy;
+  readonly contentSecrets: () => readonly string[];
+  readonly followUpConfigurationDisposition: ReturnType<
+    typeof connectedFollowUpConfiguration
+  >["disposition"];
+} {
+  return {
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
+    contentRedaction: deploymentContentPolicy(deps),
+    contentSecrets: () => currentRedactionSecrets(deps),
+    followUpConfigurationDisposition: connectedFollowUpConfiguration(
+      deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
+    ).disposition,
+  };
+}
+
 function runDefaultGroundedExploration(
   runnerCtx: DefaultRunnerContext,
   input: OrchestratorInput,
@@ -1969,10 +2010,7 @@ function runDefaultGroundedExploration(
     runnerCtx.refreshDocuments,
   );
   return runGroundedExploration(budgetedInput, {
-    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
-    followUpConfigurationDisposition: connectedFollowUpConfiguration(
-      deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
-    ).disposition,
+    ...groundedExplorationPolicies(deps),
     reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
     observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
     answerer: createGatewayAnswerer(
@@ -2479,8 +2517,8 @@ function singleAnswerContextSummary(
 // single-source folder ask. Split out of runAsk to keep both under the LOC bound.
 function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOutput): RouteResult {
   const { chat, content, deps } = workerCtx;
-  const userContent = redactString(deps.redactor, content);
-  const assistantContent = redactString(deps.redactor, output.assistantContent);
+  const userContent = redactString(currentContentRedactor(deps), content);
+  const assistantContent = redactString(currentContentRedactor(deps), output.assistantContent);
   // Citation checks follow model invocation, including answer-only context. Evidence persistence
   // and grounded-turn registration follow source availability so an ungrounded model answer can
   // never be mislabeled as durable source evidence.
@@ -2490,7 +2528,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     ? buildAnswerCitations(
         singleSentEvidencePack(output, output.pack),
         output.assistantContent,
-        deps.redactor,
+        currentContentRedactor(deps),
       )
     : [];
   const evidenceRunId = sourceEvidenceAvailable
@@ -2511,7 +2549,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     content: assistantContent,
     ...singleAnswerEvidenceDeclaration(output),
     citations,
-    uncertainty: buildUncertainty(output.pack, deps.redactor),
+    uncertainty: buildUncertainty(output.pack, currentContentRedactor(deps)),
     omittedCount: connectedContextOmittedCount(output.pack),
     elapsedMs: output.elapsedMs,
     contextPack: singleAnswerContextSummary(workerCtx, output, citations.length),
@@ -2670,7 +2708,7 @@ function resolveMultiSourceSeam(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   const model = withConversationReadinessAdmission(
-    resolvedModel,
+    withChatContentPolicy(deps, resolvedModel),
     modelId,
     readinessAdmission,
     deps,
@@ -2982,7 +3020,7 @@ function admitGroundedUser(
   const newUserMessage = {
     chatId: prepared.chat.id,
     role: "user",
-    content: redactString(deps.redactor, prepared.input.content),
+    content: redactString(currentContentRedactor(deps), prepared.input.content),
     timestamp: Date.now(),
     runId: undefined,
     workflowId: undefined,
@@ -3070,11 +3108,11 @@ function compactGroundedCurrentPrompt(
     protectedInstructionTokens: markdownSkillCompactionReserve(
       skill,
       profile,
-      groundedSystemPrompt(currentOwnAssessmentPolicy(deps)),
+      groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "file", deploymentContentPolicy(deps)),
     ),
     signal: prepared.signal,
     correlationId: prepared.correlationId,
-    redact: (value) => redactedString(deps.redactor, value),
+    redact: (value) => redactedString(currentContentRedactor(deps), value),
     call: (request, signal) => {
       const model = resolveGroundedAnswerModel(deps, modelId, groundedReadinessAdmission(prepared));
       if (isRouteResult(model))
@@ -3623,7 +3661,7 @@ function groundedAnswerWithMemoryUncertainty(
     ...body,
     uncertainty: [
       ...body.uncertainty,
-      { kind: marker.kind, claim: redactString(deps.redactor, marker.claim) },
+      { kind: marker.kind, claim: redactString(currentContentRedactor(deps), marker.claim) },
     ],
   };
 }

@@ -54,7 +54,18 @@ export interface SidecarPermissionEvent {
   readonly approvalToken?: SupervisedCodingApprovalClaim | undefined;
   readonly approvalTokenMalformed?: boolean | undefined;
   readonly operatorStopped?: boolean | undefined;
+  /** The native OpenCode action behind a policy ask (#3897); shown to the human, never logged. */
+  readonly nativeAction?: SidecarNativeAction | undefined;
 }
+
+export interface SidecarNativeAction {
+  readonly permission: string;
+  readonly resources: readonly string[];
+}
+
+const NATIVE_ACTION_MAX_RESOURCES = 64;
+const NATIVE_ACTION_RESOURCE_MAX_CHARS = 2_048;
+const NATIVE_ACTION_PERMISSION = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 
 export interface SidecarHealthEvent {
   readonly type: "health";
@@ -97,10 +108,13 @@ function permissionEvent(record: Record<string, unknown>): SidecarPermissionEven
   const expiresAt = stringField(record, "expiresAt");
   const connectorScopes = optionalConnectorScopes(record);
   const mutationMetadata = optionalMutationMetadata(record);
+  const nativeAction = optionalNativeAction(record);
   if (requestId === undefined || kind === undefined || actionClass === undefined) return undefined;
   if (reasonCode === undefined || expiresAt === undefined) return undefined;
   if (connectorScopes === undefined || mutationMetadata === undefined) return undefined;
+  if (nativeAction === undefined) return undefined;
   return {
+    ...nativeAction,
     type: "permission-request",
     requestId,
     kind,
@@ -135,6 +149,29 @@ function optionalConnectorScopes(record: Record<string, unknown>):
   if (!Object.hasOwn(record, "connectorScopes")) return {};
   const connectorScopes = connectorScopeArray(record.connectorScopes);
   return connectorScopes === undefined ? undefined : { connectorScopes };
+}
+
+function optionalNativeAction(
+  record: Record<string, unknown>,
+): { readonly nativeAction?: SidecarNativeAction } | undefined {
+  if (!Object.hasOwn(record, "nativeAction")) return {};
+  const value = record.nativeAction;
+  if (!isRecord(value) || Object.keys(value).length !== 2) return undefined;
+  const { permission, resources } = value;
+  if (typeof permission !== "string" || !NATIVE_ACTION_PERMISSION.test(permission))
+    return undefined;
+  if (
+    !Array.isArray(resources) ||
+    resources.length > NATIVE_ACTION_MAX_RESOURCES ||
+    !resources.every(
+      (resource) =>
+        typeof resource === "string" &&
+        resource.length <= NATIVE_ACTION_RESOURCE_MAX_CHARS &&
+        !resource.includes("\0"),
+    )
+  )
+    return undefined;
+  return { nativeAction: { permission, resources: resources.map(String) } };
 }
 
 function optionalCommandLabel(record: Record<string, unknown>): { readonly commandLabel?: string } {

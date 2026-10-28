@@ -283,6 +283,9 @@ export function codingOutputReserveTokens(
   return Math.max(1, Math.min(preferred, windowBound));
 }
 
+/** The sidecar gateway's raw request-body ceiling for one coding model call (4 MiB). */
+export const CODING_SIDECAR_MAX_REQUEST_BYTES = 4 * 1_048_576;
+
 function codingSidecarProjection(
   capability: ModelCapability,
   verification: GatewayVerificationState,
@@ -310,8 +313,16 @@ function codingSidecarProjection(
       // multi-turn coding sessions hit an unrelated record-count rejection.
       maxInputMessages: 512,
       // The wire envelope includes JSON-escaped tool transcripts and schemas. A 64 KB cap
-      // rejected ordinary coding context long before the separate prompt-token ceiling.
-      maxRequestBytes: 1_048_576,
+      // rejected ordinary coding context long before the separate prompt-token ceiling, and a
+      // 1 MiB cap still bound the native runtime's own context window to 40,960 input tokens at
+      // the conservative 24 escape-dense bytes per token (#3897 lab: OpenCode was told a 57k
+      // window against a 131k model). Four MiB keeps the model window the binding limit for
+      // every declared window up to 128k input tokens while remaining the hard memory bound.
+      maxRequestBytes: CODING_SIDECAR_MAX_REQUEST_BYTES,
+      // Present only for a model whose configuration declares image input; absence is text only.
+      ...(capability.supportsImageInput ? { supportsImageInput: true } : {}),
+      // Present only for a model whose PDF document input is declared or probed; absence is none.
+      ...(capability.supportsDocumentInput ? { supportsDocumentInput: true } : {}),
     },
     verification,
   };

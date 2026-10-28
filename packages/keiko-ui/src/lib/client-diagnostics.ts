@@ -34,6 +34,7 @@
 import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
+  CLIENT_STAGE_DURATION_MS_MAX,
   type ClientBindingOutcome,
   type ClientBindingReferenceShape,
   type ClientBindingSurface,
@@ -47,9 +48,11 @@ import {
   type ClientDiagnosticScopeNotice,
   type ClientDiagnosticEvidenceInspection,
   type ClientDiagnosticCodingRunRestore,
+  type ClientDiagnosticCodingWorkbenchInteraction,
   type ClientSupportReportDelivery,
   type ClientSupportReportPreparation,
   type ClientFilesScopeDecision,
+  type ClientUpdateNotice,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -74,6 +77,7 @@ import {
   type ClientComposerCodeStage,
   type ClientGatewayProfileRefreshEvidence,
   type ClientChatHistoryDeletionCounts,
+  type ClientBrowserApprovalEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "./bff-correlation";
 import {
@@ -100,7 +104,10 @@ export type ClientDiagnosticStageReport = (
       readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
       readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
     }
-) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
+) & {
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
+  readonly browserApproval?: ClientBrowserApprovalEvidence | undefined;
+};
 
 // A restored window's binding outcome (#3557), in closed values only: never the reference itself.
 // `meta.correlationId` names the request whose answer decided it.
@@ -189,10 +196,14 @@ export interface ClientDiagnosticMeta {
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
+  readonly updateNotice?: ClientUpdateNotice | undefined;
   // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
   // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
   // and how many were cut, never a message, path or run name.
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
+  // What the human did on the Coding Workbench page (#3897): closed values, a trust binding's two
+  // body-free ids and a changeset's file count — routine evidence, never a failure.
+  readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
@@ -368,11 +379,17 @@ export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticM
   writer(message, meta);
 }
 
-/** One instant adoption/selection decision, not the duration of a held model or network request. */
+/**
+ * One adoption/selection decision. A selection decision is instant and keeps `durationMs` 0; an
+ * adoption passes the catalog read it waited for (request sent to catalog adopted), which is the
+ * background refresh latency. The duration is never the time a model was held, and a value outside
+ * the closed stage bound is clamped, not refused.
+ */
 export function reportModelCatalogStage(
   stage: "gateway catalog adoption" | "model selection availability",
   modelCatalog: ClientModelCatalogEvidence,
   parentCorrelationId?: string,
+  durationMs = 0,
 ): void {
   const correlationId = newClientCorrelationId();
   reportClientDiagnostic("Model catalog decision started.", {
@@ -383,7 +400,15 @@ export function reportModelCatalogStage(
   reportClientDiagnostic("Model catalog decision settled.", {
     correlationId,
     parentCorrelationId,
-    stageReport: { stage, phase: "settled", ordinal: 1, durationMs: 0, modelCatalog },
+    stageReport: {
+      stage,
+      phase: "settled",
+      ordinal: 1,
+      durationMs: Number.isFinite(durationMs)
+        ? Math.min(CLIENT_STAGE_DURATION_MS_MAX, Math.max(0, Math.round(durationMs)))
+        : 0,
+      modelCatalog,
+    },
   });
 }
 

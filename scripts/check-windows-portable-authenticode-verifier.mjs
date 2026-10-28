@@ -238,9 +238,10 @@ export const REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN = Object.freeze({
   referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
 });
 
-// Observed on win25-vs2026/20261018.275; compatibility is not presumed.
-// The two isolated rebuilds below must still equal the unchanged committed assembly.
-const CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN = Object.freeze({
+// actions/runner-images win25-vs2026/20261018.275: VS 18.11.12306.390.
+// Measured in job 118801323826; the full distribution and references stay pinned,
+// and both isolated regenerations must still equal the committed assembly exactly.
+export const REVIEWED_WINDOWS_2025_VS2026_OCTOBER_TOOLCHAIN = Object.freeze({
   compilerSha256: "a13d1edf3ef5dd0d0e09886251f03fa18877d46ba2dacee075b4c8a5add21457",
   compilerDistribution: Object.freeze({
     fileCount: 111,
@@ -251,19 +252,14 @@ const CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN = Object.freeze({
 });
 
 export function selectReviewedVerifierToolchain(observed) {
-  const compilerSha256 = observed.compilerSha256;
-  if (compilerSha256 === CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN.compilerSha256) {
-    assertPinnedToolchain(observed, CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN);
-    return CANDIDATE_WINDOWS_2025_VS2026_20261018_TOOLCHAIN;
-  }
-  const expected =
-    compilerSha256 === REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN.compilerSha256
-      ? REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN
-      : {
-          compilerSha256: COMMITTED_VERIFIER_ASSET.compilerSha256,
-          compilerDistribution: COMMITTED_VERIFIER_ASSET.compilerDistribution,
-          referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
-        };
+  const expected = [
+    REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
+    REVIEWED_WINDOWS_2025_VS2026_OCTOBER_TOOLCHAIN,
+  ].find((toolchain) => observed.compilerSha256 === toolchain.compilerSha256) ?? {
+    compilerSha256: COMMITTED_VERIFIER_ASSET.compilerSha256,
+    compilerDistribution: COMMITTED_VERIFIER_ASSET.compilerDistribution,
+    referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
+  };
   assertPinnedToolchain(observed, expected);
   return expected;
 }

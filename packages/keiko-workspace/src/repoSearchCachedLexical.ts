@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { naturalLanguageContentTermGroups } from "./repoSearchMatchers.js";
+import { querySourceDescriptors } from "./repoSearchSourceDescriptors.js";
 import { repositoryRouteDeclarationMarker } from "./repoSearchRoutes.js";
 import { lexicalQueryGroupKey, type ScoredLine } from "./repoSearchLineSelection.js";
 import {
@@ -62,6 +63,9 @@ function cachedRouteQuery(route: RouteQueryTerms | undefined): CachedRouteQuery 
 }
 
 export function prepareCachedLexicalQuery(query: RetrievalQuery): CachedLexicalQuery | undefined {
+  // Token hashes cannot prove ordered words on one coherent observed line.
+  if (query.kind === "natural-language" && querySourceDescriptors(query.text).length > 0)
+    return undefined;
   if (query.kind === "regex" || query.kind === "file-pattern" || query.caseSensitive) {
     return undefined;
   }

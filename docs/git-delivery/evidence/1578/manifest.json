@@ -23,6 +23,7 @@
     "/api/files/content",
     "/api/git-delivery/staging/stage",
     "/api/git-delivery/commit/preview",
+    "/api/git-delivery/commit/approve",
     "/api/git-delivery/commit/execute",
     "/api/git-delivery/local-branch/create",
     "/api/git-delivery/local-branch/switch",
@@ -50,10 +51,12 @@
     "path-free and credential-free browser evidence"
   ],
   "assertions": {
-    "workspaceReads": 2,
+    "workspaceReads": 3,
     "fileContentReads": 1,
     "stageCalls": 1,
-    "commitPreviews": 1,
+    "commitPreviewsForTypedSummary": 1,
+    "commitDraftSuggestionPreviewsReached": true,
+    "commitApprovals": 1,
     "commitExecutes": 1,
     "branchCreates": 1,
     "branchSwitches": 2,

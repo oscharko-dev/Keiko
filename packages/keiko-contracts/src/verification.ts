@@ -77,6 +77,32 @@ export type VerificationLockfileState = "present" | "created" | "absent";
 export const VERIFICATION_DEPENDENCY_FAILURE_STATES: ReadonlySet<VerificationDependencyState> =
   new Set<VerificationDependencyState>(["refused", "failed", "timed-out"]);
 
+/**
+ * Why a dependency bootstrap was refused, in closed words (#3897): the plan's own refusals, a
+ * destination the egress proxy refused during the install, and the installed tree that failed its
+ * check afterwards. Body-free, so the Activity Log and the model can name the refusal that applied.
+ */
+export const VERIFICATION_DEPENDENCY_REFUSAL_REASONS = [
+  "project-npm-config",
+  "manifest-unreadable",
+  "lockfile-unreadable",
+  "unapproved-source",
+  "workspaces-unresolved",
+  "install-inspection-unavailable",
+  "install-target-invalid",
+  "install-target-foreign",
+  "egress-destination-refused",
+  "installed-lockfile-unreadable",
+  "installed-unapproved-source",
+] as const;
+
+export type VerificationDependencyRefusalReason =
+  (typeof VERIFICATION_DEPENDENCY_REFUSAL_REASONS)[number];
+
+const VERIFICATION_DEPENDENCY_REFUSAL_REASON_SET: ReadonlySet<unknown> = new Set(
+  VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
+);
+
 /** The dependency install's network use: counts only, never a destination or a byte. */
 export interface VerificationDependencyEgress {
   // Tunnels opened to the approved registry.
@@ -96,6 +122,8 @@ export interface VerificationDependencySummary {
   readonly durationMs: number;
   // A short, redacted reason for a refused or failed bootstrap (e.g. "project npm config present").
   readonly detail?: string | undefined;
+  // The closed reason of a refused bootstrap; present only when `state` is "refused".
+  readonly refusalReason?: VerificationDependencyRefusalReason | undefined;
   // The install's egress through the registry proxy (ADR-0043 D17): present whenever the proxy was
   // started for the install, with zero counts when npm made no request through it (an install that
   // ended before npm spawned); absent when no proxy was started (CodeRabbit review, PR #3452).
@@ -535,6 +563,14 @@ function hasDependencySummaryExecution(value: Readonly<Record<string, unknown>>)
   return value.detail === undefined || isBoundedText(value.detail, VERIFICATION_DETAIL_MAX_CHARS);
 }
 
+function hasDependencyRefusalReason(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    value.refusalReason === undefined ||
+    (value.state === "refused" &&
+      VERIFICATION_DEPENDENCY_REFUSAL_REASON_SET.has(value.refusalReason))
+  );
+}
+
 function isVerificationDependencyEgress(value: unknown): value is VerificationDependencyEgress {
   return (
     isRecord(value) &&
@@ -568,8 +604,10 @@ export function isVerificationDependencySummary(
       "egress",
       "completionReceipt",
       "completionRecorded",
+      "refusalReason",
     ]) &&
     hasDependencyCompletion(value) &&
+    hasDependencyRefusalReason(value) &&
     hasDependencySummaryStates(value) &&
     hasDependencySummaryExecution(value) &&
     (value.egress === undefined || isVerificationDependencyEgress(value.egress))

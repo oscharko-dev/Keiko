@@ -14,7 +14,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { setTimeout } from "node:timers";
+import { URL } from "node:url";
+import { clearTimeout, setTimeout } from "node:timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -59,6 +60,46 @@ function readinessResponse(status, body, permissionsPolicy) {
     headers: { entries: () => Object.entries(values)[Symbol.iterator]() },
   };
 }
+
+describe("readiness request lifetime", () => {
+  it.each(["headers", "body"])(
+    "bounds a stalled %s observation before another child can be probed",
+    async (phase) => {
+      const sockets = new Set();
+      const server = createHttpServer((_request, response) => {
+        if (phase === "body") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"status":');
+        }
+      });
+      server.on("connection", (socket) => {
+        sockets.add(socket);
+        socket.on("close", () => sockets.delete(socket));
+      });
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("Missing fixture port");
+      let timer;
+      try {
+        const result = await Promise.race([
+          probeApiReadiness(`http://127.0.0.1:${String(address.port)}/api/health`),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("readiness-request-unbounded")), 6000);
+          }),
+        ]);
+        expect(result).toMatchObject({
+          result: expect.stringMatching(/timeout|abort/i),
+          allowSameOriginMicrophone: false,
+        });
+      } finally {
+        clearTimeout(timer);
+        for (const socket of sockets) socket.destroy();
+        await new Promise((resolve) => server.close(resolve));
+      }
+    },
+    10_000,
+  );
+});
 
 // A loopback port that is bound and released, so connecting to it fails immediately rather than
 // hanging on a firewalled address.
@@ -674,7 +715,19 @@ describe("nextChildEnv", () => {
   it("runs next dev as the development server even when the runner itself runs under test", () => {
     // The e2e harness starts this runner with NODE_ENV=test for its own test gates. Inherited by
     // next dev, that value made Next's tsconfig verifier rewrite packages/keiko-ui/tsconfig.json.
-    expect(nextChildEnv(3001)).toStrictEqual({ NODE_ENV: "development", PORT: "3001" });
+    const bootstrap = new URL("../next-dev-bootstrap.mjs", import.meta.url).href;
+    expect(nextChildEnv(3001, "")).toStrictEqual({
+      NODE_ENV: "development",
+      PORT: "3001",
+      NODE_OPTIONS: `--import=${bootstrap}`,
+    });
+  });
+
+  it("retains existing Node options when adding the bounded framework metadata bootstrap", () => {
+    const existing = '--max-old-space-size=3072 --conditions="custom condition"';
+    expect(nextChildEnv(3001, existing).NODE_OPTIONS).toBe(
+      `${existing} --import=${new URL("../next-dev-bootstrap.mjs", import.meta.url).href}`,
+    );
   });
 });
 

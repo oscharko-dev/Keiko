@@ -10,6 +10,7 @@ import type {
 import { ApiError } from "@/lib/api";
 import { UpdateWindow, type UpdateWindowApi } from "./UpdateWindow";
 import styles from "./UpdateWindow.module.css";
+import { UpdateStartupNotice } from "./UpdateStartupNotice";
 
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client-diagnostics", () => ({
@@ -2652,4 +2653,65 @@ describe("UpdateWindow", () => {
       expect(api.verifyRestart).toHaveBeenCalledWith({ targetVersion: "0.2.10" });
     });
   });
+});
+
+it.each(["current", "degraded"] as const)(
+  "startup and Updates cannot claim a newer release from critical severity alone (%s)",
+  async (status) => {
+    const report = preflight({
+      currentVersion: "1.2.4",
+      targetVersion: "1.2.4",
+      updateAvailable: false,
+      status,
+      availabilityState: status,
+      severity: "critical",
+      userActionRequired: true,
+      manualUpdateRequired: false,
+      oneClickEligible: false,
+    });
+    const api = apiFor({ report });
+    const rendered = render(
+      <>
+        <UpdateStartupNotice ready openUpdates={() => undefined} fetchReport={async () => report} />
+        <UpdateWindow api={api} />
+      </>,
+    );
+    try {
+      const notice = await screen.findByRole("alert", { name: "Keiko update notification" });
+      expect(notice).not.toHaveTextContent("Critical update available");
+      const heading = await screen.findByRole("heading", { level: 2 });
+      expect(heading).not.toHaveTextContent("Critical update available");
+      expect(screen.queryByText("Update available", { exact: true })).toBeNull();
+    } finally {
+      rendered.unmount();
+    }
+  },
+);
+
+it("a real newer critical release remains visible in startup and Updates", async () => {
+  const report = preflight({
+    currentVersion: "1.2.4",
+    targetVersion: "1.2.5",
+    updateAvailable: true,
+    status: "update-available",
+    availabilityState: "update-available",
+    severity: "critical",
+    oneClickEligible: false,
+  });
+  const rendered = render(
+    <>
+      <UpdateStartupNotice ready openUpdates={() => undefined} fetchReport={async () => report} />
+      <UpdateWindow api={apiFor({ report })} />
+    </>,
+  );
+  try {
+    expect(
+      await screen.findByRole("alert", { name: "Keiko update notification" }),
+    ).toHaveTextContent("Critical update available");
+    expect(await screen.findByRole("heading", { level: 2 })).toHaveTextContent(
+      "Critical update available",
+    );
+  } finally {
+    rendered.unmount();
+  }
 });

@@ -1,10 +1,43 @@
+import type { OpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthorization.js";
+import type { CodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchCommand,
+  CodingWorkbenchCommandRequest,
+  CodingWorkbenchPromptMentions,
+  CodingWorkbenchPromptDelivery,
+  CodingWorkbenchPromptReference,
+  CodingWorkbenchRuntimeInboxAction,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+
 import type { CodingRuntimeHost } from "./codingRuntimeControlPlane.js";
+import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
+import type { CodingRuntimeInboxItems, CodingRuntimeInboxResult } from "./codingRuntimeInbox.js";
+import type {
+  CodingRuntimeRevertResult,
+  CodingRuntimeRevertState,
+  CodingRuntimeTurnOrigin,
+} from "./codingRuntimeRevert.js";
 
 export type CodingRuntimeTaskOutcome = "cancelled" | "failed" | "succeeded";
 
 export type CodingRuntimeTaskDispatchResult =
   | { readonly ok: true; readonly completion: Promise<CodingRuntimeTaskOutcome> }
-  | { readonly ok: false };
+  | {
+      readonly ok: false;
+      /**
+       * The closed cause when the refusal is the request's own and not a transport or authority
+       * failure: the run's runtime cannot honour the requested primary agent (#3897), or the prompt
+       * carries inputs it cannot take (a delivery its profile does not offer or no turn is running
+       * for, a reference that is not a contained text file). Absent for every other refusal, which
+       * keeps its existing answer.
+       */
+      readonly reason?: "agent-unsupported" | "inputs-refused" | undefined;
+    };
+
+/** The answer to a message delivered into the turn in flight: it starts no turn, so no completion. */
+export type CodingRuntimeTaskDeliveryResult =
+  { readonly ok: true } | { readonly ok: false; readonly reason?: "inputs-refused" | undefined };
 
 export interface CodingRuntimeRunOperation {
   readonly runId: string;
@@ -18,6 +51,51 @@ export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperat
   readonly correlationId?: string | undefined;
   /** Transient server-owned context; never user intent, persistence or skill authorization. */
   readonly initialContext?: string | undefined;
+  /**
+   * The primary agent the turn runs under. Absent keeps the run's current agent (the default
+   * `build` for a run that never named one), exactly as before.
+   */
+  readonly agent?: CodingWorkbenchAgent | undefined;
+  /**
+   * Set only on a delivery (`CodingRuntimeTaskDispatcher.deliver`): the message joins the turn in
+   * flight as `steer` or `queue` and starts none, so a dispatch or replacement never carries it.
+   */
+  readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
+  /** Workspace files the prompt references, relative to the run's workspace root (ADR-0137 D10). */
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /**
+   * Runs the turn as one of the runtime's slash commands, `taskIntent` being the text after it.
+   * Only a dispatch or a replacement carries it; the dispatcher confirms the run's runtime lists
+   * the name before anything is reserved.
+   */
+  readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /**
+   * The runtime's subagents and skills the prompt mentions (S15, #3906). The dispatcher confirms the
+   * run's runtime lists every one before anything is reserved.
+   */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
+  /**
+   * Set only by the orchestrator's automatic verification continuation: Keiko starts the turn to
+   * continue the human's accepted request, so an undo of the newest turn reaches back to that
+   * request instead of stopping at the continuation (#3904 AC3). Absent is an operator's turn.
+   */
+  readonly origin?: CodingRuntimeTurnOrigin | undefined;
+}
+
+/** One undo or restore of the run's newest turn, admitted like any other operator operation. */
+export interface CodingRuntimeRevertRequest extends CodingRuntimeRunOperation {
+  readonly action: CodingWorkbenchRuntimeRevertAction;
+  /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
+  readonly correlationId?: string | undefined;
+}
+
+/** One withdrawal or promotion of a pending message, admitted like any other operator operation. */
+export interface CodingRuntimeInboxActionRequest extends CodingRuntimeRunOperation {
+  readonly action: CodingWorkbenchRuntimeInboxAction;
+  /** The runtime's id of the pending message; the run port proves it is the operator's own. */
+  readonly itemId: string;
+  /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
+  readonly correlationId?: string | undefined;
 }
 
 export interface CodingRuntimeTaskDispatcher {
@@ -29,6 +107,66 @@ export interface CodingRuntimeTaskDispatcher {
     | ((request: CodingRuntimeTaskDispatchRequest) => Promise<CodingRuntimeTaskDispatchResult>)
     | undefined;
   readonly abort: (request: CodingRuntimeRunOperation) => Promise<boolean>;
+  /**
+   * Delivers a `steer` or `queue` message into the turn that is running. It is admitted like any
+   * other delegation (live authority, one revision, a single-use request id) but starts, replaces
+   * and settles no turn. Absent for a runtime that cannot take one, which then refuses it as the
+   * request's own fault. Never rejects.
+   */
+  readonly deliver?:
+    | ((request: CodingRuntimeTaskDispatchRequest) => Promise<CodingRuntimeTaskDeliveryResult>)
+    | undefined;
+  /**
+   * The slash commands the run's runtime lists right now, or `undefined` when the run offers none.
+   * Never rejects; the run port records one body-free line for each listing.
+   */
+  readonly commands?:
+    | ((
+        runId: string,
+        correlationId?: string,
+      ) => Promise<readonly CodingWorkbenchCommand[] | undefined>)
+    | undefined;
+  /**
+   * The subagents and skills the run's runtime lists right now (S15, #3906), or `undefined` when the
+   * run offers none. Never rejects; the run port records one body-free line for each listing.
+   */
+  readonly mentions?:
+    | ((runId: string, correlationId?: string) => Promise<CodingRuntimeMentionables | undefined>)
+    | undefined;
+  /**
+   * A live native run's MCP servers and the human's OAuth authorization of one (#3903 AC3). Each
+   * call names its run; one that offers none answers `undefined` or `unavailable`. Never rejects.
+   */
+  readonly mcpAuthorization?: OpenCodeMcpAuthorizationRunPort | undefined;
+  /**
+   * Undoes the run's newest turn or restores an undo (B3, S04). Absent for a runtime without
+   * snapshots, which then refuses the operation as the request's own fault. Never rejects.
+   */
+  readonly revert?:
+    ((request: CodingRuntimeRevertRequest) => Promise<CodingRuntimeRevertResult>) | undefined;
+  /** The counts the Workbench shows beside the undo control; absent when no undo is available. */
+  readonly revertState?:
+    ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
+  /**
+   * Commits an undo left staged in a held run when its post-completion undo window closes (#3904
+   * AC3); `none` when nothing is staged. Never rejects.
+   */
+  readonly commitRevert?: ((runId: string) => Promise<"committed" | "none" | "failed">) | undefined;
+  /**
+   * The messages the operator sent into the running turn that the runtime has not handed to the
+   * model yet, or `undefined` when the run offers none (S07). Never rejects; the run port records
+   * one body-free line for each listing.
+   */
+  readonly inbox?:
+    | ((runId: string, correlationId?: string) => Promise<CodingRuntimeInboxItems | undefined>)
+    | undefined;
+  /**
+   * Withdraws or promotes one pending message. Admitted like a revert: the live authority is
+   * revalidated, the revision is consumed once and the request id is single-use. Absent for a
+   * runtime that takes no delivery, which then refuses it as the request's own fault. Never rejects.
+   */
+  readonly inboxAction?:
+    ((request: CodingRuntimeInboxActionRequest) => Promise<CodingRuntimeInboxResult>) | undefined;
 }
 
 export interface QualifiedProductionCodingRuntime extends Omit<

@@ -11,6 +11,11 @@ import {
   parseEditorTestGenerationRequest,
 } from "./editor-test-generation.js";
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+import {
+  registerCapturedRequestIdentity,
+  registerCapturedRootAdmission,
+  registerRequestContextProjection,
+} from "../../../tests/support/editor-request-parser-contract.js";
 
 const OVERLAY = { path: "src/a.ts", languageId: "typescript", text: "export const a = 1;\n" };
 const RANGE = { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } };
@@ -267,29 +272,14 @@ describe("#3918 actual public owner preservation", () => {
 });
 
 // #3918 finite original-first observations.
-describe("#3918 captured output root admission", () => {
-  it.each([
-    ["source", parseEditorTestGenerationRequest],
-    ["public", publicOwner.parseEditorTestGenerationRequest],
-  ])("%s refuses a malformed second root", (_surface, parse) => {
-    const input = fileRequest();
-    let reads = 0;
-    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : undefined) });
-    expect(parse(input)).toEqual({ ok: false, errors: ["root must be a non-empty string"] });
-    expect(reads).toBe(2);
-  });
-  it.each([
-    ["source", parseEditorTestGenerationRequest],
-    ["public", publicOwner.parseEditorTestGenerationRequest],
-  ])("%s keeps a valid changed second root", (_surface, parse) => {
-    const input = fileRequest();
-    let reads = 0;
-    Object.defineProperty(input, "root", { get: () => (++reads === 1 ? "/repo" : "/other") });
-    const parsed = parse(input);
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) expect(parsed.value.root).toBe("/other");
-    expect(reads).toBe(2);
-  });
+describe("#3918 captured output root admission", (): void => {
+  registerCapturedRootAdmission(
+    [
+      ["source", parseEditorTestGenerationRequest],
+      ["public", publicOwner.parseEditorTestGenerationRequest],
+    ],
+    fileRequest,
+  );
 });
 
 describe("#3918 frontend-component optional range shape hypothesis", () => {
@@ -346,266 +336,14 @@ describe.each([
   ["source", parseEditorTestGenerationRequest],
   ["public", publicOwner.parseEditorTestGenerationRequest],
 ] as const)("#3918 captured request identity through %s", (_surface, parse) => {
-  it("keeps changing inherited session reads, capture order and nested references", () => {
-    const input = fileRequest();
-    const body = input.target;
-    const reads: string[] = [];
-    let sessions = 0;
-    Object.defineProperty(input, "root", {
-      get(): string {
-        reads.push("root");
-        return "/repo";
-      },
-    });
-    Object.defineProperty(input, "target", {
-      get(): unknown {
-        reads.push("target");
-        return body;
-      },
-    });
-    const inherited = {};
-    Object.defineProperty(inherited, "editorSessionId", {
-      get(this: object): string {
-        expect(this).toBe(input);
-        sessions += 1;
-        reads.push(`session:${sessions.toString()}`);
-        return sessions === 3 ? "captured-session" : "checked-session";
-      },
-    });
-    Object.setPrototypeOf(input, inherited);
-    const parsed = parse(input);
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) {
-      expect(parsed.value.root).toBe("/repo");
-      expect(parsed.value.editorSessionId).toBe("captured-session");
-      expect(parsed.value.target).toBe(body);
-      expect(Object.keys(parsed.value).slice(0, 4)).toEqual([
-        "schemaVersion",
-        "root",
-        "editorSessionId",
-        "target",
-      ]);
-    }
-    expect(reads).toEqual([
-      "root",
-      "session:1",
-      "target",
-      "root",
-      "session:2",
-      "session:3",
-      "target",
-    ]);
-  });
-
-  it("distinguishes absent, guard-refused and captured own undefined sessions", () => {
-    const absent = fileRequest();
-    let absentReads = 0;
-    Object.defineProperty(absent, "editorSessionId", {
-      get(): undefined {
-        absentReads += 1;
-        return undefined;
-      },
-    });
-    const omitted = parse(absent);
-    expect(omitted.ok).toBe(true);
-    if (omitted.ok) expect(Object.hasOwn(omitted.value, "editorSessionId")).toBe(false);
-    expect(absentReads).toBe(2);
-    for (const mode of ["guard-refused", "captured-undefined"] as const) {
-      const input = fileRequest();
-      let reads = 0;
-      Object.defineProperty(input, "editorSessionId", {
-        get(): unknown {
-          reads += 1;
-          if (reads === 1) return "initial-session";
-          if (reads === 2) return mode === "guard-refused" ? "" : "checked-session";
-          return undefined;
-        },
-      });
-      const parsed = parse(input);
-      expect(parsed.ok).toBe(true);
-      if (parsed.ok) {
-        expect(Object.hasOwn(parsed.value, "editorSessionId")).toBe(mode === "captured-undefined");
-        expect(parsed.value.editorSessionId).toBeUndefined();
-      }
-      expect(reads).toBe(mode === "guard-refused" ? 2 : 3);
-    }
-  });
-
-  it("refuses a malformed third session observation through the existing final predicate", () => {
-    const input = fileRequest();
-    let reads = 0;
-    Object.defineProperty(input, "editorSessionId", {
-      get(): unknown {
-        reads += 1;
-        return reads === 3 ? 17 : "checked-session";
-      },
-    });
-    expect(parse(input)).toEqual({
-      ok: false,
-      errors: [
-        `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
-      ],
-    });
-    expect(reads).toBe(3);
-  });
-
-  it("preserves opaque capture faults and continues capture after an invalid second root", () => {
-    for (const fault of ["root-second", "session-third"] as const) {
-      const input = fileRequest();
-      const body = input.target;
-      const failure = new TypeError("opaque identity capture");
-      const reads: string[] = [];
-      let roots = 0;
-      let sessions = 0;
-      Object.defineProperty(input, "root", {
-        get(): unknown {
-          roots += 1;
-          reads.push(`root:${roots.toString()}`);
-          if (roots === 1) return "/repo";
-          if (fault === "root-second") throw failure;
-          return undefined;
-        },
-      });
-      Object.defineProperty(input, "editorSessionId", {
-        get(): string {
-          sessions += 1;
-          reads.push(`session:${sessions.toString()}`);
-          if (sessions === 3) throw failure;
-          return "checked-session";
-        },
-      });
-      Object.defineProperty(input, "target", {
-        get(): unknown {
-          reads.push("target");
-          return body;
-        },
-      });
-      let observed: unknown;
-      try {
-        parse(input);
-      } catch (error) {
-        observed = error;
-      }
-      expect(observed).toBe(failure);
-      expect(reads).toEqual(
-        fault === "root-second"
-          ? ["root:1", "session:1", "target", "root:2"]
-          : ["root:1", "session:1", "target", "root:2", "session:2", "session:3"],
-      );
-    }
-  });
+  registerCapturedRequestIdentity(parse, fileRequest, "target");
 });
 
 describe.each([
   ["source", parseEditorTestGenerationRequest],
   ["public", publicOwner.parseEditorTestGenerationRequest],
 ] as const)("%s parser admission and context projection", (_surface, parse): void => {
-  it("projects the third context read after collection and preserves captured references", (): void => {
-    const input = fileRequest();
-    const body = input.target;
-    const trace: string[] = [];
-    const receivers: unknown[] = [];
-    const changedFiles = ["src/a.ts"];
-    const guardOnly = {
-      get queryText(): never {
-        throw new TypeError("guard-only context must not be projected");
-      },
-    };
-    let reads = 0;
-    Object.defineProperty(input, "target", {
-      get(): unknown {
-        trace.push("body");
-        return body;
-      },
-    });
-    Object.defineProperty(input, "context", {
-      get(this: unknown): unknown {
-        receivers.push(this);
-        reads += 1;
-        trace.push(`context:${String(reads)}`);
-        if (reads === 1) return { queryText: "collection" };
-        if (reads === 2) return guardOnly;
-        return { queryText: "third-projection", changedFiles };
-      },
-    });
-    const parsed = parse(input);
-    expect(trace).toEqual(["body", "context:1", "context:2", "context:3", "body"]);
-    expect(receivers).toHaveLength(3);
-    for (const receiver of receivers) expect(receiver).toBe(input);
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-    expect(parsed.value.target).toBe(body);
-    expect(parsed.value.context?.queryText).toBe("third-projection");
-    expect(parsed.value.context?.changedFiles).toBe(changedFiles);
-    expect(Object.keys(parsed.value.context ?? {})).toEqual(["queryText", "changedFiles"]);
-  });
-
-  it("omits context after a refused projection guard or an empty projection", (): void => {
-    for (const mode of ["refused", "empty"] as const) {
-      const input = fileRequest();
-      let reads = 0;
-      Object.defineProperty(input, "context", {
-        get(): unknown {
-          reads += 1;
-          return mode === "refused" && reads === 2 ? undefined : {};
-        },
-      });
-      const parsed = parse(input);
-      expect(reads).toBe(mode === "refused" ? 2 : 3);
-      expect(parsed.ok).toBe(true);
-      if (!parsed.ok) continue;
-      expect(Object.hasOwn(parsed.value, "context")).toBe(false);
-    }
-  });
-
-  it("propagates a projection getter failure before capture with exact identity", (): void => {
-    const input = fileRequest();
-    const body = input.target;
-    const trace: string[] = [];
-    const failure: Error = Object.freeze(new TypeError("synthetic context projection refusal"));
-    let reads = 0;
-    Object.defineProperty(input, "target", {
-      get(): unknown {
-        trace.push("body");
-        return body;
-      },
-    });
-    Object.defineProperty(input, "context", {
-      get(): unknown {
-        reads += 1;
-        trace.push(`context:${String(reads)}`);
-        if (reads === 3) throw failure;
-        return {};
-      },
-    });
-    let observed: unknown;
-    try {
-      parse(input);
-    } catch (error) {
-      observed = error;
-    }
-    expect(observed).toBe(failure);
-    expect(trace).toEqual(["body", "context:1", "context:2", "context:3"]);
-  });
-
-  it("retains an own undefined selector copied after a successful selector guard", (): void => {
-    const input = fileRequest();
-    let reads = 0;
-    input.context = {
-      get queryText(): unknown {
-        reads += 1;
-        return reads === 4 ? undefined : "selector";
-      },
-    };
-    const parsed = parse(input);
-    expect(reads).toBe(4);
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-    expect(Object.hasOwn(parsed.value, "context")).toBe(true);
-    expect(Object.hasOwn(parsed.value.context ?? {}, "queryText")).toBe(true);
-    expect(parsed.value.context?.queryText).toBeUndefined();
-  });
-
+  registerRequestContextProjection(parse, fileRequest, "target");
   it("keeps ordered local errors and eager collection without projecting a refused request", (): void => {
     const input = fileRequest({ schemaVersion: "foreign", root: "" });
     const body = input.target;

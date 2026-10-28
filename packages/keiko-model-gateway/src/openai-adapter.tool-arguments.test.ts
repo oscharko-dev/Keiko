@@ -105,7 +105,7 @@ function wholeBody(args: Record<string, unknown>, name = "keiko_changeset_edit")
 
 // The arguments arrive as small fragments, so a redaction applied per fragment and one applied to
 // the assembled text are both exercised.
-function streamed(args: Record<string, unknown>): Response {
+function streamed(args: Record<string, unknown>, name = "keiko_changeset_edit"): Response {
   const text = JSON.stringify(args);
   const frames: unknown[] = [];
   for (let offset = 0; offset < text.length; offset += 7) {
@@ -120,7 +120,7 @@ function streamed(args: Record<string, unknown>): Response {
                 index: 0,
                 ...(first ? { id: "call_readme", type: "function" } : {}),
                 function: {
-                  ...(first ? { name: "keiko_changeset_edit" } : {}),
+                  ...(first ? { name } : {}),
                   arguments: text.slice(offset, offset + 7),
                 },
               },
@@ -159,9 +159,12 @@ function adapter(
   });
 }
 
-async function streamedAnswer(value: OpenAiAdapter): Promise<NormalizedResponse> {
+async function streamedAnswer(
+  value: OpenAiAdapter,
+  request: GatewayRequest = REQUEST,
+): Promise<NormalizedResponse> {
   const chunks: GatewayStreamChunk[] = [];
-  for await (const chunk of value.callStream(REQUEST, PROVIDER)) chunks.push(chunk);
+  for await (const chunk of value.callStream(request, PROVIDER)) chunks.push(chunk);
   const done = chunks.at(-1);
   if (done?.type !== "done") throw new TypeError("expected a terminal done chunk");
   return done.response;
@@ -337,5 +340,84 @@ describe("tool-call arguments reach the governed tool byte for byte (#4009)", ()
       events,
     ).call(REQUEST, PROVIDER);
     expect(redactionLines(events)).toEqual([]);
+  });
+});
+
+// #3897 review: a native Code Mode program and a native shell command line are executable source.
+// A heuristic rewrite changes what runs (`basic stock holds` became `Basic [REDACTED] holds`), so
+// they reach OpenCode byte for byte like file content; the configured provider literals are still
+// removed from them.
+describe("native executable arguments reach the original runtime byte for byte (#3897)", () => {
+  const nativeTool = (name: string): Record<string, unknown> => ({
+    name,
+    description: `${name} fixture`,
+    parameters: { type: "object", properties: {}, additionalProperties: true },
+  });
+  const NATIVE_REQUEST: GatewayRequest = {
+    modelId: PROVIDER.modelId,
+    messages: [{ role: "user", content: "Run the fixture." }],
+    toolCatalog: {
+      kind: "native",
+      runtime: { id: "opencode", version: "2.1.4" },
+      tools: ["read", "execute", "shell"].map(nativeTool),
+      toolSetDigest: "c".repeat(64),
+      offered: {
+        offerId: "opencode-native-fixture",
+        expiresAt: new Date(NOW + 60_000).toISOString(),
+      },
+    } as unknown as GatewayRequest["toolCatalog"],
+  };
+  const PROGRAM = `const phrase = "The starter implementation supports basic stock holds.";\n${HEURISTIC_LOOKALIKES.split(
+    "\n",
+  )
+    .map((line) => `// ${line}`)
+    .join("\n")}\nreturn phrase;`;
+  const COMMAND =
+    "printf '%s' 'The implementation supports basic stock holds.' && echo api_key=example-value";
+  const nativePaths = [
+    [
+      "buffered",
+      (name: string, args: Record<string, unknown>): Promise<NormalizedResponse> =>
+        adapter(() => wholeBody(args, name)).call(NATIVE_REQUEST, PROVIDER),
+    ],
+    [
+      "streamed",
+      (name: string, args: Record<string, unknown>): Promise<NormalizedResponse> =>
+        streamedAnswer(
+          adapter(() => streamed(args, name)),
+          NATIVE_REQUEST,
+        ),
+    ],
+  ] as const;
+
+  it.each(nativePaths)(
+    "keeps a Code Mode program and a shell command exact on a %s answer",
+    async (_path, read) => {
+      const program = await read("execute", { code: PROGRAM });
+      expect(program.toolCalls[0]?.arguments.code).toBe(PROGRAM);
+      const shell = await read("shell", { command: COMMAND, description: "print" });
+      expect(shell.toolCalls[0]?.arguments.command).toBe(COMMAND);
+      expect(JSON.stringify([program.toolCalls, shell.toolCalls])).not.toContain("[REDACTED]");
+    },
+  );
+
+  it.each(nativePaths)(
+    "still removes the configured provider literals on a %s answer",
+    async (_path, read) => {
+      const leaked = `curl -H 'x: ${PROVIDER.apiKey}' ${PROVIDER.baseUrl} # basic stock holds`;
+      const shell = await read("shell", { command: leaked, description: "leak" });
+      expect(shell.toolCalls[0]?.arguments.command).toBe(
+        "curl -H 'x: [REDACTED]' [REDACTED] # basic stock holds",
+      );
+      const program = await read("execute", { code: `return "${PROVIDER.apiKey}";` });
+      expect(program.toolCalls[0]?.arguments.code).toBe('return "[REDACTED]";');
+    },
+  );
+
+  it("keeps heuristic redaction for a native tool that carries no executable source", async () => {
+    const read = await adapter(() =>
+      wholeBody({ path: "README.md", note: "Authorization: Bearer fixture-token-value" }, "read"),
+    ).call(NATIVE_REQUEST, PROVIDER);
+    expect(JSON.stringify(read.toolCalls)).toContain("[REDACTED]");
   });
 });

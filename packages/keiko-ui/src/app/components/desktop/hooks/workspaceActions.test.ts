@@ -1817,6 +1817,68 @@ describe("makeMutations.update", () => {
   });
 });
 
+describe("makeMutations.add — visible initial geometry", () => {
+  function allocate(
+    type: AppWindow["type"],
+    viewport: { x: number; y: number; w: number; h: number },
+    entry: "add" | "toggle" | "editor" = "add",
+  ): AppWindow {
+    let wins: AppWindow[] | null = [];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (update) => {
+      wins = typeof update === "function" ? update(wins) : update;
+    };
+    const actions = makeMutations({
+      setWins,
+      zc: { current: 0 },
+      worldVP: () => viewport,
+    });
+    if (entry === "toggle") actions.toggleTool(type);
+    else if (entry === "editor") actions.openEditorFile({ root: "/fixture", path: "index.ts" });
+    else actions.add(type);
+    const created = (wins as AppWindow[] | null)?.at(-1);
+    if (created === undefined) throw new Error("Expected allocated window");
+    return created;
+  }
+
+  it.each(["coding", "chat"] as const)(
+    "keeps new %s controls inside a reduced workspace",
+    (type) => {
+      const viewport = { x: 140, y: 80, w: 1100, h: 540 };
+      const created = allocate(type, viewport);
+      expect(created.x).toBeGreaterThanOrEqual(viewport.x);
+      expect(created.y).toBeGreaterThanOrEqual(viewport.y);
+      expect(created.x + created.w).toBeLessThanOrEqual(viewport.x + viewport.w);
+      expect(created.y + created.h).toBeLessThanOrEqual(viewport.y + viewport.h);
+      expect(created.w).toBeGreaterThanOrEqual(WIN_TYPES[type].min.w);
+      expect(created.h).toBeGreaterThanOrEqual(WIN_TYPES[type].min.h);
+      expect(created.max).toBe(false);
+    },
+  );
+
+  it("retains registry defaults when the workspace has room", () => {
+    const created = allocate("coding", { x: 0, y: 0, w: 1400, h: 1000 });
+    expect(created).toMatchObject({ w: WIN_TYPES.coding.w, h: WIN_TYPES.coding.h, max: false });
+  });
+
+  it.each(["toggle", "editor"] as const)(
+    "keeps %s allocation inside the same reduced work area",
+    (entry) => {
+      const viewport = { x: 140, y: 80, w: 1100, h: 540 };
+      const type = entry === "editor" ? "editor" : "coding";
+      const created = allocate(type, viewport, entry);
+      expect(created.x + created.w).toBeLessThanOrEqual(viewport.x + viewport.w);
+      expect(created.y + created.h).toBeLessThanOrEqual(viewport.y + viewport.h);
+      expect(created.w).toBeGreaterThanOrEqual(WIN_TYPES[type].min.w);
+      expect(created.h).toBeGreaterThanOrEqual(WIN_TYPES[type].min.h);
+    },
+  );
+
+  it("preserves usable type minima when the workspace is smaller", () => {
+    const created = allocate("coding", { x: 0, y: 0, w: 200, h: 160 });
+    expect(created).toMatchObject({ w: WIN_TYPES.coding.min.w, h: WIN_TYPES.coding.min.h });
+  });
+});
+
 describe("makeMutations.add — QI run-card dedup (#270)", () => {
   function harness(): {
     add: ReturnType<typeof makeMutations>["add"];

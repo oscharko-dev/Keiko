@@ -1,6 +1,7 @@
 import {
   lstatSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readlinkSync,
   rmSync,
@@ -502,7 +503,7 @@ describe("dev quality workflows", () => {
     // tree, so SonarCloud's branch history keeps moving. The clause is pinned exactly together with
     // `!cancelled()` and the guard, so none of the three can be altered without failing here.
     expect(coverageJob).toContain(
-      "if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
+      "if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
     );
     expect(coverageJob).toContain('if [ "${entry#*:}" != "success" ]');
     expect(coverageJob).toContain("needs.coverage-packages.result");
@@ -526,6 +527,54 @@ describe("dev quality workflows", () => {
     expect(scanAt).toBeGreaterThan(mergeAt);
     expect(scanAt).toBeGreaterThan(scriptMergeAt);
   });
+
+  it("keeps every package shard, its command and the complete-blob guard aligned", () => {
+    const job = ciWorkflow.jobs["coverage-packages"];
+    const shards = job.strategy.matrix.shard;
+    const measure = job.steps.find((step) => step.name === "Measure package coverage shard");
+    const guard = ciWorkflow.jobs["coverage-sonar"].steps.find(
+      (step) => step.name === "Verify every package coverage shard delivered its evidence",
+    );
+    expect(shards).toEqual(Array.from({ length: shards.length }, (_, index) => index + 1));
+    expect(job.name).toBe(`Coverage shard (packages \${{ matrix.shard }}/${shards.length})`);
+    expect(measure.run).toContain(`--shard=\${{ matrix.shard }}/${shards.length} `);
+    expect(guard.run).toMatch(new RegExp(`^expected=${shards.length}$`, "mu"));
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(job.strategy["fail-fast"]).toBe(false);
+    expect(measure.env.NODE_OPTIONS).toBe("--max-old-space-size=3072");
+  });
+
+  it.each(["empty", "missing", "complete", "extra"])(
+    "runs the actual package shard evidence guard against a %s blob set",
+    (kind) => {
+      const shards = ciWorkflow.jobs["coverage-packages"].strategy.matrix.shard;
+      const guard = ciWorkflow.jobs["coverage-sonar"].steps.find(
+        (step) => step.name === "Verify every package coverage shard delivered its evidence",
+      );
+      const counts = {
+        empty: 0,
+        missing: shards.length - 1,
+        complete: shards.length,
+        extra: shards.length + 1,
+      };
+      const scratch = mkdtempSync(join(tmpdir(), "keiko-coverage-shards-"));
+      try {
+        const reports = join(scratch, ".vitest-reports");
+        mkdirSync(reports);
+        for (let index = 1; index <= counts[kind]; index += 1) {
+          writeFileSync(join(reports, `blob-${index}-${shards.length}.json`), "{}");
+        }
+        const result = spawnSync("bash", ["-euo", "pipefail", "-c", guard.run], {
+          cwd: scratch,
+          encoding: "utf8",
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(kind === "complete" ? 0 : 1);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+  );
 
   // The live isolation proof the coverage run depends on moved with the suites. Asserting it on all
   // three jobs is stricter than the single assertion it replaces.
@@ -568,7 +617,9 @@ describe("dev quality workflows", () => {
     // no longer be silently re-scoped by removing or reordering whatever job happens to follow.
     const aggregateJob = ci.match(/ {2}ci:\n[\s\S]*?(?=\n {2}\S|$)/u)?.[0];
     expect(aggregateJob, "ci aggregate job block must exist").toBeDefined();
-    expect(aggregateJob).toContain("if: ${{ always() }}");
+    expect(aggregateJob).toContain(
+      "if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}",
+    );
     expect(aggregateJob).toContain("- core-quality");
     expect(aggregateJob).toContain("- code-quality-policy");
     expect(aggregateJob).toContain("CODE_QUALITY_POLICY_RESULT");

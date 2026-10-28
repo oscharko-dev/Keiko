@@ -55,8 +55,19 @@ describe("updater UI evidence freshness", () => {
     write(root, changedPath, "changed\n");
 
     expect(() => checkUpdateUiEvidence(root)).toThrow(
-      `stale sourceSha256 digest for ${changedPath}`,
+      `stale sourceFiles digest for ${changedPath}`,
     );
+  });
+
+  it.each([
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
+    "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
+  ])("rejects drift in the lazy updater translation owner %s", (path) => {
+    const root = fixtureRoot();
+    write(root, path, "changed lazy update presentation\n");
+    expect(() => checkUpdateUiEvidence(root)).toThrow(`stale sourceFiles digest for ${path}`);
   });
 
   it("rejects a narrowed or expanded digest path set", () => {
@@ -65,9 +76,46 @@ describe("updater UI evidence freshness", () => {
     write(
       root,
       "docs/design-system/evidence/3405/manifest.json",
-      `${JSON.stringify({ ...measured, sourceSha256: { omitted: sha256("omitted") } })}\n`,
+      `${JSON.stringify({ ...measured, sourceFiles: [{ path: "omitted", sha256: sha256("omitted") }] })}\n`,
     );
 
-    expect(() => checkUpdateUiEvidence(root)).toThrow("unexpected sourceSha256 path set");
+    expect(() => checkUpdateUiEvidence(root)).toThrow("unexpected sourceFiles path set");
   });
+});
+
+it("rejects duplicate source rows and extra metadata fields", () => {
+  const root = fixtureRoot();
+  const measured = measureUpdateUiEvidenceInputs(root);
+  const path = "docs/design-system/evidence/3405/manifest.json";
+  write(
+    root,
+    path,
+    JSON.stringify({
+      ...measured,
+      sourceFiles: [...measured.sourceFiles, measured.sourceFiles[0]],
+    }),
+  );
+  expect(() => checkUpdateUiEvidence(root)).toThrow("duplicate sourceFiles path");
+  write(
+    root,
+    path,
+    JSON.stringify({
+      ...measured,
+      sourceFiles: [
+        { ...measured.sourceFiles[0], extra: "untrusted metadata" },
+        ...measured.sourceFiles.slice(1),
+      ],
+    }),
+  );
+  expect(() => checkUpdateUiEvidence(root)).toThrow("invalid sourceFiles entry");
+});
+it("rejects the legacy source provenance representation", () => {
+  const root = fixtureRoot();
+  const measured = measureUpdateUiEvidenceInputs(root);
+  write(
+    root,
+    "docs/design-system/evidence/3405/manifest.json",
+    JSON.stringify({ ...measured, sourceProvenanceVersion: 1 }),
+  );
+  expect(() => checkUpdateUiEvidence(root)).toThrow("unsupported source provenance version");
 });

@@ -1143,6 +1143,36 @@ describe("ChatWindow cancel button", () => {
       resetClientDiagnosticWriter();
     }
   });
+
+  it.each(["pending", "failed"] as const)(
+    "keeps the draft visible and Send inert while a source update is %s",
+    async (groundingScopeTransition) => {
+      const sendMessage = vi.fn();
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          draft: "Preserve this question",
+          groundingScopeTransition,
+          sendMessage,
+        }),
+      );
+      const send = screen.getByRole("button", { name: "Send message" });
+      expect(send).toHaveAttribute("aria-disabled", "true");
+      expect(send).toHaveAttribute("type", "button");
+      expect(
+        screen.getByText(
+          groundingScopeTransition === "pending"
+            ? /Updating connected sources/u
+            : /Could not update connected sources/u,
+        ),
+      ).toHaveAttribute("role", "status");
+      await userEvent.click(send);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+        "Preserve this question",
+      );
+    },
+  );
 });
 
 describe("ChatWindow memory disclosure", () => {
@@ -4209,7 +4239,8 @@ describe("ChatWindow message copy", () => {
       .mockRejectedValueOnce(new Error("clipboard denied"));
     const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    const content = "Paris [1] is the capital [80, 443].";
+    const code = '```ts\n  const text = "left  right ,";\n```';
+    const content = `Paris [1] is the capital [80, 443].\n${code}`;
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -4253,6 +4284,8 @@ describe("ChatWindow message copy", () => {
         errorKind: "unavailable",
       }),
     ]);
+    expect(writeText).toHaveBeenNthCalledWith(1, `Paris is the capital [80, 443].\n${code}`);
+    expect(JSON.stringify(copyReports)).not.toContain("left  right");
     expect(JSON.stringify(copyReports)).not.toContain("Paris");
     await expectDiagnosticWireAccepted(copyReports);
     resetClientDiagnosticWriter();
@@ -4467,6 +4500,35 @@ describe("ChatWindow message copy", () => {
     expect(copyableMessageText(content, 3)).toBe(
       "Set it:\n```ts\nconst a = [1, 2, 3];\n```\nor `b = [2]`.",
     );
+  });
+
+  it.each(["```", "````", "~~~"])(
+    "preserves code literals and indentation when copying a %s fenced answer",
+    (fence) => {
+      const code = '  const text = "left  right ,";\n  const values = [1, 2];\n';
+      const content = `See [src/a.ts:1-4] [source: api] src/a.ts:1-4 【1】.\n${fence}ts\n${code}${fence}\nEnd 【1】.`;
+      expect(copyableMessageText(content, 1)).toBe(
+        `See src/a.ts:1-4.\n${fence}ts\n${code}${fence}\nEnd.`,
+      );
+    },
+  );
+
+  it.each(["[source: api]", "[src/example.ts]", "src/example.ts src/example.ts"])(
+    "keeps evidence-shaped string values unchanged in copied code: %s",
+    (value) => {
+      const content = "```js\nconst value = " + JSON.stringify(value) + ";\n```";
+      expect(copyableMessageText(content)).toBe(content);
+    },
+  );
+
+  it("preserves indentation in a copied Python block", () => {
+    const content = '```python\ndef example():\n    return "left  right"\n```';
+    expect(copyableMessageText(content)).toBe(content);
+  });
+
+  it("preserves inline code values while cleaning adjacent citation prose", () => {
+    const content = 'Keep `const text = "left  right ,"` [1].';
+    expect(copyableMessageText(content, 1)).toBe('Keep `const text = "left  right ,"`.');
   });
 
   it("removes standalone source labels without corrupting answer spacing", () => {

@@ -79,6 +79,57 @@ async function retrieve(
 }
 
 describe("query-named explicit path admission", () => {
+  it("keeps architecture prose in ordinary ranking without inventing a named file", async () => {
+    const { output, log } = await retrieve("Explain the architecture model.", {
+      files: {
+        "docs/architecture.md": "Architecture model: dependencies flow toward shared contracts.\n",
+      },
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toContain("docs/architecture.md");
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+    ).toMatchObject({ explicitPathAnchorCount: 0, explicitPathAdmittedCount: 0 });
+    expect(JSON.stringify(log.events)).not.toContain("dependencies flow");
+  });
+
+  it.each(["README", "readme", "CONTRIBUTING"])(
+    "retains the requested conventional document stem %s inside the selected folder",
+    async (stem) => {
+      const document = stem.toLowerCase() === "readme" ? "README.md" : "CONTRIBUTING.md";
+      const content = "Accepted contract: only ordered values from 3 through 11 are valid.\n";
+      const { output, log } = await retrieve(
+        `Read the connected source, ${stem} requirements, build configuration and neighboring test. Generate the complete src/OrderTest.java unit test file covering the requirements. Keep the application unchanged. Return one complete Java code block.`,
+        {
+          kind: "directory",
+          relativePaths: ["backend"],
+          files: {
+            "backend/pom.xml": "<project><artifactId>orders</artifactId></project>\n",
+            "backend/src/Order.java": "class Order { int apply(int value) { return value; } }\n",
+            "backend/src/NeighborTest.java": "class NeighborTest { void checksOrder() {} }\n",
+            [`backend/${document}`]: content,
+            "outside/README.md": "Unselected and private sibling.\n",
+          },
+        },
+      );
+      expect(output.pack.files.map((file) => file.scopePath)).toContain(`backend/${document}`);
+      expect(output.pack.files.map((file) => file.scopePath)).toEqual(
+        expect.arrayContaining([
+          "backend/pom.xml",
+          "backend/src/Order.java",
+          "backend/src/NeighborTest.java",
+        ]),
+      );
+      expect(
+        output.pack.files.flatMap((file) => file.excerpts).map((entry) => entry.content),
+      ).toContain(content);
+      expect(output.pack.files.map((file) => file.scopePath)).not.toContain("outside/README.md");
+      expect(
+        log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+      ).toMatchObject({ explicitPathAdmittedCount: 1, basenameDiscoveryMatchCount: 1 });
+      expect(JSON.stringify(log.events)).not.toContain("Accepted contract");
+    },
+  );
+
   it.each([
     ["README.md", 0],
     ["README.md", 3],

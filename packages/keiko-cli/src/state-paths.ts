@@ -11,21 +11,33 @@
 // `--state-dir`/KEIKO_STATE_DIR can never escalate into data loss outside Keiko's
 // own files.
 
+import { isProcessAlive, isProcessId } from "@oscharko-dev/keiko-security/process-scope";
+import { isKeikoUiLaunchId } from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
+export {
+  KEIKO_UI_LAUNCH_ID_ENV,
+  UI_LAUNCH_ID_FLAG,
+  isKeikoUiLaunchId,
+} from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 import {
   closeSync,
   constants as fsConstants,
   existsSync,
   fstatSync,
+  fsyncSync,
   lstatSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readSync,
+  renameSync,
   rmSync,
   writeSync,
+  writeFileSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import {
   SUPPORT_INCIDENT_DIRECTORY_NAME,
   SUPPORT_REPORT_DIRECTORY_NAME,
@@ -100,8 +112,10 @@ export function resolveStateDir(cwd: string, env: EnvSource, stateDirArg?: strin
 
 // Home-contained variant of `resolveStateDir` (#KEIKO-0330). When the state dir comes
 // from an explicit `--state-dir` argument or `KEIKO_STATE_DIR`, its resolved realpath
-// MUST live under the user's homedir. The default `<cwd>/.keiko` must remain inside
-// the canonical selected cwd, including existing ancestors. Refusing violates a fail-closed contract with the
+// MUST live under the user's homedir or equal the default `<cwd>/.keiko`. Native restarts
+// make that already-selected workspace state explicit, including on external local volumes.
+// That default must remain inside the canonical selected cwd, including existing ancestors.
+// Refusing violates a fail-closed contract with the
 // operator: without this guard, an attacker who can plant the env var (wrapper script
 // in PATH, dev-container `.env`, exported in a parent shell) can steer the pid file
 // (fed to `process.kill`) and the append-mode log file to any user-writable path.
@@ -117,14 +131,16 @@ export function resolveContainedStateDir(
 ): string {
   const explicit = explicitStateDirSource(env, stateDirArg);
   const selected = explicit ?? { source: "default state directory", value: DEFAULT_STATE_DIR_NAME };
-  const resolved = isAbsolute(selected.value) ? selected.value : resolve(cwd, selected.value);
+  const resolved = resolve(cwd, selected.value);
+  const workspaceState = resolved === resolve(cwd, DEFAULT_STATE_DIR_NAME);
+  const workspaceBound = explicit === undefined || workspaceState;
   try {
-    assertRealpathContained(explicit === undefined ? cwd : home, resolved);
+    assertRealpathContained(workspaceBound ? cwd : home, resolved);
   } catch (e) {
     if (e instanceof LauncherError && e.code === "PATH_ESCAPE") {
       throw new LauncherError(
         "STATE_DIR_ESCAPE",
-        `keiko: ${selected.source} resolves outside ${explicit === undefined ? "the selected working directory" : "the user's home directory"}; refusing to proceed.`,
+        `keiko: ${selected.source} resolves outside ${workspaceBound ? "the selected working directory" : "the user's home directory"}; refusing to proceed.`,
       );
     }
     throw e;
@@ -215,18 +231,51 @@ function createExclusivePidFileSlot(path: string): number {
   return openPidFileNoFollow(path, exclusive);
 }
 
-export const KEIKO_UI_LAUNCH_ID_ENV = "KEIKO_UI_LAUNCH_ID";
-export const UI_LAUNCH_ID_FLAG = "--launch-id";
-const UI_LAUNCH_ID_PATTERN = /^[0-9a-f]{32}$/;
-
-export function isKeikoUiLaunchId(value: string): boolean {
-  return UI_LAUNCH_ID_PATTERN.test(value);
-}
-
 export interface PidRecord {
   readonly pid: number;
   readonly launchId?: string | undefined;
   readonly browserOpenSupported?: true;
+  readonly nativeAppRuntime?: true;
+}
+
+export type UiLifecycleTracking =
+  | { readonly kind: "absent" | "unknown" }
+  | { readonly kind: "starting"; readonly launchId: string }
+  | { readonly kind: "process"; readonly record: PidRecord };
+
+const NATIVE_UI_START_PREFIX = "native-app-starting-v1\n";
+
+export function writePendingUiLaunch(path: string, launchId: string): void {
+  if (!isKeikoUiLaunchId(launchId)) throw new TypeError("Invalid UI launch identity");
+  const contents = `${NATIVE_UI_START_PREFIX}${launchId}\n`;
+  const descriptor = openPidFileNoFollow(
+    path,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
+  );
+  try {
+    assertRegularSingleLinkFile(descriptor, path);
+    if (writeSync(descriptor, contents, null, "utf8") !== Buffer.byteLength(contents))
+      throw new Error("Incomplete UI start reservation");
+    fsyncSync(descriptor);
+  } catch (error) {
+    const held = fstatSync(descriptor),
+      named = lstatSync(path);
+    if (held.dev !== named.dev || held.ino !== named.ino || named.nlink !== 1 || !named.isFile())
+      throw new Error("Unstarted UI reservation changed", { cause: error });
+    rmSync(path);
+    throw error;
+  } finally {
+    closeSync(descriptor);
+  }
+  syncPidDirectory(path);
+}
+
+/** The lifecycle guard must be held while retiring or replacing a pending attempt. */
+export function removePendingUiLaunch(path: string, launchId: string): boolean {
+  const tracking = readUiLifecycleTracking(path);
+  if (tracking.kind !== "starting" || tracking.launchId !== launchId) return false;
+  rmSync(path);
+  return true;
 }
 
 export function writeExclusivePidFile(
@@ -234,9 +283,81 @@ export function writeExclusivePidFile(
   pid: number,
   launchId?: string,
   browserOpenSupported = false,
+  nativeAppRuntime = false,
 ): void {
   const capability = browserOpenSupported && launchId !== undefined ? "browser-open-v1\n" : "";
-  writeExclusiveStateFile(path, `${encodePidFile(pid, launchId)}${capability}`);
+  const owner = nativeAppRuntime && launchId !== undefined ? "native-app-v1\n" : "";
+  const contents = `${encodePidFile(pid, launchId)}${capability}${owner}`;
+  if (!nativeAppRuntime) {
+    writeExclusiveStateFile(path, contents);
+    return;
+  }
+  if (!isProcessId(pid) || !isKeikoUiLaunchId(launchId))
+    throw new TypeError("Invalid native UI process identity");
+  publishNativePidFile(path, contents, pid, launchId);
+}
+
+function nativePidSlotMatches(path: string, pid: number, launchId: string): boolean {
+  const tracking = readUiLifecycleTracking(path);
+  if (tracking.kind === "absent") return true;
+  if (tracking.kind === "starting") return tracking.launchId === launchId;
+  return (
+    tracking.kind === "process" &&
+    tracking.record.nativeAppRuntime === true &&
+    tracking.record.pid === pid &&
+    tracking.record.launchId === launchId
+  );
+}
+
+function syncPidDirectory(path: string): void {
+  if (process.platform === "win32") return;
+  const directory = openSync(
+    dirname(path),
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+  );
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
+}
+
+function writeCompletePidRecord(path: string, contents: string): void {
+  const fd = openPidFileNoFollow(
+    path,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
+  );
+  try {
+    assertRegularSingleLinkFile(fd, path);
+    const bytes = Buffer.from(contents);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = writeSync(fd, bytes, offset, bytes.length - offset);
+      if (count <= 0) throw new Error("Incomplete UI process record");
+      offset += count;
+    }
+    if (process.platform !== "win32" && (fstatSync(fd).mode & 0o777) !== 0o600)
+      throw new Error("Native UI process record is not private");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function publishNativePidFile(path: string, contents: string, pid: number, launchId: string): void {
+  if (!nativePidSlotMatches(path, pid, launchId)) throw new Error("Native UI reservation changed");
+  const temporary = mkdtempSync(join(dirname(path), LAUNCHER_STATE_TMP_PREFIX));
+  const record = join(temporary, "ui.pid");
+  try {
+    writeFileSync(join(temporary, STAGING_OWNERSHIP_MARKER), "", { mode: 0o600, flag: "wx" });
+    writeCompletePidRecord(record, contents);
+    if (!nativePidSlotMatches(path, pid, launchId))
+      throw new Error("Native UI reservation changed");
+    atomicPublishRename(record, path, { rename: renameSync });
+    syncPidDirectory(path);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 function writeExclusiveStateFile(path: string, contents: string): void {
@@ -380,7 +501,7 @@ function parseBrowserRequest(
   launchId: string,
 ): Exclude<BrowserOpenRequestOutcome, { state: "absent" | "failed" }> {
   const lines = raw.split("\n");
-  const record = parsePidRecord(raw);
+  const record = parsePidRecord(`${lines.slice(0, 2).join("\n")}\n`);
   const metadata = browserRequestMetadata(lines);
   if (metadata === undefined || record?.launchId === undefined) {
     return { state: "refused", reason: "invalid-request" };
@@ -470,42 +591,99 @@ function pidRecordMatches(
 }
 
 // Small bound on <stateDir>/ui.pid: decimal pid, optional 32-hex launch id, newlines.
-const MAX_PID_FILE_BYTES = 64;
+const MAX_PID_FILE_BYTES = 128;
 
 function parsePidRecord(raw: string): PidRecord | undefined {
   const lines = raw.split("\n");
   const pidLine = lines[0]?.trim();
   if (pidLine === undefined || !/^[1-9]\d*$/.test(pidLine)) return undefined;
-  const launchLine = lines[1]?.trim();
+  if (!isProcessId(Number(pidLine))) return undefined;
+  const launchLine = lines[1];
   if (launchLine !== undefined && isKeikoUiLaunchId(launchLine)) {
+    if (!raw.endsWith("\n")) return undefined;
+    const capabilities = parsePidCapabilities(lines.slice(2).join("\n"));
+    if (capabilities === undefined) return undefined;
     return {
       pid: Number(pidLine),
       launchId: launchLine,
-      ...(lines[2] === "browser-open-v1" ? { browserOpenSupported: true } : {}),
+      ...capabilities,
     };
   }
-  return { pid: Number(pidLine) };
+  return raw.trim() === pidLine ? { pid: Number(pidLine) } : undefined;
 }
 
-export function readPidRecord(path: string, ownerOnly = false): PidRecord | undefined {
-  let fd: number;
-  try {
-    fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
-  } catch {
-    return undefined;
+function parsePidCapabilities(
+  suffix: string,
+): Pick<PidRecord, "browserOpenSupported" | "nativeAppRuntime"> | undefined {
+  switch (suffix) {
+    case "":
+      return {};
+    case "browser-open-v1\n":
+      return { browserOpenSupported: true };
+    case "native-app-v1\n":
+      return { nativeAppRuntime: true };
+    case "browser-open-v1\nnative-app-v1\n":
+      return { browserOpenSupported: true, nativeAppRuntime: true };
+    default:
+      return undefined;
   }
+}
+
+function readLifecycleStateText(
+  path: string,
+  ownerOnly: boolean,
+  legacyPublic = false,
+): string | undefined {
+  const fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
   try {
     assertRegularSingleLinkFile(fd, path);
-    if (ownerOnly && !isOwnerPrivateDescriptor(fd)) return undefined;
     const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
     if (bytesRead === 0 || bytesRead === MAX_PID_FILE_BYTES) return undefined;
-    return parsePidRecord(buffer.subarray(0, bytesRead).toString("utf8"));
-  } catch {
-    return undefined;
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    return lifecycleTextReadable(fd, text, ownerOnly, legacyPublic) ? text : undefined;
   } finally {
     closeSync(fd);
   }
+}
+
+function lifecycleTextReadable(
+  fd: number,
+  text: string,
+  ownerOnly: boolean,
+  legacyPublic: boolean,
+): boolean {
+  const requirePrivate =
+    (ownerOnly && !legacyPublic) || (legacyPublic && text.includes("native-app"));
+  return !requirePrivate || isOwnerPrivateDescriptor(fd);
+}
+
+export function readPidRecord(path: string, ownerOnly = false): PidRecord | undefined {
+  try {
+    const text = readLifecycleStateText(path, ownerOnly);
+    return text === undefined ? undefined : parsePidRecord(text);
+  } catch {
+    return undefined;
+  }
+}
+
+export function readUiLifecycleTracking(path: string): UiLifecycleTracking {
+  let text: string | undefined;
+  try {
+    text = readLifecycleStateText(path, true, true);
+  } catch (error) {
+    if (isFsCode(error, "ENOENT")) return { kind: "absent" };
+    throw error;
+  }
+  if (text === undefined) return { kind: "unknown" };
+  if (text.startsWith(NATIVE_UI_START_PREFIX)) {
+    const launchId = text.slice(NATIVE_UI_START_PREFIX.length, -1);
+    return text.endsWith("\n") && isKeikoUiLaunchId(launchId)
+      ? { kind: "starting", launchId }
+      : { kind: "unknown" };
+  }
+  const record = parsePidRecord(text);
+  return record === undefined ? { kind: "unknown" } : { kind: "process", record };
 }
 
 function isOwnerPrivateDescriptor(fd: number): boolean {
@@ -522,25 +700,18 @@ export function readPidFile(path: string): number | undefined {
   return readPidRecord(path)?.pid;
 }
 
-// Liveness probe identical in semantics to the lifecycle handler: a successful
-// signal-0 means alive; an EPERM error means the process exists but is owned by
-// another user (still alive); any other error means it is gone. Kept local to this
-// leaf module so uninstall/repair do not pull in lifecycle's heavy spawn/net imports.
+// Persistent records and their liveness probes use the same coordinate. Unknown owners stay held.
 export function defaultIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
-  }
+  return isProcessAlive(pid);
 }
 
-export type PidState = "absent" | "stale" | "running";
+export type PidState = "absent" | "stale" | "running" | "starting" | "unknown";
 
 export interface PidClassification {
   readonly state: PidState;
   readonly pid: number | undefined;
   readonly launchId?: string | undefined;
+  readonly nativeAppRuntime?: true;
 }
 
 // Classifies the UI pid file: `absent` (missing or malformed), `stale` (a pid is
@@ -551,11 +722,22 @@ export function classifyPid(
   pidFilePath: string,
   isAlive: (pid: number) => boolean,
 ): PidClassification {
-  const record = readPidRecord(pidFilePath);
-  if (record === undefined) return { state: "absent", pid: undefined };
+  const tracking = readUiLifecycleTracking(pidFilePath);
+  if (tracking.kind !== "process")
+    return {
+      state: tracking.kind,
+      pid: undefined,
+      ...(tracking.kind === "starting" ? { launchId: tracking.launchId } : {}),
+    };
+  const { record } = tracking;
   const state: PidState = isAlive(record.pid) ? "running" : "stale";
   if (record.launchId === undefined) return { state, pid: record.pid };
-  return { state, pid: record.pid, launchId: record.launchId };
+  return {
+    state,
+    pid: record.pid,
+    launchId: record.launchId,
+    ...(record.nativeAppRuntime ? { nativeAppRuntime: true } : {}),
+  };
 }
 
 // ── Runtime-state confidentiality manifest (Issue #1321) ──────────────────────

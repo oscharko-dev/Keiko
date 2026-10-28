@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "classification": "Canonical launcher PID-record compatibility and late-read refusal; bounded coordinator component proof, not full app-owner/update/migration acceptance",
+  "sourceParent": "77dbc57b91941d8ca775bd38cb9deaa200678a05",
+  "sourceFreeze": {
+    "artifact": "checkpoint62-source-freeze-v3.json",
+    "sha256": "fd783dc73eb8f22739ac86d8b5bb040f1b503c48e4c512f913a22ed76bb0c82c"
+  },
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "e31525e086bd5731e88d49ff9fa4879d84477e682e790b741b6fb64b06f545e1"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-launcher.test.c",
+      "sha256": "bf64627c2446ebcc8700e8a46f2d24e4eb3935fe408bc045c0f79865e8c92653"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator-windows.h",
+      "sha256": "09e50b80ec0395e27a10b74ffe69031afbda9eae9b15af4c74a7ebf16e182f02"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+      "sha256": "4292deed632aa5719b7c96ac3f9026de5eb9461537e6448197e02b39468add14"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.windows.test.c",
+      "sha256": "01af6d6e9f8787a2db14e403bf9a26777772aab4551ce31ddf9646e9e28a07a8"
+    },
+    {
+      "path": "scripts/check-linux-native-quality.sh",
+      "sha256": "29120584087f0232cb6a9242a73fad96d83eb129b3a1261cae7dc0e9bc646a15"
+    }
+  ],
+  "pdca": {
+    "plan": {
+      "canonicalProducerBefore": {
+        "healthy": 6,
+        "failed": 1,
+        "receipt": {
+          "artifact": "checkpoint62-coordinator-pid-record-red-v1.json",
+          "sha256": "82ea81895c4a7e8eec9ae63137d716e7be3312fa3eb9b42e3da15bac4f8d73ea"
+        },
+        "scope": "Exact CLI serializer and actual compiled POSIX coordinator consumer; legacy accepted, valid current browser-capability record wrongly refused. Fixed seven-case input/oracle is retained in a separately signed external fixture."
+      },
+      "lateReadBefore": {
+        "artifact": "checkpoint62-legacy-record-late-read-red-v1.json",
+        "sha256": "5aa14b2c3cf57460b93dd1f38beec0932e8c39bf0a48ad3c12453fc9234f319a"
+      },
+      "lateValidationBefore": {
+        "artifact": "checkpoint62-payload-validation-late-red-v1.json",
+        "sha256": "0df8f2c6c17b81f25ce58fa4d4fdc3f5bbf85a3af8145983bdc3aa49f114df8f"
+      }
+    },
+    "do": [
+      "One shared matcher in the existing attested coordinator header accepts the exact legacy PID/launch prefix or that prefix plus exactly browser-open-v1 and its final newline. Both POSIX/Windows consumers reuse it; no new source-inventory dependency or PID grammar is introduced.",
+      "POSIX preserves regular single-link/no-follow admission, bounded size, exact held-stat/read-count equality and complete byte matching. Windows retains its existing bounded/identity/link/reparse reader. Both refuse after their original deadline, including read completion/cleanup. The successful deadline predicate runs last, after byte validation; real process suspension in both read and comparison is tested.",
+      "The existing Linux native-quality lane now compiles/runs its existing portable coordinator C component suite as well as its prior production compiler/analyzer/kernel controls. The physical suspension hook is test-only and returns actual file bytes; production has no injected hook.",
+      "Existing sidecar acceptance/refusal receipts and caller-owned body-free update Activity Log remain authoritative; parent, plan, generation, probe, recovery and transfer policy are unchanged."
+    ],
+    "check": {
+      "canonicalAfter": {
+        "casesPerUid": 7,
+        "uids": [1000, 65534],
+        "scope": "Identical actual canonical TS bytes and seven-case oracle; both positive records and five malformed/wrong-identity cases now behave correctly."
+      },
+      "nativeLinux": {
+        "architecture": "linux/arm64",
+        "uids": [1000, 65534],
+        "processScopeControlsPerUid": 34,
+        "scope": "Ten existing C compiler/analyzer objects plus strict component-suite compile/execution and full requested real kernel lanes; unchanged containment fixture policy."
+      },
+      "nativeMacos": {
+        "architecture": "darwin/arm64",
+        "scope": "Full local native compiler/analyzer, portable component, protocol/source and boundary lane, including5 real Seatbelt controls. This does not establish installed/entitled Endpoint Security or the new app outer-owner lifetime."
+      },
+      "windows": "Shared source/closed matcher and platform test cases updated; Windows execution is unavailable on this host and remains for the required native platform CI. No local Windows runtime claim.",
+      "independent": {
+        "receipt": {
+          "artifact": "independent-checkpoint62/pid62-independent-join.json",
+          "sha256": "3cbba80bca4d1343d19d7ee6fe0c4d75629b93542b5c031e2f52d239e212e811"
+        },
+        "byteCases": 231,
+        "scope": "Exact source subset with real host files and controlled read-completion clock. Before230/231, after231/231; symlink/hardlink/FIFO/preexpired guards and same-legacy-file late read retain their independent boundaries. No full launcher, physical suspension, Windows or installed credit.",
+        "finalPredicateFollowup": {
+          "artifact": "independent-checkpoint62/pid62-final3-independent-join.json",
+          "sha256": "5e4fd274ea5ca51b98d865133bc21582136a672b7915add4e16588ff0f40ff3f",
+          "scope": "Separate final3 subset join: identical231 grammar cases for signed61/frozen2/final3; real host files plus controlled read/compare completion. Final3 alone refuses delayed comparison. This supplements, and does not relabel, physical suspension/full native lanes."
+        }
+      },
+      "localChecks": [
+        {
+          "artifact": "checkpoint62-v3-native-linux-uid1000.json",
+          "sha256": "73212e7ac3ca97777a3791dcb726f0fd77a2a749e186a8a2e42a242113081021"
+        },
+        {
+          "artifact": "checkpoint62-v3-native-linux-uid65534.json",
+          "sha256": "65c06a66746735d748c54508947ad08719b5ab1c9c9931b9d84394ac223ca10b"
+        },
+        {
+          "artifact": "checkpoint62-v3-native-macos.json",
+          "sha256": "300f89e4f1c3b97d05cc4e55de9e253da12ec991ffb154e9649abc9667e96188"
+        },
+        {
+          "artifact": "checkpoint62-v3-pid-matrix-uid1000.json",
+          "sha256": "291b5d46cf33a8a0a63e4a5157aadaae872aa116fcb92758fc2c82e3c0ae0e24"
+        },
+        {
+          "artifact": "checkpoint62-v3-pid-matrix-uid65534.json",
+          "sha256": "fad2bd7c9e521f7ec8006fb663f54e295fee8be7579a13eaf7b9227160de4015"
+        },
+        {
+          "artifact": "checkpoint62-v3-shellcheck.json",
+          "sha256": "1161627aa29d2e95fdf2cab90dbb9b97ae841af64eea0bb97fc9f684095ddaa0"
+        },
+        {
+          "artifact": "checkpoint62-v3-shell-syntax.json",
+          "sha256": "f2c035e0ceaa7d8ca724138f5d0d249a00088b4332fa9fcdfe30b86c9e81b106"
+        },
+        {
+          "artifact": "checkpoint62-v3-sonar.json",
+          "sha256": "3ec9445d815afb6f502c1c841ac03c037c33f3c9a61b8a4561a10365eaeacd72"
+        },
+        {
+          "artifact": "checkpoint62-v3-adr-index.json",
+          "sha256": "cbd67f881aad51260c07aaf8080e5616b71934a40641fb082c319687cbb61264"
+        }
+      ],
+      "shellTool": {
+        "artifact": "checkpoint62-shell-tool.json",
+        "sha256": "941115b7bc3f3c4b5a6b98ec04bfe4b9fd0d7601f179cdcc4d4ac333fb932675"
+      },
+      "unchangedRuntimeReuse": "No TypeScript/JavaScript/package export or Activity Log registration changes. Published61 whole type/lint/affected tests and full7-check Activity Log proof bind identical owners; this increment separately runs native compiler/analyzer/runtime, shell syntax/ShellCheck and real Sonar on its changed surface."
+    },
+    "act": {
+      "remaining": [
+        "Full initial/detached and successor/rollback W/S ownership and authenticated coordinator placement outside the old generation.",
+        "Linux monitor/recovery contract, delayed messages, exclusive remediation lease reclaim and invalid owner PID records.",
+        "Actual distinct and two consecutive installed updates, cancellation/recovery/SSD state continuity, actual eligible-release canary and entitled platform proof.",
+        "Released1.2.4 migration via the existing external clicked-new-package route remains unexecuted; changing branch1.2.4 bytes does not make an eligible newer release.",
+        "Broader visible UI/search/context/skills/browser/96-criterion and exact-head CI/review acceptance."
+      ],
+      "allAcceptanceComplete": false,
+      "acceptanceLedgersChanged": false
+    }
+  },
+  "limits": [
+    "The already shipped old coordinator is not repaired in place by this source change; old-profile migration and newly supported successive updates are distinct qualifications.",
+    "The primitive read-only/canonical-producer controls do not prove updater parent authority, whole-generation reaping or an installed transition.",
+    "Earlier late-read failure using the current record was measured after the format repair; the separately retained signed61 legacy-record run isolates the original deadline failure."
+  ]
+}

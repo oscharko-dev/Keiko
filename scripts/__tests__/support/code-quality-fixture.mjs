@@ -100,13 +100,16 @@ export function configureEnforcingPolicyFixture(root) {
   copyNativePolicyFixtureSources(root);
 }
 
+// Historical analyzer input only; the retired product owner is not restored in this checkout.
 export function copyNativePolicyFixtureSources(root) {
   const owner = "native/opencode-service-host";
   mkdirSync(join(root, owner), { recursive: true });
   for (const name of ["host.mjs", "entry.mjs", "guard-seams.mjs"])
     writeFileSync(
       join(root, owner, name),
-      readFileSync(new URL(`../../../${owner}/${name}`, import.meta.url)),
+      readFileSync(
+        new URL(`../fixtures/code-quality-retired-native-host/${name}.txt`, import.meta.url),
+      ),
     );
 }
 

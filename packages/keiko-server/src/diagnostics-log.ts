@@ -708,6 +708,12 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "tool-result-render-log-failed",
   // The sidecar tool bridge's own request deadline stopped a call (PR #3452, F44).
   "tool-bridge-deadline",
+  // A native OpenCode child session's ancestry could not be read from the runtime's session list;
+  // the child's permission ask is refused because nothing proves it belongs to the run (#3897).
+  "native-session-ancestry-failed",
+  // #3903 AC4: the managed task-workspace owner failed an approved Code Mode `worktree_create`
+  // without a classified answer; the request is refused and the producer's own call stays blocked.
+  "native-worktree-provision-failed",
   // KfQ 3954841973: a coding-runtime backend process (plus its HTTP/SSE client and tool bridge)
   // that was already spawned when launch failed later (lease-broker unavailable, launch-shape
   // validation) is disposed on the failure path -- mirrors opencodeRuntimeComposition.ts's
@@ -735,10 +741,6 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The gateway context-window probe could not be completed.",
   "A Knowledge Pod question did not fit the model's context window with a single reference.",
   "Model discovery exceeded the discovery cap; setup continued with the retained models.",
-  // KEIKO-0884 (#3333): loopback was the only egress class Gateway Setup accepted with no
-  // configuration signal, no log line, and no opt-in trail. Not a failure — a deliberate, silent
-  // acceptance made operator-visible.
-  "Gateway Setup accepted a loopback candidate target.",
   "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
   "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
   // #3591: chat counterpart — a candidate the smoke probe never got an answer from is kept

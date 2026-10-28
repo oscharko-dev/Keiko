@@ -76,7 +76,7 @@ project/lock and Windows native-quality gate, separately from the npm currency r
 | Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout                               |
 
 The 2026-09-30 OSV scan found newly reported advisories in the previous lockfile. The patched
-resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.8, and `ip-address` 10.7.2.
+resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.9, and `ip-address` 10.7.2.
 The two `brace-expansion` majors are pinned under their respective `minimatch` consumers so neither
 receives an incompatible major. `npm ci`, `npm audit`, and the exact OSV Scanner 2.6.0 scan pass
 with the updated lockfile.
@@ -89,6 +89,39 @@ repository-wide DOMPurify override to 3.4.16, fixing
 [GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p). The full npm audit and
 exact OSV Scanner 2.6.0 repository scan both report zero vulnerabilities with these patches; no
 waiver or gate threshold changed.
+
+On 2026-10-22 the required OSV scan newly matched DOMPurify 3.4.16 against
+[GHSA-cg2g-xh64-v4q7](https://github.com/advisories/GHSA-cg2g-xh64-v4q7),
+[GHSA-mrv2-3pqr-j5jr](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) and
+[GHSA-c6gr-qvv4-5v3f](https://github.com/advisories/GHSA-c6gr-qvv4-5v3f), and `ip-address`
+10.7.2 / 10.7.3 against [GHSA-rxp7-6hxx-x8q5](https://github.com/advisories/GHSA-rxp7-6hxx-x8q5).
+PR #4056 updates the existing DOMPurify override to the identified patched 3.4.17 release and both
+the root and native OpenCode host lockfiles to `ip-address` 10.7.4 within their existing ranges.
+The exact local OSV Scanner 2.6.0 invocation reproduces all five findings before the updates and
+reports no open findings afterward. The two existing waivers are unchanged.
+
+On 2026-10-24 the required OSV scan newly matched the dev-only `fast-uri` 3.1.8 against
+[GHSA-333x-w4r6-6crp](https://github.com/advisories/GHSA-333x-w4r6-6crp),
+[GHSA-w74x-v6f9-j3xg](https://github.com/advisories/GHSA-w74x-v6f9-j3xg),
+[GHSA-wjr9-j795-jxcr](https://github.com/advisories/GHSA-wjr9-j795-jxcr) and
+[GHSA-xhq7-xmqj-769h](https://github.com/advisories/GHSA-xhq7-xmqj-769h), and the dev-only `fallow`
+3.9.1 against [GHSA-h4fr-cmh5-qr62](https://github.com/advisories/GHSA-h4fr-cmh5-qr62) and
+[GHSA-jfwm-3p3c-6hx5](https://github.com/advisories/GHSA-jfwm-3p3c-6hx5). PR #4064 moves the
+existing `fast-uri` override to the patched 3.1.9. `fallow` moves to the patched 3.35.0 by the
+owner's gate decision of the same day: the patched line makes `dupes --fail-on-issues` fail on every
+clone group, so generated files, the translation catalogs and the failure-class contract table are
+excluded (`.fallowrc.json`) and the remaining 1,032 groups are frozen in a shrink-only baseline
+(`docs/qa/fallow/dupes-baseline.json`, enforced by
+`scripts/check-semantic-duplication.mjs`). A change fails on the clone groups it introduces, and the
+two time-boxed OSV waivers are removed.
+
+The same day, [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685),
+[GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472) and
+[GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c) were published for
+`undici` before 6.29.1, 7.30.1 and 8.12.2. PR #4064 moves the root jsdom override to 8.12.2 and the
+separate root override to 7.30.1, and adds version-scoped overrides to the native OpenCode service
+host (`undici@6.29.0` to 6.29.1, `undici@8.11.2` to 8.12.2). The exact OSV Scanner 2.7.0 action
+image reports no open finding afterward.
 
 On 2026-10-02 GitHub reviewed
 [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (braces through 3.0.3)
@@ -131,6 +164,11 @@ manifest-size and sensitive-path checks. The patched recursive OSV scan and prod
 audit pass, as do 53 targeted Rust-manifest, publishing, and pruning tests. No advisory is waived
 to accommodate this update.
 
+### Earlier #3918 security qualification (2026-10-23)
+
+The following paragraph records that repair's inputs and results. References to the private
+native service host and its lockfile are historical; the current runtime retires both.
+
 On 2026-10-23 the required recursive OSV scan and production npm audits identified new
 advisories in DOMPurify, Next.js and `ip-address`. This repair moves the existing DOMPurify
 override to 3.4.17 for
@@ -147,6 +185,22 @@ existing `socks` dependency range. No new override or waiver is added. The DOMPu
 resolution does not replace Monaco's separately vendored sanitizer; its existing disabled-markdown
 and inert-markup controls remain independently verified. The two earlier build-time advisory
 waivers retain their existing scope, expiry and revisit conditions.
+
+### Earlier Composer parser qualification (2026-10-20)
+
+On 2026-10-20 the exact OSV Scanner 2.6.0 recursive gate identified
+[GHSA-gfr2-rv44-r23c](https://github.com/advisories/GHSA-gfr2-rv44-r23c) and
+[GHSA-vfgh-jcmw-g37q](https://github.com/advisories/GHSA-vfgh-jcmw-g37q) in the runtime
+`markdown-it` 14.3.2 resolution beneath `prosemirror-markdown`. Both identify compatible 14.3.3
+as patched. The targeted lock update changes only that package's version, archive URL and
+integrity. A clean exact-lock install confirms CommonJS resolution to 14.3.3 from root, UI and
+ProseMirror contexts, while the Composer's existing CommonMark `html: false` setting remains disabled.
+The default-parser reference-definition denial of service is relevant to browser Composer
+availability; the HTML-specific parser option is not enabled on this consumer. Both defects are
+patched without enabling HTML or changing parser options. The same recursive scanner then reports
+zero unwaived findings, and all 74 existing Composer/parser controls pass. Existing waiver IDs,
+expiry dates and reachability limits remain unchanged. Earlier qualification records retain their
+original dependency inputs; current release qualification is repeated for the patched resolution.
 
 ### How this queue must be queried — and the trap in it
 
@@ -226,64 +280,66 @@ release exists and is intentionally not taken), `major-deferred` (a newer major 
 separately governed migration), `unsupported` (the newer release cannot be adopted on this runtime
 or peer graph).
 
-| Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                    |
-| ----------------------------- | --------------------- | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `fast-uri`                    | root                  | 3.1.9   | current        | Patch for the four advisories reviewed on 2026-10-23 and earlier findings; exact OSV 2.6.0 scan passes. PR #4013.                                                                                                                                                                                            |
-| `undici`                      | root                  | 8.12.2  | current        | Same-major security update for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c. The other existing override moves to 7.30.1; native host resolutions move to 6.29.1 and 8.12.2. PR #4013.                                                                                                   |
-| `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                  |
-| `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                            |
-| `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                       |
-| `typescript`                  | keiko-ui              | 5.7.3   | major-deferred | The Next.js-supported UI compiler; UI source is proven separately against native TS 7.                                                                                                                                                                                                                       |
-| `@typescript/native`          | root                  | 7.0.2   | current        | The native TypeScript 7 compiler, aliased as `npm:typescript@~7.0.2`.                                                                                                                                                                                                                                        |
-| `eslint`                      | root                  | 10.10.0 | current        | ESLint 10 lane; the `eslint-config-next` peer cap was cleared by #2777. The 10.10 update adds rule coverage and bug fixes without changing Keiko's configured rule set.                                                                                                                                      |
-| `eslint`                      | keiko-ui              | 10.10.0 | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.                                                                                                                                                                                                                         |
-| `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.                                                                                                                                                                                                                                   |
-| `typescript-eslint`           | root                  | 8.70.0  | current        | Includes rule correctness fixes and one opt-in rule. The dependency rollup regenerates the lockfile-bound tool-catalog evidence and runs the full lint lane before delivery.                                                                                                                                 |
-| `oxlint`                      | root                  | 1.78.0  | current        | Development-only syntax runner qualified for #3915; supplements typed ESLint and Sonar. Exact MIT pin, native parser visitation and conformance proofs; no product runtime dependency.                                                                                                                       |
-| `@oxlint/plugins`             | root                  | 1.78.0  | current        | Exact MIT plugin bridge of the pinned anti-slop dependency; native compatibility is qualified, not used as an ESLint replacement.                                                                                                                                                                            |
-| `oxlint-plugin-anti-slop`     | root                  | 0.1.2   | current        | MIT, Dillon Mulroy (2026). Immutable HTTPS archive at c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b with lockfile SRI and complete source hashes; #3915 qualifies all 21 noncosmetic fixture suites.                                                                                                              |
-| `next`                        | keiko-ui              | 16.4.2  | current        | Security update taken 2026-10-23 for the three reviewed Next advisories fixed from 16.4.1; moved together with `eslint-config-next`, retaining the earlier security repairs.                                                                                                                                 |
-| `eslint-config-next`          | keiko-ui              | 16.4.2  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
-| `react`                       | keiko-ui              | 19.3.0  | current        | React and its declarations move together across the UI and editor test/runtime surfaces; the UI, editor, static export, accessibility, and E2E lanes are authoritative.                                                                                                                                      |
-| `react-dom`                   | keiko-ui              | 19.3.0  | current        | Matches `react` across the UI and editor surfaces.                                                                                                                                                                                                                                                           |
-| `prosemirror-commands`        | keiko-ui              | 1.7.2   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `prosemirror-history`         | keiko-ui              | 1.5.0   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `prosemirror-inputrules`      | keiko-ui              | 1.5.1   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `prosemirror-keymap`          | keiko-ui              | 1.2.3   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `prosemirror-markdown`        | keiko-ui              | 1.13.8  | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `prosemirror-model`           | keiko-ui              | 1.25.12 | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `prosemirror-schema-list`     | keiko-ui              | 1.5.1   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `prosemirror-state`           | keiko-ui              | 1.4.4   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `prosemirror-view`            | keiko-ui              | 1.42.6  | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
-| `monaco-editor`               | root                  | 0.56.0  | current        | The reviewed editor pin; ADR-0042 was amended to 0.56.0 on 2026-08-16 and agrees.                                                                                                                                                                                                                            |
-| `monaco-editor`               | keiko-ui              | 0.56.0  | current        | Deduplicated with root.                                                                                                                                                                                                                                                                                      |
-| `monaco-editor`               | keiko-editor          | 0.56.0  | current        | Deduplicated with root.                                                                                                                                                                                                                                                                                      |
-| `@babel/preset-env`           | root                  | 8.0.5   | current        | Dependabot #3545; reviewed Babel bug-fix rollup, including destructuring, block-scoping, Safari array bounds, and parser correctness fixes.                                                                                                                                                                  |
-| `vite`                        | keiko-ui              | 8.3.3   | current        | Dependabot #3546; the workspace declaration and root override move together. Includes build/proxy performance work and fixes for CRLF code frames, package-root detection, failed-build cleanup, HTML preload targets, HMR, and asset handling.                                                              |
-| `vitest`                      | root                  | 4.1.12  | major-deferred | #3474 reverts the Vitest 5 adoption for the mutation lane: Stryker 10 with Vitest 5.0.0 reports zero killed mutants despite a covering dry run, making the security mutation evidence meaningless. 4.1.12 is the patched Vitest 4 line with patched mocker logic and working Stryker/Vitest instrumentation. |
-| `vitest`                      | keiko-ui              | 4.1.12  | major-deferred | Kept exactly aligned with the root because workspace-local Vitest drift previously produced peer-invalid `npm ls` output. The next Vitest major move must first prove non-zero Stryker kills on the security mutation scope.                                                                                 |
-| `@vitest/coverage-v8`         | root                  | 4.1.12  | major-deferred | Exact peer match for Vitest 4.1.12. Vitest 5 coverage stays deferred with the Vitest major because the security mutation runner, not the coverage package alone, is the blocking evidence path (#3474).                                                                                                      |
-| `autoprefixer`                | keiko-ui              | 10.6.1  | current        | Dependabot #3590 (consolidated 2026-09-25); minor release on the 10.x line.                                                                                                                                                                                                                                  |
-| `@types/react`                | keiko-ui              | 19.3.0  | current        | Kept exactly aligned with React 19.3 and `@types/react-dom` across the UI and editor workspaces.                                                                                                                                                                                                             |
-| `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.                                                                                                                                                                                                                             |
-| `@noble/hashes`               | keiko-ui              | 2.4.0   | current        | Security/correctness hardening; hash and UI quality gates remain authoritative.                                                                                                                                                                                                                              |
-| `@types/node`                 | root                  | 26.5.1  | current        | Root declarations realigned with the UI workspace on the Node 26 line.                                                                                                                                                                                                                                       |
-| `@types/node`                 | keiko-ui              | 26.6.1  | current        | Node 26 declaration refresh for the UI workspace (Dependabot #3586, consolidated 2026-09-25); nested under the workspace ahead of the root's ^26.5.1, as the Dependabot pull request proposed.                                                                                                               |
-| `@types/react-dom`            | keiko-ui              | 19.3.0  | current        | Kept exactly aligned with React DOM 19.3 and `@types/react` across the UI and editor workspaces.                                                                                                                                                                                                             |
-| `@vitejs/plugin-react`        | keiko-ui              | 6.1.1   | current        | Taken 2026-09-09; the UI build and its smoke lanes are the proof, and the baseline is unchanged.                                                                                                                                                                                                             |
-| `@testing-library/react`      | keiko-ui              | 16.3.3  | current        | Fixes re-entrant `act()` behavior while dispatching events.                                                                                                                                                                                                                                                  |
-| `@testing-library/user-event` | keiko-ui              | 14.6.7  | current        | Taken 2026-09-09 with the UI and editor suites as the proof; no behaviour in either depends on the deferred delta.                                                                                                                                                                                           |
-| `@playwright/test`            | root                  | 1.63.0  | current        | E2E reference runner; the browser pin and Linux-authoritative D12 evidence move with it.                                                                                                                                                                                                                     |
-| `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                                                                                                                                                                                                                                               |
-| `knip`                        | root                  | 6.35.1  | patch-deferred | Adds analysis fixes and makes plugin-config load failures fail distinctly. The later 6.36 line was not part of the reviewed Dependabot queue and remains a separate update.                                                                                                                                  |
-| `corepack`                    | root                  | 0.36.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                                                                                                                                                                                                       |
-| `fallow`                      | root                  | 3.34.0  | current        | Security update for GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5, both fixed in 3.34.0. Existing semantic duplicate command and token/line floors remain unchanged. PR #4013.                                                                                                                                 |
-| `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.9   | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                              |
-| `postcss`                     | root                  | 8.5.28  | current        | Root override; audit reports no known vulnerability.                                                                                                                                                                                                                                                         |
-| `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                         |
-| `smol-toml`                   | root                  | 1.9.0   | current        | Fix for GHSA-r4xh-jqrq-34v2; shared server Rust-manifest and Knip parser resolution.                                                                                                                                                                                                                         |
-| `ws`                          | root                  | 8.21.3  | current        | WebSocket runtime.                                                                                                                                                                                                                                                                                           |
-| `entities`                    | keiko-workspace       | 8.0.0   | patch-deferred | Registry latest is 8.1.0 (2026-10-10). Retain the reviewed BSD-2-Clause 8.0.0 pin; the compatible update needs a separate decoder review. Stewardship and alternatives are in the Quality Intelligence decision matrix.                                                                                      |
+| Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------- | --------------------- | ------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fast-uri`                    | root                  | 3.1.9   | major-deferred | Patched 3.x line for GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr and GHSA-xhq7-xmqj-769h. Retains the compatible major used by current consumers; 4.2.3 is available. Scoped refresh in PR #4069.                                                                                                                          |
+| `undici`                      | root                  | 8.12.2  | patch-deferred | Reviewed fixes for GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c. The jsdom override uses 8.12.2; the other-consumer override uses 7.30.1. Later 8.12.3 is available; this repair retains the prepared compatible floors from PR #4050. PR #4069.                                                                         |
+| `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                                                  |
+| `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                                                            |
+| `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                                                       |
+| `typescript`                  | keiko-ui              | 5.7.3   | major-deferred | The Next.js-supported UI compiler; UI source is proven separately against native TS 7.                                                                                                                                                                                                                                                       |
+| `@typescript/native`          | root                  | 7.0.2   | current        | The native TypeScript 7 compiler, aliased as `npm:typescript@~7.0.2`.                                                                                                                                                                                                                                                                        |
+| `eslint`                      | root                  | 10.13.0 | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `eslint`                      | keiko-ui              | 10.13.0 | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.                                                                                                                                                                                                                                                                   |
+| `typescript-eslint`           | root                  | 8.70.0  | patch-deferred | Owner-approved retention in PR #4066: with identical product sources and the same 12 GiB limit, 8.71.2 exhausts the root lint heap; 8.70.0 passes complete root and UI lint. Retain the exact pin while prioritizing the updater; no heap, lint-rule or gate changes.                                                                        |
+| `oxlint`                      | root                  | 1.78.0  | current        | Development-only syntax runner qualified for #3915; supplements typed ESLint and Sonar. Exact MIT pin, native parser visitation and conformance proofs; no product runtime dependency.                                                                                                                                                       |
+| `@oxlint/plugins`             | root                  | 1.78.0  | current        | Exact MIT plugin bridge of the pinned anti-slop dependency; native compatibility is qualified, not used as an ESLint replacement.                                                                                                                                                                                                            |
+| `oxlint-plugin-anti-slop`     | root                  | 0.1.2   | current        | MIT, Dillon Mulroy (2026). Immutable HTTPS archive at c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b with lockfile SRI and complete source hashes; #3915 qualifies all 21 noncosmetic fixture suites.                                                                                                                                              |
+| `next`                        | keiko-ui              | 16.4.2  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `eslint-config-next`          | keiko-ui              | 16.4.2  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `react`                       | keiko-ui              | 19.3.1  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `react-dom`                   | keiko-ui              | 19.3.1  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `prosemirror-commands`        | keiko-ui              | 1.7.2   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `prosemirror-history`         | keiko-ui              | 1.5.1   | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `prosemirror-inputrules`      | keiko-ui              | 1.5.1   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `prosemirror-keymap`          | keiko-ui              | 1.2.3   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `prosemirror-markdown`        | keiko-ui              | 1.13.8  | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `prosemirror-model`           | keiko-ui              | 1.25.12 | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `prosemirror-schema-list`     | keiko-ui              | 1.5.1   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `prosemirror-state`           | keiko-ui              | 1.4.4   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `prosemirror-view`            | keiko-ui              | 1.42.6  | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                                                            |
+| `katex`                       | keiko-ui              | 0.19.0  | patch-deferred | MIT; typesets math in Coding Workbench answers as MathML, imported lazily (#3906). 0.19.0 is the newest release at least two weeks old: it carries the fix for GHSA-238p-pmpm-9mq7 (below 0.18.2) and replaces the deprecated 0.18.11. 0.19.1 (2026-10-23) is not taken yet.                                                                 |
+| `monaco-editor`               | root                  | 0.57.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `monaco-editor`               | keiko-ui              | 0.57.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `monaco-editor`               | keiko-editor          | 0.57.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `@babel/preset-env`           | root                  | 8.0.7   | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `vite`                        | keiko-ui              | 8.3.4   | current        | Dependabot #3546; the workspace declaration and root override move together. Includes build/proxy performance work and fixes for CRLF code frames, package-root detection, failed-build cleanup, HTML preload targets, HMR, and asset handling.                                                                                              |
+| `vitest`                      | root                  | 4.1.12  | major-deferred | #3474 reverts the Vitest 5 adoption for the mutation lane: Stryker 10 with Vitest 5.0.0 reports zero killed mutants despite a covering dry run, making the security mutation evidence meaningless. 4.1.12 fixes the current mocker advisories while retaining the previously qualified Vitest 4 major; mutation thresholds remain unchanged. |
+| `vitest`                      | keiko-ui              | 4.1.12  | major-deferred | Kept exactly aligned with the root because workspace-local Vitest drift previously produced peer-invalid `npm ls` output. The next Vitest major move must first prove non-zero Stryker kills on the security mutation scope.                                                                                                                 |
+| `@vitest/coverage-v8`         | root                  | 4.1.12  | major-deferred | Exact peer match for Vitest 4.1.12. Vitest 5 coverage stays deferred with the Vitest major because the security mutation runner, not the coverage package alone, is the blocking evidence path (#3474).                                                                                                                                      |
+| `@vitest/utils`               | root                  | 5.0.5   | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `autoprefixer`                | keiko-ui              | 10.6.1  | current        | Dependabot #3590 (consolidated 2026-09-25); minor release on the 10.x line.                                                                                                                                                                                                                                                                  |
+| `@types/react`                | keiko-ui              | 19.3.0  | current        | Kept exactly aligned with React 19.3 and `@types/react-dom` across the UI and editor workspaces.                                                                                                                                                                                                                                             |
+| `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | Owner retained 4.12.1 for updater delivery; the existing dependency-review license gate rejects the proposed 4.14.0 MPL-2.0 update. No license exception is added.                                                                                                                                                                           |
+| `@noble/hashes`               | keiko-ui              | 2.4.0   | current        | Security/correctness hardening; hash and UI quality gates remain authoritative.                                                                                                                                                                                                                                                              |
+| `@types/node`                 | root                  | 26.6.5  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `@types/node`                 | keiko-ui              | 26.6.5  | current        | Matches the UI manifest and root declaration package after the owner-requested Dependabot consolidation; the obsolete nested 26.6.1 lock entry is removed.                                                                                                                                                                                   |
+| `@types/react-dom`            | keiko-ui              | 19.3.0  | current        | Kept exactly aligned with React DOM 19.3 and `@types/react` across the UI and editor workspaces.                                                                                                                                                                                                                                             |
+| `@vitejs/plugin-react`        | keiko-ui              | 6.1.2   | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `@testing-library/react`      | keiko-ui              | 16.3.3  | current        | Fixes re-entrant `act()` behavior while dispatching events.                                                                                                                                                                                                                                                                                  |
+| `@testing-library/user-event` | keiko-ui              | 14.6.8  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `@playwright/test`            | root                  | 1.64.1  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `prettier`                    | root                  | 3.9.10  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `knip`                        | root                  | 6.41.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `corepack`                    | root                  | 0.36.0  | current        | Lockfile-verified Node 26 bootstrap for the pinned offline Yarn smoke.                                                                                                                                                                                                                                                                       |
+| `fallow`                      | root                  | 3.35.0  | current        | Mandatory semantic audit over all source, preserving string values and rejecting every introduced clone group against the immutable comparison commit. The historical baseline grants no exemption; actual merged-tree qualification remains required.                                                                                       |
+| `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.11  | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                                                              |
+| `postcss`                     | root                  | 8.5.30  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                                                         |
+| `smol-toml`                   | root                  | 1.9.1   | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `ws`                          | root                  | 8.22.0  | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
+| `entities`                    | keiko-workspace       | 8.1.0   | current        | Consolidated from the owner-requested Dependabot batch (#4052, #4058, #4062); qualification is recorded in the repair PR.                                                                                                                                                                                                                    |
 
 The live inventory command is `npm outdated --workspaces --include-workspace-root --json`; it
 reported 18 non-current direct entries, every one of which is dispositioned above.
@@ -296,6 +352,11 @@ was missing from the table entirely while eleven minor releases behind. `check:d
 cannot catch this class either, by design: it compares the document against the lockfile and never
 contacts a registry, so it proves the record describes this checkout, never that the checkout is
 current. Cross-check individual root devDependencies before claiming a clean sweep.
+
+### Earlier #3918 analyzer and supplier repair
+
+These measurements and the private service-host dependency descriptions refer to the earlier
+repair tree, not to qualification of the current merged runtime or dependency graph.
 
 On 2026-10-23, a fresh local recursive OSV scan found two newly reviewed advisories in
 Fallow 3.9.1: [GHSA-h4fr-cmh5-qr62](https://github.com/advisories/GHSA-h4fr-cmh5-qr62)
@@ -319,6 +380,21 @@ The private native host uses version-specific overrides for its existing 6.29.0 
 8.11.2 resolutions, selecting patched 6.29.1 and 8.12.2 without a major-version
 migration. No advisory waiver, network authority or resource limit changes.
 
+### Dependabot #4067 integration in PR #4069
+
+The owner-requested integration includes ESLint 10.13.0 and Vite 8.3.4. The existing exact Vite
+workspace declaration is now matched by the root override. The existing gates and limits remain
+intact. The owner explicitly selected a separate PDF.js qualification: 6.3.289 remains in this PR
+because 6.4.299 changes the bundled provider format and fails the unchanged browser-baseline gate.
+
+The TypeScript compiler stays on native 7.0.2, with the 6.0.3 programmatic API and the existing
+Next.js UI API lane. The proposed API replacement with 7.0.2 fails the supported peer range of
+`typescript-eslint`; the native TypeScript toolchain gate preserves these separate roles.
+`typescript-eslint` stays on 8.70.0: a fresh full lint run with 8.71.2 on the combined sources again
+exhausted the unchanged 12 GiB heap limit. `axe-core` stays on 4.12.1: #4067's dependency review rejects
+4.14.0's MPL-2.0 license under the unchanged permissive-only policy. No license exception, heap
+increase or quality-gate relaxation is introduced.
+
 ## GitHub Actions baseline
 
 Every action is pinned to a full 40-character commit SHA with a version comment. All 12 external
@@ -328,25 +404,24 @@ additionally rejects an action repository whose sub-actions have drifted onto di
 `github/codeql-action/init` and `/analyze` are not grouped by Dependabot and a one-sided bump is a
 guaranteed version-mismatch failure.
 
-| Action                             | Version | Commit                                   | Disposition    |
-| ---------------------------------- | ------- | ---------------------------------------- | -------------- |
-| `actions/checkout`                 | v7.0.0  | 9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 | patch-deferred |
-| `actions/setup-node`               | v7.0.0  | 820762786026740c76f36085b0efc47a31fe5020 | current        |
-| `actions/upload-artifact`          | v7.0.1  | 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a | current        |
-| `actions/download-artifact`        | v8.0.1  | 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c | current        |
-| `actions/cache`                    | v6.1.0  | 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 | current        |
-| `actions/attest`                   | v4.2.0  | f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 | patch-deferred |
-| `actions/create-github-app-token`  | v3.2.0  | bcd2ba49218906704ab6c1aa796996da409d3eb1 | current        |
-| `actions/setup-dotnet`             | v6.0.0  | a98b56852c35b8e3190ac28c8c2271da59106c68 | current        |
-| `actions/dependency-review-action` | v5.0.0  | a1d282b36b6f3519aa1f3fc636f609c47dddb294 | current        |
-| `github/codeql-action`             | v4.38.1 | 1c5b675653bb5c22dbe9b12b556ec555138e09fd | current        |
-| `google/osv-scanner-action`        | v2.6.0  | a345acffa64b0eaede81a3d9aae6141214d9c8fc | current        |
-| `zizmorcore/zizmor-action`         | v0.6.4  | cc914d7f3750a2d13d75c7f184a1060aa0e9d482 | current        |
+| Action                             | Version | Commit                                   | Disposition |
+| ---------------------------------- | ------- | ---------------------------------------- | ----------- |
+| `actions/checkout`                 | v7.0.1  | 3d3c42e5aac5ba805825da76410c181273ba90b1 | current     |
+| `actions/setup-node`               | v7.1.0  | 949feb2413d6458794dcd2491c4babbbce0c15c1 | current     |
+| `actions/upload-artifact`          | v7.0.2  | cf430e030ddbb5b0abf93d22962f4752f3646cd9 | current     |
+| `actions/download-artifact`        | v8.0.2  | 9000827ccba6bdab643e8b6fd33ac0654aef8333 | current     |
+| `actions/cache`                    | v6.1.0  | 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 | current     |
+| `actions/attest`                   | v4.2.2  | 1e69f48acb82d1966a394da916b4c1698aa569d6 | current     |
+| `actions/create-github-app-token`  | v3.3.0  | 64ab729a6294000f5aa4a4bc0b73d1f32bc45510 | current     |
+| `actions/setup-dotnet`             | v6.0.0  | a98b56852c35b8e3190ac28c8c2271da59106c68 | current     |
+| `actions/dependency-review-action` | v5.0.0  | a1d282b36b6f3519aa1f3fc636f609c47dddb294 | current     |
+| `github/codeql-action`             | v4.39.0 | 6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee | current     |
+| `google/osv-scanner-action`        | v2.7.0  | b1d267aea5211fa648d9d442fa64b90dbdcbdd36 | current     |
+| `zizmorcore/zizmor-action`         | v0.7.1  | 85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e | current     |
 
-The two `patch-deferred` actions have newer upstream tags (checkout v7.0.1 and attest v4.2.2).
-They remain outside this rollup because they were not part of the reviewed Dependabot queue. The
-credential-bound Azure signing actions were retired by #3403 when Keiko-owned release signatures
-became the mandatory cross-platform trust anchor.
+The 2026-10-23 owner-requested consolidation includes the ten action updates in #4058, including
+checkout v7.0.1 and attest v4.2.2. Credential-bound Azure signing actions remain retired under #3403;
+Keiko-owned release signatures remain the mandatory cross-platform trust anchor.
 
 ## Runtime and toolchain
 
@@ -599,3 +674,116 @@ No product runtime behaviour, published surface, or state store changes; the onl
 ### 2026-10-22 OSV patch refresh (#3918)
 
 The required workflow-hygiene scan on PR #4013 identified fixable advisories in Vite, the Vitest mocker, markdown-it and the native MCP client. The root override and UI Vite declaration move together to 8.3.3. Root/UI Vitest and the coverage peer stay on the reviewed Vitest 4 major and move together to 4.1.12; the Vitest 5/Stryker deferral remains. The existing prosemirror-markdown dependency resolves markdown-it 14.3.3 without a new direct dependency. The native host retains its existing MCP override mechanism and aligns client/core at 2.3.0, as required by the client's exact core dependency. The pinned scanner, waiver set and security policy are unchanged. This security update does not establish a cause or fix for the separately open Node 26 grounding-import finding.
+
+### Source projection runtime dependencies (#4040)
+
+The security boundary lazily loads the existing TypeScript 6.0.3 API and YAML 2.9.1 parser only
+when their formats require them. Java ownership uses java-parser 3.0.1 (Apache-2.0) and its CST;
+no source is compiled or executed during redaction. Global overrides resolve both lodash variants
+to 4.18.1: upstream 4.17.21 and the earlier 4.17.23 correction remain affected by
+[GHSA-r5fr-rjxr-66jc](https://github.com/advisories/GHSA-r5fr-rjxr-66jc) and
+[GHSA-f23m-r3pf-42rh](https://github.com/advisories/GHSA-f23m-r3pf-42rh).
+The initial scoped overrides failed the actual product graph resolution check and were replaced
+by global overrides. The assembled root also declares the same Java parser runtime: npm 11.16.0
+does not propagate these overrides into the workspace-only parser graph. Merely replacing the
+locked files leaves invalid dependency edges. The root declaration gives the existing parser graph
+the root override set without adding another installed package. Actual npm resolution, supplier audit and release gates must pass before
+adoption; the earlier isolated sandbox audit alone is insufficient.
+Knip cannot observe this root lock-resolution requirement as an import. Its exact root workspace
+ignores only `java-parser`; the security workspace dependency and imports remain checked. This
+exception does not permit an unused runtime parser or alter the resolved graph. The actual
+workspace-only and invalid-edge attempts remain retained alongside passing `npm ls` and the
+production supplier audit.
+
+| Dependency    | Scope            | Resolved version | Disposition |
+| ------------- | ---------------- | ---------------- | ----------- |
+| `java-parser` | `root`           | `3.0.1`          | current     |
+| `java-parser` | `keiko-security` | `3.0.1`          | current     |
+| `typescript`  | `keiko-security` | `6.0.3`          | current     |
+| `yaml`        | `keiko-security` | `2.9.1`          | current     |
+| `lodash`      | `root`           | `4.18.1`         | current     |
+| `lodash-es`   | `root`           | `4.18.1`         | current     |
+
+### Security repair 2026-10-20: Vite and native MCP client
+
+PR #4046's required OSV scan reported two newly reviewed advisories on its published repair head.
+The root Vite override and UI declaration now pin 8.3.3 for
+[GHSA-698v-4r3x-3vcv](https://github.com/advisories/GHSA-698v-4r3x-3vcv).
+The native service host's existing selective client/core overrides now pin 2.3.0 for
+[GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw);
+the client requires core exactly 2.3.0. Its default redirect restriction remains enabled.
+Both canonical npm locks are regenerated. Resolver-required Rolldown bindings, OXC types and the
+native core's Zod patch remain visible in the lock diff. MCP's new Apache-2.0 metadata is already
+within the approved license set; no waiver or license exception changes.
+
+The original native provider/host compatibility tests, patched Vite test/build lanes, dependency
+currency/hygiene, supply-chain checks and a fresh scan qualify these exact inputs. Historical native
+source-lock evidence keeps its original binding. The earlier full coverage attempt on the preceding
+head was stopped after the security failure and receives no full-suite acceptance credit.
+
+### 2026-10-21 — Vitest 4 security patch for release 1.2.6
+
+The required OSV scan began reporting [GHSA-qxg6-89mg-rqv8](https://github.com/advisories/GHSA-qxg6-89mg-rqv8) and [GHSA-xp26-3454-mjgp](https://github.com/advisories/GHSA-xp26-3454-mjgp) in the development-only `@vitest/mocker` 4.1.11 graph during updater release verification. Root and UI Vitest, coverage-v8 and the directly imported serializer utilities are aligned at 4.1.12. The unchanged OSV Scanner 2.6.0 reproduces both findings on the prior tracked source and reports no findings on the patched graph after its existing reviewed filters. No waiver was added. The Vitest 5 / Stryker major-version deferral remains in force; this patch does not alter mutation or coverage floors.
+
+## 2026-10-23 Dependabot consolidation
+
+The owner requested the combined changes from #4052, #4058 and #4062 in the updater repair.
+TypeScript API declarations remain on the existing supported 6.0.3 lane, and the UI retains its
+5.7.3 compatibility package; the separate native compiler remains 7.0.2. The owner explicitly
+approved this exception. #4065 tracks dependency-automation alignment; #2269 and #2270 retain
+ownership of the future API migration and compatibility removal.
+
+The direct test serializer `@vitest/utils` advances to 5.0.5. Vitest and coverage remain 4.1.12,
+with their own 4.1.12 utility dependencies, so this does not adopt the deferred Vitest 5 runner
+or change the Stryker mutation lane. The existing qualification reporter suite passes all
+12 cases with the new direct serializer.
+
+`http-cache-semantics` now resolves to 4.3.0 through #4052. The earlier 4.2.0 observation above
+is historical. The current npm audit no longer reports that package; the remaining five high
+entries are the existing development-only `braces` chain. OSV Scanner 2.7.0 reports the
+`http-cache-semantics` exception as unused and no unsuppressed findings. Its obsolete
+`GHSA-ch52-4w7c-c8xp` waiver is removed; the existing development-only `braces` exception remains.
+Consolidation does not claim the full release qualification or the actual SSD updater acceptance
+has passed.
+
+The root `@napi-rs/canvas` override now matches #4062's workspace requirement at 1.0.11. Keeping
+the earlier 1.0.9 override would prevent the requested update and leave no root runtime version
+for publish staging; the resulting lockfile contains one deduplicated 1.0.11 runtime node.
+
+The owner separately retained PDF.js 6.3.289 to prioritize updater delivery. Dependabot's
+transitive lockfile refresh selected 6.4.299, whose changed core-js bundle format is not admitted
+by the existing browser-baseline provider recognizer. The exact root dependency pin retains the
+verified 6.3.289 closure; the browser floors and provider-recognition gate remain unchanged.
+The compatibility-gate controls reproduce both failures with 6.4.299 before this disposition.
+
+The owner also retained the existing axe-core 4.12.1 test dependency. GitHub dependency review
+rejects the proposed 4.14.0 MPL-2.0 update under its existing permissive-license policy. This
+disposition adds no license exception or policy change and does not remove accessibility tests.
+
+### 2026-10-24 — Sonar repair CI dependency blockers (PR #4069)
+
+The exact pinned OSV 2.7.0 container reproduced 17 findings on the unchanged baseline locks.
+This repair reuses the bounded dependency versions already prepared in PR #4050: root undici
+7.30.1/8.12.2, fast-uri 3.1.9 and Fallow 3.34.0; native undici 6.29.1/8.12.2 and Zod 4.6.7.
+No OpenCode, Effect or other native package version changes. The native graph removes the three
+nested Zod copies while retaining the existing fixed host, model binding and authority profile.
+
+All 71 native host tests pass, including original issuer-bound MCP refresh, guarded provider
+transport, PTY behavior, the original GitLab direct-access client with valid and malformed header
+records, the original GitLab OAuth schema's optional refresh-token and invalid-expiry paths, and an
+early-rejection control for oversized constrained Zod arrays. The GitLab consumer previously resolved
+Zod 3.25.76; the advisory also covers that version. Both of its actual schema families are exercised
+against the patched runtime rather than assuming compatibility from version numbers. This is evidence
+for the tested product/SDK paths rather than a claim of exhaustive upstream API equivalence.
+The same OSV container then reports no unwaived issue; the existing, unchanged, time-boxed
+build-only braces disposition remains recorded in osv-scanner.toml. No advisory waiver, gate
+threshold, provider availability or release approval is added.
+
+PR #4064 (#3897, #3898) advanced Fallow to 3.35.0 and initially used generated-file
+exclusions with a shrink-only duplication baseline. The #3918 reconciliation retains that
+933-key artifact as historical diagnostic data only: the mandatory audit preserves string
+values, covers generated and ordinary source alike, and rejects every introduced clone group
+against its immutable comparison commit. The legacy artifact grants no exemption. Actual
+3.35.0 qualification on the merged tree remains required. The private OpenCode service host
+was removed together with its lockfile and overrides, so its Zod, undici 6 and undici 8
+boundaries described above no longer exist in the tree.

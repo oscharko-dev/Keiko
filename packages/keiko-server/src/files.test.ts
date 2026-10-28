@@ -228,6 +228,24 @@ describe("desktop files browser", () => {
     });
   });
 
+  it.each([false, true])(
+    "reports the actual directory after a selected alias changes target (registered: %s)",
+    async (registered) => {
+      const alias = join(root, "folder-link");
+      await symlink(join(root, "src"), alias, "dir");
+      if (registered) store.createProject(alias, "Selected alias");
+      const first = await readFilesTree(store, alias, "");
+      expect(first.root).toBe(join(root, "src"));
+      expect(first.entries.map((entry) => entry.name)).toContain("app.ts");
+      await rm(alias);
+      await symlink(join(root, "assets"), alias, "dir");
+      const second = await readFilesTree(store, alias, "");
+      expect(second.root).toBe(join(root, "assets"));
+      expect(second.entries.map((entry) => entry.name)).toContain("pixel.png");
+      expect(second.entries.map((entry) => entry.name)).not.toContain("app.ts");
+    },
+  );
+
   it("denies an unregistered root that passes through a credential location", async () => {
     // The deny list matches on EVERY path segment of the realpath, so a root literally named like a
     // credential dir — or nested under one — is rejected even though its basename is innocuous. This

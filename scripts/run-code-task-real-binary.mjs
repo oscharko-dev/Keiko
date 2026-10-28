@@ -26,7 +26,11 @@ import {
   resolveCodingSafeSidecarGatewayProfile,
 } from "@oscharko-dev/keiko-model-gateway";
 import { OPENCODE_PINNED_VERSION } from "../packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js";
-import { resolveOpenCodeContextGeometry } from "../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
+import {
+  OPENCODE_RUNTIME_MODEL_ALIAS,
+  OPENCODE_RUNTIME_PROVIDER_ID,
+  resolveOpenCodeContextGeometry,
+} from "../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
 
 import { hostDevLaneTarget } from "./stage-dev-coding-runtime.mjs";
 import { realBinaryScenarioArtifactErrors } from "./lib/coding-issue-journey-real-binary-evidence.mjs";
@@ -192,12 +196,47 @@ function runPlaywright(env, observer, limitObserver) {
   });
 }
 
+// #3897: a native run advertises the pinned runtime's own tool set instead of a bound catalog. The
+// observed advertisement is the native counterpart of the catalog binding: the runtime identity and
+// the digest of the exact tool set the model was offered, which must not change during one journey.
+const NATIVE_TOOL_SET_DIGEST = /^[a-f0-9]{64}$/u;
+
+function hasExactKeys(value, keys) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+/** Returns a closed copy of an observed native tool set, or undefined when it is not canonical. */
+export function captureNativeToolSet(value) {
+  if (
+    !hasExactKeys(value, ["runtime", "toolSetDigest"]) ||
+    !hasExactKeys(value.runtime, ["id", "version"]) ||
+    value.runtime.id !== "opencode" ||
+    value.runtime.version !== OPENCODE_PINNED_VERSION ||
+    typeof value.toolSetDigest !== "string" ||
+    !NATIVE_TOOL_SET_DIGEST.test(value.toolSetDigest)
+  ) {
+    return undefined;
+  }
+  return {
+    runtime: { id: value.runtime.id, version: value.runtime.version },
+    toolSetDigest: value.toolSetDigest,
+  };
+}
+
 export function readGatewayObservation(path) {
   const empty = {
     requestCount: 0,
     outputTokenLimits: [],
     catalogBinding: undefined,
     catalogBindingRequestCount: 0,
+    nativeToolSet: undefined,
+    nativeToolSetRequestCount: 0,
   };
   if (!existsSync(path)) return empty;
   try {
@@ -209,6 +248,8 @@ export function readGatewayObservation(path) {
         : [],
       catalogBinding: captureToolCatalogQualificationBinding(parsed.catalogBinding),
       catalogBindingRequestCount: Number(parsed.catalogBindingRequestCount ?? 0),
+      nativeToolSet: captureNativeToolSet(parsed.nativeToolSet),
+      nativeToolSetRequestCount: Number(parsed.nativeToolSetRequestCount ?? 0),
     };
   } catch {
     return empty;
@@ -233,7 +274,11 @@ export function readMaterializedLimits(stateDir) {
   const limits = materializedConfigPaths(stateDir).flatMap((path) => {
     try {
       const config = JSON.parse(readFileSync(path, "utf8"));
-      const limit = config.provider?.["keiko-runtime"]?.models?.coding?.limit;
+      // The V2 launch profile declares the one gateway-bound provider under `providers`; the V1
+      // `provider` key no longer exists in a materialized config (#3561).
+      const limit =
+        config.providers?.[OPENCODE_RUNTIME_PROVIDER_ID]?.models?.[OPENCODE_RUNTIME_MODEL_ALIAS]
+          ?.limit;
       const geometry = [limit?.context, limit?.input, limit?.output];
       return geometry.every((value) => Number.isSafeInteger(value))
         ? [{ context: limit.context, input: limit.input, output: limit.output }]
@@ -454,12 +499,24 @@ export function buildJourneyReport(input) {
       gatewayRequestCount: input.gateway.requestCount,
       gatewayCatalogBindingRequestCount: input.gateway.catalogBindingRequestCount,
       observedGatewayOutputTokenLimits: input.gateway.outputTokenLimits,
+      ...nativeToolSetFacts(input.gateway),
     },
     egress: input.observer.report(),
     missingPayload: input.missingPayload,
     h1Search: input.h1Search,
     managedCatalog: input.managedCatalog,
+    ...(input.nativeGovernance === undefined ? {} : { nativeGovernance: input.nativeGovernance }),
     activityLog: input.activityLog,
+  };
+}
+
+// Present only for a native run, so a mapped-catalog report keeps its established shape.
+function nativeToolSetFacts(gateway) {
+  const count = gateway.nativeToolSetRequestCount ?? 0;
+  if (count <= 0) return {};
+  return {
+    gatewayNativeToolSetRequestCount: count,
+    ...(gateway.nativeToolSet === undefined ? {} : { nativeToolSet: gateway.nativeToolSet }),
   };
 }
 
@@ -647,6 +704,114 @@ export function readManagedCatalogEvidence(stateDir, gateway, h1Search) {
   };
 }
 
+const NATIVE_POLICY_DECISION_OP = "coding-runtime.native-policy.decided";
+
+function nativePolicyDecision(value) {
+  if (
+    typeof value.correlationId !== "string" ||
+    !EVIDENCE_ID.test(value.correlationId) ||
+    typeof value.permission !== "string" ||
+    typeof value.effect !== "string" ||
+    typeof value.outcome !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    correlationId: value.correlationId,
+    permission: value.permission,
+    effect: value.effect,
+    outcome: value.outcome,
+  };
+}
+
+function allowedDecisionIndex(decisions, permission, after = -1) {
+  return decisions.findIndex(
+    (decision, index) =>
+      index > after &&
+      decision.permission === permission &&
+      decision.effect === "allow" &&
+      decision.outcome === "allowed",
+  );
+}
+
+function hasStableNativeToolSet(limits) {
+  return (
+    limits.gatewayRequestCount > 0 &&
+    limits.gatewayNativeToolSetRequestCount === limits.gatewayRequestCount &&
+    captureNativeToolSet(limits.nativeToolSet) !== undefined
+  );
+}
+
+/**
+ * The native counterpart of the managed catalog proof (#3897). The runtime executes `grep` and
+ * `read` itself, so no Keiko catalog handler settles them; what Keiko owns is the permission
+ * decision it makes before each call. The proof is the one run whose Activity Log holds an allowed
+ * `grep` decision followed by an allowed `read` decision, over a stable advertised tool set and the
+ * scripted model's search-derived read (`h1Search`, which proves the read target came from the
+ * search result).
+ */
+export function readNativeGovernanceEvidence(stateDir, gateway, h1Search) {
+  const toolSet = captureNativeToolSet(gateway.nativeToolSet);
+  if (
+    toolSet === undefined ||
+    gateway.requestCount <= 0 ||
+    gateway.nativeToolSetRequestCount !== gateway.requestCount ||
+    !validH1SearchEvidence(h1Search)
+  ) {
+    return undefined;
+  }
+  const activity = readActivityRecords(stateDir);
+  if (activity === undefined) return undefined;
+  const records = activity.filter((value) => value.op === NATIVE_POLICY_DECISION_OP);
+  const decisions = records.flatMap((value) => {
+    const captured = nativePolicyDecision(value);
+    return captured === undefined ? [] : [captured];
+  });
+  if (decisions.length !== records.length) return undefined;
+  const candidates = [...new Set(decisions.map(({ correlationId }) => correlationId))].flatMap(
+    (correlationId) => {
+      const scoped = decisions.filter((decision) => decision.correlationId === correlationId);
+      const search = allowedDecisionIndex(scoped, "grep");
+      const read = allowedDecisionIndex(scoped, "read", search);
+      return search < 0 || read < 0 ? [] : [{ correlationId, decisionCount: scoped.length }];
+    },
+  );
+  if (candidates.length !== 1) return undefined;
+  return {
+    toolSet,
+    correlationId: candidates[0].correlationId,
+    decisionCount: candidates[0].decisionCount,
+    proof: {
+      kind: "native-search-read",
+      searchAllowed: true,
+      readAllowed: true,
+      causalHandoff: true,
+    },
+  };
+}
+
+function validNativeGovernanceProof(proof) {
+  return (
+    hasExactKeys(proof, ["kind", "searchAllowed", "readAllowed", "causalHandoff"]) &&
+    proof.kind === "native-search-read" &&
+    proof.searchAllowed === true &&
+    proof.readAllowed === true &&
+    proof.causalHandoff === true
+  );
+}
+
+function validNativeGovernanceEvidence(value) {
+  return (
+    value !== undefined &&
+    captureNativeToolSet(value.toolSet) !== undefined &&
+    typeof value.correlationId === "string" &&
+    EVIDENCE_ID.test(value.correlationId) &&
+    Number.isSafeInteger(value.decisionCount) &&
+    value.decisionCount >= 2 &&
+    validNativeGovernanceProof(value.proof)
+  );
+}
+
 function validManagedCatalogEvidence(value) {
   return (
     value !== undefined &&
@@ -667,6 +832,26 @@ function hasStableGatewayCatalogBinding(limits) {
     limits.gatewayRequestCount > 0 &&
     limits.gatewayCatalogBindingRequestCount === limits.gatewayRequestCount
   );
+}
+
+// This lane is macOS-only, where the product always runs the pinned runtime with its own native tool
+// set (#3897). A run is judged against the mapped catalog contract only when its requests carried a
+// bound catalog; anything else, including a run that observed nothing, is judged as the native run
+// the lane exists to prove. A run that mixes both fails the mapped check, never passes the native one.
+function isNativeRun(limits) {
+  return (limits.gatewayCatalogBindingRequestCount ?? 0) === 0;
+}
+
+function hasStableToolContract(limits) {
+  return isNativeRun(limits)
+    ? hasStableNativeToolSet(limits)
+    : hasStableGatewayCatalogBinding(limits);
+}
+
+function hasToolEvidence(report) {
+  return isNativeRun(report.limits)
+    ? validNativeGovernanceEvidence(report.nativeGovernance)
+    : validManagedCatalogEvidence(report.managedCatalog);
 }
 
 function onlyItem(values) {
@@ -729,17 +914,25 @@ export function missingRealBinaryEvidence(report) {
     );
   }
   if (limits.gatewayRequestCount <= 0) gaps.push("no gateway request was observed");
-  if (!hasStableGatewayCatalogBinding(limits)) {
-    gaps.push("not every gateway request carried the stable productive catalog binding");
-  }
+  if (!hasStableToolContract(limits)) gaps.push(missingToolContractGap(limits));
   gaps.push(...missingPayloadEvidence(report.missingPayload));
   if (!validH1SearchEvidence(report.h1Search))
     gaps.push("no useful H1 search-to-read result evidence");
-  if (!validManagedCatalogEvidence(report.managedCatalog)) {
-    gaps.push("no stable managed catalog binding with completed search and bounded read");
-  }
+  if (!hasToolEvidence(report)) gaps.push(missingToolEvidenceGap(limits));
   if (!hasRetainedActivity(report)) gaps.push("no retained canonical activity log");
   return gaps;
+}
+
+function missingToolContractGap(limits) {
+  return isNativeRun(limits)
+    ? "not every gateway request carried the one stable native tool set"
+    : "not every gateway request carried the stable productive catalog binding";
+}
+
+function missingToolEvidenceGap(limits) {
+  return isNativeRun(limits)
+    ? "no stable native governance evidence with an allowed search and bounded read"
+    : "no stable managed catalog binding with completed search and bounded read";
 }
 
 function missingPayloadEvidence(probe) {
@@ -756,18 +949,25 @@ export function realBinaryEvidenceComplete(report) {
   return (
     validJourneyIdentity(report) &&
     observedChildGeometry(limits) !== undefined &&
-    hasStableGatewayCatalogBinding(limits) &&
+    hasStableToolContract(limits) &&
     report.missingPayload?.passed === true &&
     report.missingPayload.unavailableReason === "payload-missing" &&
     validH1SearchEvidence(report.h1Search) &&
-    validManagedCatalogEvidence(report.managedCatalog) &&
+    hasToolEvidence(report) &&
     hasRetainedActivity(report)
   );
 }
 
+// The closed #3390 scenario artifact and the catalog consumer observation project the MAPPED catalog
+// proof (a bound offer and the settlements of its handlers). A native run (#3897) has no such proof:
+// its tools run inside the runtime, so these projections refuse it rather than invent one.
+function mappedQualificationEvidenceComplete(report) {
+  return realBinaryEvidenceComplete(report) && validManagedCatalogEvidence(report.managedCatalog);
+}
+
 export function buildRealBinaryScenarioArtifact(report) {
   const geometry = observedChildGeometry(report.limits);
-  if (!realBinaryEvidenceComplete(report) || geometry === undefined) {
+  if (!mappedQualificationEvidenceComplete(report) || geometry === undefined) {
     throw new TypeError("real-binary qualification evidence is incomplete");
   }
   const artifact = {
@@ -848,7 +1048,7 @@ export function writeManagedCatalogObservation(report) {
   const qualificationDirectory = process.env[TOOL_CATALOG_QUALIFICATION_DIR_ENV];
   const qualificationHead = process.env[TOOL_CATALOG_QUALIFICATION_HEAD_ENV];
   if (
-    !realBinaryEvidenceComplete(report) ||
+    !mappedQualificationEvidenceComplete(report) ||
     (qualificationDirectory !== undefined && qualificationHead !== report.sourceHead)
   ) {
     return false;
@@ -916,6 +1116,7 @@ export async function runRealBinaryJourney() {
     readGatewayGeometryEvidence(context);
   const h1Search = readH1SearchEvidence(context.stateDir);
   const managedCatalog = readManagedCatalogEvidence(context.stateDir, gateway, h1Search);
+  const nativeGovernance = readNativeGovernanceEvidence(context.stateDir, gateway, h1Search);
   const activityLog = retainJourneyActivityLog(context);
   const completedAt = new Date().toISOString();
   const report = buildJourneyReport({
@@ -929,6 +1130,7 @@ export async function runRealBinaryJourney() {
     missingPayload,
     h1Search,
     managedCatalog,
+    nativeGovernance,
     activityLog,
     observer,
     target,

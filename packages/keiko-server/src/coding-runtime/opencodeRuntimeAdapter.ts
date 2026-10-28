@@ -20,8 +20,11 @@ import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import { GOVERNED_TOOL_MODEL_CONTENT_SOURCE } from "./governedToolModelContent.js";
 import {
   createGeneratedOpenCodeNativeContextPlugin,
-  OPENCODE_NATIVE_CONTEXT_FACTS,
+  openCodeNativeContextFacts,
+  type OpenCodeNativeContextProfile,
 } from "./opencodeNativeContext.js";
+import { createGeneratedOpenCodeNativePolicyPlugin } from "./opencodeNativePolicyPlugin.js";
+import { isApprovedOpenCodeRuntimeVersion } from "./opencodeRuntimeVersions.js";
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
   runtimeMaxDurationMs,
@@ -40,10 +43,14 @@ import {
   type OpenCodeReconciliationPreparation,
   type OpenCodeReconciler,
 } from "./opencodeReconciler.js";
+import {
+  OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
+  OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
+} from "./opencodeNativeDeliveryTools.js";
 import type { OpenCodeLiveControl } from "./opencodeProtocol.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
-  OPENCODE_PINNED_VERSION,
+  OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
   openCodeVisibleToolNames,
   type OpenCodeToolProfile,
@@ -69,6 +76,7 @@ const OPEN_CODE_READINESS_PHASES = [
   "authenticated-health-version",
   "unauthenticated-health",
   "openapi-digest",
+  "policy-plugin",
   "gateway-challenge",
   "tool-facade-challenge",
   "sse-history-reconciliation",
@@ -157,6 +165,9 @@ const CODING_RUNTIME_READINESS_PHASE_OPERATION = defineActivityLogOperation({
     maxOutputTokens: { type: "integer", dataClass: "count", required: false },
     compactionAuto: { type: "boolean", dataClass: "closed-enum", required: false },
     compactionPrune: { type: "boolean", dataClass: "closed-enum", required: false },
+    // Whether the native profile's configured provider model declares image input (#3897 S14); a
+    // declaration, never a claim that an image was sent. Absent for the mapped profiles.
+    imageInputDeclared: { type: "boolean", dataClass: "closed-enum", required: false },
   },
   lifecycle: "state",
   analyzerProjection: "process-lifecycle",
@@ -209,6 +220,22 @@ const CODING_RUNTIME_COMPACTION_OPERATION = defineActivityLogOperation({
   proofIds: ["coding-runtime.compaction.emitted-line"],
 });
 
+// A turn the runtime ended itself, at a human's refusal of a question: it reports the interruption
+// and leaves its session inactive, and no idle message follows. One line per such turn, written when
+// the adapter settles it, with how long the settlement took after the interruption was observed.
+const CODING_RUNTIME_TURN_INTERRUPTED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_OPERATION_BASE,
+  op: "coding-runtime.native-turn.interrupted",
+  emitter: "coding-runtime.opencodeRuntimeAdapter.recordTurnInterrupted",
+  fields: {
+    settledAfterMs: { type: "integer", dataClass: "duration", required: true },
+  },
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-session-continuity"],
+  proofIds: ["coding-runtime.native-turn.interrupted.emitted-line"],
+});
+
 /**
  * The generated plugin client's timeout for a tool the catalog settles at `settlementBudgetMs`. A
  * tool settled beyond the sandbox default (the verification tool, the four proposal tools that wait
@@ -242,6 +269,13 @@ function boundedTurnWaitMs(value: number | undefined): number {
 }
 
 export type OpenCodeGovernedSinkReceipt = "applied" | "duplicate";
+
+/**
+ * How a waited turn ended: `true` its session went idle with a successful verdict, `false` it
+ * failed, was abandoned or ran out of time, and `"interrupted"` the runtime ended it at a human's
+ * refusal (a dismissed question), which is neither a success nor a failure of the run's work.
+ */
+export type OpenCodeTurnOutcome = boolean | "interrupted";
 
 export type OpenCodeSyncHint =
   | { readonly id: string; readonly requiresHistoryIdentity?: true }
@@ -283,9 +317,15 @@ export interface OpenCodeRuntimeAdapterPorts {
   readonly maxTurnWaitMs?: number | undefined;
   readonly contextGeometry?: OpenCodeContextGeometry | undefined;
   readonly readiness: {
-    readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
+    readonly verifiedTarget: {
+      readonly executable: string;
+      readonly attestationDigest: string;
+      /** The discovered runtime's approved upstream version; readiness must meet exactly it. */
+      readonly version: string;
+    };
     readonly configDigest: string;
-    readonly nativeContextConfigured?: true | undefined;
+    /** The guidance profile the composition materialized; its facts enter readiness evidence. */
+    readonly nativeContextProfile?: OpenCodeNativeContextProfile | undefined;
     readonly verifyTargetAttestation: () => Promise<boolean>;
     readonly materialize: () => Promise<boolean>;
     readonly startupLine: () => Promise<string>;
@@ -293,6 +333,11 @@ export interface OpenCodeRuntimeAdapterPorts {
       authorization: "basic" | "none",
     ) => Promise<{ readonly status: number; readonly version?: string }>;
     readonly openApiDigest: () => Promise<string>;
+    /**
+     * The native profile's governing plugins are active in the producer (#3897). Absent for a
+     * profile whose configured rules govern on their own; a native run without it never readies.
+     */
+    readonly policyPluginActive?: (() => Promise<boolean>) | undefined;
     readonly gatewayChallenge: () => Promise<boolean>;
     readonly toolFacadeChallenge: () => Promise<boolean>;
     readonly subscribe: (signal: AbortSignal) => AsyncIterable<OpenCodeSyncHint>;
@@ -318,10 +363,16 @@ export interface OpenCodeRuntimeAdapterPorts {
       }
     | undefined;
   readonly control: {
+    /**
+     * The liveness of the run's session tree as last read: `activity` the primary session is running,
+     * `held` it is idle but a session it owns (a background subagent) is still running, `terminal`
+     * nothing of the run is running. `held` keeps a success or an interruption open: the primary's
+     * idleness is then not the end of the run's work. Absent information is no objection.
+     */
     readonly status: (
       sessionId: string,
       signal: AbortSignal,
-    ) => Promise<OpenCodeLiveControl["state"] | undefined>;
+    ) => Promise<OpenCodeLiveControl["state"] | "held" | undefined>;
   };
   readonly safety: {
     readonly revokeAudiences: () => void;
@@ -337,8 +388,15 @@ export interface OpenCodeRuntimeAdapter {
   readonly monitor: (onFailure: () => void) => () => void;
   readonly close: () => Promise<void>;
   readonly armTurn: () => boolean;
+  /**
+   * Whether a submitted turn is still in flight: armed and not yet settled, failed or cancelled. A
+   * message that joins the running turn (`steer` / `queue`) is only meaningful while this holds;
+   * once the turn settled the run is being stopped, so a message sent then would reach a session
+   * nothing tracks.
+   */
+  readonly turnInFlight: () => boolean;
   readonly cancelTurn: () => void;
-  readonly waitForTerminal: (signal: AbortSignal) => Promise<boolean>;
+  readonly waitForTerminal: (signal: AbortSignal) => Promise<OpenCodeTurnOutcome>;
 }
 
 interface ReconciliationState {
@@ -380,7 +438,12 @@ export function createOpenCodeRuntimeAdapter(
   let turnStatusTerminal = false;
   let turnBaselineSequence: number | undefined;
   let turnSettledGeneration: number | undefined;
-  let turnSettledOutcome: boolean | undefined;
+  let turnSettledOutcome: OpenCodeTurnOutcome | undefined;
+  // The runtime ended the armed turn's execution at a human's refusal: the history length it was
+  // observed at (a verdict must come after it to count) and when.
+  let turnInterrupt: { readonly atSequence: number; readonly atMs: number } | undefined;
+  // The status port last reported the primary idle while an owned child session still runs.
+  let treeHeld = false;
   const turnNotifications = new Set<() => void>();
 
   const fail = (phase: OpenCodeReadinessPhase): OpenCodeAdapterFailure => {
@@ -481,11 +544,14 @@ export function createOpenCodeRuntimeAdapter(
       turnArmed = true;
       turnActive = false;
       turnStatusTerminal = false;
+      turnInterrupt = undefined;
+      treeHeld = false;
       turnBaselineSequence = baselineSequence;
       turnSettledGeneration = undefined;
       turnSettledOutcome = undefined;
       return true;
     },
+    turnInFlight: (): boolean => turnArmed && !closed,
     cancelTurn,
     waitForTerminal,
   };
@@ -495,16 +561,22 @@ export function createOpenCodeRuntimeAdapter(
     turnArmed = false;
     turnActive = false;
     turnStatusTerminal = false;
+    turnInterrupt = undefined;
+    treeHeld = false;
     turnBaselineSequence = undefined;
     turnSettledGeneration = undefined;
     turnSettledOutcome = undefined;
     notifyTurn();
   }
 
-  function settleTurn(generation: number, outcome: boolean): void {
+  function settleTurn(generation: number, outcome: OpenCodeTurnOutcome): void {
+    if (outcome === "interrupted" && turnInterrupt !== undefined)
+      recordTurnInterrupted(ports, Date.now() - turnInterrupt.atMs);
     turnArmed = false;
     turnActive = false;
     turnStatusTerminal = false;
+    turnInterrupt = undefined;
+    treeHeld = false;
     turnBaselineSequence = undefined;
     turnSettledGeneration = generation;
     turnSettledOutcome = outcome;
@@ -515,15 +587,44 @@ export function createOpenCodeRuntimeAdapter(
     if (control === undefined) return;
     if (ready !== undefined && control.sessionId !== ready.sessionId) return;
     if (!turnArmed) return;
+    if (control.state === "interrupted") {
+      observeInterruption(control.sessionId);
+      return;
+    }
     const changed =
       control.state === "activity" ? !turnActive || turnStatusTerminal : !turnStatusTerminal;
     if (control.state === "activity") {
       turnActive = true;
       turnStatusTerminal = false;
+      treeHeld = false;
+      // The execution runs again: an interruption it suffered earlier no longer ends the turn.
+      turnInterrupt = undefined;
     } else {
       turnStatusTerminal = true;
     }
     if (changed) notifyTurn();
+  }
+
+  // Only an execution this turn was seen running can be interrupted: an interruption that reaches
+  // the adapter after the turn it replaced ended says nothing about this one. The history is
+  // reconciled before a hint is observed, so a verdict recorded after this point is a later one.
+  function observeInterruption(sessionId: string): void {
+    if (!turnActive || turnInterrupt !== undefined) return;
+    turnInterrupt = { atSequence: state.checkpoints.get(sessionId) ?? -1, atMs: Date.now() };
+    turnStatusTerminal = true;
+    notifyTurn();
+  }
+
+  // What the status port read: `held` is an idle primary with an owned child still running, which
+  // keeps a success or an interruption open without saying anything about the primary's execution.
+  function observeStatus(
+    sessionId: string,
+    status: OpenCodeLiveControl["state"] | "held" | undefined,
+  ): void {
+    if (status === undefined) return;
+    if (!turnArmed) return;
+    treeHeld = status === "held";
+    observeControl({ sessionId, state: status === "held" ? "terminal" : status });
   }
 
   function notifyTurn(): void {
@@ -535,7 +636,7 @@ export function createOpenCodeRuntimeAdapter(
     generation: number,
     callerSignal: AbortSignal,
     sessionId: string,
-  ): Promise<boolean> {
+  ): Promise<OpenCodeTurnOutcome> {
     const deadline = new AbortController();
     const timer = setTimeout(() => {
       deadline.abort();
@@ -554,7 +655,7 @@ export function createOpenCodeRuntimeAdapter(
   }
 
   /** Active/terminal, caller, deadline, stop, and polling gates fail independently. */
-  async function waitForTerminal(callerSignal: AbortSignal): Promise<boolean> {
+  async function waitForTerminal(callerSignal: AbortSignal): Promise<OpenCodeTurnOutcome> {
     const generation = turnGeneration;
     if (turnSettled(generation) && !callerSignal.aborted) return turnSettledOutcome ?? false;
     // KEIKO-0240 + #3099 P2: settle the turn (as failed) on EVERY unsettled exit — including
@@ -576,11 +677,9 @@ export function createOpenCodeRuntimeAdapter(
     generation: number,
     signal: AbortSignal,
     sessionId: string,
-  ): Promise<boolean> {
+  ): Promise<OpenCodeTurnOutcome> {
     try {
       while (turnCurrent(generation, signal)) {
-        const settled = settleIfCompleted(generation, signal);
-        if (settled !== undefined) return settled;
         const outcome = await pollTurnOnce(generation, signal, sessionId);
         if (outcome !== undefined) return outcome;
         await waitForTurnChange(signal, generation);
@@ -598,17 +697,24 @@ export function createOpenCodeRuntimeAdapter(
     }
   }
 
-  /** Returns the settled wait outcome, or undefined when polling must continue. */
+  /**
+   * Returns the settled wait outcome, or undefined when polling must continue. A live hint can say
+   * the turn is over while the run's tree is not (a background subagent keeps working after its
+   * parent went idle), so a success or an interruption settles only after a fresh read of the
+   * tree's status; a failure ends the run whatever else is running, because settling it reaps the
+   * tree.
+   */
   async function pollTurnOnce(
     generation: number,
     signal: AbortSignal,
     sessionId: string,
-  ): Promise<boolean | undefined> {
+  ): Promise<OpenCodeTurnOutcome | undefined> {
     try {
+      if (turnOutcome(generation, signal) === false) return settleIfCompleted(generation, signal);
       const status = await ports.control.status(sessionId, signal);
-      if (status !== undefined) observeControl({ sessionId, state: status });
+      observeStatus(sessionId, status);
       const observed = observedTurnOutcome(generation, signal);
-      if (observed !== undefined || status !== "terminal") return observed;
+      if (observed !== undefined || (status !== "terminal" && status !== "held")) return observed;
       await reconcileHistory(ports, state, signal);
       return observedTurnOutcome(generation, signal);
     } catch {
@@ -616,14 +722,20 @@ export function createOpenCodeRuntimeAdapter(
     }
   }
 
-  function settleIfCompleted(generation: number, signal: AbortSignal): boolean | undefined {
+  function settleIfCompleted(
+    generation: number,
+    signal: AbortSignal,
+  ): OpenCodeTurnOutcome | undefined {
     const outcome = turnOutcome(generation, signal);
     if (outcome === undefined) return undefined;
     settleTurn(generation, outcome);
     return outcome;
   }
 
-  function observedTurnOutcome(generation: number, signal: AbortSignal): boolean | undefined {
+  function observedTurnOutcome(
+    generation: number,
+    signal: AbortSignal,
+  ): OpenCodeTurnOutcome | undefined {
     const settled = settleIfCompleted(generation, signal);
     if (settled !== undefined) return settled;
     return turnSettled(generation) ? (turnSettledOutcome ?? false) : undefined;
@@ -637,11 +749,20 @@ export function createOpenCodeRuntimeAdapter(
     return !closed && generation === turnGeneration && generation === turnSettledGeneration;
   }
 
-  function turnOutcome(generation: number, signal: AbortSignal): boolean | undefined {
+  function turnOutcome(generation: number, signal: AbortSignal): OpenCodeTurnOutcome | undefined {
     if (!turnCurrent(generation, signal)) return undefined;
     if (!turnStatusTerminal) return undefined;
     if (ready === undefined || turnBaselineSequence === undefined) return undefined;
-    return causalHistoryOutcome(ready.sessionId, turnBaselineSequence);
+    // After an interruption the turn's verdict is whatever the history recorded since it. With
+    // none, the runtime ended the turn without one: neither a success nor a failure.
+    const verdict = causalHistoryOutcome(
+      ready.sessionId,
+      turnInterrupt === undefined ? turnBaselineSequence : turnInterrupt.atSequence,
+    );
+    const outcome = verdict ?? (turnInterrupt === undefined ? undefined : "interrupted");
+    // A failure ends the run whatever else runs, because settling it reaps the tree; a success or an
+    // interruption waits until nothing the run owns is running.
+    return treeHeld && outcome !== false ? undefined : outcome;
   }
 
   function causalHistoryOutcome(sessionId: string, baselineSequence: number): boolean | undefined {
@@ -709,45 +830,35 @@ async function startAdapter(
   }>,
 ): Promise<OpenCodeAdapterReady | OpenCodeAdapterFailure> {
   const { readiness } = ports;
-  let phase = recordReadinessPhase(ports, "target-attestation");
+  const tracker = { phase: recordReadinessPhase(ports, "target-attestation") };
   try {
     if (!validTarget(readiness) || !(await readiness.verifyTargetAttestation())) {
       return fail("target-attestation");
     }
-    phase = recordReadinessPhase(ports, "config-materialization");
+    tracker.phase = recordReadinessPhase(ports, "config-materialization");
     if (!(await readiness.materialize())) {
       return fail("config-materialization");
     }
-    phase = recordReadinessPhase(ports, "endpoint");
+    tracker.phase = recordReadinessPhase(ports, "endpoint");
     const endpoint = parseStartupEndpoint(await readiness.startupLine());
     if (endpoint === undefined) return fail("endpoint");
-    phase = recordReadinessPhase(ports, "authenticated-health");
-    const authenticated = await readiness.health("basic");
-    if (authenticated.status !== 200) return fail("authenticated-health");
-    if (authenticated.version !== OPENCODE_PINNED_VERSION)
-      return fail("authenticated-health-version");
-    phase = recordReadinessPhase(ports, "unauthenticated-health");
-    const unauthenticated = await readiness.health("none");
-    if (unauthenticated.status !== 401) return fail("unauthenticated-health");
-    phase = recordReadinessPhase(ports, "openapi-digest");
-    if ((await readiness.openApiDigest()) !== readiness.verifiedTarget.attestationDigest) {
-      return fail("openapi-digest");
-    }
-    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
+    const protocolFailure = await verifyServiceProtocol(ports, tracker);
+    if (protocolFailure !== undefined) return fail(protocolFailure);
+    tracker.phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     const firstHint = await openSubscription();
-    phase = recordReadinessPhase(ports, "session-echo");
+    tracker.phase = recordReadinessPhase(ports, "session-echo");
     const sessionId = await readiness.sessionEcho();
     if (!SESSION_ID.test(sessionId)) return fail("session-echo");
-    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
+    tracker.phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHint(ports, state, firstHint.hint, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
     if (!state.checkpoints.has(sessionId)) return fail("session-echo");
-    phase = recordReadinessPhase(ports, "gateway-challenge");
+    tracker.phase = recordReadinessPhase(ports, "gateway-challenge");
     if (!(await readiness.gatewayChallenge())) return fail("gateway-challenge");
-    phase = recordReadinessPhase(ports, "tool-facade-challenge");
+    tracker.phase = recordReadinessPhase(ports, "tool-facade-challenge");
     if (!(await readiness.toolFacadeChallenge())) return fail("tool-facade-challenge");
-    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
+    tracker.phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHistory(ports, state, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
@@ -761,11 +872,36 @@ async function startAdapter(
           correlationId: correlationIdOrUnknown(ports.correlationId),
           errorKind: "internal",
         },
-        { phase, frames: keikoStackFrames(error), causeChain: causeChain(error) },
+        { phase: tracker.phase, frames: keikoStackFrames(error), causeChain: causeChain(error) },
       ),
     );
-    return fail(phase);
+    return fail(tracker.phase);
   }
+}
+
+/**
+ * The attested service's protocol identity, in order: authenticated health at the verified
+ * version, the unauthenticated refusal, the projected protocol digest and, where the profile depends
+ * on them, the governing plugins. Returns the failing phase, or undefined when all hold.
+ */
+async function verifyServiceProtocol(
+  ports: OpenCodeRuntimeAdapterPorts,
+  tracker: { phase: OpenCodeReadinessPhase },
+): Promise<OpenCodeReadinessPhase | undefined> {
+  const { readiness } = ports;
+  tracker.phase = recordReadinessPhase(ports, "authenticated-health");
+  const authenticated = await readiness.health("basic");
+  if (authenticated.status !== 200) return "authenticated-health";
+  if (authenticated.version !== readiness.verifiedTarget.version)
+    return "authenticated-health-version";
+  tracker.phase = recordReadinessPhase(ports, "unauthenticated-health");
+  if ((await readiness.health("none")).status !== 401) return "unauthenticated-health";
+  tracker.phase = recordReadinessPhase(ports, "openapi-digest");
+  if ((await readiness.openApiDigest()) !== readiness.verifiedTarget.attestationDigest)
+    return "openapi-digest";
+  if (readiness.policyPluginActive === undefined) return undefined;
+  tracker.phase = recordReadinessPhase(ports, "policy-plugin");
+  return (await readiness.policyPluginActive()) ? undefined : "policy-plugin";
 }
 
 function recordReadinessPhase(
@@ -783,9 +919,9 @@ function recordReadinessPhase(
               dependencyInstallPolicy: "offline",
               planningMode: "conversation-text",
               configDigest: ports.readiness.configDigest,
-              ...(ports.readiness.nativeContextConfigured === true
-                ? OPENCODE_NATIVE_CONTEXT_FACTS
-                : {}),
+              ...(ports.readiness.nativeContextProfile === undefined
+                ? {}
+                : openCodeNativeContextFacts(ports.readiness.nativeContextProfile)),
               ...(ports.contextGeometry === undefined
                 ? {}
                 : {
@@ -794,6 +930,9 @@ function recordReadinessPhase(
                     maxOutputTokens: ports.contextGeometry.maxOutputTokens,
                     compactionAuto: true,
                     compactionPrune: true,
+                    ...(ports.readiness.nativeContextProfile === "native"
+                      ? { imageInputDeclared: ports.contextGeometry.imageInput === true }
+                      : {}),
                   }),
             }
           : {}),
@@ -807,6 +946,7 @@ function validTarget(readiness: OpenCodeRuntimeAdapterPorts["readiness"]): boole
   return (
     isAbsolute(readiness.verifiedTarget.executable) &&
     DIGEST.test(readiness.verifiedTarget.attestationDigest) &&
+    isApprovedOpenCodeRuntimeVersion(readiness.verifiedTarget.version) &&
     DIGEST.test(readiness.configDigest)
   );
 }
@@ -892,6 +1032,9 @@ async function applyHistoryPlan(
     if (receipt !== "applied" && receipt !== "duplicate") throw new Error("sink-receipt-invalid");
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");
+  // Successful sink receipts make these projections safe to evict; undelivered critical events
+  // still retain the bounded staging protection. Checkpoints and recent replay identities remain.
+  state.reconciler.acknowledge(prepared.projections);
   recordCompactionActivity(ports, prepared.projections);
   replaceMap(state.checkpoints, planned.checkpoints);
   replaceMap(state.evidenceCheckpoints, planned.evidenceCheckpoints);
@@ -903,6 +1046,16 @@ async function applyHistoryPlan(
     // The sink owns rejection accounting and records the projection-specific closed reason.
     ports.safeActivitySink?.ingest(signal);
   }
+}
+
+function recordTurnInterrupted(ports: CompactionActivityLogPorts, settledAfterMs: number): void {
+  (ports.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_TURN_INTERRUPTED_OPERATION,
+      { level: "info", correlationId: correlationIdOrUnknown(ports.correlationId) },
+      { settledAfterMs },
+    ),
+  );
 }
 
 interface CompactionActivityLogPorts {
@@ -1100,7 +1253,7 @@ function validControl(value: unknown): value is OpenCodeLiveControl {
     exactRecord(value, ["sessionId", "state"]) &&
     typeof value.sessionId === "string" &&
     SESSION_ID.test(value.sessionId) &&
-    (value.state === "activity" || value.state === "terminal")
+    (value.state === "activity" || value.state === "interrupted" || value.state === "terminal")
   );
 }
 
@@ -1220,39 +1373,99 @@ export function createGeneratedOpenCodeV2Plugins(
   openCodeVisibleToolNames(profile);
   const cached = cachedV2PluginSources.get(profile);
   if (cached !== undefined) return cached;
-  const sources = Object.freeze({
-    keiko_governed_tools: sharedV2ToolPluginSource(false, profile),
-    keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
-  });
+  const plugins: Record<string, string> =
+    profile === "native"
+      ? {
+          keiko_native_policy: createGeneratedOpenCodeNativePolicyPlugin(),
+          keiko_native_context: createGeneratedOpenCodeNativeContextPlugin("native"),
+          [OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE]: sharedV2ToolPluginSource("native"),
+        }
+      : {
+          keiko_governed_tools: sharedV2ToolPluginSource(profile),
+          keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
+        };
+  const sources = Object.freeze(plugins);
   cachedV2PluginSources.set(profile, sources);
   return sources;
 }
 
-/** Fixed-source external host entry; it never selects or activates a runtime. */
-export function createGeneratedOpenCodeV2HostFactory(
-  profile: OpenCodeToolProfile = "direct",
-): string {
-  openCodeVisibleToolNames(profile);
-  return sharedV2ToolPluginSource(true, profile);
+type OpenCodeToolSourceDefinition = (typeof OPENCODE_TOOL_SOURCE_DEFINITIONS)[number];
+
+/**
+ * The tools a profile's generated plugin registers: the full governed set for the mapped profiles,
+ * Keiko's Git delivery subset alone for the native one (the native agent keeps OpenCode's own
+ * tools for everything else).
+ */
+function v2ToolDefinitions(profile: OpenCodeToolProfile): readonly OpenCodeToolSourceDefinition[] {
+  return profile === "native"
+    ? OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS
+    : OPENCODE_TOOL_SOURCE_DEFINITIONS;
 }
 
-function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "direct"): string {
+function sharedV2ToolPluginSource(profile: OpenCodeToolProfile): string {
+  const native = profile === "native";
+  const definitions = v2ToolDefinitions(profile);
   return [
-    ...(host
-      ? [
-          "export default (runtime) => {",
-          "  const { process, crypto, fetch, bindOwner, onParentClosed } = runtime;",
-          "  const plugin = {",
-        ]
-      : ["export default {"]),
-    '  id: "keiko.governed-tools",',
+    "export default {",
+    `  id: ${JSON.stringify(native ? OPENCODE_NATIVE_DELIVERY_PLUGIN_ID : "keiko.governed-tools")},`,
     "  async setup(ctx) {",
-    ...v2InvocationIdentitySource(host),
-    ...(host
-      ? [
-          "    bindOwner(Object.freeze({ close: closeParent, assertOpen: assertInvocationOpen, capture: captureInvocationIdentity }));",
-        ]
-      : []),
+    ...v2InvocationIdentitySource(),
+    // Only the Code Mode profile nests tool calls inside an `execute` program. A native run's
+    // delivery tools are top-level calls (the policy plugin governs `execute` itself), so there
+    // is no parent invocation to track.
+    ...(native ? [] : v2ExecuteHooksSource()),
+    "    await ctx.tool.transform((editor) => {",
+    ...definitions.map(({ name, action, arguments: schemas }) =>
+      toolSource(action, schemas, name, "v2", profile === "code-mode"),
+    ),
+    ...definitions.map(({ name }) => `      register_${name}(editor);`),
+    "    });",
+    ...(native ? nativeWebSearchProviderSource() : []),
+    "    return () => { disposed = true; parents.clear(); closedParents.clear(); };",
+    "  },",
+    "};",
+  ].join("\n");
+}
+
+// #3903 AC3 (PR #4064 review 4372361272): the original `websearch` keeps its tool, permission ask
+// and result formatting; its provider is Keiko's, the default of the runtime's websearch service, so
+// the search runs in the server through the integration the operator admitted (nativeWebSearch.ts).
+// A producer without the service keeps its own providers, and the policy decides as before.
+function nativeWebSearchProviderSource(): readonly string[] {
+  return [
+    "    if (ctx.websearch) await ctx.websearch.transform((editor) => {",
+    "      editor.add({",
+    '        id: "keiko",',
+    '        name: "Keiko",',
+    "        async execute(input, options) {",
+    "          const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
+    "          const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
+    "          const runId = process.env.KEIKO_CODING_RUN_ID;",
+    '          if (disposed || !endpoint || !capability || !runId) throw new Error("keiko-websearch-unavailable");',
+    `          const timeout = AbortSignal.timeout(${String(OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS)});`,
+    "          const signal = options && options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;",
+    '          const body = JSON.stringify({ action: "web-search", runId, query: String(input.query) });',
+    '          const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal, headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });',
+    "          const text = await response.text();",
+    `          if (text.length > ${String(CODING_TOOL_MAX_BODY_BYTES)}) throw new Error("keiko-websearch-oversized");`,
+    "          const answer = JSON.parse(text);",
+    '          if (!response.ok) throw new Error("Keiko web search " + (answer && typeof answer.reason === "string" ? answer.reason : "failed"));',
+    '          if (!answer || !Array.isArray(answer.results)) throw new Error("keiko-websearch-invalid");',
+    "          return answer.results.map((result) => ({",
+    "            url: String(result.url),",
+    '            ...(typeof result.title === "string" ? { title: result.title } : {}),',
+    '            ...(typeof result.content === "string" ? { content: result.content } : {}),',
+    '            time: typeof result.published === "number" ? { published: result.published } : {},',
+    "          }));",
+    "        },",
+    "      });",
+    '      editor.default.set("keiko");',
+    "    });",
+  ];
+}
+
+function v2ExecuteHooksSource(): readonly string[] {
+  return [
     '    await ctx.tool.hook("execute.before", (event) => {',
     '      if (event.tool !== "execute") return;',
     "      const key = directIdentity(event);",
@@ -1263,20 +1476,10 @@ function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "
     '      if (event.tool !== "execute") return;',
     "      closeParent(event);",
     "    });",
-    "    await ctx.tool.transform((editor) => {",
-    ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) =>
-      toolSource(action, schemas, name, "v2", profile === "code-mode"),
-    ),
-    ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => `      register_${name}(editor);`),
-    "    });",
-    "    return () => { disposed = true; parents.clear(); closedParents.clear(); };",
-    "  },",
-    "};",
-    ...(host ? ["  return plugin;", "};"] : []),
-  ].join("\n");
+  ];
 }
 
-function v2InvocationIdentitySource(host: boolean): readonly string[] {
+function v2InvocationIdentitySource(): readonly string[] {
   return [
     `    const MAX_IDENTITIES = ${String(MAX_RECENT_IDENTITIES)};`,
     "    const parents = new Map();",
@@ -1289,7 +1492,6 @@ function v2InvocationIdentitySource(host: boolean): readonly string[] {
     "      parents.delete(key);",
     "      closedParents.add(key);",
     "      if (closedParents.size > MAX_IDENTITIES) closedParents.delete(closedParents.values().next().value);",
-    ...(host ? ["      onParentClosed?.(context);"] : []),
     "      return true;",
     "    }",
     "    function assertInvocationOpen(context, requireParent = false) {",
@@ -1360,6 +1562,7 @@ type GeneratedToolAction =
   | "git-push"
   | "git-pull-request"
   | "git-ci"
+  | "git-sync"
   | "git-execute";
 
 /**
@@ -1385,6 +1588,9 @@ function wireRequestFor(
       return { action: "git", literal: { operation: "stage", phase: "propose" } };
     case "git-ci":
       return { action: "git", literal: { operation: "ci" } };
+    // #3902 AC2: `toolSource` sets the operation from the model-supplied `pull` flag.
+    case "git-sync":
+      return { action: "git", literal: {} };
     case "git-commit":
       return { action: "delivery", literal: { intent: "commit", phase: "propose" } };
     case "git-push":
@@ -1431,9 +1637,19 @@ function toolApprovalProofSource(): readonly string[] {
     '    patterns: ["ci"], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "ci-observe", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: "ci", ...approvalProof },',
     "  };",
     "}",
+    // #3902 AC2: a governed fetch or pull asks on the same lane, as what it is.
+    "function syncPermission(operation, approvalProof) {",
+    '  if (!approvalProof) throw new Error("keiko-tool-invalid");',
+    "  return {",
+    '    patterns: [operation], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: operation === "pull" ? "git-pull" : "git-fetch", scopeLabel: "workspace-scope", risk: operation === "pull" ? "high" : "medium", policyReason: "approval-required", commandLabel: operation, ...approvalProof },',
+    "  };",
+    "}",
+    "function isGitSync(request) {",
+    '  return request.action === "git" && (request.operation === "fetch" || request.operation === "pull");',
+    "}",
     "function toolApprovalRequired(request) {",
     "  const mode = process.env.KEIKO_CODING_MODE;",
-    '  if (request.action === "git" && request.operation === "ci") return mode === "governed-assist" || mode === "supervised-coding";',
+    '  if ((request.action === "git" && request.operation === "ci") || isGitSync(request)) return mode === "governed-assist" || mode === "supervised-coding";',
     '  return mode === "governed-assist" && ["verification", "command"].includes(request.action);',
     "}",
     "async function toolApprovalTarget(request) {",
@@ -1445,6 +1661,7 @@ function toolApprovalProofSource(): readonly string[] {
     "  }",
     '  if (request.action === "verification") return { targetId: request.verifierId };',
     '  if (request.action === "command") return { targetId: request.commandId };',
+    "  if (isGitSync(request)) return { targetId: request.operation };",
     '  return request.action === "git" && request.operation === "ci" ? { targetId: "ci" } : undefined;',
     "}",
     "async function toolApprovalProof(request) {",
@@ -1479,6 +1696,7 @@ function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[
     "  let request;",
     '  if (mode === "governed-assist" && action === "verification") request = verificationPermission(args, approvalProof);',
     '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-ci") request = ciObservationPermission(approvalProof);',
+    '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-sync") request = syncPermission(args.pull === true ? "pull" : "fetch", approvalProof);',
     "  if (!request) return;",
     // The ask expires with the one human-decision wait every governed layer budgets (PR #3452 review).
     `  const metadata = { ...request.metadata, expiresAt: new Date(Date.now() + ${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS)}).toISOString() };`,
@@ -1617,14 +1835,27 @@ function toolSource(
     "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
     '    if (action === "verification" && request.targetPath === "") delete request.targetPath;',
+    // #3902 AC2: keiko_git_stage proposes unstaging with `unstage: true`; the wire carries the
+    // operation, never the flag -- codingToolIpc.ts's exact-key parsers would reject it.
+    '    if (action === "git-stage") {',
+    '      if (args.unstage === true) request.operation = "unstage";',
+    "      delete request.unstage;",
+    "    }",
+    // #3902 AC2: keiko_git_sync's `pull` flag selects the operation; the wire carries the
+    // operation, never the flag.
+    '    if (action === "git-sync") {',
+    '      request.operation = args.pull === true ? "pull" : "fetch";',
+    "      delete request.pull;",
+    "    }",
     // git-execute is the one action whose wire shape depends on a model-supplied argument
-    // (`kind`): redeeming a stage proposal posts `{action:"git",operation:"stage",...}` while
-    // redeeming a commit/push/pull-request proposal posts `{action:"delivery",intent:kind,...}`.
+    // (`kind`): redeeming a stage or unstage proposal posts `{action:"git",operation:kind,...}`
+    // while redeeming a commit/push/pull-request proposal posts `{action:"delivery",intent:kind,...}`.
     // `kind` itself is never a wire field -- codingToolIpc.ts's exact-key parsers would reject it.
     '    if (action === "git-execute") {',
-    '      request.action = args.kind === "stage" ? "git" : "delivery";',
+    '      const index = args.kind === "stage" || args.kind === "unstage";',
+    '      request.action = index ? "git" : "delivery";',
     '      request.phase = "execute";',
-    '      if (args.kind === "stage") request.operation = "stage";',
+    "      if (index) request.operation = args.kind;",
     "      else request.intent = args.kind;",
     "      delete request.kind;",
     "    }",

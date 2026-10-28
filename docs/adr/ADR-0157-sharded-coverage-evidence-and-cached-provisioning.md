@@ -159,12 +159,15 @@ signing-relevant permissions — `build-scan-sbom-smoke` and `ui`, both `attesta
 consumer. This is the same reasoning `.github/zizmor.yml` records for the `cache-poisoning` rule.
 
 **D5 — Superseded pull-request runs are cancelled; integration runs are never grouped at all.**
-The workflow runs for pull-request code-head actions (`opened`, `reopened`, `synchronize`, and
+For live pull requests, the workflow runs for code-head actions (`opened`, `reopened`, `synchronize`, and
 `ready_for_review`) and for `edited` events. An edit is not executable evidence, but it can change
 merge-relevant metadata: `check:review-bot-suppression` reads the title and body, and a base retarget
 changes the candidate boundary. Reusing the preceding green `ci` result would therefore let changed
 metadata bypass the required verdict. The complete pipeline reruns because publishing a lightweight
 success under the same required context could mask a failed code-head run on the same commit.
+Closed/merged metadata edits are excluded at every candidate job and the aggregate before checkout
+(ADR-0139 D4, #4042). They have no live merge candidate and cannot reuse a stale event base/head
+to judge the squash commit. This admission does not change the two concurrency classes below.
 
 The two event classes use separate per-pull-request concurrency groups. Code-head runs supersede
 older code-head evidence, while metadata runs supersede older metadata evidence; an edit cannot

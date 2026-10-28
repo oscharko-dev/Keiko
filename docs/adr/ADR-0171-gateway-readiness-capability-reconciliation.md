@@ -141,8 +141,10 @@ reset a retry already in flight. Conversation renewal and interactive readiness 
 existing recovery paths. Rejected credentials and
 conclusive invalid catalog responses stop scheduled discovery until the connection changes or a
 browser reload requests a new check. Startup catalog
-completion records the applied, unchanged, stale, cancelled or failed disposition and configured
-and changed-model counts under a fresh correlation linked to the triggering request. Real
+completion records the applied, unchanged, stale, cancelled or failed disposition and the
+configured, changed, added, removed and redeployed model counts under a fresh correlation linked to
+the triggering request. A changed count includes the added and removed models; a redeployed model is
+one whose observed deployment identity (D5) was first recorded or replaced. Real
 completions include the current initialization ordinal and generation. An explicitly tagged
 retry-decision phase on the same operation records scheduling, delay/deadline, exhaustion,
 coalescing and cache-skip dispositions without claiming another catalog request. Failed completion
@@ -167,9 +169,18 @@ current holder's freshly serving candidates. An explicit failed chat observation
 `model-verification-pending`. This check occurs when the new run's context is minted. An already
 admitted gateway request retains its captured profile and admission-time feature proof (F73), so
 chat freshness expiry does not strand its task. The Coding picker excludes only explicit negative
-serving observations, preserves selected or saved unknown choices as pending, and uses its existing
-first-offered ordering over fresh candidates only when no human choice remains. Recovery restores
-the offered model and start availability. Repeated pending-profile timer reads reuse the catalog
+serving observations, preserves selected or saved unknown choices as pending, and elects a default
+over fresh candidates only when no human choice remains, with the election Chat uses
+(`electConversationDefault`: gateway-declared chat models first, special-purpose engines last,
+wire order only as the tie-break). A human choice whose forced tool-call proof lapsed or was
+withdrawn is also kept pending while the server renews it: the models wire reports
+`toolCallingRenewalPending` for a LiteLLM chat model whose automatic verification is open, and the
+browser holds only such a choice (`isCodingWorkbenchProofRenewing`). A choice that is refuted,
+never proven, not a chat model, observed unready or not being renewed still falls back to a usable
+alternative. The same wire reports `conversationReadinessStale` for a successful serving
+observation that aged out, so "was ready, needs a fresh check" is no longer folded into "never
+probed"; both stay unknown for admission. Recovery restores the offered model and start
+availability. Repeated pending-profile timer reads reuse the catalog
 already held; the existing catalog projection poller and window bus deliver subsequent changes.
 Catalog adoption, held/restored/fallback/refused selections and profile refresh use the existing
 routine client-stage transport. Decisions carry closed outcomes and actual bounded catalog counts;
@@ -247,6 +258,21 @@ A rule that judges an instant other than now takes it as `{ nowMs }`, never as a
 `isCodingWorkbenchModel` takes the capability alone: handed point-free to `Array.filter`, a numeric
 instant receives each element's index, and coding run 25 (2026-09-11) found the Coding Workbench
 judging every model as of the epoch and offering none (F76).
+
+A proof is also bound to the deployment the gateway reports behind the alias. Alias, endpoint and
+protocol do not name it: a gateway can re-point `gemma` to another underlying model without moving
+any of the three. Discovery therefore digests the management record of every replica of the alias
+(its deployment id, underlying model, provider and backend) into one order-independent value that
+the provider records as `deploymentIdentitySha256` and the proof fingerprint
+(`toolCallingConfigurationFingerprint`) includes once it is observed. A catalog refresh that
+observes a different value withdraws the proof the same way a lapsed one is withdrawn: the alias
+stays `tool-calling-unverified`, and the readiness queue renews it under a probe key that already
+changed with the fingerprint, so the six-hour cooldown of the previous deployment's probe does not
+apply. Only digests are stored or logged. A source that states no deployment (the serving list, a
+group summary) never clears a recorded identity. The first observation on a provider that had none
+also withdraws its proof once, because nothing proves the earlier proof was issued for the
+deployment now reported. A gateway declaration such as `supports_function_calling` never grants
+`toolCalling`: only the forced live probe does.
 
 ## Consequences
 

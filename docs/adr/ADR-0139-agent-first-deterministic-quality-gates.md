@@ -150,6 +150,14 @@ required checks own that trust boundary. Combined with strict required-status-ch
 protection, concurrent agents are serialized by GitHub's candidate invalidation and re-check
 semantics rather than by post-merge agent monitoring.
 
+CI admits `pull_request` events only while the event's pull request is `open`. Metadata edits
+after closure or merge have no live merge candidate: GitHub may check out the signed squash
+commit on `dev` while retaining the old PR base/head. Every CI candidate job, including the
+aggregate, rejects that lifecycle before checkout. The strict merge-candidate verifier is unchanged.
+Open title/body edits and base retargets still run fresh required checks, as do open/synchronize/
+reopen/ready events, merge groups, protected pushes and manual dispatch. The e2e wiring inventory
+models a live PR explicitly; unknown conditions continue to fail closed (#4042).
+
 ### D5 — Static guards prefer precision to suppression
 
 Guardrail scanners must not require suppression markers for provably safe constructs. The

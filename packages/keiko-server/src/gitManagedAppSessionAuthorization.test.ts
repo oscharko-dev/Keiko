@@ -236,7 +236,11 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${managedWorktree}\n`))
       .mockResolvedValueOnce(ok(""))
-      .mockResolvedValueOnce(ok("diff --git a/src/value.ts b/src/value.ts\n-old\n+new\n"));
+      .mockResolvedValueOnce(
+        ok(
+          "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-old\n+newValue\n",
+        ),
+      );
     const dependencies = deps(runner);
     const result = await handleGitDiff(
       route(

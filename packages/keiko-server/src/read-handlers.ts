@@ -47,8 +47,10 @@ import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { isToolCallingRenewalPending } from "./gateway-readiness.js";
 import {
   currentConversationReadinessObservation,
+  currentConversationReadinessStale,
   currentGatewayConfig,
   currentGatewayConfigPresent,
   currentGroundingLimits,
@@ -87,6 +89,12 @@ export function handleModels(ctx: RouteContext, deps: UiHandlerDeps): RouteResul
           return {
             ...model,
             ...(conversationReady === undefined ? {} : { conversationReady }),
+            ...(currentConversationReadinessStale(deps, model.id)
+              ? { conversationReadinessStale: true as const }
+              : {}),
+            ...(isToolCallingRenewalPending(config, model.id)
+              ? { toolCallingRenewalPending: true as const }
+              : {}),
           };
         });
   return { status: 200, body: { models } };

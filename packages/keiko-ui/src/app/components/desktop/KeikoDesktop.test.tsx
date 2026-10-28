@@ -10,6 +10,13 @@ import { KeikoDesktop } from "./KeikoDesktop";
 
 const replace = vi.fn();
 
+// Navigation retains its real pairing/confirmation path; the browser boot suite owns key renewal.
+vi.mock("@/lib/browser-approval-client", () => ({
+  createLocalBrowserApprovalClient: vi
+    .fn()
+    .mockReturnValue({ restore: vi.fn().mockResolvedValue(false) }),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: (): { replace: typeof replace } => ({ replace }),
 }));

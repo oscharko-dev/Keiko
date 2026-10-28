@@ -314,6 +314,18 @@ late ask took the expired one's place (1.1.9 lab: the expired card stayed on scr
 failed as `invalid-intent`, and the model's next ask expired unseen behind it). An approval that is
 decided, retired, or whose run settles takes its expiry timer with it.
 
+A mapped research fetch (`keiko_research_fetch`, #2387) asks through the research grant, not
+through an approval proof. Below Full access a deployment opens research only through the
+`governed-egress` network policy, and the tool facade hands such an `egress` request to the research
+port, whose fetch needs a human-approved grant bound to the exact request line. When no grant covers
+the request, the port raises the content-free `network-egress` request
+(`coding-runtime.approval.waiting`), fails the call closed, and the next ask after approval fetches
+under the minted grant. Any other envelope below Full access still refuses `egress` at the facade
+(`coding-runtime.tool-authority.denied`); in particular, narrowing keeps `governed-egress` only for
+an envelope already minted with it, so a broad envelope narrowed below Full access stays refused.
+From #3394 until this repair the facade required an approval proof that `egress` cannot carry, so
+research could not ask in Ask for approval or Supervised workspace.
+
 ### D7 — Coding evidence is content-free by construction
 
 Coding Workbench evidence records are contract-validated and redacted before persistence or review.
@@ -379,3 +391,16 @@ mistake, and weaker at package boundaries than a small closed mode set.
 
 Rejected. Subscription-backed Codex/ChatGPT routing has different credential semantics and must not
 be represented as a generic OpenAI Platform API key.
+
+## Amendment — native OpenCode actions ask through the same lane (2026-10-23, #3897)
+
+With the native tool profile (ADR-0137 D10) the sidecar runtime no longer asks through a mapped
+`keiko_governed_action` permission. OpenCode evaluates its own permission for every tool call and
+the server-owned policy decides the final effect per mode: D1's reads and planning stay allowed in
+every mode; workspace edits follow the owner decision of 2026-09-26 (an ask in Ask for approval,
+applied in Supervised workspace and Full access); vetted verification commands are routine in
+Supervised workspace while other commands and internet use ask below Full access; the
+mode-independent hard denials refuse the action outright. An ask that reaches the human is the
+same typed, content-free permission request of D6, carrying a closed `native-*` label; the action's
+own command, paths or address ride the authenticated approval-review channel only. A denied or
+expired ask answers the native call with the D6 guidance so the native loop continues without it.

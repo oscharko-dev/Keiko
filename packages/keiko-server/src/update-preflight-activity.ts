@@ -1,4 +1,4 @@
-import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import type { UpdateInstallMode, UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import type { PortableReleaseTrustFailureReason } from "@oscharko-dev/keiko-security/portable-release-trust";
 import {
   activityLogEvent,
@@ -18,6 +18,15 @@ export type PortableFetchAssetKind =
 
 type PortableEvidenceAssetKind = Extract<PortableFetchAssetKind, "manifest" | "checksum">;
 type ReleaseTrustFailureReason = PortableReleaseTrustFailureReason | "missing";
+
+// Registry metadata must remain a closed literal; owner tests bind this projection to the
+// canonical UPDATE_PORTABLE_TARGETS vocabulary without relaxing the generator's runtime-call pin.
+const PORTABLE_TARGET_FIELD_VALUES = [
+  "linux-x64",
+  "windows-x64",
+  "macos-arm64",
+  "macos-x64",
+] as const satisfies readonly UpdatePortableTarget[];
 
 const PORTABLE_ASSET_REDIRECT_REFUSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -50,7 +59,7 @@ const PORTABLE_ASSET_REDIRECT_REFUSED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "safe-platform-class",
       required: true,
-      values: ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"],
+      values: PORTABLE_TARGET_FIELD_VALUES,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -87,7 +96,7 @@ const PORTABLE_FETCH_FAILED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "safe-platform-class",
       required: true,
-      values: ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"],
+      values: PORTABLE_TARGET_FIELD_VALUES,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -118,7 +127,7 @@ const RELEASE_TRUST_VERIFY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "safe-platform-class",
       required: true,
-      values: ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"],
+      values: PORTABLE_TARGET_FIELD_VALUES,
     },
     reason: {
       type: "string",
@@ -135,6 +144,7 @@ const RELEASE_TRUST_VERIFY_OPERATION = defineActivityLogOperation({
     },
     keyId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     metadataVersion: { type: "integer", dataClass: "count", required: false },
+    catalogEntryCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -237,7 +247,11 @@ export function recordReleaseTrustFailure(
 export function recordReleaseTrustSuccess(
   sink: ServerLogSink | undefined,
   target: UpdatePortableTarget,
-  trust: { readonly keyId: string; readonly metadataVersion: number },
+  trust: {
+    readonly keyId: string;
+    readonly metadataVersion: number;
+    readonly catalogEntryCount?: number | undefined;
+  },
   correlationId?: string,
 ): void {
   sink?.write(
@@ -249,6 +263,105 @@ export function recordReleaseTrustSuccess(
         target,
         keyId: trust.keyId,
         metadataVersion: trust.metadataVersion,
+        ...(trust.catalogEntryCount === undefined
+          ? {}
+          : { catalogEntryCount: trust.catalogEntryCount }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+const UPDATE_INSTALL_MODE_DETECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.install-mode.detected",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-preflight-activity.recordUpdateInstallMode",
+  fields: {
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["preflight", "session-status"],
+    },
+    status: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["supported", "unsupported"],
+    },
+    installKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "package-manager",
+        "portable-managed",
+        "portable-bootstrap",
+        "portable-setup-failed",
+        "portable-it-managed",
+      ],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "unknown-path",
+        "local-checkout",
+        "local-install",
+        "linked-package",
+        "transient-runner",
+        "launcher-drift",
+        "package-manager-ambiguous",
+        "package-manager-unsupported",
+        "manifest-unavailable",
+        "portable-bootstrap",
+        "portable-setup-failed",
+        "portable-it-managed",
+        "portable-registration-invalid",
+        "portable-non-stable",
+      ],
+    },
+    target: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: false,
+      values: PORTABLE_TARGET_FIELD_VALUES,
+    },
+    durationMs: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-runtime"],
+  proofIds: ["update.install-mode.detected.body-free"],
+  releaseImpact: "patch",
+});
+
+export function recordUpdateInstallMode(
+  sink: ServerLogSink | undefined,
+  mode: UpdateInstallMode,
+  source: "preflight" | "session-status",
+  durationMs: number,
+  correlationId?: string,
+): void {
+  sink?.write(
+    activityLogEvent(
+      UPDATE_INSTALL_MODE_DETECTED_OPERATION,
+      { level: "info", correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        source,
+        status: mode.status,
+        ...(mode.installKind === undefined ? {} : { installKind: mode.installKind }),
+        ...(mode.reason === undefined ? {} : { reason: mode.reason }),
+        ...(mode.portable === undefined ? {} : { target: mode.portable.target }),
+        durationMs,
         completeness: "complete",
         loss: "none",
       },

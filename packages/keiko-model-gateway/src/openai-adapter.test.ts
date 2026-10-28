@@ -1170,11 +1170,8 @@ describe("OpenAiAdapter.callStream", () => {
       ),
     );
     const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
-    expect(chunks.slice(0, 2)).toEqual([
-      { type: "delta", token: "Hel" },
-      { type: "delta", token: "lo" },
-    ]);
-    const done = chunks[2];
+    expect(chunks.slice(0, 1)).toEqual([{ type: "delta", token: "Hello" }]);
+    const done = chunks[1];
     if (done?.type !== "done") throw new Error("expected a done chunk");
     expect(done.response.content).toBe("Hello");
     expect(done.response.finishReason).toBe("stop");
@@ -1326,7 +1323,7 @@ describe("OpenAiAdapter.callStream", () => {
     expect(serialized).not.toContain(customSecret);
   });
 
-  it("emits only the safe prefix while holding back a possible secret suffix", async () => {
+  it("retains an incomplete block until terminal before releasing a nonsecret suffix", async () => {
     const customSecret = "opaque-buffered-secret-value";
     const heldPrefix = customSecret.slice(0, 6);
     const adapter = adapterWith(() =>
@@ -1340,10 +1337,7 @@ describe("OpenAiAdapter.callStream", () => {
       (chunk): chunk is Extract<typeof chunk, { type: "delta" }> => chunk.type === "delta",
     );
 
-    expect(deltaTokens).toEqual([
-      { type: "delta", token: "safe-" },
-      { type: "delta", token: heldPrefix },
-    ]);
+    expect(deltaTokens).toEqual([{ type: "delta", token: `safe-${heldPrefix}` }]);
   });
 
   it("holds back a streamed secret prefix until the following delta proves it redacted", async () => {
@@ -1541,5 +1535,36 @@ describe("OpenAiAdapter.callStream mid-stream usage retention", () => {
       completionTokens: 7,
       streamedChars: "partial".length,
     });
+  });
+});
+
+describe("streamed redaction agrees with completed code and secret protection", () => {
+  it.each([
+    { text: 'password = "opaque-streaming-value"', hidden: "opaque-streaming-value" },
+    { text: "password:\nopaque-streaming-value\nPublic fact\n", hidden: "opaque-streaming-value" },
+    {
+      text: '```ts\nconst token: string = "opaque-streaming-value";\n```\n',
+      hidden: "opaque-streaming-value",
+    },
+    { text: "```tsx\nlet complete: (token: string) => void;\n```\n", hidden: undefined },
+    { text: "```java\nclass Basic extends Base {}\n```\n", hidden: undefined },
+    { text: "First complete line.\nSecond complete line.\n", hidden: undefined },
+  ])("protects every two-fragment split of $text", async ({ text, hidden }) => {
+    for (let at = 1; at < text.length; at += 1) {
+      const adapter = adapterWith(() =>
+        Promise.resolve(
+          sseResponse([deltaLine(text.slice(0, at)), deltaLine(text.slice(at)), "data: [DONE]\n"]),
+        ),
+      );
+      const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
+      const emitted = chunks
+        .filter((chunk) => chunk.type === "delta")
+        .map((chunk) => chunk.token)
+        .join("");
+      const done = chunks.find((chunk) => chunk.type === "done");
+      expect(done?.response.content, `terminal split ${at.toString()}`).toBe(emitted);
+      if (hidden === undefined) expect(emitted, `public code split ${at.toString()}`).toBe(text);
+      else expect(JSON.stringify(chunks), `secret split ${at.toString()}`).not.toContain(hidden);
+    }
   });
 });

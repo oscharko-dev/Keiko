@@ -20,7 +20,10 @@ import type {
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
+  reportCodingWorkbenchSummaryActivated,
+  reportCodingWorkbenchInteraction,
+} from "@/lib/coding-workbench-interaction";
 import { useLocale } from "@/lib/i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
@@ -31,6 +34,7 @@ import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
+import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const VIRTUAL_THRESHOLD = 100;
@@ -38,12 +42,26 @@ const VISIBLE_ROWS = 96;
 const OVERSCAN_ROWS = 8;
 // Known tool identifiers map to Coding Workbench catalog message keys, not to English strings —
 // otherwise a German session would render English labels in the localized timeline. The keys are
-// resolved through `t(...)` inside `ToolRow`.
+// resolved through `t(...)` inside `ToolRow`. The native OpenCode tools (#3897) keep their own ids.
 const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
   keiko_git_status: "codingWorkbench.timeline.tool.git_status",
   keiko_repository_search: "codingWorkbench.timeline.tool.repository_search",
   keiko_workspace_discover: "codingWorkbench.timeline.tool.workspace_discover",
   keiko_workspace_read: "codingWorkbench.timeline.tool.workspace_read",
+  read: "codingWorkbench.timeline.tool.read",
+  glob: "codingWorkbench.timeline.tool.glob",
+  grep: "codingWorkbench.timeline.tool.grep",
+  list: "codingWorkbench.timeline.tool.list",
+  edit: "codingWorkbench.timeline.tool.edit",
+  write: "codingWorkbench.timeline.tool.write",
+  patch: "codingWorkbench.timeline.tool.patch",
+  shell: "codingWorkbench.timeline.tool.shell",
+  webfetch: "codingWorkbench.timeline.tool.webfetch",
+  websearch: "codingWorkbench.timeline.tool.websearch",
+  skill: "codingWorkbench.timeline.tool.skill",
+  subagent: "codingWorkbench.timeline.tool.subagent",
+  todo: "codingWorkbench.timeline.tool.todo",
+  question: "codingWorkbench.timeline.tool.question",
 };
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
@@ -96,6 +114,8 @@ type TimelineItem =
       readonly occurredAt: string;
       readonly order: number;
       readonly plan: CodingSafeActivityPlan;
+      /** The run is active: its plan card stays open so the reader follows the steps live. */
+      readonly open: boolean;
     }
   | {
       readonly kind: "event";
@@ -219,7 +239,11 @@ function RunDetailsToggle({
       aria-expanded={expanded}
       onClick={() => {
         onToggle();
-        reportClientDiagnostic("[keiko] coding workbench run details toggled");
+        reportCodingWorkbenchInteraction({
+          interaction: "details-toggled",
+          section: "run",
+          expanded: !expanded,
+        });
       }}
     >
       {t("codingWorkbench.timeline.details")}
@@ -346,7 +370,9 @@ function timelineItems(
   const orderedItems = [...items];
   orderedItems.sort(compareTimelineItems);
   const compacted = compactToolItems(orderedItems);
-  return feed?.plan === undefined ? compacted : insertPlan(compacted, feed.plan, order);
+  return feed?.plan === undefined
+    ? compacted
+    : insertPlan(compacted, feed.plan, order, activeRunId !== undefined);
 }
 
 function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
@@ -366,13 +392,18 @@ function insertPlan(
   items: readonly TimelineItem[],
   plan: CodingSafeActivityPlan,
   order: number,
+  open: boolean,
 ): readonly TimelineItem[] {
+  // The row identity is the message that anchors the plan, not its revision: every task-list update
+  // bumps the revision, and a row keyed by it would remount the card (and close what the reader
+  // had open) on each update.
   const planItem: TimelineItem = {
     kind: "plan",
-    id: `plan:${String(plan.revision)}`,
+    id: `plan:${plan.anchorMessageId}`,
     occurredAt: plan.updatedAt,
     order,
     plan,
+    open,
   };
   const anchor = items.findIndex(
     (item) => item.kind === "message" && item.message.messageId === plan.anchorMessageId,
@@ -809,7 +840,9 @@ function MessageRow({
   );
 }
 
-// #3878: the model's own reasoning, apart from the answer and labelled as unverified. It is
+// #3878: the model's own reasoning, apart from the answer and labelled as unverified inside the
+// block: its summary sits among tool rows whose badges are statuses, where a warning-coloured
+// "Unverified" read as a failed check on every step (#3897, owner). It is
 // collapsed until the reader opens it, also while its turn streams, and its text is excluded from
 // the log's live announcements: the session stream is a `role="log"`, whose additions a screen
 // reader reads out, and up to 8 KiB of unverified reasoning per message would crowd out the answer
@@ -824,16 +857,12 @@ function ModelReasoning({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
-    <details
-      className={styles.cmpReasoning}
-      aria-live="off"
-      onToggle={() => reportClientDiagnostic("[keiko] coding workbench model reasoning toggled")}
-    >
-      <summary className={styles.cmpActivitySummary}>
+    <details className={styles.cmpReasoning} aria-live="off">
+      <summary
+        className={styles.cmpActivitySummary}
+        onClick={(event) => reportCodingWorkbenchSummaryActivated("model-reasoning", event)}
+      >
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
-        <span className={styles.cmpReasoningBadge}>
-          {t("codingWorkbench.activity.reasoning.badge")}
-        </span>
       </summary>
       <p className={styles.cmpReasoningNote}>{t("codingWorkbench.activity.reasoning.note")}</p>
       <p className={styles.cmpReasoningText}>
@@ -866,6 +895,7 @@ function MessageContent({
         diagnosticCorrelationId={runId}
         diagnosticMessageId={message.messageId}
         trailing={truncationFor(message, t)}
+        richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
     );
   }
@@ -915,9 +945,11 @@ function ToolRow({
         className={styles.toolCard}
         data-tool-state={item.tool.state}
         open={item.tool.state === "failed" || item.tool.state === "denied"}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench tool details toggled")}
       >
-        <summary className={styles.cmpActivitySummary}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("tool", event)}
+        >
           <span className={styles.toolIcon} aria-hidden="true" />
           <div className={styles.toolMeta}>
             <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
@@ -934,11 +966,34 @@ function ToolRow({
             {t(`codingWorkbench.activity.toolState.${item.tool.state}`)}
           </span>
         </summary>
+        <ToolOutcome tool={item.tool} t={t} />
         <code className={styles.toolName}>{item.tool.tool}</code>
         <ToolPresentationDetails tool={item.tool} t={t} />
       </details>
     </li>
   );
+}
+
+// Why a call ended as it did, in words: a command's exit status, or that the tool reported an
+// error to the model. Without it a failed call opened to nothing but its tool name (#3897).
+function ToolOutcome({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const exitCode = tool.presentation?.exitCode;
+  if (exitCode !== undefined) {
+    return (
+      <p className={styles.cmpToolOutcome}>
+        {t("codingWorkbench.activity.exitCode", { code: exitCode })}
+      </p>
+    );
+  }
+  return tool.state === "failed" ? (
+    <p className={styles.cmpToolOutcome}>{t("codingWorkbench.activity.toolError")}</p>
+  ) : null;
 }
 
 function ToolPresentationDetails({
@@ -996,11 +1051,11 @@ function ToolGroupRow({
       aria-setsize={total}
       data-timeline-kind="group"
     >
-      <details
-        className={styles.cmpToolGroup}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench activity group toggled")}
-      >
-        <summary className={styles.cmpActivitySummary}>
+      <details className={styles.cmpToolGroup}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("activity-group", event)}
+        >
           {t("codingWorkbench.activity.groupCount", { count })}
         </summary>
         <ol className={styles.cmpGroupedTools}>
@@ -1023,7 +1078,10 @@ function ToolGroupRow({
 }
 
 function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
-  const knownKey = KNOWN_TOOL_LABEL_KEYS[tool];
+  // The id is runtime text: `constructor` must not resolve to a member inherited from Object.
+  const knownKey = Object.hasOwn(KNOWN_TOOL_LABEL_KEYS, tool)
+    ? KNOWN_TOOL_LABEL_KEYS[tool]
+    : undefined;
   if (knownKey !== undefined) return t(knownKey);
   return tool
     .replace(/^keiko[_-]/u, "")
@@ -1050,12 +1108,13 @@ function PlanRow({
       aria-setsize={total}
       data-timeline-kind="plan"
     >
-      <details
-        className={styles.planCard}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench plan details toggled")}
-      >
-        <summary className={styles.cmpActivitySummary}>
+      <details className={styles.planCard} open={item.open}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("plan", event)}
+        >
           <p className={styles.timelineTitle}>{t("codingWorkbench.activity.plan.title")}</p>
+          <PlanProgress steps={item.plan.steps} t={t} />
         </summary>
         <ol className={styles.planSteps}>
           {item.plan.steps.map((step, index) => (
@@ -1071,6 +1130,26 @@ function PlanRow({
         {item.plan.truncated ? <p>{t("codingWorkbench.activity.plan.truncated")}</p> : null}
       </details>
     </li>
+  );
+}
+
+/** "2/5 completed" beside the plan title, so the closed card still shows how far the run is. */
+function PlanProgress({
+  steps,
+  t,
+}: {
+  readonly steps: CodingSafeActivityPlan["steps"];
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (steps.length === 0) return null;
+  const completed = steps.filter((step) => step.state === "completed").length;
+  return (
+    <span
+      className={styles.activityBadge}
+      data-state={completed === steps.length ? "completed" : undefined}
+    >
+      {t("codingWorkbench.activity.plan.progress", { completed, total: steps.length })}
+    </span>
   );
 }
 
@@ -1094,12 +1173,13 @@ function EventRow({
       data-timeline-kind="event"
       data-event-tone={tone}
     >
-      <details
-        className={styles.eventCard}
-        open={tone === "attention"}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench event details toggled")}
-      >
-        <summary className={styles.cmpActivitySummary}>{eventTitle(item.event, t)}</summary>
+      <details className={styles.eventCard} open={tone === "attention"}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("event", event)}
+        >
+          {eventTitle(item.event, t)}
+        </summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
         <VerificationDetail event={item.event} t={t} />
       </details>

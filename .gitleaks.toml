@@ -49,6 +49,15 @@ targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''idempotencyKey: "idempotency-1",''']
 
+[[allowlists]]
+description = "PR #4064: the synthetic MCP relay credential of exactly the admitted minimum length in one immutable checkpoint of the relay test. It is a generated test value that proves the relay scrubs a reflected credential, not a credential of any service; the generic-api-key rule matches its entropy. Later commits assemble it at run time. Only this exact historical fixture line in this one commit is exempt."
+condition = "AND"
+commits = ["84dddde8921ef6b0b80b0d7a69df5bc648790e42"]
+paths = ['''^packages/keiko-server/src/mcp/mcpCredentialRelay\.test\.ts$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''const SHORTEST_SECRET = "k3Y9-qL2_wX7\.pB4";''']
+
 [extend]
 useDefault = true
 
@@ -75,6 +84,14 @@ regexTarget = "line"
 regexes = [
   '''"packages/keiko-ui/src/lib/api\.ts": "[0-9a-f]{64}"''',
 ]
+
+[[allowlists]]
+description = "PR #4046: verified browser key-store source digest in the body-free browser evidence record. The pinned scanner mistakes this public source SHA-256 for a generic API key. Only the exact verified digest, complete source field line, evidence path and rule are excepted; other hashes, fields, paths and rules remain scanned. No credential, commit or whole-file exemption."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^docs/qa/evidence/4037/browser-approval-client\.json$''']
+regexTarget = "line"
+regexes = ['''^\n?[ \t]*"browser-approval-key-store\.ts": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31",?[ \t]*$''']
 
 [[allowlists]]
 description = "PR #3452: the synthetic key fixture the stream-read test copied from openai-adapter.test.ts (#855, on dev before every scanned range) in one immutable history commit. The generic-api-key rule reads `token-\", \"1234567890abcd` as a key whose value has entropy 3.81, above the rule's 3.5. No real credential was involved; the file uses a literal the rule cannot read as a key afterwards, and `dev` branch protection forbids rewriting the commit. Scoped to that one line of that file in that commit; every other commit is scanned unchanged."
@@ -149,3 +166,38 @@ paths = ['''^docs/qa/evidence/3881/acceptance-ledger\.json$''']
 targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''^\s*"authentic(?:Old)?OwnerCommit": "a535fae06f6b26f278614cc049a67e02caef5aa2",\s*$''']
+
+
+[[allowlists]]
+description = "PR #4069: 600 verified public Sonar issue identifiers and two verified design-token stylesheet SHA-256 fields in the immutable first review commit were detected as generic API keys. This history-only exemption intersects that commit, the three evidence paths, the exact public-ID field shape or exact source-hash lines, and the generic rule. Current records use issueId and file/hash records instead. No credential, future commit or whole file is exempted."
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["a34e60bda61ec0cf82e2dda28b3d511861a8b426"]
+paths = [
+  '''^docs/qa/sonarcloud-(?:blocker-medium|await-in-loop)-2026-10-24\.json$''',
+  '''^docs/design-system/evidence/sonarcloud-2026-10-24/svg-accessibility-proof\.json$''',
+]
+regexTarget = "line"
+regexes = [
+  '''^\s*"(?:key|issueKey)"\s*:\s*"Aa[A-Za-z0-9_-]{18}",?\s*$''',
+  '''^\s*"design-system/keiko-tokens\.css": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d",?\s*$''',
+  '''^\s*"design-system/keiko-semantic-tokens\.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",?\s*$''',
+]
+
+[[allowlists]]
+description = "PR #4098: synthetic credential-floor fixtures in two immutable checkpoints, a made-up RSA private-key block in two tests and a made-up Stripe-shaped key, used only to prove that the preserving Chat content projection still removes them. No real credential was involved; the following commit assembles both from fragments, so the squash-merged tree carries no literal. Scoped to the two commits, the two test files, the two rules and the synthetic values, so every other finding remains enforced."
+condition = "AND"
+commits = [
+  "618acc0ef8e88ba485b15aa9635333df060e033b",
+  "3029864dd6bd337b1881dec2e6fa6a5655c428d6",
+]
+paths = [
+  '''^packages/keiko-security/src/content-redaction\.test\.ts$''',
+  '''^packages/keiko-workspace/src/content-preservation\.test\.ts$''',
+]
+targetRules = ["private-key", "stripe-access-token"]
+regexTarget = "match"
+regexes = [
+  '''MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun''',
+  '''^sk_live_AbCdEfGhIjKlMnOp1234"$''',
+]

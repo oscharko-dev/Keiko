@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "reviewDate": "2026-10-24",
+  "pullRequest": "https://github.com/oscharko-dev/Keiko/pull/4069",
+  "ownerDirection": "Only fixes necessary to merge the existing PR into dev are authorized now. General issue cleanup remains paused.",
+  "mergeAuthorized": true,
+  "merged": false,
+  "baseRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+  "remoteHeadRevision": "a34e60bda61ec0cf82e2dda28b3d511861a8b426",
+  "localCommittedRepairBase": "d8cc404ac872885c02ca9a913b89d11e6ef0eabe",
+  "pausedFallowImplementation": {
+    "gitStashCommit": "722e88c42d6a07c0533d6a148041d383f9c23971",
+    "state": "Preserved separately; previously checked repairs may be reused only where required by this PR’s mandatory gates.",
+    "lastDiagnosticGroups": 55,
+    "note": "The stash remains an untouched recovery snapshot. Only implementation needed for the existing PR merge blockers has been restored and verified; broad issue work remains paused."
+  },
+  "mergeOnlyRepair": {
+    "priorityAssertionsStrengthened": 40,
+    "baselinePriorityTestsExpectedToFail": 7,
+    "baselineProbeExit": 1,
+    "loadingSelectionFix": "Restore the original transparent loading-cell text for selected rows, without adding !important.",
+    "fixtureCount": 40,
+    "computedValueComparisons": 50304,
+    "computedValueDifferences": 0,
+    "sourceDigests": [
+      {
+        "path": "packages/keiko-ui/src/app/globals.css",
+        "sha256": "002e4ba59dca284ab15c7afc02d3ad04fb90e011e1ed118ff82c180dce0441e2"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/globals.css.test.ts",
+        "sha256": "0e33e42a6cd7a3bb234834266a552048130e61b8d3d221fdfaa3d1b8d953f15e"
+      },
+      {
+        "path": "docs/design-system/evidence/sonarcloud-2026-10-24/css-preservation.mjs",
+        "sha256": "c82838b4f9fdc323772ad68e01ab8e7891a9e89146118491c57721c72c6c8411"
+      }
+    ]
+  },
+  "localChecks": {
+    "localSonar": "PASS: no unresolved changed-file findings.",
+    "uiTypecheck": "PASS",
+    "uiLint": "PASS",
+    "format": "PASS: final whole-repository format check; report-only wording refreshed and checked separately.",
+    "componentEquivalence": "PASS: dark/light zero gated differences; no missing selectors.",
+    "editorEquivalence": "PASS: dark/light zero gated differences; 14 reference captures; no capture errors.",
+    "accessibility": "PASS: no serious/critical violations or unresolved incomplete findings.",
+    "browserCapture": "PASS: 108 original running-app screenshots and manifest regenerated.",
+    "updaterEvidence": "PASS: all nine Chromium cases; freshness check retains exact source-path/digest validation and now shares the source list with its producer.",
+    "uiCoverage": "PASS: 564 files; 10,877 tests passed; one existing skip. Package and script coverage are still pending.",
+    "fallow": "PASS: zero changed-file groups with unchanged semantic / 100-token / 10-line / zero-issue settings.",
+    "editorReleaseEvidence": "PASS: unchanged first-load, lazy-runtime and worker budgets.",
+    "originalSerialLoops": "173 of the original 177 finding locations retain their exact whole-loop source; the same four previously reviewed QA fixture loops are the only differences.",
+    "finalVerification": "In progress; do not treat historical passing checks as current final evidence.",
+    "typecheck": "PASS: root aggregate and final root no-emit check; UI strict typecheck passes.",
+    "lint": "PASS: root/UI zero warnings; updated updater and evidence helper files additionally checked.",
+    "cssBaseline": "PASS: 50,304 original computed-value comparisons; 27,392 token comparisons across 64 modes; 1,030,224 component comparisons; zero differences.",
+    "reviewRegressionControl": "PASS: all 12 targeted CSS assertions reject the original dev CSS; every failure was an assertion failure.",
+    "runtimeRegistryCompatibility": "PASS: all 552 operation contracts and the complete generated metadata compare equal, including JSON serialization order, with the pre-refactor runtime snapshot.",
+    "runningApp": "PASS: 108 captures; zero page errors, crashed windows, unexpected API calls or missing required selectors.",
+    "activityLog": "PASS: seven checks over the complete registered inventory; 565/565 failure proofs, 30/30 scenarios, no violations.",
+    "retrievalContextAndErrorGates": "PASS: retrieval quality, grounded retrieval, grounded faithfulness, context quality and error observability.",
+    "currentTreeSecretReview": "Seven matches in the supplemental whole-file scan all have identical matched source spans already in dev and the remote PR. No rule or exception was added for them; the mandatory Git-history scan remains required after commit.",
+    "publicPackageSurface": "PASS: 6,647 assembled files; runtime JSON assets included; own editor code 78,238/102,400 gzip bytes; unchanged static initial-load ceiling passes.",
+    "remainingFullRun": "The full coverage run had 57,364 passes and six failing checks. Generated/export/source-count inventory repairs plus editor bundle repair pass 225 focused tests; the isolated verify suite passes under coverage. The Git-bound source check requires committing the new regular source files. Full verification remains pending.",
+    "initialLoad": "PASS: compact generated identity and metadata modules preserve the registry facade while avoiding eager initial-page metadata; the 349,184-byte ceiling is unchanged."
+  },
+  "unresolvedMergePreconditions": [
+    "The required Fallow 3.34.0 security update still yields 95 groups in the minimal repair scope. Owner authorizes necessary merge-blocker repairs only; no gate waiver, threshold change or broader cleanup is authorized.",
+    "GitHub still analyzes the older remote head. It has five CodeQL conversations and one CodeRabbit request-changes conversation; prepared fixes require producing-reviewer acceptance on the corrected head before settlement.",
+    "Required CI must pass on the exact new head. The latest run also failed a Windows local-volume positive probe in unchanged security code; cause is not established, and a macOS run previously hit a native handoff readiness deadline."
+  ],
+  "limits": [
+    "No merge, auto-merge, direct dev push, force push, review dismissal or check bypass has been performed.",
+    "Earlier full-root and native validation belongs to the committed repair base; final current-head CI and full release coverage are still outstanding.",
+    "The 173 retained original loops are byte-identical whole-loop source, not a claim that every surrounding refactored subsystem has a formal equivalence proof.",
+    "Do not infer current remote CI success from local checks: remote PR head remains a34e60bda61ec0cf82e2dda28b3d511861a8b426 until the verified repair commit is pushed."
+  ]
+}

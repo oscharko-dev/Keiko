@@ -957,13 +957,21 @@ describe("remaining Memory public parser obligations (#3918)", () => {
 });
 
 describe("documentation request public parser obligations (#3918)", () => {
-  it("pins two exact unknown-parameter roots without optional rule grants", () => {
+  it("pins two exact public roots with only their qualified raw rule grants", () => {
     const records = policy.responsibilities.slice(43, 45);
     expect(records).toHaveLength(2);
     for (const record of records) {
       expect(record.kind).toBe("public-parser");
       expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+      expect(record.rules).toEqual(
+        record.id === "documentation-navigation-request-public-parser"
+          ? [
+              "anti-slop/no-unknown-parameters",
+              "anti-slop/no-runtime-typeof",
+              "anti-slop/no-unsafe-dictionary-type",
+            ]
+          : ["anti-slop/no-unknown-parameters"],
+      );
       expect(record.input.parameterIndex).toBe(0);
       expect(record.consumer.kind).toBe("public-api-proof");
       expect(record.proofs).toEqual([record.input.consumerPath]);
@@ -1522,7 +1530,15 @@ describe("Context compaction diagnostic responsibility provenance", () => {
     const record = policy.responsibilities.find((entry) => entry.id === id);
     expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
     expect(record.kind).toBe("diagnostic-checker");
-    expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
+    expect(record.rules).toEqual(
+      id === "context-compaction-record-diagnostic-public-proof"
+        ? [
+            "anti-slop/no-unknown-parameters",
+            "anti-slop/no-runtime-typeof",
+            "anti-slop/no-unsafe-dictionary-type",
+          ]
+        : ["anti-slop/no-unknown-parameters"],
+    );
     expect(record.input).toEqual({
       consumerPath: "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
       specifier: "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",
@@ -1744,5 +1760,21 @@ describe("direct observation checker opt-in", () => {
     const changed = structuredClone(policy);
     changed.responsibilities[8].directRawCheckerInputs = value;
     expect(validatePolicy(changed)).toContain("invalid-responsibilities");
+  });
+});
+
+// The seven approved diagnostic/parser metadata extensions retain every previous role. These
+// two earlier exact-list proofs also bind their new raw roles; removing a grant remains a shrink.
+describe("qualified raw role metadata retention (#3918)", () => {
+  it.each([
+    "documentation-navigation-request-public-parser",
+    "context-compaction-record-diagnostic-public-proof",
+  ])("refuses removal of each qualified raw rule from %s", (id) => {
+    for (const rule of ["anti-slop/no-runtime-typeof", "anti-slop/no-unsafe-dictionary-type"]) {
+      const removed = structuredClone(policy);
+      const record = removed.responsibilities.find((entry) => entry.id === id);
+      record.rules = record.rules.filter((candidate) => candidate !== rule);
+      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+    }
   });
 });

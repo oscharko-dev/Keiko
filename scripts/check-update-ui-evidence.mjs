@@ -1,3 +1,4 @@
+import updateUiSourcePaths from "./lib/update-ui-evidence-sources.json" with { type: "json" };
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -10,16 +11,7 @@ const EVIDENCE_RECORDS = [
   "update-experience-fidelity-proof.json",
 ];
 
-export const UPDATE_UI_SOURCE_PATHS = Object.freeze([
-  "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
-  "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
-  "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
-  "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",
-  "packages/keiko-ui/src/app/globals.css",
-  "packages/keiko-ui/src/lib/api.ts",
-  "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-  "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-]);
+export const UPDATE_UI_SOURCE_PATHS = Object.freeze(updateUiSourcePaths);
 
 export const UPDATE_UI_HARNESS_PATHS = Object.freeze([
   "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
@@ -36,7 +28,11 @@ export function measureUpdateUiEvidenceInputs(repoRoot) {
   const measure = (paths) =>
     Object.fromEntries(paths.map((path) => [path, sha256File(resolve(repoRoot, path))]));
   return {
-    sourceSha256: measure(UPDATE_UI_SOURCE_PATHS),
+    sourceProvenanceVersion: 2,
+    sourceFiles: Object.entries(measure(UPDATE_UI_SOURCE_PATHS)).map(([path, sha256]) => ({
+      path,
+      sha256,
+    })),
     harnessProvenanceSha256: measure(UPDATE_UI_HARNESS_PATHS),
   };
 }
@@ -70,11 +66,40 @@ function assertDigestMap(recordName, fieldName, actual, expected) {
   }
 }
 
+function isSourceDigestRow(row) {
+  return (
+    row !== null &&
+    typeof row === "object" &&
+    !Array.isArray(row) &&
+    Object.keys(row).length === 2 &&
+    typeof row.path === "string" &&
+    typeof row.sha256 === "string"
+  );
+}
+function sourceDigestMap(rows) {
+  if (!Array.isArray(rows)) throw new TypeError("Updater UI evidence has invalid sourceFiles");
+  const seen = new Set();
+  for (const row of rows) {
+    if (!isSourceDigestRow(row))
+      throw new TypeError("Updater UI evidence has an invalid sourceFiles entry");
+    if (seen.has(row.path)) throw new Error("Updater UI evidence has a duplicate sourceFiles path");
+    seen.add(row.path);
+  }
+  return Object.fromEntries(rows.map(({ path, sha256 }) => [path, sha256]));
+}
+
 export function checkUpdateUiEvidence(repoRoot = process.cwd()) {
   const expected = measureUpdateUiEvidenceInputs(repoRoot);
   for (const name of EVIDENCE_RECORDS) {
     const record = parseEvidenceRecord(repoRoot, name);
-    assertDigestMap(name, "sourceSha256", record.sourceSha256, expected.sourceSha256);
+    if (record.sourceProvenanceVersion !== 2)
+      throw new Error("Updater UI evidence has an unsupported source provenance version");
+    assertDigestMap(
+      name,
+      "sourceFiles",
+      sourceDigestMap(record.sourceFiles),
+      sourceDigestMap(expected.sourceFiles),
+    );
     assertDigestMap(
       name,
       "harnessProvenanceSha256",

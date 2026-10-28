@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { prepareLinuxQualifiedPayload } from "../linux-portable-signing.mjs";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import {
@@ -48,6 +49,7 @@ import {
   safeArchiveEntryPath,
   sha256File,
   portableManifestValidationFailuresForDeclaredLane,
+  ripgrepApprovalForPortableTarget,
   validatePortableCandidateManifest,
   validatePortableEvaluationManifest,
   validatePortableManifest,
@@ -63,18 +65,26 @@ import {
   buildWindowsGenerationLauncher,
   isCrossDeviceError,
   moveStagedDirectory,
+  ripgrepToolManifestEntry,
   stageWindowsPortableRootFiles,
 } from "../stage-portable-runtime.mjs";
 import {
   assemblePortableReleaseAssets,
   validatePortableReleaseSet,
 } from "../assemble-portable-release-assets.mjs";
-import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
+import {
+  readZipArchiveUncompressedSize,
+  writeZipArchiveFromDirectory,
+} from "../lib/zip-archive.mjs";
 import {
   USEARCH_RUNTIME_MANIFEST,
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import {
+  RIPGREP_PORTABLE_LICENSE_PATH,
+  ripgrepPortableExecutablePath,
+} from "../../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { runtimeActivationManifest } from "../runtime-activation-manifest.mjs";
 import { validatePortableTargetRoot } from "../portable-launch-setup-stage.mjs";
 
@@ -290,6 +300,7 @@ const BASE_MANIFEST = {
     assetName: "keiko-windows-x64.zip",
     archiveFormat: "zip",
     sizeBytes: 12345678,
+    uncompressedSizeBytes: 23456789,
     sha256: DIGEST_A,
   },
   provenance: {
@@ -709,6 +720,13 @@ function syncReviewedBinding(candidate) {
       JSON.stringify(candidate.nativeAddons),
     );
   }
+  // Pinned third-party tools (ripgrep) are bound exactly like the addon: a production candidate
+  // must not carry a tool it never reviewed.
+  if (Array.isArray(candidate.nativeTools)) {
+    candidate.releaseImpact.reviewedBinding.nativeTools = JSON.parse(
+      JSON.stringify(candidate.nativeTools),
+    );
+  }
   if (candidate.runtimeAttestation === undefined) {
     delete candidate.releaseImpact.reviewedBinding.runtimeAttestation;
   } else {
@@ -759,9 +777,8 @@ function setManifestTarget(candidate, platformTarget) {
     helper.signing.notarizationVerified = target.nodePlatform === "darwin";
     if (helper.name === "keiko-runtime-supervisor") {
       if (target.nodePlatform === "linux") {
-        helper.executablePath = "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
-        helper.protocol = { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
-        helper.source.path = "packages/keiko-sandbox/src";
+        helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+        helper.source.path = "native/runtime-supervisor";
       } else {
         helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
         helper.source.path = `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`;
@@ -848,6 +865,13 @@ function syncNativeHelperVerification(candidate, target) {
     helper.signing.signatureVerified = candidate.security.signatureVerified;
     helper.signing.notarizationRequired = candidate.security.notarizationRequired;
     helper.signing.notarizationVerified = candidate.security.notarizationVerified;
+  }
+  for (const tool of candidate.nativeTools ?? []) {
+    tool.signing.signatureKind = target.signatureKind;
+    tool.signing.verificationStatus = candidate.security.verificationStatus;
+    tool.signing.signatureVerified = candidate.security.signatureVerified;
+    tool.signing.notarizationRequired = candidate.security.notarizationRequired;
+    tool.signing.notarizationVerified = candidate.security.notarizationVerified;
   }
   if (candidate.runtimeAttestation !== undefined) {
     candidate.runtimeAttestation.signing.signatureKind = target.signatureKind;
@@ -1096,6 +1120,7 @@ function writeAssemblerFixture(
     candidate.release.releaseId = 0;
     candidate.artifact.assetId = 0;
     candidate.artifact.sizeBytes = statSync(archivePath).size;
+    candidate.artifact.uncompressedSizeBytes = readZipArchiveUncompressedSize(archivePath);
     candidate.artifact.sha256 = digestFor(readFileSync(archivePath));
     const resourceRoot =
       target.nodePlatform === "darwin"
@@ -1272,6 +1297,7 @@ async function assembleStageForTest(
       buildSecureReadHelper: writeSecureReadHelperFixture,
       preparePackageSurface: preparePackageSurfaceForTest,
       sealMacosAppBundle: writeMacosSealFixture,
+      stageRipgrepTool: writeRipgrepToolFixture,
       stageUsearchAddon: writeUsearchAddonFixture,
       verifyMacosAppBundleSeal: verifyMacosSealFixture,
     },
@@ -1347,6 +1373,37 @@ function writeUsearchAddonFixture(target, resourceRoot, { evaluation = false } =
   ];
 }
 
+// The hook mirrors the real `stageRipgrepTool` signature. The entry itself comes from the producer's
+// own builder, so the identity, the digests and the signing lane are the producer's, and only the
+// bytes on disk are a fixture.
+function writeRipgrepToolFixture(target, resourceRoot, { evaluation = false } = {}) {
+  const approved = ripgrepApprovalForPortableTarget(target);
+  if (approved === undefined) throw new Error("missing ripgrep fixture approval");
+  const executablePath = ripgrepPortableExecutablePath(approved.targetKey);
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  const licenseDestination = join(resourceRoot, ...RIPGREP_PORTABLE_LICENSE_PATH.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  mkdirSync(dirname(licenseDestination), { recursive: true });
+  writeFileSync(destination, "fixture ripgrep");
+  writeFileSync(licenseDestination, "fixture ripgrep license");
+  return [
+    ripgrepToolManifestEntry(
+      target,
+      approved,
+      { destination, executablePath, licensePath: RIPGREP_PORTABLE_LICENSE_PATH },
+      evaluation,
+    ),
+  ];
+}
+
+function withRipgrepTool(candidate) {
+  const target = portableTarget(candidate.artifact.platformTarget);
+  candidate.nativeTools = writeRipgrepToolFixture(target, tempDir());
+  syncNativeHelperVerification(candidate, target);
+  syncReviewedBinding(candidate);
+  return candidate;
+}
+
 function writeRuntimeSupervisorFixture(target, destination) {
   writeFileSync(destination, `fixture runtime supervisor for ${target.platformTarget}\n`);
   if (target.nodePlatform !== "darwin") return;
@@ -1413,6 +1470,36 @@ describe("portable native helper manifest", () => {
     expect(validatePortableManifest(candidate)).toContain("nativeHelpers[1].name: must be unique");
   });
 
+  it("accepts the native Linux owner with its complete shared source tree binding", () => {
+    const candidate = assemblerCandidate(portableTarget("linux-x64"), false);
+    const helper = candidate.nativeHelpers.find(
+      (entry) => entry.name === "keiko-runtime-supervisor",
+    );
+    helper.executablePath = "runtime/native/keiko-runtime-supervisor";
+    helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+    helper.source.path = "native/runtime-supervisor";
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).toEqual([]);
+  });
+
+  it("keeps the exact legacy Linux identity parseable but refuses mixed native identities", () => {
+    const candidate = assemblerCandidate(portableTarget("linux-x64"), false);
+    const helper = candidate.nativeHelpers.find(
+      (entry) => entry.name === "keiko-runtime-supervisor",
+    );
+    helper.executablePath = "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+    helper.protocol = { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
+    helper.source.path = "packages/keiko-sandbox/src";
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).toEqual([]);
+    expect(validatePortableCandidateManifest(candidate)).toContain(
+      "nativeHelpers[1]: new Linux artifacts must bind the native runtime supervisor",
+    );
+    helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).not.toEqual([]);
+  });
+
   it("accepts exactly the secure-read and release supervisor helpers for a new artifact", () => {
     const candidate = manifest();
     addSidecarRuntime(candidate, "windows-x64");
@@ -1426,6 +1513,233 @@ describe("portable native helper manifest", () => {
     );
 
     expect(validatePortableCandidateManifest(candidate)).toEqual([]);
+  });
+});
+
+describe("portable native tool manifest", () => {
+  it("keeps manifests produced before the tool shipped parseable but requires it from a producer", () => {
+    const legacy = manifest();
+    expect(validatePortableManifest(legacy)).toEqual([]);
+    expect(validatePortableManifest(legacy, { requireNativeTools: true })).toContain(
+      "nativeTools: must contain the pinned ripgrep tool for newly produced artifacts",
+    );
+    expect(validatePortableManifest(withRipgrepTool(legacy), { requireNativeTools: true })).toEqual(
+      [],
+    );
+  });
+
+  it.each(PORTABLE_TARGETS.map((target) => target.platformTarget))(
+    "accepts exactly the pinned ripgrep tool in the production lane for %s",
+    (platformTarget) => {
+      const candidate = withRipgrepTool(setManifestTargetCopy(platformTarget));
+      expect(validatePortableManifest(candidate, { requireNativeTools: true })).toEqual([]);
+    },
+  );
+
+  it("keeps the tool explicitly unverified in the staging lane and refuses a signed claim", () => {
+    const candidate = manifest();
+    setVerificationState(candidate, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    addSidecarRuntime(candidate, "windows-x64", {
+      signing: stagingSidecarSigning(portableTarget("windows-x64")),
+    });
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    withRipgrepTool(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate, { requireNativeTools: true })).toEqual([]);
+
+    candidate.nativeTools[0].signing.verificationStatus = "verified-production";
+    candidate.nativeTools[0].signing.signatureVerified = true;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate).join("\n")).toContain(
+      "nativeTools[0].signing: must remain explicitly unverified during staging",
+    );
+  });
+
+  it("holds the tool to the evaluation lane exactly like the other native components", () => {
+    const candidate = withRipgrepTool(evaluationManifest());
+    expect(validatePortableEvaluationManifest(candidate, { requireNativeTools: true })).toEqual([]);
+    candidate.nativeTools[0].signing.verificationStatus = "unverified-staging";
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableEvaluationManifest(candidate).join("\n")).toContain(
+      "nativeTools[0].signing: must remain explicitly unverified during evaluation",
+    );
+  });
+
+  it.each([
+    [
+      "an unsigned tool in the production lane",
+      (tool) => {
+        tool.signing.verificationStatus = "unverified-staging";
+        tool.signing.signatureVerified = false;
+      },
+      "nativeTools[0].signing: must be verified for production",
+    ],
+    ["a foreign name", (tool) => (tool.name = "grep"), "nativeTools[0].name: must be ripgrep"],
+    [
+      "a foreign kind",
+      (tool) => (tool.kind = "node-native-addon"),
+      "nativeTools[0].kind: must be native-tool",
+    ],
+    [
+      "a different release",
+      (tool) => (tool.version = "15.0.0"),
+      "nativeTools[0].version: must be 15.1.0",
+    ],
+    [
+      "another platform",
+      (tool) => (tool.platformTarget = "linux-x64"),
+      "nativeTools[0].platformTarget: must be windows-x64",
+    ],
+    [
+      "another architecture",
+      (tool) => (tool.architecture = "arm64"),
+      "nativeTools[0].architecture: must be x64",
+    ],
+    [
+      "a foreign executable path",
+      (tool) => (tool.executablePath = "runtime/native/usearch.node"),
+      "nativeTools[0].executablePath: must be runtime/native/rg.exe",
+    ],
+    [
+      "a traversing executable path",
+      (tool) => (tool.executablePath = "../rg.exe"),
+      "nativeTools[0].executablePath: must be runtime/native/rg.exe",
+    ],
+    [
+      "a foreign license path",
+      (tool) => (tool.licensePath = "runtime/licenses/rg/LICENSE"),
+      "nativeTools[0].licensePath: must be runtime/licenses/ripgrep/LICENSE-MIT",
+    ],
+    [
+      "a foreign SBOM reference",
+      (tool) => (tool.sbomBomRef = "pkg:generic/rg"),
+      "nativeTools[0].sbomBomRef: must be pkg:github/burntsushi/ripgrep@15.1.0?platform=windows-x64",
+    ],
+    [
+      "a different source commit",
+      (tool) => (tool.source.commitSha = "0".repeat(40)),
+      "nativeTools[0].source.commitSha: must be af60c2de9d85e7f3d81c78601669468cf02dabab",
+    ],
+    [
+      "a different archive URL",
+      (tool) => (tool.source.archiveUrl = "https://example.test/rg.zip"),
+      "nativeTools[0].source.archiveUrl: must be https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip",
+    ],
+    [
+      "a different archive digest",
+      (tool) => (tool.source.archiveSha256 = DIGEST_A),
+      "nativeTools[0].source.archiveSha256: must be 124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a",
+    ],
+    [
+      "a different upstream executable digest",
+      (tool) => (tool.source.binarySha256 = DIGEST_A),
+      "nativeTools[0].source.binarySha256: must be decdd4992f3f1b9a5ef9898f1b40ab16886d579d6516b4efd3d5eaa19364e408",
+    ],
+    [
+      "a different license digest",
+      (tool) => (tool.source.licenseSha256 = DIGEST_A),
+      "nativeTools[0].source.licenseSha256: must be 970813655a1bf777d2ead189cef71ab73ab92ce04dc864027d61a45de03e6728",
+    ],
+    [
+      "a relabelled unsigned digest",
+      (tool) => (tool.unsignedSha256 = DIGEST_A),
+      "nativeTools[0].unsignedSha256: must be decdd4992f3f1b9a5ef9898f1b40ab16886d579d6516b4efd3d5eaa19364e408",
+    ],
+    [
+      "a malformed shipped digest",
+      (tool) => (tool.shippedSha256 = "not-a-digest"),
+      "nativeTools[0].shippedSha256: must be a SHA-256 digest",
+    ],
+    [
+      "an empty executable",
+      (tool) => (tool.sizeBytes = 0),
+      "nativeTools[0].sizeBytes: must be greater than 0",
+    ],
+    [
+      "an undeclared key",
+      (tool) => (tool.homepage = "https://example.test"),
+      "nativeTools[0].homepage: is not allowed",
+    ],
+    [
+      "an undeclared source key",
+      (tool) => (tool.source.mirror = "https://example.test"),
+      "nativeTools[0].source.mirror: is not allowed",
+    ],
+    [
+      "a missing signing section",
+      (tool) => delete tool.signing,
+      "nativeTools[0].signing: is required",
+    ],
+  ])("refuses %s", (_label, mutate, expected) => {
+    const candidate = withRipgrepTool(manifest());
+    mutate(candidate.nativeTools[0]);
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate).join("\n")).toContain(expected);
+  });
+
+  it.each([
+    [
+      "two tools",
+      (candidate) => (candidate.nativeTools = [candidate.nativeTools[0], candidate.nativeTools[0]]),
+    ],
+    ["no tools", (candidate) => (candidate.nativeTools = [])],
+    ["a non-array", (candidate) => (candidate.nativeTools = { name: "ripgrep" })],
+    ["a null section", (candidate) => (candidate.nativeTools = null)],
+  ])("refuses a tool section that is %s", (_label, mutate) => {
+    const candidate = withRipgrepTool(manifest());
+    mutate(candidate);
+    expect(validatePortableManifest(candidate)).toContain(
+      "nativeTools: must contain exactly one tool when present",
+    );
+  });
+
+  it("refuses a tool entry that is not an object", () => {
+    const candidate = withRipgrepTool(manifest());
+    candidate.nativeTools = ["ripgrep"];
+    expect(validatePortableManifest(candidate)).toContain("nativeTools[0]: must be an object");
+  });
+
+  it("binds the tool in the reviewed binding so a release cannot ship an unreviewed executable", () => {
+    const candidate = withRipgrepTool(manifest());
+    candidate.releaseImpact.reviewedBinding.nativeTools[0].shippedSha256 = DIGEST_A;
+    expect(validatePortableManifest(candidate).join("\n")).toContain("nativeTools");
+    delete candidate.releaseImpact.reviewedBinding.nativeTools;
+    expect(validatePortableManifest(candidate).join("\n")).toContain("nativeTools");
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).toEqual([]);
+  });
+
+  it("reports the tool in the signing verification summary only when the manifest carries one", () => {
+    const candidate = manifest();
+    expect(Object.keys(portableVerificationSummaryForManifest(candidate))).not.toContain(
+      "nativeTools",
+    );
+    withRipgrepTool(candidate);
+    const [summary] = portableVerificationSummaryForManifest(candidate).nativeTools;
+    expect(summary).toEqual({
+      name: "ripgrep",
+      version: "15.1.0",
+      platformTarget: "windows-x64",
+      architecture: "x64",
+      executablePath: "runtime/native/rg.exe",
+      shippedSha256: candidate.nativeTools[0].shippedSha256,
+      signingStatus: "verified-production",
+      signatureKind: "authenticode",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+    });
   });
 });
 
@@ -1990,6 +2304,17 @@ describe("validatePortableManifest", () => {
     expect(validatePortableManifest(manifest())).toEqual([]);
   });
 
+  it.each([undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 2 ** 31 + 1])(
+    "rejects an expanded archive size that the installed reader refuses: %s",
+    (uncompressedSizeBytes) => {
+      const candidate = manifest();
+      candidate.artifact.uncompressedSizeBytes = uncompressedSizeBytes;
+      expect(validatePortableManifest(candidate).join("\n")).toContain(
+        "artifact.uncompressedSizeBytes",
+      );
+    },
+  );
+
   it("accepts manifests with absent or empty sidecar runtimes", () => {
     expect(validatePortableManifest(manifest())).toEqual([]);
     const candidate = manifest();
@@ -2199,6 +2524,41 @@ describe("validatePortableManifest", () => {
     const failures = validatePortableManifest(candidate).join("\n");
     expect(failures).toContain("evidence.rawLogsPath: uses a forbidden manifest key");
     expect(failures).toContain("releaseImpact.packageManagerOutput: uses a forbidden manifest key");
+  });
+
+  it("accepts public catalog store descriptions while rejecting private data in that catalog", () => {
+    const candidate = manifest();
+    candidate.releaseImpact.catalog = {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: "public-local-knowledge-update",
+          affectedStateStores: ["local-knowledge", "task-workspaces"],
+          releaseNoteBullets: ["Updates the documented keiko.config.json settings."],
+        },
+      ],
+    };
+    expect(validatePortableManifest(candidate)).toEqual([]);
+    const entry = candidate.releaseImpact.catalog.entries[0];
+    for (const value of [
+      "sk-testCredential123456789",
+      "/Users/customer/private.json",
+      ".keiko/provider-credentials.vault",
+      "config/provider-credentials.vault",
+      "config\\provider-credentials.vault",
+      "config/provider-credentials.vault,",
+      "(config\\provider-credentials.vault).",
+      "config/provider-credentials.vault-backup",
+      "https://user:pass@example.com/config",
+    ]) {
+      entry.releaseNoteBullets = [value];
+      expect(validatePortableManifest(candidate).join("\n")).toMatch(
+        /contains (?:secret-like|forbidden)/u,
+      );
+    }
+    entry.releaseNoteBullets = [];
+    entry.rawPayload = "local-knowledge";
+    expect(validatePortableManifest(candidate).join("\n")).toContain("forbidden payload reference");
   });
 
   it("rejects rollback eligibility and unverified platform signatures", () => {
@@ -2678,6 +3038,21 @@ describe("portable qualification producers", () => {
       .map((key) => key.replaceAll('"', ""))
       .sort();
     expect(declared).toEqual(emitted);
+  });
+});
+
+describe("portable qualification producers and the pinned tool section", () => {
+  it("emits the tool section into the activation manifest only for a manifest that carries tools", () => {
+    // Complements the pin above, which fixes the closed key set for a manifest without tools. The
+    // section is the single optional key a producer accepts, so its name is pinned here too.
+    const candidate = setManifestTargetCopy("macos-arm64");
+    const closedKeys = Object.keys(runtimeActivationManifest(candidate)).sort();
+    const withTools = Object.keys(runtimeActivationManifest(withRipgrepTool(candidate))).sort();
+    expect(withTools).toEqual([...closedKeys, "nativeTools"].sort());
+    for (const producer of ["macos", "windows"]) {
+      const source = readFileSync(`scripts/qualify-${producer}-runtime-release.mjs`, "utf8");
+      expect(source).toContain('key !== "nativeTools"');
+    }
   });
 });
 
@@ -3516,6 +3891,47 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       else process.env.PATH = originalPath;
     }
   });
+
+  it(
+    "stages the native Linux supervisor and retains the packaged namespace gateway",
+    async () => {
+      const dir = tempDir();
+      const nodeArchive = createNodeArchiveFixture(dir, "linux-x64");
+      const sidecarSpec = createSidecarFixture(dir, "linux-x64");
+      const outDir = join(dir, "out");
+      const stage = await assembleStageForTest("linux-x64", nodeArchive, outDir, dir, [
+        sidecarSpec,
+      ]);
+      const root = join(outDir, "linux-x64");
+      const helper = stage.manifest.nativeHelpers.find(
+        (entry) => entry.name === "keiko-runtime-supervisor",
+      );
+      expect(helper).toMatchObject({
+        executablePath: "runtime/native/keiko-runtime-supervisor",
+        protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+        source: {
+          path: "native/runtime-supervisor",
+          treeSha256: hashDirectoryTree("native/runtime-supervisor"),
+        },
+      });
+      const payload = join(root, "payload", "Keiko");
+      expect(await sha256File(join(payload, helper.executablePath))).toBe(helper.shippedSha256);
+      expect(
+        existsSync(join(payload, "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js")),
+      ).toBe(true);
+      const sbom = JSON.parse(readFileSync(join(root, "evidence", "sbom.cdx.json"), "utf8"));
+      expect(
+        sbom.components.find((entry) => entry.name === "keiko-runtime-supervisor").hashes,
+      ).toContainEqual({ alg: "SHA-256", content: helper.shippedSha256 });
+      prepareLinuxQualifiedPayload({ "stage-root": root });
+      const prepared = JSON.parse(
+        readFileSync(join(root, "manifest", "portable-manifest.json"), "utf8"),
+      );
+      expect(prepared.runtimeActivation.trustAnchor).toBe("sigstore-qualification-receipt");
+      expect(prepared.releaseImpact.catalog).toEqual(stage.manifest.releaseImpact.catalog);
+    },
+    STAGE_COMMAND_TIMEOUT_MS,
+  );
 
   it("stages macOS resources under the app bundle and binds the sidecar manifest to ZIP bytes", async () => {
     const dir = tempDir();

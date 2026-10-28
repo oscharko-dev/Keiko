@@ -563,3 +563,216 @@ describe("fresh paths-only actual Git membership (#3918)", () => {
     expect(vi.mocked(execFileSync).mock.results[0].type).toBe("return");
   });
 });
+
+const NATIVE_TEST_INFRASTRUCTURE = [
+  "native/portable-launcher/test-app-owner-macos.mjs",
+  "native/runtime-supervisor/linux/app-owner-cli-fixture.mjs",
+  "native/runtime-supervisor/linux/process_scope_decoder_worker_fixture.mjs",
+  "native/runtime-supervisor/linux/process_scope_node_fixture.mjs",
+  "native/runtime-supervisor/process_scope_observer_worker_fixture.mjs",
+];
+
+function writeNativeInfrastructureFixture(root, path) {
+  const source = "export const fixtureValue = 1;\n";
+  mkdirSync(join(root, path, ".."), { recursive: true });
+  writeFileSync(join(root, path), source);
+  return source;
+}
+
+describe("exact native test-infrastructure inventory (#3918)", () => {
+  it.each(NATIVE_TEST_INFRASTRUCTURE)(
+    "classifies only the exact fixture %s while keeping runtime promotion fail-closed",
+    (path) => {
+      expect(policyMembership.classifyPolicyPath(path, [])).toEqual({
+        scope: "tests",
+        production: false,
+        reason: "test-or-fixture",
+      });
+      expect(() => policyMembership.classifyPolicyPath(path, [], true)).toThrow(
+        "unclassified-source",
+      );
+      const nearby = path.replace(/\.mjs$/u, "-unregistered.mjs");
+      expect(() => policyMembership.classifyPolicyPath(nearby, [])).toThrow("unclassified-source");
+    },
+  );
+
+  it("retains every existing inventoried row and hashes all five exact added fixtures", async () => {
+    const root = trackedRepository();
+    const before = await collectPolicyInventory(root);
+    const sources = new Map();
+    for (const path of NATIVE_TEST_INFRASTRUCTURE)
+      sources.set(path, writeNativeInfrastructureFixture(root, path));
+    const after = await collectPolicyInventory(root);
+    expect(after.files).toHaveLength(before.files.length + NATIVE_TEST_INFRASTRUCTURE.length);
+    for (const retained of before.files)
+      expect(after.files.find((file) => file.path === retained.path)).toEqual(retained);
+    for (const [path, source] of sources)
+      expect(after.files.find((file) => file.path === path)).toEqual({
+        path,
+        tracked: false,
+        sha256: policyDigest(source),
+        scope: "tests",
+        production: false,
+        reason: "test-or-fixture",
+      });
+    expect(after.productionReachability).toEqual(before.productionReachability);
+    expect(after.packages).toEqual(before.packages);
+    expect(after.rootBuild).toEqual(before.rootBuild);
+  });
+
+  it.each(NATIVE_TEST_INFRASTRUCTURE)(
+    "rejects a real production runtime import of exact native fixture %s",
+    async (path) => {
+      const root = trackedRepository();
+      writeNativeInfrastructureFixture(root, path);
+      mkdirSync(join(root, "scripts"), { recursive: true });
+      writeFileSync(join(root, "scripts/runtime-entry.mjs"), `import "../${path}";\n`);
+      await expect(collectPolicyInventory(root)).rejects.toThrow("unclassified-source");
+    },
+  );
+
+  it.each(NATIVE_TEST_INFRASTRUCTURE)(
+    "rejects a real public export of exact native fixture %s",
+    async (path) => {
+      const root = trackedRepository();
+      writeNativeInfrastructureFixture(root, path);
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({
+          name: "fixture",
+          workspaces: ["packages/*"],
+          exports: `./${path}`,
+        }),
+      );
+      await expect(collectPolicyInventory(root)).rejects.toThrow("unclassified-source");
+    },
+  );
+});
+
+const FOURTH_PACKAGE_FIXTURE =
+  "packages/keiko-server/src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts";
+const NEARBY_PACKAGE_SOURCE = FOURTH_PACKAGE_FIXTURE.replace(".ts", "-unregistered.ts");
+
+function writeFourthPackageFixture(root) {
+  const directory = "packages/keiko-server";
+  mkdirSync(join(root, directory, "src/tool-catalog/__fixtures__"), { recursive: true });
+  writeFileSync(
+    join(root, directory, "package.json"),
+    JSON.stringify({ name: "@oscharko-dev/keiko-server", exports: "./src/index.ts" }),
+  );
+  writeFileSync(
+    join(root, directory, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: { rootDir: "src", outDir: "dist" },
+      include: ["src/**/*.ts"],
+    }),
+  );
+  const sources = new Map([
+    [`${directory}/src/index.ts`, "export const value = 1;\n"],
+    [FOURTH_PACKAGE_FIXTURE, "export const fixtureValue = 1;\n"],
+    [NEARBY_PACKAGE_SOURCE, "export const nearbyValue = 1;\n"],
+  ]);
+  for (const [path, source] of sources) writeFileSync(join(root, path), source);
+  return sources;
+}
+
+function writeFourthFixtureChain(root, sources) {
+  const directory = "packages/keiko-server/src/tool-catalog/__fixtures__";
+  sources.set(FOURTH_PACKAGE_FIXTURE, 'export * from "./catalogRuntimeFixture.js";\n');
+  sources.set(
+    `${directory}/catalogRuntimeFixture.ts`,
+    'export * from "./catalogToolFixture.js";\n',
+  );
+  sources.set(
+    `${directory}/catalogToolFixture.ts`,
+    'export * from "../../../../../tests/support/buffered-server-log.js";\n',
+  );
+  sources.set("tests/support/buffered-server-log.ts", "export const fixtureValue = 1;\n");
+  mkdirSync(join(root, "tests/support"), { recursive: true });
+  for (const [path, source] of sources) writeFileSync(join(root, path), source);
+}
+
+function exposeFourthPackageFixture(root, linkage) {
+  if (linkage === "runtime") {
+    writeFileSync(
+      join(root, "packages/keiko-server/src/index.ts"),
+      'export * from "./tool-catalog/__fixtures__/nativeEffectRuntimeFixture.js";\n',
+    );
+    return;
+  }
+  writeFileSync(
+    join(root, "packages/keiko-server/package.json"),
+    JSON.stringify({
+      name: "@oscharko-dev/keiko-server",
+      exports: "./src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts",
+    }),
+  );
+}
+
+describe("exact fourth package-fixture membership (#3918)", () => {
+  it("keeps the fourth fixture exact and preserves its supported runtime owner", () => {
+    const packages = [{ directory: "packages/keiko-server", name: "@oscharko-dev/keiko-server" }];
+    expect(policyMembership.classifyPolicyPath(FOURTH_PACKAGE_FIXTURE, packages)).toEqual({
+      scope: "tests",
+      production: false,
+      reason: "test-or-fixture",
+    });
+    const production = {
+      scope: "package:@oscharko-dev/keiko-server",
+      production: true,
+      reason: "workspace-owner",
+    };
+    expect(policyMembership.classifyPolicyPath(NEARBY_PACKAGE_SOURCE, packages)).toEqual(
+      production,
+    );
+    expect(policyMembership.classifyPolicyPath(FOURTH_PACKAGE_FIXTURE, packages, true)).toEqual(
+      production,
+    );
+  });
+
+  it("retains the full census and hashes without promoting a dormant fixture chain", async () => {
+    const root = trackedRepository();
+    const before = await collectPolicyInventory(root);
+    const sources = writeFourthPackageFixture(root);
+    writeFourthFixtureChain(root, sources);
+    const after = await collectPolicyInventory(root);
+    expect(after.files).toHaveLength(before.files.length + sources.size);
+    for (const retained of before.files)
+      expect(after.files.find((file) => file.path === retained.path)).toEqual(retained);
+    for (const [path, source] of sources) {
+      const row = after.files.find((file) => file.path === path);
+      expect(row).toMatchObject({ path, tracked: false, sha256: policyDigest(source) });
+      const production = path.endsWith("/src/index.ts") || path === NEARBY_PACKAGE_SOURCE;
+      expect(row.production).toBe(production);
+      expect(row.scope).toBe(production ? "package:@oscharko-dev/keiko-server" : "tests");
+    }
+    expect(after.productionReachability.promoted).toEqual([]);
+  });
+
+  it.each(["runtime", "public"])(
+    "promotes a healthy fourth package fixture reached through a real %s edge",
+    async (linkage) => {
+      const root = trackedRepository();
+      writeFourthPackageFixture(root);
+      exposeFourthPackageFixture(root, linkage);
+      const inventory = await collectPolicyInventory(root);
+      expect(inventory.files.find((file) => file.path === FOURTH_PACKAGE_FIXTURE)).toMatchObject({
+        scope: "package:@oscharko-dev/keiko-server",
+        production: true,
+        reason: "production-runtime-reachable",
+      });
+      expect(inventory.productionReachability.promoted).toContain(FOURTH_PACKAGE_FIXTURE);
+    },
+  );
+
+  it.each(["runtime", "public"])(
+    "rejects the unsupported transitive root helper reached through a real %s edge",
+    async (linkage) => {
+      const root = trackedRepository();
+      const sources = writeFourthPackageFixture(root);
+      writeFourthFixtureChain(root, sources);
+      exposeFourthPackageFixture(root, linkage);
+      await expect(collectPolicyInventory(root)).rejects.toThrow("unclassified-source");
+    },
+  );
+});

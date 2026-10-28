@@ -12,12 +12,17 @@ import {
 import type {
   CodingWorkbenchContextUsage,
   CodingWorkbenchContextUsageBreakdown,
+  CodingWorkbenchRuntimeVersion,
 } from "@oscharko-dev/keiko-contracts";
 import { TaskWorkspaceManager } from "../../TaskWorkspaceManager";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { Icons } from "../../Icons";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
+  reportCodingWorkbenchSummaryActivated,
+  reportCodingWorkbenchInteraction,
+} from "@/lib/coding-workbench-interaction";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { useCodingWorkbenchVersionFacts } from "./useCodingWorkbenchVersionFacts";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const InfoIcon = Icons.info;
@@ -105,7 +110,11 @@ function TaskWorkspaceLocation(): ReactNode {
         aria-controls={visible ? id : undefined}
         onClick={() => {
           setVisible(!visible);
-          reportClientDiagnostic("[keiko] coding workbench workspace location toggled");
+          reportCodingWorkbenchInteraction({
+            interaction: "details-toggled",
+            section: "workspace-location",
+            expanded: !visible,
+          });
         }}
       >
         {t("codingWorkbench.history.location")}
@@ -300,6 +309,8 @@ function ContextUsagePanel(props: {
 interface InfoPanelProps {
   readonly facts: readonly CodingWorkbenchInfoFact[];
   readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
+  /** The activated runtime's version facts, as readiness reports them (#3904 AC4). */
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
 }
 
 export function CodingWorkbenchInfoPanel(props: InfoPanelProps): ReactNode {
@@ -334,15 +345,16 @@ export function CodingWorkbenchInfoPanel(props: InfoPanelProps): ReactNode {
 
 function InformationDetails(props: InfoPanelProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const versions = useCodingWorkbenchVersionFacts(props.runtimeVersion);
   return (
-    <details
-      className={styles.cmpInfoDetails}
-      onToggle={() =>
-        reportClientDiagnostic("[keiko] coding workbench information details toggled")
-      }
-    >
-      <summary className={styles.cmpActivitySummary}>{t("codingWorkbench.info.details")}</summary>
-      <InformationFacts facts={props.facts.filter((fact) => !fact.primary)} />
+    <details className={styles.cmpInfoDetails}>
+      <summary
+        className={styles.cmpActivitySummary}
+        onClick={(event) => reportCodingWorkbenchSummaryActivated("information", event)}
+      >
+        {t("codingWorkbench.info.details")}
+      </summary>
+      <InformationFacts facts={[...props.facts.filter((fact) => !fact.primary), ...versions]} />
       <p className={styles.helpText}>{t("codingWorkbench.controls.help")}</p>
       <TaskWorkspaceLocation />
       <OptionalTaskWorkspaceManager />

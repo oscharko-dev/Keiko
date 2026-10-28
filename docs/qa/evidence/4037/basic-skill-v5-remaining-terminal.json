@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "classification": "Completed16 previously undispatched known-calibration cases; original stopped v5 and failed case8 remain unchanged; no full original protocol success or stage advancement",
+  "productSourceHead": "0faa5db9d54a5c3551f81cf5ed52f13e56e50210",
+  "measurementListenerOwnerHead": "bcf00058947496d5a6c18d9c5a185ba66386f45b",
+  "inputReceipt": {
+    "artifact": "skill-basic-v5-remaining-input-receipt.json",
+    "sha256": "3e6bccad4f87e19e4a99da6142bb4b10ab1be596561776b3c9c89c5a8c4ce2ac"
+  },
+  "terminalReceipt": {
+    "artifact": "skill-basic-v5-remaining-terminal-receipt.json",
+    "sha256": "a3d56dc5d7c642bd94e50c3deaff0e0eced0d9ebc43e768efc191077935168bb"
+  },
+  "archive": {
+    "artifact": "skill-basic-v5-remaining-terminal.tar.gz",
+    "bytes": 1302226,
+    "sha256": "31f840099a8f7fef152de325ced2cf9209bfc87e580025354a6a24b6db1dd7ed",
+    "selectedFiles": 1054,
+    "regularMembers": 1055,
+    "excludedPrivateFiles": 128,
+    "knownCredentialBytesAbsent": true,
+    "allMembersMatch": true
+  },
+  "observations": {
+    "workflowsCompleted": 16,
+    "failedWorkflows": 0,
+    "finalCleanCorrectSubjectRuns": 16,
+    "physicalRequests": 68,
+    "taskRequests": 24,
+    "readinessRequests": 44,
+    "all16TerminalPhysicalAdmissionsAllowed": true,
+    "all12219DeclaredInputsUnchanged": true,
+    "original12203InputsUnchanged": true
+  },
+  "actualAttemptBudgetAudit": {
+    "attempts": 24,
+    "allRequestedCapsWithinProgressiveOriginal8192": true,
+    "allKnownCompletionChargesWithinRequestedCap": true,
+    "receipt": {
+      "artifact": "remaining-v5-caps-terminal.json",
+      "sha256": "6f6744b9acdb65deea39c9afebbdf951174bfb756d08ec4cb60875c167417e3b"
+    }
+  },
+  "guardLimitation": {
+    "finding": {
+      "artifact": "remaining16-prior-cap-before-independent.json",
+      "sha256": "d57c47dcd6ebb22e1e9f8a91a8afe25f9e101ee6e2c8f9e364415f9e713bcfdc"
+    },
+    "description": "Frozen prospective v1 continuation guard rechecked failed-phase admission and cumulative actual usage but omitted earlier requested-cap rechecks. Separate actual-attempt evidence validates every observed request; the original guard is not rewritten or represented as complete."
+  },
+  "limits": [
+    "Original v5 remains7 completed, failed React control case8 and16 undispatched under its original stopping behavior. This separate continuation never repeats that case or changes its result.",
+    "Original6/6 clean-control advancement threshold cannot be met after case8; no automatic or retrospective stage advancement.",
+    "Canonical assertion-only scoring, typed Mockito execution errors, generated naming/sections, factual/citation quality and held-outs remain distinct. Full semantic/profile/benefit review is pending.",
+    "No task, skill, model setting, grant, generated file or scoring rule is changed, and no new skill acceptance is claimed."
+  ]
+}

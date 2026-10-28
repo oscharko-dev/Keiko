@@ -53,6 +53,7 @@ import {
   type ExecuteVerificationArgs,
   type ExecuteVerificationResult,
 } from "./verificationExecution.js";
+import { VERIFICATION_DEPENDENCY_REFUSAL_REASONS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
   VERIFICATION_COMPLETION_FIELD_CONTRACTS,
   VERIFICATION_DEPENDENCY_STATE_VALUES,
@@ -224,6 +225,13 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
     durationMs: { type: "integer", dataClass: "duration", required: true },
     egressAllowed: { type: "integer", dataClass: "count", required: false },
     egressRefused: { type: "integer", dataClass: "count", required: false },
+    // Which closed refusal applied, so a refused bootstrap names its cause (#3897).
+    refusalReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -259,6 +267,8 @@ export interface VerificationRunInput {
   readonly requestId?: string | undefined;
   // Server-minted request correlation. Never accepted from the parsed client payload.
   readonly correlationId?: string | undefined;
+  // Server-owned: the native coding runtime's platform when it shares the workspace's dependencies.
+  readonly sharedHostPlatform?: ExecuteVerificationArgs["sharedHostPlatform"];
 }
 
 export interface VerificationRunStart {
@@ -548,7 +558,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitRunStarted(runId, input, startedAtMs);
     this.emitStepsStarted(runId, plan);
     try {
-      const { execution, failureOutput } = await this.executeAgentPlan(plan, resolved, entry);
+      const { execution, failureOutput } = await this.executeAgentPlan(
+        plan,
+        resolved,
+        entry,
+        input.sharedHostPlatform,
+      );
       const { report } = execution;
       this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
@@ -603,10 +618,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     plan: VerificationPlan,
     resolved: ResolvedVerificationWorkspace,
     entry: InFlightRun,
+    sharedHostPlatform: VerificationRunInput["sharedHostPlatform"],
   ): Promise<AgentExecution> {
     const failureOutput: VerificationStepOutput[] = [];
     const execution = await this.executePort({
       ...this.buildExecuteArgs(plan, resolved, entry),
+      ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
       onStepOutput: (output): void => {
         if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
       },
@@ -840,6 +857,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
                 egressAllowed: dependencies.egress.allowed,
                 egressRefused: dependencies.egress.refused,
               }),
+          ...(dependencies.refusalReason === undefined
+            ? {}
+            : { refusalReason: dependencies.refusalReason }),
         },
       ),
     );

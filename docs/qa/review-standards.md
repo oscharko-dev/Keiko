@@ -57,3 +57,44 @@ Canonical governance:
 - Architectural behaviour changes update an existing ADR or add the next indexed ADR. Coverage and
   performance evidence must exercise production entry points and never duplicate the formula it is
   intended to verify.
+
+## Evidence and review scope
+
+Start with the PR's intended outcome, current head and changed behavior. Read surrounding code and
+callers to test a hypothesis; a changed-lines-only search is insufficient on the first pass.
+Every actionable finding identifies a file and line, trigger or input, concrete consequence, and
+the missing guard or contradictory contract. State uncertainty explicitly; do not turn a guess
+from an identifier into a defect. Validate the claim against the current implementation before
+posting it. Distinguish introduced regressions from pre-existing defects and optional suggestions.
+
+Prioritize authorization, data loss, privacy, compatibility and incorrect behavior. Leave formatting
+and routine lint diagnostics to their existing gates. Do not add speculative cleanup or cosmetic
+nits to a correctness review. A pre-existing defect needs explicit attribution and separate scope,
+not a claim that this PR introduced it. Existing gates and security obligations still apply.
+When reporting a review result, give the actionable finding count, inspected scope and checks not
+run. Zero findings means none found in that scope, not proof of safety; this does not require a
+CodeRabbit high-level summary or a PR-body edit (both remain disabled).
+
+## Convergence without bypassing settlement
+
+After the initial review, concentrate subsequent passes on the new diff, affected callers and
+previous findings. Expand scope when a concrete dependency or security risk warrants it. Do not
+repost an already answered finding without new evidence. Collect already published findings from
+all producers into one repair, following the existing
+[settlement cadence](review-settlement.md); do not wait for unpublished findings.
+
+After three unsuccessful repair rounds, reassess the root cause and scope in the PR before another
+speculative repair. Record what failed, the evidence and the next targeted check; involve the
+maintainer when the intended behavior or authority is unclear. This is a reassessment trigger,
+not permission to stop a required reviewer, ignore a finding, resolve a thread automatically or
+merge. Current-head checks, the existing settlement contract and owner-only integration remain
+mandatory. No new round-count automation or merge condition is introduced here.
+
+## Learning from a confirmed defect
+
+Fix the failure class at its owning layer and add executable regression protection where practical.
+If a durable repository-specific trap remains, update the matching [EXPERIENCE.md](../../EXPERIENCE.md)
+entry with evidence and a retirement trigger. Do not write an entry for every successful PR.
+Assess changes to these instructions using confirmed historical defects and clean changes as
+negative controls; measure false positives as well as caught regressions. A shorter prompt or more
+review comments alone does not demonstrate better quality.

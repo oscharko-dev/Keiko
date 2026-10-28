@@ -12,9 +12,20 @@ const REPAIR_TEXT_MAX = 131_072;
 const INSERTION_MAX = 32;
 const MARKER_BODY_LENGTH_RE = /^.{1,512}$/su;
 const PADDING_MAX = 16;
+const REPAIR_GRAPHEMES = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 export function fitsCitationRepairTextLimit(text: string): boolean {
   return text.length <= REPAIR_TEXT_MAX;
+}
+
+/** The annotation protocol can target only original text outside rendered Markdown code. */
+export function hasCitationRepairProse(sourceText: string): boolean {
+  let cursor = 0;
+  for (const range of markdownCodeRanges(sourceText)) {
+    if (sourceText.slice(cursor, range.start).trim().length > 0) return true;
+    cursor = range.end;
+  }
+  return sourceText.slice(cursor).trim().length > 0;
 }
 
 interface MarkerInsertion {
@@ -27,12 +38,75 @@ export function buildCitationRepairPrompt(
   kind: "file" | "numeric" = "file",
 ): string {
   return [
-    `Return the original answer verbatim; only insert supported ${kind === "file" ? "[path:line-range]" : "[n]"} citation markers.`,
-    "Use only the supplied repository excerpts. Preserve every claim, code block and existing bracket.",
-    "Do not add explanations, tools, missing-evidence declarations or unsupported locations.",
+    `Return only JSON: {"insertions":[{"after":"exact unique original prose","marker":"${kind === "file" ? "[path:line-range]" : "[n]"}"}]}.`,
+    "Using only supplied excerpts, only insert supported markers; never rewrite the answer. At most 32 entries; after at most 512 characters, outside code, missing-evidence declarations and assessment. No explanations.",
     "Original answer:",
     answerText,
   ].join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function annotationEntries(text: string): readonly unknown[] | undefined {
+  if (!fitsCitationRepairTextLimit(text)) return undefined;
+  const json = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/u.exec(text)?.[1] ?? text;
+  if (!json.startsWith("{")) return undefined;
+  const value: unknown = JSON.parse(json);
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !Array.isArray(value.insertions))
+    return undefined;
+  const entries: readonly unknown[] = value.insertions;
+  return entries.length > 0 && entries.length <= INSERTION_MAX ? entries : undefined;
+}
+
+function annotation(
+  entry: unknown,
+): { readonly after: string; readonly marker: string } | undefined {
+  if (!isRecord(entry) || Object.keys(entry).length !== 2) return undefined;
+  const after = entry.after;
+  const marker = entry.marker;
+  if (typeof after !== "string" || typeof marker !== "string") return undefined;
+  if (after.length === 0 || after.length > 512 || !MARKER_BODY_LENGTH_RE.test(marker.slice(1, -1)))
+    return undefined;
+  return { after, marker };
+}
+
+function annotatedAnswer(original: string, response: string): string | undefined {
+  const entries = annotationEntries(response);
+  if (entries === undefined) return undefined;
+  const insertions = new Map<number, string>();
+  for (const entry of entries) {
+    const value = annotation(entry);
+    if (value === undefined) return undefined;
+    const start = original.indexOf(value.after);
+    if (start < 0 || original.includes(value.after, start + 1)) return undefined;
+    const offset = start + value.after.length;
+    if (insertions.has(offset)) return undefined;
+    insertions.set(offset, ` ${value.marker}`);
+  }
+  let answer = original;
+  for (const [offset, marker] of [...insertions].sort((a, b) => b[0] - a[0])) {
+    answer = answer.slice(0, offset) + marker + answer.slice(offset);
+  }
+  return answer;
+}
+
+/** Construct annotations locally, then retain every existing marker-only and sent-evidence guard. */
+export function citationRepairContent(
+  original: string,
+  response: string,
+  index: PackCitationIndex,
+  numericMarkers?: ReadonlySet<number>,
+): string | undefined {
+  if (!fitsCitationRepairTextLimit(original) || !fitsCitationRepairTextLimit(response))
+    return undefined;
+  if (validateCitationRepair(original, response, index, numericMarkers)) return response;
+  const candidate = annotatedAnswer(original, response.trim());
+  return candidate !== undefined &&
+    validateCitationRepair(original, candidate, index, numericMarkers)
+    ? candidate
+    : undefined;
 }
 
 function supportedBracket(
@@ -76,14 +150,42 @@ function paddingEnd(text: string, offset: number): number {
   return end;
 }
 
+function previousCodePoint(text: string, offset: number): string {
+  return Array.from(text.slice(Math.max(0, offset - 2), offset)).at(-1) ?? "";
+}
+
+function nextCodePoint(text: string, offset: number): string {
+  const point = text.codePointAt(offset);
+  return point === undefined ? "" : String.fromCodePoint(point);
+}
+
+function splitsGrapheme(text: string, offset: number): boolean {
+  return (
+    offset > 0 &&
+    offset < text.length &&
+    REPAIR_GRAPHEMES.segment(text).containing(offset)?.index !== offset
+  );
+}
+
 function splitsSubstantiveToken(text: string, offset: number): boolean {
+  if (splitsGrapheme(text, offset)) return true;
   const word = /[\p{L}\p{M}\p{N}_$]/u;
-  const separator = /[.,/:\\-]/u;
-  const before = text.charAt(offset - 1);
-  const after = text.charAt(offset);
+  const separator = /[.,/:\\’'-]/u;
+  const before = previousCodePoint(text, offset);
+  const after = nextCodePoint(text, offset);
   if (word.test(before) && word.test(after)) return true;
-  if (word.test(before) && separator.test(after) && word.test(text.charAt(offset + 1))) return true;
-  return separator.test(before) && word.test(text.charAt(offset - 2)) && word.test(after);
+  if (/^[=<>!~&|+*/%^?:.-]{2}$/u.test(before + after)) return true;
+  if (
+    word.test(before) &&
+    separator.test(after) &&
+    word.test(nextCodePoint(text, offset + after.length))
+  )
+    return true;
+  return (
+    separator.test(before) &&
+    word.test(previousCodePoint(text, offset - before.length)) &&
+    word.test(after)
+  );
 }
 
 function unchangedWithInsertions(

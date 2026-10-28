@@ -92,6 +92,13 @@ process/request/model-call boundaries, read a Keiko-code stack frame without a h
 directory layout, and scaffold a red-then-green regression test — all without any customer content
 ever appearing in the artifact.
 
+Source projection adds optional, typed counts on the existing `chat.response.streamed` operation:
+projection revision, source regions, depth/size/syntax refusals, and pending/published character-block
+observations. `search.connected-context.evidence-details` identifies the projection revision within its existing field grant. Parser
+errors containing source text never become diagnostics; unavailable source follows existing read
+failure and uncertainty evidence. These fields do not prove compilation, model quality, UI copying,
+or durable persistence: each claim still requires its own actual execution evidence.
+
 **Non-goals.** This epic does not log prompts, responses, document text, secrets, absolute
 filesystem paths, or any other customer content — content-shape and counts only, never bodies. It
 does not introduce runtime source maps, OpenTelemetry, or a second logging/tracing subsystem; every
@@ -404,14 +411,39 @@ lifecycle phase, analyzer projection, supported failure classes, executable proo
 impact. TypeScript derives the exact event field type from that declaration, including required and
 optional fields; unknown keys and wrong values are compile errors.
 
-Generation resolves the two canonical `keiko-contracts` APIs through TypeScript declaration and
-alias symbols. A local same-shaped helper is unrelated and ignored. A non-literal or unresolved
+Generation resolves the canonical registration/emission APIs through TypeScript declaration and
+alias symbols. Field descriptors may also use the dependency-free Contracts constructors
+`activityLogCountField`, `activityLogDurationField`, `activityLogBooleanField` and
+`activityLogStringEnumField`, exposed through the existing observability surface. Only actual
+constructor declaration symbols and finite literal/const arguments are admitted; compatible local
+functions and wrappers grant no authority. Helper argument expansion has a local 256-visit bound
+and the existing 64-value vocabulary bound; ordinary literal acceptance is unchanged. Generation
+invokes the trusted built constructors only after static admission, never inspected source code.
+The generated operation tuple imports the defining leaf directly and uses constructors only where
+keys, order, omission and values match exactly; other descriptors remain literals. Every descriptor
+is freshly allocated, enum inputs retain their producer reference, and generated enum occurrences
+receive independent arrays. Exact literal types, runtime graph identity and writer revalidation
+remain mandatory. A local same-shaped registration/emission API is unrelated and ignored; a field substitute inside
+a canonical registration is refused. A non-literal or unresolved
 canonical registration/emission, a duplicate operation, a registration with no emitter, an emitter
 without its registration, or relevant compiler diagnostics is an actionable closed violation. The
 checked-in catalog and generated runtime module come from those canonical declarations. The runtime
 module contains the complete safe operation schemas and failure-class coverage as well as the
 registry/schema/catalog identity constants; it is not a digest-only index. The drift check requires
 both byte equality and an empty authoritative violation set.
+
+The public generated registry preserves its exports through separate identity and metadata modules.
+The compact identity module carries the digests and closed surface vocabulary; the metadata loader
+imports independent failure-class coverage and operation-to-surface JSON assets. This keeps the
+large metadata off consumers that require only identity, including the initial UI load, while
+separating declarative data from executable code. The metadata public types use stable
+readonly schemas, including the existing closed classifications and lifecycle enums, rather than
+literal counts and fixed list positions (owner decision, 2026-10-24). Canonical source operation
+registrations retain their exact inferred field types, and generation preserves every runtime
+contract value. JSON metadata is covered by the same byte-exact regeneration and runtime checks.
+The support-code inventory likewise stores its three existing readonly string lists as generated
+JSON data; their exported types, values and order remain intact. Its retained module-history tuple
+keeps its exact literal types and archived values.
 
 The predecessor bracket scanner remains temporarily in the same generated file as a visibly
 non-authoritative migration input. Its `<dynamic>` and `unknown` records authorize nothing and must
@@ -429,6 +461,26 @@ marker value. The metadata reader admits complete structural declarations and pr
 reference, including declarations not yet generated into the registry; this grants no canonical
 write authority. Forwarding copies preserve raw attachments even when that checked reader refuses
 them, so final validation retains the existing rejection classification.
+
+Client update presentation uses the existing `client.update-notice.presented` operation with
+closed `noticeKind` and `presentation` (`shown`, `dismissed`, `suppressed`), the actual
+`updateAvailable` flag and `blockerCount`, and the existing request correlation. Availability kinds
+must agree with the flag; a no-signal result may only be suppressed. Immediate user dismissals,
+including opening Updates and dismissing a local load-failure fallback, record their own bounded
+presentation transition; restoring a stored dismissal remains a separate observation. No release
+report, message body, path, version guess or private warning is admitted as presentation evidence.
+
+Files source intents use the existing `client.files-scope.decision` operation's closed
+`intent-send-cancelled` decision and the admitted intent correlation. This records cancellation
+against the controller that actually owns the conversation, including an unpublished root fallback
+and regeneration. Navigation alone does not cancel captured canonical Voice work, and this client
+observation is not a substitute for server persistence acknowledgement or terminal settlement.
+Portable preflight and status record `update.install-mode.detected` with closed mode/reason/target
+and measured duration, never roots or package bodies. Browser secret rotation records the actual
+remaining `cookieMaxAgeSeconds` on the existing `coding-app-session.rotated` operation; changing a
+secret does not extend approved absolute authority. The generated registry remains authoritative
+for exact enums, obligations and executable proofs; these producers retain the existing writer,
+segmented store and reader ownership under ADR-0179.
 
 Every generated operation schema includes required `completeness` and `loss` contracts. The event
 constructor supplies the safe defaults `complete` and `none`, while a producer that observed
@@ -1301,9 +1353,10 @@ bounded conversation lane, not the whole model input; unused source capacity rem
 identified. Checkpoint validity uses that same lane profile. These fields are counts only and
 retain the existing timeline, causal correlation and sufficiency contract.
 
-Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
-`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
-`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
+`imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
+when present, `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. PDF document
+parts take the same per-part media reserve as images. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 
@@ -1749,6 +1802,10 @@ segment is orphaned when:
 - its owner has exited, or its pid now belongs to this process;
 - it is older than two segment windows and unwritten for one (pid reuse);
 - it is this instance's own abandoned segment.
+
+The `same-process` recovery reason requires both the process id and instance id to match.
+A matching instance id alone does not establish ownership: an active segment held by another
+live process remains foreign and prevents replacement of the shared store policy.
 
 Recovery seals the file as it is: a partial final line is kept and reported (`tailState:
 "truncated"`, `truncatedBytes`), and valid lines are never rewritten. An interrupted seal whose seal

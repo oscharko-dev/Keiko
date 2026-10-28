@@ -2,6 +2,7 @@ import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-act
 import { newClientCorrelationId } from "./bff-correlation";
 import { reportGatewayProfileRefresh, reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
+import { requestCodingAppSessionReinspection } from "./coding-app-session-client";
 import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
@@ -10,6 +11,10 @@ import type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
 } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeInboxAction,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
@@ -28,9 +33,12 @@ import {
   createRecoveryAcknowledgementMutation,
   createResearchRevokeMutation,
   createRetryMutation,
+  createInboxMutation,
+  createRevertMutation,
   createRunBoundMutation,
   createStartMutation,
   mutationResultMatchesCurrentTruth,
+  type CodingWorkbenchFollowUpInputs,
   type CodingWorkbenchMutationCommand,
 } from "./coding-workbench-runtime-mutations";
 import { requestGatewayModelCatalogRefresh } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
@@ -77,7 +85,15 @@ export interface RuntimeMutationActions {
   readonly acknowledgeRecovery: () => Promise<void>;
   readonly pause: () => Promise<void>;
   readonly resume: (requestedMode: CodingWorkbenchMode) => Promise<void>;
-  readonly submitFollowUp: (taskIntent: string) => Promise<void>;
+  readonly submitFollowUp: (
+    taskIntent: string,
+    inputs?: CodingWorkbenchFollowUpInputs,
+  ) => Promise<void>;
+  readonly revert: (action: CodingWorkbenchRuntimeRevertAction) => Promise<void>;
+  readonly inboxAction: (
+    action: CodingWorkbenchRuntimeInboxAction,
+    itemId: string,
+  ) => Promise<void>;
   readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
 
@@ -420,6 +436,10 @@ export function useCodingWorkbenchRuntimeResources(
   };
 }
 
+// ADR-0141 D6: a per-run control from a browser without app-session authority is answered with the
+// same not-found result as an unknown run, so the refusal cannot say whether the session was revoked.
+const RUN_NOT_FOUND_CODE = "CODING_RUNTIME_RUN_NOT_FOUND";
+
 function useRuntimeMutationQueue({
   stateRef,
   refreshRun,
@@ -446,7 +466,9 @@ function useRuntimeMutationQueue({
           }
           dispatch({ kind: "mutation-complete" });
         } catch (error) {
-          dispatch({ kind: "mutation-failed", error: codingWorkbenchRuntimeApiError(error) });
+          const failure = codingWorkbenchRuntimeApiError(error);
+          dispatch({ kind: "mutation-failed", error: failure });
+          if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
         }
       };
       const result = mutationTail.current.then(execute, execute);
@@ -504,8 +526,20 @@ export function useCodingWorkbenchRuntimeMutations(
     [enqueueMutation],
   );
   const submitFollowUp = useCallback(
-    (taskIntent: string): Promise<void> =>
-      enqueueMutation("follow-up", (current) => createFollowUpMutation(taskIntent, current)),
+    (taskIntent: string, inputs?: CodingWorkbenchFollowUpInputs): Promise<void> =>
+      enqueueMutation("follow-up", (current) =>
+        createFollowUpMutation(taskIntent, current, inputs),
+      ),
+    [enqueueMutation],
+  );
+  const revert = useCallback(
+    (action: CodingWorkbenchRuntimeRevertAction): Promise<void> =>
+      enqueueMutation("revert", (current) => createRevertMutation(action, current)),
+    [enqueueMutation],
+  );
+  const inboxAction = useCallback(
+    (action: CodingWorkbenchRuntimeInboxAction, itemId: string): Promise<void> =>
+      enqueueMutation("inbox", (current) => createInboxMutation(action, itemId, current)),
     [enqueueMutation],
   );
   const revokeResearchGrant = useCallback(
@@ -523,6 +557,8 @@ export function useCodingWorkbenchRuntimeMutations(
     pause,
     resume,
     submitFollowUp,
+    revert,
+    inboxAction,
     revokeResearchGrant,
   };
 }

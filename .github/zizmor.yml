@@ -33,12 +33,12 @@ rules:
       # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
       # no ignore list at all.
       # USearch runtime: coverage-packages, coverage-ui, coverage-scripts
-      - ci.yml:662
-      - ci.yml:761
-      - ci.yml:836
+      - ci.yml:667
+      - ci.yml:766
+      - ci.yml:841
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:950
-      - ci.yml:1085
+      - ci.yml:955
+      - ci.yml:1083
   dangerous-triggers:
     ignore:
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and
@@ -68,4 +68,7 @@ rules:
       # bootstrapping npm is inherently outside the lockfile since it changes the binary that
       # later reads that lockfile. The version is pinned exactly (not @latest), which is the
       # practical mitigation for this specific operation (see the inline comment there).
-      - release.yml:202
+      - release.yml:204
+      # The runtime-package publisher (#3898 AC8) uses the same exact npm for the same reason: OIDC
+      # trusted publishing needs it, and it changes the binary that later reads the lockfile.
+      - coding-runtime-publish.yml:61

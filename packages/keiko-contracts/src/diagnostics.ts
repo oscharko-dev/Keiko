@@ -342,6 +342,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "cursor-collision",
   "workspace-scroll-ready",
   "workspace-viewport-fitted",
+  "workspace-window-sizing-retired",
   "workspace-layout-locked",
   "workspace-layout-unlocked",
   "literal-input-preserved",
@@ -478,9 +479,61 @@ export const CLIENT_MODULE_LOAD_FAILURES = [
   "git-history",
   "git-read",
   "widget-locale",
+  "browser-approval",
+  "update-startup",
 ] as const;
 export type ClientModuleLoadFailure = (typeof CLIENT_MODULE_LOAD_FAILURES)[number];
 const CLIENT_MODULE_LOAD_FAILURE_SET: ReadonlySet<unknown> = new Set(CLIENT_MODULE_LOAD_FAILURES);
+
+export const CLIENT_UPDATE_NOTICE_KINDS = [
+  "update-available",
+  "critical-update-available",
+  "portable-setup-required",
+  "externally-managed",
+  "check-unavailable",
+  "action-required",
+  "no-update-signal",
+] as const;
+export type ClientUpdateNoticeKind = (typeof CLIENT_UPDATE_NOTICE_KINDS)[number];
+export const CLIENT_UPDATE_NOTICE_PRESENTATIONS = ["shown", "dismissed", "suppressed"] as const;
+export interface ClientUpdateNotice {
+  readonly blockerCount: number;
+  readonly noticeKind: ClientUpdateNoticeKind;
+  readonly presentation: (typeof CLIENT_UPDATE_NOTICE_PRESENTATIONS)[number];
+  readonly updateAvailable: boolean;
+}
+const UPDATE_NOTICE_KINDS: ReadonlySet<unknown> = new Set(CLIENT_UPDATE_NOTICE_KINDS);
+const UPDATE_NOTICE_PRESENTATIONS: ReadonlySet<unknown> = new Set(
+  CLIENT_UPDATE_NOTICE_PRESENTATIONS,
+);
+const UPDATE_NOTICE_KEYS = new Set([
+  "noticeKind",
+  "presentation",
+  "updateAvailable",
+  "blockerCount",
+]);
+function coherentUpdateNotice(notice: Record<string, unknown>): boolean {
+  const available =
+    notice.noticeKind === "update-available" || notice.noticeKind === "critical-update-available";
+  return (
+    notice.updateAvailable === available &&
+    (notice.noticeKind !== "no-update-signal" || notice.presentation === "suppressed")
+  );
+}
+
+function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
+  const notice = value.updateNotice;
+  if (notice === undefined) return true;
+  if (!isRecord(notice) || !isActivityLogCorrelationId(value.correlationId)) return false;
+  return (
+    Object.keys(notice).length === UPDATE_NOTICE_KEYS.size &&
+    Object.keys(notice).every((key) => UPDATE_NOTICE_KEYS.has(key)) &&
+    UPDATE_NOTICE_KINDS.has(notice.noticeKind) &&
+    UPDATE_NOTICE_PRESENTATIONS.has(notice.presentation) &&
+    isBoundedNonNegativeInteger(notice.blockerCount, 1_000_000) &&
+    coherentUpdateNotice(notice)
+  );
+}
 
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
@@ -513,7 +566,9 @@ export interface ClientDiagnosticIngestRequest {
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
+  readonly updateNotice?: ClientUpdateNotice | undefined;
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
+  readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
@@ -715,7 +770,9 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "supportReportDelivery",
   "supportReportPreparation",
   "filesScopeDecision",
+  "updateNotice",
   "codingRunRestore",
+  "codingWorkbenchInteraction",
 ] as const;
 const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "message",
@@ -750,6 +807,14 @@ function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolea
   );
 }
 
+// The Coding Workbench's closed reports: a restored run's counts and the human's interactions.
+function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
+    isOptional(value.codingWorkbenchInteraction, isClientDiagnosticCodingWorkbenchInteraction)
+  );
+}
+
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
@@ -761,7 +826,7 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     hasValidRetrievalEvidenceContext(value) &&
     isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
     isOptional(value.supportReportPreparation, isClientSupportReportPreparation) &&
-    isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
+    hasValidCodingReportContext(value) &&
     hasValidFilesScopeDecisionContext(value)
   );
 }
@@ -788,7 +853,8 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
   return (
     hasValidVoiceCaptureContext(value) &&
     hasValidGitContext(value) &&
-    hasValidHealthDiagnostic(value)
+    hasValidHealthDiagnostic(value) &&
+    hasValidUpdateNoticeContext(value)
   );
 }
 
@@ -860,8 +926,37 @@ export const CLIENT_STAGE_IDS = [
   "gateway profile refresh",
   "model selection availability",
   "markdown copy feedback",
+  "transcript navigation",
+  "browser approval",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
+
+export const CLIENT_BROWSER_APPROVAL_OPERATIONS = [
+  "key-create",
+  "key-prepare",
+  "key-load",
+  "key-store",
+  "key-forget",
+  "proof-sign",
+  "session-restore",
+] as const;
+export const CLIENT_BROWSER_APPROVAL_OUTCOMES = [
+  "created",
+  "available",
+  "missing",
+  "stored",
+  "forgotten",
+  "signed",
+  "active",
+  "unavailable",
+  "failed",
+  "cancelled",
+] as const;
+
+export interface ClientBrowserApprovalEvidence {
+  readonly operation: (typeof CLIENT_BROWSER_APPROVAL_OPERATIONS)[number];
+  readonly outcome?: (typeof CLIENT_BROWSER_APPROVAL_OUTCOMES)[number] | undefined;
+}
 
 export const CLIENT_STAGE_PHASES = ["started", "settled"] as const;
 export type ClientStagePhase = (typeof CLIENT_STAGE_PHASES)[number];
@@ -891,6 +986,7 @@ export interface ClientStageStartedIngestRequest {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
+  readonly browserApproval?: ClientBrowserApprovalEvidence | undefined;
 }
 
 export interface ClientSourcePreviewCounts {
@@ -930,6 +1026,7 @@ export interface ClientStageSettledIngestRequest {
   readonly preview?: ClientSourcePreviewCounts | undefined;
   readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
   readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
+  readonly browserApproval?: ClientBrowserApprovalEvidence | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -938,6 +1035,7 @@ export type ClientStageIngestRequest =
 
 const CLIENT_STAGE_ID_SET: ReadonlySet<string> = new Set(CLIENT_STAGE_IDS);
 const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "browserApproval",
   "kind",
   "stage",
   "phase",
@@ -1107,6 +1205,27 @@ function hasValidGatewayProfileStage(value: Record<string, unknown>): boolean {
     : isOneOf(evidence.catalogReread, ["requested", "skipped"]);
 }
 
+const BROWSER_APPROVAL_EVIDENCE_KEYS = new Set(["operation", "outcome"]);
+const BROWSER_APPROVAL_OPERATIONS: ReadonlySet<string> = new Set(
+  CLIENT_BROWSER_APPROVAL_OPERATIONS,
+);
+const BROWSER_APPROVAL_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_BROWSER_APPROVAL_OUTCOMES);
+
+function hasValidBrowserApprovalStage(value: Record<string, unknown>): boolean {
+  const evidence = value.browserApproval;
+  if (value.stage !== "browser approval") return evidence === undefined;
+  if (!isRecord(evidence)) return false;
+  if (Object.keys(evidence).some((key) => !BROWSER_APPROVAL_EVIDENCE_KEYS.has(key))) return false;
+  if (
+    typeof evidence.operation !== "string" ||
+    !BROWSER_APPROVAL_OPERATIONS.has(evidence.operation)
+  )
+    return false;
+  return value.phase === "started"
+    ? evidence.outcome === undefined
+    : typeof evidence.outcome === "string" && BROWSER_APPROVAL_OUTCOMES.has(evidence.outcome);
+}
+
 function hasValidStageContext(value: Record<string, unknown>): boolean {
   return (
     hasValidStageDeletion(value) &&
@@ -1114,6 +1233,7 @@ function hasValidStageContext(value: Record<string, unknown>): boolean {
     hasValidSourcePreview(value) &&
     hasValidModelCatalogStage(value) &&
     hasValidGatewayProfileStage(value) &&
+    hasValidBrowserApprovalStage(value) &&
     isOptional(value.parentCorrelationId, isActivityLogCorrelationId)
   );
 }
@@ -1889,6 +2009,136 @@ function isClientDiagnosticCodingRunRestore(
   return restore !== undefined && coherentCodingRunRestore(restore);
 }
 
+// ─── Coding Workbench interaction (#3897) ──────────────────────────────────────
+//
+// What the human did on the Coding Workbench page — opened a detail, saw the progress state change,
+// picked an agent, jumped to a pending decision, bound a repository for trust, received a changeset
+// for review. Each is ordinary evidence and travels as its own closed report, so it reaches the
+// activity log at info as `client.coding-workbench.interaction` instead of a warn/unknown
+// `client.diagnostic` (Keiko 1.3.0 test: 174 of 180 browser diagnostics were these notes). Closed
+// values, two body-free ids and one count only — never a path, a tool name or a custom agent name.
+
+export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
+  "details-toggled",
+  "progress-state",
+  "agent-selected",
+  "pending-decision-focused",
+  "repository-trust-bound",
+  "changeset-review-prepared",
+] as const;
+export type ClientCodingWorkbenchInteractionName =
+  (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
+
+/** The disclosure the human opened or closed. */
+export const CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS = [
+  "run",
+  "model-reasoning",
+  "tool",
+  "activity-group",
+  "plan",
+  "event",
+  "workspace-location",
+  "information",
+] as const;
+export type ClientCodingWorkbenchDetailSection =
+  (typeof CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS)[number];
+
+/** The progress bar's own states. */
+export const CLIENT_CODING_WORKBENCH_PROGRESS_STATES = [
+  "working",
+  "approval",
+  "question",
+  "paused",
+  "ready",
+] as const;
+export type ClientCodingWorkbenchProgressState =
+  (typeof CLIENT_CODING_WORKBENCH_PROGRESS_STATES)[number];
+
+/** A built-in agent by name; every custom primary agent is `custom`, never its name. */
+export const CLIENT_CODING_WORKBENCH_AGENT_KINDS = ["build", "plan", "custom"] as const;
+export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGENT_KINDS)[number];
+
+/** Bounds a changeset's file count, like the restored-run counts above. */
+export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
+
+export type ClientDiagnosticCodingWorkbenchInteraction =
+  | {
+      readonly interaction: "details-toggled";
+      readonly section: ClientCodingWorkbenchDetailSection;
+      readonly expanded: boolean;
+    }
+  | {
+      readonly interaction: "progress-state";
+      readonly progressState: ClientCodingWorkbenchProgressState;
+    }
+  | { readonly interaction: "agent-selected"; readonly agent: ClientCodingWorkbenchAgentKind }
+  | { readonly interaction: "pending-decision-focused" }
+  | {
+      readonly interaction: "repository-trust-bound";
+      readonly repositoryId: string;
+      readonly workspaceId: string;
+    }
+  | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number };
+
+const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_INTERACTIONS,
+);
+const CODING_WORKBENCH_DETAIL_SECTION_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
+);
+const CODING_WORKBENCH_PROGRESS_STATE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
+);
+const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+);
+
+function isCodingWorkbenchInteractionName(
+  value: unknown,
+): value is ClientCodingWorkbenchInteractionName {
+  return isSetMember(value, CODING_WORKBENCH_INTERACTION_SET);
+}
+
+// Each interaction carries exactly its own fields: a progress state never rides a toggle.
+const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
+  Record<
+    ClientCodingWorkbenchInteractionName,
+    Readonly<Record<string, (value: unknown) => boolean>>
+  >
+> = {
+  "details-toggled": {
+    section: (value) => isSetMember(value, CODING_WORKBENCH_DETAIL_SECTION_SET),
+    expanded: (value) => typeof value === "boolean",
+  },
+  "progress-state": {
+    progressState: (value) => isSetMember(value, CODING_WORKBENCH_PROGRESS_STATE_SET),
+  },
+  "agent-selected": { agent: (value) => isSetMember(value, CODING_WORKBENCH_AGENT_KIND_SET) },
+  "pending-decision-focused": {},
+  "repository-trust-bound": {
+    repositoryId: (value) => typeof value === "string" && BODY_FREE_ID_PATTERN.test(value),
+    workspaceId: (value) =>
+      typeof value === "string" && WORKSPACE_DIAGNOSTIC_ID_PATTERN.test(value),
+  },
+  "changeset-review-prepared": {
+    fileCount: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX),
+  },
+};
+
+/** True for one closed interaction with exactly its own valid fields. */
+function isClientDiagnosticCodingWorkbenchInteraction(
+  value: unknown,
+): value is ClientDiagnosticCodingWorkbenchInteraction {
+  if (!isRecord(value) || !isCodingWorkbenchInteractionName(value.interaction)) return false;
+  const fields = CODING_WORKBENCH_INTERACTION_FIELDS[value.interaction];
+  const keys = Object.keys(value).filter((key) => key !== "interaction");
+  return (
+    keys.length === Object.keys(fields).length &&
+    keys.every((key) => fields[key]?.(value[key]) === true)
+  );
+}
+
 // ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────
 //
 // Whether this process can currently produce machine-reconstruction evidence. `ready` holds only
@@ -1937,6 +2187,8 @@ export interface HealthResponse {
   readonly status: "ok";
   readonly version: string;
   readonly diagnostics: ActivityLogReadinessSnapshot;
+  /** The server-owned instance identity, when this process was started by a modern launcher. */
+  readonly launchId?: string;
 }
 
 const READINESS_STATE_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_READINESS_STATES);
@@ -2144,6 +2396,13 @@ export const CLIENT_FILES_SCOPE_DECISIONS = [
   "timeout-recovered",
   "timeout-rejected",
   "request-superseded",
+  "root-normalized",
+  "root-replaced",
+  "intent-pending",
+  "intent-applied",
+  "intent-failed",
+  "intent-send-refused",
+  "intent-send-cancelled",
 ] as const;
 export interface ClientFilesScopeDecision {
   readonly decision: (typeof CLIENT_FILES_SCOPE_DECISIONS)[number];

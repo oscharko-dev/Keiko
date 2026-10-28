@@ -18,6 +18,10 @@ import {
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  KEIKO_UI_LAUNCH_ID_ENV,
+  isKeikoUiLaunchId,
+} from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentActivityLogReadiness } from "@oscharko-dev/keiko-activity-log";
@@ -127,6 +131,7 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
+import { handleCodingSidecarMcpRelay } from "./coding-sidecar-mcp-relay.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import {
   handleCodingCodexSubscriptionProfile,
@@ -135,6 +140,7 @@ import {
 import { CODING_CONTEXT_ROUTE_GROUP } from "./coding-context/codingContextRoutes.js";
 import { CODING_RUNTIME_ROUTE_GROUP } from "./coding-runtime/codingRuntimeRoutes.js";
 import { CODING_APP_SESSION_ROUTE_GROUP } from "./coding-app-session/codingAppSessionRoutes.js";
+import { BROWSER_APPROVAL_ROUTES } from "./coding-app-session/browserApprovalRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -457,11 +463,13 @@ export interface RouteDefinition {
 // `diagnostics` is additive (#3532): the Activity Log readiness evaluated before this server
 // accepted work, with a live lost-event count. It is a closed, body-free projection — states,
 // reason codes and a count — so a health probe never discloses a path or an error message.
-function health(): RouteResult {
+function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const launchId = deps.env[KEIKO_UI_LAUNCH_ID_ENV];
   const body: HealthResponse = {
     status: "ok",
     version: SDK_VERSION,
     diagnostics: currentActivityLogReadiness(),
+    ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
   };
   return { status: 200, body };
 }
@@ -568,6 +576,22 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-sidecar/tool",
     handler: handleCodingSidecarToolFacade,
+  },
+  // #3903 AC3: the MCP Streamable HTTP transport of a relayed remote server, per method.
+  {
+    method: "GET",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
   },
   {
     method: "GET",
@@ -1642,6 +1666,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // fetch/snapshot + stream surface. It does not widen the permanently content-free runtime SSE
   // union above; content-bearing reads fail closed to a content-free projection without a session.
   ...CODING_APP_SESSION_ROUTE_GROUP,
+  ...BROWSER_APPROVAL_ROUTES,
   // #1989 coding-context intake: governed GitHub/Jira reads behind default-false connector
   // authorization, the server deployment ceiling, and connector-scope grants. Context stays
   // untrusted-labeled and evidence content-free; upstream failures answer as an opaque 502.

@@ -21,12 +21,72 @@ export type { SandboxBackend } from "@oscharko-dev/keiko-contracts";
 // `SandboxPolicy` structurally, only this package's own plan/decision types.
 export type IsolatedRunNetworkPolicy = NetworkPolicy | NetworkGatewayPolicy;
 
-/** Transient, server-owned native service roots; model-visible access needs its own authority hook. */
+/** The long-lived runtime profiles the gateway planner can wrap (ADR-0043 D14, #3897). */
+export type RuntimeGatewayProfile = "keiko-gateway" | "keiko-native";
+
+/**
+ * The native profile's network disposition (#3897). `loopback-only` is the kernel-enforced floor
+ * below Full access: the attested Model Gateway, the tool facade and local dev servers are loopback,
+ * every other destination is denied before traffic. `inherited` is Full access, whose egress stays
+ * bounded by the accepted Authority Envelope and the per-action permission policy.
+ */
+export type RuntimeGatewayEgress = "inherited" | "loopback-only";
+
+/**
+ * Transient, server-owned native service roots; model-visible access needs its own authority hook.
+ * `read-write` is the native profile (#3897): the workspace is the agent's working tree, writes
+ * stay inside it and the private state, and `deniedReadRoots` keeps credential stores and Keiko's
+ * own state out of reach regardless of what the agent runs.
+ */
 export interface RuntimeGatewayFilesystem {
   readonly workspaceRoot: string;
-  readonly workspaceAccess: "read-only";
+  readonly workspaceAccess: "read-only" | "read-write";
   readonly privateStateRoot: string;
   readonly runtimeReadRoot: string;
+  readonly deniedReadRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: absolute read-only support roots of the project's toolchains (the
+   * directories the launcher's `PATH` names, or their install prefixes). Everything else outside
+   * the workspace, the private state and the system roots stays unreadable (#3897).
+   */
+  readonly toolchainReadRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: the common Git directory of a workspace that is a linked worktree, which
+   * its `.git` file names outside the workspace. The server proves the reciprocal worktree
+   * registration before it names one; the process reads it, never writes it, so status, diff, log,
+   * show and blame work while staging and delivery stay with Keiko (#3897 review). Absent means the
+   * workspace carries its own Git directory, or none was proven.
+   */
+  readonly gitMetadataReadRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: directories outside the workspace and the private state that the
+   * operator explicitly accepted as read-only external references (#3900 AC5,
+   * `KEIKO_CODING_EXTERNAL_READ_ROOTS`). The process reads them, never writes them; the denied
+   * roots and the credential names stay unreadable inside them. Absent means none.
+   */
+  readonly externalReadRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: absolute directories strictly inside the writable roots (the workspace or
+   * the private state) that the process may read but never create, change, replace, remove or move
+   * entries in, so a shell child cannot rewrite the policy plugin or the configuration the runtime
+   * loads from its private state (#3897 review). Absent means the writable roots stay fully writable.
+   */
+  readonly protectedWriteRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: absolute directories strictly inside the private state where the process
+   * writes ordinary files and directories but never creates a symbolic or hard link, and whose
+   * ancestors up to the private state cannot be replaced, so a path inside one always names a file
+   * physically inside it (the plan agent's notes, #3897 review). Absent means no such constraint.
+   */
+  readonly linkFreeWriteRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: absolute regular files inside the workspace or an accepted external
+   * reference that had more than one hard link when the run launched (`scanNativeLinkedFiles`). A
+   * second name can alias a file outside every admitted root, so the kernel denies each one's
+   * contents and every write, rename or link of it to every process of the run, whatever tool reads
+   * it (PR #4064 review, #3900 AC2/AC5). Absent means the scan found none.
+   */
+  readonly linkedFiles?: readonly string[] | undefined;
 }
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
@@ -48,9 +108,19 @@ export interface IsolatedRunPlan {
   readonly cwd: string;
   readonly network: IsolatedRunNetworkPolicy;
   readonly filesystem?: FilesystemPolicy | undefined;
+  /**
+   * Strict bubblewrap execution-root runs only: an existing direct child of `cwd`, owned by the
+   * caller for exactly this run, that the child sees as its /tmp, HOME and TMPDIR. Absent, the
+   * shared `.keiko-sandbox-tmp` directory of the execution root is used.
+   */
+  readonly executionTmp?: string | undefined;
   /** Exact trusted child executable admitted by the long-lived gateway profile. */
   readonly gatewayChildExecutable?: string | undefined;
   readonly gatewayFilesystem?: RuntimeGatewayFilesystem | undefined;
+  /** Absent means the loopback-gateway-only profile; `keiko-native` opens toolchains and egress. */
+  readonly gatewayProfile?: RuntimeGatewayProfile | undefined;
+  /** Native profile only; absent fails closed to `loopback-only`. */
+  readonly gatewayEgress?: RuntimeGatewayEgress | undefined;
 }
 
 // The decision for a single run:

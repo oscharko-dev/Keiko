@@ -580,6 +580,23 @@ describe("validateSelectedScope", () => {
 
 // ─── validateEvidenceAtom ─────────────────────────────────────────────────────
 describe("validateEvidenceAtom", () => {
+  it("accepts the body-free observed source-description witness", () => {
+    expect(
+      validateEvidenceAtom({ ...happyAtom(), metrics: { sourceDescriptorMatch: true } }),
+    ).toEqual({ ok: true });
+  });
+  it.each([false, 0, "true", null])(
+    "rejects malformed source-description witness: %s",
+    (sourceDescriptorMatch) => {
+      expectInvalidWithReason(
+        validateEvidenceAtom({
+          ...happyAtom(),
+          metrics: { sourceDescriptorMatch },
+        } as unknown as EvidenceAtom),
+        "sourceDescriptorMatch",
+      );
+    },
+  );
   it("accepts a body-free lexical query-group bitset", () => {
     expect(
       validateEvidenceAtom({

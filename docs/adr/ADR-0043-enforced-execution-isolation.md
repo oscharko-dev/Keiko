@@ -192,6 +192,12 @@ namespace reaps detached descendants when the main command exits. The compatibil
 wrapper retains its existing contract. Actual compiled `runCommand` controls qualify both an owned
 foreign-process signal/visibility refusal and zero acting descendants after successful settlement,
 with a held-main detached-write positive control.
+The child's `/tmp`, `HOME` and `TMPDIR` are the caller's per-run ephemeral home: a direct child of
+the mounted root, created before spawn and removed in every settle path, because whatever the child
+writes there (npm logs, Node's compile cache) would otherwise stay in the real workspace and make a
+later verified commit's clean-candidate fact false (PR #4095). Without one, the shared
+`.keiko-sandbox-tmp` directory of the root is used; a per-run directory anywhere else fails closed
+before spawn.
 On macOS, assured execution-root runs select Docker/Podman with its existing private PID namespace
 and container lifetime; without one, admission fails closed before spawn. Filesystem-scoped Seatbelt
 cannot own a detached `setsid` descendant after the command exits, so it no longer qualifies for
@@ -318,6 +324,28 @@ the namespace listener is ready and its readiness message has crossed the IPC ch
 inherit the network namespace. No host network namespace, veth, NAT rule, root, or ambient
 `CAP_NET_ADMIN` is granted. Parent-death, signals, relay failure, and cleanup stay inside the
 wrapper's fail-closed lifecycle.
+
+The original V2 service launch additionally opts in to a bounded reverse route using
+`KEIKO_LINUX_GATEWAY_SERVICE=1`. Ordinary gateway commands do not opt in. The same anonymous IPC
+owner accepts one closed loopback service announcement, binds a fresh host-loopback listener, and
+publishes that listener's endpoint to the existing authenticated protocol client. Accepted TCP
+sockets cross the private IPC channel to the namespace launcher, which connects only to that
+first, immutable namespace-local service port. It rejects the gateway port itself, additional
+announcements, changed destinations, replayed connection ids and malformed handles. Each direction
+is bounded to 64 connections; pending producer output across both streams is bounded to 64 KiB. The runtime's random
+per-run Basic credential remains required by its original HTTP server. The target receives neither
+the opt-in marker nor an IPC descriptor, and reap, disconnect or failed transfer closes the
+listener and its sockets. This supplies the service's control route without giving it another
+host destination or weakening its network namespace. The existing `runtime.confinement.spawned`,
+`runtime.confinement.failed` and runtime handshake evidence describe the launch and its outcome;
+the forwarding code does not log an endpoint, header, credential or request body.
+The opted-in service also receives a PID namespace (`bwrap --unshare-pid` or
+`unshare --pid --fork`) under the same launcher owner, without requiring a `/proc` remount.
+The matched Linux process backend retains the declared `stdin-eof` lifetime and ends that pipe
+for a graceful stop. A forced signal, pipe failure or unclean wrapper exit cannot prove complete
+reaping: both the wait and reconciliation paths retain recovery-required state and issue no reap
+receipt. Session persistence consequently cannot copy a database while its producer may still run.
+
 
 Launcher failures cross a dedicated descriptor-3 diagnostics channel that the server provisions
 only for the Linux wrapper. The host launcher relocates that pipe to descriptor 9 when entering the
@@ -605,6 +633,25 @@ addons or enable their lifecycle builds; required-package platform and engine ch
 apply to the host. A package that needs a disabled install script remains unsupported. The real
 npm 11.16.0 control qualifies one Linux native binding and one exact-file Vitest test, not generic
 native-build or complete OpenCode parity.
+
+The installed tree is shared with whatever else runs in the workspace. The native coding runtime's
+shell runs on the host, while this verifier's execution-root backend on macOS is a Linux container,
+so an install for the measured Linux target replaced the host's native bindings and broke every
+later native npm or Vitest command (PR #4064 review). A native run's verification therefore names
+the host platform (`sharedHostPlatform`), and the bootstrap refuses an install whose measured
+target has another operating system or CPU (`install-target-foreign`) before npm writes the tree.
+The refusal tells the model to run the project's own checks in the native shell, which the native
+policy reads as verification evidence (#3901). A run without a host-native consumer installs for
+its measured target as before. Every refused bootstrap carries its closed `refusalReason` on the
+dependency summary and on `editor.verification.dependencies`. The coding facade names a step behind
+an `install-target-foreign` refusal `native-shell-required` instead of `dependencies-unavailable`,
+with guidance to run the repository's own command for that check in the shell: in the Keiko 1.3.0
+test on macOS the generic reason left the model without a check it could run, and the run settled
+`verification-not-evidenced` (#3897). The refused bootstrap still fails the report (D17), so the
+port presents such a report, in which every step was skipped, to the model as not run: the reason
+and its guidance reach the model instead of a generic verification failure. Every other refused
+bootstrap remains a failed verification. Isolation, the refusal and its evidence rules are
+unchanged.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in

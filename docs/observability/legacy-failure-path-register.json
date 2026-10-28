@@ -177,18 +177,6 @@
     },
     {
       "path": "packages/keiko-cli/src/lifecycle.ts",
-      "owner": "cmdStart",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/lifecycle.ts",
-      "owner": "defaultIsProcessAlive",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/lifecycle.ts",
       "owner": "fetchHealthProbe",
       "kind": "unregistered-catch",
       "count": 1
@@ -268,12 +256,6 @@
     {
       "path": "packages/keiko-cli/src/portable-install.ts",
       "owner": "managedRootAllowedForTarget",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/portable-install.ts",
-      "owner": "processIsAlive",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -471,12 +453,6 @@
     },
     {
       "path": "packages/keiko-cli/src/state-paths.ts",
-      "owner": "defaultIsProcessAlive",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/state-paths.ts",
       "owner": "dirHasSqliteFamilyArtifact",
       "kind": "unregistered-catch",
       "count": 1
@@ -491,7 +467,7 @@
       "path": "packages/keiko-cli/src/state-paths.ts",
       "owner": "readPidRecord",
       "kind": "unregistered-catch",
-      "count": 2
+      "count": 1
     },
     {
       "path": "packages/keiko-cli/src/support.ts",
@@ -1576,12 +1552,6 @@
     {
       "path": "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.ts",
       "owner": "loadRuntime",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.ts",
-      "owner": "openVerifiedRuntime",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -5673,12 +5643,6 @@
     },
     {
       "path": "packages/keiko-server/src/qualityIntelligence/reviewStore.ts",
-      "owner": "reviewLockOwnerIsDead",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/qualityIntelligence/reviewStore.ts",
       "owner": "stampReviewLockOwner",
       "kind": "unregistered-catch",
       "count": 1
@@ -6231,27 +6195,9 @@
     },
     {
       "path": "packages/keiko-server/src/update-local-state.ts",
-      "owner": "processIsAlive",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/update-local-state.ts",
       "owner": "publishRemediationLease",
       "kind": "unregistered-catch",
       "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/update-local-state.ts",
-      "owner": "readRemediationLease",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/update-local-state.ts",
-      "owner": "releaseRemediationLease",
-      "kind": "unregistered-catch",
-      "count": 3
     },
     {
       "path": "packages/keiko-server/src/update-local-state.ts",
@@ -6423,12 +6369,6 @@
     },
     {
       "path": "packages/keiko-server/src/update-portable-normal-startup.ts",
-      "owner": "pidAlive",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/update-portable-normal-startup.ts",
       "owner": "readPortableRecoveredLaunchDescriptor",
       "kind": "unregistered-catch",
       "count": 1
@@ -6522,12 +6462,6 @@
       "owner": "claimInspectedLock",
       "kind": "unregistered-catch",
       "count": 2
-    },
-    {
-      "path": "packages/keiko-server/src/update-session-lock.ts",
-      "owner": "defaultPidAlive",
-      "kind": "unregistered-catch",
-      "count": 1
     },
     {
       "path": "packages/keiko-server/src/update-session-lock.ts",

@@ -9,7 +9,7 @@ The committed performance evidence documents live in `docs/release/`:
 | `1580-workspace-perf-evidence.json`      | Workspace browser-performance measurement                             | `npm run check:perf-evidence:workspace`      |
 | `2952-coding-runtime-calibration.json`   | Frozen native coding-runtime reference samples and provenance         | `npm run check:perf-evidence:coding-runtime` |
 | `2952-coding-runtime-perf-evidence.json` | Native coding-runtime candidate measurements                          | `npm run check:perf-evidence:coding-runtime` |
-| `3415-tool-catalog-calibration.json`     | Frozen tool-catalog reference samples and provenance                  | `npm run check:tool-catalog-performance`     |
+| `3415-tool-catalog-calibration.json`     | Tool-catalog reference samples and pair provenance                    | `npm run check:tool-catalog-performance`     |
 | `3415-tool-catalog-perf-evidence.json`   | Tool-catalog candidate compiler and lookup measurements               | `npm run check:tool-catalog-performance`     |
 
 ## When evidence must be regenerated
@@ -108,12 +108,15 @@ ceilings. A ruler recalibration rebinds the calibration digest but carries every
 forward unchanged; it cannot widen or opportunistically tighten a threshold from one noisy run.
 The candidate binds the measured tool-catalog source tree and lockfile; both documents bind the
 measurement ruler and reference environment. A routine source or lockfile update therefore writes
-a new candidate against the frozen calibration and budget. It never moves the threshold.
+a new candidate against the frozen calibration and budget in the original container procedure;
+the portable procedure below replaces both measurements while preserving the budget. Neither moves
+the threshold.
 `npm run check:tool-catalog-performance` runs a fresh deterministic work check on every invocation,
 then evaluates the committed reference evidence. Fresh local or CI wall-clock values are reported
 for diagnosis and are never compared with the reference threshold.
 
-The reference environment is the pinned Linux arm64 Node image below with at least 14 logical cores.
+There are two explicit reference procedures. The original reference environment is the pinned
+Linux arm64 Node image below with at least 14 logical cores.
 The repository command creates a self-contained clone at the exact source revision, installs and
 builds inside the container, supplies the image identity to the producer, validates the candidate,
 and copies only the candidate document back. It refuses a dirty working tree because a clean clone
@@ -122,6 +125,37 @@ could not reproduce that subject.
 ```bash
 npm run perf:evidence:regen:tool-catalog
 ```
+
+For a machine without that original environment, or to refresh an existing portable pair, use:
+
+```bash
+npm run perf:evidence:regen:tool-catalog:portable -- --baseline origin/dev
+```
+
+Start from an installed checkout with `npm run build:packages` completed so the producer's workspace
+imports exist. Commit the implementation first and fetch the intended baseline before this command.
+It requires a clean checkout, a baseline that is an ancestor of HEAD, Node 24.18.0, npm 11.16.0,
+and a dedicated Linux, macOS or Windows x64/arm64 host with at least 14 logical cores. It archives
+the baseline into a separate directory, installs both lockfiles with `npm ci --ignore-scripts`,
+and builds both package trees. Two fresh Node processes then measure the baseline and candidate
+with the candidate's identical measurement ruler. Do not run other builds or benchmarks concurrently.
+
+Schema 2 (`functional-performance-paired-host`) records both commit IDs, the previous calibration
+and budget digests, and matching host fingerprints: OS release, CPU model digest, core count,
+memory, Node version and Node binary digest. It replaces calibration and candidate together and
+carries all six numeric maxima and ceilings forward exactly. Both runs must pass those limits;
+there is no host-speed multiplier or automatic threshold recalibration. Case identities and the
+complete sampling procedure must match, and source, ruler or host changes during the run abort it.
+The old single-candidate writer refuses a portable calibration. A portable refresh always measures
+both revisions again; it cannot attach new samples to a previous host's measurements.
+
+Review and commit all three generated documents. Their commit IDs identify the measured source
+commits before the evidence-only commit; the documents themselves are outside the subject digest.
+The retained baseline directory allows inspection. This procedure applies only to the tool-catalog
+target and does not change the editor D12 or coding-runtime reference environments.
+If either run exceeds a budget, both completed measurements are retained as `failed-pair.json`
+in the scratch directory for diagnosis. The command fails and leaves governed evidence untouched;
+inspect host load and the measured values before deciding whether another run is justified.
 
 The V2 case is added with the explicit one-time extension mode:
 
@@ -207,11 +241,12 @@ throwaway clone below; only after mounting your working checkout directly re-run
   host is an environment verdict, not a product regression — fix the load, not the code. Since
   ADR-0156 D5 the run still completes and writes its document, so you can read the numbers and
   decide; before that, an overrun destroyed the evidence that would have shown it.
-- **VM sizing (macOS Docker Desktop).** The default VM allocation (~8 GiB) is marginal for the
-  cap budgets, and every writer mode of the tool-catalog evidence (`--rebind-case-identity`,
-  `--recalibrate`, `--extend-managed-runtime`, `--write-measurement`) requires the container to
-  report exactly the committed reference environment: 16 logical cores and `totalMemoryBytes`
-  67302940672 (a 64 GiB VM), as recorded in `docs/release/3415-tool-catalog-calibration.json`.
+- **VM sizing (macOS Docker Desktop, original container procedure).** The default VM allocation
+  (~8 GiB) is marginal for the cap budgets. Against a schema 1 tool-catalog calibration, the
+  container writer modes (`--rebind-case-identity`, `--recalibrate`, `--extend-managed-runtime`,
+  `--write-measurement`) require exactly its recorded environment. The historical calibration
+  before #4050 recorded 16 logical cores and `totalMemoryBytes` 67302940672 (a 64 GiB VM).
+  A schema 2 calibration instead requires the complete portable pair procedure described above.
   Configure the VM at 64 GiB / 16 CPUs
   (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`) and
   verify it before a rebind; an 8 GiB VM fails with
@@ -279,12 +314,8 @@ It discovers the approved OpenCode payload through the production dev lane, crea
 Git repository and managed task workspace for each sample, pairs through the real launcher
 attestation, and exercises the mounted BFF. The only substituted execution is a deterministic model
 response: 64 chunks of 32 ASCII characters, one gateway call, no tool requests. The exact 2,048
-characters must arrive in the protected activity channel. Before the timed operations, a fixture-owned
-loopback provider answers the real startup conversation-readiness probe. Its configuration uses the
-canonical tool-calling fingerprint, and preparation awaits the same holder that admits the runtime
-run. A failed provider still refuses admission. The readiness provider is separate from the one
-measured gateway call and remains alive until dependency disposal. No prompts, responses, paths,
-endpoints, bearers, raw CPU model names or customer content are written to the evidence.
+characters must arrive in the protected activity channel. No prompts, responses, paths, endpoints,
+bearers, raw CPU model names or customer content are written to the evidence.
 
 | Metric                | Start                       | End                                          | What it proves                                                                                        |
 | --------------------- | --------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -410,6 +441,23 @@ variance of the new kernel. The two workload metrics that the change could plaus
 cold start and the bounded throughput, both tightened. The next ordinary re-measurement on this
 reference uses `--recalibrate` and its shrink-only ratchet again.
 
+### Historical reference records and merged-subject freshness
+
+The dated records below retain two pre-merge evidence lineages. The 2026-10-15/16 #4013 records
+belong to the owner-selected 18-core, 64 GiB replacement reference running OpenCode 2.0.10. They
+remain historical measurements of their named source and ruler revisions; they do not qualify
+OpenCode 2.1.4 or establish a hardware-only comparison. The later #4064 records describe that
+branch's separately stamped OpenCode 2.1.4 environment and toolchain history. Statements there that
+an environment is unchanged refer to that lineage's preceding record, not to the #4013 replacement
+machine. Neither set of numbers may be transferred to a different host, payload, helper, source
+or ruler merely by merging this document.
+
+The merged subject's current freshness has not been established by this documentation resolution.
+Check the actual committed calibration, budget and candidate against the existing strict judge. If
+the merged source or ruler is not bound, current regeneration remains pending through the existing
+producer and reference procedure. The recorded owner-selected replacement is not silently revoked,
+and no new replacement decision, budget widening, sample removal or edited measurement is made here.
+
 **Replacement reference measured, 2026-10-15 (owner decision, PR #4013).** The owner selected the
 available 18-core, 64 GiB Mac to replace the former 16-core, 128 GiB reference. This is an explicit
 replacement decision, not evidence that the former machine is unavailable. Both environments use
@@ -424,7 +472,13 @@ old fixture left the real startup readiness probe pointed at an unreachable plac
 It produced no timing samples or new ceilings. The fixture now supplies a local provider before
 production dependency construction and awaits actual admission readiness before timing; the
 measurement boundaries, workload, sample counts and ceiling formula are unchanged. This fixture
-repair is a ruler change and is included in the replacement calibration's provenance.
+repair is a ruler change and is included in the replacement calibration's provenance. At that
+measured revision, before the timed operations, the fixture-owned loopback provider answered the
+real startup conversation-readiness probe using the canonical tool-calling fingerprint; preparation
+awaited the same holder that admitted the run. A failed provider still refused admission. The
+readiness provider was separate from the measured gateway call and remained alive until dependency
+disposal. These details describe that historical measurement, not an unverified claim about the
+merged OpenCode 2.1.4 composition.
 
 Calibration and the independent candidate were measured at signed `7dcbb6d5676ed7461b7860258b4add6ebf5f7cf3`,
 with source-tree digest `205007c7d4b4d821b9086274701de98c61782f26f13d8f437974fbdc1e1e6060`
@@ -484,6 +538,119 @@ Values are milliseconds, rounded for display; generated documents retain full pr
 existing shrink-only ratchet preserved or tightened every ceiling. This source/ruler refresh uses
 the same reference and does not establish a controlled performance improvement over the previous
 subject.
+
+**Reference re-established, 2026-10-23 (epic #3897, PR #4064).** Two inputs of the recorded
+environment moved, so neither `--recalibrate` nor `--recalibrate-runtime` could match the
+2026-10-07 calibration. First, the approved runtime moved from OpenCode 2.0.10 to 2.1.4 (new
+payload digest), which `--recalibrate-runtime` permits on its own. Second, the secure-read helper
+digest changed (`8fabdaf2…` to `1c758e0c…`), because `dev` commit `040bcc685` (#3895, 2026-10-09)
+changed `native/secure-workspace-read/secure_workspace_read.c` without re-measuring. Both modes
+therefore refuse with `recalibration-reference-environment-differs`, and the committed calibration
+was already unreachable on `dev`. Host, kernel 27.0.0, cores, memory, CPU model digest and the
+Node 24.18.0 / npm 11.16.0 pair are unchanged. Measured with the step 2 procedure (fresh
+`--calibrate`, an independent measurement, the freshness check), then the shrink-only ratchet was
+applied against the previously reviewed budget, so no ceiling widened.
+
+| Metric                | Previous ceiling (2026-10-07) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1562.4                        | 1519.1                    | 1519.1            | 1426.4       |
+| `readinessMs`         | 3.26                          | 8.99                      | 3.26              | 1.81         |
+| `sseFirstByteMs`      | 4.65                          | 4.78                      | 4.65              | 2.18         |
+| `boundedThroughputMs` | 98.4                          | 115.7                     | 98.4              | 79.9         |
+
+The fresh calibration's own ranges are wider for three metrics. The committed budget keeps the
+previously reviewed ceiling for those three and takes the tighter cold-start ceiling. Every measured
+p95 is below its committed ceiling, so the move hides no regression.
+
+**Reference re-established, 2026-10-25 (owner decision, PR #4064, #3907 AC7).** The functional
+test support (`productionOpenCodeBackend.functional/_support.ts`, a ruler input) gained the #3899,
+#3901 and #3902 real-binary journeys, so the ruler moved and the evidence had to be measured again.
+The host, kernel 27.0.0, cores, memory, CPU model digest, Node 24.18.0 / npm 11.16.0, Apple Git
+2.54.0, OpenCode 2.1.4 and the secure-read helper digest are unchanged. The shrink-only
+`--recalibrate` was run first and could not settle: its candidate exceeded the reviewed
+cold-start and throughput ceilings. The owner decided to re-establish the reference once the
+change was profiled.
+
+Profiling first measured the previous reference revision (`5b77de7bc`) and the head under identical
+conditions, then bisected the 192 first-parent commits with an eight-sample bench. Three changes
+accounted for the increase:
+
+- `49bec8b28` lets native Git read a linked task worktree's proven metadata (#3902). OpenCode's
+  git-backed snapshots, which native undo needs (#3904), and its project detection (#3902 AC1) now
+  run, where before they failed with "not a git repository". This adds about 48 ms to the end of a
+  run and 80 ms to its start.
+- `1f4562c55` keeps a succeeded run's undo for a bounded window (#3904), about 15 ms.
+- The macOS process sweep and a 200 ms native plugin readiness poll. Both were reduced in this pull
+  request (`387a71e61`): the sweep asks the kernel instead of listing processes, and the poll asks
+  every 10 ms within the same 10-second bound. Together this saves about 30 ms at the end of each
+  run and 80 ms at its start.
+
+The step 2 procedure produced a fresh `--calibrate`, an independent measurement and the freshness
+check. Readiness and the first SSE byte have no profiled cause to rise, so both keep their
+previously reviewed ceilings. Cold start and bounded throughput take the fresh calibration
+ceilings, which are wider.
+
+| Metric                | Previous ceiling (2026-10-23) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1519.1                        | 1771.7                    | 1771.7            | 1591.1       |
+| `readinessMs`         | 3.26                          | 3.75                      | 3.26              | 1.97         |
+| `sseFirstByteMs`      | 4.65                          | 6.34                      | 4.65              | 2.21         |
+| `boundedThroughputMs` | 98.4                          | 177.9                     | 177.9             | 135.8        |
+
+The measured p95 of cold start and bounded throughput rose by 4.7 % and 38 % over the previous
+ceilings. Both rises are the profiled feature work above; neither is an unexplained regression.
+
+**Ruler recalibrated, 2026-10-26 (PR #4064, #3902 AC2, #3903 AC3).** The functional test support
+gained the governed fetch/pull and web search journeys, so the ruler moved again. The recorded
+environment is unchanged, so the shrink-only `--recalibrate` ran at `1049404b6`, followed by an
+independent measurement and the freshness check. No ceiling widened; two tightened.
+
+| Metric                | Previous ceiling (2026-10-25) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1771.7                        | 1614.3                    | 1614.3            | 1481.0       |
+| `readinessMs`         | 3.26                          | 3.59                      | 3.26              | 1.92         |
+| `sseFirstByteMs`      | 4.65                          | 4.91                      | 4.65              | 2.11         |
+| `boundedThroughputMs` | 177.9                         | 160.0                     | 160.0             | 128.4        |
+
+The committed candidate was measured again after the Sonar repair at `4428bcb19` against this
+calibration: p95 1525.4, 1.89, 2.37 and 140.6 ms, each below its committed ceiling.
+After the await-in-loop review at `1ddc81669` it was measured again: p95 1565.8, 2.00, 2.19
+and 154.6 ms, each below its committed ceiling.
+After the op catalog was regenerated at `363d2cb5d` it was measured again: p95 1566.3, 1.89,
+2.08 and 130.3 ms, each below its committed ceiling.
+After the search key redaction and the process-table mark at `37367b1cc` it was measured again:
+p95 1497.9, 2.17, 2.11 and 139.2 ms, each below its committed ceiling.
+After the task import, the version facts and the offline network deadlines at `e8a6d5ec7` it
+was measured again: p95 1533.3, 1.93, 2.20 and 131.6 ms, each below its committed ceiling.
+After the shared Coding History transfer line at `08fbb9bec` it was measured again: p95 1534.6,
+2.11, 2.57 and 129.0 ms, each below its committed ceiling.
+After the bounded DNS lookups at `7789da5c4` it was measured again: p95 1524.8, 1.95, 2.37 and
+142.6 ms, each below its committed ceiling.
+After the support code inventory was regenerated at `def82bff7` it was measured again: p95
+1465.6, 1.86, 2.02 and 128.5 ms, each below its committed ceiling.
+After the optional runtime packages were pinned to 1.1.4 at `05bb62655` (the lockfile is part of
+the subject) it was measured again: p95 1551.9, 1.93, 2.32 and 136.6 ms, each below its committed
+ceiling.
+
+**Ruler recalibrated, 2026-10-26 (#3897, nightly real-binary journey).** The functional test support
+now scripts the runtime's own `grep`, `read`, `skill` and `edit` tools instead of the mapped
+`keiko_*` tools a native run no longer offers, so the ruler moved again. The recorded environment is
+unchanged, so the shrink-only `--recalibrate` ran at `15af8b5c3`, followed by an independent
+measurement and the freshness check. No ceiling widened; one tightened.
+
+| Metric                | Previous ceiling (2026-10-26) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1614.3                        | 1798.4                    | 1614.3            | 1512.6       |
+| `readinessMs`         | 3.26                          | 3.59                      | 3.26              | 1.91         |
+| `sseFirstByteMs`      | 4.65                          | 4.48                      | 4.48              | 2.42         |
+| `boundedThroughputMs` | 160.0                         | 179.3                     | 160.0             | 129.6        |
+
+The three follow-up branches (task import and offline network tools, the 1.1.4 runtime pin and this
+journey repair) were combined into one delivery at `6bfb9e129` and measured again against this
+calibration: p95 1547.2, 1.92, 2.51 and 138.9 ms, each below its committed ceiling.
+After the 1.3.0 version bump at `ae84d3a73` (the lockfile and package versions are part of the
+subject) it was measured again: p95 1508.3, 2.15, 2.28 and 141.2 ms, each below its committed
+ceiling.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

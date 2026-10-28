@@ -70,7 +70,7 @@ agentic coding loop must preserve all of these invariants.
 
 The host stack is fixed and non-trivial for editor runtime loading: `@oscharko-dev/keiko-ui` runs
 **Next.js 16.2.12 (App Router), Turbopack, and `output: "export"` static export**
-(`packages/keiko-ui/next.config.mjs`). `monaco-editor@0.56.0` and `@monaco-editor/react@4.7.0` are
+(`packages/keiko-ui/next.config.mjs`). `monaco-editor@0.57.0` and `@monaco-editor/react@4.7.0` are
 local, no-CDN editor runtime dependencies. The Model Gateway's `ModelCapability` contract
 (`packages/keiko-contracts/src/gateway.ts`) has no fill-in-the-middle (FIM) capability today.
 
@@ -156,20 +156,24 @@ base branch):
    enter read-only/degraded mode, and files > 1,000,000 bytes use the existing too-large path without
    instantiating Monaco. #1207 measures and enforces these budgets; #1209 records release evidence.
 7. **Monaco DOMPurify supply-chain control (#1196 host mount).** Mounting Monaco in `keiko-ui` brings
-   `monaco-editor`'s declared `dompurify@3.4.8` dependency into keiko-ui's audit closure. The control
-   is a root `overrides: { dompurify: "3.4.17" }` pinning the patched DOMPurify line (the reviewed
-   advisories affect versions through `3.4.16`); `monaco-editor` stays at the reviewed `0.56.0` pin and
-   the old
+   `monaco-editor`'s declared `dompurify@3.4.15` dependency into keiko-ui's audit closure. The control
+   is a root `overrides: { dompurify: "3.4.17" }` pinning the patched npm dependency (the reviewed
+   advisories affect versions through `3.4.16`); `monaco-editor` uses the reviewed `0.57.0` pin and the old
    `npm audit fix` downgrade path is not taken. The override does not replace Monaco's vendored
-   DOMPurify copy, which is also `3.4.8` in `monaco-editor@0.56.0`. Governed providers
+   DOMPurify copy, which is `3.4.15` in `monaco-editor@0.57.0`. Governed providers
    may explicitly enable hover, completion, parameter hints, code-action lightbulbs, and inlay hints;
    their bridges enumerate plain-string fields and never forward `IMarkdownString` or trusted-Markdown
    objects. Hover is the sole Markdown renderer and wraps server text in an inert code fence longer
    than every content backtick run. Suggest documentation, links, code lens, the inline-suggest
    toolbar, and syntax-highlighted ghost text remain disabled. Runtime guards discard non-string
    completion/signature metadata even if an untyped host violates the TypeScript contract. The
-   durable fix remains upgrading Monaco to a release whose vendored DOMPurify fixes the reviewed
-   advisories.
+   0.57.0 update replaces the previously vendored 3.4.8 copy with 3.4.15. That vendored copy remains
+   within the reviewed affected range; patching the npm dependency does not patch this source or
+   establish that every runtime exposure is remediated. The governed rendering controls remain
+   independent of the dependency version. Durable remediation requires a Monaco release whose
+   vendored DOMPurify fixes the reviewed advisories. Recheck both copies when Monaco changes, and
+   review any newly enabled Markdown surface before wiring it. The dated advisory disposition is
+   in the [dependency security closeout](../release/2296-dependency-security-closeout.md).
    Detailed in the `@oscharko-dev/keiko-editor` README supply-chain note.
 
 ### D4 — Server-side deterministic language service is the single source of truth
@@ -300,7 +304,12 @@ patches without explicit local action.
 - [ADR-0045](ADR-0045-staged-multi-language-lsp-expansion.md) and [docs/planning/keiko-editor-multi-language-expansion.md](../planning/keiko-editor-multi-language-expansion.md) (staged multi-language expansion; realises the #1213 deferral)
 - `docs/planning/keiko-editor-architecture-blueprint.md`
 - `docs/security-and-audit-boundaries.md`
-- Monaco Editor 0.56.0 (MIT); `@monaco-editor/react` 4.7.0 (MIT); Monaco ESM worker integration; LSP
+- Monaco Editor 0.57.0 (MIT); `@monaco-editor/react` 4.7.0 (MIT); Monaco ESM worker integration; LSP
   3.17; `monaco-languageclient`
 - OWASP Top 10 for LLM Applications (2025): LLM01, LLM05, LLM08
 - EU AI Act Reg. (EU) 2024/1689 Art. 12 & 14; DORA Reg. (EU) 2022/2554; BaFin BDAI principles (2021)
+
+The 2026-10-23 Dependabot consolidation (#4062) updates the shared Monaco runtime to 0.57.0.
+The UI and editor retain one matching pin and the existing worker integration; the root
+DOMPurify security override remains 3.4.17. This version update does not restore retired Editor
+agent execution or change package boundaries.

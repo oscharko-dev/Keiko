@@ -21,7 +21,11 @@ import { URL, fileURLToPath, pathToFileURL } from "node:url";
 
 import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./portable-runtime.mjs";
 import { loadPortableRuntimeApprovals } from "./portable-runtime-approvals.mjs";
-import { writeZipArchiveEntries, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
+import {
+  readZipArchiveUncompressedSize,
+  writeZipArchiveEntries,
+  writeZipArchiveFromDirectory,
+} from "./lib/zip-archive.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
@@ -734,9 +738,6 @@ function nativeHelperBytes(target, name) {
 }
 
 function nativeHelperExecutablePath(target, name) {
-  if (target === "linux-x64" && name === "keiko-runtime-supervisor") {
-    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
-  }
   return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;
 }
 
@@ -754,7 +755,7 @@ function nativeHelper(target, version, signingVerified, name) {
   const runtimeTarget = targetByName(target);
   const secureRead = name === "keiko-secure-workspace-read";
   const sourcePath = nativeHelperSourcePath(target, secureRead);
-  const protocol = nativeHelperProtocol(target, secureRead);
+  const protocol = nativeHelperProtocol(secureRead);
   const bytes = nativeHelperBytes(target, name);
   const digest = sha256(bytes);
   const signing = componentSigningEvidence(target, signingVerified);
@@ -784,16 +785,13 @@ function nativeHelper(target, version, signingVerified, name) {
 
 function nativeHelperSourcePath(target, secureRead) {
   if (secureRead) return "native/secure-workspace-read";
-  if (target === "linux-x64") return "packages/keiko-sandbox/src";
+  if (target === "linux-x64") return "native/runtime-supervisor";
   const platform = target === "windows-x64" ? "windows" : "macos";
   return `native/runtime-supervisor/${platform}`;
 }
 
-function nativeHelperProtocol(target, secureRead) {
+function nativeHelperProtocol(secureRead) {
   if (secureRead) return { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" };
-  if (target === "linux-x64") {
-    return { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
-  }
   return { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
 }
 
@@ -1148,6 +1146,7 @@ function portableManifestArtifact(input) {
     assetName: input.archive.name,
     archiveFormat: "zip",
     sizeBytes: input.archive.size,
+    uncompressedSizeBytes: input.archive.uncompressedSizeBytes,
     sha256: input.archiveSha,
   };
 }
@@ -1251,6 +1250,7 @@ function createScenarioReleaseFiles(
   payload,
 ) {
   const archive = releaseAsset(100 + targetIndex(target), assetName(target), fileSize(archivePath));
+  archive.uncompressedSizeBytes = readZipArchiveUncompressedSize(archivePath);
   let archiveSha = sha256File(archivePath);
   const manifest = portableManifest({
     target,
@@ -1265,6 +1265,7 @@ function createScenarioReleaseFiles(
     rmSync(archivePath);
     zipDirectory(payloadSource, archivePath);
     archive.size = fileSize(archivePath);
+    archive.uncompressedSizeBytes = readZipArchiveUncompressedSize(archivePath);
     archiveSha = sha256File(archivePath);
     syncPortableArchiveIdentity(manifest, archive, archiveSha);
   }
@@ -1285,6 +1286,7 @@ function createScenarioReleaseFiles(
 
 function syncPortableArchiveIdentity(manifest, archive, archiveSha) {
   manifest.artifact.sizeBytes = archive.size;
+  manifest.artifact.uncompressedSizeBytes = archive.uncompressedSizeBytes;
   manifest.artifact.sha256 = archiveSha;
   manifest.releaseImpact.reviewedBinding.assetSizeBytes = archive.size;
   manifest.releaseImpact.reviewedBinding.archiveSha256 = archiveSha;

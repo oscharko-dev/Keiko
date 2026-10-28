@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, type RefCallback, type RefObject } from "react";
+import { newClientCorrelationId } from "./bff-correlation";
+import { reportClientDiagnostic } from "./client-diagnostics";
 
 /**
  * Stick-to-bottom behaviour for a live log region: while the reader is at (or near) the bottom,
@@ -20,17 +22,73 @@ export interface FollowNewest {
   readonly stickRef: { current: boolean };
   /** Scroll handler for the region: re-derives "near the bottom" from the live geometry. */
   readonly onScroll: () => void;
+  /** Binds the scroll region and its native Home/End navigation, preserving its log semantics. */
+  readonly regionRef: RefCallback<HTMLElement>;
   /** Follow again and scroll to the end now, regardless of the current position. */
   readonly resume: () => void;
 }
 
 const NEAR_BOTTOM_PX = 64;
 
+function reportTranscriptNavigation(): void {
+  const correlationId = newClientCorrelationId();
+  reportClientDiagnostic("Transcript navigation started.", {
+    correlationId,
+    stageReport: { stage: "transcript navigation", phase: "started", ordinal: 1 },
+  });
+  reportClientDiagnostic("Transcript navigation settled.", {
+    correlationId,
+    stageReport: { stage: "transcript navigation", phase: "settled", ordinal: 1, durationMs: 0 },
+  });
+}
+
+function hasNavigationModifier(event: KeyboardEvent): boolean {
+  return event.shiftKey || event.altKey || event.ctrlKey || event.metaKey;
+}
+
+function navigateTranscript(
+  event: KeyboardEvent,
+  element: HTMLElement,
+  stickRef: FollowNewest["stickRef"],
+): void {
+  if (event.target !== element || event.defaultPrevented) return;
+  if (event.isComposing || hasNavigationModifier(event)) return;
+  if (event.key !== "Home" && event.key !== "End") return;
+  event.preventDefault();
+  stickRef.current = event.key === "End";
+  element.scrollTo({
+    top: stickRef.current ? element.scrollHeight : 0,
+    behavior: "instant",
+  });
+  reportTranscriptNavigation();
+}
+
+function useRegionKeyboard(
+  scrollRef: RefObject<HTMLElement | null>,
+  stickRef: FollowNewest["stickRef"],
+): RefCallback<HTMLElement> {
+  return useCallback(
+    (element: HTMLElement | null): (() => void) | undefined => {
+      scrollRef.current = element;
+      if (element === null) return undefined;
+      const onKeyDown = (event: KeyboardEvent): void =>
+        navigateTranscript(event, element, stickRef);
+      element.addEventListener("keydown", onKeyDown);
+      return (): void => {
+        element.removeEventListener("keydown", onKeyDown);
+        if (scrollRef.current === element) scrollRef.current = null;
+      };
+    },
+    [scrollRef, stickRef],
+  );
+}
+
 export function useFollowNewest(
   scrollRef: RefObject<HTMLElement | null>,
   growthKey: string | number,
 ): FollowNewest {
   const stickRef = useRef(true);
+  const regionRef = useRegionKeyboard(scrollRef, stickRef);
 
   const scrollToEnd = useCallback((): void => {
     const element = scrollRef.current;
@@ -53,5 +111,5 @@ export function useFollowNewest(
     scrollToEnd();
   }, [growthKey, scrollToEnd]);
 
-  return useMemo(() => ({ stickRef, onScroll, resume }), [onScroll, resume]);
+  return useMemo(() => ({ stickRef, onScroll, regionRef, resume }), [onScroll, regionRef, resume]);
 }

@@ -1,0 +1,82 @@
+name: Coding runtime packages
+
+# Publishes the optional npm coding-runtime packages (@oscharko-dev/keiko-coding-runtime-darwin-arm64
+# and -darwin-x64) through npm Trusted Publishing, the way release.yml publishes the product (#3898
+# AC8). release.yml is root-only, so before this workflow these packages had no governed path.
+#
+# A release owner runs it on dev with the runtime version to publish. It publishes only the reviewed
+# tarballs pinned for that version in docs/release/coding-runtime-npm-packages.json, which only a
+# reviewed change to dev extends. They are downloaded from the GitHub prerelease
+# coding-runtime-<version>, an untrusted transport: scripts/publish-coding-runtime-npm-packages.mjs
+# checks each against its pin and against the approvals compiled into this commit before npm sees it,
+# and accepts a version npm already holds only with the pinned integrity.
+#
+# The npm Trusted Publisher of both packages is bound to this file and the npm-runtime-publish
+# environment, whose deployment branch policy admits dev only. No registry token exists.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Runtime package version reviewed in docs/release/coding-runtime-npm-packages.json
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: coding-runtime-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish the reviewed coding-runtime packages
+    # Only an allowlisted human in KEIKO_RELEASE_OWNER_GITHUB_LOGINS, the same variable release.yml
+    # reads, may dispatch it, and only on dev. Empty, missing or malformed configuration refuses.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && github.ref == 'refs/heads/dev'
+      && !endsWith(github.triggering_actor, '[bot]')
+      && contains(fromJSON(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS), github.triggering_actor)
+    runs-on: ubuntu-latest
+    environment: npm-runtime-publish
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+          registry-url: "https://registry.npmjs.org"
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Ensure npm supports OIDC trusted publishing
+        # The same exact governed npm as release.yml's publish job.
+        run: npm install --global --ignore-scripts npm@11.16.0
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build workspace packages for the verifier
+        run: npm run build:packages
+      - name: Download the reviewed tarballs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_VERSION: ${{ inputs.version }}
+        run: |
+          case "$RUNTIME_VERSION" in
+            *[!0-9.]* | "") echo "runtime version must be x.y.z" >&2; exit 1 ;;
+          esac
+          gh release download "coding-runtime-$RUNTIME_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir .coding-runtime-release
+      - name: Verify and publish
+        # No NODE_AUTH_TOKEN or NPM_TOKEN: npm authenticates through OIDC (id-token: write above),
+        # and the publisher refuses to run without it.
+        env:
+          RUNTIME_VERSION: ${{ inputs.version }}
+        run: node scripts/publish-coding-runtime-npm-packages.mjs "$RUNTIME_VERSION" .coding-runtime-release

@@ -338,6 +338,63 @@ describe("short document source context", () => {
     expect(pack.usage.excerptBytes).toBeLessThanOrEqual(80);
   });
 
+  it.each([
+    [
+      "pom.xml",
+      '<project xmlns="http://maven.apache.org/POM/4.0.0">',
+      "<artifactId>Atlas-H17</artifactId>",
+      "</project>",
+    ],
+    ["package.json", '{"private": true,', '"name": "Atlas-H17"', "}"],
+    ["go.mod", "module example.org/workspace", "// Atlas-H17 test dependency", "go 1.24"],
+    ["Cargo.toml", "[package]", 'name = "Atlas-H17"', 'version = "1.0.0"'],
+    ["pyproject.toml", "[project]", 'name = "Atlas-H17"', 'version = "1.0.0"'],
+    ["build.gradle", "plugins { id 'java' }", "description = 'Atlas-H17'", "group = 'example'"],
+  ])(
+    "retains complete canonical manifests within the existing grant: %s",
+    async (path, head, match, tail) => {
+      const content = [head, ...Array<string>(10).fill(""), match, tail].join("\n");
+      const root = shortDocumentRoot({ [path]: content });
+      const log = createBufferedServerLogSink();
+      const { pack } = await retrieve(root, 'Read the build configuration for "Atlas-H17".', {
+        activityLog: log,
+      });
+      const excerpts = pack.files.find((file) => file.scopePath === path)?.excerpts;
+      expect(excerpts?.some((excerpt) => excerpt.content === content)).toBe(true);
+      expect(pack.usage.excerptBytes).toBeLessThanOrEqual(pack.budget.excerptBytesMax);
+      expect(
+        log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+      ).toMatchObject({
+        usageExcerptBytes: pack.usage.excerptBytes,
+        usageFilesRead: pack.usage.filesRead,
+      });
+      expect(log.lines().join("\n")).not.toContain("Atlas-H17");
+    },
+  );
+
+  it("retains the byte ceiling when a complete canonical manifest does not fit", async () => {
+    const content = [
+      "<project>",
+      ...Array<string>(10).fill(""),
+      "<name>Atlas-H17</name>",
+      "</project>",
+    ].join("\n");
+    const root = shortDocumentRoot({ "pom.xml": content });
+    const { pack } = await retrieve(
+      root,
+      'Read the build configuration for "Atlas-H17".',
+      {},
+      {
+        ...DEFAULT_EXPLORATION_BUDGET,
+        excerptBytesMax: 32,
+      },
+    );
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(32);
+    expect(
+      pack.files.flatMap((file) => file.excerpts).some((excerpt) => excerpt.content === content),
+    ).toBe(false);
+  });
+
   it("keeps code hit windows bounded instead of appending an unrelated source tail", async () => {
     const root = shortDocumentRoot({
       "state.ts": [

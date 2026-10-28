@@ -50,9 +50,9 @@ const read = (path) => readFileSync(join(repoRoot, path), "utf8");
 // Harness deadline for the one fixture registry program this suite compiles, not a product budget.
 const FIXTURE_PROGRAM_TIMEOUT_MS = 2 * 60_000;
 const GATE_COMMAND = "npm run check:activity-log";
-// ADR-0178: the one condition the gate's host job may carry (matched exactly, see ciFindings).
+// ADR-0178 reuse plus #4042 live-PR admission; no product-change filtering (matched exactly).
 const ACTIVITY_LOG_REUSE_GUARD =
-  "${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}";
+  "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}";
 
 /**
  * The gate's hosting job header, anchored by its own `name:`. The guard line alone appears on all
@@ -284,8 +284,8 @@ function ciFindings(workflowText) {
   const findings = [];
   if (!(workflow.jobs.ci?.needs ?? []).includes(name)) findings.push("ci-job-not-required");
   // The gate must never be narrowed by a condition — least of all a changed-file one, since it
-  // exists precisely so an UNCHANGED emitter is proven again. ADR-0178's reuse guard is the single
-  // permitted condition, and it is matched exactly rather than by pattern: it fires only when this
+  // exists precisely so an UNCHANGED emitter is proven again. #4042 excludes closed metadata
+  // events before candidate work. For admitted events, ADR-0178's exact reuse guard fires only when this
   // commit's tree is byte-identical to a pull-request head whose own run executed this very gate
   // over the complete inventory. That is strictly stronger than "the diff did not touch it" — the
   // whole worktree is proven, not a subset — so the invariant this pin protects is preserved. Any

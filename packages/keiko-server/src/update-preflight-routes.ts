@@ -10,6 +10,7 @@ import type {
 import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
+import { recordUpdateInstallMode } from "./update-preflight-activity.js";
 import { detectUpdateInstallMode, productionUpdateFacts } from "./update-install-mode.js";
 import { fetchPortableGitHubReleaseAssets } from "./update-preflight-portable-assets.js";
 import {
@@ -136,7 +137,11 @@ async function portablePreflightReport(
   }
   const catalog =
     validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk(deps.diagnostics);
-  const impactResolution = impactFromCatalog(catalog, currentVersion, outcome.targetVersion);
+  const impactResolution = impactFromCatalog(
+    outcome.releaseImpactCatalog ?? catalog,
+    currentVersion,
+    outcome.targetVersion,
+  );
   return portableUpdateAvailableReport(
     base,
     outcome.targetVersion,
@@ -219,7 +224,15 @@ export async function runUpdatePreflight(
       : (options.currentVersion ?? SDK_VERSION);
   const checkedAt = (options.clock?.() ?? new Date()).toISOString();
   const base = reportBase(currentVersion, checkedAt);
+  const modeStartedAt = performance.now();
   const mode = installModeForPreflight(deps, options);
+  recordUpdateInstallMode(
+    deps.activityLog,
+    mode,
+    "preflight",
+    Math.round(performance.now() - modeStartedAt),
+    correlationId,
+  );
   const portableReport = await portableModePreflightReport(
     deps,
     base,

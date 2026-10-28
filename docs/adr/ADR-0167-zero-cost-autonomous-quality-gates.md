@@ -69,10 +69,14 @@ be reconsidered only after a later live probe proves durable zero-cost, fail-clo
 
 ### D3 — Add zero-tolerance OSS gates for semantic clones and secrets
 
-Fallow 3.34.0 is exact-version locked. The repository command uses its native audit attribution
+Fallow 3.35.0 is exact-version locked. The repository command uses its native audit attribution
 against the immutable comparison commit and rejects every introduced semantic clone group of at
-least 100 tokens and 10 lines. A closed configuration preserves semantic mode, those floors,
-a minimum of two occurrences and import exclusion. String literal values remain significant through
+least 100 tokens and 10 lines. The public `--changed-since` argument resolves once; the analyzer
+receives that immutable commit through explicit `--base`, so automatic merged-default-branch
+attribution cannot change the accepted comparison. For #3918, the accepted comparison remains the
+immutable 8c710 base. A closed configuration preserves semantic mode, those floors, a minimum of two
+occurrences and import exclusion. It disables default generated-framework ignores, supplies no path
+or clone exclusions, and keeps string literal values significant through
 `duplicates.normalization.ignoreStringValues: false`; identifier and numeric-value normalization
 retain the exact pinned analyzer's semantic-mode behavior. Ignoring imports avoids punishing required
 module boilerplate, and semantic normalization still detects renamed-variable and numeric-varied
@@ -86,7 +90,19 @@ adding another matching copy still fails.
 The command explicitly evaluates the native introduced-group count. Neither the old 3.9.1
 standalone command's successful exit nor audit's default warning exit proves zero introduced
 groups. A failed analyzer, invalid report or unresolved comparison fails the repository command;
-there is no percentage workaround, stored exemption baseline or acknowledgement path.
+there is no percentage workaround or acknowledgement path. Supported native token-equivalent base
+reuse remains valid; unavailable or invalid comparison evidence does not.
+
+The incoming `docs/qa/fallow/dupes-baseline.json` is retained as a historical artifact from a different
+coverage and normalization policy. Its location keys and fingerprints do not certify compatibility
+with this strict configuration. It neither suppresses the mandatory audit nor creates an additional
+acceptance veto from unmatched or stale historical keys. No generated, i18n or manually named owner
+is exempted. Native baseline reporting, key-growth checks and `baselines prune` remain available
+maintenance capabilities, proven on fixture-owned same-configuration baselines. The historical
+production artifact is not automatically pruned, re-seeded or expanded under this different ruler;
+configuration or normalization mismatch is not evidence that a clone was repaired. In particular,
+matching a baseline cannot rescue an introduced clone, and equal group counts do not authorize
+replacing one held identity with another.
 
 Gitleaks 8.30.1 runs from an official checksum-pinned release binary, never from the non-OSS hosted
 action. It redacts all finding output and scans the complete pull-request commit range. That range

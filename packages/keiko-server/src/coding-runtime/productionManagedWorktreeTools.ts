@@ -1,3 +1,4 @@
+import { ACTIVITY_LOG_DIAGNOSTIC_FIELDS } from "@oscharko-dev/keiko-contracts/runtime/activity-log-diagnostic-fields";
 import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
@@ -79,6 +80,8 @@ import type {
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
+  CodingToolNativeVerificationHooks,
+  CodingToolNativeVerificationResult,
   CodingVerificationBlockedReason,
   CodingVerificationExecutedObserver,
 } from "./codingToolFacadePorts.js";
@@ -144,12 +147,56 @@ import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOpe
 
 const PROPOSAL_APPROVAL_POLL_MS = 25;
 
-const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOperation({
+const CODING_VERIFICATION_STEP_NAMES = [
+  "test:passed",
+  "targeted-test:passed",
+  "typecheck:passed",
+  "lint:passed",
+  "build:passed",
+  "test:denied",
+  "test:cancelled",
+  "test:dependencies-unavailable",
+  "test:native-shell-required",
+  "test:script-missing",
+  "test:skipped",
+  "targeted-test:denied",
+  "targeted-test:cancelled",
+  "targeted-test:dependencies-unavailable",
+  "targeted-test:native-shell-required",
+  "targeted-test:script-missing",
+  "targeted-test:skipped",
+  "typecheck:denied",
+  "typecheck:cancelled",
+  "typecheck:dependencies-unavailable",
+  "typecheck:native-shell-required",
+  "typecheck:script-missing",
+  "typecheck:skipped",
+  "lint:denied",
+  "lint:cancelled",
+  "lint:dependencies-unavailable",
+  "lint:native-shell-required",
+  "lint:script-missing",
+  "lint:skipped",
+  "build:denied",
+  "build:cancelled",
+  "build:dependencies-unavailable",
+  "build:native-shell-required",
+  "build:script-missing",
+  "build:skipped",
+] as const;
+
+const CODING_WORKTREE_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
+  owner: "keiko-server",
+  causal: "correlation",
+  releaseImpact: "patch",
+} as const;
+
+const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.tool-availability.failed",
   category: "gateway",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.logOptionalToolAvailabilityFailure",
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
@@ -173,35 +220,18 @@ const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOpera
     },
     // Optional: persisted-line redaction omits an empty frames/causeChain array (an error without
     // Keiko frames or without a cause), so a required one would reject that ordinary failure line.
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_LOG_DIAGNOSTIC_FIELDS,
   },
-  causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-tool-availability"],
   proofIds: ["coding-runtime.tool-availability.failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_EDITOR_REVIEW_DECIDED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.editor-review.decided",
   category: "security",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.editorReviewRequirement",
   fields: {
     mode: {
@@ -218,20 +248,16 @@ const CODING_RUNTIME_EDITOR_REVIEW_DECIDED_OPERATION = defineActivityLogOperatio
       values: ["allowed", "review-required"],
     },
   },
-  causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "capability",
   failureClasses: ["coding-editor-mutation"],
   proofIds: ["coding-runtime.editor-review.decided.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_REPOSITORY_RERANK_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.repository-rerank",
   category: "gateway",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.repositoryRerank",
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
@@ -270,35 +296,18 @@ const CODING_RUNTIME_REPOSITORY_RERANK_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["pod-query-failed"],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_LOG_DIAGNOSTIC_FIELDS,
   },
-  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-repository-rerank"],
   proofIds: ["coding-runtime.repository-rerank.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_OPERATOR_DECISION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.operator-decision",
   category: "process",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.recordScriptTrustWait",
   fields: {
     decision: {
@@ -322,20 +331,16 @@ const CODING_RUNTIME_OPERATOR_DECISION_OPERATION = defineActivityLogOperation({
     waitCeilingMs: { type: "integer", dataClass: "duration", required: true },
     pollIntervalMs: { type: "integer", dataClass: "duration", required: true },
   },
-  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["coding-runtime-operator-decision"],
   proofIds: ["coding-runtime.operator-decision.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_WORKTREE_OPERATION_BASE,
   op: "coding-runtime.verification",
   category: "process",
-  owner: "keiko-server",
   emitter: "coding-runtime.productionManagedWorktreeTools.verification",
   fields: {
     state: {
@@ -350,38 +355,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       maxItems: 5,
-      values: [
-        "test:passed",
-        "targeted-test:passed",
-        "typecheck:passed",
-        "lint:passed",
-        "build:passed",
-        "test:denied",
-        "test:cancelled",
-        "test:dependencies-unavailable",
-        "test:script-missing",
-        "test:skipped",
-        "targeted-test:denied",
-        "targeted-test:cancelled",
-        "targeted-test:dependencies-unavailable",
-        "targeted-test:script-missing",
-        "targeted-test:skipped",
-        "typecheck:denied",
-        "typecheck:cancelled",
-        "typecheck:dependencies-unavailable",
-        "typecheck:script-missing",
-        "typecheck:skipped",
-        "lint:denied",
-        "lint:cancelled",
-        "lint:dependencies-unavailable",
-        "lint:script-missing",
-        "lint:skipped",
-        "build:denied",
-        "build:cancelled",
-        "build:dependencies-unavailable",
-        "build:script-missing",
-        "build:skipped",
-      ],
+      values: CODING_VERIFICATION_STEP_NAMES,
     },
     verifierId: {
       type: "string",
@@ -409,27 +383,12 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["begin", "complete", "observe"],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_LOG_DIAGNOSTIC_FIELDS,
   },
-  causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["coding-runtime-verification"],
   proofIds: ["coding-runtime.verification.emitted-line"],
-  releaseImpact: "patch",
 });
 
 type ProposalApprovalWaitOutcome = "approved" | "denied" | "cancelled" | "expired" | "unavailable";
@@ -797,6 +756,7 @@ export function createProductionManagedWorktreeToolFacade(
       ...(input.observeEditOutcome === undefined
         ? {}
         : { observeEditOutcome: input.observeEditOutcome }),
+      nativeVerification: nativeVerificationHooks(input),
     },
   );
   const acceptedInitialization = acceptedInitializationFacet(input, readEdit);
@@ -988,7 +948,10 @@ function requestStageReview(
   input: ProductionManagedWorktreeToolInput,
   result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
 ): void {
-  if (result.kind === "stage" && result.status === "approval-required")
+  if (
+    (result.kind === "stage" || result.kind === "unstage") &&
+    result.status === "approval-required"
+  )
     input.requestStageApproval?.(result.proposalId);
 }
 
@@ -999,8 +962,13 @@ async function releaseStageProposal(
 ): Promise<
   import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined
 > {
-  if (result.kind !== "stage" || result.status !== "approval-required") return result;
+  if (
+    (result.kind !== "stage" && result.kind !== "unstage") ||
+    result.status !== "approval-required"
+  )
+    return result;
   requestStageReview(input, result);
+  const actionKind = result.kind === "stage" ? "git-stage" : "git-unstage";
   const service = input.runtimeGitService;
   if (service === undefined) return undefined;
   const outcome = await waitForRuntimeProposalApproval(
@@ -1008,10 +976,10 @@ async function releaseStageProposal(
     result.proposalId,
     signal,
     (error) => {
-      recordProposalApprovalResolutionFailure(input, "git-stage", result.proposalId, error);
+      recordProposalApprovalResolutionFailure(input, actionKind, result.proposalId, error);
     },
   );
-  recordProposalApprovalWait(input, "git-stage", result.proposalId, outcome);
+  recordProposalApprovalWait(input, actionKind, result.proposalId, outcome);
   if (outcome === "denied") return "declined";
   return outcome === "approved" ? { ...result, status: "ready", reason: "none" } : undefined;
 }
@@ -1203,7 +1171,7 @@ function recordPolicyAuthorizedProposal(
 
 function recordProposalApprovalWait(
   input: ProductionManagedWorktreeToolInput,
-  actionKind: "git-stage" | "commit" | "push" | "pull-request",
+  actionKind: "git-stage" | "git-unstage" | "commit" | "push" | "pull-request",
   proposalId: string,
   outcome: ProposalApprovalWaitOutcome,
 ): void {
@@ -1235,7 +1203,7 @@ function recordProposalApprovalWait(
 
 export function recordProposalApprovalResolutionFailure(
   input: Pick<ProductionManagedWorktreeToolInput, "activityLog" | "authorityRef" | "diagnostics">,
-  actionKind: "git-stage" | "commit" | "push" | "pull-request",
+  actionKind: "git-stage" | "git-unstage" | "commit" | "push" | "pull-request",
   proposalId: string,
   error: unknown,
 ): void {
@@ -1411,7 +1379,7 @@ async function rankedByIndex(
 ): Promise<readonly { readonly scopePath: string }[]> {
   const provider = lease.provider;
   if (provider === undefined) return [];
-  return provider.search({
+  return await provider.search({
     query: {
       kind: retrievalKind(request.mode),
       text: request.query,
@@ -2038,6 +2006,7 @@ const EXECUTED_RED_STATUSES = ["failed", "timed-out", "resource-exceeded"] as co
 // (PR #3452 review). The not-run path is left to runs in which no step went red.
 function modelFacingStatus(report: VerificationReport): Exclude<VerificationStatus, "passed"> {
   const overall = report.overallStatus as Exclude<VerificationStatus, "passed">;
+  if (refusedOnlyForThisHost(report)) return "skipped";
   if (VERIFICATION_OUTCOME_REASON_CODES[overall] !== "VERIFICATION_NOT_RUN") return overall;
   const executedRed = EXECUTED_RED_STATUSES.find((status) =>
     report.results.some((result) => result.status === status),
@@ -2063,6 +2032,18 @@ function failedVerificationOutcome(
   };
 }
 
+// A refused bootstrap fails the report (ADR-0043 D17), but `install-target-foreign` refuses only
+// because this host's runtime holds the dependencies: when no step ran, the model is told to run
+// the check in its own shell (native-shell-required), not a failure it cannot repair (PR #4096).
+function refusedOnlyForThisHost(report: VerificationReport): boolean {
+  return (
+    report.overallStatus === "failed" &&
+    report.dependencies?.refusalReason === "install-target-foreign" &&
+    report.results.length > 0 &&
+    report.results.every((result) => result.status === "skipped")
+  );
+}
+
 // A run that never executed used to reach the model as a bare VERIFICATION_NOT_RUN, and the model
 // picked another verifier at once without knowing why (F74, Coding Workbench run 24). Each step it
 // did not run now carries the closed reason: a verifier the repository defines no script for, a
@@ -2079,17 +2060,33 @@ const NOT_RUN_STATUSES: ReadonlySet<VerificationStatus> = new Set([
 ]);
 
 function notRunSteps(report: VerificationReport): readonly VerificationNotRunStep[] {
+  const dependencies = dependenciesNotRunReason(report);
   return report.results
     .filter((result) => NOT_RUN_STATUSES.has(result.status))
     .slice(0, NOT_RUN_STEP_LIMIT)
-    .map((result) => ({ kind: result.kind, reason: notRunReason(result) }));
+    .map((result) => ({ kind: result.kind, reason: notRunReason(result, dependencies) }));
 }
 
-function notRunReason(result: VerificationResult): VerificationNotRunReason {
+// The governed verifier's container cannot install for this host without replacing the native
+// runtime's dependencies (`install-target-foreign`, Keiko 1.3.0 test on macOS): the same check run
+// in the runtime's own shell is the verification that can run, and it is recorded as one for the
+// same target. Every other bootstrap that did not complete remains a blocker to report.
+function dependenciesNotRunReason(
+  report: VerificationReport,
+): Extract<VerificationNotRunReason, "dependencies-unavailable" | "native-shell-required"> {
+  return report.dependencies?.refusalReason === "install-target-foreign"
+    ? "native-shell-required"
+    : "dependencies-unavailable";
+}
+
+function notRunReason(
+  result: VerificationResult,
+  dependencies: ReturnType<typeof dependenciesNotRunReason>,
+): VerificationNotRunReason {
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";
   const detail = result.detail ?? "";
-  if (detail.startsWith("dependencies unavailable: bootstrap ")) return "dependencies-unavailable";
+  if (detail.startsWith("dependencies unavailable: bootstrap ")) return dependencies;
   return /^no [a-z-]+ script detected in package\.json$/u.test(detail)
     ? "script-missing"
     : "skipped";
@@ -2116,7 +2113,15 @@ function recordVerificationNotRun(
   );
 }
 
-type VerificationNotRunLogStep = `${VerificationKind}:${VerificationNotRunReason}`;
+type VerificationPassedLogStep = Extract<
+  (typeof CODING_VERIFICATION_STEP_NAMES)[number],
+  `${string}:passed`
+>;
+
+type VerificationNotRunLogStep = Exclude<
+  (typeof CODING_VERIFICATION_STEP_NAMES)[number],
+  VerificationPassedLogStep
+>;
 
 function verificationNotRunLogStep(step: VerificationNotRunStep): VerificationNotRunLogStep {
   return `${step.kind}:${step.reason}`;
@@ -2341,13 +2346,28 @@ function verificationRunInput(
 ): VerificationRunInput {
   const correlationId = verificationCorrelationId(input);
   recordVerificationTarget(input, request, kind);
+  const sharedHostPlatform = input.toolProfile === "native" ? nativeHostPlatform() : undefined;
   return {
     projectId: input.workspaceRoot,
     kinds: [kind],
     requestId: request.actionId,
     ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
     ...(correlationId === undefined ? {} : { correlationId }),
+    ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
   };
+}
+
+/**
+ * The native runtime's shell runs on this host and uses the workspace's installed dependencies, so
+ * the governed verifier must not replace them with another platform's (its container backend on
+ * macOS is Linux): the bootstrap then refuses that install instead (`install-target-foreign`).
+ */
+function nativeHostPlatform(): VerificationRunInput["sharedHostPlatform"] {
+  const os = process.platform;
+  const cpu = process.arch;
+  return (os === "darwin" || os === "linux" || os === "win32") && (cpu === "arm64" || cpu === "x64")
+    ? { os, cpu }
+    : undefined;
 }
 
 function recordVerificationTarget(
@@ -2519,6 +2539,67 @@ function publishVerification(
   };
   if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
     throw new Error("runtime-verification-event-invalid");
+  }
+  input.onRuntimeEvent(event);
+}
+
+/**
+ * Native verification commands reach the same verification owner as the governed verifier (#3897
+ * review, #3901): the edit revision and admission observer are captured when the policy admits the
+ * command, and its exit status becomes the same summary event, so the run's ledger, its settlement
+ * and the Workbench's verification card treat both alike.
+ */
+function nativeVerificationHooks(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolNativeVerificationHooks {
+  let sequence = 0;
+  return {
+    revision: input.verificationRevision,
+    admitted: input.verificationAdmitted,
+    blocked: input.verificationBlocked,
+    publish: (result): void => {
+      sequence += 1;
+      publishNativeVerification(input, sequence, result);
+    },
+  };
+}
+
+function publishNativeVerification(
+  input: ProductionManagedWorktreeToolInput,
+  sequence: number,
+  result: CodingToolNativeVerificationResult,
+): void {
+  const targetDigest = codingVerificationTargetDigest(result.kind);
+  result.executed?.(targetDigest);
+  const status = result.passed ? "passed" : "failed";
+  const passedCount = result.passed ? 1 : 0;
+  const failedCount = result.passed ? 0 : 1;
+  const event: CodingWorkbenchRuntimeEvent = {
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    eventId: `event-runtime-verification-${String(sequence)}`,
+    runId: input.authorityRef.runId,
+    occurredAt: new Date().toISOString(),
+    kind: "verification-summarized",
+    verificationKind: "verification-command",
+    ...(result.editRevision === undefined ? {} : { verificationEditRevision: result.editRevision }),
+    verificationStatus: status,
+    verificationSummary: {
+      verifierId: result.kind,
+      status,
+      passedCount,
+      failedCount,
+      skippedCount: 0,
+      durationMs: result.durationMs,
+    },
+    passedCount,
+    failedCount,
+    skippedCount: 0,
+    failureLocationCount: 0,
+    failureLocationsTruncated: false,
+    verificationTargetDigest: targetDigest,
+  };
+  if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
+    throw new Error("runtime-native-verification-event-invalid");
   }
   input.onRuntimeEvent(event);
 }

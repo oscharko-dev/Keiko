@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "releases": {
+    "1.1.4": {
+      "macos-arm64": {
+        "name": "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+        "tarball": "oscharko-dev-keiko-coding-runtime-darwin-arm64-1.1.4.tgz",
+        "sizeBytes": 102483313,
+        "sha256": "b27f41dba90e611e24d347df467025b16ee47a6a285a250adcab55c9b601cf29",
+        "integrity": "sha512-2BAqK9Gix+HPHSmAj8xRoHn9e4fSNh9K1NylrFn1o6OlbT1ycZytlprTjTyBwqv6vO/9ekTDTHxNN9jJHPV+Ig=="
+      },
+      "macos-x64": {
+        "name": "@oscharko-dev/keiko-coding-runtime-darwin-x64",
+        "tarball": "oscharko-dev-keiko-coding-runtime-darwin-x64-1.1.4.tgz",
+        "sizeBytes": 107585104,
+        "sha256": "070e0f2a21e0e55a661db9330165c4a9d6de50daf079bcbcff51aca2b2840e66",
+        "integrity": "sha512-BQ20gNcmRes5xReJxdAWhTNun77G7SnatL+DzHjVzDNhEvuR7wqNJgcDaRGeOsdRZBX0VFq1bcqiQZXb4TxA+g=="
+      }
+    }
+  }
+}

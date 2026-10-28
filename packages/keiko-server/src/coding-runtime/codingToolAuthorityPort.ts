@@ -4,6 +4,8 @@ import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { isRuntimeGitSyncOperation, type RuntimeGitSyncOperation } from "./codingRuntimeGitIpc.js";
+import { gitOperationEnvelopeDecision } from "../gitDelivery/runBoundAuthority.js";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
@@ -43,9 +45,14 @@ import type {
   CodingToolNativeReadListResult,
   CodingToolMutationGuard,
   CodingToolProducerBinding,
+  CodingToolNativeVerificationHooks,
   MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
+import {
+  createCodingToolNativeEffectFacet,
+  createCodingToolNativeSettlementFacet,
+} from "./codingToolNativeEffect.js";
 import { changesetPayloadBytes } from "./codingToolReplacementEdits.js";
 import {
   createCodingToolGovernedDelegate,
@@ -176,6 +183,8 @@ interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
   readonly catalogBudget?: CatalogToolBudgetPort | undefined;
   readonly unavailableOptionalTools?: (() => ReadonlySet<OpenCodeOptionalToolName>) | undefined;
   readonly disableCatalogBridge?: boolean | undefined;
+  /** The run's verification owner for native verification commands (#3901). */
+  readonly nativeVerification?: CodingToolNativeVerificationHooks | undefined;
 }
 
 export type CodingToolAuthorityAvailability =
@@ -426,33 +435,29 @@ function finishAdmission(
 function finishStageAdmission(
   input: FinishAdmissionInput,
 ): ReturnType<CodingToolAuthorityPort["admit"]> | undefined {
-  const {
-    request,
-    trusted,
-    approvalProofVerifier,
-    authority,
-    context,
-    capability,
-    binding,
-    approvalMatched,
-  } = input;
-  if (
-    request.action === "git" &&
-    request.operation === "stage" &&
-    request.phase === "execute" &&
-    approvalMatched
-  ) {
-    const lease =
-      trusted.runId === undefined
-        ? undefined
-        : approvalProofVerifier?.consumeStage?.(trusted.runId, request.proposalId);
-    if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
-    const admitted = guarded(authority, context, capability, request, binding, true);
-    return admitted.ok
-      ? { ...admitted, mutationGuard: { ...admitted.mutationGuard, stageApproval: lease } }
-      : admitted;
-  }
-  return undefined;
+  const { request, approvalMatched } = input;
+  if (!approvalMatched || request.action !== "git") return undefined;
+  // Staging and unstaging both change the index under the one stage approval kind (#3902 AC2).
+  if (request.operation !== "stage" && request.operation !== "unstage") return undefined;
+  if (request.phase !== "execute") return undefined;
+  return admitIndexRedemption(input, request.proposalId);
+}
+
+function admitIndexRedemption(
+  input: FinishAdmissionInput,
+  proposalId: string,
+): ReturnType<CodingToolAuthorityPort["admit"]> {
+  const { request, trusted, approvalProofVerifier, authority, context, capability, binding } =
+    input;
+  const lease =
+    trusted.runId === undefined
+      ? undefined
+      : approvalProofVerifier?.consumeStage?.(trusted.runId, proposalId);
+  if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
+  const admitted = guarded(authority, context, capability, request, binding, true);
+  return admitted.ok
+    ? { ...admitted, mutationGuard: { ...admitted.mutationGuard, stageApproval: lease } }
+    : admitted;
 }
 
 function resolveDelegation(
@@ -595,13 +600,7 @@ export function createRuntimeCodingToolFacade(
 ): CodingToolFacade {
   const configuration = { ...options };
   const activityLog = configuration.catalogActivityLog ?? processServerLogSink();
-  const nativeOptions = {
-    ...configuration,
-    invocationContext: context,
-    invocationRegistry:
-      configuration.invocationRegistry ??
-      createCodingToolInvocationRegistry({ now: lazyContextClock(context) }),
-  };
+  const nativeOptions = withInvocationContext(configuration, context);
   const authorityPort = createCodingToolAuthorityPort(authority, context, {
     approvalProofVerifier: configuration.approvalProofVerifier,
     activityLog,
@@ -629,7 +628,43 @@ export function createRuntimeCodingToolFacade(
     nativeOptions,
     activityLog,
   );
-  return nativeTextRead === undefined ? facade : { ...facade, nativeTextRead };
+  return {
+    ...facade,
+    ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
+    ...nativeExecutionFacets(authority, context, configuration),
+  };
+}
+
+function withInvocationContext(
+  configuration: RuntimeCodingToolFacadeOptions,
+  context: CodingToolAuthorityContextProvider,
+): NativeReadFacadeOptions {
+  return {
+    ...configuration,
+    invocationContext: context,
+    invocationRegistry:
+      configuration.invocationRegistry ??
+      createCodingToolInvocationRegistry({ now: lazyContextClock(context) }),
+  };
+}
+
+// Native OpenCode calls execute outside `execute()`: the same live authority and budget owner admits
+// their permission checks, and the same run-effort owner counts their terminal calls.
+function nativeExecutionFacets(
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
+  context: CodingToolAuthorityContextProvider,
+  configuration: RuntimeCodingToolFacadeOptions,
+): Pick<CodingToolFacade, "nativeEffect" | "nativeSettlement"> {
+  return {
+    nativeEffect: createCodingToolNativeEffectFacet(authority, context),
+    nativeSettlement: createCodingToolNativeSettlementFacet(configuration.onToolSettled, {
+      observeEditOutcome: configuration.observeEditOutcome,
+      verification: configuration.nativeVerification,
+    }),
+  };
 }
 
 /** F8 (#3413): the production CatalogToolBinder-backed bridge for the facade's covered actions
@@ -791,7 +826,7 @@ function actionClassesAllowed(
   request: CodingToolActionRequest,
   approved: boolean,
 ): boolean {
-  if (request.action === "git" && request.operation === "stage" && approved)
+  if (request.action === "git" && gitClassesDecidedElsewhere(request, approved))
     return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
   // Propose/reconcile plan a delivery without performing one yet, so they need only
   // workspace-read -- but a matched per-action approval on the EXECUTE phase is not a substitute
@@ -806,6 +841,18 @@ function actionClassesAllowed(
     return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
   }
   return hasClasses(envelope.authority.actionClasses, codingToolRequiredActionClasses(request));
+}
+
+// An approved stage or unstage redemption carries its own approval; a fetch's or pull's delivery
+// and network gate is the Git sync owner's decision (runtimeGitPolicyAllowed below), which defers
+// it to the mode matrix below Full access exactly as it does for the Git Client's own Fetch and
+// Pull (#3902 AC2).
+function gitClassesDecidedElsewhere(
+  request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
+  approved: boolean,
+): boolean {
+  if (isRuntimeGitSyncOperation(request.operation)) return true;
+  return (request.operation === "stage" || request.operation === "unstage") && approved;
 }
 
 // The extra policy beyond the required action class, one exhaustive case per governed action.
@@ -843,7 +890,10 @@ function additionalPolicyAllowed(
         connectorAllowed(envelope, request.scope)
       );
     case "egress":
-      return internetPolicyAllowed(envelope, approvalVerified) && networkAllowed(envelope);
+      return (
+        networkAllowed(envelope) &&
+        (internetPolicyAllowed(envelope, approvalVerified) || researchGrantGoverned(envelope))
+      );
     case "skill":
     case "skill-discover":
     case "child-agent":
@@ -933,9 +983,27 @@ function runtimeGitPolicyAllowed(
     );
   if (request.operation === "read" || request.operation === "write")
     return gitPolicyAllowed(envelope, request.operation, approved);
-  if (request.operation === "stage" && request.phase === "execute")
+  if (isRuntimeGitSyncOperation(request.operation))
+    return gitSyncPolicyAllowed(envelope, request.operation, approved);
+  if (
+    (request.operation === "stage" || request.operation === "unstage") &&
+    request.phase === "execute"
+  )
     return workspaceMediumRiskAllowed(envelope, approved);
   return true;
+}
+
+// #3902 AC2: the decision the Git sync owner makes for the Git Client's Fetch and Pull
+// (runBoundAuthority.ts): Full access admits them within the envelope's own delivery and network
+// scope; a lower mode's approval-required delivery effect is redeemed only by the operator's
+// approval of this exact call, and a denied one by nothing.
+function gitSyncPolicyAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  operation: RuntimeGitSyncOperation,
+  approved: boolean,
+): boolean {
+  const decision = gitOperationEnvelopeDecision(envelope.authority, operation);
+  return decision.ok || (approved && decision.reason === "approval-required");
 }
 
 function gitPolicyAllowed(
@@ -1014,7 +1082,11 @@ function matchedStageApproval(
   request: CodingToolActionRequest,
   verifier: CodingToolApprovalProofVerifier | undefined,
 ): boolean | undefined {
-  if (request.action === "git" && request.operation === "stage" && request.phase === "execute")
+  if (
+    request.action === "git" &&
+    (request.operation === "stage" || request.operation === "unstage") &&
+    request.phase === "execute"
+  )
     return (
       context.runId !== undefined &&
       verifier?.matchesStage?.(context.runId, request.proposalId) === true
@@ -1065,6 +1137,17 @@ function deliveryAllowed(
     : networkAllowed(envelope) &&
         hasClasses(authority.actionClasses, ["network-egress"]) &&
         hasScope(authority.networkPolicy.connectorScopes, "source-control.write");
+}
+
+// #2387: below Full access the mode asks before internet use, and research is the only egress a
+// deployment opens there, through the `governed-egress` policy. Its one delegate is the research
+// port, which fetches only under a human-approved grant bound to the exact request line and, when
+// none covers the request, raises that approval and fails the call closed. The grant is the
+// per-action approval, so the facade hands the request on instead of demanding a proof egress
+// cannot carry. Narrowing keeps this policy only for an envelope that was already minted with it;
+// a broad envelope narrowed below Full access drops to deny-all.
+function researchGrantGoverned(envelope: CodingWorkbenchRuntimeAuthorityEnvelope): boolean {
+  return envelope.authority.networkPolicy.mode === "governed-egress";
 }
 
 function networkAllowed(envelope: CodingWorkbenchRuntimeAuthorityEnvelope): boolean {

@@ -386,8 +386,8 @@ describe("ContainerStatusWidget", () => {
     const { container } = render(<ContainerStatusWidget projectPath="/proj" />);
 
     expect(await screen.findByText(/blocked by policy/i)).toBeInTheDocument();
-    const dot = container.querySelector(".dot");
-    expect(dot).toHaveStyle({ background: "var(--danger)" });
+    const dot = container.querySelector<HTMLElement>(".dot");
+    expect(dot?.style.background).toBe("var(--danger)");
   });
 
   it("has no axe violations in the unavailable state", async () => {

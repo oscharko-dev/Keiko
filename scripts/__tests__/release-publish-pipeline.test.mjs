@@ -62,6 +62,7 @@ import {
   PORTABLE_TARGETS,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "../portable-runtime.mjs";
+import { readZipArchiveUncompressedSize, writeZipArchiveEntries } from "../lib/zip-archive.mjs";
 import {
   buildPortableEvaluationManifest,
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
@@ -173,6 +174,7 @@ function portableManifest(target, archivePath, assetId) {
       notarizationRequired,
       verificationChecks,
       nativeHelpers,
+      readZipArchiveUncompressedSize(archivePath),
     ),
     provenanceText,
   };
@@ -187,6 +189,7 @@ function portableManifestObject(
   notarizationRequired,
   verificationChecks,
   nativeHelpers,
+  uncompressedSizeBytes,
 ) {
   const releaseTag = `v${RELEASE_VERSION}`;
   const security = portableSecurity(target, notarizationRequired, verificationChecks);
@@ -201,7 +204,10 @@ function portableManifestObject(
     schemaVersion: 1,
     product: portableProduct(),
     release: { releaseId: 0, releaseTag, stable: true, commitSha: HEAD_SHA },
-    artifact: portableArtifact(target, assetId, archiveSize, archiveSha256),
+    artifact: {
+      ...portableArtifact(target, assetId, archiveSize, archiveSha256),
+      uncompressedSizeBytes,
+    },
     provenance: portableProvenance(provenanceSha256),
     runtime: portableRuntime(target),
     runtimeActivation,
@@ -242,9 +248,6 @@ function nativeHelperBytes(target, name) {
 }
 
 function nativeHelperExecutablePath(target, name) {
-  if (target.nodePlatform === "linux" && name === "keiko-runtime-supervisor") {
-    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
-  }
   return `runtime/native/${name}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
@@ -261,14 +264,14 @@ function portableNativeHelper(target, name) {
     executablePath: nativeHelperExecutablePath(target, name),
     protocol: {
       schemaVersion: 1,
-      requestMagic: supervisor ? (target.nodePlatform === "linux" ? "none" : "KRP1") : "KSR1",
-      responseMagic: supervisor ? (target.nodePlatform === "linux" ? "none" : "KRS1") : "KSS1",
+      requestMagic: supervisor ? "KRP1" : "KSR1",
+      responseMagic: supervisor ? "KRS1" : "KSS1",
     },
     source: {
       commitSha: HEAD_SHA,
       path: supervisor
         ? target.nodePlatform === "linux"
-          ? "packages/keiko-sandbox/src"
+          ? "native/runtime-supervisor"
           : `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`
         : "native/secure-workspace-read",
       treeSha256: digestFor(`${name}\n`),
@@ -903,7 +906,12 @@ function writePortableAssetsFixture(root, options = {}) {
     const manifestPath = join(targetRoot, "manifest", "portable-manifest.json");
     mkdirSync(join(targetRoot, "evidence"), { recursive: true });
     mkdirSync(dirname(manifestPath), { recursive: true });
-    writeFileSync(archivePath, `portable archive for ${target.platformTarget}\n`);
+    writeZipArchiveEntries(archivePath, [
+      {
+        name: "Keiko/readme.txt",
+        data: Buffer.from(`portable archive for ${target.platformTarget}\n`),
+      },
+    ]);
     const { manifest, provenanceText } = portableManifest(target, archivePath, 0);
     writeNativeHelperFixture(targetRoot, target);
     addPortableSidecarFixture(
@@ -1520,6 +1528,31 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
     });
+
+    it.each(["size-mismatch", "malformed-zip"])(
+      "refuses %s expanded metadata before publication",
+      (kind) => {
+        lastRun = runPublish({
+          npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+          initState: { published: true, tagged: true },
+          portableFixtureOptions: {
+            mutateManifest: (candidate, target, index, root) => {
+              if (index !== 0) return;
+              if (kind === "size-mismatch") ++candidate.artifact.uncompressedSizeBytes;
+              else writeFileSync(join(root, target.assetName), "invalid ZIP");
+            },
+          },
+        });
+        expect(lastRun.status).toBe(1);
+        expect(lastRun.stderr).toContain(
+          kind === "size-mismatch"
+            ? "uncompressedSizeBytes must match"
+            : "expanded size could not be verified",
+        );
+        expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+        expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      },
+    );
 
     // portableAssetsFromManifest/normalizePortableAssets (release-publish.mjs) is the
     // publish-time twin of validatePortableReleaseSet: the last check before npm publish,

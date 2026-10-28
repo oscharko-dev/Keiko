@@ -45,6 +45,7 @@ import {
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   DEPENDENCY_INSTALL_LIMITS,
+  type VerificationDependencyRefusalReason,
   type VerificationDependencyState,
   type VerificationDependencySummary,
   type VerificationLockfileState,
@@ -130,14 +131,11 @@ const INSTALL_LOCATION = /(?:^|\/)node_modules\//u;
 // One Subresource Integrity hash in an algorithm npm verifies; an entry may list several.
 const INTEGRITY_HASH = /^sha(?:1|256|384|512)-[A-Za-z0-9+/]+={0,2}$/u;
 
-export type DependencyBootstrapRefusal =
-  | "project-npm-config"
-  | "manifest-unreadable"
-  | "lockfile-unreadable"
-  | "unapproved-source"
-  | "workspaces-unresolved"
-  | "install-inspection-unavailable"
-  | "install-target-invalid";
+// The plan's own refusals; the contract's closed vocabulary adds the egress and installed-tree ones.
+export type DependencyBootstrapRefusal = Exclude<
+  VerificationDependencyRefusalReason,
+  "egress-destination-refused" | "installed-lockfile-unreadable" | "installed-unapproved-source"
+>;
 
 export type DependencyBootstrapPlan =
   | { readonly kind: "none" }
@@ -169,6 +167,13 @@ export interface DependencyBootstrapDeps {
     | undefined;
   readonly resolveDependencyInstallTarget?:
     (() => Promise<NonNullable<DependencyBootstrapDeps["dependencyInstallTarget"]>>) | undefined;
+  /**
+   * The platform of a host-native consumer that shares the workspace's installed tree (the native
+   * coding runtime's shell). An install for another platform would replace that consumer's native
+   * bindings in the shared tree, so it is refused (`install-target-foreign`); absent, any measured
+   * target installs as before.
+   */
+  readonly sharedHostPlatform?: HostInstallPlatform | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly resolveExecutable?: RunCommandDeps["resolveExecutable"] | undefined;
   readonly onTerminated?: RunCommandDeps["onTerminated"] | undefined;
@@ -411,6 +416,11 @@ function lockfileState(root: string, fs: WorkspaceFs): VerificationLockfileState
 }
 
 type DependencyInstallTarget = NonNullable<DependencyBootstrapDeps["dependencyInstallTarget"]>;
+
+export interface HostInstallPlatform {
+  readonly os: DependencyInstallTarget["os"];
+  readonly cpu: DependencyInstallTarget["cpu"];
+}
 const TARGET_FIELDS = [
   "os",
   "cpu",
@@ -751,6 +761,8 @@ function projectNpmConfigApproved(
 
 const REFUSAL_DETAIL: Readonly<Record<DependencyBootstrapRefusal, string>> = {
   "install-target-invalid": "dependency execution target unavailable; verification refused",
+  "install-target-foreign":
+    "verification runs on another platform than the native runtime sharing this workspace; installing would replace its native dependencies, so it is refused. Run the project's own checks in the native shell instead.",
   "install-inspection-unavailable":
     "installed dependency identity unavailable; verification refused",
   "project-npm-config": "project npm config present; dependency installation refused",
@@ -780,6 +792,13 @@ const INSTALLED_TREE_REFUSAL_DETAIL: Readonly<
     "the installed tree names a source other than the approved HTTPS registry; verification refused",
 };
 
+const INSTALLED_TREE_REFUSAL_REASON: Readonly<
+  Record<Exclude<LockfileVerdict, "approved">, VerificationDependencyRefusalReason>
+> = {
+  "lockfile-unreadable": "installed-lockfile-unreadable",
+  "unapproved-source": "installed-unapproved-source",
+};
+
 function checkedInstall(
   outcome: DependencyBootstrapOutcome,
   deps: DependencyBootstrapDeps,
@@ -792,6 +811,7 @@ function checkedInstall(
       ...outcome.summary,
       state: "refused",
       detail: INSTALLED_TREE_REFUSAL_DETAIL[refusal],
+      refusalReason: INSTALLED_TREE_REFUSAL_REASON[refusal],
     },
   };
 }
@@ -800,6 +820,7 @@ function settled(
   state: VerificationDependencyState,
   lockfile: VerificationLockfileState,
   detail?: string,
+  refusalReason?: VerificationDependencyRefusalReason,
 ): DependencyBootstrapOutcome {
   return {
     summary: {
@@ -808,6 +829,7 @@ function settled(
       exitCode: null,
       durationMs: 0,
       ...(detail === undefined ? {} : { detail }),
+      ...(state === "refused" && refusalReason !== undefined ? { refusalReason } : {}),
     },
   };
 }
@@ -891,7 +913,7 @@ async function executeDependencyBootstrap(
   if (plan.kind === "none") return settled("none", "absent");
   if (plan.kind === "current") return settled("current", plan.lockfile);
   if (plan.kind === "refused")
-    return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason]);
+    return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason], plan.reason);
   const startedAt = deps.now();
   completedInstalls.delete(deps.workspace.root);
   let proxy: RegistryEgressProxy;
@@ -949,16 +971,25 @@ function withEgress(
 ): DependencyBootstrapOutcome {
   const summary = { ...outcome.summary, egress };
   if (fault !== undefined) {
+    // A refusal reason belongs to a refused summary only; the fault supersedes an earlier refusal.
+    const { refusalReason: _superseded, ...faulted } = summary;
     return {
       ...outcome,
-      summary: { ...summary, state: "failed", detail: EGRESS_FAULT_DETAIL },
+      summary: { ...faulted, state: "failed", detail: EGRESS_FAULT_DETAIL },
     };
   }
   const state = outcome.summary.state;
   const reachedOut = egress.refused > 0 && (state === "installed" || state === "failed");
   return {
     ...outcome,
-    summary: reachedOut ? { ...summary, state: "refused", detail: EGRESS_REFUSAL_DETAIL } : summary,
+    summary: reachedOut
+      ? {
+          ...summary,
+          state: "refused",
+          detail: EGRESS_REFUSAL_DETAIL,
+          refusalReason: "egress-destination-refused",
+        }
+      : summary,
   };
 }
 
@@ -1033,7 +1064,8 @@ function targetResolutionFailure(
   return settled(
     error instanceof DependencyTargetError ? "refused" : rejectedInstallState(error),
     plan.lockfile,
-    "dependency execution target unavailable; verification refused",
+    REFUSAL_DETAIL["install-target-invalid"],
+    "install-target-invalid",
   );
 }
 
@@ -1055,6 +1087,19 @@ function admittedBootstrapPlan(
   );
 }
 
+/** An install the shared host consumer could not use is refused before npm writes the tree. */
+function foreignTargetRefusal(
+  plan: DependencyBootstrapPlan,
+  deps: DependencyBootstrapDeps,
+): DependencyBootstrapPlan {
+  const host = deps.sharedHostPlatform;
+  const target = deps.dependencyInstallTarget;
+  if (plan.kind !== "install" || host === undefined || target === undefined) return plan;
+  return target.os === host.os && target.cpu === host.cpu
+    ? plan
+    : { kind: "refused", reason: "install-target-foreign", lockfile: plan.lockfile };
+}
+
 export async function runDependencyBootstrap(
   plan: DependencyBootstrapPlan,
   deps: DependencyBootstrapDeps,
@@ -1069,7 +1114,7 @@ export async function runDependencyBootstrap(
     reportDependencyBootstrapFailure(deps, "target-probe", error);
     return targetResolutionFailure(plan, deps, error);
   }
-  const admitted = admittedBootstrapPlan(plan, effectiveDeps);
+  const admitted = foreignTargetRefusal(admittedBootstrapPlan(plan, effectiveDeps), effectiveDeps);
   const priorReceipt = completedInstalls.has(deps.workspace.root) ? "changed" : "missing";
   const receipt = admitted.kind === "current" ? "current" : priorReceipt;
   if (admitted.kind === "refused") completedInstalls.delete(deps.workspace.root);

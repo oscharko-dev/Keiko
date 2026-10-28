@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -21,12 +22,15 @@ import type {
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import { fakePairingRequestBody } from "../coding-app-session/_support.js";
-import type { UiHandlerDeps } from "../deps.js";
+import { productionOpenCodeToolProfile, type UiHandlerDeps } from "../deps.js";
 import {
   defaultServerDiagnosticSink,
   type ServerDiagnosticRecord,
@@ -65,12 +69,22 @@ import {
   type ScriptedOpenCodeHarness,
 } from "./opencodeFunctionalHarness/_support.js";
 import { devLaneEnvEnabled } from "./devLanePortableCodingRuntime.js";
+import { openCodeSelectableAgents } from "./opencodeAgents.js";
+import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import {
   createFunctionalRuntimeResolver,
   functionalBffDeps,
   productionDiscoveryBffDeps,
   FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
   FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
+  FUNCTIONAL_INDEX_AFTER_MARKER,
+  FUNCTIONAL_INDEX_PATH,
+  FUNCTIONAL_INDEX_STAGED_MARKER,
+  FUNCTIONAL_SYNC_HEAD_MARKER,
+  FUNCTIONAL_WEBSEARCH_QUERY,
+  FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
+  FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND,
+  FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
   type ScriptState,
@@ -90,6 +104,7 @@ interface FunctionalWorkspaceFixture {
   readonly repository: string;
   readonly db: DatabaseSync;
   readonly lifecycle: ReturnType<typeof createWorkspaceLifecycleService>;
+  readonly provisioning: ReturnType<typeof createWorkspaceProvisioningService>;
   readonly managedRoot: string;
   readonly workspace: string;
   readonly target: string;
@@ -322,6 +337,7 @@ describe("production OpenCode backend functional pipeline", () => {
       await runAuthorityScenarios(fixture, pipeline);
       await runRejectedQuestionScenario(fixture, pipeline, scripted);
       await runStopPendingQuestionScenario(fixture, pipeline);
+      await runFollowUpReplacementScenario(fixture, pipeline, scripted);
       await runOutOfScopeScenario(fixture, pipeline, scripted);
       assertRedactedEvidence(fixture, pipeline);
       assertCanariesAbsentFromRequestTargets(scripted);
@@ -387,14 +403,21 @@ function devLaneDiscoveryFunctionalEnabled(): boolean {
  */
 async function bootDiscoveryPipeline(
   fixture: FunctionalWorkspaceFixture,
+  observeGatewayRequest?: (request: GatewayRequest) => void,
+  operatorEnv?: Readonly<Record<string, string>>,
 ): Promise<FunctionalPipeline> {
   const verification = createVerification(fixture.workspace);
   const port = await reserveLoopbackPort();
   const deps = productionDiscoveryBffDeps({
     stateRoot: join(fixture.root, "bff-state"),
     workspaceLifecycle: fixture.lifecycle,
+    // The run's Git preparation re-proves the managed workspace through the same provisioning
+    // owner that created it, as the composed server does.
+    workspaceProvisioning: fixture.provisioning,
     script: fixture.script,
     uiPort: port,
+    ...(observeGatewayRequest === undefined ? {} : { observeGatewayRequest }),
+    ...(operatorEnv === undefined ? {} : { operatorEnv }),
   });
   disposers.push(async () => {
     await deps.codingRuntimeOrchestrator?.shutdown();
@@ -449,6 +472,9 @@ async function assertLiveReadiness(baseUrl: string): Promise<void> {
     effectiveMode: "autonomous-delivery",
     runtimeAvailable: true,
     runtimeEvidenceClass: "functional-not-platform-qualified",
+    // Derived from the production entry points, not restated: the platform picks the profile.
+    selectableAgents: openCodeSelectableAgents(productionOpenCodeToolProfile()),
+    promptInputs: openCodePromptInputs(productionOpenCodeToolProfile()),
   });
 }
 
@@ -1087,6 +1113,65 @@ async function runStopPendingQuestionScenario(
   expect(readFile(fixture.target)).toBe(NEW);
 }
 
+// A follow-up into a pause resumes the run and replaces its turn (#3452): the native interrupt reads
+// the session's background shell jobs and its inbox before the successor prompt is submitted
+// (#4064). A read the runtime cannot answer rejects the interrupt and refuses the follow-up.
+async function runFollowUpReplacementScenario(
+  fixture: FunctionalWorkspaceFixture,
+  pipeline: FunctionalPipeline,
+  scripted: ScriptedOpenCodeHarness,
+): Promise<void> {
+  fixture.script.mode = "productive";
+  fixture.script.calls = 0;
+  const started = await post(
+    pipeline.baseUrl,
+    "/api/coding-workbench/runtime/runs",
+    startBody("follow-up-replacement"),
+  );
+  expect(started.status).toBe(200);
+  const run = (await started.json()) as { runId: string; state: string };
+  await waitForQuestion(pipeline.orchestrator, run.runId, "follow-up-question");
+  const paused = await post(
+    pipeline.baseUrl,
+    `/api/coding-workbench/runtime/runs/${run.runId}/pause`,
+    {
+      requestId: run.runId,
+    },
+  );
+  expect(paused.status).toBe(200);
+  await expect(paused.json()).resolves.toMatchObject({ runId: run.runId, state: "paused" });
+  const child = scripted.children.at(-1);
+  const promptsBefore = promptRequestCount(child);
+  const followed = await post(
+    pipeline.baseUrl,
+    `/api/coding-workbench/runtime/runs/${run.runId}/follow-up`,
+    {
+      requestId: "follow-up-replacement-turn",
+      expectedRevision: pipeline.orchestrator.getSnapshot(run.runId)?.revision ?? -1,
+      taskIntent: "Follow up on the accepted task",
+    },
+  );
+  expect(followed.status).toBe(200);
+  await expect(followed.json()).resolves.toMatchObject({ runId: run.runId, state: "running" });
+  await vi.waitFor(
+    () => {
+      expect(promptRequestCount(child)).toBe(promptsBefore + 1);
+    },
+    { timeout: 30_000, interval: 50 },
+  );
+  expect(pipeline.orchestrator.getSnapshot(run.runId)?.state).not.toBe("failed");
+  expect(pipeline.diagnostics.map((record) => record.code)).not.toContain(
+    "stage=dispatch:reason=interrupt-rejected",
+  );
+  await stopRun(pipeline.baseUrl, run.runId);
+}
+
+function promptRequestCount(
+  child: ScriptedOpenCodeHarness["children"][number] | undefined,
+): number {
+  return (child?.requestedTargets() ?? []).filter((target) => target.endsWith("/prompt")).length;
+}
+
 async function runOutOfScopeScenario(
   fixture: FunctionalWorkspaceFixture,
   pipeline: FunctionalPipeline,
@@ -1252,6 +1337,7 @@ function setupWorkspace(
         repository,
         db,
         lifecycle,
+        provisioning,
         managedRoot,
         workspace,
         target,
@@ -1443,3 +1529,756 @@ function git(cwd: string, args: readonly string[]): string {
 function readFile(path: string): string {
   return readFileSync(path, "utf8");
 }
+
+// #3899 AC2: the original pinned service, started by the production lifecycle owner from the
+// dev lane's verified artifact (no runtime seam), observed as the processes and sockets it really
+// has. Only the model is scripted; it starts one background and one foreground child through the
+// runtime's own shell tool, so every ending has a live process tree to reap.
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode service lifecycle through the production owner (#3899 AC2)",
+  () => {
+    it("starts the attested service behind an authenticated loopback transport, bound to the task's workspace", async () => {
+      const run = await startLifecycleRun("lifecycle-identity");
+      const phases = readinessPhases(run.log, run.runId);
+      expect(orderedSubsequence(phases, ATTESTED_SERVICE_PHASES), phases.join(",")).toBe(true);
+      const addresses = listeningAddresses(run.service.pid);
+      expect(addresses.length).toBeGreaterThan(0);
+      for (const address of addresses) {
+        expect(address).toMatch(/^127\.0\.0\.1:\d+$/u);
+        await expectRefusedWithoutTheRunPassword(`http://${address}`);
+      }
+      expect(
+        realpathSync(processDirectory(onlyProcess(FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND).pid)),
+      ).toBe(realpathSync(run.fixture.workspace));
+      await stopRun(run.pipeline.baseUrl, run.runId);
+      await expectServiceTreeReaped(run.service);
+    }, 180_000);
+
+    it("cancels a busy turn and reaps the service, its background job and what a command detached", async () => {
+      const run = await startLifecycleRun("lifecycle-cancel");
+      expect(childCommands(run.service.pid)).toEqual(
+        expect.arrayContaining([
+          FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
+          FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
+        ]),
+      );
+      // The detached process belongs to launchd already, in the run's workspace (#3901 AC3).
+      const detached = onlyProcess(FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND);
+      expect(detached.ppid).toBe(1);
+      expect(realpathSync(processDirectory(detached.pid))).toBe(
+        realpathSync(run.fixture.workspace),
+      );
+      // PR #4064 review: a process started in the run's workspace from outside the run, after the
+      // service, is the human's; it shares the detached process's parent, directory and start
+      // window, and the Stop never touches it.
+      const foreign = spawn("/bin/sleep", ["3899.9"], {
+        cwd: run.fixture.workspace,
+        detached: true,
+        stdio: "ignore",
+      });
+      foreign.unref();
+      try {
+        await stopRun(run.pipeline.baseUrl, run.runId);
+        // Physical execution is settled before Stop answers: nothing is left to wait for (#3901 AC3).
+        expectNothingLeft(run.service);
+        expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).toBe("cancelled");
+        await vi.waitFor(() => {
+          expect(sweepLines(run.log, run.runId)).toEqual([
+            expect.objectContaining({ outcome: "reaped" }),
+          ]);
+        });
+        expect(sweepLines(run.log, run.runId)[0]?.roundCount).toBeGreaterThanOrEqual(1);
+        expect(() => process.kill(foreign.pid ?? 0, 0)).not.toThrow();
+      } finally {
+        foreign.kill("SIGKILL");
+      }
+    }, 180_000);
+
+    it("ends the children of a crashed service and continues the task in a new service", async () => {
+      const transcripts: string[] = [];
+      const run = await startLifecycleRun("lifecycle-crash", (request) => {
+        transcripts.push(JSON.stringify(request.messages));
+      });
+      // A crash while the command runs, at once: no sample of the running service is needed, the
+      // run's sandbox member answers which processes are the run's (PR #4064 review).
+      process.kill(run.service.pid, "SIGKILL");
+      await expectServiceTreeReaped(run.service);
+      // The line follows the kernel's answer that no process of the run remains.
+      await vi.waitFor(() => {
+        expect(sweepLines(run.log, run.runId)).toEqual([
+          expect.objectContaining({ outcome: "reaped" }),
+        ]);
+      });
+      // The background job, the busy foreground child and the detached process remained.
+      expect(sweepLines(run.log, run.runId)[0]?.roundCount).toBeGreaterThanOrEqual(1);
+      await vi.waitFor(
+        () => {
+          expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).not.toBe("running");
+        },
+        { timeout: 30_000, interval: 100 },
+      );
+      // A runtime ended by a signal nobody in Keiko sent is a human reconciliation (ADR-0137 D5):
+      // the Workbench offers "Acknowledge recovery", and the next start takes the slot.
+      const crashed = run.pipeline.orchestrator.getSnapshot(run.runId);
+      expect(crashed?.state).toBe("recovery-required");
+      const acknowledged = await post(
+        run.pipeline.baseUrl,
+        `/api/coding-workbench/runtime/runs/${run.runId}/recovery-ack`,
+        { requestId: run.runId, acknowledged: true },
+      );
+      expect(acknowledged.status).toBe(200);
+      run.fixture.script.mode = "lifecycle-continue";
+      transcripts.length = 0;
+      const continued = await startRun(run.pipeline, {
+        ...startBody("lifecycle-restart"),
+        taskIntent: "Continue after the crash",
+        conversationId: crashed?.conversationId,
+      });
+      const restarted = onlyService();
+      expect(restarted.pid).not.toBe(run.service.pid);
+      await vi.waitFor(() => {
+        expect(transcripts.some((transcript) => transcript.includes(SECRET))).toBe(true);
+      });
+      await stopRun(run.pipeline.baseUrl, continued);
+      await expectServiceTreeReaped(restarted);
+    }, 240_000);
+
+    it("reaps a service that dies during startup, refuses that start, and starts the next one", async () => {
+      const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+      fixture.script.mode = "lifecycle-continue";
+      const pipeline = await bootDiscoveryPipeline(fixture);
+      const killed = killServiceOnSpawn();
+      const refused = await post(
+        pipeline.baseUrl,
+        "/api/coding-workbench/runtime/runs",
+        startBody("lifecycle-startup-failure"),
+      );
+      const service = await killed;
+      const body = (await refused.json()) as { readonly state?: string };
+      expect(refused.status === 200 && body.state === "running").toBe(false);
+      await expectServiceTreeReaped(service);
+      const runId = await startRun(pipeline, startBody("lifecycle-after-startup-failure"));
+      const next = onlyService();
+      await stopRun(pipeline.baseUrl, runId);
+      await expectServiceTreeReaped(next);
+    }, 240_000);
+
+    it("ends an active run and reaps its service tree when the server shuts down", async () => {
+      const run = await startLifecycleRun("lifecycle-shutdown");
+      await run.pipeline.deps.dispose?.();
+      expectNothingLeft(run.service);
+      expect(settledStates(run.log, run.runId)).toContain("cancelled");
+    }, 180_000);
+  },
+);
+
+interface ProcessRow {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly command: string;
+}
+
+interface LifecycleRun {
+  readonly fixture: FunctionalWorkspaceFixture;
+  readonly pipeline: FunctionalPipeline;
+  readonly runId: string;
+  readonly service: ProcessRow;
+  readonly log: BufferedServerLogSink;
+}
+
+// The readiness phases that attest the service before its first turn: the verified artifact, the
+// announced loopback endpoint, authenticated health (which refuses any version but the pinned one),
+// the refusal of an unauthenticated request, the producer's protocol digest and the session echoed
+// at the bound workspace Location (opencodeRuntimeAdapter.ts).
+const ATTESTED_SERVICE_PHASES = [
+  "target-attestation",
+  "endpoint",
+  "authenticated-health",
+  "unauthenticated-health",
+  "openapi-digest",
+  "session-echo",
+] as const;
+const SERVICE_COMMAND = "/opencode-compatible/payload/bin/opencode serve --hostname 127.0.0.1 ";
+
+async function startLifecycleRun(
+  tag: string,
+  observeGatewayRequest?: (request: GatewayRequest) => void,
+): Promise<LifecycleRun> {
+  const log = recordActivityLog();
+  const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+  fixture.script.mode = "lifecycle";
+  const pipeline = await bootDiscoveryPipeline(fixture, observeGatewayRequest);
+  const runId = await startRun(pipeline, startBody(tag));
+  await vi.waitFor(
+    () => {
+      expect(childCommands(onlyService().pid)).toContain(FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND);
+    },
+    { timeout: 60_000, interval: 200 },
+  );
+  return { fixture, pipeline, runId, service: onlyService(), log };
+}
+
+async function startRun(pipeline: FunctionalPipeline, body: unknown): Promise<string> {
+  const started = await post(pipeline.baseUrl, "/api/coding-workbench/runtime/runs", body);
+  const text = await started.clone().text();
+  expect(started.status, text).toBe(200);
+  const run = (await started.json()) as { readonly runId: string; readonly state: string };
+  expect(run.state, text).toBe("running");
+  return run.runId;
+}
+
+function recordActivityLog(): BufferedServerLogSink {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  disposers.push(() => {
+    resetServerLogger();
+  });
+  return sink;
+}
+
+function readinessPhases(log: BufferedServerLogSink, runId: string): readonly string[] {
+  return log.events.flatMap((event) => {
+    const phase = event.extra?.phase;
+    return event.op === "coding-runtime.readiness.phase" &&
+      event.correlationId === runId &&
+      typeof phase === "string"
+      ? [phase]
+      : [];
+  });
+}
+
+function sweepLines(
+  log: BufferedServerLogSink,
+  runId: string,
+): readonly Readonly<Record<string, unknown>>[] {
+  return log.events.flatMap((event) =>
+    event.op === "coding-runtime.descendants.swept" && event.correlationId === runId
+      ? [
+          {
+            outcome: event.extra?.outcome,
+            roundCount: event.extra?.roundCount,
+            checkCount: event.extra?.checkCount,
+          },
+        ]
+      : [],
+  );
+}
+
+function settledStates(log: BufferedServerLogSink, runId: string): readonly unknown[] {
+  return log.events.flatMap((event) =>
+    event.op === "coding-runtime.run.settled" && event.extra?.runId === runId
+      ? [event.extra.state]
+      : [],
+  );
+}
+
+function orderedSubsequence(values: readonly string[], expected: readonly string[]): boolean {
+  let next = 0;
+  for (const value of values) if (value === expected[next]) next += 1;
+  return next === expected.length;
+}
+
+function processTable(): readonly ProcessRow[] {
+  return execFileSync("/bin/ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line);
+      return match === null
+        ? []
+        : [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" }];
+    });
+}
+
+/** The original services this server process owns right now. */
+function services(): readonly ProcessRow[] {
+  return processTable().filter(
+    (row) => row.ppid === process.pid && row.command.includes(SERVICE_COMMAND),
+  );
+}
+
+function onlyService(): ProcessRow {
+  const owned = services();
+  expect(owned).toHaveLength(1);
+  const [service] = owned;
+  if (service === undefined) throw new Error("expected-one-original-service");
+  return service;
+}
+
+function onlyProcess(command: string): ProcessRow {
+  const matching = processTable().filter((row) => row.command === command);
+  expect(matching).toHaveLength(1);
+  const [row] = matching;
+  if (row === undefined) throw new Error("expected-one-process");
+  return row;
+}
+
+function childCommands(pid: number): readonly string[] {
+  return processTable()
+    .filter((row) => row.ppid === pid)
+    .map((row) => row.command);
+}
+
+function lsofNames(args: readonly string[]): readonly string[] {
+  return execFileSync("/usr/sbin/lsof", [...args, "-Fn"], { encoding: "utf8" })
+    .split("\n")
+    .filter((line) => line.startsWith("n"))
+    .map((line) => line.slice(1));
+}
+
+function listeningAddresses(pid: number): readonly string[] {
+  return lsofNames(["-a", "-nP", "-p", String(pid), "-iTCP", "-sTCP:LISTEN"]);
+}
+
+function processDirectory(pid: number): string {
+  const [directory] = lsofNames(["-a", "-p", String(pid), "-d", "cwd"]);
+  if (directory === undefined) throw new Error("expected-process-directory");
+  return directory;
+}
+
+// Only Keiko holds the run's password: the service answers nothing without it, with a wrong one,
+// or for a state-changing request.
+async function expectRefusedWithoutTheRunPassword(origin: string): Promise<void> {
+  const wrong = `Basic ${Buffer.from("opencode:not-the-run-password").toString("base64")}`;
+  const statuses = [
+    (await fetch(`${origin}/api/info`)).status,
+    (await fetch(`${origin}/api/info`, { headers: { Authorization: wrong } })).status,
+    (await fetch(`${origin}/api/session`, { method: "POST", body: "{}" })).status,
+  ];
+  expect(statuses).toEqual([401, 401, 401]);
+}
+
+const LIFECYCLE_COMMANDS: ReadonlySet<string> = new Set([
+  FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
+  FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND,
+  FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
+]);
+
+/** The service, its children and every lifecycle command are gone right now. */
+function expectNothingLeft(service: ProcessRow): void {
+  const live = processTable();
+  expect(live.filter((row) => row.pid === service.pid || row.ppid === service.pid)).toEqual([]);
+  expect(live.filter((row) => LIFECYCLE_COMMANDS.has(row.command))).toEqual([]);
+}
+
+async function expectServiceTreeReaped(service: ProcessRow): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expectNothingLeft(service);
+    },
+    { timeout: 20_000, interval: 200 },
+  );
+}
+
+/** Kills the first original service this process starts, the moment it appears. */
+async function killServiceOnSpawn(): Promise<ProcessRow> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const [service] = services();
+    if (service !== undefined) {
+      process.kill(service.pid, "SIGKILL");
+      return service;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("original-service-never-started");
+}
+
+// #3901 AC4: the execution boundary as the run's own shell sees it, on the production path with
+// the original 2.1.4 in Full access. One probe reports what a command of the run can reach.
+const PROBE_SCRIPT = `#!/bin/sh
+foreign="$1"; state="$2"
+if ps -p "$foreign" -o pid= >/dev/null 2>&1; then echo probe.introspect=visible; else echo probe.introspect=hidden; fi
+if kill -0 "$foreign" 2>/dev/null; then echo probe.signal=allowed; else echo probe.signal=denied; fi
+if cat .env >/dev/null 2>&1; then echo probe.dotenv=readable; else echo probe.dotenv=denied; fi
+if cat "$state" >/dev/null 2>&1; then echo probe.state=readable; else echo probe.state=denied; fi
+echo "probe.secrets=$(env | grep -c -E '^(OPENCODE_SERVER_PASSWORD|KEIKO_MODEL_GATEWAY_CAPABILITY|KEIKO_TOOL_FACADE_CAPABILITY|OPENCODE_CONFIG_CONTENT)=')"
+echo "probe.openssl_conf=\${OPENSSL_CONF:-unset}"
+if [ -n "\${OPENSSL_CONF:-}" ] && cat "$OPENSSL_CONF" >/dev/null 2>&1; then echo probe.openssl_read=ok; else echo probe.openssl_read=denied; fi
+echo "probe.node_options=\${NODE_OPTIONS:-unset}"
+echo "probe.node_options_sha=$(node -p 'require("node:crypto").createHash("sha256").update(process.env.NODE_OPTIONS ?? "").digest("hex")' 2>/dev/null || echo failed)"
+if node -e 'require("node:crypto").createHash("sha256")' >/dev/null 2>&1; then echo probe.node=ok; else echo probe.node=failed; fi
+echo probe.done=1
+`;
+
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode execution boundary on macOS (#3901 AC4)",
+  () => {
+    it("hides foreign processes, sensitive files and run secrets, and keeps the operator's OpenSSL configuration", async () => {
+      const probe = await probeBoundary((opensslConf) => ({
+        OPENSSL_CONF: opensslConf,
+        NODE_OPTIONS: "--openssl-shared-config",
+      }));
+      expect(probe.facts).toEqual({
+        introspect: "hidden",
+        signal: "denied",
+        dotenv: "denied",
+        state: "denied",
+        secrets: "0",
+        openssl_conf: probe.opensslConf,
+        openssl_read: "ok",
+        node_options: "--openssl-shared-config",
+        node_options_sha: sha256("--openssl-shared-config"),
+        node: "ok",
+      });
+      expect(probe.transcript).not.toContain("DOTENV_CANARY_3901");
+    }, 180_000);
+
+    // PR #4064 review: Node reads NODE_OPTIONS with its own quoting, so an operator's configuration
+    // under a directory with spaces is one option; a whitespace split dropped it from the run. Node
+    // refuses to start on a configuration file it cannot read, so `node=ok` proves the read.
+    it("keeps a quoted OpenSSL configuration path with spaces, as Node reads it", async () => {
+      let nodeOptions = "";
+      const probe = await probeBoundary((opensslConf) => {
+        nodeOptions = `--openssl-config="${opensslConf}" --openssl-shared-config`;
+        return { NODE_OPTIONS: nodeOptions };
+      }, "operator openssl");
+      expect(probe.opensslConf).toContain(" ");
+      expect(probe.facts).toMatchObject({
+        node_options_sha: sha256(nodeOptions),
+        openssl_conf: "unset",
+        node: "ok",
+      });
+    }, 180_000);
+
+    // PR #4064 review: a negated OpenSSL switch is one of Node's own OpenSSL-only forms.
+    it("keeps a quoted configuration together with a negated OpenSSL switch", async () => {
+      let nodeOptions = "";
+      const probe = await probeBoundary((opensslConf) => {
+        nodeOptions = `--openssl-config="${opensslConf}" --openssl-shared-config --no-openssl-legacy-provider`;
+        return { NODE_OPTIONS: nodeOptions };
+      }, "operator openssl");
+      expect(probe.facts).toMatchObject({ node_options_sha: sha256(nodeOptions), node: "ok" });
+    }, 180_000);
+
+    it("keeps NODE_OPTIONS that carry anything besides OpenSSL and FIPS switches out of the run", async () => {
+      const probe = await probeBoundary(() => ({
+        NODE_OPTIONS: "--openssl-shared-config --max-old-space-size=64",
+      }));
+      expect(probe.facts).toMatchObject({
+        node_options: "unset",
+        openssl_conf: "unset",
+        node: "ok",
+      });
+    }, 180_000);
+  },
+);
+
+interface BoundaryProbe {
+  readonly facts: Readonly<Record<string, string>>;
+  readonly transcript: string;
+  readonly opensslConf: string;
+}
+
+async function probeBoundary(
+  operatorEnv: (opensslConf: string) => Readonly<Record<string, string>>,
+  opensslDirectory = "openssl",
+): Promise<BoundaryProbe> {
+  const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+  writeFileSync(join(fixture.workspace, ".env"), "API_KEY=DOTENV_CANARY_3901\n");
+  writeFileSync(join(fixture.workspace, "probe.sh"), PROBE_SCRIPT, { mode: 0o755 });
+  const openssl = join(fixture.root, opensslDirectory);
+  mkdirSync(openssl, { recursive: true });
+  const opensslConf = join(openssl, "openssl.cnf");
+  writeFileSync(opensslConf, "openssl_conf = openssl_init\n[openssl_init]\n");
+  const state = join(fixture.root, "bff-state", "ui-db", "keiko.config.json");
+  fixture.script.mode = "probe";
+  fixture.script.probeCommand = `sh ./probe.sh ${String(process.pid)} '${state}'`;
+  const transcripts: string[] = [];
+  const pipeline = await bootDiscoveryPipeline(
+    fixture,
+    (request) => {
+      transcripts.push(JSON.stringify(request.messages));
+    },
+    operatorEnv(opensslConf),
+  );
+  const runId = await startRun(pipeline, startBody("boundary-probe"));
+  await vi.waitFor(
+    () => {
+      expect(transcripts.join("\n")).toContain("probe.done=1");
+    },
+    { timeout: 60_000, interval: 200 },
+  );
+  await stopRun(pipeline.baseUrl, runId);
+  return { facts: probeFacts(transcripts), transcript: transcripts.join("\n"), opensslConf };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function probeFacts(transcripts: readonly string[]): Readonly<Record<string, string>> {
+  const facts: Record<string, string> = {};
+  for (const match of transcripts.join("\n").matchAll(/probe\.([a-z_]+)=([^\s"\\]+)/gu)) {
+    const [, key, value] = match;
+    if (key !== undefined && value !== undefined && key !== "done") facts[key] = value;
+  }
+  return facts;
+}
+
+// #3902 AC2: Git as the original runtime uses it in the managed task worktree. It reads with its
+// own Git; the worktree's Git directory is read-only to it, so the index changes only through
+// Keiko's proposals and their redemption, unstaging included.
+const GIT_READ_PROBE_SCRIPT = `#!/bin/sh
+run() { name="$1"; shift; if "$@" >/dev/null 2>&1; then echo "git.$name=ok"; else echo "git.$name=refused"; fi; }
+printf 'changed\\n' >> src/example.ts
+run status git status --porcelain
+git diff --quiet -- src/example.ts >/dev/null 2>&1
+case $? in 0) echo git.diff=unchanged ;; 1) echo git.diff=changed ;; *) echo git.diff=refused ;; esac
+run log git log -1 --format=%H
+run show git show --stat HEAD
+run blame git blame -- src/example.ts
+run add git add -- src/example.ts
+run restore_staged git restore --staged -- src/example.ts
+echo git.done=1
+`;
+
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode Git in the managed worktree (#3902 AC2)",
+  () => {
+    async function journey(
+      mode: "probe" | "index",
+      done: string,
+      probeCommand?: string,
+    ): Promise<{ readonly transcript: string; readonly workspace: string }> {
+      const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+      writeFileSync(join(fixture.workspace, "gitprobe.sh"), GIT_READ_PROBE_SCRIPT, { mode: 0o755 });
+      fixture.script.mode = mode;
+      if (probeCommand !== undefined) fixture.script.probeCommand = probeCommand;
+      const transcripts: string[] = [];
+      const pipeline = await bootDiscoveryPipeline(fixture, (request) => {
+        transcripts.push(JSON.stringify(request.messages));
+      });
+      const runId = await startRun(pipeline, startBody(`git-${mode}`));
+      await vi.waitFor(
+        () => {
+          expect(transcripts.join("\n")).toContain(done);
+        },
+        { timeout: 120_000, interval: 200 },
+      );
+      await stopRun(pipeline.baseUrl, runId);
+      return { transcript: transcripts.join("\n"), workspace: fixture.workspace };
+    }
+
+    it("reads status, diff, log, show and blame with its own Git and cannot write the index", async () => {
+      const { transcript } = await journey("probe", "git.done=1", "sh ./gitprobe.sh 2>&1");
+      const facts = Object.fromEntries(
+        [...transcript.matchAll(/git\.([a-z_]+)=([a-z0-9]+)/gu)].map(
+          (match) => [match[1] ?? "", match[2] ?? ""] as const,
+        ),
+      );
+      expect(facts).toEqual({
+        status: "ok",
+        diff: "changed",
+        log: "ok",
+        show: "ok",
+        blame: "ok",
+        add: "refused",
+        restore_staged: "refused",
+        done: "1",
+      });
+    }, 240_000);
+
+    it("stages a change and gives it back to the worktree only through Keiko", async () => {
+      const { transcript, workspace } = await journey("index", FUNCTIONAL_INDEX_AFTER_MARKER);
+      // The agent's own Git saw the change staged after the stage redemption, and not after the
+      // unstage redemption; both redemptions succeeded.
+      expect(transcript).toContain(`${FUNCTIONAL_INDEX_STAGED_MARKER}${FUNCTIONAL_INDEX_PATH},`);
+      expect(transcript).toMatch(new RegExp(`${FUNCTIONAL_INDEX_AFTER_MARKER}(?:\\\\)+n`, "u"));
+      expect(transcript).toMatch(/(?<![a-z])stage-\d+\\*",\\*"status\\*":\\*"succeeded/u);
+      expect(transcript).toMatch(/unstage-\d+\\*",\\*"status\\*":\\*"succeeded/u);
+      // The worktree keeps the bytes; only the index gave them back.
+      expect(git(workspace, ["diff", "--cached", "--name-only"])).toBe("");
+      expect(git(workspace, ["diff", "--name-only"])).toBe(FUNCTIONAL_INDEX_PATH);
+      expect(readFile(join(workspace, FUNCTIONAL_INDEX_PATH))).toContain("staged by the agent");
+    }, 240_000);
+  },
+);
+
+// #3902 AC2 (PR #4064 review 4373825976): synchronization as the original runtime reaches it in the
+// managed task worktree. Its shell's own `git fetch` stays refused in every mode; `keiko_git_sync`
+// fetches and fast-forwards through the Git sync owner, below Full access only after the operator
+// approves the exact operation. A fixture-owned bare remote is the task branch's upstream, and a
+// second clone moves it ahead; no external network is reached.
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode synchronization through Keiko (#3902 AC2)",
+  () => {
+    function publishUpstream(fixture: FunctionalWorkspaceFixture): string {
+      const remote = join(fixture.root, "remote.git");
+      git(fixture.root, ["init", "-q", "--bare", "-b", "main", remote]);
+      git(fixture.repository, ["remote", "add", "origin", remote]);
+      const branch = git(fixture.workspace, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      git(fixture.workspace, ["push", "-q", "-u", "origin", branch]);
+      const other = join(fixture.root, "other");
+      git(fixture.root, ["clone", "-q", "-b", branch, remote, other]);
+      git(other, ["config", "user.email", "remote@keiko.example"]);
+      git(other, ["config", "user.name", "Keiko Remote"]);
+      git(other, ["config", "commit.gpgsign", "false"]);
+      writeFileSync(join(other, "REMOTE.md"), "from the remote\n");
+      git(other, ["add", "REMOTE.md"]);
+      git(other, ["commit", "-q", "-m", "remote change"]);
+      git(other, ["push", "-q", "origin", branch]);
+      return git(other, ["rev-parse", "HEAD"]);
+    }
+
+    it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+      "fetches and fast-forwards through Keiko in %s, while the shell's own fetch stays refused",
+      async (mode) => {
+        const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+        const remoteHead = publishUpstream(fixture);
+        fixture.script.mode = "sync";
+        const transcripts: string[] = [];
+        const pipeline = await bootDiscoveryPipeline(fixture, (request) => {
+          transcripts.push(JSON.stringify(request.messages));
+        });
+        const runId = await startRun(pipeline, {
+          requestId: `sync-${mode}`,
+          taskIntent: SECRET,
+          requestedMode: mode,
+        });
+        // The operator approves whatever the run asks; the asks are recorded by what they are.
+        const asked: string[] = [];
+        await vi.waitFor(
+          async () => {
+            const snapshot = pipeline.orchestrator.getSnapshot(runId);
+            const pending = snapshot?.pendingPermission;
+            if (snapshot?.state === "awaiting-approval" && pending !== undefined) {
+              asked.push(pending.actionKind ?? "native");
+              await pipeline.orchestrator.decideApproval(runId, {
+                requestId: pending.requestId,
+                decision: "approved",
+                expectedRevision: snapshot.revision,
+              });
+            }
+            expect(transcripts.join("\n")).toContain(`${FUNCTIONAL_SYNC_HEAD_MARKER}remote change`);
+          },
+          { timeout: 180_000, interval: 200 },
+        );
+        await stopRun(pipeline.baseUrl, runId);
+        const transcript = transcripts.join("\n");
+        // The shell's fetch was refused with the pointer to the governed tool, and reached nothing.
+        expect(transcript).toContain("Fetch or fast-forward pull with keiko_git_sync");
+        expect(transcript).toMatch(/kind\\*":\\*"fetch\\*",\\*"status\\*":\\*"succeeded/u);
+        expect(transcript).toMatch(/kind\\*":\\*"pull\\*",\\*"status\\*":\\*"succeeded/u);
+        expect(git(fixture.workspace, ["rev-parse", "HEAD"])).toBe(remoteHead);
+        expect(asked.filter((kind) => kind === "git-fetch" || kind === "git-pull")).toEqual(
+          mode === "autonomous-delivery" ? [] : ["git-fetch", "git-pull"],
+        );
+      },
+      300_000,
+    );
+  },
+);
+
+// #3903 AC3 / #3907 AC10 (PR #4064 review 4372361272): the original `websearch` through the search
+// integration the operator admitted. A fixture-owned loopback service answers as an Exa-style MCP
+// endpoint; no external network is reached. Connected, Full access searches once through Keiko's
+// provider and the model reads the result; below Full access, and without an admitted integration,
+// the honest refusal stands and nothing is searched.
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode web search through an admitted integration (#3903 AC3)",
+  () => {
+    const FIXTURE_TITLE = "Keiko fixture search result";
+    const FIXTURE_URL = "https://example.test/keiko-governed-search";
+    // A synthetic operator key with characters each encoding spells differently.
+    const SEARCH_KEY = "synthetic-search-key/7+fixture=";
+
+    async function searchService(): Promise<{
+      readonly endpoint: string;
+      readonly queries: string[];
+      readonly keys: (string | null)[];
+    }> {
+      const queries: string[] = [];
+      const keys: (string | null)[] = [];
+      // Like a careless provider, the fixture echoes the key it received in every field it returns.
+      const server = createServer((request, response) => {
+        const key = new URL(request.url ?? "/", "http://127.0.0.1").searchParams.get("exaApiKey");
+        keys.push(key);
+        const echo = key ?? "";
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          const call = JSON.parse(body) as {
+            readonly params?: { readonly arguments?: { readonly query?: string } };
+          };
+          queries.push(call.params?.arguments?.query ?? "");
+          const text = `Title: ${FIXTURE_TITLE} ${echo}\nURL: ${FIXTURE_URL}?key=${encodeURIComponent(echo)}\nPublished: 2026-10-01T00:00:00.000Z\nText: The fixture page about governed search, read with ${echo}.`;
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end(
+            `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text }] } })}\n\n`,
+          );
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      disposers.push(
+        () =>
+          new Promise<void>((resolve) => {
+            server.close(() => {
+              resolve();
+            });
+          }),
+      );
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("fixture-address");
+      return { endpoint: `http://127.0.0.1:${String(address.port)}/mcp`, queries, keys };
+    }
+
+    async function journey(
+      mode: "supervised-coding" | "autonomous-delivery",
+      endpoint: string | undefined,
+    ): Promise<string> {
+      const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+      fixture.script.mode = "websearch";
+      const transcripts: string[] = [];
+      const pipeline = await bootDiscoveryPipeline(
+        fixture,
+        (request) => {
+          transcripts.push(JSON.stringify(request.messages));
+        },
+        endpoint === undefined
+          ? undefined
+          : {
+              KEIKO_CODING_WEBSEARCH_ENDPOINT: endpoint,
+              KEIKO_CODING_WEBSEARCH_API_KEY: SEARCH_KEY,
+            },
+      );
+      const runId = await startRun(pipeline, {
+        requestId: `websearch-${mode}`,
+        taskIntent: SECRET,
+        requestedMode: mode,
+      });
+      // The search's answer (or its refusal) is the second model request's last message.
+      await vi.waitFor(
+        () => {
+          expect(transcripts.join("\n")).toContain('"role":"tool"');
+        },
+        { timeout: 120_000, interval: 200 },
+      );
+      await stopRun(pipeline.baseUrl, runId);
+      return transcripts.join("\n");
+    }
+
+    it("searches once through Keiko's provider in Full access, and the model reads the result", async () => {
+      const service = await searchService();
+      const transcript = await journey("autonomous-delivery", service.endpoint);
+      expect(service.queries).toEqual([FUNCTIONAL_WEBSEARCH_QUERY]);
+      expect(service.keys).toEqual([SEARCH_KEY]);
+      expect(transcript).toContain(FIXTURE_TITLE);
+      expect(transcript).toContain(FIXTURE_URL);
+      // PR #4064 review: the key the provider echoed never reaches the model, in any encoding.
+      for (const form of [SEARCH_KEY, encodeURIComponent(SEARCH_KEY), "synthetic-search-key"])
+        expect(transcript).not.toContain(form);
+    }, 240_000);
+
+    it("keeps the honest refusals: below Full access, and with no admitted integration", async () => {
+      const service = await searchService();
+      const supervised = await journey("supervised-coding", service.endpoint);
+      expect(supervised).toContain("internet access is only available in Full access");
+      const unconfigured = await journey("autonomous-delivery", undefined);
+      expect(unconfigured).toContain("web search needs a search integration");
+      expect(service.queries).toEqual([]);
+    }, 360_000);
+  },
+);

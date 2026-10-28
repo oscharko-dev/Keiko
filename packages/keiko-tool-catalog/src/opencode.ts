@@ -1,17 +1,13 @@
 import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Canonical managed OpenCode descriptors, their profile and pinned native extension schemas.
-// The default profile exposes seventeen governed tools plus `question`. The explicit Code Mode
+// The default profile exposes eighteen governed tools plus `question`. The explicit Code Mode
 // profile retains those same governed capabilities and describes original native question/execute
 // transport. It is an inactive advertisement prerequisite, not a runtime or network activation.
 // Native extensions are never managed descriptors and retain their exact pinned wire schemas.
 // The server's incoming contract matcher and the provider bridge consume this one declaration.
 // Managed source schemas still belong to opencodeToolSchemas.ts; the catalog dialect losslessly
 // projects their canonical descriptors and does not control the native engine or its tool loop.
-import {
-  OPENCODE_TOOL_PROFILES,
-  type OpenCodeToolProfile,
-} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
@@ -39,10 +35,18 @@ const OPENCODE_DISCOVER_MAX_RESULTS = 100;
 const OPENCODE_READ_MAX_START_LINE = 1_000_000;
 const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 
+/**
+ * Server-selected fixed tool contract only; this value is never a model or module selector.
+ * `native` is the standalone-equivalent profile (#3897): the pinned OpenCode service runs its own
+ * tools, agents and commands, and Keiko binds the autonomy mode through the supported permission
+ * and tool hooks instead of substituting mapped tools.
+ */
+export const OPENCODE_TOOL_PROFILES = Object.freeze(["native", "direct", "code-mode"] as const);
+export type OpenCodeToolProfile = (typeof OPENCODE_TOOL_PROFILES)[number];
 const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
-const OPENCODE_RUNTIME = { id: "opencode", version: "2.0.10" } as const;
+const OPENCODE_RUNTIME = { id: "opencode", version: "2.1.4" } as const;
 
 export interface OpenCodeNativeExtensionDefinition {
   readonly alias: "question" | "execute";
@@ -589,9 +593,10 @@ function gitStageSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.stage",
     alias: "keiko_git_stage",
     description:
-      "Create a non-mutating proposal to stage one or more workspace-relative paths. This call " +
-      "does not mutate the Git index. Execute staging before rerunning verification for commit " +
-      "proof." +
+      "Create a non-mutating proposal to stage one or more workspace-relative paths, or with " +
+      "unstage: true to give their staged changes back to the worktree, which keeps its bytes " +
+      "(request only paths keiko_git_status lists as staged). This call does not mutate the Git " +
+      "index. Execute staging before rerunning verification for commit proof." +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       {
@@ -601,8 +606,10 @@ function gitStageSpec(): OpenCodeToolSpec {
           maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
           items: { type: "string", minLength: 1, maxLength: 512 },
         },
+        // #3902 AC2: unstaging is staging's inverse under the same proposal and approval.
+        unstage: { type: "boolean" },
       },
-      ["paths"],
+      ["paths", "unstage"],
     ),
     effects: ["workspace-write"],
     idempotency: "server-key-required",
@@ -670,14 +677,15 @@ function gitExecuteSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.execute",
     alias: "keiko_git_execute",
     description:
-      "Execute a stage, commit, push or pull-request proposal using its matching kind and returned " +
+      "Execute a stage, unstage, commit, push or pull-request proposal using its matching kind and " +
+      "returned " +
       'proposalId when its status is ready or approvalDisposition: "ready" is present. The fresh ' +
       "disposition means approval has already been granted even if an immutable receipt still " +
       "says approval-required. Stage execution mutates the Git index and must complete before commit-grade " +
       "verification; proposal tools alone perform no Git mutation.",
     inputSchema: managedObjectSchema(
       {
-        kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+        kind: { type: "string", enum: ["stage", "unstage", "commit", "push", "pull-request"] },
         proposalId: { type: "string", minLength: 1, maxLength: 64 },
       },
       ["kind", "proposalId"],
@@ -685,6 +693,26 @@ function gitExecuteSpec(): OpenCodeToolSpec {
     effects: ["workspace-write", "delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-execute-port",
+  };
+}
+
+// #3902 AC2: one fetch, or one fast-forward pull, through the Git sync owner. A pull moves the
+// worktree, a fetch only remote-tracking refs; both reach the remote.
+function gitSyncSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.sync",
+    alias: "keiko_git_sync",
+    description:
+      "Fetch the upstream remote's branches (pull: false), or fast-forward the current branch to " +
+      "its upstream (pull: true). It never merges, rebases or overwrites local changes; a branch " +
+      "that has diverged, has no upstream or has uncommitted changes is reported, not changed. " +
+      "This call waits for any required operator decision.",
+    inputSchema: managedObjectSchema({ pull: { type: "boolean" } }, ["pull"]),
+    effects: ["workspace-write", "delivery-substrate", "network-egress"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-sync-port",
+    // It waits in place for the operator's approval of the call below Full access.
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -734,6 +762,7 @@ export function opencodeRegistrationSet(
       gitPushSpec(),
       gitPullRequestSpec(),
       gitExecuteSpec(),
+      gitSyncSpec(),
       ciStatusSpec(),
     ].map((spec) => entryFor(spec)),
   };

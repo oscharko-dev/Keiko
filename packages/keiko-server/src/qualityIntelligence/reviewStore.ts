@@ -1,3 +1,4 @@
+import { currentProcessId, isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 // Quality Intelligence review-state companion store (Epic #270, Issue #282).
 //
 // The run manifest is immutable evidence; the candidate artifact is the generated body. The MUTABLE
@@ -598,18 +599,13 @@ const readReviewLockPid = (lockPath: string): number | undefined => {
 const reviewLockOwnerIsDead = (lockPath: string): boolean => {
   const pid = readReviewLockPid(lockPath);
   if (pid === undefined) return true;
-  if (pid === process.pid) return true;
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "EPERM";
-  }
+  if (pid === currentProcessId()) return true;
+  return !isProcessAlive(pid);
 };
 
 const stampReviewLockOwner = (fd: number): void => {
   try {
-    writeSync(fd, `${String(process.pid)}\n`);
+    writeSync(fd, `${String(currentProcessId())}\n`);
     fsyncSync(fd);
   } catch {
     // Best-effort ownership stamp; the lock still works without it.

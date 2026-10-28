@@ -15,7 +15,7 @@ import { buildBugContext } from "./context.js";
 import { computeBugFingerprint } from "./emit.js";
 import { parseFailureEvidence } from "./failure-parse.js";
 import { acquireMemoryContext, emitMemoryWriteCandidate } from "./memory.js";
-import { runBugModelLoop } from "./model-loop.js";
+import { reviewedBugPatchLoop, runBugModelLoop } from "./model-loop.js";
 import {
   cancelledReport,
   emitCompleted,
@@ -83,7 +83,12 @@ async function runPipeline(state: BugRunState): Promise<BugInvestigationReport> 
     budgetBytes: pack.budgetBytes,
     droppedForBudget: pack.droppedForBudget,
   });
-  const loop = await runBugModelLoop(state, workspace, report, evidence, pack);
+  // An apply writes the fix the human reviewed; only a dry run asks the model (#4025 AC4).
+  const reviewed = state.input.apply === true ? state.input.reviewedPatch : undefined;
+  const loop =
+    reviewed === undefined
+      ? await runBugModelLoop(state, workspace, report, evidence, pack)
+      : reviewedBugPatchLoop(state, workspace, report, evidence, reviewed);
   return finishPipeline(state, workspace, loop, evidence);
 }
 

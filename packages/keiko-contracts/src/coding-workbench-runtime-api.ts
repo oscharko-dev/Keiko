@@ -1,3 +1,4 @@
+import { validatePhysicalArrayEntries } from "./contract-validation-primitives.js";
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
@@ -27,6 +28,7 @@ import {
   validateSafeId,
   validateSseEventFields,
   validateStrictUtcInstant,
+  validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
 import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
@@ -62,6 +64,538 @@ export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscr
 
 export const CODING_WORKBENCH_RUNTIME_PREFERENCES: readonly CodingWorkbenchRuntimePreference[] =
   Object.freeze(["managed-gateway", "codex-subscription"] as const);
+
+/**
+ * The built-in primary agents an operator may select for a Coding Workbench turn, as in standalone
+ * OpenCode (Tab switches between them). `build` is the default agent every run starts under; `plan`
+ * is OpenCode's own read-only agent: its shipped policy denies edits except its own plan file, so
+ * it narrows what the turn may do and never widens authority.
+ */
+export type CodingWorkbenchBuiltInAgent = "build" | "plan";
+
+export const CODING_WORKBENCH_AGENTS: readonly CodingWorkbenchBuiltInAgent[] = Object.freeze([
+  "build",
+  "plan",
+] as const);
+
+/**
+ * The primary agent a turn runs under: a built-in, or on the native profile a custom primary agent
+ * the run's runtime lists right now (#3903 AC1), a repository or configured agent whose mode is
+ * `primary` or `all`. A custom one is named by its bounded agent name and the server confirms it
+ * against the run's live listing before it switches; the run's mode still decides every action.
+ * The intersection keeps the built-in names as literals beside every other name.
+ */
+export type CodingWorkbenchAgent = CodingWorkbenchBuiltInAgent | (string & Record<never, never>);
+
+/** The agent every run starts under and the one an absent `agent` field means. */
+export const DEFAULT_CODING_WORKBENCH_AGENT: CodingWorkbenchBuiltInAgent = "build";
+
+export function isCodingWorkbenchBuiltInAgent(
+  value: unknown,
+): value is CodingWorkbenchBuiltInAgent {
+  return isOneOf(value, CODING_WORKBENCH_AGENTS);
+}
+
+// Names a custom primary agent can never carry: the runtime's built-in subagents and hidden agents,
+// and any spelling of a built-in primary agent other than its own. Selecting one of them as the
+// primary agent is never a choice the runtime offers (#3897).
+const CODING_WORKBENCH_RESERVED_AGENT_NAMES: ReadonlySet<string> = new Set([
+  "build",
+  "plan",
+  "general",
+  "explore",
+  "compaction",
+  "title",
+  "summary",
+]);
+
+/**
+ * A built-in agent, or a well-formed custom primary agent name that no built-in or reserved agent
+ * carries in any spelling. Whether such an agent exists is the run's own live listing.
+ */
+export function isCodingWorkbenchAgent(value: unknown): value is CodingWorkbenchAgent {
+  if (isCodingWorkbenchBuiltInAgent(value)) return true;
+  return (
+    isCodingWorkbenchMentionName(value) &&
+    !CODING_WORKBENCH_RESERVED_AGENT_NAMES.has(value.toLowerCase())
+  );
+}
+
+/**
+ * How a message sent WHILE a turn runs reaches the run's session, as in standalone OpenCode
+ * (`POST /api/session/{sessionID}/prompt`, `delivery`). `steer` injects it into the running turn at
+ * its next step boundary; `queue` delivers it after the turn's current work. A closed vocabulary:
+ * the browser cannot name an arbitrary OpenCode delivery mode. Absent means an ordinary follow-up.
+ */
+export type CodingWorkbenchPromptDelivery = "steer" | "queue";
+
+export const CODING_WORKBENCH_PROMPT_DELIVERIES: readonly CodingWorkbenchPromptDelivery[] =
+  Object.freeze(["steer", "queue"] as const);
+
+export function isCodingWorkbenchPromptDelivery(
+  value: unknown,
+): value is CodingWorkbenchPromptDelivery {
+  return isOneOf(value, CODING_WORKBENCH_PROMPT_DELIVERIES);
+}
+
+/**
+ * A workspace file the human attached to a prompt with `@`. The browser names the file by its path
+ * RELATIVE to the run's workspace root and never sends an absolute path or a URI: the server
+ * resolves it against the run's own workspace, refuses anything that is not a plain, contained,
+ * non-sensitive text file, and only then maps it to the runtime's attachment (ADR-0137 D10).
+ */
+export interface CodingWorkbenchPromptReference {
+  readonly path: string;
+}
+
+/** At most this many files ride on one prompt. */
+export const CODING_WORKBENCH_PROMPT_REFERENCES_MAX = 16;
+export const CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS = 1024;
+const CODING_WORKBENCH_PROMPT_REFERENCE_SEGMENT_MAX_CHARS = 255;
+const DRIVE_LETTER_PREFIX = /^[A-Za-z]:/u;
+
+function referenceSegmentAdmitted(segment: string): boolean {
+  return (
+    segment.length > 0 &&
+    segment.length <= CODING_WORKBENCH_PROMPT_REFERENCE_SEGMENT_MAX_CHARS &&
+    segment !== "." &&
+    segment !== ".."
+  );
+}
+
+/**
+ * Transport shape of one reference path, decided without touching a filesystem: a bounded POSIX
+ * path relative to the workspace root, with no empty, `.` or `..` segment, no backslash, no control
+ * character and no absolute or drive-letter spelling. Whether the path names a contained, readable
+ * text file is the server's decision against the run's workspace.
+ */
+export function isCodingWorkbenchPromptReferencePath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS &&
+    !value.startsWith("/") &&
+    !value.includes("\\") &&
+    !DRIVE_LETTER_PREFIX.test(value) &&
+    !containsControlCharacter(value) &&
+    value.split("/").every(referenceSegmentAdmitted)
+  );
+}
+
+export function parseCodingWorkbenchPromptReferences(
+  value: unknown,
+): CodingWorkbenchValidationResult<readonly CodingWorkbenchPromptReference[]> {
+  if (!Array.isArray(value)) return invalid("references must be an array");
+  const errors: string[] = [];
+  const admitted = checkCodingWorkbenchPromptReferences(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchPromptReferences(
+  value: readonly unknown[],
+  errors: string[],
+): value is readonly CodingWorkbenchPromptReference[] {
+  if (value.length === 0 || value.length > CODING_WORKBENCH_PROMPT_REFERENCES_MAX) {
+    errors.push(
+      `references must hold 1 to ${String(CODING_WORKBENCH_PROMPT_REFERENCES_MAX)} files`,
+    );
+  }
+  const seen = new Set<string>();
+  validatePhysicalArrayEntries(
+    value,
+    "references",
+    errors,
+    false,
+    "must be an object",
+    (entry, path, issues): boolean => {
+      const memberErrors = referenceEntryErrors(entry, path, seen);
+      issues.push(...memberErrors);
+      return memberErrors.length === 0;
+    },
+  );
+  return errors.length === 0;
+}
+
+function referenceEntryErrors(entry: unknown, path: string, seen: Set<string>): string[] {
+  if (!isRecord(entry)) return [`${path} must be an object`];
+  const errors = exactKeys(entry, ["path"], path);
+  if (!isCodingWorkbenchPromptReferencePath(entry.path)) {
+    errors.push(`${path}.path must be a bounded workspace-relative path`);
+  } else if (seen.has(entry.path)) {
+    errors.push(`${path}.path repeats an earlier reference`);
+  } else {
+    seen.add(entry.path);
+  }
+  return errors;
+}
+
+/**
+ * A slash command a native run offers, as the runtime lists it (`GET /api/command`, ADR-0137 D10):
+ * the name the operator types after `/` and the one-line description the runtime gives it. Both are
+ * untrusted display text from the runtime, bounded here so a hostile or malformed listing can never
+ * reach the browser unbounded. A command is a server-authored prompt template; naming one grants
+ * nothing, and every effect it causes still passes the run's own policy.
+ */
+export interface CodingWorkbenchCommand {
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+/** At most this many commands ride one listing. */
+export const CODING_WORKBENCH_COMMANDS_MAX = 64;
+export const CODING_WORKBENCH_COMMAND_NAME_MAX_CHARS = 64;
+export const CODING_WORKBENCH_COMMAND_DESCRIPTION_MAX_CHARS = 200;
+const CODING_WORKBENCH_COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u;
+
+/**
+ * The commands every native run starts with: the runtime's own built-ins (`init`, guided AGENTS.md
+ * setup, and `review`, review of the changes), pinned by the original-runtime proof. They let the
+ * composer of a new task offer a `/` menu before any run, and so any runtime, exists to list
+ * commands; the run's own listing stays the authority once it does.
+ */
+export const CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES: readonly string[] = Object.freeze([
+  "init",
+  "review",
+]);
+
+/** Transport shape of a command name: bounded, no whitespace, no path or control character. */
+export function isCodingWorkbenchCommandName(value: unknown): value is string {
+  return typeof value === "string" && CODING_WORKBENCH_COMMAND_NAME.test(value);
+}
+
+/**
+ * The command a start or a follow-up names: only the name, never the template. The text after the
+ * command is the request's `taskIntent`. Whether the run's runtime lists the name is the server's
+ * decision when the turn is dispatched.
+ */
+export interface CodingWorkbenchCommandRequest {
+  readonly name: string;
+}
+
+export function parseCodingWorkbenchCommandRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchCommandRequest> {
+  if (!isRecord(value)) return invalid("command must be an object");
+  const errors = exactKeys(value, ["name"], "command");
+  const admitted = checkCodingWorkbenchCommandRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchCommandRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchCommandRequest {
+  if (!isCodingWorkbenchCommandName(value.name)) {
+    errors.push("command.name must be a bounded command name");
+  }
+  return errors.length === 0;
+}
+
+function commandEntryErrors(entry: unknown, path: string, seen: Set<string>): string[] {
+  if (!isRecord(entry)) return [`${path} must be an object`];
+  const errors = exactKeys(entry, ["name", "description"], path);
+  if (!isCodingWorkbenchCommandName(entry.name)) {
+    errors.push(`${path}.name must be a bounded command name`);
+  } else if (seen.has(entry.name)) {
+    errors.push(`${path}.name repeats an earlier command`);
+  } else {
+    seen.add(entry.name);
+  }
+  if (
+    entry.description !== undefined &&
+    !validateUntrustedDisplayText(entry.description, CODING_WORKBENCH_COMMAND_DESCRIPTION_MAX_CHARS)
+  ) {
+    errors.push(`${path}.description must be bounded display text`);
+  }
+  return errors;
+}
+
+/**
+ * The native agents and skills a prompt may mention (S15, #3906), as the run's runtime lists them:
+ * `@name` names a subagent the runtime offers, `$id` one of its skills. An entry is the runtime's
+ * own untrusted display text, bounded here like a command. Mentioning one asks the runtime to
+ * involve it, exactly as its own interface does; it grants nothing, and every effect it causes
+ * still passes the run's native policy.
+ */
+export interface CodingWorkbenchMentionableAgent {
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+export interface CodingWorkbenchMentionableSkill {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+/**
+ * The subagents every native run starts with (`general`, `explore`), pinned by the original-runtime
+ * listing of 2.1.4. They let the composer of a new task offer `@` before any run exists to list
+ * them; the run's own listing is the authority once it does, and the server confirms every mention.
+ */
+export const CODING_WORKBENCH_BUILT_IN_SUBAGENTS: readonly CodingWorkbenchMentionableAgent[] =
+  Object.freeze([{ name: "general" }, { name: "explore" }]);
+
+/** At most this many agents or skills ride one listing, and this many mentions one prompt. */
+export const CODING_WORKBENCH_MENTIONABLES_MAX = 64;
+export const CODING_WORKBENCH_PROMPT_MENTIONS_MAX = 8;
+export const CODING_WORKBENCH_MENTION_DESCRIPTION_MAX_CHARS = 200;
+const CODING_WORKBENCH_MENTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+
+/** Transport shape of an agent name or a skill id: bounded, no whitespace, path or control. */
+export function isCodingWorkbenchMentionName(value: unknown): value is string {
+  return typeof value === "string" && CODING_WORKBENCH_MENTION_NAME.test(value);
+}
+
+/**
+ * Where a mention stands in the prompt's text, as the runtime records it: the half-open range
+ * `[start, end)` of `text`, the token as typed (`@general`, `$review-method`).
+ */
+export interface CodingWorkbenchPromptMentionSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+export interface CodingWorkbenchAgentMention {
+  readonly name: string;
+  readonly mention?: CodingWorkbenchPromptMentionSpan | undefined;
+}
+
+export interface CodingWorkbenchSkillMention {
+  readonly id: string;
+  readonly mention?: CodingWorkbenchPromptMentionSpan | undefined;
+}
+
+/** The agents and skills a start or a follow-up mentions; whether the run lists them is the server's call. */
+export interface CodingWorkbenchPromptMentions {
+  readonly agents?: readonly CodingWorkbenchAgentMention[] | undefined;
+  readonly skills?: readonly CodingWorkbenchSkillMention[] | undefined;
+}
+
+/** Bound of a mention span's offsets: the prompt text is bounded far below this. */
+const MENTION_OFFSET_MAX = 1_000_000;
+
+function isMentionOffset(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MENTION_OFFSET_MAX
+  );
+}
+
+function mentionSpanErrors(value: unknown, path: string): string[] {
+  if (value === undefined) return [];
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = exactKeys(value, ["start", "end", "text"], path);
+  const { start, end, text } = value;
+  if (!isMentionOffset(start) || !isMentionOffset(end) || end <= start) {
+    errors.push(`${path} must be a bounded half-open range`);
+  } else if (typeof text !== "string" || text.length !== end - start) {
+    errors.push(`${path}.text must be the mentioned token`);
+  }
+  return errors;
+}
+
+function mentionListErrors(
+  value: unknown,
+  key: "agents" | "skills",
+  field: "name" | "id",
+): string[] {
+  if (value === undefined) return [];
+  const path = `mentions.${key}`;
+  if (!Array.isArray(value)) return [`${path} must be an array`];
+  const errors: string[] = [];
+  if (value.length === 0 || value.length > CODING_WORKBENCH_PROMPT_MENTIONS_MAX) {
+    errors.push(`${path} must hold 1 to ${String(CODING_WORKBENCH_PROMPT_MENTIONS_MAX)} entries`);
+  }
+  const seen = new Set<string>();
+  validatePhysicalArrayEntries(
+    value,
+    path,
+    errors,
+    false,
+    "must be an object",
+    (entry, at, issues): boolean => {
+      if (!isRecord(entry)) {
+        issues.push(`${at} must be an object`);
+        return false;
+      }
+      const before = issues.length;
+      issues.push(...exactKeys(entry, [field, "mention"], at));
+      const identity = entry[field];
+      if (!isCodingWorkbenchMentionName(identity)) issues.push(`${at}.${field} is invalid`);
+      else if (seen.has(identity)) issues.push(`${at}.${field} repeats an earlier mention`);
+      else seen.add(identity);
+      issues.push(...mentionSpanErrors(entry.mention, `${at}.mention`));
+      return issues.length === before;
+    },
+  );
+  return errors;
+}
+
+export function parseCodingWorkbenchPromptMentions(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchPromptMentions> {
+  if (!isRecord(value)) return invalid("mentions must be an object");
+  const errors = exactKeys(value, ["agents", "skills"], "mentions");
+  const admitted = checkCodingWorkbenchPromptMentions(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchPromptMentions(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchPromptMentions {
+  if (value.agents === undefined && value.skills === undefined) {
+    errors.push("mentions must name an agent or a skill");
+  }
+  errors.push(
+    ...mentionListErrors(value.agents, "agents", "name"),
+    ...mentionListErrors(value.skills, "skills", "id"),
+  );
+  return errors.length === 0;
+}
+
+function mentionableErrors(
+  entry: unknown,
+  path: string,
+  keys: readonly string[],
+  seen: Set<string>,
+): string[] {
+  if (!isRecord(entry)) return [`${path} must be an object`];
+  const errors = exactKeys(entry, keys, path);
+  const identity = keys[0] === "id" ? entry.id : entry.name;
+  if (!isCodingWorkbenchMentionName(identity)) errors.push(`${path} identity is invalid`);
+  else if (seen.has(identity)) errors.push(`${path} repeats an earlier entry`);
+  else seen.add(identity);
+  if (keys[0] === "id" && !validateUntrustedDisplayText(entry.name, 64)) {
+    errors.push(`${path}.name must be bounded display text`);
+  }
+  if (
+    entry.description !== undefined &&
+    !validateUntrustedDisplayText(entry.description, CODING_WORKBENCH_MENTION_DESCRIPTION_MAX_CHARS)
+  ) {
+    errors.push(`${path}.description must be bounded display text`);
+  }
+  return errors;
+}
+
+function mentionablesErrors(
+  value: unknown,
+  key: "agents" | "primaryAgents" | "skills",
+  keys: readonly string[],
+): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return [`commandsChannelPayload.${key} must be an array`];
+  const errors: string[] = [];
+  if (value.length > CODING_WORKBENCH_MENTIONABLES_MAX) {
+    errors.push(`${key} must hold at most ${String(CODING_WORKBENCH_MENTIONABLES_MAX)} entries`);
+  }
+  const seen = new Set<string>();
+  validatePhysicalArrayEntries(
+    value,
+    key,
+    errors,
+    false,
+    "must be an object",
+    (entry, path, issues): boolean => {
+      const memberErrors = mentionableErrors(entry, path, keys, seen);
+      issues.push(...memberErrors);
+      return memberErrors.length === 0;
+    },
+  );
+  return errors;
+}
+
+/** Session facet of the commands channel: the status of the presented cookie only (ADR-0141). */
+export const CODING_WORKBENCH_RUNTIME_COMMANDS_SESSION_STATES = ["active", "unpaired"] as const;
+
+export type CodingWorkbenchRuntimeCommandsSession =
+  (typeof CODING_WORKBENCH_RUNTIME_COMMANDS_SESSION_STATES)[number];
+
+/**
+ * `GET /runs/:runId/commands`: the commands the run's runtime lists right now. Absent `commands`
+ * means the run offers none (a mapped profile, a run that is not live, or a listing the runtime
+ * could not give). An unpaired caller receives the constant `{ session: "unpaired" }` regardless
+ * of the run, so the route is not an existence oracle.
+ */
+export interface CodingWorkbenchRuntimeCommandsChannelPayload {
+  readonly session: CodingWorkbenchRuntimeCommandsSession;
+  readonly commands?: readonly CodingWorkbenchCommand[] | undefined;
+  /** The subagents a prompt may mention with `@` (#3906); absent, the run offers none. */
+  readonly agents?: readonly CodingWorkbenchMentionableAgent[] | undefined;
+  /**
+   * The custom primary agents the run may switch to beside `build` and `plan` (#3903 AC1), as the
+   * runtime lists them; absent, it offers none.
+   */
+  readonly primaryAgents?: readonly CodingWorkbenchMentionableAgent[] | undefined;
+  /** The skills a prompt may mention with `$` (#3906); absent, the run offers none. */
+  readonly skills?: readonly CodingWorkbenchMentionableSkill[] | undefined;
+}
+
+export function unpairedCodingWorkbenchRuntimeCommandsChannelPayload(): CodingWorkbenchRuntimeCommandsChannelPayload {
+  return { session: "unpaired" };
+}
+
+/** Exact keys, a valid session facet, a bounded duplicate-free listing, none when unpaired. */
+export function validateCodingWorkbenchRuntimeCommandsChannelPayload(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeCommandsChannelPayload> {
+  if (!isRecord(value)) return invalid("commands channel payload must be an object");
+  const errors = exactKeys(
+    value,
+    ["session", "commands", "agents", "primaryAgents", "skills"],
+    "commandsChannelPayload",
+  );
+  const admitted = checkCodingWorkbenchRuntimeCommandsChannelPayload(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeCommandsChannelPayload(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeCommandsChannelPayload {
+  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_COMMANDS_SESSION_STATES)) {
+    errors.push("commandsChannelPayload.session is invalid");
+  }
+  const listed = [value.commands, value.agents, value.primaryAgents, value.skills].some(
+    (list) => list !== undefined,
+  );
+  if (value.session === "unpaired" && listed) {
+    errors.push("commandsChannelPayload listings must be absent when the session is unpaired");
+  }
+  errors.push(
+    ...(value.commands === undefined ? [] : commandListErrors(value.commands)),
+    ...mentionablesErrors(value.agents, "agents", ["name", "description"]),
+    ...mentionablesErrors(value.primaryAgents, "primaryAgents", ["name", "description"]),
+    ...mentionablesErrors(value.skills, "skills", ["id", "name", "description"]),
+  );
+  return errors.length === 0;
+}
+
+function commandListErrors(commands: unknown): string[] {
+  if (!Array.isArray(commands)) return ["commandsChannelPayload.commands must be an array"];
+  const errors: string[] = [];
+  if (commands.length > CODING_WORKBENCH_COMMANDS_MAX) {
+    errors.push(`commands must hold at most ${String(CODING_WORKBENCH_COMMANDS_MAX)} entries`);
+  }
+  const seen = new Set<string>();
+  validatePhysicalArrayEntries(
+    commands,
+    "commands",
+    errors,
+    false,
+    "must be an object",
+    (entry, path, issues): boolean => {
+      const memberErrors = commandEntryErrors(entry, path, seen);
+      issues.push(...memberErrors);
+      return memberErrors.length === 0;
+    },
+  );
+  return errors;
+}
 
 export const CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS = 128;
 export const CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS = 200;
@@ -126,10 +660,91 @@ export interface CodingWorkbenchRuntimeReadiness {
    * and would reproduce the green-readiness-over-an-unverified-runtime class (audit F-01).
    */
   readonly runtimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  /**
+   * The primary agents this deployment's OpenCode tool profile can honour, computed server-side
+   * (#3897). Always carries the default agent (`build`); `plan` is listed only where OpenCode runs
+   * its own tools (the native profile), because a mapped profile would run a read-only request as
+   * an editing agent. The browser offers an agent switch only for what is listed here, and the
+   * server refuses (`invalid-intent`) any start or follow-up that names an agent outside it.
+   */
+  readonly selectableAgents: readonly CodingWorkbenchBuiltInAgent[];
+  /**
+   * What the composed OpenCode tool profile can do with a prompt's inputs, computed server-side
+   * (#3897). Absent reads as nothing: the browser offers Send now, Queue and the `@` file picker
+   * only where this says so, and the server refuses (`invalid-intent`) a follow-up that uses one
+   * the run's runtime cannot honour, exactly as it refuses a `plan` request.
+   */
+  readonly promptInputs?: CodingWorkbenchRuntimePromptInputs | undefined;
+  /**
+   * The version facts of the activated runtime (#3904 AC4), only when it is available. Absent reads
+   * as not reported, never as the pinned version: a server that cannot name the runtime it
+   * verified must not let the browser claim one.
+   */
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+}
+
+/** Where the activated runtime came from (#3904 AC4); see `CodingWorkbenchRuntimeVersion`. */
+export type CodingWorkbenchRuntimeOrigin =
+  "portable-release" | "npm-runtime-package" | "dev-checkout";
+
+export const CODING_WORKBENCH_RUNTIME_ORIGINS: readonly CodingWorkbenchRuntimeOrigin[] =
+  Object.freeze(["portable-release", "npm-runtime-package", "dev-checkout"] as const);
+
+/**
+ * What runs and what this build expects (#3904 AC4). `opencode` is the version the verified
+ * runtime's approved release metadata names; `pinned` is the version this Keiko build stages. They
+ * differ while an earlier approved runtime package is still installed. A newer runtime arrives only
+ * with a Keiko update; the runtime never updates itself.
+ */
+export interface CodingWorkbenchRuntimeVersion {
+  readonly opencode: string;
+  readonly pinned: string;
+  readonly origin: CodingWorkbenchRuntimeOrigin;
+}
+
+/** The prompt inputs a runtime can honour; see `CodingWorkbenchRuntimeReadiness.promptInputs`. */
+export interface CodingWorkbenchRuntimePromptInputs {
+  /** A message may be sent while a turn runs, as `steer` or `queue`. */
+  readonly delivery: boolean;
+  /**
+   * Workspace files may be referenced with `@` and attached to a prompt: to a follow-up and, as the
+   * run's workspace is resolved when its first turn is dispatched, to the start.
+   */
+  readonly references: boolean;
+  /**
+   * A turn may be started by one of the runtime's slash commands (`/init`, `/review`): a start or
+   * a follow-up may carry `command`. Absent reads as false, like any prompt input an older server
+   * never offered.
+   */
+  readonly commands?: boolean | undefined;
+  /**
+   * A prompt may mention the runtime's subagents with `@` and its skills with `$` (S15, #3906): a
+   * start or a follow-up may carry `mentions`. Absent reads as false.
+   */
+  readonly mentions?: boolean | undefined;
 }
 
 export interface CodingWorkbenchRuntimeProjectMemoryRequest {
   readonly enabled: boolean;
+}
+
+/**
+ * Starts a new task as a fork of another Coding History task (S03, #3904): the new task begins from
+ * the source task's saved native session, in the same workspace, and shows the source's conversation
+ * up to the fork point as its own earlier history. It names a task and optionally a message of it,
+ * nothing else: the fork is minted, bounded and approved like any other start, so it carries none of
+ * the source run's authority. A server that holds no saved session for the source still starts the
+ * task, with the source's history as context, exactly as a follow-up does.
+ */
+export interface CodingWorkbenchRuntimeForkRequest {
+  /** The Coding History task to fork; it must belong to the active workspace. */
+  readonly taskId: string;
+  /**
+   * The user message of that task (an id from its Coding History) to fork just before, so the new
+   * task carries what came ahead of it and not the message or anything after. Absent forks the task
+   * as it ended.
+   */
+  readonly beforeMessageId?: string | undefined;
 }
 
 export interface CodingWorkbenchRuntimeStartRequest {
@@ -138,6 +753,8 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly taskIntent: string;
   /** Durable conversation identity; never grants execution authority. */
   readonly conversationId?: string | undefined;
+  /** Forks another task into a new one; never combined with `conversationId`. */
+  readonly fork?: CodingWorkbenchRuntimeForkRequest | undefined;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
@@ -161,6 +778,328 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * active workspace binding and defaults an omitted field to enabled for older clients.
    */
   readonly projectMemory?: CodingWorkbenchRuntimeProjectMemoryRequest | undefined;
+  /**
+   * The primary agent the run's first turn runs under. Absent means the default (`build`), exactly
+   * as before. Selecting `plan` needs a runtime that can honour it; the server refuses the start
+   * (`invalid-intent`) rather than run a read-only request as `build`. A start names a built-in.
+   */
+  readonly agent?: CodingWorkbenchBuiltInAgent | undefined;
+  /**
+   * Workspace files the first prompt references with `@`, by path relative to the workspace root
+   * (ADR-0137 D10). They are resolved against the run's own canonical workspace root when the
+   * first turn is dispatched, through the same admission as a follow-up's; a reference that is
+   * refused refuses the start (`invalid-intent`) instead of starting without it.
+   */
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /**
+   * Starts the run's first turn with one of the runtime's slash commands, the text being
+   * `taskIntent` (which may then be empty). A native runtime only; it cannot be combined with an
+   * issue reference, whose context a command turn does not carry.
+   */
+  readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /**
+   * The subagents and skills the first prompt mentions (S15, #3906). Like `references`, they are
+   * checked against the run's own runtime when its first turn is dispatched; a mention the runtime
+   * does not list refuses the start (`invalid-intent`) instead of starting without it.
+   */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
+}
+
+/**
+ * Body of `POST /runs/:runId/follow-up`. `agent` selects the primary agent for this and the
+ * following turns; absent keeps the run's current agent.
+ *
+ * `delivery` makes the message a steering or queued message for the turn that is running right now
+ * (it never starts a turn, so it cannot name an `agent`); `references` attaches workspace files to
+ * the prompt, by path relative to the run's workspace (ADR-0137 D10).
+ */
+export interface CodingWorkbenchRuntimeFollowUpRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
+  readonly taskIntent: string;
+  readonly agent?: CodingWorkbenchAgent | undefined;
+  readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /**
+   * Runs the turn as one of the runtime's slash commands, the text being `taskIntent` (which may
+   * then be empty). It starts a turn like any follow-up, so it cannot also be a `delivery`.
+   */
+  readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /** The subagents and skills this message mentions (S15, #3906), checked against the run's listing. */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
+}
+
+/**
+ * The turn-revert actions of a live native run (B3, S04). `undo` stops the turn in flight, when
+ * there is one, and restores the workspace files the run's newest turn changed; `restore` re-applies
+ * them while the undo is still staged. Closed, so the browser can name nothing else.
+ */
+export type CodingWorkbenchRuntimeRevertAction = "undo" | "restore";
+
+export const CODING_WORKBENCH_RUNTIME_REVERT_ACTIONS: readonly CodingWorkbenchRuntimeRevertAction[] =
+  Object.freeze(["undo", "restore"] as const);
+
+export function isCodingWorkbenchRuntimeRevertAction(
+  value: unknown,
+): value is CodingWorkbenchRuntimeRevertAction {
+  return isOneOf(value, CODING_WORKBENCH_RUNTIME_REVERT_ACTIONS);
+}
+
+/** Body of `POST /runs/:runId/revert`: the usual revision-bound envelope plus the closed action. */
+export interface CodingWorkbenchRuntimeRevertRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly action: CodingWorkbenchRuntimeRevertAction;
+}
+
+/** Upper bound on a revert file or line count; matches the approval-review count bound. */
+export const CODING_WORKBENCH_RUNTIME_REVERT_MAX_COUNT = 1_000_000;
+
+/**
+ * What an undo would do or has done: counts only. `staged` says an undo is in place and a
+ * `restore` can bring the changes back; otherwise the counts describe the run's newest turn. No
+ * path, patch or message ever rides this projection.
+ */
+export interface CodingWorkbenchRuntimeRevertState {
+  readonly staged: boolean;
+  readonly fileCount: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+/** Session facet of the revert channel: the status of the presented cookie only (ADR-0141). */
+export const CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES = ["active", "unpaired"] as const;
+
+export type CodingWorkbenchRuntimeRevertSession =
+  (typeof CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES)[number];
+
+/**
+ * `GET /runs/:runId/revert`: absent `revert` means no undo is available for the run (a runtime
+ * without snapshots, a run that is not live, or a session the runtime cannot read). An unpaired
+ * caller receives the constant `{ session: "unpaired" }` regardless of the run.
+ */
+export interface CodingWorkbenchRuntimeRevertChannelPayload {
+  readonly session: CodingWorkbenchRuntimeRevertSession;
+  readonly revert?: CodingWorkbenchRuntimeRevertState | undefined;
+}
+
+export function unpairedCodingWorkbenchRuntimeRevertChannelPayload(): CodingWorkbenchRuntimeRevertChannelPayload {
+  return { session: "unpaired" };
+}
+
+function revertCountValid(value: unknown): boolean {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CODING_WORKBENCH_RUNTIME_REVERT_MAX_COUNT
+  );
+}
+
+function validateRevertState(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("revertChannelPayload.revert must be an object");
+    return;
+  }
+  errors.push(
+    ...exactKeys(value, ["staged", "fileCount", "additions", "deletions"], "revertChannelPayload"),
+  );
+  if (typeof value.staged !== "boolean") errors.push("revertChannelPayload.staged is invalid");
+  for (const key of ["fileCount", "additions", "deletions"] as const) {
+    if (!revertCountValid(value[key])) errors.push(`revertChannelPayload.${key} is invalid`);
+  }
+}
+
+/** Exact keys, a valid session facet, bounded counts, and no revert state for an unpaired caller. */
+export function validateCodingWorkbenchRuntimeRevertChannelPayload(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeRevertChannelPayload> {
+  if (!isRecord(value)) return invalid("revert channel payload must be an object");
+  const errors = exactKeys(value, ["session", "revert"], "revertChannelPayload");
+  const admitted = checkCodingWorkbenchRuntimeRevertChannelPayload(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeRevertChannelPayload(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeRevertChannelPayload {
+  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES)) {
+    errors.push("revertChannelPayload.session is invalid");
+  }
+  if (value.session === "unpaired" && value.revert !== undefined) {
+    errors.push("revertChannelPayload.revert must be absent when the session is unpaired");
+  }
+  if (value.revert !== undefined) validateRevertState(value.revert, errors);
+  return errors.length === 0;
+}
+
+/**
+ * The actions on a message Keiko delivered into a running turn and the runtime has not handed to the
+ * model yet (S07, ADR-0137 D10): `cancel` withdraws it, `promote` changes a queued message to `steer`
+ * so it joins the turn at its next step (Send now). Closed, so the browser can name nothing else.
+ */
+export type CodingWorkbenchRuntimeInboxAction = "cancel" | "promote";
+
+export const CODING_WORKBENCH_RUNTIME_INBOX_ACTIONS: readonly CodingWorkbenchRuntimeInboxAction[] =
+  Object.freeze(["cancel", "promote"] as const);
+
+export function isCodingWorkbenchRuntimeInboxAction(
+  value: unknown,
+): value is CodingWorkbenchRuntimeInboxAction {
+  return isOneOf(value, CODING_WORKBENCH_RUNTIME_INBOX_ACTIONS);
+}
+
+/** At most this many pending messages ride one listing: the most a run retains (ADR-0137 D10). */
+export const CODING_WORKBENCH_RUNTIME_INBOX_ITEMS_MAX = 32;
+/** The operator's own text as a one-line preview; longer text ends in an ellipsis. */
+export const CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS = 200;
+const CODING_WORKBENCH_RUNTIME_INBOX_ITEM_ID = /^msg_[A-Za-z0-9_-]{1,251}$/u;
+
+/**
+ * Transport shape of a pending message's id (the runtime's own message id, which Keiko minted when it
+ * delivered the message). Whether the id names a message of THIS run's turn that is still pending is
+ * the server's decision; the browser only hands back an id it was listed.
+ */
+export function isCodingWorkbenchRuntimeInboxItemId(value: unknown): value is string {
+  return typeof value === "string" && CODING_WORKBENCH_RUNTIME_INBOX_ITEM_ID.test(value);
+}
+
+/** Body of `POST /runs/:runId/inbox`: the usual revision-bound envelope, the action and the item. */
+export interface CodingWorkbenchRuntimeInboxRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly action: CodingWorkbenchRuntimeInboxAction;
+  readonly itemId: string;
+}
+
+export function parseCodingWorkbenchRuntimeInboxRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeInboxRequest> {
+  if (!isRecord(value)) return invalid("inbox request must be an object");
+  const errors = exactKeys(
+    value,
+    ["requestId", "expectedRevision", "action", "itemId"],
+    "inboxRequest",
+  );
+  const admitted = checkCodingWorkbenchRuntimeInboxRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeInboxRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeInboxRequest {
+  validateRequestId(value.requestId, errors);
+  validateExpectedRevision(value, errors);
+  if (!isCodingWorkbenchRuntimeInboxAction(value.action)) errors.push("action is invalid");
+  if (!isCodingWorkbenchRuntimeInboxItemId(value.itemId)) errors.push("itemId is invalid");
+  return errors.length === 0;
+}
+
+/**
+ * One message Keiko delivered into the running turn that is still waiting: how it will be delivered
+ * and the operator's own text as a one-line preview (control and invisible characters removed,
+ * whitespace collapsed, at most `CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS`). Nothing the
+ * runtime holds about the message beside its id and delivery ever rides this projection.
+ */
+export interface CodingWorkbenchRuntimeInboxItem {
+  readonly itemId: string;
+  readonly delivery: CodingWorkbenchPromptDelivery;
+  readonly preview: string;
+}
+
+/** Session facet of the inbox channel: the status of the presented cookie only (ADR-0141). */
+export const CODING_WORKBENCH_RUNTIME_INBOX_SESSION_STATES = ["active", "unpaired"] as const;
+
+export type CodingWorkbenchRuntimeInboxSession =
+  (typeof CODING_WORKBENCH_RUNTIME_INBOX_SESSION_STATES)[number];
+
+/**
+ * `GET /runs/:runId/inbox`: the pending messages of the turn that is running, in the order the
+ * runtime will hand them to the model (every `steer` message, then every `queue` message, each in
+ * the order it was delivered). Absent `items` means the run offers none (a mapped profile, a run
+ * whose turn is not in flight, a listing the runtime could not give); present and empty means
+ * nothing is waiting. An unpaired caller receives the constant `{ session: "unpaired" }` regardless
+ * of the run, so the route is not an existence oracle.
+ */
+export interface CodingWorkbenchRuntimeInboxChannelPayload {
+  readonly session: CodingWorkbenchRuntimeInboxSession;
+  readonly items?: readonly CodingWorkbenchRuntimeInboxItem[] | undefined;
+}
+
+export function unpairedCodingWorkbenchRuntimeInboxChannelPayload(): CodingWorkbenchRuntimeInboxChannelPayload {
+  return { session: "unpaired" };
+}
+
+function inboxItemErrors(entry: unknown, path: string, seen: Set<string>): string[] {
+  if (!isRecord(entry)) return [`${path} must be an object`];
+  const errors = exactKeys(entry, ["itemId", "delivery", "preview"], path);
+  if (!isCodingWorkbenchRuntimeInboxItemId(entry.itemId)) {
+    errors.push(`${path}.itemId is invalid`);
+  } else if (seen.has(entry.itemId)) {
+    errors.push(`${path}.itemId repeats an earlier item`);
+  } else {
+    seen.add(entry.itemId);
+  }
+  if (!isCodingWorkbenchPromptDelivery(entry.delivery)) errors.push(`${path}.delivery is invalid`);
+  if (
+    !validateUntrustedDisplayText(entry.preview, CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS, {
+      minChars: 0,
+    })
+  ) {
+    errors.push(`${path}.preview must be bounded display text`);
+  }
+  return errors;
+}
+
+function inboxListErrors(items: unknown): string[] {
+  if (!Array.isArray(items)) return ["inboxChannelPayload.items must be an array"];
+  const errors: string[] = [];
+  if (items.length > CODING_WORKBENCH_RUNTIME_INBOX_ITEMS_MAX) {
+    errors.push(
+      `items must hold at most ${String(CODING_WORKBENCH_RUNTIME_INBOX_ITEMS_MAX)} entries`,
+    );
+  }
+  const seen = new Set<string>();
+  validatePhysicalArrayEntries(
+    items,
+    "items",
+    errors,
+    false,
+    "must be an object",
+    (entry, path, issues): boolean => {
+      const memberErrors = inboxItemErrors(entry, path, seen);
+      issues.push(...memberErrors);
+      return memberErrors.length === 0;
+    },
+  );
+  return errors;
+}
+
+/** Exact keys, a valid session facet, a bounded duplicate-free listing, none when unpaired. */
+export function validateCodingWorkbenchRuntimeInboxChannelPayload(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeInboxChannelPayload> {
+  if (!isRecord(value)) return invalid("inbox channel payload must be an object");
+  const errors = exactKeys(value, ["session", "items"], "inboxChannelPayload");
+  const admitted = checkCodingWorkbenchRuntimeInboxChannelPayload(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeInboxChannelPayload(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeInboxChannelPayload {
+  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_INBOX_SESSION_STATES)) {
+    errors.push("inboxChannelPayload.session is invalid");
+  }
+  if (value.session === "unpaired" && value.items !== undefined) {
+    errors.push("inboxChannelPayload.items must be absent when the session is unpaired");
+  }
+  if (value.items !== undefined) errors.push(...inboxListErrors(value.items));
+  return errors.length === 0;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -201,6 +1140,7 @@ export type CodingWorkbenchRuntimePendingPermission = Pick<
   | "policyReason"
   | "connectorScopes"
   | "commandLabel"
+  | "nativePermission"
   | "expiresAt"
 >;
 
@@ -391,7 +1331,7 @@ function checkStartRequest(
   errors: string[],
 ): value is Record<string, unknown> & CodingWorkbenchRuntimeStartRequest {
   const request = validateRequestId(value.requestId, errors);
-  const intent = validateTaskIntent(value.taskIntent, errors);
+  const intent = validateTaskIntent(value.taskIntent, errors, value.command !== undefined);
   const conversation =
     value.conversationId === undefined ||
     validateSafeId(value.conversationId, "conversationId", errors, 128);
@@ -403,6 +1343,10 @@ function checkStartRequest(
   const issue = validateIssueRef(value.issueRef, errors);
   const purpose = validateIssuePurpose(value.issuePurpose, value.issueRef, errors);
   const memory = validateProjectMemoryRequest(value.projectMemory, errors);
+  const promptBefore = errors.length;
+  validateStartAgent(value.agent, errors);
+  validateStartPromptInputs(value, errors);
+  const prompt = errors.length === promptBefore;
   const digest = validateExpectedIssueDigest(value, errors);
   return [
     request,
@@ -415,6 +1359,7 @@ function checkStartRequest(
     issue,
     purpose,
     memory,
+    prompt,
     digest,
   ].every(Boolean);
 }
@@ -495,13 +1440,50 @@ function checkRequestIdOnly(
   return validateRequestId(value.requestId, errors);
 }
 
-function validateTaskIntent(value: unknown, errors: string[]): value is string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 65_536) {
-    errors.push("taskIntent must be a bounded non-empty string");
+// The text of a request. A slash command takes its arguments from it, and a command such as
+// `/review` needs none, so only a request that names a command may carry an empty text.
+function validateTaskIntent(
+  value: unknown,
+  errors: string[],
+  commandNamed = false,
+): value is string {
+  const minimum = commandNamed ? 0 : 1;
+  if (typeof value !== "string" || value.length < minimum || value.length > 65_536) {
+    errors.push(
+      commandNamed
+        ? "taskIntent must be a bounded string"
+        : "taskIntent must be a bounded non-empty string",
+    );
     return false;
   }
   return true;
 }
+
+// Mentions are supplementary like a command: an absent field adds no key.
+function validateMentions(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  const mentions = parseCodingWorkbenchPromptMentions(value);
+  if (!mentions.ok) errors.push(...mentions.errors);
+}
+
+// A command is a supplementary field like `agent`: an absent one adds no key, an invalid one
+// reports the command parser's own reasons.
+function validateCommandRequest(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  const command = parseCodingWorkbenchCommandRequest(value);
+  if (!command.ok) errors.push(...command.errors);
+}
+
+function validateAgent(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isCodingWorkbenchAgent(value)) errors.push("agent is invalid");
+}
+
+// A start names a built-in agent only: a custom primary agent exists in a run's own listing, so it
+// can be chosen for a follow-up once that run lists it, never for a run that does not exist yet.
+function validateStartAgent(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isCodingWorkbenchBuiltInAgent(value)) errors.push("agent is invalid");
+}
+
 function validateRuntimePreference(
   value: unknown,
   errors: string[],
@@ -588,25 +1570,59 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   if (!isRecord(value)) return invalid("start request must be an object");
-  const errors = exactKeys(
-    value,
-    [
-      "requestId",
-      "taskIntent",
-      "conversationId",
-      "requestedMode",
-      "runtimePreference",
-      "modelId",
-      "reasoningEffort",
-      "issueRef",
-      "expectedIssueBindingDigest",
-      "issuePurpose",
-      "projectMemory",
-    ],
-    "startRequest",
-  );
+  const errors = exactKeys(value, START_REQUEST_KEYS, "startRequest");
   const admitted = checkStartRequest(value, errors);
   return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+const START_REQUEST_KEYS: readonly string[] = [
+  "requestId",
+  "taskIntent",
+  "conversationId",
+  "requestedMode",
+  "runtimePreference",
+  "modelId",
+  "reasoningEffort",
+  "issueRef",
+  "expectedIssueBindingDigest",
+  "issuePurpose",
+  "projectMemory",
+  "agent",
+  "references",
+  "command",
+  "mentions",
+  "fork",
+];
+
+// A fork names the task to fork and, optionally, the message to fork before; it starts a NEW task, so
+// it cannot also continue one.
+function validateForkRequest(value: Record<string, unknown>, errors: string[]): void {
+  if (value.fork === undefined) return;
+  if (value.conversationId !== undefined) errors.push("fork cannot continue a conversation");
+  if (!isRecord(value.fork)) {
+    errors.push("fork must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value.fork, ["taskId", "beforeMessageId"], "fork"));
+  validateSafeId(value.fork.taskId, "fork.taskId", errors, 128);
+  if (value.fork.beforeMessageId !== undefined) {
+    validateSafeId(value.fork.beforeMessageId, "fork.beforeMessageId", errors, 128);
+  }
+}
+
+// The first prompt's references and command (ADR-0137 D10): the same bounds as a follow-up's, and a
+// command turn carries none of an issue's context, so the two never combine.
+function validateStartPromptInputs(value: Record<string, unknown>, errors: string[]): void {
+  if (value.references !== undefined) {
+    const references = parseCodingWorkbenchPromptReferences(value.references);
+    if (!references.ok) errors.push(...references.errors);
+  }
+  validateMentions(value.mentions, errors);
+  validateCommandRequest(value.command, errors);
+  if (value.command !== undefined && value.issueRef !== undefined) {
+    errors.push("command cannot be combined with an issue reference");
+  }
+  validateForkRequest(value, errors);
 }
 
 // A retry uses the identical request shape as the initial start; the distinct name documents the
@@ -615,6 +1631,54 @@ export function parseCodingWorkbenchRuntimeRetryRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   return parseCodingWorkbenchRuntimeStartRequest(value);
+}
+
+export function parseCodingWorkbenchRuntimeFollowUpRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeFollowUpRequest> {
+  if (!isRecord(value)) return invalid("follow-up request must be an object");
+  const errors = exactKeys(
+    value,
+    [
+      "requestId",
+      "expectedRevision",
+      "taskIntent",
+      "agent",
+      "delivery",
+      "references",
+      "command",
+      "mentions",
+    ],
+    "followUpRequest",
+  );
+  const admitted = checkCodingWorkbenchRuntimeFollowUpRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeFollowUpRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeFollowUpRequest {
+  validateRequestId(value.requestId, errors);
+  validateExpectedRevision(value, errors);
+  validateTaskIntent(value.taskIntent, errors, value.command !== undefined);
+  validateAgent(value.agent, errors);
+  validatePromptDelivery(value, errors);
+  validateCommandRequest(value.command, errors);
+  validateMentions(value.mentions, errors);
+  if (value.references !== undefined) {
+    const references = parseCodingWorkbenchPromptReferences(value.references);
+    if (!references.ok) errors.push(...references.errors);
+  }
+  return errors.length === 0;
+}
+
+// A delivered message joins the turn that is running, so it cannot also switch that turn's agent.
+function validatePromptDelivery(value: Record<string, unknown>, errors: string[]): void {
+  if (value.delivery === undefined) return;
+  if (!isCodingWorkbenchPromptDelivery(value.delivery)) errors.push("delivery is invalid");
+  else if (value.agent !== undefined) errors.push("delivery cannot select an agent");
+  else if (value.command !== undefined) errors.push("delivery cannot run a command");
 }
 
 export function parseCodingWorkbenchRuntimeReadinessRequest(
@@ -1183,6 +2247,9 @@ export function validateCodingWorkbenchRuntimeReadiness(
       "runtimeAvailable",
       "runtimeUnavailableReason",
       "runtimeEvidenceClass",
+      "selectableAgents",
+      "promptInputs",
+      "runtimeVersion",
     ],
     "runtimeReadiness",
   );
@@ -1206,6 +2273,11 @@ function checkRuntimeReadiness(
   }
   const reason = validateRuntimeUnavailableReason(value, errors);
   const evidence = validateRuntimeEvidenceClass(value, errors);
+  const capabilitiesBefore = errors.length;
+  validateSelectableAgents(value, errors);
+  validatePromptInputs(value.promptInputs, errors);
+  validateRuntimeVersion(value, errors);
+  const capabilities = errors.length === capabilitiesBefore;
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -1222,7 +2294,7 @@ function checkRuntimeReadiness(
   }
   const available = typeof value.runtimeAvailable === "boolean";
   if (!available) errors.push("runtimeAvailable is invalid");
-  return [version, modes, reason, evidence, available].every(Boolean);
+  return [version, modes, reason, evidence, capabilities, available].every(Boolean);
 }
 
 /**
@@ -1269,6 +2341,82 @@ function validateRuntimeEvidenceClass(value: Record<string, unknown>, errors: st
   }
   return true;
 }
+
+/**
+ * The selectable agents are a closed, duplicate-free list that keeps the default agent. An absent,
+ * unknown or default-less list is refused rather than read as "build only": a payload that could
+ * advertise an agent this contract does not know must never reach the browser's agent switch.
+ */
+function validateSelectableAgents(value: Record<string, unknown>, errors: string[]): void {
+  const agents = value.selectableAgents;
+  if (
+    !Array.isArray(agents) ||
+    agents.length > CODING_WORKBENCH_AGENTS.length ||
+    !agents.every(isCodingWorkbenchBuiltInAgent) ||
+    new Set<unknown>(agents).size !== agents.length
+  ) {
+    errors.push("selectableAgents is invalid");
+    return;
+  }
+  if (!agents.includes(DEFAULT_CODING_WORKBENCH_AGENT)) {
+    errors.push("selectableAgents must include the default agent");
+  }
+}
+
+// A release version: numeric core and an optional bounded pre-release, never a path or a range.
+const RUNTIME_VERSION_PATTERN = /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?$/u;
+
+function isRuntimeVersionText(value: unknown): value is string {
+  return typeof value === "string" && RUNTIME_VERSION_PATTERN.test(value);
+}
+
+/**
+ * Absent reads as not reported. A present value names two release versions and a closed origin,
+ * and only an available runtime may carry one.
+ */
+function validateRuntimeVersion(value: Record<string, unknown>, errors: string[]): void {
+  const version = value.runtimeVersion;
+  if (version === undefined) return;
+  if (!isRecord(version)) {
+    errors.push("runtimeVersion must be an object");
+    return;
+  }
+  errors.push(...exactKeys(version, ["opencode", "pinned", "origin"], "runtimeVersion"));
+  for (const field of ["opencode", "pinned"] as const) {
+    if (!isRuntimeVersionText(version[field])) errors.push(`runtimeVersion.${field} is invalid`);
+  }
+  if (!isOneOf(version.origin, CODING_WORKBENCH_RUNTIME_ORIGINS)) {
+    errors.push("runtimeVersion.origin is invalid");
+  }
+  if (value.runtimeAvailable !== true) {
+    errors.push("runtimeVersion must be absent when the runtime is unavailable");
+  }
+}
+
+/**
+ * Absent reads as no prompt input; a present value is the booleans and nothing else. `delivery` and
+ * `references` are always stated, `commands` may be absent (a server older than the command
+ * surface never states it, which reads as false).
+ */
+function validatePromptInputs(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("promptInputs must be an object");
+    return;
+  }
+  errors.push(
+    ...exactKeys(value, ["delivery", "references", "commands", "mentions"], "promptInputs"),
+  );
+  for (const field of ["delivery", "references"] as const) {
+    if (typeof value[field] !== "boolean") errors.push(`promptInputs.${field} must be boolean`);
+  }
+  for (const field of ["commands", "mentions"] as const) {
+    if (value[field] !== undefined && typeof value[field] !== "boolean") {
+      errors.push(`promptInputs.${field} must be boolean`);
+    }
+  }
+}
+
 export function validateCodingWorkbenchRuntimeSseEvent(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSseEvent> {

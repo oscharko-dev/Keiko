@@ -211,7 +211,7 @@ function topicRoutingAdapter(
   return {
     ...adapter,
     request: async (req) =>
-      adapter.request(
+      await adapter.request(
         req.input.includes("[[topic:") ? req : { ...req, input: withTopicMarker(req.input, topic) },
       ),
   };
@@ -339,6 +339,13 @@ function buildOutcomeSummary(perQuery: readonly QueryEvaluation[]): RetrievalEva
   };
 }
 
+function meanQueryScore(
+  perQuery: readonly QueryEvaluation[],
+  dimension: keyof QueryScores,
+): number {
+  return mean(perQuery.map((query) => query.scores[dimension]));
+}
+
 function buildScorecard(
   fixture: RetrievalEvalFixture,
   runId: string,
@@ -346,14 +353,14 @@ function buildScorecard(
   modelJudged: ModelJudgedRetrievalEvalScores | undefined,
 ): RetrievalEvalScorecard {
   const dimensions = {
-    recall: mean(perQuery.map((q) => q.scores.recall)),
-    precision: mean(perQuery.map((q) => q.scores.precision)),
-    meanReciprocalRank: mean(perQuery.map((q) => q.scores.meanReciprocalRank)),
-    ndcg: mean(perQuery.map((q) => q.scores.ndcg)),
-    sourceIsolation: mean(perQuery.map((q) => q.scores.sourceIsolation)),
-    citationQuality: mean(perQuery.map((q) => q.scores.citationQuality)),
-    noEvidenceAccuracy: mean(perQuery.map((q) => q.scores.noEvidenceAccuracy)),
-    contextBudgetFit: mean(perQuery.map((q) => q.scores.contextBudgetFit)),
+    recall: meanQueryScore(perQuery, "recall"),
+    precision: meanQueryScore(perQuery, "precision"),
+    meanReciprocalRank: meanQueryScore(perQuery, "meanReciprocalRank"),
+    ndcg: meanQueryScore(perQuery, "ndcg"),
+    sourceIsolation: meanQueryScore(perQuery, "sourceIsolation"),
+    citationQuality: meanQueryScore(perQuery, "citationQuality"),
+    noEvidenceAccuracy: meanQueryScore(perQuery, "noEvidenceAccuracy"),
+    contextBudgetFit: meanQueryScore(perQuery, "contextBudgetFit"),
     latencyMs: perQuery.reduce((acc, q) => acc + q.scores.latencyTicks, 0),
   };
   const passed = evaluateFloors(dimensions, PASS_THRESHOLDS).ok;

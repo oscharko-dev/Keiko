@@ -344,6 +344,54 @@ describe("CodingWorkbenchRunStatus", () => {
     );
     expect(screen.queryByRole("timer")).toBeNull();
   });
+
+  it("names the plan agent in the status line only while the plan agent is active (#3897)", () => {
+    const planning: CodingWorkbenchRuntimeState = {
+      ...RUNNING,
+      selectableAgents: ["build", "plan"],
+      agent: "plan",
+    };
+    const { rerender } = render(
+      <CodingWorkbenchRunStatus state={planning} researchGrant={null} phase="model" />,
+    );
+    expect(screen.getByTestId("coding-runtime-agent")).toHaveTextContent("Plan agent");
+
+    rerender(
+      <CodingWorkbenchRunStatus
+        state={{ ...planning, agent: "build" }}
+        researchGrant={null}
+        phase="model"
+      />,
+    );
+    expect(screen.queryByTestId("coding-runtime-agent")).toBeNull();
+
+    // A deployment that does not offer the plan agent never labels a run with it.
+    rerender(
+      <CodingWorkbenchRunStatus
+        state={{ ...planning, selectableAgents: ["build"] }}
+        researchGrant={null}
+        phase="model"
+      />,
+    );
+    expect(screen.queryByTestId("coding-runtime-agent")).toBeNull();
+  });
+
+  it("names the plan agent in German without an accessibility violation (#3897)", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const { container } = render(
+      <I18nProvider>
+        <CodingWorkbenchRunStatus
+          state={{ ...RUNNING, selectableAgents: ["build", "plan"], agent: "plan" }}
+          researchGrant={null}
+          phase="model"
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByTestId("coding-runtime-agent")).toHaveTextContent("Plan-Agent");
+    vi.useRealTimers();
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
 });
 
 it.each(["en", "de"] as const)(

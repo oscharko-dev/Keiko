@@ -25,12 +25,10 @@ const REQUIRED_PUBLISH_GATES: readonly ReleaseImpactPublishGate[] = [
   "package-surface",
   "qi-supply-chain",
 ];
-// Both artifact forms the publish gate verifies live against the GitHub API before a release may
-// go out (scripts/check-release-impact.mjs): a review on the release pull request, and an owner
-// comment on the release epic. Accepting only the first here would make a release the gate
-// approved look unapproved to the runtime, which withholds the governed one-click update and
-// reports the target as missing reviewed metadata (Codex finding on #3054). The runtime checks
-// shape only — the live authorship and version-binding checks stay in the publish gate.
+// Installed readers require these canonical audit-reference forms for reviews and owner comments
+// (#3054). The reference is not independent approval authority: ADR-0177 retired live GitHub
+// authorship verification. Protected release delivery and authenticated manifests establish trust;
+// catalog producers retain this shape so existing readers recognize the reviewed target.
 const RUNTIME_APPROVAL_REFERENCE_PATTERN =
   /^github-(?:pr-review|issue-comment):([^#/\s]+\/[^#/\s]+)#\d+#\d+$/u;
 

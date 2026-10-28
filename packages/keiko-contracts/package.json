@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
@@ -30,6 +30,10 @@
     "./context-observations": {
       "types": "./dist/context-observations.d.ts",
       "import": "./dist/context-observations.js"
+    },
+    "./sensitive-path-patterns": {
+      "types": "./dist/sensitive-path-patterns.d.ts",
+      "import": "./dist/sensitive-path-patterns.js"
     },
     "./text-safety": {
       "types": "./dist/text-safety.d.ts",
@@ -119,6 +123,10 @@
       "types": "./dist/citation-markers.d.ts",
       "import": "./dist/citation-markers.js"
     },
+    "./runtime/unified-diff": {
+      "types": "./dist/unified-diff.d.ts",
+      "import": "./dist/unified-diff.js"
+    },
     "./runtime/code-task-acceptance": {
       "types": "./dist/code-task-acceptance.d.ts",
       "import": "./dist/code-task-acceptance.js"
@@ -170,6 +178,10 @@
     "./runtime/coding-workbench-runtime-api": {
       "types": "./dist/coding-workbench-runtime-api.d.ts",
       "import": "./dist/coding-workbench-runtime-api.js"
+    },
+    "./runtime/mcp-servers": {
+      "types": "./dist/mcp-servers.d.ts",
+      "import": "./dist/mcp-servers.js"
     },
     "./runtime/coding-workbench-runtime-approval-review": {
       "types": "./dist/coding-workbench-runtime-approval-review.d.ts",
@@ -238,6 +250,14 @@
     "./runtime/diagnostics": {
       "types": "./dist/diagnostics.d.ts",
       "import": "./dist/diagnostics.js"
+    },
+    "./runtime/native-runtime-wire": {
+      "types": "./dist/native-runtime-wire.d.ts",
+      "import": "./dist/native-runtime-wire.js"
+    },
+    "./runtime/ui-launch": {
+      "types": "./dist/ui-launch.d.ts",
+      "import": "./dist/ui-launch.js"
     },
     "./runtime/runtime-qualification": {
       "types": "./dist/runtime-qualification.d.ts",
@@ -839,9 +859,9 @@
       "types": "./dist/governed-tool-bridge.d.ts",
       "import": "./dist/governed-tool-bridge.js"
     },
-    "./runtime/opencode-service-host": {
-      "types": "./dist/opencode-service-host.d.ts",
-      "import": "./dist/opencode-service-host.js"
+    "./runtime/activity-log-diagnostic-fields": {
+      "types": "./dist/activity-log-diagnostic-fields.d.ts",
+      "import": "./dist/activity-log-diagnostic-fields.js"
     }
   },
   "scripts": {

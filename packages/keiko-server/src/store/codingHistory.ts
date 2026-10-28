@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { withImmediateTransaction } from "./transaction.js";
 import type { DatabaseSync } from "node:sqlite";
 import type {
@@ -24,14 +25,93 @@ export interface CodingHistoryBeginInput extends CodingHistoryCreateInput {
   readonly intent: string;
 }
 
+/** Where a fork ends in its source, as Coding History counts the source's user turns. */
+export type CodingHistoryForkBoundary =
+  | { readonly kind: "end" }
+  | {
+      readonly kind: "turn";
+      /** Zero-based position of the user turn among the source's user turns. */
+      readonly ordinal: number;
+      /** How many user turns the source holds; a runtime holding another number cannot be aligned. */
+      readonly userTurnCount: number;
+    };
+
+/** What a fork would inherit, decided before anything is created. */
+export interface CodingHistoryForkPlan {
+  readonly boundary: CodingHistoryForkBoundary;
+  /** The source's conversation ahead of the fork point, which the new task shows as its own. */
+  readonly inheritedCount: number;
+  /** The conversation the source shows. */
+  readonly sourceCount: number;
+}
+
+/** The workspace fields a Coding History task is scoped by. */
+export interface CodingHistoryTaskScope {
+  readonly projectPath: string;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly branch: string;
+}
+
+export interface CodingHistoryForkSource extends CodingHistoryCreateInput {
+  /** The task to fork. It must belong to the same operator, workspace, task workspace and branch. */
+  readonly sourceId: string;
+  /**
+   * The task workspace the new task's own one was provisioned from (#3903 AC4, #3902 AC3): the
+   * source may belong to it instead. Absent, the source belongs to the new task's workspace.
+   */
+  readonly sourceScope?: CodingHistoryTaskScope | undefined;
+  /** A user message of the source to fork just before; absent forks the source as it ended. */
+  readonly beforeMessageId?: string;
+}
+
+export interface CodingHistoryForkInput extends CodingHistoryForkSource {
+  readonly runId: string;
+  readonly intent: string;
+}
+
+export interface CodingHistoryFork extends CodingHistoryForkPlan {
+  readonly task: CodingHistoryTask;
+}
+
+/** One message of an imported file, already sanitized and within the message bound. */
+export interface CodingHistoryImportedMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  /** The time the file says it was written; absent stamps it at import. */
+  readonly timestamp?: number | undefined;
+}
+
+export interface CodingHistoryImportInput extends CodingHistoryCreateInput {
+  readonly messages: readonly CodingHistoryImportedMessage[];
+}
+
 export interface CodingHistoryStore {
   readonly begin: (input: CodingHistoryBeginInput) => CodingHistoryTask;
+  /** What a fork of the source would inherit, or `undefined` when it cannot be made. */
+  readonly planFork: (input: CodingHistoryForkSource) => CodingHistoryForkPlan | undefined;
+  /**
+   * Begins a new task from a copy of the source's conversation ahead of the fork point, bound to a
+   * run of its own that holds only the copies, then begins the given run with its intent. The
+   * source is untouched.
+   */
+  readonly fork: (input: CodingHistoryForkInput) => CodingHistoryFork;
   readonly create: (input: CodingHistoryCreateInput) => CodingHistoryTask;
+  /**
+   * Creates a task from an imported file (#3904 AC4): its messages are bound to a run of its own,
+   * which no runtime ever executed, so the task reads as `imported` and is continued by a fork.
+   */
+  readonly importTask: (input: CodingHistoryImportInput) => CodingHistoryTask;
   readonly get: (id: string, operatorDigest?: string) => CodingHistoryTask | undefined;
   readonly list: (operatorDigest: string) => readonly CodingHistoryTask[];
   readonly messagesBeforeRun: (id: string, runId: string) => readonly ChatMessage[];
   readonly detail: (id: string, operatorDigest: string) => CodingHistoryDetail | undefined;
   readonly forRun: (runId: string) => CodingHistoryTask | undefined;
+  /**
+   * The user message that carries the run's task intent: created when the run began, it holds the
+   * conversation's skill selection of that moment as its immutable turn binding (#4025).
+   */
+  readonly intentMessageId: (runId: string) => string | undefined;
   readonly bindRun: (id: string, runId: string) => void;
   readonly update: (
     id: string,
@@ -62,7 +142,18 @@ interface HistoryRow {
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+/** Run ids that hold an imported file's messages; no runtime run is ever given one. */
+const IMPORT_RUN_PREFIX = "import-";
 export const CODING_HISTORY_MESSAGE_MAX_CHARS = 65_536;
+
+/**
+ * Where the stored message that starts at `offset` ends: at most one message's length, and never
+ * between the two halves of a UTF-16 surrogate pair, so a long text splits into whole characters.
+ */
+export function codingHistoryChunkEnd(content: string, offset: number): number {
+  const end = Math.min(content.length, offset + CODING_HISTORY_MESSAGE_MAX_CHARS);
+  return (content.codePointAt(end - 1) ?? 0) > 0xffff ? end - 1 : end;
+}
 
 function assertId(value: string): void {
   if (!SAFE_ID.test(value)) throw invalidRequest("Invalid Coding History identity.");
@@ -81,11 +172,6 @@ function readTask(
     return undefined;
   const chat = store.findChatById(id);
   if (chat === undefined) return undefined;
-  const latest = db
-    .prepare(
-      "SELECT run_id FROM coding_history_runs WHERE chat_id = ? ORDER BY sequence DESC LIMIT 1",
-    )
-    .get(id);
   return {
     id,
     title: chat.title,
@@ -97,8 +183,27 @@ function readTask(
     status: row.status,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
-    ...(typeof latest?.run_id === "string" ? { latestRunId: latest.run_id } : {}),
+    ...latestRun(db, id),
   };
+}
+
+/**
+ * The task's newest run. An imported task's only run is the synthetic one its import bound, which
+ * is no run to continue, so it is named only as the task's origin (#3904 AC4).
+ */
+function latestRun(
+  db: DatabaseSync,
+  id: string,
+): Pick<CodingHistoryTask, "latestRunId" | "origin"> {
+  const latest = db
+    .prepare(
+      "SELECT run_id FROM coding_history_runs WHERE chat_id = ? ORDER BY sequence DESC LIMIT 1",
+    )
+    .get(id);
+  if (typeof latest?.run_id !== "string") return {};
+  return latest.run_id.startsWith(IMPORT_RUN_PREFIX)
+    ? { origin: "imported" }
+    : { latestRunId: latest.run_id };
 }
 
 function requireTask(db: DatabaseSync, store: UiStore, id: string): CodingHistoryTask {
@@ -132,6 +237,9 @@ function createTask(
   });
 }
 
+/** The source id of the user message a run's task intent is stored as. */
+const INTENT_SOURCE_ID = "intent";
+
 function beginTask(
   db: DatabaseSync,
   store: UiStore,
@@ -148,9 +256,144 @@ function beginTask(
     appendMessage(db, store, now, {
       id: task.id,
       runId: input.runId,
-      sourceId: "intent",
+      sourceId: INTENT_SOURCE_ID,
       role: "user",
       content: input.intent,
+    });
+    return requireTask(db, store, task.id);
+  });
+}
+
+interface ForkSelection {
+  readonly plan: CodingHistoryForkPlan;
+  readonly inherited: readonly ChatMessage[];
+}
+
+function forkBoundary(
+  shown: readonly ChatMessage[],
+  beforeMessageId: string | undefined,
+): { readonly index: number; readonly boundary: CodingHistoryForkBoundary } | undefined {
+  if (beforeMessageId === undefined) return { index: shown.length, boundary: { kind: "end" } };
+  const index = shown.findIndex((message) => message.id === beforeMessageId);
+  if (shown[index]?.role !== "user") return undefined;
+  const turns = (messages: readonly ChatMessage[]): number =>
+    messages.filter((message) => message.role === "user").length;
+  return {
+    index,
+    boundary: {
+      kind: "turn",
+      ordinal: turns(shown.slice(0, index)),
+      userTurnCount: turns(shown),
+    },
+  };
+}
+
+/**
+ * Decides what a fork inherits. A boundary inside the conversation needs all of it: a source whose
+ * earlier messages Coding History no longer lists cannot have its user turns counted, and no turn is
+ * guessed. A source of another workspace, task workspace, branch or operator is not forked.
+ */
+function inTaskScope(task: CodingHistoryTaskScope, scope: CodingHistoryTaskScope): boolean {
+  return (
+    task.workspaceId === scope.workspaceId &&
+    task.taskId === scope.taskId &&
+    task.branch === scope.branch &&
+    task.projectPath === scope.projectPath
+  );
+}
+
+function selectFork(
+  db: DatabaseSync,
+  store: UiStore,
+  input: CodingHistoryForkSource,
+): ForkSelection | undefined {
+  const source = readTask(db, store, input.sourceId, input.operatorDigest);
+  if (
+    source === undefined ||
+    !(
+      inTaskScope(source, input) ||
+      (input.sourceScope !== undefined && inTaskScope(source, input.sourceScope))
+    )
+  ) {
+    return undefined;
+  }
+  // The conversation Coding History shows for the source: user and assistant messages, no echoes.
+  const listed = store.listMessages(input.sourceId, 200);
+  const echoes = repeatedIntentMessageIds(db, input.sourceId);
+  const shown = listed.filter((message) => !echoes.has(message.id) && message.role !== "system");
+  const truncated = store.countMessages(input.sourceId) > listed.length;
+  if (truncated && input.beforeMessageId !== undefined) return undefined;
+  const point = forkBoundary(shown, input.beforeMessageId);
+  if (point === undefined) return undefined;
+  const inherited = shown.slice(0, point.index);
+  return {
+    inherited,
+    plan: {
+      boundary: point.boundary,
+      inheritedCount: inherited.length,
+      sourceCount: shown.length,
+    },
+  };
+}
+
+/** Run id of the synthetic run that holds a fork's copied conversation, ahead of its own run. */
+function inheritedRunId(runId: string): string {
+  return `inherit-${runId}`;
+}
+
+function forkTask(
+  db: DatabaseSync,
+  store: UiStore,
+  now: () => number,
+  input: CodingHistoryForkInput,
+): CodingHistoryFork {
+  return withImmediateTransaction(db, () => {
+    const selection = selectFork(db, store, input);
+    if (selection === undefined) throw invalidRequest("Coding task cannot be forked.");
+    const task = createTask(db, store, input);
+    const inheritedRun = inheritedRunId(input.runId);
+    bindRun(db, store, task.id, inheritedRun, now);
+    selection.inherited.forEach((message, index) => {
+      appendMessage(db, store, now, {
+        id: task.id,
+        runId: inheritedRun,
+        sourceId: `inherited-${String(index)}`,
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: message.content,
+        timestamp: message.timestamp,
+      });
+    });
+    bindRun(db, store, task.id, input.runId, now);
+    appendMessage(db, store, now, {
+      id: task.id,
+      runId: input.runId,
+      sourceId: INTENT_SOURCE_ID,
+      role: "user",
+      content: input.intent,
+    });
+    return { task: requireTask(db, store, task.id), ...selection.plan };
+  });
+}
+
+function importTask(
+  db: DatabaseSync,
+  store: UiStore,
+  now: () => number,
+  input: CodingHistoryImportInput,
+): CodingHistoryTask {
+  return withImmediateTransaction(db, () => {
+    const task = createTask(db, store, input);
+    const runId = `${IMPORT_RUN_PREFIX}${randomUUID()}`;
+    bindRun(db, store, task.id, runId, now);
+    input.messages.forEach((message, index) => {
+      appendMessage(db, store, now, {
+        id: task.id,
+        runId,
+        sourceId: `imported-${String(index)}`,
+        role: message.role,
+        content: message.content,
+        ...(message.timestamp === undefined ? {} : { timestamp: message.timestamp }),
+      });
     });
     return requireTask(db, store, task.id);
   });
@@ -189,6 +432,8 @@ function appendMessage(
     readonly sourceId: string;
     readonly role: "user" | "assistant";
     readonly content: string;
+    /** A copied message keeps the time it was written; absent stamps it now. */
+    readonly timestamp?: number;
   },
 ): void {
   const { id, runId, sourceId, role, content } = input;
@@ -208,7 +453,7 @@ function appendMessage(
       chatId: id,
       role,
       content,
-      timestamp: now(),
+      timestamp: input.timestamp ?? now(),
       runId: undefined,
       workflowId: undefined,
       workflowStatus: undefined,
@@ -338,6 +583,15 @@ function updateTask(
   });
 }
 
+function readIntentMessageId(db: DatabaseSync, runId: string): string | undefined {
+  const row = db
+    .prepare(
+      "SELECT message_id FROM coding_history_message_bindings WHERE run_id = ? AND source_id = ?",
+    )
+    .get(runId, INTENT_SOURCE_ID);
+  return typeof row?.message_id === "string" ? row.message_id : undefined;
+}
+
 export function createCodingHistoryStore(
   db: DatabaseSync,
   store: UiStore,
@@ -345,7 +599,10 @@ export function createCodingHistoryStore(
 ): CodingHistoryStore {
   return {
     begin: (input) => beginTask(db, store, now, input),
+    planFork: (input) => selectFork(db, store, input)?.plan,
+    fork: (input) => forkTask(db, store, now, input),
     create: (input) => createTask(db, store, input),
+    importTask: (input) => importTask(db, store, now, input),
     get: (id, operator) => readTask(db, store, id, operator),
     list: (operator) =>
       db
@@ -370,6 +627,7 @@ export function createCodingHistoryStore(
       const row = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id = ?").get(runId);
       return typeof row?.chat_id === "string" ? readTask(db, store, row.chat_id) : undefined;
     },
+    intentMessageId: (runId) => readIntentMessageId(db, runId),
     bindRun: (id, runId): void => {
       bindRun(db, store, id, runId, now);
     },

@@ -1,5 +1,6 @@
 import type { DraftDeliveryService } from "../gitDelivery/draftDeliveryTypes.js";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { isRuntimeGitSyncOperation, type RuntimeGitSyncOperation } from "./codingRuntimeGitIpc.js";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
 import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
@@ -33,6 +34,12 @@ export interface ApprovableCiObservationRequest extends CodingToolRequestIdentit
   readonly operation: "ci";
   readonly approvalProof?: CodingToolApprovalProof | undefined;
 }
+/** #3902 AC2: a governed fetch or fast-forward pull, redeemable the same way as a CI observation. */
+export interface ApprovableGitSyncRequest extends CodingToolRequestIdentity {
+  readonly action: "git";
+  readonly operation: RuntimeGitSyncOperation;
+  readonly approvalProof?: CodingToolApprovalProof | undefined;
+}
 export interface ApprovableConnectorRequest extends CodingToolRequestIdentity {
   readonly action: "connector";
   readonly scope: string;
@@ -42,6 +49,7 @@ export interface ApprovableConnectorRequest extends CodingToolRequestIdentity {
 export type ApprovableToolRequest =
   | Extract<CodingToolActionRequest, { readonly action: "command" | "verification" }>
   | ApprovableCiObservationRequest
+  | ApprovableGitSyncRequest
   | ApprovableConnectorRequest;
 
 /** The one predicate every caller uses to decide whether a request can carry a redeemable proof. */
@@ -52,7 +60,8 @@ export function isApprovableToolRequest(
     request.action === "command" ||
     request.action === "verification" ||
     request.action === "connector" ||
-    (request.action === "git" && request.operation === "ci")
+    (request.action === "git" &&
+      (request.operation === "ci" || isRuntimeGitSyncOperation(request.operation)))
   );
 }
 
@@ -147,7 +156,8 @@ export type ApprovalDigestInput =
       "action" | "actionId" | "idempotencyKey" | "verifierId" | "targetPath"
     >
   | Pick<ApprovableConnectorRequest, "action" | "actionId" | "idempotencyKey" | "scope">
-  | Pick<ApprovableCiObservationRequest, "action" | "actionId" | "idempotencyKey" | "operation">;
+  | Pick<ApprovableCiObservationRequest, "action" | "actionId" | "idempotencyKey" | "operation">
+  | Pick<ApprovableGitSyncRequest, "action" | "actionId" | "idempotencyKey" | "operation">;
 
 export function codingToolApprovalBindingDigest(
   runId: string,
@@ -404,7 +414,8 @@ function requestTargetId(request: ApprovalDigestInput): string {
     return targetId;
   }
   if (request.action === "connector") return request.scope;
-  return CI_OBSERVATION_TARGET_ID;
+  // A fetch and a pull are approved as what they are; the ask names the same target.
+  return request.operation === "ci" ? CI_OBSERVATION_TARGET_ID : request.operation;
 }
 
 export function codingToolVerificationApprovalTargetId(

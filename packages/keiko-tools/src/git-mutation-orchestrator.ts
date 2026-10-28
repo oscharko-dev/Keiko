@@ -79,6 +79,7 @@ export interface GitStageCommand {
 export interface GitUnstageCommand {
   readonly kind: "unstage";
   readonly pathspecs: readonly string[];
+  readonly verified?: import("./git-mutation-adapter.js").GitVerifiedCommitPrecondition;
 }
 
 export interface GitCommitCommand {
@@ -384,7 +385,10 @@ function dispatchExecution(
     case "stage":
       return dispatchStage(command, adapter);
     case "unstage":
-      return adapter.unstage({ pathspecs: command.pathspecs });
+      return adapter.unstage({
+        pathspecs: command.pathspecs,
+        ...(command.verified === undefined ? {} : { verified: command.verified }),
+      });
     case "commit":
       return adapter.commit({
         message: command.message,

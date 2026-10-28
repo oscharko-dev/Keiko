@@ -7,6 +7,9 @@
     "ignoreImports": true,
     "normalization": {
       "ignoreStringValues": false
-    }
+    },
+    "ignoreDefaults": false,
+    "ignore": [],
+    "ignoredClones": []
   }
 }

@@ -1,12 +1,13 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AvailableCodingSafeActivityFeed,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 
+import { I18nProvider, I18N_STORAGE_KEY, loadLocaleMessages, type Locale } from "@/lib/i18n";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -240,6 +241,28 @@ function feedWithPresentedTools(): AvailableCodingSafeActivityFeed {
   return { ...feed, turns: [{ turnId: "turn-tools", messages: [], tools, truncated: false }] };
 }
 
+// The two failed calls of a real run (#3897): a command that exited non-zero and a Code Mode
+// program that reported an error to the model. Neither carries any other presentation fact.
+function feedWithFailedNativeCalls(): AvailableCodingSafeActivityFeed {
+  const feed = feedWithRepeatedTools();
+  const tools = [
+    {
+      callId: "execute-1",
+      tool: "execute",
+      state: "failed" as const,
+      occurredAt: AT,
+    },
+    {
+      callId: "shell-1",
+      tool: "shell",
+      state: "failed" as const,
+      occurredAt: AT,
+      presentation: { exitCode: 1 },
+    },
+  ];
+  return { ...feed, turns: [{ turnId: "turn-failed", messages: [], tools, truncated: false }] };
+}
+
 const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
@@ -283,6 +306,26 @@ function paintRowHeights(container: HTMLElement, heightFor: (li: HTMLLIElement) 
 }
 
 describe("CodingWorkbenchTimeline", () => {
+  it("says why a failed call failed instead of opening to its tool name alone", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithFailedNativeCalls())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const cards = [...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]')];
+    expect(cards).toHaveLength(2);
+    const [execute, shell] = cards;
+    expect(execute?.open).toBe(true);
+    expect(execute).toHaveTextContent("The tool reported an error to the model.");
+    expect(execute).not.toHaveTextContent("exited with code");
+    expect(shell?.open).toBe(true);
+    expect(shell).toHaveTextContent("The command exited with code 1.");
+    expect(shell).not.toHaveTextContent("reported an error");
+  });
+
   it("keeps each presented call visible with precise canonical facts", () => {
     const { container } = render(
       <Timeline
@@ -758,6 +801,43 @@ describe("CodingWorkbenchTimeline", () => {
     expect(detail).toHaveTextContent("keiko_workspace_discover");
   });
 
+  it("reports a tool disclosure only when the reader activates its summary", () => {
+    // #3897 review: a failed card opens itself, and the browser announces that as a `toggle` too.
+    const toggled = (expanded: boolean): readonly unknown[] => [
+      "[keiko] coding workbench interaction: details-toggled",
+      {
+        codingWorkbenchInteraction: { interaction: "details-toggled", section: "tool", expanded },
+        correlationId: undefined,
+      },
+    ];
+    const summaryOf = (details: Element | undefined): HTMLElement => {
+      const summary = details?.querySelector("summary");
+      if (summary === null || summary === undefined) throw new Error("disclosure without summary");
+      return summary;
+    };
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const { container } = render(
+        <Timeline
+          events={[]}
+          activity={activityLike(feedWithRepeatedTools())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const [routine, failed] = container.querySelectorAll('[data-timeline-kind="tool"] details');
+      if (failed === undefined) throw new Error("failed tool card missing");
+      fireEvent(failed, new Event("toggle"));
+      expect(writer).not.toHaveBeenCalled();
+
+      fireEvent.click(summaryOf(failed));
+      fireEvent.click(summaryOf(routine));
+      expect(writer.mock.calls).toEqual([toggled(false), toggled(true)]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
   // The tool-call card (`.toolCard`) and plan card rows are otherwise exercised only indirectly
   // through CodingWorkbenchWindow.test.tsx's full-window axe pass; this pins the Timeline's own
   // rendering of both directly, matching the per-component axe suites of its siblings.
@@ -925,8 +1005,9 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
       />,
     );
     const block = reasoningBlock(container);
-    expect(block.querySelector("summary")).toHaveTextContent("Model reasoning");
-    expect(block.querySelector("summary")).toHaveTextContent("Unverified");
+    // The summary sits among tool rows whose badges are statuses; a warning-coloured "Unverified"
+    // there read as a failed check on every step (#3897, owner). The label lives in the block.
+    expect(block.querySelector("summary")?.textContent).toBe("Model reasoning");
     expect(block).toHaveTextContent("Unverified model reasoning");
     expect(block).toHaveTextContent(THOUGHT.text);
     const answer = container.querySelector(
@@ -1074,7 +1155,19 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
     expect(reasoningBlock(container)).toHaveTextContent("Output truncated");
   });
 
-  it("reports every toggle, which is always the reader's, and nothing else", () => {
+  it("reports each summary activation, which is always the reader's, and nothing else", () => {
+    // #3897: a toggle is routine evidence on its own closed report, never a free-text note.
+    const toggled = (expanded: boolean): readonly unknown[] => [
+      "[keiko] coding workbench interaction: details-toggled",
+      {
+        codingWorkbenchInteraction: {
+          interaction: "details-toggled",
+          section: "model-reasoning",
+          expanded,
+        },
+        correlationId: undefined,
+      },
+    ];
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
     try {
@@ -1086,17 +1179,16 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
           questions={IDLE_QUESTIONS}
         />,
       );
-      expect(writer).not.toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
       const block = reasoningBlock(container);
       block.open = true;
       fireEvent(block, new Event("toggle"));
-      expect(writer).toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
+      block.open = false;
+      const summary = block.querySelector("summary");
+      if (summary === null) throw new Error("reasoning block without summary");
+      fireEvent.click(summary);
+      expect(writer).toHaveBeenCalledExactlyOnceWith(...toggled(true));
       writer.mockClear();
       rerender(
         <Timeline
@@ -1106,10 +1198,7 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
           questions={IDLE_QUESTIONS}
         />,
       );
-      expect(writer).not.toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
     } finally {
       resetClientDiagnosticWriter();
     }
@@ -1493,5 +1582,287 @@ describe("timeline facts remain scoped to their run", () => {
     expect(container).toHaveTextContent("Type check: Passed");
     expect(container).toHaveTextContent("Checks: 1 passed, 0 unsuccessful, 0 skipped");
     expect(container.querySelector('[data-event-tone="success"]')).not.toBeNull();
+  });
+});
+
+// #3897 review: the native OpenCode tools (read, glob, edit, shell, webfetch, ...) used to show the
+// capitalised raw id ("Webfetch", "Glob") in English even in a German session. Each now resolves
+// through the localized catalog; an unknown or MCP tool keeps the humanized fallback.
+describe("CodingWorkbenchTimeline native tool labels", () => {
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  function feedWithTools(tools: readonly string[]): AvailableCodingSafeActivityFeed {
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-native",
+          messages: [],
+          // `running` rows are never grouped or merged, so every tool keeps its own title.
+          tools: tools.map((tool, index) => ({
+            callId: `call-${String(index)}`,
+            tool,
+            state: "running" as const,
+            occurredAt: AT,
+          })),
+          truncated: false,
+        },
+      ],
+    };
+  }
+
+  async function renderIn(locale: Locale, tools: readonly string[]): Promise<HTMLElement> {
+    await loadLocaleMessages(locale);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    return render(
+      <I18nProvider>
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithTools(tools))}
+          questions={IDLE_QUESTIONS}
+        />
+      </I18nProvider>,
+    ).container;
+  }
+
+  function titles(container: HTMLElement): readonly string[] {
+    return [...container.querySelectorAll('[data-timeline-kind="tool"] summary p')].map(
+      (node) => node.textContent ?? "",
+    );
+  }
+
+  const NATIVE_TOOLS = [
+    "read",
+    "glob",
+    "grep",
+    "list",
+    "edit",
+    "write",
+    "patch",
+    "shell",
+    "webfetch",
+    "websearch",
+    "skill",
+    "subagent",
+    "todo",
+    "question",
+  ] as const;
+
+  it("names every native tool in English", async () => {
+    const container = await renderIn("en", NATIVE_TOOLS);
+
+    expect(titles(container)).toEqual([
+      "Read file",
+      "Find files",
+      "Search in files",
+      "List folder",
+      "Edit file",
+      "Write file",
+      "Apply patch",
+      "Shell command",
+      "Web fetch",
+      "Web search",
+      "Skill",
+      "Subagent",
+      "Task list",
+      "Question",
+    ]);
+  });
+
+  it("names every native tool in German instead of capitalising its raw id", async () => {
+    const container = await renderIn("de", NATIVE_TOOLS);
+
+    expect(titles(container)).toEqual([
+      "Datei lesen",
+      "Dateien suchen",
+      "In Dateien suchen",
+      "Ordner auflisten",
+      "Datei bearbeiten",
+      "Datei schreiben",
+      "Patch anwenden",
+      "Shell-Befehl",
+      "Webabruf",
+      "Websuche",
+      "Skill",
+      "Subagent",
+      "Aufgabenliste",
+      "Rückfrage",
+    ]);
+    // "Skill" and "Subagent" are the same word in both languages; every other raw id is gone.
+    for (const tool of NATIVE_TOOLS.filter((id) => id !== "skill" && id !== "subagent")) {
+      expect(titles(container)).not.toContain(`${tool.slice(0, 1).toUpperCase()}${tool.slice(1)}`);
+    }
+  });
+
+  it("keeps the existing Keiko tool labels", async () => {
+    const container = await renderIn("en", ["keiko_git_status", "keiko_workspace_read"]);
+
+    expect(titles(container)).toEqual(["Git status", "Workspace read"]);
+  });
+
+  it("humanizes an unknown or MCP tool id instead of inventing a localized label", async () => {
+    const container = await renderIn("de", ["linear.create_issue", "keiko_run_command"]);
+
+    expect(titles(container)).toEqual(["Linear Create Issue", "Run Command"]);
+  });
+
+  // The lookup used a plain object: a tool called `constructor` resolved to Object's constructor
+  // function and `t(function)` rendered nonsense instead of falling back to the humanized id.
+  it.each([
+    ["constructor", "Constructor"],
+    ["toString", "ToString"],
+    ["hasOwnProperty", "HasOwnProperty"],
+  ])("never resolves the inherited name %s to a prototype member", async (tool, humanized) => {
+    const container = await renderIn("en", [tool]);
+
+    expect(titles(container)).toEqual([humanized]);
+  });
+});
+
+// #3897 review: the plan card was a <details> keyed by the plan REVISION, so every todo update
+// remounted it (losing the reader's place and its open state) and its closed summary said nothing
+// about progress.
+describe("CodingWorkbenchTimeline plan card", () => {
+  function planFeed(
+    revision: number,
+    states: readonly ("pending" | "active" | "completed" | "cancelled")[],
+    anchorMessageId = "message-1",
+  ): AvailableCodingSafeActivityFeed {
+    const feed = feedWithPlan(0);
+    return {
+      ...feed,
+      turns: feed.turns.map((turn) => ({
+        ...turn,
+        messages: turn.messages.map((message) => ({ ...message, messageId: anchorMessageId })),
+      })),
+      plan: {
+        revision,
+        anchorMessageId,
+        updatedAt: AT,
+        steps: states.map((state, index) => ({
+          text: `Step ${String(index + 1)}`,
+          state,
+          truncated: false,
+        })),
+        truncated: false,
+      },
+    };
+  }
+
+  function renderPlan(
+    feed: AvailableCodingSafeActivityFeed,
+    active: boolean,
+  ): ReturnType<typeof render> {
+    return render(
+      <Timeline
+        active={active}
+        events={[]}
+        activity={activityLike(feed)}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+  }
+
+  function planDetails(container: HTMLElement): HTMLDetailsElement {
+    const details = container.querySelector<HTMLDetailsElement>(
+      '[data-timeline-kind="plan"] details',
+    );
+    if (details === null) throw new Error("expected the plan card");
+    return details;
+  }
+
+  it("keeps the same card element across plan revisions of one anchor message", () => {
+    const view = renderPlan(planFeed(1, ["active", "pending", "pending"]), false);
+    const before = planDetails(view.container);
+    before.open = true;
+
+    view.rerender(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(planFeed(2, ["completed", "active", "pending"]))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const after = planDetails(view.container);
+    expect(after).toBe(before);
+    expect(after.open).toBe(true);
+    expect(within(after).getByText("Completed", { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("shows how many steps are completed in the closed summary", () => {
+    const { container } = renderPlan(
+      planFeed(3, ["completed", "completed", "active", "pending", "cancelled"]),
+      false,
+    );
+
+    const summary = planDetails(container).querySelector("summary");
+    expect(summary).toHaveTextContent("Current plan");
+    expect(summary).toHaveTextContent("2/5 completed");
+  });
+
+  it("localizes the progress in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            events={[]}
+            activity={activityLike(planFeed(1, ["completed", "pending"]))}
+            questions={IDLE_QUESTIONS}
+          />
+        </I18nProvider>,
+      );
+
+      expect(planDetails(container).querySelector("summary")).toHaveTextContent(
+        "1/2 abgeschlossen",
+      );
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+
+  it("omits the progress for a plan without steps", () => {
+    const { container } = renderPlan(planFeed(1, []), false);
+
+    expect(planDetails(container).querySelector("summary")).not.toHaveTextContent("completed");
+  });
+
+  it("keeps the plan open while the run is active and closed once it is settled", () => {
+    const feed = planFeed(1, ["active", "pending"]);
+    const active = renderPlan(feed, true);
+    expect(planDetails(active.container).open).toBe(true);
+    active.unmount();
+
+    const settled = renderPlan(feed, false);
+    expect(planDetails(settled.container).open).toBe(false);
+  });
+
+  it("starts a new card when the plan moves to another anchor message", () => {
+    const view = renderPlan(planFeed(1, ["active"], "message-1"), false);
+    const before = planDetails(view.container);
+
+    view.rerender(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(planFeed(2, ["active"], "message-2"))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(planDetails(view.container)).not.toBe(before);
+  });
+
+  it("has no axe violations with the progress summary", async () => {
+    const { container } = renderPlan(planFeed(1, ["completed", "pending"]), true);
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

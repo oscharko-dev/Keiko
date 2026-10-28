@@ -111,7 +111,8 @@ describe("native catalog composition through genuine runtime owners", () => {
       );
       const callGateway = gateway.chat.bind(gateway);
       vi.spyOn(gateway, "chat").mockImplementation((request) => {
-        const binding = request.toolCatalog?.offered.binding;
+        const catalog = request.toolCatalog;
+        const binding = catalog?.kind === "bound" ? catalog.offered.binding : undefined;
         if (binding === undefined) throw new TypeError("Expected native catalog binding");
         observedBindings.push({
           catalogRevision: binding.catalogRevision,

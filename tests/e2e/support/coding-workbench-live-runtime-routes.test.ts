@@ -11,7 +11,7 @@ import {
   type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
 
-import { createRuntimeFixture } from "./coding-workbench-live-runtime-fixtures.js";
+import { activeWorkspace, createRuntimeFixture } from "./coding-workbench-live-runtime-fixtures.js";
 import {
   handleEditorSnapshotRoute,
   installRuntimeRoutes,
@@ -160,10 +160,9 @@ async function installedRuntimeHandler(): Promise<FixtureRouteHandler> {
   return handler;
 }
 
-function capturedCatalogRoute(
-  suffix: string,
+function capturedApiRoute(
+  path: string,
   method = "GET",
-  pathname = "/api/models",
 ): CapturedRoute & {
   readonly continued: () => boolean;
   readonly delegated: () => boolean;
@@ -174,7 +173,7 @@ function capturedCatalogRoute(
   const route = {
     request: () => ({
       method: (): string => method,
-      url: (): string => `http://fixture.invalid${pathname}${suffix}`,
+      url: (): string => `http://fixture.invalid${path}`,
     }),
     fulfill: (options: RouteFulfillOptions): Promise<void> => captured.route.fulfill(options),
     fallback: (): Promise<void> => {
@@ -200,14 +199,14 @@ describe("installed live runtime model catalog", (): void => {
     try {
       vi.setSystemTime(new Date("2026-10-17T04:00:00.000Z"));
       const handler = await installedRuntimeHandler();
-      const first = capturedCatalogRoute("");
+      const first = capturedApiRoute("/api/models");
       await handler(first.route);
       vi.advanceTimersByTime(5_000);
-      const refreshed = capturedCatalogRoute("?refresh=1");
+      const refreshed = capturedApiRoute("/api/models?refresh=1");
       await handler(refreshed.route);
       expect(refreshed.fulfillment()?.body).toBe(first.fulfillment()?.body);
       const nextHandler = await installedRuntimeHandler();
-      const next = capturedCatalogRoute("");
+      const next = capturedApiRoute("/api/models");
       await nextHandler(next.route);
       expect(next.fulfillment()?.body).not.toBe(first.fulfillment()?.body);
     } finally {
@@ -218,7 +217,7 @@ describe("installed live runtime model catalog", (): void => {
   it.each(["", "?refresh=1"])(
     "serves a freshly verified ready model for GET /api/models%s",
     async (suffix): Promise<void> => {
-      const route = capturedCatalogRoute(suffix);
+      const route = capturedApiRoute(`/api/models${suffix}`);
       const handler = await installedRuntimeHandler();
       await handler(route.route);
 
@@ -239,7 +238,7 @@ describe("installed live runtime model catalog", (): void => {
   );
 
   it("delegates startup update requests to the context fixture", async (): Promise<void> => {
-    const route = capturedCatalogRoute("", "GET", "/api/update/preflight");
+    const route = capturedApiRoute("/api/update/preflight");
     const handler = await installedRuntimeHandler();
     await handler(route.route);
     expect(route.delegated()).toBe(true);
@@ -248,11 +247,62 @@ describe("installed live runtime model catalog", (): void => {
   });
 
   it("delegates non-GET model requests to remaining handlers", async (): Promise<void> => {
-    const route = capturedCatalogRoute("", "POST");
+    const route = capturedApiRoute("/api/models", "POST");
     const handler = await installedRuntimeHandler();
     await handler(route.route);
     expect(route.delegated()).toBe(true);
     expect(route.continued()).toBe(false);
     expect(route.fulfillment()).toBeUndefined();
   });
+});
+
+describe("installed live runtime repository reads", (): void => {
+  it("registers the source repository modeled by the active workspace", async (): Promise<void> => {
+    const route = capturedApiRoute("/api/projects");
+    await (
+      await installedRuntimeHandler()
+    )(route.route);
+    expect(route.continued()).toBe(false);
+    expect(JSON.parse(route.fulfillment()?.body as string)).toMatchObject({
+      projects: [{ path: activeWorkspace().instance.repositoryRoot, workspaceAvailable: true }],
+    });
+  });
+
+  it("serves branches for the modeled source root", async (): Promise<void> => {
+    const workspace = activeWorkspace().instance;
+    const route = capturedApiRoute(
+      `/api/git/branches?root=${encodeURIComponent(workspace.repositoryRoot)}`,
+    );
+    await (
+      await installedRuntimeHandler()
+    )(route.route);
+    expect(route.continued()).toBe(false);
+    expect(JSON.parse(route.fulfillment()?.body as string)).toMatchObject({
+      root: workspace.repositoryRoot,
+      available: true,
+      branches: [{ name: workspace.baseBranch, current: true }],
+    });
+  });
+
+  it.each([
+    "/api/git/branches?root=%2Funmodeled",
+    "/api/git/branches",
+    "/api/git/branches?root=",
+    "/api/git/branches?root=%",
+    "/api/git/branches?root=%2Fworkspace%2F",
+    "/api/git/branches?root=%2F..%2Fetc",
+    "/api/git/status?root=%2Fworkspace",
+    "/api/projects",
+  ])(
+    "leaves unmodeled reads and non-GET mutations to the server: %s",
+    async (path): Promise<void> => {
+      const route = capturedApiRoute(path, path === "/api/projects" ? "POST" : "GET");
+      await (
+        await installedRuntimeHandler()
+      )(route.route);
+      expect(route.delegated()).toBe(true);
+      expect(route.continued()).toBe(false);
+      expect(route.fulfillment()).toBeUndefined();
+    },
+  );
 });

@@ -1,0 +1,298 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "3c423d1117e1e1c040534abd6b551b73815c04d5",
+  "classification": "Scoped inline-source, overlapping-region, JSON-value and public-consumer repair. No complete issue, skill, privacy or release acceptance.",
+  "repair": [
+    "Reuse canonical Markdown code ranges and bounded unresolved-inline hints; retain unresolved source until completion and discard cancelled pending text.",
+    "Keep source-region stitching monotonic so overlapping language hints cannot append an already redacted private suffix.",
+    "Parse JSON/JSONC roots through native syntactic diagnostics, including arrays and scalars. A filename hint does not invalidate harmless public metadata; private alternative source requires an existing validated language owner.",
+    "Use parsed YAML key ownership for malformed-source refusal while preserving public safety instructions under ordinary redaction.",
+    "Invalidate older projected index records with snapshot version15; existing body-free observations record source-redaction revision7."
+  ],
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "e2b232a3eb4129ee8e6121360ec4762c3f1a286d0108a83a000c79a5969d4ece"
+    },
+    {
+      "path": "packages/keiko-contracts/src/citation-markers.test.ts",
+      "sha256": "2543a40700d81ce1a29a81f3d76d755eef44d1fb6360905dccab6be1a64163a1"
+    },
+    {
+      "path": "packages/keiko-contracts/src/citation-markers.ts",
+      "sha256": "b4a051167645eb77166a7ff93cae0e8282efd7e7b6a8275b5abe75014ec0e802"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-code.ts",
+      "sha256": "3e081018899b277b03efca48d199eca6bc5330d42e734128d2ac64ad32b89852"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-consumer-preservation.test.ts",
+      "sha256": "dc1578b84b8119c11b2154daca8153275a7ac6756419f769ddd07762694783ec"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-inline-source.test.ts",
+      "sha256": "d68a0d43d9764744afa8ac086a5c097610e5d58949b35f9013fe992f70dc1832"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-overlap.test.ts",
+      "sha256": "2aba2440a3cec0ef7fec1836cff14b4590be8b901b1782de5bdd43e31a476307"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-stream.ts",
+      "sha256": "e8b0fd2d28d7b990be184bb4c255e98f90404f3d204fed273ddf628fde817f5f"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-typescript.ts",
+      "sha256": "dbee6fa0ce5029a4c6edac0929528a50b5b1b92383f223c15fa92481a8d376ec"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-yaml.ts",
+      "sha256": "405719f4859b6aa7b6a6294ae948555589dadd05cdeba8ad19ee41d43c448fe7"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction.ts",
+      "sha256": "3d4a659d3ca2a9c4b2dd1d4dad3ac678fc11ee1f17d422b94019337e41f9a942"
+    },
+    {
+      "path": "packages/keiko-workspace/src/workspaceIndex.ts",
+      "sha256": "c4a49364ce3cdf28ce36612f2006bcb389bb8d8708e7904415f9b7b0cb4b10e8"
+    }
+  ],
+  "freeze": {
+    "sourceSha256": "e770f0f79226c3715d80a3e08538025da9c23cc2553f798f5da1d5d96a809b70",
+    "compiledSha256": "48717bbf842ed9aa95e8ca2dd2729242d716fd99c9988d03d3df8ea618310ab1"
+  },
+  "affectedTests": {
+    "passed": 9138,
+    "failed": 0,
+    "skipped": 4,
+    "reportSha256": "5e7bc18d67128f7bbc4dbd4009f715ffe0edb6a7da6c33f1e63e55cc5474f6cb"
+  },
+  "affectedCoverage": {
+    "classification": "Affected code only, not repository-wide coverage.",
+    "linesPercent": 94.62,
+    "branchesPercent": 87.1,
+    "reportSha256": "891d7163dc29317205e6ddc79025c1fbe0835b6b11a7b68fed1417c37ad602d3"
+  },
+  "localChecks": [
+    {
+      "label": "checkpoint82e-typecheck-v2",
+      "sha256": "77e80744bcceca4131ece93b682de36bd205f33e51143196a5fc8138478d03b6",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": null
+    },
+    {
+      "label": "checkpoint82e-lint-v2",
+      "sha256": "a43f7b0eb97e739c5997614b2fa0f5a5492b8ac5c7dddc015740559312290e10",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": null
+    },
+    {
+      "label": "checkpoint82e-format-check-v1",
+      "sha256": "e9d24c2c278a8b9cb1887314f86f10a309aa07d4dfa2e00d8459ca7409e74b29",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": null
+    },
+    {
+      "label": "checkpoint82e-fallback-controls-v1",
+      "sha256": "b1aaf752f4807ffaebf5283ac454f0a2784ad51969fb02269baf835b4e4cdf87",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": null
+    },
+    {
+      "label": "checkpoint82e-activity-v1",
+      "sha256": "b4800b575aeae098287da37b92f7a9461b2cb80afadb20ff7ebda77e24dd58ed",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": null
+    },
+    {
+      "label": "checkpoint82e-final-sonar-v1",
+      "sha256": "4af14b066e3deec9d398e7461f78a8f1dae2ba828af0703503df188c9fa52f51",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": null
+    },
+    {
+      "label": "checkpoint82e-final-affected-coverage-v1",
+      "sha256": "8a1c7f363ac8d64155a4dd59500d58e37cab882dd2a4cb7ac47631e39f1c1dc9",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": true
+    },
+    {
+      "label": "checkpoint82e-final-retrieval-v1",
+      "sha256": "6325e51b4d2a605093f4df145e47cc7bfc9ce2635afea36dbde8f3fe9751293b",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": true
+    },
+    {
+      "label": "checkpoint82e-final-grounded-v1",
+      "sha256": "10c2ec6e858a5ad6e76b4ff58d0836299ad86fc00cf4dc4a3bf96124b38ac7d6",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": true
+    },
+    {
+      "label": "checkpoint82e-final-faithfulness-v1",
+      "sha256": "fcdc3444760bc4e59adcf37f2778bd81c9a3858430936d4a1f6f933a588d60ae",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": true
+    },
+    {
+      "label": "checkpoint82e-final-context-v1",
+      "sha256": "9bd9703bcf96c27b898570c96ee92a4836388417a5b510d41c0a7154a31c7643",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": true
+    },
+    {
+      "label": "checkpoint82e-final-observability-v1",
+      "sha256": "d5bf8df163ef775735214fe0dd0dc9fbf71b6ea5af2b0cc889b1b955faa8a4bf",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": true
+    },
+    {
+      "label": "checkpoint82e-final-adr-v1",
+      "sha256": "5685ca78aabf6fd77d7c27560ff8b317f419b9f5c68c2bb3d1e61596e5a47910",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "compiledUnchangedWhenMeasured": true
+    }
+  ],
+  "retainedFailedAttempts": [
+    {
+      "label": "checkpoint82-inline-red-v1.tests.json",
+      "sha256": "691122987238d07a2fdf138c04b0bbd3e0c9b85eda34c20e9a5c9ec45307e03a",
+      "passed": 3,
+      "failed": 8,
+      "skipped": 0
+    },
+    {
+      "label": "checkpoint82-inline-hints-red-v1.tests.json",
+      "sha256": "7531105481f1e5f1846f73e20a9d882c1ecd7ff4ae6c6eeef60d302d8b517c17",
+      "passed": 40,
+      "failed": 2,
+      "skipped": 0
+    },
+    {
+      "label": "checkpoint82-inline-public-scalar-red-v1.tests.json",
+      "sha256": "b3a344851c081687a5e9cc1f9412a002cc3280a9b7f466211159dd2121f68444",
+      "passed": 12,
+      "failed": 2,
+      "skipped": 0
+    },
+    {
+      "label": "checkpoint82-public-safety-red-v1.tests.json",
+      "sha256": "025b91893e6790554d00c80f8129ee23964fc8dfd441af19fb34dd7d71915217",
+      "passed": 0,
+      "failed": 1,
+      "skipped": 10
+    },
+    {
+      "label": "checkpoint82c-overlap-red-v1.json",
+      "sha256": "04cd8c26a9cb505bb152e2675b71d6482d903103e2448bc80e85bae1c9cb4bc3",
+      "exitCode": 1
+    },
+    {
+      "label": "checkpoint82d-json-owner-red-v1.json",
+      "sha256": "e409db4e9e293f1ce68c45816d37b86c358d54dee10938ae865abe83a063cd72",
+      "exitCode": 1
+    },
+    {
+      "label": "checkpoint82d-final-affected-coverage-v1.tests.json",
+      "sha256": "824ff191b29c519ffb8e7996e4f119ddd659adaaeae4bb2bed42150c18fa5c13",
+      "passed": 9124,
+      "failed": 4,
+      "skipped": 4
+    },
+    {
+      "label": "checkpoint82e-public-json-hint-green-v1.json",
+      "sha256": "b95b4a302369f87d80afc2e4a032041f8ab0abb4eec3f724c779e84edc1dfbb4",
+      "exitCode": 1
+    }
+  ],
+  "verificationNotes": [
+    "Original large-lockfile and explicit-path public-metadata fixtures and assertions remain unchanged.",
+    "The first82e consumer run overlapped a package build and failed3tests; the completed-build rerun passed all79. Both runs remain retained.",
+    "All stream partitions remain present. Two long coverage test batches were split into disjoint groups under the unchanged per-test timeout; no sampling or larger budget.",
+    "Existing assembled package-surface proof from82d binds the unchanged public export surface;82e changes only internal JSON fallback and index revision.",
+    "Conservative malformed-source refusal can omit ambiguous public prose; no universal byte-preservation promise."
+  ],
+  "independent": {
+    "classification": "Separate isolated final82e source/runtime capture; declared controls unchanged.",
+    "sourceFiles": 7577,
+    "compiledFiles": 6645,
+    "jsonHintCases": 40,
+    "jsonRootCases": 45,
+    "privateOrConfiguredLeaks": 0,
+    "publicShapesExact": 7,
+    "publicShapesMeasured": 8,
+    "streamCases": 48,
+    "streamPartitions": 2860,
+    "actualWorkspaceCases": 6,
+    "oldSnapshotsRejected": [12, 13, 14],
+    "rebuiltVersion": 15,
+    "evidence": [
+      {
+        "label": "redaction-candidate-82e-independent/capture.json",
+        "sha256": "aa1f215d96e368493565d33b0e044c0ff9211d2c894944dd9cb81c29f5a54a67"
+      },
+      {
+        "label": "json-hint-fallback-candidate82e.json",
+        "sha256": "fa75fb78544809575cace08e518d6e627b82576dce54387ad4ee6e3046cdea09"
+      },
+      {
+        "label": "explicit-json-owner-candidate82e.json",
+        "sha256": "641026188313885ccda68f41708e80a9e2ade35e313985b89aa39e707ea2c172"
+      },
+      {
+        "label": "json-index-after-candidate82e.json",
+        "sha256": "7049262e86500660375027cd7b471ae8a1fe5dda90d553cf7fa916e5b2c74e9a"
+      },
+      {
+        "label": "json-index-after-v14-candidate82e.json",
+        "sha256": "db0f21a80fcf47ce6879f6e2499e8fff77b244603918a2e067a54d9006e6d803"
+      }
+    ]
+  },
+  "skillState": {
+    "javaOriginalCorrectSubject": {
+      "skillPassed": 6,
+      "controlPassed": 5,
+      "perGroup": 6
+    },
+    "javaOriginalFullCorrectnessAndConventions": {
+      "skillPassed": 5,
+      "controlPassed": 5,
+      "perGroup": 6
+    },
+    "javaSeparateBoundedRepairs": {
+      "skill": 1,
+      "control": 1,
+      "bothCompileAndPass": true,
+      "eachIndependentDefectsDetected": 6
+    },
+    "qualification": "Original failures remain failed. Bounded repair results do not establish unused-task benefit. React qualification remains open.",
+    "thinkingDefault": "enabled",
+    "composerChanged": false,
+    "promptSkillOrBudgetChanges": false
+  },
+  "remainingHolds": [
+    "Malformed scalar-root escaped JSON under inferred plain-text source ownership.",
+    "Unified-diff privacy and exact public-byte preservation.",
+    "Follow-up source selection at the existing search-call grant.",
+    "Vendor dependency closure and declared supply-chain decisions.",
+    "Remaining native updater/browser/multi-source/history acceptance and original96criterion reconciliation.",
+    "React and untouched held-out skill qualification.",
+    "Final exact-head local/CI checks, evidenced review settlement and authorized verified integration."
+  ]
+}

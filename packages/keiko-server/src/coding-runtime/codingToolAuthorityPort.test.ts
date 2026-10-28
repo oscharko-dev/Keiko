@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type {
   CodingWorkbenchRuntimeAuthorityEnvelope,
@@ -34,6 +34,7 @@ import {
   codingRuntimeCommandPolicyForMode,
   codingRuntimeConnectorScopesForMode,
   codingRuntimeNetworkPolicyForMode,
+  type CodingRuntimeAuthorityService,
   type CodingRuntimeCapabilityDelegationInput,
 } from "./runtimeAuthorityService.js";
 import {
@@ -397,6 +398,116 @@ describe("CodingToolAuthorityPort", () => {
     expect(port.admit("capability", approved).ok).toBe(false);
   });
 
+  // #3902 AC2: a governed fetch or pull meets the Git sync owner's decision. Full access admits it
+  // within the production envelope; below Full access it is approval-required, and only the
+  // operator's approval of that exact call admits it -- once, and never for the other operation.
+  // The production envelope there carries no network egress at all: the owner defers that gate to
+  // the mode matrix, as it does for the Git Client's own Fetch and Pull.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "admits a fetch or pull at %s only through the operator's approval of that exact call",
+    (mode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode: mode,
+        actionClasses: codingRuntimeActionClassesForMode(mode, false),
+        connectorScopes: codingRuntimeConnectorScopesForMode(mode),
+        networkPolicy: codingRuntimeNetworkPolicyForMode(mode, false),
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const approvalProofVerifier = createCodingToolApprovalBridge();
+      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+        approvalProofVerifier,
+      });
+      const nowMs = Date.parse("2026-07-12T09:00:00.000Z");
+      for (const operation of ["fetch", "pull"] as const) {
+        const request = {
+          action: "git" as const,
+          operation,
+          actionId: `${operation}-${mode}`,
+          idempotencyKey: `${operation}-${mode}`,
+        };
+        const approvalProof = {
+          approvalId: request.actionId,
+          approvalDigest: codingToolApprovalBindingDigest("run-authority-a", request),
+        };
+        expect(port.admit("capability", request).ok).toBe(false);
+        expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(false);
+        expect(
+          approvalProofVerifier.observePermission({
+            runId: "run-authority-a",
+            requestId: `permission-${request.actionId}`,
+            action: "git",
+            actionId: request.actionId,
+            idempotencyKey: request.idempotencyKey,
+            targetId: operation,
+            proof: approvalProof,
+            expiresAt: "2026-07-12T09:05:00.000Z",
+            nowMs,
+          }),
+        ).toBe(true);
+        expect(
+          approvalProofVerifier.activatePermission({
+            runId: "run-authority-a",
+            requestId: `permission-${request.actionId}`,
+            approvalAuthorityDigest: "c".repeat(64),
+            expiresAtMs: Date.parse("2026-07-12T09:05:00.000Z"),
+            nowMs,
+          }),
+        ).toBe(true);
+        const other = operation === "fetch" ? "pull" : "fetch";
+        expect(port.admit("capability", { ...request, operation: other, approvalProof }).ok).toBe(
+          false,
+        );
+        expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(true);
+        expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(false);
+      }
+    },
+  );
+
+  it("admits a fetch and a pull at autonomous-delivery within its production envelope, without an approval", () => {
+    const envelope = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      actionClasses: codingRuntimeActionClassesForMode("autonomous-delivery", false),
+      connectorScopes: codingRuntimeConnectorScopesForMode("autonomous-delivery"),
+      networkPolicy: codingRuntimeNetworkPolicyForMode("autonomous-delivery", false),
+    });
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const port = createCodingToolAuthorityPort(authority, runtimeContext);
+    for (const operation of ["fetch", "pull"] as const)
+      expect(
+        port.admit("capability", {
+          action: "git",
+          operation,
+          actionId: operation,
+          idempotencyKey: operation,
+        }).ok,
+      ).toBe(true);
+    const narrowed = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      networkPolicy: { mode: "deny-all", connectorScopes: [] },
+    });
+    const refused = createCodingToolAuthorityPort(
+      {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope: narrowed })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope: narrowed })),
+      },
+      runtimeContext,
+    );
+    expect(
+      refused.admit("capability", {
+        action: "git",
+        operation: "fetch",
+        actionId: "fetch",
+        idempotencyKey: "fetch",
+      }).ok,
+    ).toBe(false);
+  });
+
   it("admits a connector read at supervised-coding once its scoped approval is redeemed, never a mismatched scope", () => {
     const envelope = restrictedEnvelope({
       effectiveMode: "supervised-coding",
@@ -530,6 +641,79 @@ describe("CodingToolAuthorityPort", () => {
           actionId: "egress-after-narrow",
           idempotencyKey: "egress-after-narrow",
           target: "approved-target",
+        }),
+      ).toEqual({ ok: false, reason: "action-not-authorized" });
+      expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "hands %s research egress to the grant-gated research port under governed egress",
+    async (effectiveMode) => {
+      // #2387: below Full access a deployment opens research only through the `governed-egress`
+      // policy, whose single delegate asks the human for a request-line-bound grant and fails the
+      // call closed until that grant exists. Refusing it here left the ask unreachable, so research
+      // could never be approved in these modes. The envelope comes from the production mints.
+      const envelope = restrictedEnvelope({
+        effectiveMode,
+        actionClasses: codingRuntimeActionClassesForMode(effectiveMode, true),
+        connectorScopes: codingRuntimeConnectorScopesForMode(effectiveMode),
+        networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, true),
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const log = createBufferedServerLogSink();
+      const egress = vi.fn(() => Promise.resolve({ status: "failed" as const }));
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        () => ({ ...runtimeContext(), correlationId: "research-ask" }),
+        { ...governedPorts(), egressAuthority: { execute: egress } },
+        { catalogActivityLog: log, disableCatalogBridge: true },
+      );
+
+      await expect(
+        runtime.execute({
+          capability: "capability",
+          body: JSON.stringify({
+            action: "egress",
+            actionId: "research-ask",
+            idempotencyKey: "research-ask",
+            target: "https://docs.example.org/guide",
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "failed" });
+
+      expect(egress).toHaveBeenCalledTimes(1);
+      expect(log.events.map((event) => event.op)).not.toContain(
+        "coding-runtime.tool-authority.denied",
+      );
+    },
+  );
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "keeps %s egress denied when the deployment did not open governed research",
+    (effectiveMode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode,
+        actionClasses: [...codingRuntimeActionClassesForMode(effectiveMode, true)],
+        connectorScopes: codingRuntimeConnectorScopesForMode(effectiveMode),
+        networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, false),
+      });
+      const resolveCapabilityForDelegation = vi.fn(() => ({ ok: true as const, envelope }));
+      const port = createCodingToolAuthorityPort(
+        {
+          resolveCapabilityForDelegation,
+          revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        },
+        runtimeContext,
+      );
+
+      expect(
+        port.admit("capability", {
+          action: "egress",
+          actionId: "research-without-policy",
+          idempotencyKey: "research-without-policy",
+          target: "https://docs.example.org/guide",
         }),
       ).toEqual({ ok: false, reason: "action-not-authorized" });
       expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
@@ -3066,3 +3250,169 @@ it.each(["context", "producer"] as const)(
     }
   },
 );
+
+describe("native effect admission (#3897 review)", () => {
+  const nativeContext = (): ReturnType<Parameters<typeof createRuntimeCodingToolFacade>[1]> => ({
+    adapterKind: "model-gateway-sidecar",
+    liveFacts,
+    workspaceRoot: "/managed/workspace",
+    deploymentCeiling: "autonomous-delivery",
+    nowIso: "2026-07-12T09:00:00.000Z",
+    runId: "run-native-effect",
+    envelopeDigest: DIGEST,
+    authorityExpiresAt: "2026-07-12T12:00:00.000Z",
+  });
+  const call = {
+    sessionId: "ses_primary",
+    messageId: "msg_1",
+    callId: "call_1",
+  };
+  type RevalidateFn = CodingRuntimeAuthorityService["revalidateCapabilityForMutation"];
+  type ReserveFn = CodingRuntimeAuthorityService["resolveCapabilityForDelegation"];
+  const mockedAuthority = (
+    envelope: CodingWorkbenchRuntimeAuthorityEnvelope = fullyAuthorizedEnvelope,
+  ): {
+    readonly revalidateCapabilityForMutation: Mock<RevalidateFn>;
+    readonly resolveCapabilityForDelegation: Mock<ReserveFn>;
+  } => ({
+    revalidateCapabilityForMutation: vi.fn<RevalidateFn>(() => ({ ok: true, envelope })),
+    resolveCapabilityForDelegation: vi.fn<ReserveFn>(() => ({ ok: true, envelope })),
+  });
+
+  it("admits an effect through the delegation path, reserving one tool call under the invocation's identity", () => {
+    const authority = mockedAuthority();
+    const facade = createRuntimeCodingToolFacade(authority, nativeContext, governedPorts());
+    expect(facade.nativeEffect).toBeDefined();
+    expect(
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "command-execution",
+        invocation: call,
+      }),
+    ).toEqual({ ok: true, charge: "charged" });
+    expect(authority.resolveCapabilityForDelegation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "runtime-capability-secret",
+        delegationId: expect.stringMatching(/^native-invocation-[a-f0-9]{64}$/u) as string,
+        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        workspaceRoot: "/managed/workspace",
+        deploymentCeiling: "autonomous-delivery",
+      }),
+    );
+    const reserved = authority.resolveCapabilityForDelegation.mock.calls[0]?.[0];
+    expect(reserved?.idempotencyKey).toBe(reserved?.delegationId);
+    // The identity carries no session, message or call text.
+    expect(reserved?.delegationId).not.toContain("msg_1");
+    expect(reserved?.delegationId).not.toContain("call_1");
+  });
+
+  // CORRECTED INVARIANT (PR #4064 audit). This test replaces "revalidates a read without reserving a
+  // tool call", which pinned the defect: the read exemption let 100 distinct native reads through a
+  // 10-call envelope. A read is a tool call like any other: every check revalidates live authority,
+  // and the invocation's one call is reserved on its first check, whatever the action class.
+  it("revalidates every check and charges a read once per invocation like any other tool call", () => {
+    const authority = mockedAuthority();
+    const facade = createRuntimeCodingToolFacade(authority, nativeContext, governedPorts());
+    const admitRead = (callId: string): unknown =>
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "workspace-read",
+        invocation: { ...call, callId },
+      });
+    expect(admitRead("call_1")).toEqual({ ok: true, charge: "charged" });
+    expect(authority.revalidateCapabilityForMutation).toHaveBeenCalledOnce();
+    expect(authority.resolveCapabilityForDelegation).toHaveBeenCalledOnce();
+    // The authority's replay ledger answers the second check of the same invocation: no new charge,
+    // but live authority is revalidated again.
+    authority.resolveCapabilityForDelegation.mockReturnValueOnce({
+      ok: false,
+      reason: "authority-replayed",
+    });
+    expect(admitRead("call_1")).toEqual({ ok: true, charge: "already-charged" });
+    expect(authority.revalidateCapabilityForMutation).toHaveBeenCalledTimes(2);
+    const identities = authority.resolveCapabilityForDelegation.mock.calls.map(
+      ([input]) => input.delegationId,
+    );
+    expect(identities[0]).toBe(identities[1]);
+    // Another call id is another invocation, hence another identity.
+    expect(admitRead("call_2")).toEqual({ ok: true, charge: "charged" });
+    expect(authority.resolveCapabilityForDelegation.mock.calls[2]?.[0].delegationId).not.toBe(
+      identities[0],
+    );
+  });
+
+  it("charges a check that names no invocation on its own, and never treats a replay of it as charged", () => {
+    const authority = mockedAuthority();
+    const facade = createRuntimeCodingToolFacade(authority, nativeContext, governedPorts());
+    const admit = (): unknown =>
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "workspace-read",
+      });
+    expect(admit()).toEqual({ ok: true, charge: "per-check" });
+    expect(admit()).toEqual({ ok: true, charge: "per-check" });
+    const [first, second] = authority.resolveCapabilityForDelegation.mock.calls.map(
+      ([input]) => input.delegationId,
+    );
+    expect(first).toMatch(/^native-[a-f0-9]{24}$/u);
+    expect(second).not.toBe(first);
+    authority.resolveCapabilityForDelegation.mockReturnValueOnce({
+      ok: false,
+      reason: "authority-replayed",
+    });
+    expect(admit()).toEqual({ ok: false, reason: "authority-replayed" });
+  });
+
+  it("refuses a read on an expired authority without attempting a reservation", () => {
+    const authority = {
+      ...mockedAuthority(),
+      revalidateCapabilityForMutation: vi.fn<RevalidateFn>(() => ({
+        ok: false,
+        reason: "authority-expired",
+      })),
+    };
+    expect(
+      createRuntimeCodingToolFacade(authority, nativeContext, governedPorts()).nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "workspace-read",
+        invocation: call,
+      }),
+    ).toEqual({ ok: false, reason: "authority-expired" });
+    expect(authority.resolveCapabilityForDelegation).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the budget is exhausted, and when the envelope lacks the class without reserving", () => {
+    const exhausted = {
+      ...mockedAuthority(),
+      resolveCapabilityForDelegation: vi.fn<ReserveFn>(() => ({
+        ok: false,
+        reason: "authority-budget-exceeded",
+      })),
+    };
+    expect(
+      createRuntimeCodingToolFacade(exhausted, nativeContext, governedPorts()).nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "workspace-read",
+        invocation: call,
+      }),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+
+    const narrow = mockedAuthority(restrictedEnvelope({ actionClasses: ["workspace-read"] }));
+    const facade = createRuntimeCodingToolFacade(narrow, nativeContext, governedPorts());
+    expect(
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "command-execution",
+        invocation: call,
+      }),
+    ).toEqual({ ok: false, reason: "action-not-authorized" });
+    expect(narrow.resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    expect(
+      facade.nativeEffect?.admit({
+        capability: "runtime-capability-secret",
+        actionClass: "workspace-read",
+        invocation: call,
+      }),
+    ).toEqual({ ok: true, charge: "charged" });
+  });
+});

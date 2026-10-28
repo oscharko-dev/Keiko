@@ -183,6 +183,7 @@ import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   isDesktopChatStreamEvent,
   type ChatContextStatusWire,
+  type DesktopChatCreateRequestWire,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
   type ConversationAttachmentUploadResponseWire,
@@ -191,6 +192,7 @@ import {
   type DesktopChatStreamEventType,
   type GitChangeConnectResponse,
   type GitChangeRefreshResponse,
+  type MarkdownSkillReference,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -938,6 +940,8 @@ export interface StartRunInput {
   limits?: Record<string, unknown>;
   governedHandoff?: Record<string, unknown>;
   governedHandoffSourceGroundedRunId?: string;
+  // The private Markdown skill the human selected for a governed workflow run (#4025 AC1).
+  skill?: MarkdownSkillReference;
   voiceOrigin?: {
     readonly profile: string;
     readonly turnIndex: number;
@@ -1442,11 +1446,7 @@ export async function patchChatMessage(
 // Desktop canvas V1 — real chat through the existing model gateway
 // ---------------------------------------------------------------------------
 
-export interface CreateDesktopChatInput {
-  projectPath?: string;
-  title?: string;
-  modelId?: string;
-}
+export type CreateDesktopChatInput = DesktopChatCreateRequestWire;
 
 export async function createDesktopChat(
   input: CreateDesktopChatInput = {},

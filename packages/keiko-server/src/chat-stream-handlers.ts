@@ -1,3 +1,7 @@
+import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
+import { setImmediate as yieldHttpWrites } from "node:timers/promises";
+import { createStreamingRedactor } from "@oscharko-dev/keiko-security/redaction";
+import { currentRedactionSecrets } from "./deps.js";
 import { raceAbort } from "./abort-race.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
@@ -34,6 +38,7 @@ import type { ChatMessage } from "./store/index.js";
 import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type {
+  ConversationMemoryActionWire,
   ConversationMemoryResultWire,
   DesktopChatSendResponse,
   DesktopChatStreamEvent,
@@ -162,6 +167,47 @@ function releaseStreamIterator(
   }
 }
 
+function tokenChunkCapacity(res: RouteContext["res"], remaining: number): number {
+  const ceiling = res.writableHighWaterMark;
+  if (!Number.isFinite(ceiling) || ceiling <= 0) return remaining;
+  const queued = Number.isFinite(res.writableLength) ? res.writableLength : 0;
+  const framing = Buffer.byteLength(sseMessage({ event: "token", data: { text: "" } }));
+  // JSON can expand one UTF-16 unit to six bytes. Half the available body capacity leaves
+  // room for HTTP framing and the existing buffered headers without raising any queue bound.
+  return Math.max(1, Math.floor((ceiling - queued - framing) / 12));
+}
+
+function tokenChunkEnd(text: string, from: number, capacity: number): number {
+  let end = Math.min(text.length, from + capacity);
+  if ((text.codePointAt(end - 1) ?? 0) > 0xffff) end += end - from === 1 ? 1 : -1;
+  return end;
+}
+
+function tokenPublisher(
+  ctx: RouteContext,
+  controller: AbortController,
+  termination: StreamTermination,
+): (text: string) => Promise<void> {
+  return async (text): Promise<void> => {
+    let from = 0;
+    while (from < text.length && !controller.signal.aborted) {
+      const end = tokenChunkEnd(text, from, tokenChunkCapacity(ctx.res, text.length - from));
+      termination.tokenFrames += 1;
+      writeOrDestroy(
+        ctx.res,
+        sseMessage({ event: "token", data: { text: text.slice(from, end) } }),
+        controller,
+        () => {
+          termination.backpressure = true;
+        },
+        ctx.correlationId,
+      );
+      from = end;
+      if (from < text.length && !requestIsAborted(controller.signal)) await yieldHttpWrites();
+    }
+  };
+}
+
 async function streamConversation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -170,6 +216,11 @@ async function streamConversation(
   termination: StreamTermination,
 ): Promise<StreamedTurn | undefined> {
   const iterator = stream[Symbol.asyncIterator]();
+  const publication = createStreamingRedactor(
+    (text): string => currentContentRedactor(deps)(text) as string,
+    currentRedactionSecrets(deps),
+  );
+  const publish = tokenPublisher(ctx, controller, termination);
   try {
     for (;;) {
       const next = await iterator.next();
@@ -180,20 +231,13 @@ async function streamConversation(
       // never shows it, so a reasoning chunk (none reaches this surface today) is passed over.
       if (chunk.type === "reasoning") continue;
       if (chunk.type === "delta") {
-        termination.tokenFrames += 1;
-        writeOrDestroy(
-          ctx.res,
-          sseMessage({ event: "token", data: { text: deps.redactor(chunk.token) as string } }),
-          controller,
-          () => {
-            termination.backpressure = true;
-          },
-          ctx.correlationId,
-        );
+        await publish(publication.push(chunk.token));
         if (requestIsAborted(controller.signal)) return undefined;
-      } else {
-        return { response: chunk.response };
+        continue;
       }
+      await publish(publication.finish());
+      if (requestIsAborted(controller.signal)) return undefined;
+      return { response: chunk.response };
     }
   } finally {
     releaseStreamIterator(ctx, deps, iterator);
@@ -231,8 +275,13 @@ async function persistStreamedTurn(
   correlationId: string | undefined,
 ): Promise<DesktopChatSendResponse | undefined> {
   const { request, chat, modelId, memoryContext } = prepared;
-  const redactedContent = deps.redactor(turn.response.content) as string;
-  const actions = await collectMemoryActions(deps, request, memoryContext, { correlationId });
+  const redactedContent = currentContentRedactor(deps)(turn.response.content) as string;
+  const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
+    deps,
+    request,
+    memoryContext,
+    { correlationId },
+  );
   if (signal.aborted) return undefined;
   const createdAssistant = createAssistantMessage(
     deps,
@@ -638,7 +687,9 @@ function resolveDesktopChatStreamCall(
     );
     return asCallableOrRouteResult<StreamCall>(invalidExecution);
   }
-  const model = deps.modelPortFactory(prepared.modelId);
+  const resolvedModel = deps.modelPortFactory(prepared.modelId);
+  const model =
+    resolvedModel === undefined ? undefined : withChatContentPolicy(deps, resolvedModel);
   return model?.callStream === undefined
     ? asCallableOrRouteResult<StreamCall>(streamingUnsupportedOutcome(correlationId))
     : asCallableOrRouteResult<StreamCall>(model.callStream.bind(model));

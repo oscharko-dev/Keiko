@@ -1,74 +1,72 @@
-// Scripted MODEL boundary for the real-binary lane (#3417): the model discovers the approved skills
-// and invokes the one discovery listed, so the skill id it passes comes from the runtime's own
-// discovery result. Discovery, invocation and their evidence still traverse the shipped runtime,
-// protocol, binder and production skill handlers.
+// Scripted MODEL boundary for the real-binary lane (#3417, #3897): the original runtime lists the
+// skills it can load in its own system prompt, and the model invokes the one it finds there with the
+// runtime's own `skill` tool, so the skill id it passes comes from that listing and never from a
+// fixture. The skill itself is a repository skill the fixture repository carries: it reaches the
+// listing only through Keiko's sanitized repository-item admission (#3903) into the run's private
+// discovery directory, so a listed fixture skill proves that boundary end to end.
 import { createHash } from "node:crypto";
-import { decodeGovernedToolModelContent } from "../governedToolModelContent.js";
+
+import { nativeSystemPrompt } from "./nativeToolTranscript.js";
 
 export const SKILL_DISCOVERY_PROOF_CALL_ID = "skill-real-binary-discovery";
+
+/** The repository skill the journey's fixture repository carries under `.opencode/skills/`. */
+export const FUNCTIONAL_REPOSITORY_SKILL_NAME = "repo-structure-summary";
+
+/** The fixture skill's `SKILL.md`: closed frontmatter and a plain Markdown body, no authority. */
+export function functionalRepositorySkillText(): string {
+  return [
+    "---",
+    `name: ${FUNCTIONAL_REPOSITORY_SKILL_NAME}`,
+    "description: Summarize the structure of the repository in a few lines.",
+    "---",
+    "List the top-level folders of the repository and what each one is for.",
+    "",
+  ].join("\n");
+}
 
 export interface SkillDiscoveryConsumptionProof {
   readonly schemaVersion: 1;
   readonly toolCallId: string;
   readonly listedCount: number;
-  readonly catalogDigest: string;
+  readonly listingDigest: string;
   readonly skillIdDigest: string;
   readonly invokedSkillDerivedFromResult: true;
 }
 
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+interface ListedSkill {
+  readonly id: string;
+  readonly name: string;
 }
 
-function discoveryOutput(transcript: string): Record<string, unknown> {
-  const messages: unknown = JSON.parse(transcript);
-  if (!Array.isArray(messages)) throw new TypeError("skill proof requires gateway messages");
-  const reply: unknown = messages.find(
-    (message: unknown) =>
-      record(message) &&
-      message.role === "tool" &&
-      message.toolCallId === SKILL_DISCOVERY_PROOF_CALL_ID,
+const AVAILABLE_SKILLS = /<available_skills>([\s\S]*?)<\/available_skills>/u;
+const LISTED_SKILL = /<skill>\s*<id>([^<]*)<\/id>\s*<name>([^<]*)<\/name>/gu;
+
+function skillListing(transcript: string): { block: string; skills: readonly ListedSkill[] } {
+  const block = AVAILABLE_SKILLS.exec(nativeSystemPrompt(transcript))?.[1];
+  if (block === undefined) throw new TypeError("skill proof requires the runtime skill listing");
+  const skills = [...block.matchAll(LISTED_SKILL)].flatMap((match) =>
+    match[1] === undefined || match[2] === undefined ? [] : [{ id: match[1], name: match[2] }],
   );
-  if (!record(reply) || typeof reply.content !== "string") {
-    throw new TypeError("skill proof requires the correlated runtime discovery result");
-  }
-  const output = decodeGovernedToolModelContent(reply.content);
-  if (!record(output) || output.status !== "completed" || !record(output.skills)) {
-    throw new TypeError("skill proof requires a completed discovery result");
-  }
-  return output.skills;
+  return { block, skills };
 }
 
-function firstReadySkill(discovery: Record<string, unknown>): string {
-  const skill: unknown = Array.isArray(discovery.skills) ? discovery.skills[0] : undefined;
-  if (
-    !record(skill) ||
-    typeof skill.skillId !== "string" ||
-    !record(skill.readiness) ||
-    skill.readiness.state !== "ready"
-  ) {
-    throw new TypeError("skill proof requires a listed, ready skill");
-  }
-  return skill.skillId;
-}
-
-/** The keiko_skill arguments derived from the correlated discovery result, never from a fixture. */
+/** The `skill` arguments derived from the runtime's own listing, never from a fixture constant. */
 export function skillInvocationHandoff(
   transcript: string,
+  skillName: string,
   observe: ((proof: SkillDiscoveryConsumptionProof) => void) | undefined,
 ): Record<string, unknown> {
-  const discovery = discoveryOutput(transcript);
-  if (typeof discovery.catalogDigest !== "string") {
-    throw new TypeError("skill proof requires the listing's catalog digest");
-  }
-  const skillId = firstReadySkill(discovery);
+  const listing = skillListing(transcript);
+  const skill = listing.skills.find((candidate) => candidate.name === skillName);
+  if (skill === undefined) throw new TypeError("skill proof requires the admitted skill listed");
   observe?.({
     schemaVersion: 1,
     toolCallId: SKILL_DISCOVERY_PROOF_CALL_ID,
-    listedCount: Array.isArray(discovery.skills) ? discovery.skills.length : 0,
-    catalogDigest: discovery.catalogDigest,
-    skillIdDigest: createHash("sha256").update(skillId).digest("hex"),
+    listedCount: listing.skills.length,
+    listingDigest: createHash("sha256").update(listing.block).digest("hex"),
+    skillIdDigest: createHash("sha256").update(skill.id).digest("hex"),
     invokedSkillDerivedFromResult: true,
   });
-  return { skillId };
+  return { id: skill.id };
 }

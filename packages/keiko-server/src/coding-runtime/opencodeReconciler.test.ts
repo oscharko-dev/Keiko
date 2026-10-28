@@ -170,6 +170,75 @@ describe("OpenCode history reconciliation", () => {
     });
   });
 
+  it("releases acknowledged critical staging without widening bounds or replaying effects", () => {
+    const reconciler = createOpenCodeReconciler({ maxEvents: 2 });
+    let latest = event("evt_0", 0, "tool");
+    for (let sequence = 0; sequence < 1_000; sequence += 1) {
+      latest = event(`evt_${String(sequence)}`, sequence, "tool");
+      const prepared = reconciler.prepare([latest]);
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) throw new Error("critical-preparation-failed");
+      expect(prepared.commit()).toBe(true);
+      reconciler.acknowledge(prepared.projections);
+      expect(reconciler.staging().events).toBeLessThanOrEqual(2);
+      expect(reconciler.staging().identities).toBeLessThanOrEqual(2);
+      expect(reconciler.staging().digests).toBeLessThanOrEqual(2);
+    }
+    expect(reconciler.ingest([latest])).toEqual({ ok: true, applied: 0, projections: [] });
+    expect(reconciler.ingest([{ ...latest, digest: "f".repeat(64) }])).toEqual({
+      ok: false,
+      reason: "sequence-conflict",
+    });
+    expect(reconciler.ingest([event("evt_1001", 1_001, "tool")])).toEqual({
+      ok: false,
+      reason: "sequence-gap",
+    });
+  });
+
+  it("retains unacknowledged critical work while recycling delivered events", () => {
+    const reconciler = createOpenCodeReconciler({ maxEvents: 2 });
+    const permission = event("evt_permission", 0, "permission");
+    const question = event("evt_question", 1, "question");
+    expect(reconciler.ingest([permission, question])).toMatchObject({ ok: true });
+    reconciler.acknowledge([question]);
+    expect(reconciler.ingest([event("evt_tool", 2, "tool")])).toMatchObject({ ok: true });
+    expect(reconciler.ingest([{ ...permission, digest: "f".repeat(64) }])).toEqual({
+      ok: false,
+      reason: "sequence-conflict",
+    });
+    expect(reconciler.ingest([event("evt_terminal", 3, "terminal")])).toEqual({
+      ok: false,
+      reason: "staging-overflow",
+    });
+  });
+
+  it("invalidates a stale prepared snapshot only when acknowledgement changes staging", () => {
+    const reconciler = createOpenCodeReconciler();
+    const first = event("evt_0", 0, "tool");
+    expect(reconciler.ingest([first])).toMatchObject({ ok: true });
+    const stale = reconciler.prepare([event("evt_1", 1, "tool")]);
+    reconciler.acknowledge([first]);
+    expect(stale.ok && stale.commit()).toBe(false);
+    const current = reconciler.prepare([event("evt_1", 1, "tool")]);
+    reconciler.acknowledge([first]);
+    expect(current.ok && current.commit()).toBe(true);
+  });
+
+  it("does not release uncommitted or mismatched critical projections", () => {
+    const reconciler = createOpenCodeReconciler({ maxEvents: 1 });
+    const first = event("evt_permission", 0, "permission");
+    const prepared = reconciler.prepare([first]);
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error("critical-preparation-failed");
+    reconciler.acknowledge(prepared.projections);
+    expect(prepared.commit()).toBe(true);
+    reconciler.acknowledge([{ ...first, digest: "f".repeat(64) }]);
+    expect(reconciler.ingest([event("evt_terminal", 1, "terminal")])).toEqual({
+      ok: false,
+      reason: "staging-overflow",
+    });
+  });
+
   it("fails closed for critical-only byte overflow", () => {
     const reconciler = createOpenCodeReconciler({ maxEvents: 256, maxBytes: 1 });
     expect(reconciler.ingest([event("evt_permission", 0, "permission")])).toEqual({

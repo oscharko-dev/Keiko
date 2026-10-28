@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "bb56e1e301ba24667a90f952adec60753db49fd0",
+  "classification": "Bounded malformed-YAML redaction performance repair; not skill, installed updater, full browser or complete issue acceptance",
+  "repair": [
+    "Replace the comment-tail regex with one scan of line endings and disjoint header prefixes.",
+    "Preserve the original classification and fail-closed private-value behavior without changing source-size, task, transport or test deadlines.",
+    "Identify the implementation as code-redaction revision2 through existing Activity Log evidence fields; no new operation or grant."
+  ],
+  "sources": [
+    {
+      "path": "packages/keiko-security/src/redaction-yaml.ts",
+      "sha256": "c42d637eca2f2c6487e4d54b23848e2af471cdddfeb497b9e1b011f690f31047"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-yaml.classification.test.ts",
+      "sha256": "2c16053f03375257d7d56506b447306a50644846ab2ad01ddbbc8fed0960be7f"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction.ts",
+      "sha256": "f99ea3949d1a4b61dbb62aecc9124d09d08c5b56319df5736491375ead0e6051"
+    },
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "41d9b99c87ef8a6931bcbd23e362ebfd8370050d8fab34f3db102bc0b1ba55ec"
+    }
+  ],
+  "regression": {
+    "before": "Eight focused controls passed; repeated malformed header input exceeded the existing2000ms child deadline.",
+    "after": "Same focused case passes under unchanged2000ms deadline;60format/stream/classification controls passed.",
+    "inputBytes": 196619,
+    "deadlineMs": 2000
+  },
+  "broadAffectedCoverage": {
+    "passed": 8991,
+    "failed": 0,
+    "existingSkipped": 4,
+    "total": 8995,
+    "notWholeRepositoryCoverage": true
+  },
+  "independentEquivalence": {
+    "cases": 679255,
+    "classificationDifferences": 0,
+    "receiptSha256": "3ff73c6e119301598e9aec7d3cc2dd9ec0803c48d009067fcd69cccfea4de336"
+  },
+  "freeze": {
+    "sourceSha256": "e4fa25eb2837ad606695d1f84a5608c1e6e65fc4eb39a0b73f8e00743d4895ad",
+    "compiledSha256": "a536a29449d5b95d7c0eeafcb7349ef63e7e63e1ea16bb698d15d3aa0e19b808"
+  },
+  "checks": [
+    {
+      "label": "checkpoint78-yaml-bounded-classification-red-v1",
+      "receiptSha256": "3a9242d5e841dff01490d79cd08b258fe35d1ca79fe1bc8bc65caa5a330bc28e",
+      "exitCode": 1,
+      "sourceUnchanged": true,
+      "logSha256": "9d39e28657f51fcf63f366c14965bf1eaff9555c7b29635e28c7d8d6db0482b5"
+    },
+    {
+      "label": "checkpoint78-yaml-bounded-classification-green-v1",
+      "receiptSha256": "cf40086be537a58445a318ccdc5b4ad270b134036392117b993e7dc8700e0476",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "10eaad1d330bb6a12f74abcf58386e916b503e63ac1f22feb419ebf615a09dc5"
+    },
+    {
+      "label": "checkpoint78-yaml-typecheck-v1",
+      "receiptSha256": "1bae1c70adf809944464efabc4673c927c639cfe78fcdbea9a824eb4fbca21b9",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "label": "checkpoint78-yaml-broad-coverage-v1",
+      "receiptSha256": "989fbf2edf5dd1a519e58dfa91968d692f32e14803cf183143515a2d64dec463",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "0edbaaffcb30df06784cb1256b087d5c2308fe51266ef13cc8115e2874e1348b"
+    },
+    {
+      "label": "checkpoint78-yaml-scoped-lint-v1",
+      "receiptSha256": "01ed28fef638fc3f5668f8a4fe7a7f0c336f9108b83c54906f68d8444d27b13f",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "checkpoint78-yaml-format-check-v1",
+      "receiptSha256": "ae2e1180667c9f777302f3aa4a6cb28077a6c249e75c59b79998caa73016fa66",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "label": "checkpoint78-yaml-arch-v1",
+      "receiptSha256": "6f8c4a4fcb09187cd8c7fbd75cd63dcb404b16dc2ac16c519a3c13fc9a4d002a",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "75f7908c05f8abf8189012d98d26b77d7e27c752a64d3bd9daa48965caad586d"
+    },
+    {
+      "label": "checkpoint78-yaml-arch-negative-v1",
+      "receiptSha256": "76ab6824e72e755f1aa69513871b8d203ae69acc5f667c0854b4a34acd82e2dd",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "3e024386847be2d39bc4cdb0b5829c7b2243a9bfc5887d6ec1f86e72abcff6df"
+    },
+    {
+      "label": "checkpoint78-yaml-activity-v1",
+      "receiptSha256": "286dcfe7e51f87809e25ad02cb2e1fe9e2cad5af1f24e9341f861125f8bf66e3",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "438ffd26b216bd54142e8790cbab2b42e6018e6050b7215947d229c9757a2329"
+    },
+    {
+      "label": "checkpoint78-yaml-adr-v1",
+      "receiptSha256": "566926a8cfd6f68383e4178c879604ed50bb4e799456aacb199714d04bed52b5",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    },
+    {
+      "label": "checkpoint78-yaml-sonar-v1",
+      "receiptSha256": "2daf3d4a390e8e9581c11b8edd6ddc945652e516e8febdbce430ec7cff274d6f",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "a9b63ea2fe7c7e9fb745cac49d4196fd0c6d18b2d5709081d24f11441a89ba17"
+    }
+  ],
+  "limitations": [
+    "Current-head required GitHub checks and complete review settlement remain pending.",
+    "Original first-draft model failures and acceptance ledgers are unchanged.",
+    "Copy Answer semantic preservation and staged vendor override resolution are separate known defects."
+  ],
+  "independentRuntime": {
+    "receiptSha256": "ce4d24b60cdfeb6c8485720770b2a00c11dce60422d086580acc3653889c0b1a",
+    "scalingControls": 16,
+    "priorCompletedOutputsCompared": 14,
+    "oldPublic196KCaseTimedOut": true,
+    "sameCaseAfterMs": 11.020125,
+    "scope": "Observed isolated runtime measurement, not a portable timing guarantee",
+    "sourceFormatRows": 181,
+    "streamPartitions": 1147,
+    "ambiguousBoundaryPartitions": 531,
+    "yamlLexicalRows": 6,
+    "malformedPrivacyRows": 9
+  }
+}

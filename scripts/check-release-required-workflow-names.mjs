@@ -2,6 +2,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pullRequestJobNames } from "./lib/workflow-trigger-scenarios.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const workflowsDir = join(repoRoot, ".github", "workflows");
@@ -86,7 +87,9 @@ export function workflowJobNames(source) {
   function flush() {
     if (currentJobId === null) return;
     const name = currentJobName ?? currentJobId;
-    names.push(...expandMatrixName(name, source));
+    const lifecycle = pullRequestJobNames(name);
+    names.push(...expandMatrixName(lifecycle?.admitted ?? name, source));
+    if (lifecycle !== undefined) names.push(lifecycle.inactive);
   }
 
   for (const line of lines) {

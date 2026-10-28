@@ -171,6 +171,9 @@ export interface ExecuteVerificationArgs {
   // ADR-0043 D17: install the manifest's declared dependencies before the first script step when
   // the installed tree is not current. Off unless the caller asks, exactly like the orchestrator.
   readonly dependencyBootstrap?: "off" | "auto" | undefined;
+  // The platform of the native coding runtime that shares this workspace (`sharedHostPlatform` of
+  // the bootstrap): an install for another platform is refused instead of replacing its bindings.
+  readonly sharedHostPlatform?: VerificationDeps["sharedHostPlatform"];
   // The orchestrator's redacted output tail of a step that did not pass (ADR-0126 D3), forwarded
   // as it happens; never part of the persisted report.
   readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
@@ -314,6 +317,9 @@ async function executeExclusiveVerification(
     ...(args.dependencyBootstrap === undefined
       ? {}
       : { dependencyBootstrap: args.dependencyBootstrap }),
+    ...(args.sharedHostPlatform === undefined
+      ? {}
+      : { sharedHostPlatform: args.sharedHostPlatform }),
     ...(args.onStepOutput === undefined ? {} : { onStepOutput: args.onStepOutput }),
   });
   return {

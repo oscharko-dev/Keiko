@@ -225,6 +225,7 @@ function readiness(): unknown {
     effectiveMode: "supervised-coding",
     runtimeAvailable: true,
     runtimeEvidenceClass: "platform-qualified",
+    selectableAgents: ["build"],
   };
 }
 

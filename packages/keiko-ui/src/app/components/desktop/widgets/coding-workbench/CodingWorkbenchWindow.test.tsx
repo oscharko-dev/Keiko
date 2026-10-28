@@ -13,6 +13,7 @@ import {
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
@@ -39,14 +40,16 @@ import type {
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import type { UseCodingWorkbenchApprovalReviewResult } from "@/lib/useCodingWorkbenchApprovalReview";
 import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-import type { ProjectWithAvailability } from "@/lib/types";
+import type { FilesSearchResponse, ProjectWithAvailability } from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import {
   CodingWorkbenchWindow,
+  newTaskReferenceRoot,
   sessionGrowthKey,
   type CodingWorkbenchGitTarget,
 } from "./CodingWorkbenchWindow";
@@ -58,6 +61,12 @@ import {
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
+import {
+  I18nProvider,
+  I18N_STORAGE_KEY,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
 import {
@@ -73,6 +82,10 @@ const researchHookMock = vi.hoisted(() => vi.fn());
 // #3417: the approved-skills channel has a hook of its own; every suite here stays hermetic through it.
 const skillsHookMock = vi.hoisted(() => vi.fn());
 const approvalReviewHookMock = vi.hoisted(() => vi.fn());
+// B3 (S04): the undo channel has a hook of its own; every suite stays hermetic through it.
+const revertHookMock = vi.hoisted(() => vi.fn());
+// S07: so does the list of messages waiting for the running turn.
+const inboxHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
 const repositoryBranchHookMock = vi.hoisted(() =>
@@ -115,11 +128,26 @@ const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
 // dedicated paused-state suite can opt into the exact branch it needs without reaching the network.
 const trustStatusMock = vi.hoisted(() => vi.fn());
 const trustMutateMock = vi.hoisted(() => vi.fn());
+// #3897 review: the Changes list and the journey summary read one git status through one hook. The
+// default rejects exactly like the unreachable network these suites ran against before, so only the
+// suites that count or answer the read opt into a response.
+const gitStatusMock = vi.hoisted(() => vi.fn());
+const gitHistoryMock = vi.hoisted(() => vi.fn());
+// ADR-0137 D10: the composer's `@` picker searches files through the Files surface's own search, and
+// its `/` menu reads a paused run's commands through a hook of its own.
+const filesSearchMock = vi.hoisted(() => vi.fn());
+const commandsHookMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    fetchGitStatus: (...args: Parameters<typeof actual.fetchGitStatus>): unknown =>
+      gitStatusMock(...args),
+    fetchGitHistory: (...args: Parameters<typeof actual.fetchGitHistory>): unknown =>
+      gitHistoryMock(...args),
+    fetchFilesSearch: (...args: Parameters<typeof actual.fetchFilesSearch>): unknown =>
+      filesSearchMock(...args),
     fetchCodingWorkbenchJourneyRefresh: journeyRefreshMock,
     fetchGitDeliveryMergeExecute: mergeExecuteMock,
     fetchGitDeliveryPrExecute: prUpdateExecuteMock,
@@ -160,6 +188,11 @@ function defaultTaskSession(): CodingTaskSession {
     error: false,
     newTask: vi.fn(),
     finish: vi.fn(),
+    fork: null,
+    beginFork: vi.fn(),
+    cancelFork: vi.fn(),
+    forkTargets: [],
+    continueIn: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -185,6 +218,18 @@ vi.mock("@/lib/useCodingWorkbenchSkills", () => ({
 
 vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
   useCodingWorkbenchApprovalReview: approvalReviewHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchRevert", () => ({
+  useCodingWorkbenchRevert: revertHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchInbox", () => ({
+  useCodingWorkbenchInbox: inboxHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchCommands", () => ({
+  useCodingWorkbenchCommands: commandsHookMock,
 }));
 
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
@@ -242,6 +287,7 @@ const IDLE_ACTIVITY: UseCodingWorkbenchSafeActivityResult = {
 function actions(): CodingWorkbenchRuntimeActions {
   return {
     setRequestedMode: vi.fn(),
+    setAgent: vi.fn(),
     setRuntimePreference: vi.fn(),
     setSelectedModel: vi.fn(),
     setReasoningEffort: vi.fn(),
@@ -258,6 +304,8 @@ function actions(): CodingWorkbenchRuntimeActions {
     pause: vi.fn(() => Promise.resolve()),
     resume: vi.fn(() => Promise.resolve()),
     submitFollowUp: vi.fn(() => Promise.resolve()),
+    revert: vi.fn(() => Promise.resolve()),
+    inboxAction: vi.fn(() => Promise.resolve()),
     revokeResearchGrant: vi.fn(() => Promise.resolve()),
   };
 }
@@ -323,6 +371,7 @@ function liveState(
         deploymentCeiling: "supervised-coding",
         effectiveMode: "governed-assist",
         runtimeAvailable: true,
+        selectableAgents: ["build"],
         runtimeEvidenceClass: "platform-qualified",
       },
       error: null,
@@ -491,9 +540,36 @@ beforeEach(() => {
   prUpdateExecuteMock.mockReset();
   trustStatusMock.mockReset().mockResolvedValue(trustStatus("unused", "trusted"));
   trustMutateMock.mockReset();
+  gitStatusMock.mockReset().mockRejectedValue(new Error("git status not available in this suite"));
+  gitHistoryMock
+    .mockReset()
+    .mockRejectedValue(new Error("git history not available in this suite"));
   questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
+  revertHookMock.mockReset().mockReturnValue({ revert: null });
+  inboxHookMock.mockReset().mockReturnValue({ status: "idle", items: [], retry: vi.fn() });
+  // The commands listing is read only for a paused run the `/` menu asked about.
+  commandsHookMock
+    .mockReset()
+    .mockImplementation(({ runId, wanted }: { runId?: string; wanted: boolean }) =>
+      runId !== undefined && wanted
+        ? {
+            status: "ready",
+            commands: [{ name: "review" }, { name: "team:deploy-check", description: "Deploy" }],
+            agents: [{ name: "explore", description: "Fast agent for exploring code" }],
+            skills: [{ id: "review-method", name: "review-method", description: "A method" }],
+            retry: vi.fn(),
+          }
+        : { status: "idle", commands: [], agents: [], skills: [], retry: vi.fn() },
+    );
+  filesSearchMock.mockReset().mockResolvedValue({
+    root: "/repo",
+    query: "",
+    results: [],
+    truncated: false,
+    scannedFileCount: 0,
+  });
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
   skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
@@ -1429,10 +1505,39 @@ describe("CodingWorkbenchWindow", () => {
     const liveActions = renderWorkbench(liveState({ requestedMode: "governed-assist" }));
 
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
-    await user.click(screen.getByRole("option", { name: "Full access" }));
+    await user.click(screen.getByRole("option", { name: /^Full access/u }));
 
     expect(liveActions.setRequestedMode).toHaveBeenCalledWith("autonomous-delivery");
     expect(change).toHaveBeenCalledWith("autonomous-delivery");
+  });
+
+  // #3897 review: after a reload the saved selection (here Supervised) is restored while the
+  // restored run was confirmed in another mode; the locked control must name the run's own mode.
+  it.each([
+    ["governed-assist", "Ask for approval"],
+    ["supervised-coding", "Supervised workspace"],
+    ["autonomous-delivery", "Full access"],
+  ] as const)("shows a restored %s run's confirmed mode in the locked control", (mode, label) => {
+    renderWorkbench(
+      liveState({
+        requestedMode: "supervised-coding",
+        run: {
+          status: "ready",
+          value: snapshot({ runId: "run-1", state: "running", effectiveMode: mode }),
+          error: null,
+        },
+      }),
+    );
+
+    const authority = screen.getByRole("combobox", { name: "Run authority" });
+    expect(authority).toHaveTextContent(label);
+    expect(authority.getAttribute("title")).toContain(
+      {
+        "governed-assist": "every command asks",
+        "supervised-coding": "vetted project commands",
+        "autonomous-delivery": "without asking",
+      }[mode],
+    );
   });
 
   it("shows the selected authority while the server enforces a lower deployment ceiling", () => {
@@ -1448,6 +1553,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "governed-assist",
             effectiveMode: "governed-assist",
             runtimeAvailable: true,
+            selectableAgents: ["build"],
           },
         },
       }),
@@ -1477,6 +1583,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "governed-assist",
             effectiveMode: "governed-assist",
             runtimeAvailable: true,
+            selectableAgents: ["build"],
           },
         },
       }),
@@ -1505,6 +1612,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "supervised-coding",
             effectiveMode: "governed-assist",
             runtimeAvailable: true,
+            selectableAgents: ["build"],
           },
         },
       }),
@@ -1583,6 +1691,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "supervised-coding",
             effectiveMode: "governed-assist",
             runtimeAvailable: false,
+            selectableAgents: ["build"],
             runtimeUnavailableReason: "runtime-unqualified",
           },
         },
@@ -1617,6 +1726,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "supervised-coding",
             effectiveMode: "governed-assist",
             runtimeAvailable: false,
+            selectableAgents: ["build"],
             runtimeUnavailableReason: "runtime-unqualified",
           },
         },
@@ -1644,6 +1754,7 @@ describe("CodingWorkbenchWindow", () => {
             deploymentCeiling: "supervised-coding",
             effectiveMode: "governed-assist",
             runtimeAvailable: false,
+            selectableAgents: ["build"],
           },
         },
         workspace: {
@@ -1848,6 +1959,7 @@ describe("CodingWorkbenchWindow", () => {
         deploymentCeiling: "supervised-coding",
         effectiveMode: "governed-assist",
         runtimeAvailable: false,
+        selectableAgents: ["build"],
         runtimeUnavailableReason: "runtime-disabled",
       },
     } as const satisfies CodingWorkbenchRuntimeState["runtime"];
@@ -2105,6 +2217,7 @@ describe("CodingWorkbenchWindow", () => {
               deploymentCeiling: "supervised-coding",
               effectiveMode: "governed-assist",
               runtimeAvailable: false,
+              selectableAgents: ["build"],
               runtimeUnavailableReason: "runtime-disabled",
             },
           },
@@ -2139,6 +2252,7 @@ describe("CodingWorkbenchWindow", () => {
               deploymentCeiling: "supervised-coding",
               effectiveMode: "governed-assist",
               runtimeAvailable: false,
+              selectableAgents: ["build"],
               runtimeUnavailableReason: "runtime-disabled",
             },
           },
@@ -2267,6 +2381,27 @@ describe("CodingWorkbenchWindow", () => {
     expect(dialog).toHaveTextContent("Not reported by runtime");
   });
 
+  // #3904 AC4: the runtime version the server verified reaches the information unchanged.
+  it("shows the activated runtime's version from readiness in the information", (): void => {
+    const state = liveState();
+    const ready = state.runtime.value;
+    if (ready === null) throw new Error("readiness fixture missing");
+    renderWorkbench({
+      ...state,
+      runtime: {
+        ...state.runtime,
+        value: {
+          ...ready,
+          runtimeVersion: { opencode: "2.1.4", pinned: "2.1.4", origin: "portable-release" },
+        },
+      },
+    });
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("OpenCode runtime");
+    expect(dialog).toHaveTextContent("2.1.4 · Keiko release");
+    expect(dialog).toHaveTextContent("Latest Keiko release");
+  });
+
   it("separates current context capacity from cumulative run input", ({ onTestFinished }): void => {
     // The expected English display must not depend on the Windows host's regional settings.
     const NumberFormat = Intl.NumberFormat;
@@ -2372,6 +2507,228 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(1, "approved");
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(2, "denied");
+  });
+
+  // #3897 review: a native OpenCode edit ask names no supervised action kind and no command label;
+  // its explicit `nativePermission` must still bind Approve to the authenticated review facts.
+  function nativeEditApprovalState(): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId: "permission-native-edit-1",
+            kind: "workspace-write",
+            actionClass: "workspace-write",
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            scopeLabel: "workspace-scope",
+            risk: "medium",
+            nativePermission: "edit",
+            expiresAt: "2026-07-13T12:05:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  it("#3897: a native edit ask keeps Approve disabled until its review facts show the paths", () => {
+    approvalReviewHookMock.mockReturnValue({ status: "loading", review: null, retry: vi.fn() });
+    renderWorkbench(nativeEditApprovalState());
+    expect(screen.getByText("Loading the requested action…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    cleanup();
+
+    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null, retry: vi.fn() });
+    renderWorkbench(nativeEditApprovalState());
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    cleanup();
+
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-native-edit-1",
+        nativeAction: { permission: "edit", resources: ["src/app.ts", "src/app.test.ts"] },
+        paths: ["src/app.ts", "src/app.test.ts"],
+        pathsTruncated: false,
+        fileCount: 2,
+        addedLines: 0,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(nativeEditApprovalState());
+    const review = screen.getByRole("group", { name: "What the agent wants to do" });
+    expect(review).toHaveTextContent("File change");
+    expect(review).toHaveTextContent("src/app.ts");
+    expect(review).toHaveTextContent("src/app.test.ts");
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+  });
+
+  function nativeAskState(
+    nativePermission: string,
+    requestId = "permission-native-1",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId,
+            kind: "workspace-write",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            scopeLabel: "workspace-scope",
+            risk: "high",
+            commandLabel: "native-shell",
+            nativePermission,
+            expiresAt: "2026-07-13T12:05:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  function nativeReview(
+    permission: string,
+    resources: readonly string[],
+    requestId = "permission-native-1",
+  ): UseCodingWorkbenchApprovalReviewResult {
+    return {
+      status: "ready",
+      review: {
+        requestId,
+        nativeAction: { permission, resources },
+        paths: [],
+        pathsTruncated: false,
+        fileCount: 0,
+        addedLines: 0,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult;
+  }
+
+  // #3897 review: the generic "Raw commands, prompts, diffs, and file contents remain hidden." sat
+  // directly under the visible command. A native ask says what Approve does for ITS permission.
+  it("#3897: a native shell ask states what Approve runs instead of claiming the command is hidden", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["npm run build\n  && npm test"]));
+    renderWorkbench(nativeAskState("shell"));
+
+    const review = screen.getByRole("group", { name: "What the agent wants to do" });
+    expect(review).toHaveTextContent("Approve runs this command once in the task workspace");
+    expect(screen.queryByText(/remain hidden/u)).toBeNull();
+    // One help line per ask, never the generic one beside the native one.
+    expect(screen.getAllByText(/Approve .* once/u)).toHaveLength(1);
+    // The command keeps its line breaks (the block is pre-wrapped), not a whitespace-collapsed line.
+    expect(
+      screen.getByRole("list", { name: "Requested command, paths, or addresses" }).textContent,
+    ).toBe("npm run build\n  && npm test");
+  });
+
+  it("#3897: a native web ask names the internet and Full access, never the task workspace", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("webfetch", ["https://example.test/doc"]));
+    renderWorkbench(nativeAskState("webfetch"));
+
+    const review = screen.getByRole("group", { name: "What the agent wants to do" });
+    expect(review).toHaveTextContent("Internet access is only available in Full access.");
+    expect(review).not.toHaveTextContent("task workspace");
+  });
+
+  it("#3897: Approve stays disabled for a native ask whose review names no resource, Deny stays", () => {
+    for (const review of [
+      nativeReview("shell", []),
+      nativeReview("shell", ["", "   "]),
+      {
+        status: "ready",
+        review: {
+          requestId: "permission-native-1",
+          paths: [],
+          pathsTruncated: false,
+          fileCount: 0,
+          addedLines: 0,
+          deletedLines: 0,
+        },
+        retry: vi.fn(),
+      } as UseCodingWorkbenchApprovalReviewResult,
+    ]) {
+      approvalReviewHookMock.mockReturnValue(review);
+      renderWorkbench(nativeAskState("shell"));
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+      cleanup();
+    }
+  });
+
+  it("#3897: explains why Approve is unavailable for an ask that names nothing", async () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", []));
+    renderWorkbench(nativeAskState("shell"));
+
+    const approve = screen.getByRole("button", { name: "Approve once" });
+    expect(screen.getByText("No command, path, or address was named.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Approval is unavailable because this request names no command, path, or address. Deny it so the agent can continue.",
+      ),
+    ).toBeInTheDocument();
+    expect(approve).toHaveAccessibleDescription(/names no command, path, or address/u);
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("#3897: a native ask with a named resource keeps Approve enabled and the note absent", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["ls -la"]));
+    renderWorkbench(nativeAskState("shell"));
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    expect(screen.queryByText(/Approval is unavailable|Approval stays unavailable/u)).toBeNull();
+  });
+
+  // #3897 review: request A -> B left the same Approve button mounted, so a keyboard user focused on
+  // A's Approve and pressing Enter after B arrived decided B without ever seeing it.
+  it("#3897: a new approval request mounts a fresh prompt instead of reusing a focused Approve", () => {
+    approvalReviewHookMock.mockImplementation((input: { readonly permissionRequestId?: string }) =>
+      nativeReview("shell", ["echo hello"], input.permissionRequestId),
+    );
+    runtimeHookMock.mockReturnValue({
+      state: nativeAskState("shell", "permission-a"),
+      actions: actions(),
+    });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    const approveA = screen.getByRole("button", { name: "Approve once" });
+    approveA.focus();
+    expect(approveA).toHaveFocus();
+
+    runtimeHookMock.mockReturnValue({
+      state: nativeAskState("shell", "permission-b"),
+      actions: actions(),
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    const approveB = screen.getByRole("button", { name: "Approve once" });
+    expect(approveB).not.toBe(approveA);
+    expect(approveA).not.toBeInTheDocument();
+    expect(approveB).not.toHaveFocus();
+  });
+
+  it("#3897: the same approval request keeps its prompt across unrelated re-renders", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["echo hello"]));
+    runtimeHookMock.mockReturnValue({ state: nativeAskState("shell"), actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    const approve = screen.getByRole("button", { name: "Approve once" });
+    approve.focus();
+
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBe(approve);
+    expect(approve).toHaveFocus();
   });
 
   // Workbench audit, 2026-09-03: on the governance-critical permission-approval screen, `request.kind`,
@@ -3376,6 +3733,86 @@ describe("CodingWorkbenchWindow", () => {
     );
   });
 
+  // #3897 review: native OpenCode edits emit neither a status nor a diff-summarized event, so the
+  // Changes list stayed stale for a whole Supervised or Full access run. A settled tool row of the
+  // safe-activity feed is the signal, and the journey summary and the list share ONE read of it.
+  describe("the Changes list during a native run", () => {
+    function runningState(): CodingWorkbenchRuntimeState {
+      return liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+      });
+    }
+
+    function feedWithTools(
+      tools: readonly { readonly tool: string; readonly state: "running" | "succeeded" }[],
+    ): AvailableCodingSafeActivityFeed {
+      const feed = activityFeed();
+      const [turn] = feed.turns;
+      if (turn === undefined) throw new Error("expected a turn");
+      return {
+        ...feed,
+        turns: [
+          {
+            ...turn,
+            tools: tools.map((tool, index) => ({
+              callId: `call-${String(index)}`,
+              occurredAt: AT,
+              ...tool,
+            })),
+          },
+        ],
+      };
+    }
+
+    function mountRun(feed: AvailableCodingSafeActivityFeed): {
+      readonly rerenderWith: (next: AvailableCodingSafeActivityFeed) => void;
+    } {
+      gitStatusMock.mockResolvedValue({ available: false });
+      gitHistoryMock.mockResolvedValue({ available: false, entries: [] });
+      const binding = activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task");
+      runtimeHookMock.mockReturnValue({ state: runningState(), actions: actions() });
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed });
+      const ui = (): ReactElement => (
+        <ActiveWorkspaceProvider value={binding}>
+          <CodingWorkbenchWindow />
+        </ActiveWorkspaceProvider>
+      );
+      const view = render(ui());
+      return {
+        rerenderWith: (next): void => {
+          activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed: next });
+          view.rerender(ui());
+        },
+      };
+    }
+
+    it("reads the git status once for the journey summary and the Changes list together", async () => {
+      mountRun(feedWithTools([]));
+
+      await waitFor(() => expect(gitStatusMock).toHaveBeenCalled());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(gitStatusMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["edit", "write", "patch", "shell"])(
+      "refreshes the Changes list when a native %s tool settles",
+      async (tool) => {
+        const run = mountRun(feedWithTools([{ tool, state: "running" }]));
+        await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(1));
+
+        run.rerenderWith(feedWithTools([{ tool, state: "succeeded" }]));
+
+        await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+      },
+    );
+  });
+
   it("announces an unavailable authentication setup plan in the single live status", () => {
     renderWorkbench(
       liveState({
@@ -3745,13 +4182,17 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
-    expect(diagnostic).toHaveBeenCalledWith("[keiko] coding workbench repository trust bound", {
-      correlationId: "run-script-trust",
-      workspaceTrustBinding: {
-        repositoryId: "repository-1",
-        workspaceId: "workspace-1",
+    expect(diagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench interaction: repository-trust-bound",
+      {
+        correlationId: "run-script-trust",
+        codingWorkbenchInteraction: {
+          interaction: "repository-trust-bound",
+          repositoryId: "repository-1",
+          workspaceId: "workspace-1",
+        },
       },
-    });
+    );
   });
 
   it.each<Partial<ActiveWorkspaceApi>>([
@@ -4020,14 +4461,16 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     // The run's trust binding is judged on its own diagnostics: the LAST binding line names A and no
     // binding line ever names B. Diagnostics about other surfaces (a worktree catalog read this
     // fixture leaves unanswered) are not this pin's subject and may follow it.
+    // #3897: the binding travels as a closed interaction report; the pin's subject is unchanged.
     const bindingLines = diagnostic.mock.calls.filter(
-      ([note]) => note === "[keiko] coding workbench repository trust bound",
+      ([note]) => note === "[keiko] coding workbench interaction: repository-trust-bound",
     );
     expect(bindingLines.at(-1)).toEqual([
-      "[keiko] coding workbench repository trust bound",
+      "[keiko] coding workbench interaction: repository-trust-bound",
       {
         correlationId: "run-correlation-0001",
-        workspaceTrustBinding: {
+        codingWorkbenchInteraction: {
+          interaction: "repository-trust-bound",
           repositoryId: WORKSPACE_A.repositoryId,
           workspaceId: WORKSPACE_A.id,
         },
@@ -4084,6 +4527,114 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 // Reconnect (or reloaded the page). `useCodingWorkbenchSafeActivity` is fully mocked in this file
 // (its own reconnect/resync behaviour is pinned at the hook level), so these tests prove the ONE
 // thing this window itself owns: calling `activity.retry()` exactly when a new run id appears.
+// ADR-0137 D10: while a turn runs the window offers Send now and Queue where the server says the
+// runtime takes messages, wires them to the follow-up mutation as a delivery, and says what came of it.
+describe("CodingWorkbenchWindow prompt inputs while a turn runs (ADR-0137 D10)", () => {
+  function running(
+    overrides: Partial<CodingWorkbenchRuntimeState> = {},
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: { status: "ready", value: snapshot({ state: "running", runId: "run-1" }), error: null },
+      promptInputs: { delivery: true, references: true },
+      ...overrides,
+    });
+  }
+
+  it("sends the draft into the running turn with Send now and queues it with Queue", async () => {
+    const user = userEvent.setup();
+    const live = renderWorkbench(running());
+    await user.type(
+      screen.getByRole("textbox", { name: "Task instructions" }),
+      "  also cover empty  ",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Send now" }));
+    expect(live.submitFollowUp).toHaveBeenLastCalledWith("also cover empty", {
+      delivery: "steer",
+      references: [],
+    });
+    await user.click(screen.getByRole("button", { name: "Queue message" }));
+    expect(live.submitFollowUp).toHaveBeenLastCalledWith("also cover empty", {
+      delivery: "queue",
+      references: [],
+    });
+    expect(live.pause).not.toHaveBeenCalled();
+  });
+
+  it("offers neither where the runtime reported no delivery, and the Codex source never gets them", () => {
+    renderWorkbench(running({ promptInputs: { delivery: false, references: false } }));
+    expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Queue message" })).toBeNull();
+    cleanup();
+    renderWorkbench(running({ runtimePreference: "codex-subscription" }));
+    expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
+  });
+
+  it("says a message was sent once its follow-up settled, and clears the notice with the next action", async () => {
+    const user = userEvent.setup();
+    const live = actions();
+    runtimeHookMock.mockReturnValue({ state: running(), actions: live });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    await user.type(screen.getByRole("textbox", { name: "Task instructions" }), "queued note");
+    await user.click(screen.getByRole("button", { name: "Queue message" }));
+
+    runtimeHookMock.mockReturnValue({
+      state: running({
+        mutation: { status: "pending", kind: "follow-up", requestId: "req-1", error: null },
+      }),
+      actions: live,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(screen.queryByText(/Message queued/u)).toBeNull();
+
+    runtimeHookMock.mockReturnValue({ state: running(), actions: live });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(
+      screen.getByText("Message queued. It is delivered after the running task's current work."),
+    ).toBeInTheDocument();
+
+    runtimeHookMock.mockReturnValue({
+      state: running({
+        mutation: { status: "pending", kind: "pause", requestId: "req-2", error: null },
+      }),
+      actions: live,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(screen.queryByText(/Message queued/u)).toBeNull();
+  });
+
+  it("tells the person a refused message was not sent and keeps their text", async () => {
+    const user = userEvent.setup();
+    const live = actions();
+    runtimeHookMock.mockReturnValue({ state: running(), actions: live });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    await user.type(screen.getByRole("textbox", { name: "Task instructions" }), "do not lose me");
+    await user.click(screen.getByRole("button", { name: "Send now" }));
+
+    const refused = {
+      status: "error" as const,
+      kind: "follow-up" as const,
+      requestId: "req-1",
+      error: { code: "INVALID_INTENT", message: "The request is not valid.", retryable: false },
+    };
+    runtimeHookMock.mockReturnValue({
+      state: running({
+        mutation: { status: "pending", kind: "follow-up", requestId: "req-1", error: null },
+      }),
+      actions: live,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    runtimeHookMock.mockReturnValue({ state: running({ mutation: refused }), actions: live });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    expect(screen.getByText(/was not sent and your text is kept/u)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Task instructions" })).toHaveValue(
+      "do not lose me",
+    );
+    expect(screen.queryByText(/Message sent/u)).toBeNull();
+  });
+});
+
 describe("CodingWorkbenchWindow reconnects activity on a newly observed run (#3384 cascade)", () => {
   function runningState(runId: string): CodingWorkbenchRuntimeState {
     return liveState({
@@ -4588,6 +5139,142 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
   });
 
+  // #3905 AC4: a human choice whose forced tool-call proof lapsed, or was withdrawn because the
+  // gateway re-pointed the alias, is not a refused choice. The server renews it by itself and says
+  // so on the models wire; until then the choice stays pending with Start withheld, and a choice
+  // that is NOT being renewed keeps falling back (the pin above).
+  describe("a human choice whose tool proof the server is renewing", () => {
+    const LAPSED_PROOF = {
+      status: "verified" as const,
+      checkedAt: "2000-01-01T00:00:00.000Z",
+      probe: "gateway-tool-calling-v1" as const,
+      configurationFingerprint: "fingerprint-1",
+    };
+    const renewing = (patch: Partial<ModelCapability> = {}): ModelCapability => ({
+      ...MODEL_B,
+      toolCalling: false,
+      toolCallingVerification: LAPSED_PROOF,
+      toolCallingRenewalPending: true,
+      ...patch,
+    });
+    const present = (unavailable: ModelCapability): void => {
+      chatCatalogMock.models = [MODEL_A, unavailable];
+      chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+      chatCatalogMock.modelCatalogRead = {
+        capabilities: [MODEL_A, unavailable],
+        source: "background",
+        correlationId: "renewal-catalog-123",
+      };
+    };
+
+    it("keeps the choice pending instead of replacing it with the first ready model", () => {
+      present(renewing());
+      const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    });
+
+    it("keeps it through the renewal and offers it again once the proof is fresh", () => {
+      present(renewing());
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_B.id }),
+        actions: liveActions,
+      });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      chatCatalogMock.modelCatalogRead = {
+        capabilities: [MODEL_A, MODEL_B],
+        source: "background",
+        correlationId: "renewal-catalog-456",
+      };
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    });
+
+    it("withholds Start while the choice is pending", async () => {
+      present(renewing());
+      taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), visibleRun: false });
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          selectedModelId: MODEL_B.id,
+          run: { status: "ready", value: null, error: null },
+        }),
+        actions: liveActions,
+      });
+      render(
+        <ActiveWorkspaceProvider value={activeWorkspaceWithBinding("/repos/keiko", "/worktrees/t")}>
+          <CodingWorkbenchWindow selectedRoot={undefined} />
+        </ActiveWorkspaceProvider>,
+      );
+      await userEvent.setup().type(screen.getByLabelText("Task instructions"), "Add a unit test");
+      await userEvent.setup().click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(liveActions.start).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { title: "an embedding model", patch: { kind: "embedding" as const } },
+      {
+        title: "a refuted proof",
+        patch: {
+          toolCalling: true,
+          toolCallingVerification: { ...LAPSED_PROOF, status: "unsupported" as const },
+        },
+      },
+      { title: "a model observed unready", patch: { conversationReady: false } },
+      {
+        title: "a model that never claimed tool calling",
+        patch: { toolCallingVerification: undefined },
+      },
+    ])("still falls back from $title even when it is flagged", ({ patch }) => {
+      present(renewing(patch));
+      const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
+    });
+
+    it("records the pending choice as held, never as refused, then as restored", () => {
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      present(renewing());
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_B.id }),
+        actions: liveActions,
+      });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      chatCatalogMock.modelCatalogRead = {
+        capabilities: [MODEL_A, MODEL_B],
+        source: "background",
+        correlationId: "renewal-catalog-789",
+      };
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const outcomes = diagnostic.mock.calls
+        .map(([, meta]) => meta?.stageReport?.modelCatalog?.outcome)
+        .filter((outcome) => outcome === "held" || outcome === "refused" || outcome === "restored");
+      expect(outcomes).toEqual(["held", "restored"]);
+      resetClientDiagnosticWriter();
+    });
+  });
+
+  // The default a Workbench elects when no human choice remains is the one Chat elects: a model the
+  // gateway declared as chat, then an unremarkable one, and a special-purpose engine (OCR, speech)
+  // only when nothing else is ready. Wire order must not decide it.
+  it("elects the same default as Chat instead of the first ready model in wire order", () => {
+    const special = { ...MODEL_A, id: "dotsocr" };
+    chatCatalogMock.models = [special, MODEL_B];
+    const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith(special.id);
+  });
+
+  it("prefers a gateway-declared chat model among ready candidates", () => {
+    const declared = { ...MODEL_B, chatModeDeclared: true };
+    chatCatalogMock.models = [MODEL_A, declared];
+    const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+  });
+
   it("records actual Workbench catalog and held/restored selection without raw identifiers", () => {
     const diagnostic = vi.fn();
     setClientDiagnosticWriter(diagnostic);
@@ -5064,5 +5751,876 @@ describe("CodingWorkbenchWindow finished answers", () => {
   it("keeps Copy on the answer of a settled run", () => {
     renderRunInState("succeeded");
     expect(copyButtons()).toHaveLength(1);
+  });
+});
+
+// #3897: the Build | Plan switch, as in standalone OpenCode's primary agent switch.
+describe("CodingWorkbenchWindow primary agent switch (#3897)", () => {
+  afterEach(() => {
+    cleanup();
+    resetClientDiagnosticWriter();
+  });
+
+  function planOffered(
+    overrides: Partial<CodingWorkbenchRuntimeState> = {},
+  ): CodingWorkbenchRuntimeState {
+    return liveState({ selectableAgents: ["build", "plan"], ...overrides });
+  }
+
+  function runIn(
+    state: CodingWorkbenchRuntimeSnapshot["state"],
+  ): CodingWorkbenchRuntimeState["run"] {
+    return { status: "ready", value: snapshot({ state, runId: "run-1" }), error: null };
+  }
+
+  it("offers no agent switch while the server offers only the default agent", () => {
+    renderWorkbench(liveState());
+    expect(screen.queryByRole("group", { name: "Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coding-runtime-agent")).not.toBeInTheDocument();
+  });
+
+  it("selects the plan agent through the runtime and reports only the closed agent id", async () => {
+    const user = userEvent.setup();
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta?.codingWorkbenchInteraction !== undefined) {
+        reports.push(meta.codingWorkbenchInteraction);
+      }
+    });
+    const liveActions = renderWorkbench(planOffered(), actions());
+    expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Plan" }));
+
+    expect(liveActions.setAgent).toHaveBeenCalledExactlyOnceWith("plan");
+    expect(reports).toContainEqual({ interaction: "agent-selected", agent: "plan" });
+  });
+
+  it("names the plan agent in the status line and the information panel while it is selected", () => {
+    renderWorkbench(planOffered({ agent: "plan", run: runIn("succeeded") }));
+    expect(screen.getByRole("button", { name: "Plan" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("coding-runtime-agent")).toHaveTextContent("Plan agent");
+    const dialog = openWorkbenchInformation();
+    expect(within(dialog).getByText("Agent")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("AgentPlan");
+  });
+
+  it("states the build agent in the information panel without a status label", () => {
+    renderWorkbench(planOffered({ run: runIn("succeeded") }));
+    expect(screen.queryByTestId("coding-runtime-agent")).not.toBeInTheDocument();
+    expect(openWorkbenchInformation()).toHaveTextContent("AgentBuild");
+  });
+
+  it.each(["starting", "ready", "running", "awaiting-approval", "stopping"] as const)(
+    "disables the switch while the run is %s",
+    (state) => {
+      renderWorkbench(planOffered({ run: runIn(state) }));
+      expect(screen.getByRole("button", { name: "Build" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
+    },
+  );
+
+  it.each(["idle", "paused", "succeeded", "failed"] as const)(
+    "keeps the switch operable between turns, while the run is %s",
+    (state) => {
+      renderWorkbench(planOffered({ run: runIn(state) }));
+      expect(screen.getByRole("button", { name: "Build" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Plan" })).toBeEnabled();
+    },
+  );
+
+  it("disables the switch while a runtime mutation is pending", () => {
+    renderWorkbench(
+      planOffered({
+        run: runIn("paused"),
+        mutation: { status: "pending", kind: "follow-up", requestId: "request-1", error: null },
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
+  });
+
+  it("has no accessibility violations with the switch and the plan label shown", async () => {
+    renderWorkbench(planOffered({ agent: "plan" }));
+    expect(
+      await axe(document.body, { rules: { region: { enabled: false } } }),
+    ).toHaveNoViolations();
+  });
+
+  it("labels the switch in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      runtimeHookMock.mockReturnValue({ state: planOffered(), actions: actions() });
+      render(
+        <I18nProvider>
+          <CodingWorkbenchWindow selectedRoot="/repo" />
+        </I18nProvider>,
+      );
+      expect(screen.getByRole("group", { name: "Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Bauen" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Planen" })).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+});
+
+describe("turn revert (B3, S04)", () => {
+  const NEWEST = { staged: false, fileCount: 3, additions: 12, deletions: 4 } as const;
+
+  function runningState(
+    state: "running" | "paused" | "succeeded" | "failed" = "running",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        value: snapshot({ state, runId: "run-1", revision: 4 }),
+        error: null,
+      },
+    });
+  }
+
+  it("reads the revert channel of the live run and shows nothing while it offers no undo", () => {
+    renderWorkbench(runningState());
+
+    expect(revertHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", live: true, revision: 4 }),
+    );
+    expect(screen.queryByRole("region", { name: "Last turn" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo last turn" })).not.toBeInTheDocument();
+  });
+
+  // #3904 AC3: the server may still hold a healthy settled run's runtime for the undo window, so its
+  // revert channel is read; the server answers no counts once that window has closed.
+  it.each(["succeeded", "failed"] as const)(
+    "reads the revert channel of a held %s run",
+    (state) => {
+      renderWorkbench(runningState(state));
+
+      expect(revertHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", live: true, revision: 4 }),
+      );
+      expect(screen.queryByRole("button", { name: "Undo last turn" })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["cancelled", "awaiting-approval"] as const)(
+    "tells the hook a %s run is not live, so no undo is offered for it",
+    (state) => {
+      renderWorkbench(
+        liveState({
+          run: { status: "ready", value: snapshot({ state, runId: "run-1" }), error: null },
+        }),
+      );
+
+      expect(revertHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", live: false }),
+      );
+    },
+  );
+
+  it.each(["running", "paused", "succeeded"] as const)(
+    "undoes the last turn of a %s run only after the confirmation",
+    async (state) => {
+      const user = userEvent.setup();
+      revertHookMock.mockReturnValue({ revert: NEWEST });
+      const liveActions = renderWorkbench(runningState(state));
+
+      await user.click(screen.getByRole("button", { name: "Undo last turn" }));
+      expect(liveActions.revert).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", { name: "Confirm undo" }));
+
+      expect(liveActions.revert).toHaveBeenCalledExactlyOnceWith("undo");
+    },
+  );
+
+  it("offers Restore while an undo is staged and restores through the same action", async () => {
+    const user = userEvent.setup();
+    revertHookMock.mockReturnValue({ revert: { ...NEWEST, staged: true } });
+    const liveActions = renderWorkbench(runningState());
+
+    expect(screen.queryByRole("button", { name: "Undo last turn" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Restore changes" }));
+    await user.click(screen.getByRole("button", { name: "Confirm restore" }));
+
+    expect(liveActions.revert).toHaveBeenCalledExactlyOnceWith("restore");
+  });
+
+  it("holds the control while a runtime mutation is in flight", () => {
+    revertHookMock.mockReturnValue({ revert: NEWEST });
+    renderWorkbench(
+      liveState({
+        ...runningState(),
+        mutation: { status: "pending", kind: "revert", requestId: "request-1", error: null },
+      }),
+    );
+
+    expect(screen.getByRole("button", { name: "Undo last turn" })).toBeDisabled();
+  });
+
+  it("labels the control in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      revertHookMock.mockReturnValue({ revert: NEWEST });
+      runtimeHookMock.mockReturnValue({ state: runningState(), actions: actions() });
+      render(
+        <I18nProvider>
+          <CodingWorkbenchWindow selectedRoot="/repo" />
+        </I18nProvider>,
+      );
+      expect(screen.getByRole("region", { name: "Letzter Durchgang" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Letzten Durchgang rückgängig machen" }),
+      ).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+});
+
+// S07 (ADR-0137 D10): the messages the operator sent into the running turn that the runtime has not
+// taken yet are listed above the composer, with Cancel and Send now.
+describe("messages waiting for the running turn (S07)", () => {
+  const STEERED = {
+    itemId: "msg_16b08469d001DaT0xxHG2PAKe6",
+    delivery: "steer",
+    preview: "Use the new logger",
+  } as const;
+  const QUEUED = {
+    itemId: "msg_16b08469d002DaT0xxHG2PAKe6",
+    delivery: "queue",
+    preview: "Then update the docs",
+  } as const;
+
+  function runningState(
+    state: CodingWorkbenchRuntimeStateName = "running",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        value: snapshot({ state, runId: "run-1", revision: 4 }),
+        error: null,
+      },
+    });
+  }
+
+  function waiting(items: readonly (typeof STEERED | typeof QUEUED)[]): void {
+    inboxHookMock.mockReturnValue({ status: "ready", items, retry: vi.fn() });
+  }
+
+  it("reads the inbox of the live run with its revision and the signal that the turn took a message", () => {
+    renderWorkbench(runningState());
+
+    expect(inboxHookMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      live: true,
+      revision: 4,
+      deliveredSignal: null,
+    });
+    expect(screen.queryByRole("region", { name: "Messages waiting for this task" })).toBeNull();
+  });
+
+  it("counts the messages of the conversation the feed holds as the delivered signal", () => {
+    const feed = activityFeed();
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new Error("expected a turn");
+    activityHookMock.mockReturnValue({
+      ...IDLE_ACTIVITY,
+      status: "live",
+      feed: {
+        ...feed,
+        turns: [
+          {
+            ...turn,
+            messages: [
+              ...turn.messages,
+              { ...turn.messages[0]!, messageId: "message-2", role: "user" },
+              { ...turn.messages[0]!, messageId: "message-3", role: "user" },
+            ],
+          },
+        ],
+      },
+    });
+
+    renderWorkbench(runningState());
+
+    expect(inboxHookMock).toHaveBeenCalledWith(expect.objectContaining({ deliveredSignal: 2 }));
+  });
+
+  it.each(["paused", "succeeded", "failed", "cancelled", "awaiting-approval"] as const)(
+    "tells the hook a %s run is not running: a turn that is not running holds no waiting message",
+    (state) => {
+      renderWorkbench(runningState(state));
+
+      expect(inboxHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", live: false }),
+      );
+    },
+  );
+
+  it("lists the waiting messages above the composer with their delivery", () => {
+    waiting([STEERED, QUEUED]);
+    renderWorkbench(runningState());
+
+    const region = screen.getByRole("region", { name: "Messages waiting for this task" });
+    const rows = within(region).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Use the new logger");
+    expect(rows[1]).toHaveTextContent("Queued");
+    expect(
+      region.compareDocumentPosition(screen.getByRole("textbox")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("cancels a waiting message through the window's one mutation queue", async () => {
+    const user = userEvent.setup();
+    waiting([STEERED, QUEUED]);
+    const liveActions = renderWorkbench(runningState());
+
+    await user.click(screen.getByRole("button", { name: "Cancel message: Then update the docs" }));
+
+    expect(liveActions.inboxAction).toHaveBeenCalledExactlyOnceWith("cancel", QUEUED.itemId);
+  });
+
+  it("changes a queued message to Send now through the same queue", async () => {
+    const user = userEvent.setup();
+    waiting([STEERED, QUEUED]);
+    const liveActions = renderWorkbench(runningState());
+
+    await user.click(screen.getByRole("button", { name: "Send now: Then update the docs" }));
+
+    expect(liveActions.inboxAction).toHaveBeenCalledExactlyOnceWith("promote", QUEUED.itemId);
+  });
+
+  it("holds the controls while a runtime mutation is in flight", () => {
+    waiting([QUEUED]);
+    renderWorkbench(
+      liveState({
+        ...runningState(),
+        mutation: { status: "pending", kind: "inbox", requestId: "request-1", error: null },
+      }),
+    );
+
+    const region = screen.getByRole("region", { name: "Messages waiting for this task" });
+    for (const button of within(region).getAllByRole("button")) expect(button).toBeDisabled();
+  });
+
+  it("offers a retry when the list could not be read", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn();
+    inboxHookMock.mockReturnValue({ status: "error", items: [], retry });
+    renderWorkbench(runningState());
+
+    const region = screen.getByRole("region", { name: "Messages waiting for this task" });
+    expect(within(region).getByRole("alert")).toHaveTextContent(
+      "The waiting messages could not be read.",
+    );
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("labels the list in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      waiting([STEERED, QUEUED]);
+      runtimeHookMock.mockReturnValue({ state: runningState(), actions: actions() });
+      render(
+        <I18nProvider>
+          <CodingWorkbenchWindow selectedRoot="/repo" />
+        </I18nProvider>,
+      );
+      expect(
+        screen.getByRole("region", { name: "Nachrichten, die auf diese Aufgabe warten" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Nachricht abbrechen: Use the new logger" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Jetzt senden: Then update the docs" }),
+      ).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+});
+
+// Parity row S15 (#3906): a prompt mentions the runtime's subagents with `@` and its skills with `$`,
+// picked from the run's own listing; what is sent names the tokens of exactly the text sent.
+describe("CodingWorkbenchWindow @agent and $skill mentions (#3906)", () => {
+  const PROMPT_INPUTS = {
+    delivery: true,
+    references: true,
+    commands: true,
+    mentions: true,
+  } as const;
+  const taskBox = (): HTMLElement => screen.getByRole("textbox", { name: "Task instructions" });
+
+  function idle(overrides: Partial<CodingWorkbenchRuntimeState> = {}): CodingWorkbenchRuntimeState {
+    return liveState({ promptInputs: PROMPT_INPUTS, ...overrides });
+  }
+
+  function pausedRun(): CodingWorkbenchRuntimeState {
+    return idle({
+      run: {
+        status: "ready",
+        value: snapshot({ state: "paused", runId: "run-1", effectiveMode: "supervised-coding" }),
+        error: null,
+      },
+    });
+  }
+
+  it("mentions a subagent the run lists, picked from the @ list, with the span of its token", async () => {
+    const live = renderWorkbench(pausedRun());
+    const user = userEvent.setup();
+    await user.type(taskBox(), "Ask @exp");
+
+    await user.click(await screen.findByRole("button", { name: "Mention agent explore" }));
+    await user.type(taskBox(), "to look");
+    await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("Ask @explore to look", {
+      references: [],
+      mentions: { agents: [{ name: "explore", mention: { start: 4, end: 12, text: "@explore" } }] },
+    });
+  });
+
+  it("uses a skill the run lists, picked from the $ list with the keyboard", async () => {
+    const live = renderWorkbench(pausedRun());
+    const user = userEvent.setup();
+    await user.type(taskBox(), "Use $rev");
+
+    expect(await screen.findByRole("group", { name: "Use a skill" })).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    await user.type(taskBox(), "now");
+    await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("Use $review-method now", {
+      references: [],
+      mentions: {
+        skills: [{ id: "review-method", mention: { start: 4, end: 18, text: "$review-method" } }],
+      },
+    });
+  });
+
+  it("offers the built-in subagents to a new task and starts it with the mention", async () => {
+    const live = renderWorkbench(idle());
+    const user = userEvent.setup();
+    await user.type(taskBox(), "@gen");
+
+    await user.click(await screen.findByRole("button", { name: "Mention agent general" }));
+    await user.type(taskBox(), "plan it");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+    expect(
+      (vi.mocked(live.start).mock.calls[0]?.[1] as { mentions?: unknown } | undefined)?.mentions,
+    ).toEqual({ agents: [{ name: "general", mention: { start: 0, end: 8, text: "@general" } }] });
+    // No skill can be listed before a run exists.
+    await user.type(taskBox(), " $x");
+    expect(screen.queryByRole("group", { name: "Use a skill" })).toBeNull();
+  });
+
+  it("sends no mention once the person deleted its token, and none where the runtime takes none", async () => {
+    const live = renderWorkbench(pausedRun());
+    const user = userEvent.setup();
+    await user.type(taskBox(), "Ask @exp");
+    await user.click(await screen.findByRole("button", { name: "Mention agent explore" }));
+    await user.clear(taskBox());
+    await user.type(taskBox(), "Ask explore");
+    await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+    expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("Ask explore");
+    cleanup();
+
+    renderWorkbench(idle({ promptInputs: { delivery: true, references: true, commands: true } }));
+    await userEvent.setup().type(taskBox(), "@gen");
+    expect(screen.queryByRole("button", { name: "Mention agent general" })).toBeNull();
+  });
+});
+
+// Parity rows S15 and C02 (ADR-0137 D10): the first prompt of a new task references workspace files
+// with `@` and may open with one of the runtime's slash commands, and a paused run's follow-up may too.
+describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D10)", () => {
+  const PROMPT_INPUTS = { delivery: true, references: true, commands: true } as const;
+  const taskBox = (): HTMLElement => screen.getByRole("textbox", { name: "Task instructions" });
+
+  function idle(overrides: Partial<CodingWorkbenchRuntimeState> = {}): CodingWorkbenchRuntimeState {
+    return liveState({ promptInputs: PROMPT_INPUTS, ...overrides });
+  }
+
+  function pausedRun(
+    overrides: Partial<CodingWorkbenchRuntimeState> = {},
+  ): CodingWorkbenchRuntimeState {
+    return idle({
+      run: {
+        status: "ready",
+        value: snapshot({ state: "paused", runId: "run-1", effectiveMode: "supervised-coding" }),
+        error: null,
+      },
+      ...overrides,
+    });
+  }
+
+  function hit(root: string, path = "src/app.ts"): FilesSearchResponse["results"][number] {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    return {
+      root,
+      path,
+      name,
+      directory: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "",
+      extension: "ts",
+      sizeBytes: 10,
+      modifiedAt: 1,
+    };
+  }
+
+  function respondWithHit(root: string): void {
+    filesSearchMock.mockResolvedValue({
+      root,
+      query: "ap",
+      results: [hit(root)],
+      truncated: false,
+      scannedFileCount: 1,
+    } satisfies FilesSearchResponse);
+  }
+
+  async function mention(): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = userEvent.setup();
+    await user.type(taskBox(), "look at @ap");
+    return user;
+  }
+
+  function optionOf(options: unknown): Record<string, unknown> {
+    return (options ?? {}) as Record<string, unknown>;
+  }
+
+  describe("the @ picker of a task that has no run yet", () => {
+    it("searches the selected repository and starts the run with the files the person picked", async () => {
+      respondWithHit("/repo");
+      const live = renderWorkbench(idle());
+      const user = await mention();
+
+      await user.click(await screen.findByRole("button", { name: "Reference src/app.ts" }));
+      expect(filesSearchMock).toHaveBeenLastCalledWith("/repo", "ap", 8, expect.anything());
+      await user.type(taskBox(), "please");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+      expect(live.start).toHaveBeenCalledExactlyOnceWith("look at @src/app.ts please", {
+        projectMemoryEnabled: true,
+        references: [{ path: "src/app.ts" }],
+      });
+    });
+
+    it("searches the live task workspace when it belongs to the selected repository", async () => {
+      respondWithHit("/worktrees/task-1");
+      renderWorkbench(
+        idle(),
+        actions(),
+        undefined,
+        activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+      );
+      await mention();
+
+      expect(
+        await screen.findByRole("button", { name: "Reference src/app.ts" }),
+      ).toBeInTheDocument();
+      expect(filesSearchMock).toHaveBeenLastCalledWith(
+        "/worktrees/task-1",
+        "ap",
+        8,
+        expect.anything(),
+      );
+    });
+
+    it("never searches the workspace of a repository that is not the selected one", async () => {
+      respondWithHit("/repos/selected");
+      runtimeHookMock.mockReturnValue({ state: idle(), actions: actions() });
+      render(
+        <ActiveWorkspaceProvider
+          value={activeWorkspaceWithBinding("/repos/other", "/worktrees/other-task")}
+        >
+          <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+        </ActiveWorkspaceProvider>,
+      );
+      await mention();
+
+      await screen.findByRole("button", { name: "Reference src/app.ts" });
+      for (const call of filesSearchMock.mock.calls) {
+        expect(call[0]).toBe("/repos/selected");
+      }
+    });
+
+    it("searches the repository, not the task workspace, while the binding is not settled", async () => {
+      respondWithHit("/repos/keiko");
+      renderWorkbench(idle(), actions(), undefined, {
+        ...activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+        switching: true,
+      });
+      await mention();
+
+      await screen.findByRole("button", { name: "Reference src/app.ts" });
+      expect(filesSearchMock).toHaveBeenLastCalledWith("/repos/keiko", "ap", 8, expect.anything());
+    });
+
+    it("searches the next run's root once the previous run is over", async () => {
+      respondWithHit("/repo");
+      renderWorkbench(
+        idle({
+          run: {
+            status: "ready",
+            value: snapshot({ state: "succeeded", runId: "run-1" }),
+            error: null,
+          },
+        }),
+      );
+      await mention();
+
+      await screen.findByRole("button", { name: "Reference src/app.ts" });
+      expect(filesSearchMock).toHaveBeenLastCalledWith("/repo", "ap", 8, expect.anything());
+    });
+
+    it("keeps searching the run's own workspace while a run is live", async () => {
+      respondWithHit("/worktrees/task-1");
+      renderWorkbench(
+        idle({
+          run: {
+            status: "ready",
+            value: snapshot({ state: "running", runId: "run-1" }),
+            error: null,
+          },
+        }),
+        actions(),
+        undefined,
+        activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+      );
+      await mention();
+
+      await screen.findByRole("button", { name: "Reference src/app.ts" });
+      expect(filesSearchMock).toHaveBeenLastCalledWith(
+        "/worktrees/task-1",
+        "ap",
+        8,
+        expect.anything(),
+      );
+    });
+
+    it("is not offered where the runtime reports no references, or for the Codex source", async () => {
+      const live = renderWorkbench(
+        idle({ promptInputs: { delivery: true, references: false, commands: true } }),
+      );
+      const user = await mention();
+      expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1])).not.toHaveProperty("references");
+      cleanup();
+
+      renderWorkbench(idle({ runtimePreference: "codex-subscription" }));
+      await mention();
+      expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
+      expect(filesSearchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves the next task a clean composer once the draft is gone", async () => {
+      respondWithHit("/repo");
+      const live = actions();
+      runtimeHookMock.mockReturnValue({ state: idle(), actions: live });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const user = await mention();
+      await user.click(await screen.findByRole("button", { name: "Reference src/app.ts" }));
+      expect(screen.getByRole("list", { name: "Referenced files" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(live.start).toHaveBeenCalledOnce();
+
+      // The start settles: the window clears the draft that start consumed.
+      runtimeHookMock.mockReturnValue({
+        state: idle({
+          mutation: { status: "pending", kind: "start", requestId: "req-1", error: null },
+        }),
+        actions: live,
+      });
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      runtimeHookMock.mockReturnValue({ state: idle(), actions: live });
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      await waitFor(() => expect(taskBox()).toHaveValue(""));
+      expect(screen.queryByRole("list", { name: "Referenced files" })).toBeNull();
+      await user.type(taskBox(), "a different task");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(live.start).toHaveBeenLastCalledWith("a different task", {
+        projectMemoryEnabled: true,
+      });
+    });
+  });
+
+  describe("the / menu and the first prompt of a new task", () => {
+    it("starts a command by name with the text after it as its arguments", async () => {
+      const live = renderWorkbench(idle());
+      const user = userEvent.setup();
+      // `#13` is the command's own argument: it is never read as an issue to resolve.
+      await user.type(taskBox(), "/review pr #13");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+      expect(live.start).toHaveBeenCalledExactlyOnceWith("pr #13", {
+        projectMemoryEnabled: true,
+        command: { name: "review" },
+      });
+      expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1]).issue).toBeUndefined();
+    });
+
+    it("starts a bare command with an empty text", async () => {
+      const live = renderWorkbench(idle());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "/init");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+      expect(live.start).toHaveBeenCalledExactlyOnceWith("", {
+        projectMemoryEnabled: true,
+        command: { name: "init" },
+      });
+    });
+
+    it("sends a slash that names no offered command as the text it is", async () => {
+      const live = renderWorkbench(idle());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "/foo bar");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+      expect(live.start).toHaveBeenCalledExactlyOnceWith("/foo bar", {
+        projectMemoryEnabled: true,
+      });
+      expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1])).not.toHaveProperty("command");
+    });
+
+    it("offers the built-in commands before there is a run to list them", async () => {
+      renderWorkbench(idle());
+      await userEvent.setup().type(taskBox(), "/");
+
+      const list = await screen.findByRole("list", { name: "Matching commands" });
+      expect(within(list).getAllByRole("button")).toHaveLength(2);
+      expect(commandsHookMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ runId: expect.any(String) as unknown }),
+      );
+    });
+
+    it("is not offered where the runtime reports no commands, or for the Codex source", async () => {
+      renderWorkbench(idle({ promptInputs: { delivery: true, references: true } }));
+      await userEvent.setup().type(taskBox(), "/");
+      expect(screen.queryByRole("group", { name: "Run a slash command" })).toBeNull();
+      cleanup();
+
+      renderWorkbench(idle({ runtimePreference: "codex-subscription" }));
+      await userEvent.setup().type(taskBox(), "/");
+      expect(screen.queryByRole("group", { name: "Run a slash command" })).toBeNull();
+    });
+  });
+
+  describe("a paused run's follow-up", () => {
+    it("offers what the run lists and sends the chosen command as a follow-up", async () => {
+      const live = renderWorkbench(pausedRun());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "/");
+
+      const list = await screen.findByRole("list", { name: "Matching commands" });
+      expect(within(list).getByText("/team:deploy-check")).toBeInTheDocument();
+      expect(within(list).getByText("Deploy")).toBeInTheDocument();
+      expect(commandsHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", wanted: true }),
+      );
+
+      await user.type(taskBox(), "review pr");
+      await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+      expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("pr", {
+        references: [],
+        command: { name: "review" },
+      });
+      expect(live.start).not.toHaveBeenCalled();
+    });
+
+    it("sends a bare command with an empty text", async () => {
+      const live = renderWorkbench(pausedRun());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "/review");
+      await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+      expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("", {
+        references: [],
+        command: { name: "review" },
+      });
+    });
+
+    it("sends an ordinary follow-up exactly as it always did", async () => {
+      const live = renderWorkbench(pausedRun());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "please add a test");
+      await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+      expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("please add a test");
+    });
+
+    it("offers no command menu to a turn that is running", async () => {
+      renderWorkbench(
+        idle({
+          run: {
+            status: "ready",
+            value: snapshot({ state: "running", runId: "run-1" }),
+            error: null,
+          },
+        }),
+      );
+      await userEvent.setup().type(taskBox(), "/");
+
+      expect(screen.queryByRole("group", { name: "Run a slash command" })).toBeNull();
+      expect(commandsHookMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ wanted: true, runId: "run-1" }),
+      );
+    });
+  });
+});
+
+describe("newTaskReferenceRoot", () => {
+  const REPOSITORY = "/repos/keiko";
+
+  it("is the live task workspace of the selected repository once its binding has settled", () => {
+    const workspace = activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1");
+    expect(newTaskReferenceRoot(workspace, REPOSITORY)).toBe("/worktrees/task-1");
+  });
+
+  it("is the selected repository when the active workspace belongs to another one", () => {
+    const workspace = activeWorkspaceWithBinding("/repos/other", "/worktrees/other");
+    expect(newTaskReferenceRoot(workspace, REPOSITORY)).toBe(REPOSITORY);
+  });
+
+  it.each([
+    ["loading", { loading: true }],
+    ["switching", { switching: true }],
+    ["unreadable", { error: "binding read failed" }],
+  ] as const)("is the selected repository while the live binding is %s", (_name, unsettled) => {
+    const workspace = {
+      ...activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1"),
+      ...unsettled,
+    };
+    expect(newTaskReferenceRoot(workspace, REPOSITORY)).toBe(REPOSITORY);
+  });
+
+  it("is the selected repository when no workspace is active", () => {
+    const workspace = {
+      ...activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1"),
+      activeInstance: null,
+      activeBinding: null,
+    };
+    expect(newTaskReferenceRoot(workspace, REPOSITORY)).toBe(REPOSITORY);
+  });
+
+  it("is nothing without a selected repository, whatever workspace is active", () => {
+    const workspace = activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1");
+    expect(newTaskReferenceRoot(workspace, null)).toBeNull();
   });
 });

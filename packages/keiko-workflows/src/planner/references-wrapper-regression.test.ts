@@ -2,12 +2,22 @@ import { describe, expect, it } from "vitest";
 import { extractPathReferences } from "./references.js";
 
 describe("reference wrappers preserve complete paths without promoting prose extensions", () => {
-  it.each(["HTML", "html", "TXT", "txt", "MD", "md"])(
-    "does not make the ordinary prose word %s a file reference",
-    (term) => {
-      expect(extractPathReferences(`Explain the ${term} format.`)).toEqual([]);
-    },
-  );
+  it.each([
+    "HTML",
+    "html",
+    "TXT",
+    "txt",
+    "MD",
+    "md",
+    "readmeHelper",
+    "myREADME",
+    "architecture",
+    "Architecture",
+    "overview",
+    "agents",
+  ])("does not make the ordinary prose word %s a file reference", (term) => {
+    expect(extractPathReferences(`Explain the ${term} format.`)).toEqual([]);
+  });
 
   it.each([
     ["[src/Feature/validation.ts]", "src/Feature/validation.ts"],
@@ -25,6 +35,11 @@ describe("reference wrappers preserve complete paths without promoting prose ext
     ['"src/Feature/validation.ts:7-9"', "src/Feature/validation.ts", 7],
     ["manual.html", "manual.html", undefined],
     ["README.md", "README.md", undefined],
+    ["README", "README", undefined],
+    ["readme", "readme", undefined],
+    ["CONTRIBUTING", "CONTRIBUTING", undefined],
+    ["architecture.md", "architecture.md", undefined],
+    ["docs/architecture.md", "docs/architecture.md", undefined],
     ["CMakeLists.txt", "CMakeLists.txt", undefined],
   ] as const)("preserves an actual file reference %s", (text, path, line) => {
     expect(extractPathReferences(`Explain ${text}`)).toEqual([

@@ -50,14 +50,16 @@ The customer contract for this release is explicit:
 - macOS may require the local user to approve Keiko's Endpoint Security System Extension once.
 
 Apple Developer ID signing, notarization, a granted Endpoint Security entitlement, and the
-corresponding provisioning material are external release prerequisites for both portable macOS
-targets. The paid Apple Developer Program alone does not remove the system-extension approval.
+corresponding provisioning material are prerequisites of the optional Endpoint Security Coding
+backend. They are not prerequisites of the ordinary app lifecycle or portable updater, which uses
+Keiko release trust and its separate native application-owner role (ADR-0121).
+The paid Apple Developer Program alone does not remove the system-extension approval.
 Organization-managed Macs may preapprove it through MDM. Missing credentials, entitlement, user
 approval, or an active extension keep Coding Workbench unavailable; they never select the macOS
 development lane or a process-group fallback.
 
-The customer contract accepts Apple's required first-run boundary. Keiko installs the signed app at
-exactly `/Applications/Keiko.app`; macOS may request administrator authorization, System Extension
+The Endpoint Security backend accepts Apple's required first-run boundary. Its signed app lives at
+`/Applications/Keiko.app`; macOS may request administrator authorization, System Extension
 approval, and Full Disk Access once. Those dialogs are part of the first start, and MDM may
 preinstall or preapprove them. Signing and notarization establish publisher and artifact trust but
 do not suppress the System Extension or Full Disk Access consent decisions.
@@ -73,6 +75,7 @@ production ZIP contains:
 - the exact supported Node.js runtime;
 - the exact review-approved OpenCode payload and its redistribution evidence;
 - the secure workspace-read helper;
+- the pinned ripgrep executable and its MIT license, which the OpenCode search tools run;
 - the target's complete runtime supervision backend;
 - a platform-anchored activation attestation; and
 - on macOS, the Endpoint Security System Extension and its activation manager.
@@ -97,6 +100,29 @@ environment and is verified offline against Sigstore's embedded public trust roo
 repository, workflow, source commit, target, backend, and component digests on a fresh runner and at
 point of use. Linux has no evaluation or unconfined fallback: missing namespace support or any stale,
 partial, differently targeted, or differently attested evidence keeps the runtime unavailable.
+
+**Amended 2026-10-23 — pinned ripgrep, never a run-time download (#3897).** OpenCode's `glob` and
+`grep` tools and its file finder run ripgrep, which the runtime would otherwise resolve from `PATH`
+and then download from GitHub on first use. The runtime lane is loopback-only below Full access and
+customers sit behind firewalls, so an unprovisioned payload would lose search silently. Every
+production ZIP therefore ships the identical upstream ripgrep 15.1.0 at `runtime/native/rg`
+(`rg.exe` on Windows) with its MIT text at `runtime/licenses/ripgrep/LICENSE-MIT`. The approval table
+(`packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts`) pins, per target, the upstream archive
+URL and SHA-256, the extracted executable's SHA-256 and the license digest, exactly as ADR-0164 D3
+pins USearch; `npm run provision:ripgrep` fetches and verifies it, and portable staging verifies it
+again. The manifest records it in a closed `nativeTools` section (never a second `nativeAddons`
+entry, which every signing and qualification consumer pins to exactly one), duplicated in the
+activation manifest and `reviewedBinding`. Platform signing covers the executable with the rest of
+the payload and rebinds `shippedSha256` while `unsignedSha256` keeps the upstream identity. A staged
+payload is smoked by actually running the executable outside `PATH` and the user's configuration.
+Launch verifies the executable against the same pinned digest (or the activation-bound signed one)
+through the same verifier before the runtime may use it, and puts only that verified directory on
+the child `PATH` (and, for the native macOS profile, on the matching Seatbelt read allowlist). A
+ripgrep that does not verify never blocks the run: search is degraded, the closed reason is recorded
+by `coding-runtime.ripgrep.resolved`, and no path is logged. The npm runtime packages of ADR-0140 D2a
+ship the same unmodified executable at the same paths (amended 2026-10-24), verified against the
+same pinned digest at every launch. Details:
+[`docs/qa/ripgrep-runtime-evidence.md`](../qa/ripgrep-runtime-evidence.md).
 
 There are exactly three pre-signing lanes, and a lane is a declaration the artifact carries in its
 own manifest, never an argument a caller supplies:
@@ -130,9 +156,10 @@ release bundle: assembly runs only from a stable-tag push and its own predicates
 `verified-production`.
 
 The automatic managed-install copy remains the default first launch. Windows uses its user-local
-managed root. Both macOS targets use exactly `/Applications/Keiko.app`; another macOS root is not
-release-qualified and cannot activate the Endpoint Security runtime. A downloaded artifact never
-asks the customer to select a runtime or install location.
+managed root. Both macOS targets default to `/Applications/Keiko.app`. Explicit setup may attest a
+dedicated user-owned local folder, including an external SSD, for ordinary app execution and
+portable updates. Such a location does not qualify the optional Endpoint Security Coding backend.
+A downloaded artifact never asks the customer to select a runtime or install location.
 
 ### D2 — Activation evidence is platform-anchored and component-bound
 
@@ -217,6 +244,53 @@ The macOS supervisor never substitutes a shell, inherited session, or process gr
 The qualification fixture creates descendants across fork and exec, exercises stop and abrupt
 control-channel loss, and requires the system extension to prove zero live descendants.
 
+Reconciliation cannot infer an empty tree from an unknown handle or a lost in-memory session
+inventory. Unknown and non-owner handles receive the same observation refusal, while an existing
+live owner retains its distinct already-active response. Only the existing observed zero-live
+path may emit an empty-tree proof; monitor restart or missing state does not establish it.
+
+The monitor establishes a per-client sequence baseline before accepting ARM. It reads Apple's
+`global_seq_num` only when the message version exposes it (version four or later), and subsequent
+events must advance by exactly one. Missing, repeated, reversed or exhausted sequence values,
+or unavailable sequence fields, irreversibly invalidate that monitor instance's observation
+authority. The existing count-only diagnostic records the closed failure reason and counters;
+active clients receive the existing observation-error response. Every zero-live reply site is
+guarded, including stop and disconnect, and new ARM requests refuse after loss. A subsequent
+apparently contiguous event cannot restore the missing inventory. Startup cannot overwrite an
+observed failed state with active. Routine event tracking and unrelated exec policy retain their
+existing behavior; this refusal does not prove that an unobserved descendant was terminated.
+Native recovery, generation transfer and real Endpoint Security qualification remain separate
+requirements, including after monitor restart.
+
+Stop and socket EOF are not event-queue barriers. An armed session with no observed root retains
+its pending ownership; it cannot emit ZERO_LIVE merely because the current inventory is empty.
+Root observation or the matching supervisor EXIT, together with intact event continuity, establishes
+the observation boundary. A disconnected session is retired only after that supervisor EXIT and
+the final observed descendant EXIT, including failed-spawn sessions that never produced a child.
+
+Observed process membership copies audit tokens and matches PID plus PID version. NOTIFY_EXEC
+updates the stored pre-exec identity to its actual post-exec target before further fork, exec or
+exit handling. Every stop, late-fork and inventory-exhaustion signal uses the token-bound libproc
+SPI, with no numeric-PID fallback. ESRCH is not exit evidence: it may mean an exec notification is
+pending. Other signaling refusals invalidate the session's proof; both decisions have bounded,
+body-free native diagnostics. The SPI is private and subject to OS compatibility qualification;
+current-SDK linkage and a fixture-owned kernel signal test do not qualify every supported OS.
+Initial peer admission captures one credential-checked audit token and verifies its code/team
+before waiting for a frame. That preflight may reject but cannot authorize allocation. After the
+complete bounded frame arrives, the same exact token is checked again and passed to allocation.
+The public `kSecGuestAttributeAudit` CFData binds both Security guest checks to PID plus PID version;
+a numeric-PID lookup or a later token lookup cannot substitute another generation. Missing or
+stale identity, invalid signature and foreign-team code refuse through the existing diagnostic.
+The first frame has a total five-second monotonic deadline, including fragmented reads and EINTR;
+SO_RCVTIMEO alone is an inactivity timer and cannot establish that bound. Later session control
+reads retain their existing long-lived behavior. The connection-slot limit is unchanged.
+A fixture-owned actual kernel-token code lookup confirms generation refusal on the measured host
+only; it does not qualify signed Endpoint Security integration on every supported system.
+LOCAL_PEERTOKEN supplies a current PID token, not an immutable connect-time peer certificate.
+Existing credentials and code admission remain required, and full peer-lifetime authentication
+remains a separate qualification requirement. ARM refuses an identity still owned by another
+session; this safety refusal does not implement working update-generation ownership transfer.
+
 The activation manager submits exactly Keiko's bundled extension through Apple's SystemExtensions
 framework and keeps the request alive while local-user approval is pending. After system-extension
 activation, the monitor reports a closed `needs-full-disk-access` state when `es_new_client`
@@ -251,6 +325,16 @@ discovery rejects zero, multiple, unapproved, stale, or tampered payloads. OpenC
 provider credential and no unrestricted provider endpoint. All model traffic is capability-bound
 to Keiko's loopback Model Gateway; the gateway remains the only package permitted to load provider
 SDKs and credentials.
+
+OpenCode knows exactly one provider, the gateway-bound `keiko-runtime`, and one model. Which
+upstream serves it (LiteLLM, Azure or a later one) is the gateway's concern and invisible to the
+runtime. Because the pinned 2.1.4 runtime otherwise lists OpenCode's hosted free models and
+discovers local model servers such as Ollama on their default loopback ports, every launch binds
+the producer's own provider policy (`provider.use` denied for `*`, allowed for `keiko-runtime`) on
+the server-owned configuration layer and sets `OPENCODE_DISABLE_FREE_MODELS` and
+`OPENCODE_DISABLE_MODELS_FETCH`. The runtime's catalog then lists the gateway model alone (real
+binary under the Seatbelt profile), and `coding-runtime.provider-policy.bound` records the binding
+of every prepared run.
 
 Codex subscription activation remains disabled for this release. No missing OpenCode prerequisite
 falls back to Codex, a globally installed executable, `PATH`, npm, a network download, or a
@@ -334,6 +418,12 @@ signing block, and the native addon — and stamps the activation document's `tr
 `evaluation-unqualified`. A manifest that declares the lane in some of those places and not others
 is rejected by the schema, and an artifact whose activation document is incoherent across those
 blocks is refused at discovery.
+
+For macOS portable updates, ADR-0121 D7 authenticates the complete release manifest and the exact
+sidecar payload independently of Apple signing. Both preflight and staging verify that signature
+before admitting declared negative Apple evidence. The unauthenticated evaluation update path
+remains refused, and this admission never turns negative platform-signature or Coding qualification
+evidence into a positive claim. The runtime activation entry point retains its separate defaults.
 
 **Exactly what is waived — and nothing else.** The lane waives the platform signature,
 notarization and platform-attestation gates. It waives nothing else:
@@ -432,6 +522,13 @@ value, so an unthreaded path degrades to "unverified" and never to "verified". T
 Coding Workbench information panel, the run status's readiness details and the bootstrap setup
 screen all state plainly that the runtime is an unverified evaluation runtime; none of them renders
 it as plain green. This is the class audit finding F-01 closed, and it must not be reintroduced.
+Since #3904 an available runtime's readiness also carries the optional `runtimeVersion` facts: the
+verified upstream OpenCode version, the version this Keiko build pins, and the closed origin of the
+runtime (`portable-release`, `npm-runtime-package`, `dev-checkout`). The validator refuses them
+while the runtime is unavailable, and an absent value reads as "not reported", never as a version.
+The Workbench information panel shows them beside the latest Keiko release the existing update
+preflight reports; a version that differs from the pin is shown as a warning, not hidden. These
+facts describe the activated runtime only; they grant no update or install authority.
 Since #3873 the run status's live region announces the run's own state and revision first, and the
 readiness facts — this one included — sit in its collapsed readiness details, which assistive
 technology can open; the details never state a plain "Runtime ready." for an evaluation runtime.
@@ -517,3 +614,6 @@ done exactly that; an evaluation runtime is not such a fact and stays in the det
 | 1.3     | 2026-09-10 | Closed the Linux launch-path binding for Issue #3451: receipt schema v2 and production discovery now bind and rehash the launcher, Node.js executable, and USearch addon in addition to the existing activation, helper, and sidecar evidence. |
 | 1.4     | 2026-09-10 | Allowed stable Windows and macOS payloads to use ADR-0121 D7 platform-neutral release trust without claiming native qualification; dispatch artifacts remain unpublishable. |
 | 1.5     | 2026-09-14 | Recorded the ADR-0177 rehearsal identity for the Linux receipt: `@refs/heads/dev` signatures verify only in the Linux signing tool's rehearsal lane, never in production discovery. |
+| 1.6     | 2026-10-23 | Pinned OpenCode 2.1.4 and introduced the one version boundary (`opencodeRuntimeVersions.ts`, #3908): every producer-derived identity (tag, commit, raw schema digest, structural protocol-surface digest) is resolved from the discovered runtime's approved version, the already published npm runtime packages keep their own previous identity until packages built from the current pin replace them, and D6 continues to forbid any fallback outside the approved set. |
+| 1.7     | 2026-10-23 | Shipped the pinned ripgrep 15.1.0 executable and MIT license in every production ZIP (`nativeTools`, `runtime/native/rg`), so the OpenCode search tools never download at run time (#3897). |
+| 1.8     | 2026-10-24 | D6: the runtime knows one provider. Every launch binds the producer's gateway-only provider policy on the server-owned layer and disables OpenCode's hosted free models and the models.dev catalog fetch, after the original 2.1.4 executable was shown to list free models and a local Ollama beside the gateway model (#3905, parity row S11). |

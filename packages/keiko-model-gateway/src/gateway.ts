@@ -228,6 +228,16 @@ export interface GatewayCallRequest extends GatewayRequest {
    */
   readonly answerRepair?: "steered" | undefined;
   /**
+   * The explicit content projection of a Chat answer (#4098); local, never serialized into a
+   * provider request body. `preserve` keeps personal data, configuration values and code in the
+   * answer, its stream and its structured output, and still removes configured secrets and
+   * credential shapes. Only Chat sets it, and only under the deployment opt-out
+   * `KEIKO_CONTENT_REDACTION=off`; every other call, the coding sidecar, memory, commit drafts and
+   * pull-request descriptions included, keeps the default projection. Tool-call arguments never
+   * follow it.
+   */
+  readonly contentRedaction?: "preserve" | undefined;
+  /**
    * Hears the call's outage (#3873 review); local, never serialized into a provider request. It is
    * told when a failure that says the provider is unavailable is met with a scheduled retry, when
    * the call's admission waits for the circuit breaker or a provider cooldown (the wait before the

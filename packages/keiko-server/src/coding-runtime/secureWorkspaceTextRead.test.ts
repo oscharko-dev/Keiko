@@ -686,6 +686,45 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
       },
     );
 
+    // #3903, owner decision of 2026-10-24: a repository's Claude-compatible skill documents are the
+    // one named exception, and only for a caller that names it.
+    it("reads a .claude skill document only under the repository-item exception", async () => {
+      const { root } = fixture();
+      const skill = ".claude/skills/review/SKILL.md";
+      const { port, create } = portOver(root, () =>
+        Promise.resolve(
+          encodeSecureWorkspaceReadResponse({ status: "ok", bytes: Buffer.from("# Skill\n") }),
+        ),
+      );
+
+      await expect(port.readText({ relativePath: skill })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+      });
+      expect(create).not.toHaveBeenCalled();
+      await expect(
+        port.readText({ relativePath: skill, denyListException: "repository-claude-skill" }),
+      ).resolves.toEqual({ ok: true, text: "# Skill\n" });
+    });
+
+    it.each([
+      ".claude/settings.json",
+      ".claude/skills/review/run.sh",
+      ".claude/skills/review/nested/SKILL.md",
+      ".claude/skills/Review/SKILL.md",
+      ".CLAUDE/skills/review/SKILL.md",
+      ".claude/agents/review.md",
+      "packages/app/.claude/skills/review/SKILL.md",
+    ])("keeps %s denied even under the exception", async (relativePath) => {
+      const { root } = fixture();
+      const { port, create } = portOver(root);
+
+      await expect(
+        port.readText({ relativePath, denyListException: "repository-claude-skill" }),
+      ).resolves.toEqual({ ok: false, reason: "denied" });
+      expect(create).not.toHaveBeenCalled();
+    });
+
     it("leaves the documented .env.example exception to the helper", async () => {
       const { root } = fixture();
       const { port, create } = portOver(root, () =>

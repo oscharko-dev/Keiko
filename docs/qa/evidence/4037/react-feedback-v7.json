@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "classification": "Terminal failed prospective V7 known-fixture feedback campaign. Valid observed measurement contracts do not establish generated-test correctness, skill benefit, untouched holdout performance or acceptance.",
+  "qualificationSourceHead": "1df1384e51580eaeb5193cd9dbbe1a3590d635f8",
+  "sourceManifestSha256": "306f3af5f8cdb169030a44bcbfe2ec6fab5d8cd9e49543dfb1ccd34e0602320d",
+  "sourceArchive": {
+    "sha256": "8ab97921b0a14825f028f3a7e48f562a6a69dc742a9743d120840e314b96d641",
+    "bytes": 9451888,
+    "regularMembers": 2277,
+    "sourceFiles": 2225,
+    "helpers": 12,
+    "inputs": 11
+  },
+  "terminalArchive": {
+    "classification": "terminal-prospective-v7-failed-no-acceptance",
+    "processExitCode": 1,
+    "archiveSha256": "3c2919d0fa81474ed447884376c51bb0fdc0e85b6f03766cd62a523ba5955d53",
+    "archiveBytes": 438117,
+    "ledgerSha256": "d62ea2a714483d6ec391357bb76315005086e9667eb483bbc282d66520083cef",
+    "casesDispatched": 4,
+    "phasesObserved": 7,
+    "physicalRecords": 35,
+    "observedMeasurementContractsValid": true,
+    "baselineEligiblePhases": 0,
+    "terminalReason": "product-request-refused",
+    "actualServerDiagnosticCode": "GATEWAY_OUTPUT_EXHAUSTED",
+    "actualServerDiagnosticClass": "ProviderOutputExhaustedError",
+    "remainingCasesDispatched": false,
+    "failedOutputsRepaired": false,
+    "recredit": false
+  },
+  "plannedCases": 6,
+  "dispatchedCases": 4,
+  "remainingCasesNotDispatched": 2,
+  "observedPhases": 7,
+  "physicalRecords": 35,
+  "conversationRecords": 15,
+  "baselineEligiblePhases": 0,
+  "mutationTrialsDispatched": 0,
+  "originalProcessExitCode": 1,
+  "protocol": {
+    "initialOutputGrant": 4096,
+    "totalCaseOutputGrant": 8192,
+    "totalCaseInputGrant": 118784,
+    "contextWindow": 131072,
+    "feedback": "At most one actual strict compiler or correct-subject diagnostic. No mutant/oracle/human hint feedback or generated-output repair.",
+    "customerSkillSha256": "3d9625ee530bd949863f8285e37fd4928d14d3d70aca42d256280d70dd602fcc"
+  },
+  "failedCaseCosts": {
+    "classification": "Descriptive sum of retained physical conversation records, including terminal feedback. The original failed case has no chargedTotal field; its immutable ledger is not amended.",
+    "conversationRecords": 3,
+    "canonicalObservedInput": 21329,
+    "providerReportedInput": 18851,
+    "providerReportedOutput": 8192
+  },
+  "cases": [
+    {
+      "caseId": "react-feedback-v7-gwt-skill-1",
+      "skillSelected": true,
+      "status": "completed-execution-and-semantic-review-pending",
+      "phases": [
+        {
+          "phase": "initial",
+          "measurementContract": true,
+          "counts": {
+            "variant": "correct",
+            "exitCode": 20,
+            "generatedSha256": "be689e2c1ce462c7d88b09b088538d2e079aaf352647d1da0cdd74319f9dd4a9",
+            "typechecks": false,
+            "baselineEligible": false,
+            "assertionDetection": false
+          },
+          "verificationDisposition": "observed"
+        },
+        {
+          "phase": "feedback",
+          "measurementContract": true,
+          "counts": {
+            "variant": "correct",
+            "exitCode": 1,
+            "generatedSha256": "593d7eac1c2c3df48a2876a93944b906d051bc498b23c1281af0cf9c4b31be57",
+            "tests": 7,
+            "passed": 6,
+            "failed": 1,
+            "runtimeErrors": 0,
+            "reportComplete": true,
+            "cleanExecution": false,
+            "endReason": "failed",
+            "status": 1,
+            "typechecks": true,
+            "baselineEligible": false,
+            "assertionDetection": false,
+            "reportSha256": "0371cf6b1e50ec5f9e6beb6ffa358c8a1038ba3d6d773e902eaad9e371a6f029"
+          },
+          "verificationDisposition": "observed"
+        }
+      ]
+    },
+    {
+      "caseId": "react-feedback-v7-gwt-control-1",
+      "skillSelected": false,
+      "status": "completed-execution-and-semantic-review-pending",
+      "phases": [
+        {
+          "phase": "initial",
+          "measurementContract": true,
+          "counts": {
+            "variant": "correct",
+            "exitCode": 20,
+            "generatedSha256": "1550e04a5c311821041d957bc21553be6f5be3cf6acdb8a0fd13bd751ab3d1ea",
+            "typechecks": false,
+            "baselineEligible": false,
+            "assertionDetection": false
+          },
+          "verificationDisposition": "observed"
+        },
+        {
+          "phase": "feedback",
+          "measurementContract": true,
+          "counts": {
+            "variant": "correct",
+            "exitCode": 1,
+            "generatedSha256": "7a454b4abf455065e1138bc8893855d238fb5434d9c92768c99159529a75e4ac",
+            "tests": 6,
+            "passed": 2,
+            "failed": 4,
+            "runtimeErrors": 0,
+            "reportComplete": true,
+            "cleanExecution": true,
+            "endReason": "failed",
+            "status": 1,
+            "typechecks": true,
+            "baselineEligible": false,
+            "assertionDetection": false,
+            "reportSha256": "597349953893c44f1e65b8ec83d316aa302b9e9d8bc8bf9ea74a74286240ee28"
+          },
+          "verificationDisposition": "observed"
+        }
+      ]
+    },
+    {
+      "caseId": "react-feedback-v7-gwt-control-2",
+      "skillSelected": false,
+      "status": "completed-execution-and-semantic-review-pending",
+      "phases": [
+        {
+          "phase": "initial",
+          "measurementContract": true,
+          "counts": {
+            "variant": "correct",
+            "exitCode": 1,
+            "generatedSha256": "9b435b6bd61249a37115c28bacf723a107f4557925d6416350ec4966c038fbfb",
+            "tests": 7,
+            "passed": 5,
+            "failed": 2,
+            "runtimeErrors": 1,
+            "reportComplete": true,
+            "cleanExecution": false,
+            "endReason": "failed",
+            "status": 1,
+            "typechecks": true,
+            "baselineEligible": false,
+            "assertionDetection": false,
+            "reportSha256": "84025981140a3fde29e05af19a329b797c333c59483900ce611070c5c04708c8"
+          },
+          "verificationDisposition": "observed"
+        },
+        {
+          "phase": "feedback",
+          "measurementContract": true,
+          "counts": {
+            "variant": "correct",
+            "exitCode": 1,
+            "generatedSha256": "d93c83cf125a4ec537c3097ece644aca2c81c73d6aa1529a60a13950df89ddd0",
+            "tests": 7,
+            "passed": 7,
+            "failed": 0,
+            "runtimeErrors": 1,
+            "reportComplete": true,
+            "cleanExecution": false,
+            "endReason": "passed",
+            "status": 1,
+            "typechecks": true,
+            "baselineEligible": false,
+            "assertionDetection": false,
+            "reportSha256": "0c149df2f752989d4fe71bb635fed41630face242b5fa4f78bd01d7240eb20dc"
+          },
+          "verificationDisposition": "observed"
+        }
+      ]
+    },
+    {
+      "caseId": "react-feedback-v7-gwt-skill-2",
+      "skillSelected": true,
+      "status": "failed",
+      "phases": [
+        {
+          "phase": "initial",
+          "measurementContract": true,
+          "counts": {
+            "variant": "correct",
+            "exitCode": 1,
+            "generatedSha256": "6477716e2b499ce3439a533de722fefb826f7df6a99dd1f38099c73b8a494f92",
+            "tests": 7,
+            "passed": 6,
+            "failed": 1,
+            "runtimeErrors": 0,
+            "reportComplete": true,
+            "cleanExecution": true,
+            "endReason": "failed",
+            "status": 1,
+            "typechecks": true,
+            "baselineEligible": false,
+            "assertionDetection": false,
+            "reportSha256": "72b50ee767a3885bb7df7893d68031f4d1e8fb5a29a50ae53aa0da68578e2c47"
+          },
+          "verificationDisposition": "observed"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "All seven observed phases pass source, admission, accounting and persisted-answer measurement joins. None passes the correct application. Runtime errors disqualify an output even when every assertion passes.",
+    "The fourth case feedback is refused by the product with ProviderOutputExhaustedError / GATEWAY_OUTPUT_EXHAUSTED. Its physical output cost remains recorded. The declared terminal-stop rule leaves two cases undispatched.",
+    "The fixture was already used. This is neither untouched holdout evidence nor a rerun of the original single-pass output allocation.",
+    "All 2225 source files, 12 helpers and 11 inputs still match their frozen manifest after termination. Earlier failed V5/V6 records and archives are unchanged.",
+    "Both customer skills remain unaccepted. No generated output is repaired or recredited."
+  ],
+  "prospectiveResponseFormatObservation": {
+    "classification": "Separate bounded compatibility observation, not V7 replay or skill acceptance. Original V7 sources/configuration remain unchanged; no structured capability is enabled.",
+    "plainControl": {
+      "finishReason": "stop",
+      "matched": true,
+      "promptTokens": 31,
+      "completionTokens": 88
+    },
+    "strictSchema": {
+      "status": 501,
+      "errorCode": "GATEWAY_PROVIDER_ERROR",
+      "reportedUsage": "unavailable"
+    },
+    "physicalHttpCalls": 2,
+    "undispatchedCases": 1,
+    "earlierHarnessFailure": "Incorrect Gateway method invocation; zero physical calls. Retained separately.",
+    "result": "The declared response_format parameter alone does not establish strict JSON-schema support. The served path refuses the first actual schema request; the prospective probe stops without retry.",
+    "summarySha256": "0a3f27bff122e40f0af98aca13d2ad308c88f1109f2071621f1b6121c1352c6f",
+    "predeclaredSha256": "855e72f1ebcb31c4a7a744dc70966d8ec48dfbf9c534831f62b5a96cc94bac12",
+    "driverSha256": "75a296086b7ba6011f517c7ba6ada04d252009021d05044d7dd953670c164a7e"
+  }
+}

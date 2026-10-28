@@ -24,6 +24,13 @@ import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.gener
 import { containsAbsolutePath } from "./text-safety.js";
 
 export {
+  activityLogBooleanField,
+  activityLogCountField,
+  activityLogDurationField,
+  activityLogStringEnumField,
+} from "./activity-log-field-contracts.js";
+
+export {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   ACTIVITY_LOG_FAILURE_SURFACES,

@@ -5,23 +5,40 @@ import type {
   CatalogDigest,
   CompiledCatalogTool,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { createToolInvocationNormalizer, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import { isGatewayNativeToolAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import {
+  createToolInvocationNormalizer,
+  createToolRef,
+  OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+} from "@oscharko-dev/keiko-tool-catalog";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
+  createOpenCodeNativeToolAdvertisement,
   deriveGatewayCatalogReadiness,
   hasExactOpenCodeVisibleToolContract,
   openCodeGatewayCatalogProjection,
+  openCodeVisibleToolNames,
   OPENCODE_MODEL_VISIBLE_TOOLS,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+  OPENCODE_PINNED_VERSION,
   projectedGatewaySchema,
   type OpenCodeGatewayHandlerCoverage,
   OPENCODE_GATEWAY_OFFER_SETTLEMENT_GRACE_MS,
   opencodeGatewayOfferLifetimeMs,
 } from "./opencodeToolSchemas.js";
+import {
+  OPENCODE_NATIVE_TOOL_CONTRACT_MAX_SCHEMA_BYTES,
+  OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOOLS,
+  OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOTAL_BYTES,
+  OPENCODE_NATIVE_TOOL_DEFINITIONS,
+  OPENCODE_NATIVE_TOOL_NAMES,
+  openCodeNativeToolSetDigest,
+} from "./opencodeNativeTools.js";
 import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
 import { OPENCODE_GOVERNED_SYSTEM_PROMPT } from "./opencodeLaunchProfile.js";
 import { createCanonicalOpenCodeHandlerCoverage } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+import { gatewayNativeToolDefinitionBytes } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 
 const projectionCompilations = vi.hoisted(() => ({ count: 0, utf8Bytes: 0 }));
 
@@ -77,10 +94,13 @@ interface RealAdvertisedTool {
   readonly parameters: Readonly<Record<string, unknown>>;
 }
 
-/** Live V2 capture: the real OpenCode 2.0.10 binary's actual `tools` advertisement. */
+/**
+ * Live capture: the pinned OpenCode 2.1.4 binary's actual direct-profile `tools` advertisement,
+ * recorded by opencodeNativeQualification.real.test.ts.
+ */
 function realAdvertisementFixture(): readonly RealAdvertisedTool[] {
   const path = new URL(
-    "./opencodeToolSchemas.opencode-2.0.10-advertised.fixture.json",
+    "./opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
     import.meta.url,
   );
   const parsed = JSON.parse(readFileSync(path, "utf8")) as readonly {
@@ -101,10 +121,14 @@ describe("OpenCode visible tool contract", () => {
       new URL("../update-portable-sidecar-verification.ts", import.meta.url),
     ];
 
+    // #3908: the version registry is the one owner of version identities; consumers resolve the
+    // discovered runtime's pin instead of restating a version or digest literal.
     for (const consumer of consumers) {
       const source = readFileSync(consumer, "utf8");
-      expect(source).toContain("OPENCODE_PINNED_VERSION");
+      expect(source).toContain("openCodeRuntimeVersionPin");
       expect(source).not.toContain('"1.18.30"');
+      expect(source).not.toContain('"2.0.10"');
+      expect(source).not.toMatch(/[a-f0-9]{64}/u);
     }
   });
 
@@ -278,9 +302,9 @@ describe("OpenCode visible tool contract", () => {
     });
   });
 
-  it("accepts the exact projected surface including the eight new Git/CI tools and #3414's repository search", () => {
+  it("accepts the exact projected surface including the Git/CI tools and #3414's repository search", () => {
     expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
-    expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(18);
+    expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(19);
   });
 
   it("bounds keiko_git_diff to CODING_RUNTIME_GIT_MAX_PATHS paths", () => {
@@ -291,13 +315,14 @@ describe("OpenCode visible tool contract", () => {
     expect(paths.maxItems).toBe(50);
   });
 
-  it("requires kind and proposalId for keiko_git_execute, bounding proposalId to the three server-issued prefixes", () => {
+  it("requires kind and proposalId for keiko_git_execute, bounding proposalId to the four server-issued prefixes", () => {
     const execute = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_git_execute");
     const pattern = execute?.parameters.properties.proposalId.pattern;
     if (pattern === undefined) throw new TypeError("Expected keiko_git_execute proposalId schema.");
     expect(execute?.parameters.required).toEqual(["kind", "proposalId"]);
     expect(execute?.parameters.properties.kind.enum).toEqual([
       "stage",
+      "unstage",
       "commit",
       "push",
       "pull-request",
@@ -306,15 +331,23 @@ describe("OpenCode visible tool contract", () => {
     // hand-typed, so this equality catches the two sources drifting apart.
     expect(pattern).toBe(proposalIdPattern());
     const accepted = new RegExp(pattern, "u");
-    // stage-* (runtimeGitService.ts), delivery-* (draftDeliveryFacts.ts, push/pull-request), and
-    // commit-* (verifiedCommitService.ts's VerifiedCommitService.propose()) are the three shapes
-    // the server actually mints; a real minted commit proposal id must be redeemable through this
+    // stage-* and unstage-* (runtimeGitService.ts), delivery-* (draftDeliveryFacts.ts,
+    // push/pull-request), and commit-* (verifiedCommitService.ts's VerifiedCommitService.propose())
+    // are the four shapes the server actually mints; a real minted commit proposal id must be redeemable through this
     // tool (regression: the pattern previously omitted "commit", making #3386's commit-redemption
     // path unreachable through the model-visible schema even though "commit" is a valid `kind`).
     expect(accepted.test(mintProposalId("stage"))).toBe(true);
+    expect(accepted.test(mintProposalId("unstage"))).toBe(true);
     expect(accepted.test(mintProposalId("delivery"))).toBe(true);
     expect(accepted.test(mintProposalId("commit"))).toBe(true);
     expect(accepted.test("other-1")).toBe(false);
+  });
+
+  // #3902 AC2: unstaging is an explicit choice on every stage proposal, never an omitted default.
+  it("requires paths and the unstage choice for keiko_git_stage", () => {
+    const stage = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_git_stage");
+    expect(stage?.parameters.required).toEqual(["paths", "unstage"]);
+    expect(stage?.parameters.properties.unstage.type).toBe("boolean");
   });
 
   it("requires forceFresh as a boolean for keiko_ci_status", () => {
@@ -337,7 +370,7 @@ describe("OpenCode visible tool contract", () => {
 });
 
 describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
-  it("binds the seventeen governed tools plus the native question extension", () => {
+  it("binds the eighteen governed tools plus the native question extension", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
       0,
       undefined,
@@ -365,14 +398,15 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
         "keiko_git_push",
         "keiko_pull_request",
         "keiko_git_execute",
+        "keiko_git_sync",
         "keiko_ci_status",
       ].sort(),
     );
     // Catalog toolRefs never carry a native extension (ADR-0175 D2: never a Keiko tool
-    // descriptor) -- the offered set still names only the seventeen catalog-representable tools
+    // descriptor) -- the offered set still names only the eighteen catalog-representable tools
     // (#3414 added keiko_repository_search, #3386's H1 handler, to the original fifteen; #3417
-    // adds keiko_skill_discover).
-    expect(advertisement.offered.toolRefs).toHaveLength(17);
+    // adds keiko_skill_discover; #3902 AC2 keiko_git_sync).
+    expect(advertisement.offered.toolRefs).toHaveLength(18);
     expect(advertisement.offered.binding.readiness).toBe("ready");
   });
 
@@ -383,7 +417,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   // #3386/#3387/#3388 Git/CI tools under their canonical identities" test pins that registration),
   // so this stays one exact-equality invariant rather than a two-source partition: every
   // model-visible tool is either a catalog-projected tool or the native question extension.
-  it("names all eighteen OpenCode 2.0.10 model-visible tools", () => {
+  it("names all eighteen OpenCode model-visible tools", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
       0,
       undefined,
@@ -578,7 +612,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
       undefined,
       OFFER_LIFETIME_MS,
     );
-    expect(withoutCoverage.offered.toolRefs).toHaveLength(17);
+    expect(withoutCoverage.offered.toolRefs).toHaveLength(18);
     expect(withoutCoverage.offered.binding.readiness).toBe("ready");
     expect(withoutCoverage.offered.binding.handlerSetDigest).toBe(
       withoutCoverage.projection.projectionDigest,
@@ -595,7 +629,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
     expect(advertisement.offered.toolRefs.map((ref) => ref.canonicalId)).not.toContain(
       "keiko.repo.search",
     );
-    expect(advertisement.offered.toolRefs).toHaveLength(16);
+    expect(advertisement.offered.toolRefs).toHaveLength(17);
     // One unready optional tool must not swing the whole advertisement to unavailable, matching
     // catalogToolBinder.ts's own per-tool offer semantics (buildCatalogOffer) -- but the TOP-LEVEL
     // readiness signal still reflects that at least one real binding was not ready.
@@ -630,7 +664,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
       OFFER_LIFETIME_MS,
     );
     expect(advertisement.offered.binding.readiness).toBe("ready");
-    expect(advertisement.offered.toolRefs).toHaveLength(17);
+    expect(advertisement.offered.toolRefs).toHaveLength(18);
   });
 
   it("uses the caller-supplied real handlerSetDigest verbatim, never the projection digest alias (#3414-AC4)", () => {
@@ -679,7 +713,7 @@ describe("deriveGatewayCatalogReadiness", () => {
     expect(deriveGatewayCatalogReadiness(tools)).toBe("unavailable");
   });
 
-  it("advertises the real seventeen-tool production catalog as ready", () => {
+  it("advertises the real eighteen-tool production catalog as ready", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
       0,
       undefined,
@@ -689,9 +723,10 @@ describe("deriveGatewayCatalogReadiness", () => {
   });
 });
 
-// Captured directly from a real OpenCode 2.0.10 provider call. The gateway must accept its
-// closed top-level schemas while rejecting altered tools, including the two empty-parameter tools.
-describe("OpenCode 2.0.10 real advertisement fidelity", () => {
+// Captured directly from a real OpenCode 2.1.4 provider call in the direct profile. The gateway
+// must accept its closed top-level schemas while rejecting altered tools, including the two
+// empty-parameter tools.
+describe("OpenCode 2.1.4 real advertisement fidelity", () => {
   it("accepts the unchanged live-captured tools with the current verification projection", () => {
     expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
   });
@@ -811,8 +846,8 @@ describe("explicit native Code Mode schema boundary", () => {
       handlerSetDigest: "caller-owned-handler-digest" as CatalogDigest,
     };
     const offer = createOpenCodeGatewayToolCatalogAdvertisement(1000, coverage, 9000, "code-mode");
-    expect(offer.projection.tools).toHaveLength(17);
-    expect(offer.offered.toolRefs).toHaveLength(16);
+    expect(offer.projection.tools).toHaveLength(18);
+    expect(offer.offered.toolRefs).toHaveLength(17);
     expect(offer.offered.toolRefs.some((ref) => ref.canonicalId === "keiko.repo.search")).toBe(
       false,
     );
@@ -835,5 +870,266 @@ describe("explicit native Code Mode schema boundary", () => {
     expect(() => {
       Reflect.apply(openCodeGatewayCatalogProjection, undefined, ["unknown"]);
     }).toThrow(TypeError);
+  });
+});
+
+interface NativeAdvertisedTool {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+}
+
+function nativeTool(name: string, parameters: Record<string, unknown> = {}): NativeAdvertisedTool {
+  return { name, description: `The ${name} tool.`, parameters: { type: "object", ...parameters } };
+}
+
+/** The tools a native-profile provider request carries: the producer's own inventory. */
+function nativeAdvertisedTools(): readonly NativeAdvertisedTool[] {
+  return OPENCODE_NATIVE_TOOL_NAMES.map((name) => nativeTool(name));
+}
+
+/** A parameters object whose serialized UTF-8 size is exactly `bytes`. */
+function parametersOfUtf8Bytes(bytes: number): Record<string, unknown> {
+  const overhead = Buffer.byteLength(JSON.stringify({ p: "" }), "utf8");
+  const parameters = { p: "x".repeat(bytes - overhead) };
+  expect(Buffer.byteLength(JSON.stringify(parameters), "utf8")).toBe(bytes);
+  return parameters;
+}
+
+function uniquelyNamed(count: number): NativeAdvertisedTool[] {
+  return Array.from({ length: count }, (_unused, index) => nativeTool(`tool_${String(index)}`));
+}
+
+describe("openCodeVisibleToolNames", () => {
+  it("names the Keiko-governed tools for the default and the direct profile", () => {
+    expect(openCodeVisibleToolNames()).toEqual(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+    expect(openCodeVisibleToolNames("direct")).toEqual(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+  });
+
+  it("names the producer's own non-Code-Mode inventory for the native profile (#3897)", () => {
+    const names = openCodeVisibleToolNames("native");
+    expect(names).toBe(OPENCODE_NATIVE_TOOL_NAMES);
+    expect(names.length).toBeGreaterThan(0);
+    const codeModeOnly = OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => tool.codemode);
+    expect(codeModeOnly.length).toBeGreaterThan(0);
+    for (const tool of codeModeOnly) expect(names).not.toContain(tool.id);
+  });
+
+  it("names the native extension aliases for the Code Mode profile", () => {
+    expect(openCodeVisibleToolNames("code-mode")).toEqual(
+      OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map((definition) => definition.alias),
+    );
+  });
+
+  it.each([["unknown"], ["NATIVE"], [null], [7]])(
+    "refuses the profile %s instead of falling back to another contract",
+    (profile) => {
+      expect(() => {
+        Reflect.apply(openCodeVisibleToolNames, undefined, [profile]);
+      }).toThrow(new TypeError("Invalid OpenCode profile"));
+    },
+  );
+});
+
+describe("hasExactOpenCodeVisibleToolContract for the native profile (#3897)", () => {
+  const MAX_TOOLS = OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOOLS;
+  const MAX_SCHEMA_BYTES = OPENCODE_NATIVE_TOOL_CONTRACT_MAX_SCHEMA_BYTES;
+  const MAX_TOTAL_BYTES = OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOTAL_BYTES;
+
+  it("admits the producer's own advertisement without pinning any Keiko schema digest", () => {
+    expect(hasExactOpenCodeVisibleToolContract(nativeAdvertisedTools(), "native")).toBe(true);
+    expect(hasExactOpenCodeVisibleToolContract(projectedTools(), "native")).toBe(true);
+  });
+
+  it("admits MCP and plugin tools beside the native ones, which the mapped profiles refuse", () => {
+    const withExtension = [...nativeAdvertisedTools(), nativeTool("github.create-issue_2")];
+    expect(hasExactOpenCodeVisibleToolContract(withExtension, "native")).toBe(true);
+    expect(hasExactOpenCodeVisibleToolContract(withExtension, "direct")).toBe(false);
+    expect(hasExactOpenCodeVisibleToolContract(withExtension, "code-mode")).toBe(false);
+  });
+
+  it("still refuses the native advertisement under the mapped profiles", () => {
+    expect(hasExactOpenCodeVisibleToolContract(nativeAdvertisedTools())).toBe(false);
+    expect(hasExactOpenCodeVisibleToolContract(nativeAdvertisedTools(), "code-mode")).toBe(false);
+  });
+
+  it("fails closed for an unknown profile, even for an otherwise admissible tool set", () => {
+    const tools = nativeAdvertisedTools();
+    expect(Reflect.apply(hasExactOpenCodeVisibleToolContract, undefined, [tools, "unknown"])).toBe(
+      false,
+    );
+    expect(Reflect.apply(hasExactOpenCodeVisibleToolContract, undefined, [tools, null])).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ["no advertisement", undefined],
+    ["an empty advertisement", []],
+    ["a repeated tool name", [nativeTool("read"), nativeTool("glob"), nativeTool("read")]],
+    ["an empty tool name", [nativeTool("")]],
+    ["a name starting with a digit", [nativeTool("1read")]],
+    ["a name containing a space", [nativeTool("read file")]],
+    ["a name containing a slash", [nativeTool("mcp/read")]],
+    ["a name longer than 64 characters", [nativeTool("a".repeat(65))]],
+  ])("refuses %s", (_label, tools) => {
+    expect(hasExactOpenCodeVisibleToolContract(tools, "native")).toBe(false);
+  });
+
+  it("admits a 64-character tool name", () => {
+    expect(hasExactOpenCodeVisibleToolContract([nativeTool("a".repeat(64))], "native")).toBe(true);
+  });
+
+  it("admits exactly the maximum tool count and refuses one more", () => {
+    expect(hasExactOpenCodeVisibleToolContract(uniquelyNamed(MAX_TOOLS), "native")).toBe(true);
+    expect(hasExactOpenCodeVisibleToolContract(uniquelyNamed(MAX_TOOLS + 1), "native")).toBe(false);
+  });
+
+  it("admits a schema of exactly the per-tool byte limit and refuses one byte more", () => {
+    const atLimit = {
+      name: "read",
+      description: "r",
+      parameters: parametersOfUtf8Bytes(MAX_SCHEMA_BYTES),
+    };
+    const overByOne = {
+      name: "read",
+      description: "r",
+      parameters: parametersOfUtf8Bytes(MAX_SCHEMA_BYTES + 1),
+    };
+    expect(hasExactOpenCodeVisibleToolContract([atLimit], "native")).toBe(true);
+    expect(hasExactOpenCodeVisibleToolContract([overByOne], "native")).toBe(false);
+  });
+
+  it("measures a schema in UTF-8 bytes, not in characters", () => {
+    const characters = Math.floor(MAX_SCHEMA_BYTES * 0.6);
+    const parameters = { p: "\u00e9".repeat(characters) };
+    expect(JSON.stringify(parameters).length).toBeLessThan(MAX_SCHEMA_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(parameters), "utf8")).toBeGreaterThan(MAX_SCHEMA_BYTES);
+    expect(hasExactOpenCodeVisibleToolContract([{ name: "read", parameters }], "native")).toBe(
+      false,
+    );
+  });
+
+  // #3897 review: admission counts every complete definition (name, description, schema) as UTF-8
+  // JSON with the gateway contract's own formula, so what it admits the gateway also captures.
+  it("admits complete definitions up to the total budget exactly and refuses one byte over it", () => {
+    const toolOf = (name: string, bytes: number): NativeAdvertisedTool => {
+      const empty = gatewayNativeToolDefinitionBytes({
+        name,
+        description: "",
+        parameters: { p: "" },
+      });
+      return { name, description: "", parameters: { p: "x".repeat(bytes - empty) } };
+    };
+    const count = MAX_TOTAL_BYTES / MAX_SCHEMA_BYTES;
+    const atBudget = Array.from({ length: count }, (_unused, index) =>
+      toolOf(`full_${String(index)}`, MAX_SCHEMA_BYTES),
+    );
+    expect(hasExactOpenCodeVisibleToolContract(atBudget, "native")).toBe(true);
+    const overByOne = [
+      ...atBudget.slice(0, -1),
+      toolOf(`full_${String(count - 1)}`, MAX_SCHEMA_BYTES + 1),
+    ];
+    expect(hasExactOpenCodeVisibleToolContract(overByOne, "native")).toBe(false);
+    const longDescription = { ...nativeTool("read"), description: "d".repeat(16_385) };
+    expect(hasExactOpenCodeVisibleToolContract([longDescription], "native")).toBe(false);
+  });
+});
+
+describe("createOpenCodeNativeToolAdvertisement (#3897)", () => {
+  const NOW = 1_000;
+  const LIFETIME_MS = 9_000;
+
+  it("advertises the admitted definitions, pinned by the tool-set digest and runtime version", () => {
+    const tools = nativeAdvertisedTools();
+    const advertisement = createOpenCodeNativeToolAdvertisement(tools, NOW, LIFETIME_MS);
+    expect(advertisement.kind).toBe("native");
+    expect(advertisement.runtime).toEqual({ id: "opencode", version: OPENCODE_PINNED_VERSION });
+    expect(advertisement.tools).toEqual(tools);
+    expect(advertisement.toolSetDigest).toBe(openCodeNativeToolSetDigest(tools));
+    expect(advertisement.offered.expiresAt).toBe(new Date(NOW + LIFETIME_MS).toISOString());
+    expect(advertisement.offered.offerId).toMatch(/^opencode-native-[0-9a-f-]{36}$/u);
+  });
+
+  it("produces an advertisement the gateway contract admits, for the producer's whole inventory", () => {
+    const advertisement = createOpenCodeNativeToolAdvertisement(
+      nativeAdvertisedTools(),
+      NOW,
+      LIFETIME_MS,
+    );
+    expect(isGatewayNativeToolAdvertisement(advertisement)).toBe(true);
+  });
+
+  // #3908 AC4: the committed capture of the pinned 2.1.4 producer's model-visible tools, which the
+  // real-binary qualification compares against the live advertisement on every pinned run.
+  it("admits the pinned 2.1.4 producer's captured tools, each native one a classified tool", () => {
+    const captured = JSON.parse(
+      readFileSync(
+        new URL("./opencodeToolSchemas.opencode-2.1.4-advertised.fixture.json", import.meta.url),
+        "utf8",
+      ),
+    ) as readonly RealAdvertisedTool[];
+    const tools = captured.map(({ name, parameters }) => ({ name, description: "", parameters }));
+    const advertisement = createOpenCodeNativeToolAdvertisement(tools, NOW, LIFETIME_MS);
+    expect(isGatewayNativeToolAdvertisement(advertisement)).toBe(true);
+    const classified = new Set(OPENCODE_NATIVE_TOOL_DEFINITIONS.map((tool) => tool.id));
+    const native = captured.map(({ name }) => name).filter((name) => !name.startsWith("keiko_"));
+    expect(native.filter((name) => !classified.has(name))).toEqual([]);
+  });
+
+  it("forwards only name, description and parameters of each tool, as independent wrappers", () => {
+    const input: NativeAdvertisedTool = nativeTool("read", { properties: { path: {} } });
+    const carrying = { ...input, handler: "/usr/bin/anything", authority: "root" };
+    const advertisement = createOpenCodeNativeToolAdvertisement([carrying], NOW, LIFETIME_MS);
+    const [forwarded] = advertisement.tools;
+    expect(Object.keys(forwarded ?? {}).sort()).toEqual(["description", "name", "parameters"]);
+    expect(forwarded).toEqual(input);
+    expect(forwarded).not.toBe(carrying);
+    expect(isGatewayNativeToolAdvertisement(advertisement)).toBe(true);
+  });
+
+  it("issues a distinct offer identity per call and an expiry from the supplied clock", () => {
+    const tools = nativeAdvertisedTools();
+    const first = createOpenCodeNativeToolAdvertisement(tools, NOW, LIFETIME_MS);
+    const second = createOpenCodeNativeToolAdvertisement(tools, NOW, LIFETIME_MS);
+    expect(first.offered.offerId).not.toBe(second.offered.offerId);
+    expect(first.toolSetDigest).toBe(second.toolSetDigest);
+    const later = createOpenCodeNativeToolAdvertisement(tools, NOW + 60_000, 1);
+    expect(later.offered.expiresAt).toBe(new Date(NOW + 60_001).toISOString());
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "refuses the offer lifetime %s",
+    (lifetime) => {
+      expect(() =>
+        createOpenCodeNativeToolAdvertisement(nativeAdvertisedTools(), NOW, lifetime),
+      ).toThrow(
+        new RangeError("the gateway offer lifetime must be a positive number of milliseconds"),
+      );
+    },
+  );
+
+  it.each([
+    ["no tools", []],
+    ["a repeated tool", [nativeTool("read"), nativeTool("read")]],
+    ["an inadmissible tool name", [nativeTool("read file")]],
+    [
+      "an oversized schema",
+      [
+        nativeTool(
+          "read",
+          parametersOfUtf8Bytes(OPENCODE_NATIVE_TOOL_CONTRACT_MAX_SCHEMA_BYTES + 1),
+        ),
+      ],
+    ],
+    ["too many tools", uniquelyNamed(OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOOLS + 1)],
+  ])("refuses to advertise %s", (_label, tools) => {
+    expect(() => createOpenCodeNativeToolAdvertisement(tools, NOW, LIFETIME_MS)).toThrow(
+      new TypeError("native-tool-contract-invalid"),
+    );
+  });
+
+  it("checks the offer lifetime before the tool contract", () => {
+    expect(() => createOpenCodeNativeToolAdvertisement([], NOW, 0)).toThrow(RangeError);
   });
 });

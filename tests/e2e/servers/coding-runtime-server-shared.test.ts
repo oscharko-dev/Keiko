@@ -68,22 +68,68 @@ describe("nextScriptedTurn question-skip ceiling (KEIKO-0902)", () => {
     expect(response.toolCalls[0]?.name).toBe("question");
   });
 
+  it("retains one stable body-free native tool set across gateway requests (#3897)", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-gateway-native-"));
+    const outputPath = join(root, "gateway.json");
+    process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH = outputPath;
+    const observe = gatewayObserver();
+    if (observe === undefined) throw new Error("Expected gateway observer");
+    const advertisement = {
+      kind: "native" as const,
+      runtime: { id: "opencode" as const, version: "2.1.4" },
+      toolSetDigest: "e".repeat(64),
+      tools: [{ name: "grep", description: "must not be recorded", parameters: {} }],
+      offered: { offerId: "opencode-native-fixture", expiresAt: "2030-01-01T00:00:00.000Z" },
+    };
+    const request: GatewayRequestStub = {
+      modelId: "coding",
+      messages: [],
+      maxOutputTokens: 8192,
+      toolCatalog: advertisement,
+    };
+    try {
+      observe(request);
+      observe(request);
+      const observed: unknown = JSON.parse(readFileSync(outputPath, "utf8"));
+      expect(observed).toMatchObject({
+        requestCount: 2,
+        catalogBinding: null,
+        catalogBindingRequestCount: 0,
+        nativeToolSetRequestCount: 2,
+        nativeToolSet: {
+          runtime: { id: "opencode", version: "2.1.4" },
+          toolSetDigest: "e".repeat(64),
+        },
+        contentFieldsRecorded: false,
+      });
+      expect(JSON.stringify(observed)).not.toContain("must not be recorded");
+      expect(() => {
+        observe({
+          ...request,
+          toolCatalog: { ...advertisement, toolSetDigest: "f".repeat(64) },
+        });
+      }).toThrow("native tool set changed");
+      // A request that carries no advertisement (a title or compaction call) is counted, not bound.
+      observe({ modelId: "coding", messages: [], maxOutputTokens: 8192 });
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+        requestCount: 4,
+        nativeToolSetRequestCount: 2,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("retains one stable body-free production catalog binding across gateway requests", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-gateway-binding-"));
     const outputPath = join(root, "gateway.json");
     process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH = outputPath;
     const observe = gatewayObserver();
     if (observe === undefined) throw new Error("Expected gateway observer");
+    const binding = { ...DIGESTS, profile: { id: "opencode", version: 1 } };
     const request = {
       maxOutputTokens: 4096,
-      toolCatalog: {
-        offered: {
-          binding: {
-            ...DIGESTS,
-            profile: { id: "opencode", version: 1 },
-          },
-        },
-      },
+      toolCatalog: { kind: "bound", offered: { binding } },
     } as GatewayRequestStub;
     try {
       observe(request);
@@ -98,14 +144,8 @@ describe("nextScriptedTurn question-skip ceiling (KEIKO-0902)", () => {
         observe({
           ...request,
           toolCatalog: {
-            ...request.toolCatalog,
-            offered: {
-              ...request.toolCatalog?.offered,
-              binding: {
-                ...request.toolCatalog?.offered.binding,
-                handlerSetDigest: "d".repeat(64),
-              },
-            },
+            kind: "bound",
+            offered: { binding: { ...binding, handlerSetDigest: "d".repeat(64) } },
           },
         } as GatewayRequestStub);
       }).toThrow("catalog binding changed");

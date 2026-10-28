@@ -57,7 +57,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "prettier";
 import ts from "typescript";
@@ -82,6 +82,12 @@ import {
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
   isActivityLogDiagnosticWhen,
 } from "../packages/keiko-contracts/dist/observability.js";
+import {
+  activityLogBooleanField,
+  activityLogCountField,
+  activityLogDurationField,
+  activityLogStringEnumField,
+} from "../packages/keiko-contracts/dist/activity-log-field-contracts.js";
 import { ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS } from "../packages/keiko-contracts/dist/activity-log-failure-class-contracts.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { generateFailureSurfaceInventory } from "./lib/activity-log-failure-surface-inventory.mjs";
@@ -100,8 +106,16 @@ const REPO_ROOT = dirname(SCRIPT_DIR);
 const OUTPUT_RELATIVE_PATH = "docs/observability/op-catalog.generated.json";
 const RUNTIME_REGISTRY_RELATIVE_PATH =
   "packages/keiko-contracts/src/activity-log-registry.generated.ts";
+const RUNTIME_METADATA_RELATIVE_PATH =
+  "packages/keiko-contracts/src/activity-log-runtime-metadata.generated.ts";
+const RUNTIME_IDENTITY_RELATIVE_PATH =
+  "packages/keiko-contracts/src/activity-log-identity.generated.ts";
 const RUNTIME_OPERATIONS_RELATIVE_PATH =
   "packages/keiko-contracts/src/activity-log-operations.generated.ts";
+const RUNTIME_FAILURE_COVERAGE_RELATIVE_PATH =
+  "packages/keiko-contracts/src/activity-log-failure-class-coverage.generated.json";
+const RUNTIME_OPERATION_SURFACES_RELATIVE_PATH =
+  "packages/keiko-contracts/src/activity-log-operation-surfaces.generated.json";
 
 const REGISTRATION_KEYS = new Set([
   "contractKind",
@@ -448,22 +462,27 @@ function stringLiteralType(checker, node, propertyName) {
   return type.isStringLiteral() ? type.value : undefined;
 }
 
-const CANONICAL_ACTIVITY_LOG_API =
-  /\/packages\/keiko-contracts\/(?:src|dist)\/observability(?:\.d)?\.ts$/u;
+function canonicalContractModule(repoRoot, sourceFile, moduleName) {
+  const sourcePath = resolve(sourceFile.fileName);
+  return (
+    sourcePath === resolve(repoRoot, "packages", "keiko-contracts", "src", `${moduleName}.ts`) ||
+    sourcePath === resolve(repoRoot, "packages", "keiko-contracts", "dist", `${moduleName}.d.ts`)
+  );
+}
 
-function canonicalActivityLogApiName(checker, node) {
+function canonicalActivityLogApiName(checker, node, repoRoot) {
   const declaration = checker.getResolvedSignature(node)?.declaration;
   if (declaration === undefined) return undefined;
-  const sourcePath = declaration.getSourceFile().fileName.replaceAll("\\", "/");
-  if (!CANONICAL_ACTIVITY_LOG_API.test(sourcePath)) return undefined;
+  if (!canonicalContractModule(repoRoot, declaration.getSourceFile(), "observability"))
+    return undefined;
   return declaration.name !== undefined && ts.isIdentifier(declaration.name)
     ? declaration.name.text
     : undefined;
 }
 
-function typedCallKind(checker, node) {
+function typedCallKind(checker, node, repoRoot) {
   if (!ts.isCallExpression(node)) return undefined;
-  const apiName = canonicalActivityLogApiName(checker, node);
+  const apiName = canonicalActivityLogApiName(checker, node, repoRoot);
   if (apiName === "activityLogEvent") return "activity-log-event";
   const expectedKind =
     apiName === "defineActivityLogOperation" ? "activity-log-operation" : undefined;
@@ -506,11 +525,11 @@ function constInitializer(checker, identifier) {
   return declaration.initializer;
 }
 
-function literalRegistryObject(value, checker, seen) {
+function literalRegistryObject(value, checker, repoRoot, seen) {
   const result = Object.create(null);
   for (const property of value.properties) {
     if (ts.isSpreadAssignment(property)) {
-      const spread = literalRegistryValue(property.expression, checker, seen);
+      const spread = literalRegistryValue(property.expression, checker, repoRoot, seen);
       if (spread === undefined || typeof spread !== "object" || Array.isArray(spread)) {
         return undefined;
       }
@@ -519,43 +538,135 @@ function literalRegistryObject(value, checker, seen) {
     }
     if (!ts.isPropertyAssignment(property)) return undefined;
     const name = propertyNameText(property.name);
-    const propertyValue = literalRegistryValue(property.initializer, checker, seen);
+    const propertyValue = literalRegistryValue(property.initializer, checker, repoRoot, seen);
     if (name === undefined || propertyValue === undefined) return undefined;
     result[name] = propertyValue;
   }
   return result;
 }
 
-function literalRegistryIdentifier(identifier, checker, seen) {
+function literalRegistryIdentifier(identifier, checker, repoRoot, seen) {
   const initializer = constInitializer(checker, identifier);
   if (initializer === undefined || seen.has(initializer)) return undefined;
-  return literalRegistryValue(initializer, checker, new Set([...seen, initializer]));
+  return literalRegistryValue(initializer, checker, repoRoot, new Set([...seen, initializer]));
 }
 
-function literalRegistryArray(value, checker, seen) {
+function literalRegistryArray(value, checker, repoRoot, seen) {
   const items = [];
   for (const item of value.elements) {
     if (ts.isSpreadElement(item)) {
-      const spread = literalRegistryValue(item.expression, checker, seen);
+      const spread = literalRegistryValue(item.expression, checker, repoRoot, seen);
       if (!Array.isArray(spread)) return undefined;
       items.push(...spread);
       continue;
     }
-    const itemValue = literalRegistryValue(item, checker, seen);
+    const itemValue = literalRegistryValue(item, checker, repoRoot, seen);
     if (itemValue === undefined) return undefined;
     items.push(itemValue);
   }
   return items;
 }
 
-function literalRegistryValue(expression, checker, seen = new Set()) {
+const FIELD_CONSTRUCTORS = {
+  activityLogCountField,
+  activityLogDurationField,
+  activityLogBooleanField,
+  activityLogStringEnumField,
+};
+// This is local to newly admitted helper arguments, not a limit on existing literal declarations.
+const FIELD_ARGUMENT_WORK_LIMIT = 256;
+
+function fieldConstructorDeclaration(checker, call) {
+  if (checker === undefined || !ts.isIdentifier(call.expression)) return undefined;
+  let symbol = checker.getSymbolAtLocation(call.expression);
+  if (symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  const declarations = symbol?.declarations ?? [];
+  return declarations.length === 1 ? declarations[0] : undefined;
+}
+
+function canonicalFieldConstructor(checker, call, repoRoot) {
+  const declaration = fieldConstructorDeclaration(checker, call);
+  if (declaration === undefined) return undefined;
+  if (!ts.isFunctionDeclaration(declaration) || declaration.name === undefined) return undefined;
+  if (
+    !canonicalContractModule(repoRoot, declaration.getSourceFile(), "activity-log-field-contracts")
+  )
+    return undefined;
+  const name = declaration.name.text;
+  return Object.hasOwn(FIELD_CONSTRUCTORS, name) ? name : undefined;
+}
+
+function fieldArgumentArray(value, checker, seen, budget) {
+  const items = [];
+  for (const item of value.elements) {
+    const spread = ts.isSpreadElement(item);
+    const resolved = fieldArgumentValue(spread ? item.expression : item, checker, seen, budget);
+    if (resolved === undefined || (spread && !Array.isArray(resolved))) return undefined;
+    if (spread) items.push(...resolved);
+    else items.push(resolved);
+    if (items.length > 64) return undefined;
+  }
+  return items;
+}
+
+function fieldArgumentExpression(expression, budget) {
+  let value = expression;
+  while (
+    ts.isAsExpression(value) ||
+    ts.isSatisfiesExpression(value) ||
+    ts.isParenthesizedExpression(value)
+  ) {
+    budget.remaining -= 1;
+    if (budget.remaining < 0) return undefined;
+    value = value.expression;
+  }
+  return value;
+}
+
+function fieldArgumentValue(expression, checker, seen, budget) {
+  budget.remaining -= 1;
+  if (budget.remaining < 0) return undefined;
+  const value = fieldArgumentExpression(expression, budget);
+  if (value === undefined) return undefined;
+  const primitive = literalPrimitive(value);
+  if (primitive !== undefined) return primitive.value;
+  if (ts.isIdentifier(value)) {
+    const initializer = constInitializer(checker, value);
+    if (initializer === undefined || seen.has(initializer)) return undefined;
+    return fieldArgumentValue(initializer, checker, new Set([...seen, initializer]), budget);
+  }
+  return ts.isArrayLiteralExpression(value)
+    ? fieldArgumentArray(value, checker, seen, budget)
+    : undefined;
+}
+
+function literalFieldConstructor(call, checker, repoRoot, seen) {
+  const name = canonicalFieldConstructor(checker, call, repoRoot);
+  if (name === undefined || call.arguments.some(ts.isSpreadElement)) return undefined;
+  const expectedArity = name === "activityLogStringEnumField" ? 2 : 1;
+  if (call.arguments.length !== expectedArity) return undefined;
+  const budget = { remaining: FIELD_ARGUMENT_WORK_LIMIT };
+  const args = call.arguments.map((argument) =>
+    fieldArgumentValue(argument, checker, seen, budget),
+  );
+  if (typeof args[0] !== "boolean") return undefined;
+  if (expectedArity === 2 && invalidClosedStringArray(args[1], REGISTRATION_CLOSED_VALUE))
+    return undefined;
+  return FIELD_CONSTRUCTORS[name](...args);
+}
+
+function literalRegistryValue(expression, checker, repoRoot, seen = new Set()) {
   const value = unwrapExpression(expression);
   const primitive = literalPrimitive(value);
   if (primitive !== undefined) return primitive.value;
-  if (ts.isIdentifier(value)) return literalRegistryIdentifier(value, checker, seen);
-  if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, checker, seen);
+  if (ts.isCallExpression(value)) return literalFieldConstructor(value, checker, repoRoot, seen);
+  if (ts.isIdentifier(value)) return literalRegistryIdentifier(value, checker, repoRoot, seen);
+  if (ts.isArrayLiteralExpression(value))
+    return literalRegistryArray(value, checker, repoRoot, seen);
   return ts.isObjectLiteralExpression(value)
-    ? literalRegistryObject(value, checker, seen)
+    ? literalRegistryObject(value, checker, repoRoot, seen)
     : undefined;
 }
 
@@ -758,6 +869,9 @@ function typedRegistryProgram(repoRoot) {
     options: {
       baseUrl: repoRoot,
       paths: {
+        "@oscharko-dev/keiko-contracts/runtime/activity-log-diagnostic-fields": [
+          "packages/keiko-contracts/src/activity-log-diagnostic-fields.ts",
+        ],
         "@oscharko-dev/keiko-contracts/runtime/observability": [
           "packages/keiko-contracts/src/observability.ts",
         ],
@@ -766,6 +880,9 @@ function typedRegistryProgram(repoRoot) {
         ],
         "@oscharko-dev/keiko-contracts/runtime/pr-description": [
           "packages/keiko-contracts/src/pr-description.ts",
+        ],
+        "@oscharko-dev/keiko-contracts/runtime/verification": [
+          "packages/keiko-contracts/src/verification.ts",
         ],
         "@oscharko-dev/keiko-model-gateway": ["packages/keiko-model-gateway/src/index.ts"],
       },
@@ -783,8 +900,9 @@ export function isTypedRegistrySourceFile(repoRoot, sourceFile) {
   return sourceFile.fileName.replaceAll("\\", "/").startsWith(packagesRoot);
 }
 
-function relevantRegistrySource(sourceFile) {
+function relevantRegistrySource(sourceFile, repoRoot) {
   return (
+    canonicalContractModule(repoRoot, sourceFile, "activity-log-field-contracts") ||
     sourceFile.text.includes("defineActivityLogOperation") ||
     sourceFile.text.includes("activityLogEvent")
   );
@@ -801,7 +919,8 @@ function typedRegistryDiagnostics(program, repoRoot) {
   const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
   return diagnostics
     .filter(
-      (diagnostic) => diagnostic.file !== undefined && relevantRegistrySource(diagnostic.file),
+      (diagnostic) =>
+        diagnostic.file !== undefined && relevantRegistrySource(diagnostic.file, repoRoot),
     )
     .map((diagnostic) => ({
       ...registryViolation(
@@ -956,7 +1075,9 @@ function rejectInvalidRegistrationField(context, site, value) {
 function registrationLiteral(context, node, site) {
   const argument = node.arguments[0];
   const value =
-    argument === undefined ? undefined : literalRegistryValue(argument, context.checker);
+    argument === undefined
+      ? undefined
+      : literalRegistryValue(argument, context.checker, context.repoRoot);
   if (value !== undefined && typeof value.op === "string") return value;
   context.violations.push(
     registryViolation(
@@ -1008,7 +1129,7 @@ function rejectReservedEnvelopeField(context, site, fields) {
 }
 
 function collectTypedRegistration(context, sourceFile, node) {
-  if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
+  if (typedCallKind(context.checker, node, context.repoRoot) !== "activity-log-operation") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
   const value = registrationLiteral(context, node, site);
   if (value === undefined) return;
@@ -1037,7 +1158,7 @@ function collectTypedRegistration(context, sourceFile, node) {
 }
 
 function collectTypedEmission(context, sourceFile, node) {
-  if (typedCallKind(context.checker, node) !== "activity-log-event") return;
+  if (typedCallKind(context.checker, node, context.repoRoot) !== "activity-log-event") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
   const argument = node.arguments[0];
   const symbol =
@@ -1648,26 +1769,98 @@ export function activityLogOperationSurfaces(inventory) {
   );
 }
 
+function equalDescriptor(left, right) {
+  const leftKeys = Reflect.ownKeys(left);
+  const rightKeys = Reflect.ownKeys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index]) &&
+    leftKeys.every((key) => JSON.stringify(left[key]) === JSON.stringify(right[key]))
+  );
+}
+
+function renderedFieldDescriptor(descriptor) {
+  if (typeof descriptor.required !== "boolean") return JSON.stringify(descriptor);
+  for (const [name, construct] of Object.entries(FIELD_CONSTRUCTORS)) {
+    const args =
+      name === "activityLogStringEnumField"
+        ? [descriptor.required, descriptor.values]
+        : [descriptor.required];
+    if (args.length === 2 && invalidClosedStringArray(descriptor.values, REGISTRATION_CLOSED_VALUE))
+      continue;
+    if (equalDescriptor(descriptor, construct(...args))) {
+      return `${name}(${args.map((argument) => JSON.stringify(argument)).join(", ")})`;
+    }
+  }
+  return JSON.stringify(descriptor);
+}
+
+function renderedRuntimeOperation(operation) {
+  return `{${Object.entries(runtimeOperationContract(operation))
+    .map(([key, value]) => {
+      const rendered =
+        key === "fields"
+          ? `{${Object.entries(value)
+              .map(
+                ([name, descriptor]) =>
+                  `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`,
+              )
+              .join(",")}}`
+          : JSON.stringify(value);
+      return `${JSON.stringify(key)}: ${rendered}`;
+    })
+    .join(",")}}`;
+}
+
 export function runtimeOperationsModule(typedRegistry) {
-  const operationRegistry = typedRegistry.operations.map(runtimeOperationContract);
   return [
     "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
-    `export const ACTIVITY_LOG_OPERATION_REGISTRY = ${JSON.stringify(operationRegistry, null, 2)} as const;`,
+    `import { ${Object.keys(FIELD_CONSTRUCTORS).join(", ")} } from "./activity-log-field-contracts.js";`,
+    `export const ACTIVITY_LOG_OPERATION_REGISTRY = [${typedRegistry.operations.map(renderedRuntimeOperation).join(",\n")}] as const;`,
     "",
   ].join("\n");
 }
 
-export function runtimeRegistryModule(typedRegistry, inventory) {
+export function runtimeRegistryData(typedRegistry, inventory) {
+  return {
+    failureClassCoverage: typedRegistry.failureClassCoverage,
+    operationSurfaces: activityLogOperationSurfaces(inventory),
+  };
+}
+
+export function runtimeIdentityModule(typedRegistry) {
   return [
     "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
     `export const ACTIVITY_LOG_REGISTRY_VERSION = ${String(typedRegistry.schemaVersion)} as const;`,
     `export const ACTIVITY_LOG_SCHEMA_DIGEST = "${typedRegistry.schemaDigest}" as const;`,
     `export const ACTIVITY_LOG_CATALOG_DIGEST = "${typedRegistry.catalogDigest}" as const;`,
-    'export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";',
-    `export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = ${JSON.stringify(typedRegistry.failureClassCoverage, null, 2)} as const;`,
     `export const ACTIVITY_LOG_FAILURE_SURFACES = ${JSON.stringify(ACTIVITY_LOG_FAILURE_SURFACES)} as const;`,
     "export type ActivityLogFailureSurface = (typeof ACTIVITY_LOG_FAILURE_SURFACES)[number];",
-    `export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLogFailureSurface>> = ${JSON.stringify(activityLogOperationSurfaces(inventory), null, 2)};`,
+    "",
+  ].join("\n");
+}
+
+export function runtimeMetadataModule() {
+  return [
+    "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
+    'import type { ActivityLogFailureSurface } from "./activity-log-identity.generated.js";',
+    'import failureCoverageData from "./activity-log-failure-class-coverage.generated.json" with { type: "json" };',
+    'import operationSurfaceData from "./activity-log-operation-surfaces.generated.json" with { type: "json" };',
+    'import type { ActivityLogFailureClassCoverageMetadata, ReadonlyRegistryData } from "./activity-log-registry-metadata.js";',
+    "const failureMetadata: ReadonlyRegistryData<typeof failureCoverageData> = failureCoverageData;",
+    "// The producer validates these data against the canonical operation and failure-class contracts.",
+    "export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = failureMetadata as ActivityLogFailureClassCoverageMetadata;",
+    "export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLogFailureSurface>> = operationSurfaceData as Readonly<Record<string, ActivityLogFailureSurface>>;",
+    "",
+  ].join("\n");
+}
+
+export function runtimeRegistryModule() {
+  return [
+    "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
+    'export { ACTIVITY_LOG_REGISTRY_VERSION, ACTIVITY_LOG_SCHEMA_DIGEST, ACTIVITY_LOG_CATALOG_DIGEST, ACTIVITY_LOG_FAILURE_SURFACES, type ActivityLogFailureSurface } from "./activity-log-identity.generated.js";',
+    'export { ACTIVITY_LOG_FAILURE_CLASS_COVERAGE, ACTIVITY_LOG_OPERATION_SURFACES } from "./activity-log-runtime-metadata.generated.js";',
+    'export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";',
     "",
   ].join("\n");
 }
@@ -2422,6 +2615,8 @@ export function generateOpCatalog(repoRoot = REPO_ROOT) {
       const relPath = relative(repoRoot, absPath).replaceAll("\\", "/");
       if (
         relPath === RUNTIME_REGISTRY_RELATIVE_PATH ||
+        relPath === RUNTIME_IDENTITY_RELATIVE_PATH ||
+        relPath === RUNTIME_METADATA_RELATIVE_PATH ||
         relPath === RUNTIME_OPERATIONS_RELATIVE_PATH
       )
         continue;
@@ -2477,38 +2672,42 @@ async function writeGeneratedFiles(catalog, inventory) {
   const operationsBytes = await toolCatalogOperationsBytes(REPO_ROOT);
   const catalogBytes = await formatGeneratedJson(catalog);
   const inventoryBytes = await formatGeneratedJson(inventory);
-  const runtimeRegistryBytes = await format(
-    runtimeRegistryModule(catalog.typedRegistry, inventory),
-    {
-      parser: "typescript",
-      printWidth: 100,
-      tabWidth: 2,
-    },
-  );
+  const registryData = runtimeRegistryData(catalog.typedRegistry, inventory);
+  const failureCoverageBytes = await formatGeneratedJson(registryData.failureClassCoverage);
+  const operationSurfaceBytes = await formatGeneratedJson(registryData.operationSurfaces);
+  const metadataBytes = await format(runtimeMetadataModule(), {
+    parser: "typescript",
+    printWidth: 100,
+    tabWidth: 2,
+  });
+  const identityBytes = await format(runtimeIdentityModule(catalog.typedRegistry), {
+    parser: "typescript",
+    printWidth: 100,
+    tabWidth: 2,
+  });
+  const runtimeRegistryBytes = await format(runtimeRegistryModule(), {
+    parser: "typescript",
+    printWidth: 100,
+    tabWidth: 2,
+  });
   const runtimeOperationsBytes = await format(runtimeOperationsModule(catalog.typedRegistry), {
     parser: "typescript",
     printWidth: 100,
     tabWidth: 2,
   });
-  const outPath = join(REPO_ROOT, ...OUTPUT_RELATIVE_PATH.split("/"));
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, catalogBytes, "utf8");
-  writeFileSync(
-    join(REPO_ROOT, ...FAILURE_SURFACE_INVENTORY_RELATIVE_PATH.split("/")),
-    inventoryBytes,
-    "utf8",
-  );
-  writeFileSync(
-    join(REPO_ROOT, ...RUNTIME_REGISTRY_RELATIVE_PATH.split("/")),
-    runtimeRegistryBytes,
-    "utf8",
-  );
-  writeFileSync(
-    join(REPO_ROOT, ...RUNTIME_OPERATIONS_RELATIVE_PATH.split("/")),
-    runtimeOperationsBytes,
-    "utf8",
-  );
-  writeFileSync(join(REPO_ROOT, TOOL_CATALOG_OPERATIONS_PATH), operationsBytes, "utf8");
+  const artifacts = [
+    [OUTPUT_RELATIVE_PATH, catalogBytes],
+    [RUNTIME_METADATA_RELATIVE_PATH, metadataBytes],
+    [RUNTIME_IDENTITY_RELATIVE_PATH, identityBytes],
+    [FAILURE_SURFACE_INVENTORY_RELATIVE_PATH, inventoryBytes],
+    [RUNTIME_REGISTRY_RELATIVE_PATH, runtimeRegistryBytes],
+    [RUNTIME_OPERATIONS_RELATIVE_PATH, runtimeOperationsBytes],
+    [RUNTIME_FAILURE_COVERAGE_RELATIVE_PATH, failureCoverageBytes],
+    [RUNTIME_OPERATION_SURFACES_RELATIVE_PATH, operationSurfaceBytes],
+    [TOOL_CATALOG_OPERATIONS_PATH, operationsBytes],
+  ];
+  mkdirSync(dirname(join(REPO_ROOT, OUTPUT_RELATIVE_PATH)), { recursive: true });
+  for (const [path, bytes] of artifacts) writeFileSync(join(REPO_ROOT, path), bytes, "utf8");
 }
 
 function reportInventory(inventory) {

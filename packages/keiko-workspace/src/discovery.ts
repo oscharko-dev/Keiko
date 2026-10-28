@@ -39,7 +39,7 @@ import {
 } from "./errors.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactWorkspaceSource } from "./sourceRedaction.js";
 import {
   DEFAULT_READ_OPTIONS,
   type DiscoveredFile,
@@ -49,6 +49,7 @@ import {
   type ReadOptions,
   type WorkspaceInfo,
 } from "./types.js";
+import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import {
   StructuralExecutionStoppedError,
   structuralExecutionStopped,
@@ -1018,6 +1019,19 @@ function assertNoHardLinkAlias(stats: WorkspaceStat, relPath: string): void {
 export type WorkspaceContentLane = "evidence" | "editor";
 
 /**
+ * The content policy of an evidence-lane read (#4098). Only a workspace Chat built under the
+ * deployment opt-out carries `preserve`; every other workspace keeps the default projection.
+ */
+export function workspaceContentPolicy(workspace: WorkspaceInfo): ContentRedactionPolicy {
+  return workspace.contentRedaction === "preserve" ? "preserve" : "redact";
+}
+
+/** The configured secret literals a preserving evidence-lane read still removes (#4098). */
+export function workspaceContentSecrets(workspace: WorkspaceInfo): readonly string[] {
+  return workspace.contentRedaction === "preserve" ? (workspace.contentSecrets?.() ?? []) : [];
+}
+
+/**
  * RAW, UNREDACTED workspace bytes for the editor lane.
  *
  * Structurally distinct from `FileContent` on purpose: the payload lives on `rawText`, so it cannot
@@ -1315,7 +1329,13 @@ export function readWorkspaceFilePrefixForEvidence(
   }
   assertStablePrefixRead(workspace, fs, target);
   assertBeforeRead?.();
-  return redact(rawText, [], { preserveSourceLineBreaks: true });
+  return redactWorkspaceSource(
+    rawText,
+    relPath,
+    true,
+    workspaceContentPolicy(workspace),
+    workspaceContentSecrets(workspace),
+  );
 }
 
 /** Internal text seam that keeps stable read metadata attached until index persistence. */
@@ -1348,7 +1368,15 @@ export function readWorkspaceFileTextForInternalUse(
         }
       : {}),
     content:
-      lane === "editor" ? raw.rawText : redact(raw.rawText, [], { preserveSourceLineBreaks }),
+      lane === "editor"
+        ? raw.rawText
+        : redactWorkspaceSource(
+            raw.rawText,
+            relPath,
+            preserveSourceLineBreaks,
+            workspaceContentPolicy(workspace),
+            workspaceContentSecrets(workspace),
+          ),
     sizeBytes: raw.sizeBytes,
     stat: raw.stat,
   };
@@ -1455,7 +1483,13 @@ export function readWorkspaceFile(
   return {
     relativePath: raw.relativePath,
     sizeBytes: raw.sizeBytes,
-    text: redact(raw.rawText, [], { preserveSourceLineBreaks: true }),
+    text: redactWorkspaceSource(
+      raw.rawText,
+      relPath,
+      true,
+      workspaceContentPolicy(workspace),
+      workspaceContentSecrets(workspace),
+    ),
     truncated: raw.truncated,
   };
 }

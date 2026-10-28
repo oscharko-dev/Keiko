@@ -1,4 +1,10 @@
-import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import {
+  CodingRuntimeAgentUnsupportedError,
+  CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeLaunchRejectedError,
+} from "./launchFailure.js";
+import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
+import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import {
   createProductionDraftDeliveryService,
@@ -30,6 +36,7 @@ import { createRuntimeGitPreparation } from "./productionRuntimeGitPreparation.j
 import { isAbsolute } from "node:path";
 
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeEvent,
@@ -107,6 +114,7 @@ import {
   createProductionRuntimeOperationGuard,
   createProductionRuntimeManager,
   createProductionRuntimeTaskDispatcher,
+  revertMembers,
   type ProductionRuntimeRunRecord,
   type ProductionRuntimeTurnPort,
 } from "./productionCodingRuntimePorts.js";
@@ -120,6 +128,7 @@ import {
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import {
   productionRuntimeAuthorityFacts,
+  productionWorkspaceMatches,
   resolveProductionRuntimeContext,
   trustedManagedWorkspaceRoot,
   type ProductionWorkspaceAuthorityInput,
@@ -652,6 +661,10 @@ function launchResolver(
     ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
     resolve: (request): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
       const context = launchContext(input, preparation, request);
+      // Before the one-use confirmation is consumed or authority minted: a refused agent leaves
+      // nothing to undo, and the operator's confirmation stays valid for the corrected request.
+      refuseUnsupportedAgent(request.agent, context.runtimeSource, shared.toolProfile);
+      refuseUnsupportedPromptInputs(request, context.runtimeSource, shared.toolProfile);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
       const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
@@ -682,6 +695,44 @@ function launchResolver(
       }
     },
   };
+}
+
+/**
+ * `plan` is OpenCode's own read-only agent and exists only on the native service. Another profile,
+ * or a Codex subscription run that has no agent concept, cannot honour it, and running the request
+ * as the default editing agent would break the read-only expectation it carries (#3897).
+ */
+function refuseUnsupportedAgent(
+  agent: CodingWorkbenchAgent | undefined,
+  runtimeSource: CodingRuntimeTrustedContext["runtimeSource"],
+  toolProfile: OpenCodeToolProfile,
+): void {
+  if (agent === undefined) return;
+  const selectable = runtimeSource === "keiko-sidecar" ? openCodeSelectableAgents(toolProfile) : [];
+  if (!isAgentAdmitted(selectable, agent)) throw new CodingRuntimeAgentUnsupportedError(agent);
+}
+
+/**
+ * The first prompt's `@` references and slash command exist on the native service only (ADR-0137
+ * D10). Another profile, or a Codex subscription run, has neither; starting without them would
+ * answer another request than the one written, so the start is refused before the confirmation is
+ * consumed or any run is minted. Where the files are resolved, and whether the command is listed,
+ * waits for the first turn's dispatch.
+ */
+function refuseUnsupportedPromptInputs(
+  request: Pick<ProductionRuntimeBackendInput["request"], "references" | "command" | "mentions">,
+  runtimeSource: CodingRuntimeTrustedContext["runtimeSource"],
+  toolProfile: OpenCodeToolProfile,
+): void {
+  const offered = runtimeSource === "keiko-sidecar" ? openCodePromptInputs(toolProfile) : undefined;
+  const asked: readonly (readonly [boolean, boolean | undefined])[] = [
+    [request.references !== undefined, offered?.references],
+    [request.command !== undefined, offered?.commands],
+    [request.mentions !== undefined, offered?.mentions],
+  ];
+  if (asked.some(([wanted, honoured]) => wanted && honoured !== true)) {
+    throw new CodingRuntimeInputsUnsupportedError();
+  }
 }
 
 function consumeStartConfirmation(
@@ -1026,6 +1077,9 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     operationGuard: createProductionRuntimeOperationGuard(request.runId, () =>
       runtimeAuthorityLive(input, context, minted, authority),
     ),
+    // #3904 AC3: an undo of a settled, held run is admitted while the workspace is still the one the
+    // run was bound to; its own authority ended with the run.
+    heldAdmission: () => productionWorkspaceMatches(input.workspaceAuthority, context),
     waitForPendingMutations: (signal) => surface.leases.waitForIdle(signal),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
@@ -1096,16 +1150,42 @@ export function bindExplicitSkillTurns(
   explicitSkills: ExplicitSkillInvocationTracker,
 ): ProductionRuntimeTurnPort {
   return {
-    submitTurn: async (runId, text, initialContext): Promise<boolean> => {
-      explicitSkills.observeTurn(text);
-      const accepted = await turnPort.submitTurn(runId, text, initialContext);
+    // Handed on with exactly the arguments it came with, so a plain turn stays a plain call.
+    submitTurn: async (...turn): Promise<boolean> => {
+      explicitSkills.observeTurn(turn[1]);
+      const accepted = await turnPort.submitTurn(...turn);
       if (!accepted) explicitSkills.clear();
       return accepted;
     },
+    selectableAgents: turnPort.selectableAgents,
+    // A delivered message joins the turn that is running and starts none, so it neither replaces
+    // that turn's explicit-skill request nor clears it: only a turn's own submission observes text.
+    ...(turnPort.admitPromptInputs === undefined || turnPort.deliverPrompt === undefined
+      ? {}
+      : {
+          admitPromptInputs: turnPort.admitPromptInputs,
+          deliverPrompt: turnPort.deliverPrompt,
+        }),
+    // Listing a run's commands and confirming one starts and settles nothing, so the explicit-skill
+    // request of the turn that follows is neither replaced nor cleared by it.
+    ...(turnPort.listCommands === undefined || turnPort.admitCommand === undefined
+      ? {}
+      : { listCommands: turnPort.listCommands, admitCommand: turnPort.admitCommand }),
+    ...(turnPort.listMentions === undefined ? {} : { listMentions: turnPort.listMentions }),
+    // Authorizing an MCP server starts and settles no turn either.
+    ...(turnPort.mcpAuthorization === undefined
+      ? {}
+      : { mcpAuthorization: turnPort.mcpAuthorization }),
     abortTurn: async (runId): Promise<boolean> => {
       explicitSkills.clear();
       return turnPort.abortTurn(runId);
     },
+    ...revertMembers(turnPort),
+    // Reading or withdrawing a pending message starts and settles no turn, so the explicit-skill
+    // request of the turn in flight is neither replaced nor cleared by it.
+    ...(turnPort.listInbox === undefined || turnPort.actOnInbox === undefined
+      ? {}
+      : { listInbox: turnPort.listInbox, actOnInbox: turnPort.actOnInbox }),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       try {
         return await turnPort.waitForTerminal(runId, signal);

@@ -39,11 +39,20 @@ async function repair(
   if (!("read" in read) || read.read.text.split("\n").length !== 2)
     throw new Error("ci-fixture-repair-read-failed");
   const next = "export const value = 'REPAIRED_CI_3388';\n";
+  // The model-visible edit form (#3873, PR #3876): one exact replacement bound to the file's read
+  // digest. The catalog's `keiko.changeset.edit` schema no longer offers a diff beside it, so the
+  // retired `patch` form this repair used to send is refused as invalid before it reaches the
+  // editor (opencodeToolSchemas.ts's CHANGESET_EDIT_SCHEMA).
   const edited = await invoke(run, `${id}-edit`, {
     action: "edit",
     changeset: {
-      patch: `--- a/${COMMIT_TARGET}\n+++ b/${COMMIT_TARGET}\n@@ -1 +1 @@\n-${read.read.text}+${next}`,
+      edits: [
+        { file: COMMIT_TARGET, oldString: read.read.text, newString: next, replaceAll: false },
+      ],
+      deletions: [],
+      renames: [],
       files: [{ file: COMMIT_TARGET, expectedContentHash: read.read.digest }],
+      selectedFiles: [COMMIT_TARGET],
     },
   });
   if (edited.status !== "completed") return edited;

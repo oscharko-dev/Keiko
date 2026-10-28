@@ -5,6 +5,12 @@ import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import {
+  RIPGREP_PORTABLE_LICENSE_PATH,
+  ripgrepPortableExecutablePath,
+  ripgrepRuntimeApproval,
+  ripgrepRuntimeTargetKey,
+} from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { sha256 } from "./lib/digest.mjs";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
@@ -171,7 +177,7 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
 ]);
 
 const SECRET_PATTERNS = Object.freeze([
-  /sk-[\w-]{8,}/iu,
+  /(?<![\w-])sk-[\w-]{8,}/iu,
   /ghp_\w{8,}/iu,
   /github_pat_\w{82}/iu,
   /npm_[^\W_]{36}/iu,
@@ -272,6 +278,28 @@ const NATIVE_ADDON_KEYS = Object.freeze([
   "sizeBytes",
   "sbomBomRef",
   "signing",
+]);
+const NATIVE_TOOL_KEYS = Object.freeze([
+  "name",
+  "kind",
+  "version",
+  "platformTarget",
+  "architecture",
+  "executablePath",
+  "licensePath",
+  "source",
+  "unsignedSha256",
+  "shippedSha256",
+  "sizeBytes",
+  "sbomBomRef",
+  "signing",
+]);
+const NATIVE_TOOL_SOURCE_KEYS = Object.freeze([
+  "commitSha",
+  "archiveUrl",
+  "archiveSha256",
+  "binarySha256",
+  "licenseSha256",
 ]);
 const REQUIRED_NATIVE_HELPER_NAMES = Object.freeze([
   "keiko-secure-workspace-read",
@@ -539,6 +567,14 @@ function validateArtifact(manifest, failures, options) {
   validateAssetIdentity(assetId, failures, options);
   if (numberAt(artifact, "sizeBytes", "artifact", failures) === 0) {
     push(failures, "artifact.sizeBytes", "must be greater than 0");
+  }
+  const expanded = artifact?.uncompressedSizeBytes;
+  if (!Number.isSafeInteger(expanded) || expanded <= 0 || expanded > 2 ** 31) {
+    push(
+      failures,
+      "artifact.uncompressedSizeBytes",
+      "must be a positive safe integer at most 2 GiB",
+    );
   }
   digestAt(artifact, "sha256", "artifact", failures, options);
   if (stringAt(artifact, "archiveFormat", "artifact", failures) !== "zip") {
@@ -896,6 +932,9 @@ function validateNativeHelper(manifest, helper, index, names, failures, options)
     return;
   }
   const identity = validateNativeHelperIdentity(manifest, helper, path, names, failures);
+  if (options.requireNativeHelpers === true && identity.contract?.legacy === true) {
+    push(failures, path, "new Linux artifacts must bind the native runtime supervisor");
+  }
   validateNativeHelperProtocol(helper, identity.contract, path, failures);
   validateNativeHelperSource(helper, identity.contract, path, failures, options);
   validateNativeHelperBinding(
@@ -932,6 +971,114 @@ function validateNativeAddons(manifest, failures, options) {
   digestAt(addon, "shippedSha256", path, failures, options);
   positiveNumberAt(addon, "sizeBytes", path, failures);
   validateNativeHelperSigning(addon, target, path, failures, options);
+}
+
+/**
+ * The pinned third-party executables a portable payload ships beside the Keiko-built helpers
+ * (Epic #3897): today exactly ripgrep, the search dependency of the OpenCode coding runtime. A tool
+ * is not a Node addon and not Keiko-built, so it has its own closed section rather than a second
+ * `nativeAddons` entry, which every signing and qualification consumer pins to exactly one.
+ * Absence stays parseable for artifacts produced before the tool shipped; a producer asks for
+ * presence with `requireNativeTools`, and any consumer that finds a tool validates it fully.
+ */
+function validateNativeTools(manifest, failures, options) {
+  const tools = manifest.nativeTools;
+  if (tools === undefined) {
+    if (options.requireNativeTools === true) {
+      push(
+        failures,
+        "nativeTools",
+        "must contain the pinned ripgrep tool for newly produced artifacts",
+      );
+    }
+    return;
+  }
+  if (!Array.isArray(tools) || tools.length !== 1) {
+    push(failures, "nativeTools", "must contain exactly one tool when present");
+    return;
+  }
+  const tool = tools[0];
+  const path = "nativeTools[0]";
+  if (!isRecord(tool)) {
+    push(failures, path, "must be an object");
+    return;
+  }
+  const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const approval = ripgrepApprovalForPortableTarget(target);
+  exactKeysAt(tool, NATIVE_TOOL_KEYS, path, failures);
+  validateNativeToolIdentity(tool, target, approval, path, failures);
+  validateNativeToolSource(tool, approval, path, failures, options);
+  digestAt(tool, "unsignedSha256", path, failures, options);
+  literalAt(tool, "unsignedSha256", approval?.binarySha256, path, failures);
+  digestAt(tool, "shippedSha256", path, failures, options);
+  positiveNumberAt(tool, "sizeBytes", path, failures);
+  validateNativeHelperSigning(tool, target, path, failures, options);
+}
+
+export function ripgrepApprovalForPortableTarget(target) {
+  if (target === undefined) return undefined;
+  return ripgrepRuntimeApproval(
+    ripgrepRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture),
+  );
+}
+
+/** The CycloneDX reference of the shipped tool. One definition for the producer and the validator. */
+export function nativeToolSbomBomRef(approval, platformTarget) {
+  return `pkg:github/burntsushi/ripgrep@${approval?.version ?? ""}?platform=${platformTarget ?? ""}`;
+}
+
+/**
+ * The provenance projection of a manifest tool. Shared by the producer and by the signed-archive
+ * rebind so the statement both write is, by construction, the same statement.
+ */
+export function nativeToolProvenance(tool) {
+  return {
+    architecture: tool.architecture,
+    executablePath: tool.executablePath,
+    name: tool.name,
+    shippedSha256: tool.shippedSha256,
+    signatureKind: tool.signing.signatureKind,
+    signatureVerified: tool.signing.signatureVerified,
+    notarizationVerified: tool.signing.notarizationVerified,
+    sourceCommitSha: tool.source.commitSha,
+    archiveSha256: tool.source.archiveSha256,
+    unsignedSha256: tool.unsignedSha256,
+    version: tool.version,
+  };
+}
+
+function validateNativeToolIdentity(tool, target, approval, path, failures) {
+  literalAt(tool, "name", "ripgrep", path, failures);
+  literalAt(tool, "kind", "native-tool", path, failures);
+  literalAt(tool, "version", approval?.version, path, failures);
+  literalAt(tool, "platformTarget", target?.platformTarget, path, failures);
+  literalAt(tool, "architecture", target?.nodeArchitecture, path, failures);
+  literalAt(
+    tool,
+    "executablePath",
+    approval === undefined ? undefined : ripgrepPortableExecutablePath(approval.targetKey),
+    path,
+    failures,
+  );
+  literalAt(tool, "licensePath", RIPGREP_PORTABLE_LICENSE_PATH, path, failures);
+  literalAt(
+    tool,
+    "sbomBomRef",
+    nativeToolSbomBomRef(approval, target?.platformTarget),
+    path,
+    failures,
+  );
+}
+
+function validateNativeToolSource(tool, approval, path, failures, options) {
+  const source = recordAt(tool, "source", path, failures);
+  exactKeysAt(source, NATIVE_TOOL_SOURCE_KEYS, `${path}.source`, failures);
+  literalAt(source, "commitSha", approval?.sourceCommit, `${path}.source`, failures);
+  literalAt(source, "archiveUrl", approval?.archiveUrl, `${path}.source`, failures);
+  literalAt(source, "archiveSha256", approval?.archiveSha256, `${path}.source`, failures);
+  literalAt(source, "binarySha256", approval?.binarySha256, `${path}.source`, failures);
+  literalAt(source, "licenseSha256", approval?.licenseSha256, `${path}.source`, failures);
+  digestAt(source, "binarySha256", `${path}.source`, failures, options);
 }
 
 function usearchApprovalForPortableTarget(target) {
@@ -981,7 +1128,7 @@ function validateNativeHelperIdentity(manifest, helper, path, names, failures) {
   names.add(name);
   const targetName = stringAt(helper, "platformTarget", path, failures);
   const target = portableTargetByName(targetName);
-  const contract = nativeHelperContract(name, target);
+  const contract = nativeHelperContract(name, target, helper);
   if (contract === undefined) {
     push(failures, `${path}.name`, "is unsupported");
   } else {
@@ -1005,7 +1152,7 @@ function validateNativeHelperIdentity(manifest, helper, path, names, failures) {
   return { contract, target, targetName };
 }
 
-function nativeHelperContract(name, target) {
+function nativeHelperContract(name, target, helper) {
   if (target === undefined) return undefined;
   const suffix = target.nodePlatform === "win32" ? ".exe" : "";
   if (name === "keiko-secure-workspace-read") {
@@ -1017,24 +1164,34 @@ function nativeHelperContract(name, target) {
       sourcePath: "native/secure-workspace-read",
     };
   }
-  if (name === "keiko-runtime-supervisor") {
-    const linux = target.nodePlatform === "linux";
-    const sourcePlatform = target.nodePlatform === "win32" ? "windows" : "macos";
-    return {
-      bomName: name,
-      executablePath: linux
-        ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
-        : `runtime/native/${name}${suffix}`,
-      kind: "runtime-process-supervisor",
-      protocol: linux
-        ? { requestMagic: "none", responseMagic: "none" }
-        : { requestMagic: "KRP1", responseMagic: "KRS1" },
-      sourcePath: linux
-        ? "packages/keiko-sandbox/src"
-        : `native/runtime-supervisor/${sourcePlatform}`,
-    };
-  }
+  if (name === "keiko-runtime-supervisor") return supervisorContract(name, target, helper, suffix);
   return undefined;
+}
+
+function supervisorContract(name, target, helper, suffix) {
+  const linux = target.nodePlatform === "linux";
+  const legacy =
+    linux &&
+    helper.executablePath === "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  return {
+    bomName: name,
+    executablePath: legacy
+      ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
+      : `runtime/native/${name}${suffix}`,
+    kind: "runtime-process-supervisor",
+    protocol: legacy
+      ? { requestMagic: "none", responseMagic: "none" }
+      : { requestMagic: "KRP1", responseMagic: "KRS1" },
+    sourcePath: supervisorSourcePath(target, legacy),
+    legacy,
+  };
+}
+
+function supervisorSourcePath(target, legacy) {
+  if (legacy) return "packages/keiko-sandbox/src";
+  if (target.nodePlatform === "linux") return "native/runtime-supervisor";
+  const platform = target.nodePlatform === "win32" ? "windows" : "macos";
+  return `native/runtime-supervisor/${platform}`;
 }
 
 function validateNativeHelperProtocol(helper, contract, path, failures) {
@@ -1968,6 +2125,7 @@ function reviewedBindingChecks(manifest) {
     ...sidecarBindingChecks(manifest),
     ...nativeHelperBindingChecks(manifest),
     ...nativeAddonBindingChecks(manifest),
+    ...nativeToolBindingChecks(manifest),
     ...runtimeAttestationBindingChecks(manifest),
     ...runtimeQualificationBindingChecks(manifest),
   ];
@@ -2023,6 +2181,10 @@ function nativeHelperBindingChecks(manifest) {
 
 function nativeAddonBindingChecks(manifest) {
   return Array.isArray(manifest.nativeAddons) ? [["nativeAddons", manifest.nativeAddons]] : [];
+}
+
+function nativeToolBindingChecks(manifest) {
+  return Array.isArray(manifest.nativeTools) ? [["nativeTools", manifest.nativeTools]] : [];
 }
 
 function runtimeAttestationBindingChecks(manifest) {
@@ -2229,8 +2391,26 @@ function scanForbiddenString(value, path, failures) {
     push(failures, path, "contains secret-like or private-path text");
   }
   for (const part of FORBIDDEN_PATH_PARTS) {
-    if (value.includes(part)) push(failures, path, `contains forbidden payload reference ${part}`);
+    if (forbiddenPayloadReference(value, path, part))
+      push(failures, path, `contains forbidden payload reference ${part}`);
   }
+}
+
+function forbiddenPayloadReference(value, path, part) {
+  // A signed catalog describes public store names and release notes. These fields
+  // do not select payload files. Credentials, private paths and relative state
+  // paths remain forbidden, as do unknown fields and every artifact/path field.
+  const publicCatalogText =
+    /^manifest\.releaseImpact\.catalog\.entries\[\d+\]\.(?:id|userVisibleSummary|releaseNoteBullets\[\d+\]|review\.rationale|affectedStateStores\[\d+\]|stateImpact\[\d+\]\.(?:store|description)|breakingException\.(?:rationale|warningText)|correctionRationale)$/u.test(
+      path,
+    );
+  if (!publicCatalogText) return value.includes(part);
+  return (
+    value.includes(`${part}/`) ||
+    value.includes(`${part}\\`) ||
+    value.includes(`/${part}`) ||
+    value.includes(`\\${part}`)
+  );
 }
 
 function normalizedValidationOptions(options) {
@@ -2278,6 +2458,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateSidecarRuntimes(manifest, failures, normalized);
   validateNativeHelpers(manifest, failures, normalized);
   validateNativeAddons(manifest, failures, normalized);
+  validateNativeTools(manifest, failures, normalized);
   validatePackageSurface(manifest, failures);
   validateEntrypoints(manifest, failures);
   validateInstallLayout(manifest, failures);
@@ -2390,6 +2571,7 @@ export function portableVerificationSummaryForManifest(manifest) {
     reasonCodes: security.verificationReasonCodes ?? [],
     nativeHelpers: nativeHelperVerificationSummaries(manifest),
     nativeAddons: nativeAddonVerificationSummaries(manifest),
+    ...nativeToolSummaryEntry(manifest),
     sidecarRuntimes: sidecarVerificationSummaries(manifest),
     verificationChecks: security.verificationChecks ?? {},
   };
@@ -2410,6 +2592,27 @@ function nativeAddonVerificationSummaries(manifest) {
     notarizationRequired: addon.signing?.notarizationRequired,
     notarizationVerified: addon.signing?.notarizationVerified,
   }));
+}
+
+// Present only when the manifest carries tools, so the summary of an artifact produced before the
+// tool shipped keeps its exact historical shape.
+function nativeToolSummaryEntry(manifest) {
+  if (!Array.isArray(manifest.nativeTools)) return {};
+  return {
+    nativeTools: manifest.nativeTools.map((tool) => ({
+      name: tool.name,
+      version: tool.version,
+      platformTarget: tool.platformTarget,
+      architecture: tool.architecture,
+      executablePath: tool.executablePath,
+      shippedSha256: tool.shippedSha256,
+      signingStatus: tool.signing?.verificationStatus,
+      signatureKind: tool.signing?.signatureKind,
+      signatureVerified: tool.signing?.signatureVerified,
+      notarizationRequired: tool.signing?.notarizationRequired,
+      notarizationVerified: tool.signing?.notarizationVerified,
+    })),
+  };
 }
 
 function nativeHelperVerificationSummaries(manifest) {

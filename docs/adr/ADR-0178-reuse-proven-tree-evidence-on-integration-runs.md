@@ -56,7 +56,8 @@ jobs whose verdict that evidence carries do not run: `semantic-duplication`, `co
 `coverage-packages`, `coverage-ui`, `coverage-scripts`, `coverage-sonar`, `build-scan-sbom-smoke`,
 `cross-platform-smoke`, `node-26-compatibility`, `portable-secure-read`, `firefox-smoke`, and `ui`.
 
-`protected-branch-gate`, `secret-scan`, `change-scope`, and the resolver itself always run: they cost
+For admitted lifecycle events (ADR-0139 D4), `protected-branch-gate`, `secret-scan`,
+`change-scope`, and the resolver itself always run: they cost
 under two minutes in total and they judge the integration commit's own identity and history rather
 than its content.
 

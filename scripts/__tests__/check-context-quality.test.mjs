@@ -10,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-server";
 
 import {
+  aggregateRehydrationMetrics,
   buildAggregateSummary,
   buildProvenanceMap,
   deepEqual,
@@ -41,6 +42,7 @@ import {
   laneOfIncludedIds,
   percentile,
   redactLanes,
+  rehydrateScenarios,
 } from "../check-context-quality.mjs";
 import {
   buildChatHistoryFixtures,
@@ -85,6 +87,23 @@ const STRICT_BUDGET = {
   maxChatCompactionLatencyP95Ms: 1000,
   maxAssemblyLatencyP95Ms: 1000,
 };
+
+describe("context-quality corpus integration", () => {
+  it("rehydrates every evicted fixture in corpus order and detects invalidation", async () => {
+    const scenarios = await buildScenarioCorpus();
+    const rehydrations = await rehydrateScenarios(scenarios);
+    expect(rehydrations.map((scenario) => scenario.id)).toEqual([
+      "long-agentic-refund-session",
+      "budget-pressure-eviction",
+    ]);
+    expect(aggregateRehydrationMetrics(rehydrations)).toEqual({
+      excludedRepoFiles: 3,
+      rehydrationReadiness: 1,
+      compactionPreservation: 1,
+      invalidationDetected: true,
+    });
+  });
+});
 
 function passingSummary() {
   return {

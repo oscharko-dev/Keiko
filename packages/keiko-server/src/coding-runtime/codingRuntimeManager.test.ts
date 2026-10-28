@@ -5,7 +5,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -14,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -38,6 +37,7 @@ import {
   type CodingRuntimeManager,
   type CodingRuntimeManagerDeps,
   type CodingRuntimeLaunchRequest,
+  type OpenCodeLifecycleAdapter,
   type ReviewedCodexEgressPolicy,
 } from "./codingRuntimeManager.js";
 import {
@@ -64,13 +64,6 @@ import {
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_GOVERNED_ACTION_PERMISSION } from "./opencodeToolSchemas.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
-import { attestPortableSidecarTreeSync } from "@oscharko-dev/keiko-security/portable-tree-attestation";
-import {
-  inspectOpenCodeServiceHostDisk,
-  prepareOpenCodeServiceHostLaunch,
-  OPENCODE_SERVICE_HOST_DISK_EVIDENCE,
-  type PreparedOpenCodeServiceHostLaunch,
-} from "./opencodeServiceHostArtifact.js";
 
 const tempDirs: string[] = [];
 const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
@@ -798,6 +791,7 @@ interface PermissionLineInput {
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly targetPath?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
+  readonly nativeAction?: { readonly permission: string; readonly resources: readonly string[] };
   readonly fileCount?: number | undefined;
   readonly addedLines?: number | undefined;
   readonly deletedLines?: number | undefined;
@@ -938,6 +932,39 @@ describe("coding runtime manager", () => {
     expect(harness.captures[0]?.executable).not.toBe(unmanaged);
     expect(JSON.stringify(result)).not.toContain(fixture.managedRoot);
     expect(JSON.stringify(result)).not.toContain(unmanaged);
+  });
+
+  it("launches a Full-access run whose mode value the host also carries under a non-secret name (#3897)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin", KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" },
+    });
+
+    const result = await manager.start(
+      autonomousDeliveryRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    expect(harness.captures[0]?.env).toMatchObject({ KEIKO_CODING_MODE: "autonomous-delivery" });
+    expect(harness.captures[0]?.env).not.toHaveProperty("KEIKO_CODING_DEPLOYMENT_CEILING");
+  });
+
+  it("refuses a child env value that equals a credential-named host value (#3897)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin", PROFILE_ACCESS_TOKEN: "coding-safe-openai-compatible" },
+    });
+
+    expect(
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({ ok: false, failureCode: "env-secret-denied", retryable: false });
+    expect(harness.children).toHaveLength(0);
   });
 
   it("fails closed when OpenCode is paired with a Codex subscription profile", async () => {
@@ -4443,6 +4470,224 @@ describe("coding runtime manager", () => {
     ]);
   });
 
+  // S02 (#3904): the lifecycle learns how the run ended when its state is disposed, so a database
+  // is retained only for a run that an orderly stop settled normally.
+  it.each([
+    ["succeeded", "succeeded"],
+    ["failed", "failed"],
+    ["cancelled", "cancelled"],
+    [undefined, "cancelled"],
+  ] as const)(
+    "hands the lifecycle the status an orderly stop(%s) ended the run with",
+    async (requested, terminalStatus) => {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      const dispose = vi.fn<NonNullable<OpenCodeLifecycleAdapter["dispose"]>>(() => true);
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: testSupervisor(() => ({
+          ...child.handle,
+          kill: (signal): void => {
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        })),
+        openCodeLifecycleAdapter: {
+          handshake: vi.fn(() => Promise.resolve({ ok: true as const })),
+          dispose,
+        },
+      });
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+
+      await manager.stop("run-1988", requested);
+
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(dispose.mock.calls[0]?.[0]).toBe("run-1988");
+      expect(dispose.mock.calls[0]?.[2]).toEqual({ terminalStatus });
+    },
+  );
+
+  // #3904 AC3 (owner decision 2026-10-24): a succeeded native run keeps its process for the
+  // post-completion undo window, with every run authority revoked, until a later stop reaps it.
+  describe("holding a succeeded runtime for the undo window", () => {
+    function heldHarness(options: { readonly native?: boolean } = {}): {
+      readonly manager: ReturnType<typeof createTestCodingRuntimeManager>;
+      readonly child: ReturnType<typeof fakeChild>;
+      readonly order: string[];
+      readonly fixture: ReturnType<typeof createManagedFixture>;
+    } {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      const order: string[] = [];
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: testSupervisor(() => ({
+          ...child.handle,
+          kill: (signal): void => {
+            order.push(`signal:${signal}`);
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        })),
+        revokeRuntime: (runId): true => {
+          order.push(`revoke:${runId}`);
+          return true;
+        },
+        abortInFlightActions: (runId): true => {
+          order.push(`abort:${runId}`);
+          return true;
+        },
+        ...(options.native === false
+          ? {}
+          : {
+              openCodeLifecycleAdapter: {
+                handshake: vi.fn(() => Promise.resolve({ ok: true as const })),
+                dispose: (runId, _signal, settlement): true => {
+                  order.push(`dispose:${runId}:${String(settlement?.terminalStatus)}`);
+                  return true;
+                },
+              },
+            }),
+        releaseRuntimeAfterReap: (runId): true => {
+          order.push(`release:${runId}`);
+          return true;
+        },
+      });
+      return { manager, child, order, fixture };
+    }
+
+    async function startHeld(
+      harness: ReturnType<typeof heldHarness>,
+    ): Promise<Awaited<ReturnType<NonNullable<CodingRuntimeManager["hold"]>>> | undefined> {
+      const { manager, fixture } = harness;
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+      return manager.hold?.("run-1988");
+    }
+
+    it("revokes every run authority but keeps the process, and records the run as succeeded", async () => {
+      const harness = heldHarness();
+
+      await expect(startHeld(harness)).resolves.toEqual({ ok: true, status: "held" });
+
+      expect(harness.order).toEqual(["revoke:run-1988", "abort:run-1988"]);
+      expect(harness.child.kills).toEqual([]);
+      expect(harness.manager.result("run-1988")?.status).toBe("succeeded");
+    });
+
+    it("keeps a healthy failed runtime undoable and never promotes its result to success", async () => {
+      const harness = heldHarness();
+      const { manager, fixture } = harness;
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+      await expect(manager.hold?.("run-1988", "failed")).resolves.toEqual({
+        ok: true,
+        status: "held",
+      });
+      expect(harness.child.kills).toEqual([]);
+      expect(manager.result("run-1988")?.status).toBe("failed");
+      await manager.stop("run-1988", "succeeded");
+      expect(manager.result("run-1988")?.status).toBe("failed");
+      expect(harness.order).toContain("dispose:run-1988:failed");
+    });
+
+    it("reaps, disposes as succeeded and releases only when the held runtime is stopped", async () => {
+      const harness = heldHarness();
+      await startHeld(harness);
+
+      await expect(harness.manager.stop("run-1988", "succeeded")).resolves.toEqual({
+        ok: true,
+        status: "stopped",
+      });
+
+      expect(harness.order).toEqual([
+        "revoke:run-1988",
+        "abort:run-1988",
+        "revoke:run-1988",
+        "abort:run-1988",
+        "signal:SIGTERM",
+        "dispose:run-1988:succeeded",
+        "release:run-1988",
+      ]);
+      expect(harness.manager.health().status).toBe("stopped");
+    });
+
+    it("admits no approval for a held run", async () => {
+      const harness = heldHarness();
+      await startHeld(harness);
+
+      expect(
+        harness.manager.issueApproval({
+          runId: "run-1988",
+          requestId: "approval-after-hold",
+          actionClass: "workspace-write",
+          targetDigest: "d".repeat(64),
+          scopeDigest: "e".repeat(64),
+        } as unknown as Parameters<typeof harness.manager.issueApproval>[0]),
+      ).toMatchObject({ ok: false });
+    });
+
+    it("stops a runtime without the native lifecycle instead of holding it", async () => {
+      const harness = heldHarness({ native: false });
+
+      await expect(startHeld(harness)).resolves.toEqual({ ok: true, status: "stopped" });
+      expect(harness.order).toContain("signal:SIGTERM");
+    });
+
+    it("refuses to hold another run's runtime", async () => {
+      const harness = heldHarness();
+      await harness.manager.start(
+        launchRequest(
+          harness.fixture.workspaceRoot,
+          harness.fixture.managedRoot,
+          harness.fixture.executablePath,
+        ),
+      );
+
+      await expect(harness.manager.hold?.("run-other")).resolves.toEqual({
+        ok: false,
+        failureCode: "runtime-run-mismatch",
+        retryable: false,
+      });
+      expect(harness.order).toEqual([]);
+    });
+  });
+
+  it("reports a runtime that exited on its own as failed, even when a stop folds onto that teardown as succeeded", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const dispose = vi.fn<NonNullable<OpenCodeLifecycleAdapter["dispose"]>>(() => true);
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: true as const })),
+        dispose,
+      },
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    // The runtime exits cleanly by itself mid-run; the orchestrator's stop arrives in the same tick.
+    child.exit(0);
+    const stopped = manager.stop("run-1988", "succeeded");
+    await stopped;
+
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(dispose.mock.calls[0]?.[2]).toEqual({ terminalStatus: "failed" });
+  });
+
   it("does not dispose or release a runtime whose complete-tree reap is unproven", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();
@@ -4958,6 +5203,57 @@ describe("governed-assist approval reviewability", () => {
     });
   });
 
+  it("keeps the review facts of every queued ask, not only the latest (#3897 live lab)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    // OpenCode issues parallel native edits; each ask waits in the queue with its own facts.
+    for (const [requestId, path] of [
+      ["perm-3897-edit", "src/a.ts"],
+      ["perm-3898-edit", "src/b.ts"],
+      ["perm-3899-edit", "src/c.ts"],
+    ] as const) {
+      harness.children[0]?.stdout.write(
+        permissionLine({
+          requestId,
+          kind: "workspace-write",
+          actionClass: "workspace-write",
+          reasonCode: "approval-required",
+          scopeLabel: "workspace-scope",
+          risk: "medium",
+          policyReason: "approval-required",
+          nativeAction: { permission: "edit", resources: [path] },
+        }),
+      );
+    }
+    await settle();
+
+    for (const [requestId, path] of [
+      ["perm-3897-edit", "src/a.ts"],
+      ["perm-3898-edit", "src/b.ts"],
+      ["perm-3899-edit", "src/c.ts"],
+    ] as const) {
+      expect(manager.pendingApprovalReview("run-1991", requestId)).toMatchObject({
+        requestId,
+        nativeAction: { permission: "edit", resources: [path] },
+        paths: [path],
+      });
+    }
+    expect(manager.pendingApprovalReview("run-1991", "perm-3900-edit")).toBeUndefined();
+  });
+
   it("refuses a review for a stale request id, a foreign run, and an escaping path", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -5444,456 +5740,4 @@ it("aborts the private cleanup signal when OpenCode disposal explicitly refuses 
   });
   expect(disposalSignal?.aborted).toBe(true);
   expect(release).not.toHaveBeenCalled();
-});
-
-async function preparedHostFixture(workspace: string): Promise<PreparedOpenCodeServiceHostLaunch> {
-  const payloadRoot = tempDir("keiko-prepared-host-");
-  mkdirSync(join(payloadRoot, "runtime"));
-  mkdirSync(join(payloadRoot, "evidence"));
-  for (const [path] of OPENCODE_SERVICE_HOST_DISK_EVIDENCE)
-    writeFileSync(join(payloadRoot, path), "inactive byte fixture");
-  writeFileSync(join(payloadRoot, "guard-seams.mjs"), "original byte fixture");
-  const measured = attestPortableSidecarTreeSync(
-    payloadRoot,
-    "runtime/node",
-    Date.now() + 5000,
-    undefined,
-    OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path]) => path),
-  );
-  const base = (
-    JSON.parse(
-      readFileSync(
-        new URL(
-          "../../../keiko-contracts/src/opencode-service-host.private-qualified.fixture.json",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    ) as { readonly approval: Record<string, unknown> }
-  ).approval;
-  const approval = {
-    ...base,
-    platformTarget: "windows-x64",
-    payloadTreeSha256: measured.treeSha256,
-    ...Object.fromEntries(
-      OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path, field]) => [
-        field,
-        measured.selectedFileSha256ByPath?.[path],
-      ]),
-    ),
-  };
-  const receipt = await inspectOpenCodeServiceHostDisk(
-    {
-      payloadRoot,
-      approval,
-      target: "windows-x64",
-      trustedSupplement: { "windows-x64": approval },
-    },
-    { deadline: Date.now() + 5000 },
-  );
-  if (!receipt.ok) throw new Error("Expected inactive supplementary receipt");
-  const program = prepareOpenCodeServiceHostLaunch(
-    receipt,
-    {
-      workspace,
-      stateRoot: tempDir("keiko-prepared-state-"),
-      password: "p".repeat(43),
-      providerURL: "http://127.0.0.1:1983/api/coding-sidecar/gateway/chat/completions",
-      facadeURL: "http://127.0.0.1:1983/api/coding-sidecar/tool",
-      providerCapability: "m".repeat(32),
-      facadeCapability: "t".repeat(32),
-      mode: "supervised-coding",
-      runId: "run-1988",
-      configDigest: "f".repeat(64),
-      toolProfile: "direct",
-    },
-    {},
-  );
-  if (program === undefined) throw new Error("Expected inactive fixed program");
-  return program;
-}
-
-function hostTransportHarness(input: {
-  readonly program: PreparedOpenCodeServiceHostLaunch;
-  readonly stdin?: Writable;
-  readonly lifetime?: true;
-  readonly env?: Readonly<Record<string, string>>;
-  readonly canSpawn?: () => boolean;
-  readonly reaps?: boolean;
-  readonly onSpawn?: () => void;
-  readonly now?: () => number;
-}): {
-  readonly manager: CodingRuntimeManager;
-  readonly captures: { executable: string; args: readonly string[]; cwd: string }[];
-  readonly handshake: Mock<() => Promise<{ readonly ok: true }>>;
-  readonly events: CodingWorkbenchRuntimeEvent[];
-  readonly diagnostics: ServerDiagnosticRecord[];
-  readonly release: Mock<() => true>;
-} {
-  const child = fakeChild();
-  const captures: { executable: string; args: readonly string[]; cwd: string }[] = [];
-  const events: CodingWorkbenchRuntimeEvent[] = [];
-  const diagnostics: ServerDiagnosticRecord[] = [];
-  const handshake = vi.fn(() => Promise.resolve({ ok: true as const }));
-  const release = vi.fn((): true => true);
-  const manager = createTestCodingRuntimeManager({
-    processEnv: {},
-    diagnostics: {
-      record: (record): void => {
-        diagnostics.push(record);
-      },
-    },
-    supervisor: testSupervisor(
-      (executable, args, _env, cwd) => {
-        captures.push({ executable, args, cwd });
-        input.onSpawn?.();
-        return {
-          ...child.handle,
-          ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-          kill: (signal): void => {
-            child.kills.push(signal);
-            if (input.reaps !== false) child.exit();
-          },
-        };
-      },
-      undefined,
-      input.lifetime,
-    ),
-    canSpawnRuntime: input.canSpawn,
-    now: input.now,
-    releaseRuntimeAfterReap: release,
-    openCodeLifecycleAdapter: {
-      prepare: () =>
-        Promise.resolve({
-          ok: true as const,
-          parentLifetime: "stdin-eof" as const,
-          serviceHost: input.program,
-          env: input.env,
-        }),
-      handshake,
-    },
-    onRuntimeEvent: (event): void => {
-      events.push(event);
-    },
-  });
-  return { manager, captures, handshake, events, diagnostics, release };
-}
-
-function startHostTransport(
-  manager: CodingRuntimeManager,
-  workspace: string,
-  extra: Partial<CodingRuntimeLaunchRequest> = {},
-): ReturnType<CodingRuntimeManager["start"]> {
-  const fixture = createManagedFixture();
-  return manager.start({
-    ...launchRequest(workspace, fixture.managedRoot, fixture.executablePath),
-    ...extra,
-  });
-}
-
-function blockedHostPacket(): {
-  readonly stdin: Writable;
-  readonly entered: Promise<void>;
-  finishLate(): void;
-} {
-  let enter: (() => void) | undefined;
-  let callback: (() => void) | undefined;
-  const entered = new Promise<void>((resolve) => {
-    enter = resolve;
-  });
-  const stdin = new Writable({
-    write(_chunk, _encoding, done): void {
-      callback = done;
-      enter?.();
-    },
-  });
-  return {
-    stdin,
-    entered,
-    finishLate: (): void => {
-      if (callback === undefined) throw new Error("host-packet-write-not-entered");
-      callback();
-    },
-  };
-}
-
-async function timedOutHostPacket(reaps: boolean): Promise<{
-  readonly result: Awaited<ReturnType<CodingRuntimeManager["start"]>>;
-  readonly harness: ReturnType<typeof hostTransportHarness>;
-}> {
-  const workspace = tempDir("keiko-host-workspace-");
-  const program = await preparedHostFixture(workspace);
-  const packet = blockedHostPacket();
-  const harness = hostTransportHarness({
-    program,
-    stdin: packet.stdin,
-    lifetime: true,
-    reaps,
-    now: () => 1000,
-  });
-  // Real disk attestation must finish before the unchanged writer timeout is advanced.
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  let starting: Promise<Awaited<ReturnType<CodingRuntimeManager["start"]>>> | undefined;
-  try {
-    starting = Promise.resolve(
-      startHostTransport(harness.manager, workspace, { startTimeoutMs: 20 }),
-    );
-    await Promise.race([
-      packet.entered,
-      starting.then(() => {
-        throw new Error("host-start-settled-before-packet-write");
-      }),
-    ]);
-    expect(harness.captures).toHaveLength(1);
-    expect(harness.handshake).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(20);
-    await vi.advanceTimersByTimeAsync(5);
-    await vi.advanceTimersByTimeAsync(5);
-    const result = await starting;
-    expect(packet.stdin.destroyed).toBe(true);
-    packet.finishLate();
-    await settle();
-    expect(harness.handshake).not.toHaveBeenCalled();
-    expect(harness.events.some((event) => event.kind === "runtime-started")).toBe(false);
-    return { result, harness };
-  } finally {
-    packet.stdin.destroy();
-    try {
-      await vi.runAllTimersAsync();
-      await starting;
-    } finally {
-      vi.useRealTimers();
-    }
-  }
-}
-
-describe("inactive fixed host prepared transport", () => {
-  it("preserves artifact-owned Node/bootstrap and writes one owned packet before readiness", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    const chunks: Buffer[] = [];
-    const stdin = new Writable({
-      write(chunk: Buffer, _encoding, done): void {
-        chunks.push(Buffer.from(chunk));
-        setImmediate(done);
-      },
-    });
-    const harness = hostTransportHarness({ program, stdin, lifetime: true });
-    harness.handshake.mockImplementation(() => {
-      expect(Buffer.concat(chunks).toString("utf8")).toBe(program.packet);
-      return Promise.resolve({ ok: true as const });
-    });
-    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
-      ok: true,
-    });
-    expect(harness.captures).toEqual([
-      { executable: program.executable, args: program.args, cwd: workspace },
-    ]);
-    expect(chunks).toHaveLength(1);
-    expect(Buffer.byteLength(program.packet)).toBeLessThanOrEqual(16384);
-    expect(program.packet.endsWith("\n")).toBe(true);
-    expect(stdin.writableEnded).toBe(false);
-    expect(harness.handshake).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses an unsupported stdin lease without falling back to CLI", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    const harness = hostTransportHarness({ program, stdin: new PassThrough() });
-    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
-      ok: false,
-    });
-    expect(harness.captures).toHaveLength(0);
-    expect(harness.handshake).not.toHaveBeenCalled();
-  });
-
-  it.each(["missing", "broken"])(
-    "refuses %s owned stdin through existing cleanup",
-    async (control) => {
-      const workspace = tempDir("keiko-host-workspace-");
-      const program = await preparedHostFixture(workspace);
-      const stdin = new Writable({
-        write(_chunk, _encoding, done): void {
-          done(new Error("EPIPE"));
-        },
-      });
-      const harness = hostTransportHarness({
-        program,
-        lifetime: true,
-        ...(control === "missing" ? {} : { stdin }),
-      });
-      await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
-        ok: false,
-      });
-      expect(harness.handshake).not.toHaveBeenCalled();
-      expect(harness.manager.health().status).toBe("stopped");
-      expect(harness.events.some((event) => event.kind === "runtime-started")).toBe(false);
-    },
-  );
-
-  it("aborts a blocked write and never invokes readiness after its late callback", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    let callback: (() => void) | undefined;
-    const stdin = new Writable({
-      write(_chunk, _encoding, done): void {
-        callback = done;
-      },
-    });
-    const harness = hostTransportHarness({ program, stdin, lifetime: true });
-    const controller = new AbortController();
-    const starting = startHostTransport(harness.manager, workspace, { signal: controller.signal });
-    await vi.waitFor(() => {
-      expect(callback).toBeDefined();
-    });
-    controller.abort();
-    await expect(starting).resolves.toMatchObject({ ok: false, failureCode: "start-aborted" });
-    callback?.();
-    await settle();
-    expect(harness.handshake).not.toHaveBeenCalled();
-    expect(harness.manager.health().status).toBe("stopped");
-  });
-
-  it("retains recovery when a timed-out packet writer cannot prove process reap", async () => {
-    const { result, harness } = await timedOutHostPacket(false);
-    expect(result).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
-    expect(harness.handshake).not.toHaveBeenCalled();
-    expect(harness.manager.health().status).toBe("recovery-required");
-    expect(harness.release).not.toHaveBeenCalled();
-  });
-
-  it("stops a timed-out packet writer after authentic complete process reap", async () => {
-    const { result, harness } = await timedOutHostPacket(true);
-    expect(result).toMatchObject({ ok: false, failureCode: "start-timeout" });
-    expect(harness.manager.health().status).toBe("stopped");
-    expect(harness.release).toHaveBeenCalledOnce();
-  });
-
-  it("refuses an expired host-attestation deadline before spawn or packet write", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    const packet = blockedHostPacket();
-    let clock = 1000;
-    const harness = hostTransportHarness({
-      program,
-      stdin: packet.stdin,
-      lifetime: true,
-      reaps: false,
-      now: (): number => {
-        const current = clock;
-        clock += 20;
-        return current;
-      },
-    });
-    try {
-      const result = await startHostTransport(harness.manager, workspace, { startTimeoutMs: 20 });
-      expect(result).toMatchObject({ ok: false, failureCode: "start-timeout" });
-      expect(harness.captures).toHaveLength(0);
-      expect(harness.handshake).not.toHaveBeenCalled();
-      expect(harness.manager.health().status).toBe("stopped");
-      expect(harness.release).not.toHaveBeenCalled();
-      expect(packet.stdin.writableLength).toBe(0);
-      expect(harness.events.some((event) => event.kind === "runtime-started")).toBe(false);
-    } finally {
-      packet.stdin.destroy();
-    }
-  });
-
-  it("freshly refuses changed host bytes before spawn", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    writeFileSync(join(dirname(program.args[0]), "guard-seams.mjs"), "changed module");
-    const harness = hostTransportHarness({ program, stdin: new PassThrough(), lifetime: true });
-    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
-      ok: false,
-    });
-    expect(harness.captures).toHaveLength(0);
-    expect(harness.handshake).not.toHaveBeenCalled();
-  });
-
-  it("rechecks authority after spawn before writing any bootstrap capability", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    const stdin = new PassThrough();
-    let accepted = true;
-    const harness = hostTransportHarness({
-      program,
-      stdin,
-      lifetime: true,
-      canSpawn: () => accepted,
-      onSpawn: (): void => {
-        accepted = false;
-      },
-    });
-    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
-      ok: false,
-    });
-    expect(stdin.readableLength).toBe(0);
-    expect(harness.handshake).not.toHaveBeenCalled();
-    expect(harness.manager.health().status).toBe("stopped");
-  });
-
-  it("rechecks current authority after the asynchronous bootstrap write settles", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    let accepted = true;
-    const stdin = new Writable({
-      write(_chunk, _encoding, done): void {
-        accepted = false;
-        setImmediate(done);
-      },
-    });
-    const harness = hostTransportHarness({
-      program,
-      stdin,
-      lifetime: true,
-      canSpawn: () => accepted,
-    });
-    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
-      ok: false,
-    });
-    expect(harness.handshake).not.toHaveBeenCalled();
-    expect(harness.manager.health().status).toBe("stopped");
-    expect(harness.events.some((event) => event.kind === "runtime-started")).toBe(false);
-  });
-
-  it("refuses a copied program or a different accepted workspace before spawn", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    for (const control of [
-      { program: { ...program }, workspace },
-      { program, workspace: tempDir("keiko-other-host-workspace-") },
-    ]) {
-      const harness = hostTransportHarness({
-        program: control.program,
-        stdin: new PassThrough(),
-        lifetime: true,
-      });
-      await expect(startHostTransport(harness.manager, control.workspace)).resolves.toMatchObject({
-        ok: false,
-      });
-      expect(harness.captures).toHaveLength(0);
-      expect(harness.handshake).not.toHaveBeenCalled();
-    }
-  });
-
-  it("refuses current-authority revocation and final ambient Node injection before spawn", async () => {
-    const workspace = tempDir("keiko-host-workspace-");
-    const program = await preparedHostFixture(workspace);
-    for (const control of [
-      { canSpawn: (): false => false },
-      { env: { NODE_OPTIONS: "--import evil.mjs" } },
-    ]) {
-      const harness = hostTransportHarness({
-        program,
-        stdin: new PassThrough(),
-        lifetime: true,
-        ...control,
-      });
-      await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
-        ok: false,
-      });
-      expect(harness.captures).toHaveLength(0);
-    }
-  });
 });

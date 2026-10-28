@@ -301,6 +301,7 @@ describe("POST /api/diagnostics/client", () => {
   it.each([
     "draft-notifications-ready",
     "workspace-viewport-fitted",
+    "workspace-window-sizing-retired",
     "scope-refusal-restored",
     "scope-refusal-skipped-owner",
     "scope-refusal-skipped-draft",
@@ -1579,6 +1580,118 @@ describe("POST /api/diagnostics/client", () => {
     ).toBeUndefined();
   });
 
+  // #3897 (Keiko 1.3.0 test): 174 of 180 browser diagnostics were Coding Workbench notes — a detail
+  // opened, the progress state, a trust binding — persisted as warn/unknown failures. Each is now a
+  // closed report on its own info line and the routine budget.
+  it.each([
+    { interaction: "details-toggled", section: "tool", expanded: true },
+    { interaction: "progress-state", progressState: "working" },
+    { interaction: "agent-selected", agent: "custom" },
+    { interaction: "pending-decision-focused" },
+    {
+      interaction: "repository-trust-bound",
+      repositoryId: "repo_trust-1",
+      workspaceId: `local:${"a".repeat(64)}`,
+    },
+    { interaction: "changeset-review-prepared", fileCount: 3 },
+    { interaction: "changeset-review-prepared", fileCount: 100_000 },
+  ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] coding workbench interaction: tool details opened in /secret/path",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_coding-interaction-0001",
+      codingWorkbenchInteraction: interaction,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.coding-workbench.interaction",
+    );
+    expect(event?.level).toBe("info");
+    expect(event?.errorKind).toBeUndefined();
+    const record = expectActivityLogProof(
+      "client.coding-workbench.interaction.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_coding-interaction-0001",
+      ...interaction,
+      completeness: "complete",
+      loss: "none",
+    });
+    // Closed values only: the free-text note is never kept.
+    expect(JSON.stringify(record)).not.toContain("secret");
+  });
+
+  it.each([
+    { interaction: "details-toggled", section: "tool" },
+    { interaction: "details-toggled", section: "terminal", expanded: true },
+    { interaction: "progress-state", progressState: "working", agent: "build" },
+    { interaction: "agent-selected", agent: "my-private-agent" },
+    { interaction: "pending-decision-focused", fileCount: 1 },
+    { interaction: "repository-trust-bound", repositoryId: "repo/../x", workspaceId: "w" },
+    {
+      interaction: "repository-trust-bound",
+      repositoryId: "",
+      workspaceId: `local:${"a".repeat(64)}`,
+    },
+    { interaction: "repository-trust-bound", repositoryId: "repo_trust-1", workspaceId: "" },
+    { interaction: "changeset-review-prepared", fileCount: -1 },
+    { interaction: "changeset-review-prepared", fileCount: 100_001 },
+    { interaction: "changeset-review-prepared", fileCount: 1.5 },
+    { interaction: "tool-name", tool: "bash" },
+  ])("refuses a Coding Workbench interaction outside its closed shape: %o", async (interaction) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] coding workbench interaction",
+      clientTs: CLIENT_TS,
+      codingWorkbenchInteraction: interaction,
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(
+      sink.events.find((candidate) => candidate.op === "client.coding-workbench.interaction"),
+    ).toBeUndefined();
+  });
+
+  it("refuses a Coding Workbench interaction that also carries failure context", async () => {
+    const body = JSON.stringify({
+      message: "[keiko] coding workbench interaction",
+      clientTs: CLIENT_TS,
+      kind: "boundary",
+      codingWorkbenchInteraction: { interaction: "pending-decision-focused" },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+  });
+
+  it("keeps the failure budget available after a burst of Coding Workbench interactions", async () => {
+    const sink = captureServerLog();
+    const toggled = JSON.stringify({
+      message: "[keiko] coding workbench interaction: details-toggled",
+      clientTs: CLIENT_TS,
+      codingWorkbenchInteraction: {
+        interaction: "details-toggled",
+        section: "event",
+        expanded: false,
+      },
+    });
+    // One more than a budget admits in a window: the burst spends the routine budget alone.
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(toggled));
+    }
+
+    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+    expect(
+      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
+    ).toBe(true);
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+  });
+
   // PR #3678 review: the copy button's changed transformation must be reconstructable: one line per
   // copy with its outcome and marker counts, and a failed copy with its error kind and frames.
   it("persists a chat answer copy and its failure as client.answer.copied", async () => {
@@ -1626,6 +1739,42 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it("persists a setup-only update notice as routine closed presentation evidence", async () => {
+    const sink = captureServerLog();
+    const updateNotice = {
+      blockerCount: 0,
+      noticeKind: "portable-setup-required",
+      presentation: "shown",
+      updateAvailable: false,
+    };
+    const body = {
+      message: "private hostile browser prose",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_notice-0001",
+      updateNotice,
+    };
+    expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.update-notice.presented",
+    );
+    if (event === undefined) throw new TypeError("Missing update notice presentation evidence");
+    const line = formatActivityLogProofLine(event);
+    const record = expectActivityLogProof("client.update-notice.presented.line", line);
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_notice-0001",
+      ...updateNotice,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(line).not.toContain("private hostile");
+  });
+
   it.each([
     "restored",
     "owned-elsewhere",
@@ -1641,6 +1790,13 @@ describe("POST /api/diagnostics/client", () => {
     "timeout-recovered",
     "timeout-rejected",
     "request-superseded",
+    "root-normalized",
+    "root-replaced",
+    "intent-pending",
+    "intent-applied",
+    "intent-failed",
+    "intent-send-refused",
+    "intent-send-cancelled",
   ])(
     "persists the closed Files ownership decision %s as routine causal evidence",
     async (decision) => {
@@ -3389,13 +3545,18 @@ describe("actual source reveal lifecycle", () => {
   );
 });
 
-it.each(["started", "settled"] as const)(
-  "persists code copy feedback %s through the existing activity log",
-  async (phase) => {
+it.each([
+  ["markdown copy feedback", "started", "markdown-copy-feedback"],
+  ["markdown copy feedback", "settled", "markdown-copy-feedback"],
+  ["transcript navigation", "started", "transcript-navigation"],
+  ["transcript navigation", "settled", "transcript-navigation"],
+] as const)(
+  "persists %s %s through the existing activity log",
+  async (stage, phase, activityStage) => {
     const sink = captureServerLog();
     const body = {
       kind: "stage",
-      stage: "markdown copy feedback",
+      stage,
       phase,
       ordinal: 1,
       correlationId: "copy-feedback-123",
@@ -3410,7 +3571,7 @@ it.each(["started", "settled"] as const)(
     expect(JSON.parse(line)).toMatchObject({
       level: "info",
       correlationId: body.correlationId,
-      stage: "markdown-copy-feedback",
+      stage: activityStage,
       completeness: "complete",
       loss: "none",
     });
@@ -3511,3 +3672,47 @@ it("persists a real profile read outcome and skipped catalog reread without inve
   expect(JSON.parse(line)).not.toHaveProperty("configuredModelCount");
   expect(clientDiagnosticEvents(sink)).toEqual([]);
 });
+
+it.each([
+  ["started", "key-store"],
+  ["settled", "key-store"],
+  ["started", "key-prepare"],
+  ["settled", "key-prepare"],
+] as const)(
+  "persists closed browser approval %s/%s evidence through the actual registered formatter",
+  async (phase, operation) => {
+    const sink = captureServerLog();
+    const outcome = operation === "key-prepare" ? "created" : "stored";
+    const body = {
+      kind: "stage",
+      stage: "browser approval",
+      phase,
+      ordinal: 1,
+      correlationId: "browser-store-123",
+      parentCorrelationId: "browser-approval-123",
+      ...(phase === "started"
+        ? { browserApproval: { operation } }
+        : { durationMs: 2, browserApproval: { operation, outcome } }),
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    const event = clientStageEvents(sink, `client.stage.${phase}`)[0];
+    const line = formatActivityLogProofLine(event ?? {});
+    if (phase === "started") expectActivityLogProof("client.stage.started.line", line);
+    else expectActivityLogProof("client.stage.settled.line", line);
+    expect(JSON.parse(line)).toMatchObject({
+      level: "info",
+      stage: "browser-approval",
+      browserOperation: operation,
+      correlationId: body.correlationId,
+      parentCorrelationId: body.parentCorrelationId,
+      ...(phase === "started" ? {} : { durationMs: 2, browserOutcome: outcome }),
+    });
+    const invalid = {
+      ...body,
+      browserApproval: { ...body.browserApproval, privateKey: "PRIVATE_BROWSER_KEY_CANARY" },
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(invalid)))).status).toBe(400);
+    expect(line.includes("PRIVATE_BROWSER_KEY_CANARY")).toBe(false);
+    expect(clientDiagnosticEvents(sink)).toEqual([]);
+  },
+);

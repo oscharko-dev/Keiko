@@ -18,6 +18,7 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   decideCodingWorkbenchActionForMode,
+  isNativeActionPermissionRequest,
   permissionKindForSupervisedCodingAction,
   resolveEffectiveCodingWorkbenchMode,
   supervisedCodingActionRequiresApproval,
@@ -191,6 +192,9 @@ describe("coding-workbench constants", () => {
     expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
       "file-edit",
       "git-stage",
+      "git-unstage",
+      "git-fetch",
+      "git-pull",
       "verification-command",
       "ci-observe",
       "connector-read",
@@ -649,6 +653,25 @@ describe("resolveEffectiveCodingWorkbenchMode", () => {
   });
 });
 
+describe("isNativeActionPermissionRequest", () => {
+  it("recognizes a native ask by its OpenCode permission, for edits as well as commands", () => {
+    expect(isNativeActionPermissionRequest({ nativePermission: "shell" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "edit" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "webfetch" })).toBe(true);
+    expect(isNativeActionPermissionRequest({ nativePermission: "" })).toBe(false);
+    // A command label alone is not the discriminator (#3897 review: edits carry none).
+    expect(isNativeActionPermissionRequest({ commandLabel: "native-shell" })).toBe(false);
+    expect(
+      isNativeActionPermissionRequest({
+        actionKind: "verification-command",
+        nativePermission: "shell",
+      }),
+    ).toBe(false);
+    expect(isNativeActionPermissionRequest({})).toBe(false);
+    expect(isNativeActionPermissionRequest(undefined)).toBe(false);
+  });
+});
+
 describe("decideCodingWorkbenchActionForMode", () => {
   it("admits every action class for every mode before tri-state policy evaluation", () => {
     for (const mode of CODING_WORKBENCH_MODES) {
@@ -680,12 +703,14 @@ describe("supervised coding action authority", () => {
     const autoAdmitted = CODING_WORKBENCH_SUPERVISED_ACTION_KINDS.filter(
       (kind) => !supervisedCodingActionRequiresApproval(kind),
     );
-    expect(autoAdmitted).toEqual(["file-edit", "git-stage", "verification-command"]);
+    // #3902 AC2: unstaging is the routine inverse of staging, admitted alike in Supervised mode.
+    expect(autoAdmitted).toEqual(["file-edit", "git-stage", "git-unstage", "verification-command"]);
   });
 
   it("maps supervised actions to the existing permission classes", () => {
     expect(permissionKindForSupervisedCodingAction("file-edit")).toBe("workspace-write");
     expect(permissionKindForSupervisedCodingAction("git-stage")).toBe("workspace-write");
+    expect(permissionKindForSupervisedCodingAction("git-unstage")).toBe("workspace-write");
     expect(permissionKindForSupervisedCodingAction("verification-command")).toBe(
       "command-execution",
     );

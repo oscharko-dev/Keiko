@@ -68,6 +68,21 @@ function handledHistoryPatch(restoringHistory: boolean): WindowCfgRecord {
   };
 }
 
+// Existing windows may have no repositoryPath yet. Seed them once from the shell, then keep their
+// own selection independent of subsequent Chat or Git context changes. The decision waits for the
+// first render that knows the shell's state: a restored layout mounts this window on first paint,
+// before the shell's project has loaded, and deciding then left the window without a repository
+// for good. A window that meets an active task-workspace binding first never seeds.
+function useShellSeedRoot(context: WindowRenderContext): string | null | undefined {
+  const seed = useRef<{ readonly root: string | null } | null>(null);
+  if (seed.current === null) {
+    if (context.activeBinding !== null) seed.current = { root: null };
+    else if (typeof context.selectedRoot === "string")
+      seed.current = { root: context.selectedRoot };
+  }
+  return seed.current?.root;
+}
+
 /** Keep feature navigation inside the Workbench's existing observed lazy-load boundary. */
 export function CodingWorkbenchWindowHost({
   cfg,
@@ -77,10 +92,8 @@ export function CodingWorkbenchWindowHost({
   readonly context: WindowRenderContext;
 }): ReactNode {
   const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
-  // Existing windows may have no repositoryPath yet. Seed them once from the shell, then keep
-  // their own selection independent of subsequent Chat or Git context changes.
-  const initialRoot = useRef(context.activeBinding === null ? context.selectedRoot : null);
-  const root = cfgRoot ?? initialRoot.current;
+  const seedRoot = useShellSeedRoot(context);
+  const root = cfgRoot ?? seedRoot;
   const historySelection =
     typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;
   const restoringHistory = isHistoryRestore(historySelection);

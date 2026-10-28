@@ -244,3 +244,19 @@ describe("createSessionRegistry", () => {
     expect(registry.verify(a.cookieToken)).toBeUndefined();
   });
 });
+
+it.each(["idle", "absolute"] as const)(
+  "direct rotation cannot revive %s-expired registry authority",
+  (kind) => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({
+      now: clock.now,
+      idleTtlMs: kind === "idle" ? 50 : 1000,
+      absoluteTtlMs: 100,
+    });
+    const minted = registry.mint("synthetic-principal");
+    clock.advance(kind === "idle" ? 51 : 101);
+    expect(registry.rotate(minted.session.sessionId)).toBeUndefined();
+    expect(registry.sessionCount()).toBe(0);
+  },
+);

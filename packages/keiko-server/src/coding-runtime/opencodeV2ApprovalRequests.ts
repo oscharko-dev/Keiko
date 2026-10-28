@@ -39,6 +39,17 @@ interface Pending {
 }
 
 export interface OpenCodeV2ApprovalRequests {
+  /**
+   * A server-built ask of the native policy (#3897): the event is already projected, so it goes
+   * straight to the human through the same pending registry, wait and settlement as a plugin ask.
+   */
+  requestNative(input: {
+    readonly runId: string;
+    readonly event: SidecarPermissionEvent;
+    readonly actionId?: string | undefined;
+    readonly onPermission: (event: SidecarPermissionEvent) => void;
+    readonly signal: AbortSignal;
+  }): Promise<OpenCodeV2ApprovalDecision>;
   request(input: {
     readonly value: unknown;
     readonly runId: string;
@@ -101,6 +112,18 @@ function parsedAsk(value: unknown, runId: string, sessionId: string): ParsedAsk 
 // The decision about one parsed ask, naming its call and its permission request.
 function decided(ask: ParsedAsk, outcome: OpenCodeV2ApprovalOutcome): OpenCodeV2ApprovalDecision {
   return { outcome, actionId: ask.actionId, requestId: ask.event.requestId };
+}
+
+// A native ask may have no tool call to settle (an action evaluated outside a tool part).
+function nativeDecided(
+  ask: ParsedAsk,
+  outcome: OpenCodeV2ApprovalOutcome,
+): OpenCodeV2ApprovalDecision {
+  return {
+    outcome,
+    ...(ask.actionId === "" ? {} : { actionId: ask.actionId }),
+    requestId: ask.event.requestId,
+  };
 }
 
 function dispatchPermission(
@@ -191,6 +214,22 @@ export function createOpenCodeV2ApprovalRequests(
       if (ask === undefined) return UNAVAILABLE;
       if (input.signal.aborted || state.closed) return decided(ask, "cancelled");
       return decideAsk(state, input, ask, diagnostics);
+    },
+    requestNative: async (input): Promise<OpenCodeV2ApprovalDecision> => {
+      const ask: ParsedAsk = { event: input.event, actionId: input.actionId ?? "" };
+      if (input.signal.aborted || state.closed) return nativeDecided(ask, "cancelled");
+      const { runId, onPermission, signal } = input;
+      if (state.pending.size >= MAX_PENDING_ASKS || state.pending.has(ask.event.requestId))
+        return nativeDecided(ask, "unavailable");
+      const outcome = await humanDecision(
+        state.pending,
+        runId,
+        ask.event,
+        onPermission,
+        signal,
+        diagnostics,
+      );
+      return nativeDecided(ask, outcome);
     },
     resolve: (runId, requestId, approved): boolean => {
       const item = state.pending.get(requestId);

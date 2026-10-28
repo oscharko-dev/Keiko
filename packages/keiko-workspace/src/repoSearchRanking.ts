@@ -1,6 +1,7 @@
 import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
+import { expandedQueryTerms, MAX_EXPANDED_QUERY_TERMS } from "./repoSearchQueryTerms.js";
 import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
+import { mapUnquotedRepositoryFilePaths } from "./repoSearchQueryPaths.js";
 
 export interface PathLexicalSignals {
   readonly score: number;
@@ -125,8 +126,19 @@ export function queryRankingTerms(task: string | undefined): readonly string[] {
   if (task === undefined || task.trim().length === 0) {
     return [];
   }
-  return naturalLanguageContentTerms(task, false);
+  return memoizedQueryRankingTerms(task);
 }
+
+const memoizedQueryRankingTerms = memoizeByStringKey(8, (task: string): readonly string[] => {
+  const content = naturalLanguageContentTerms(task, false);
+  if (/["'`“”‘’«»]/u.test(task)) return content;
+  const terms = new Set<string>();
+  mapUnquotedRepositoryFilePaths(task, (path, raw) => {
+    if (terms.size < MAX_EXPANDED_QUERY_TERMS) terms.add(path.toLowerCase());
+    return raw;
+  });
+  return [...new Set([...terms, ...content])].slice(0, MAX_EXPANDED_QUERY_TERMS);
+});
 
 // Memoized per (queryTerms identity × scopePath). Candidate prioritization computes these
 // signals for EVERY discovered path on every search — O(paths × terms) string matching that

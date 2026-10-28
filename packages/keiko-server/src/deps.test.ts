@@ -633,6 +633,19 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       env: {},
       uiDbPath: join(stateA, "keiko-ui.db"),
     });
+    // #3897: a readiness fetch seam handed to the builder reaches the built dependencies, so a
+    // fixture can answer the automatic conversation probe that starts during construction.
+    const readinessFetch: typeof fetch = () => Promise.reject(new Error("seam-only"));
+    const seamed = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: join(stateA, "evidence-seamed"),
+      env: {},
+      uiDbPath: join(stateA, "keiko-ui-seamed.db"),
+      gatewayReadinessFetch: readinessFetch,
+    });
+    expect(seamed.gatewayReadinessFetch).toBe(readinessFetch);
+    expect(depsA.gatewayReadinessFetch).toBeUndefined();
+    await seamed.dispose?.();
     const depsB = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: join(stateB, "evidence"),
@@ -2211,6 +2224,38 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
+  it.each([
+    [undefined, "redact", "default", "info"],
+    ["off", "preserve", "off", "info"],
+    ["OFF", "redact", "invalid", "warn"],
+  ] as const)(
+    "resolves KEIKO_CONTENT_REDACTION=%j once at startup into the Chat policy %s (#4098)",
+    async (value, policy, setting, level) => {
+      const stateDir = tmp("content-policy-state-");
+      const activityLog = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("content-policy-evidence-"),
+        uiDbPath: join(stateDir, "keiko-ui.db"),
+        env: value === undefined ? {} : { KEIKO_CONTENT_REDACTION: value },
+      });
+      try {
+        expect(deps.contentRedaction).toBe(policy);
+        const lines = activityLog.events.filter(
+          (event) => event.op === "chat.content-policy.resolved",
+        );
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatchObject({ level, extra: { policy, setting } });
+        const opened = activityLog.events.find((event) => event.op === "store.opened");
+        expect(lines[0]?.correlationId).toBe(opened?.correlationId);
+      } finally {
+        await deps.dispose?.();
+        resetServerLogger();
+      }
+    },
+  );
+
   it("uses one valid correlation for production bootstrap store and memory events", async () => {
     const stateDir = tmp("bootstrap-correlation-state-");
     const activityLog = createBufferedServerLogSink();
@@ -3748,5 +3793,14 @@ describe("runtime gateway accepted source and active inventory", () => {
       vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
       expect(currentConversationReady(deps, "retained-chat")).toBe(false);
     });
+  });
+});
+
+describe("production OpenCode tool profile (#3897)", () => {
+  it("runs the native service only where its kernel boundary is qualified", async () => {
+    const { productionOpenCodeToolProfile } = await import("./deps.js");
+    expect(productionOpenCodeToolProfile("darwin")).toBe("native");
+    expect(productionOpenCodeToolProfile("linux")).toBe("direct");
+    expect(productionOpenCodeToolProfile("win32")).toBe("direct");
   });
 });

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildCitationRepairPrompt, validateCitationRepair } from "./grounded-citation-repair.js";
+import {
+  buildCitationRepairPrompt,
+  citationRepairContent,
+  validateCitationRepair,
+} from "./grounded-citation-repair.js";
 import type { PackCitationIndex } from "./grounded-faithfulness.js";
 
 const index: PackCitationIndex = {
@@ -17,6 +21,169 @@ function citationIndexForPath(scopePath: string): PackCitationIndex {
     lineWindowsBySourceId: new Map([["1", new Map([[scopePath, [{ startLine: 1, endLine: 1 }]]])]]),
   };
 }
+
+function annotationResponse(
+  after = "Feature returns true.",
+  marker = "[src/Feature.ts:3]",
+): string {
+  return JSON.stringify({ insertions: [{ after, marker }] });
+}
+
+describe.each(["literal", "annotation"] as const)("%s citation token boundaries", (protocol) => {
+  it.each([
+    ["Don't persist secrets.", "Don"],
+    ["Don't persist secrets.", "Don'"],
+    ["Don’t persist secrets.", "Don"],
+    ["Don’t persist secrets.", "Don’"],
+    ["The threshold is >=10.", "The threshold is >"],
+    ["The threshold is <=10.", "The threshold is <"],
+    ["The condition is value!=null.", "The condition is value!"],
+    ["The condition is value===null.", "The condition is value=="],
+    ["The condition is ready&&valid.", "The condition is ready&"],
+    ["The fallback is value??defaultValue.", "The fallback is value?"],
+    ["The expression is value?.name.", "The expression is value?"],
+    ["The callback is value=>value.", "The callback is value="],
+  ])("refuses splitting a contraction or operator in %s", (original, after) => {
+    const offset = original.indexOf(after) + after.length;
+    const response =
+      protocol === "annotation"
+        ? annotationResponse(after)
+        : original.slice(0, offset) + " [src/Feature.ts:3]" + original.slice(offset);
+    expect(citationRepairContent(original, response, index)).toBeUndefined();
+  });
+
+  it.each([
+    "Don't persist secrets.",
+    "Don’t persist secrets.",
+    "The threshold is >=10.",
+    "The condition is value!=null.",
+    "The customers' data stays local.",
+  ])("retains citation placement after the complete claim %s", (original) => {
+    const expected = original + " [src/Feature.ts:3]";
+    const response = protocol === "annotation" ? annotationResponse(original) : expected;
+    expect(citationRepairContent(original, response, index)).toBe(expected);
+  });
+});
+
+describe("locally constructed citation annotations", () => {
+  it.each([false, true])("accepts a supported unique prose annotation (fenced=%s)", (fenced) => {
+    const response = annotationResponse();
+    expect(
+      citationRepairContent(
+        "Feature returns true.\n\n```ts\nreturn true;\n```",
+        fenced ? `\`\`\`json\n${response}\n\`\`\`` : response,
+        index,
+      ),
+    ).toBe("Feature returns true. [src/Feature.ts:3]\n\n```ts\nreturn true;\n```");
+  });
+
+  it("preserves literal marker-only responses for existing providers", () => {
+    expect(
+      citationRepairContent(
+        "Feature returns true.",
+        "Feature returns true [src/Feature.ts:3].",
+        index,
+      ),
+    ).toBe("Feature returns true [src/Feature.ts:3].");
+  });
+
+  it("applies multiple original-coordinate annotations without offset drift", () => {
+    const response = JSON.stringify({
+      insertions: [
+        { after: "First claim.", marker: "[src/Feature.ts:3]" },
+        { after: "Second claim.", marker: "[src/Feature.ts:4-5]" },
+      ],
+    });
+    expect(citationRepairContent("First claim. Second claim.", response, index)).toBe(
+      "First claim. [src/Feature.ts:3] Second claim. [src/Feature.ts:4-5]",
+    );
+  });
+
+  it.each([
+    ["Feature returns true.", annotationResponse("Feature returns false.")],
+    ["Feature returns true. Feature returns true.", annotationResponse()],
+    ["Feature returns true.", annotationResponse("Feature returns true.", "[src/Feature.ts:9]")],
+    ["Feature returns true.", annotationResponse("Feature returns true.", "[other/private.ts:3]")],
+    ["`Feature returns true.`", annotationResponse()],
+    ["```ts\nFeature returns true.\n```", annotationResponse()],
+    ["Missing evidence: Feature returns true.", annotationResponse()],
+    ["<assessment>Feature returns true.</assessment>", annotationResponse()],
+    ["The limit is 10.25.", annotationResponse("The limit is 10", "[src/Feature.ts:3]")],
+    [
+      "Feature returns true.",
+      annotationResponse("Feature returns true.", "changed [src/Feature.ts:3]"),
+    ],
+    ["Feature returns true.", "not JSON"],
+    ["Feature returns true.", '{"insertions":[]}'],
+    ["Feature returns true.", '{"insertions":{},"content":"replacement"}'],
+    ["Feature returns true.", '{"insertions":[{"after":"","marker":"[src/Feature.ts:3]"}]}'],
+    ["Feature returns true.", '{"insertions":[{"after":1,"marker":"[src/Feature.ts:3]"}]}'],
+    ["Feature returns true.", '{"insertions":[null]}'],
+    ["Feature returns true.", JSON.stringify({ insertions: [null], content: "replacement" })],
+    [
+      "Feature returns true.",
+      JSON.stringify({
+        insertions: [
+          { after: "Feature returns true.", marker: "[src/Feature.ts:3]", content: "replacement" },
+        ],
+      }),
+    ],
+    ["Feature returns true.", annotationResponse("Feature returns true.", "")],
+    ["x".repeat(513), annotationResponse("x".repeat(513))],
+  ])(
+    "refuses ambiguous, changed, unauthorized or ineligible annotation of %s",
+    (original, response) => {
+      expect(citationRepairContent(original, response, index)).toBeUndefined();
+    },
+  );
+
+  it("rejects duplicate insertion coordinates and preserves the 32-marker bound", () => {
+    const entries = Array.from({ length: 33 }, (_, i) => ({
+      after: `Fact ${String(i)}.`,
+      marker: "[src/Feature.ts:3]",
+    }));
+    const original = entries.map((entry) => entry.after).join("\n");
+    expect(
+      citationRepairContent(original, JSON.stringify({ insertions: entries }), index),
+    ).toBeUndefined();
+    expect(
+      citationRepairContent(original, JSON.stringify({ insertions: entries.slice(0, 32) }), index),
+    ).toBeDefined();
+    expect(
+      citationRepairContent(
+        "Fact 0.",
+        JSON.stringify({ insertions: [entries[0], entries[0]] }),
+        index,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("retains raw-response and constructed-answer size limits before trimming or insertion", () => {
+    expect(
+      citationRepairContent(
+        "Feature returns true.",
+        " ".repeat(131_072) + annotationResponse(),
+        index,
+      ),
+    ).toBeUndefined();
+    expect(
+      citationRepairContent("x".repeat(131_073), annotationResponse("x"), index),
+    ).toBeUndefined();
+    const original = "x".repeat(131_051) + "Feature returns true.";
+    expect(citationRepairContent(original, annotationResponse(), index)).toBeUndefined();
+  });
+
+  it("authorizes numeric annotations only against actually sent numeric markers", () => {
+    const response = annotationResponse("Feature returns true.", "[2]");
+    expect(citationRepairContent("Feature returns true.", response, index, new Set([2]))).toBe(
+      "Feature returns true. [2]",
+    );
+    expect(
+      citationRepairContent("Feature returns true.", response, index, new Set([1])),
+    ).toBeUndefined();
+    expect(citationRepairContent("Feature returns true.", response, index)).toBeUndefined();
+  });
+});
 
 describe("bounded marker-only citation repair", () => {
   it.each([false, true])("retains the repaired UTF-16 size boundary (astral=%s)", (astral) => {
@@ -152,4 +319,46 @@ describe("bounded marker-only citation repair", () => {
     expect(prompt).toContain("only insert");
     expect(prompt).toContain("[path:line-range]");
   });
+});
+
+it.each([
+  ["𝒜uthorizedValue is preserved.", "𝒜"],
+  ["Q𝒜Value is preserved.", "Q"],
+  ["𝒜Value is preserved.", "\ud835"],
+  ["The 😀 icon is preserved.", "The \ud83d"],
+])("rejects annotation splitting a Unicode token or scalar: %s", (original, after) => {
+  expect(citationRepairContent(original, annotationResponse(after), index)).toBeUndefined();
+});
+
+it.each(["𝒜uthorizedValue", "😀"])(
+  "preserves complete Unicode text at a prose boundary: %s",
+  (value) => {
+    const original = `${value} is preserved.`;
+    expect(citationRepairContent(original, annotationResponse(original), index)).toBe(
+      original + " [src/Feature.ts:3]",
+    );
+  },
+);
+
+it.each([
+  ["𝒜uthorizedValue is preserved.", "𝒜"],
+  ["Q𝒜Value is preserved.", "Q"],
+  ["𝒜Value is preserved.", "\ud835"],
+  ["The 😀 icon is preserved.", "The \ud83d"],
+])("legacy marker-only repair rejects the same Unicode split: %s", (original, after) => {
+  const offset = original.indexOf(after) + after.length;
+  const candidate = original.slice(0, offset) + " [src/Feature.ts:3]" + original.slice(offset);
+  expect(validateCitationRepair(original, candidate, index)).toBe(false);
+});
+
+it.each([
+  ["The 👩🏽‍💻 icon is preserved.", "The 👩"],
+  ["The 👩🏽‍💻 icon is preserved.", "The 👩🏽‍"],
+  ["The 🇩🇪 flag is preserved.", "The 🇩"],
+  ["The e\u0301 mark is preserved.", "The e"],
+])("rejects both protocols inside a complete grapheme in %s", (original, after) => {
+  expect(citationRepairContent(original, annotationResponse(after), index)).toBeUndefined();
+  const offset = after.length;
+  const legacy = original.slice(0, offset) + " [src/Feature.ts:3]" + original.slice(offset);
+  expect(validateCitationRepair(original, legacy, index)).toBe(false);
 });

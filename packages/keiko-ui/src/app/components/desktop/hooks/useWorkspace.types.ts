@@ -30,6 +30,7 @@ export interface OpenEditorFileRequest {
 }
 
 export interface ChatBindingTarget {
+  readonly sourceWindowId?: string;
   readonly conversationId: string | undefined;
   readonly projectPath: string | undefined;
   readonly isCurrent: () => boolean;

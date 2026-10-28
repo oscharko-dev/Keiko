@@ -50,13 +50,13 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify checked-out commit
         # The request authorizes the commit the button was pressed on, never a newer dev head.
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -64,7 +64,7 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Mint the release tag token
         id: tag-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}
           private-key: ${{ secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY }}
@@ -96,12 +96,12 @@ jobs:
       run-id: ${{ steps.authorize.outputs.run-id }}
       run-attempt: ${{ steps.authorize.outputs.run-attempt }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify checked-out commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -125,12 +125,12 @@ jobs:
       contents: read
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify checked-out commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -140,6 +140,8 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Build workspace packages for qualification
         run: npm run build:packages
+      - name: Provision the pinned ripgrep runtime
+        run: npm run provision:ripgrep
       - name: Install Chromium for customer-shape qualification
         timeout-minutes: 10
         run: node node_modules/playwright/cli.js install --with-deps chromium
@@ -176,7 +178,7 @@ jobs:
       PORTABLE_ASSETS_RUN_ATTEMPT: ${{ needs.authorize.outputs.run-attempt }}
       PORTABLE_ASSETS_RUN_ID: ${{ needs.authorize.outputs.run-id }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -184,7 +186,7 @@ jobs:
         # An explicit ref would check out the tag as it is when the job starts, after an approval that
         # may come long after the dispatch; the run is bound to the commit it was started for.
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false

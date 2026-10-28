@@ -54,6 +54,11 @@ import {
 const cleanups: string[] = [];
 const originalPlatform = process.platform;
 
+async function initializeProcessScope(): Promise<void> {
+  const { currentProcessScopeKind } = await import("./process-scope.js");
+  currentProcessScopeKind();
+}
+
 function setPlatform(value: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { value, configurable: true });
 }
@@ -678,6 +683,7 @@ describe("openSafeArtifactFile", () => {
     const path = join(base, "artifact");
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     vi.resetModules();
+    await initializeProcessScope();
     vi.doMock("node:fs", () => ({
       ...actual,
       closeSync: (): never => {
@@ -1841,6 +1847,7 @@ describe("publishSafeArtifactFileSet", () => {
     ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
     vi.doUnmock("node:child_process");
     vi.resetModules();
+    await initializeProcessScope();
     const [stageName] = publicationStages(base);
     expect(stageName).toBeDefined();
     const stage = join(base, stageName ?? "missing");
@@ -2370,6 +2377,7 @@ describe("publishSafeArtifactFileSet", () => {
     await leaveLinkedPublication(base, path);
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     vi.resetModules();
+    await initializeProcessScope();
     vi.doMock("node:fs", () => ({
       ...actual,
       readSync: (...args: Parameters<typeof actual.readSync>): number => {
@@ -2401,6 +2409,7 @@ describe("publishSafeArtifactFileSet", () => {
     const opened = new Set<number>();
     const closed = new Set<number>();
     vi.resetModules();
+    await initializeProcessScope();
     vi.doMock("node:fs", () => ({
       ...actual,
       openSync: (...args: Parameters<typeof actual.openSync>): number => {

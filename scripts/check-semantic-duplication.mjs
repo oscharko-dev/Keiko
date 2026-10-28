@@ -19,9 +19,38 @@ export const SEMANTIC_DUPLICATION_CONFIG = {
     minLines: 10,
     minOccurrences: 2,
     ignoreImports: true,
+    ignoreDefaults: false,
+    ignore: [],
+    ignoredClones: [],
     normalization: { ignoreStringValues: false },
   },
 };
+
+// This artifact predates the strict string-preserving, full-source configuration. It is
+// historical reporting input, never a suppression source or a veto for the mandatory audit.
+export const DUPES_BASELINE = "docs/qa/fallow/dupes-baseline.json";
+export const FALLOW_DUPES_ARGS = Object.freeze([
+  "dupes",
+  "--mode",
+  "semantic",
+  "--min-tokens",
+  "100",
+  "--min-lines",
+  "10",
+  "--ignore-imports",
+  "--no-package-baselines",
+]);
+
+/** Select report groups for a diagnostic view without narrowing the mandatory audit. */
+export function ownedGroups(groups, changed) {
+  if (changed === undefined) return groups;
+  return groups.filter((group) => group.instances.some((instance) => changed.has(instance.file)));
+}
+
+/** Read a legacy diagnostic count; absence is not evidence that a baseline check passed. */
+export function staleEntries(staleness) {
+  return typeof staleness?.stale_entries === "number" ? staleness.stale_entries : 0;
+}
 
 function requireCondition(condition, message) {
   if (!condition) throw new Error(message);
@@ -42,7 +71,7 @@ function validateHeader(report, base, head) {
     "invalid audit envelope",
   );
   requireCondition(
-    report.schema_version === 13 && report.version === "3.34.0",
+    report.schema_version === 13 && report.version === "3.35.0",
     "unsupported audit protocol",
   );
   requireCondition(report.base_ref === base, "audit base mismatch");
@@ -178,7 +207,7 @@ function analyze(repoRoot, base, head, execute, env) {
       "json",
       "--config",
       configPath,
-      "--changed-since",
+      "--base",
       base,
     ],
     repoRoot,

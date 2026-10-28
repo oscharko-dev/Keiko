@@ -104,6 +104,7 @@ const MANAGED_INSTALL_RULES: Readonly<
       "app/package.json",
       "app/release-impact.catalog.json",
       "support/keiko-support.sh",
+      "runtime/native/keiko-runtime-supervisor",
     ],
     recursivePrefixes: ["app/dist/", "app/node_modules/", "runtime/node/"],
   },
@@ -154,6 +155,10 @@ const WINDOWS_GENERATION_PAYLOAD_EXACT_FILES: readonly string[] = [
   "runtime/native/keiko-secure-workspace-read.exe",
   "runtime/native/usearch.node",
   "runtime/licenses/usearch/LICENSE",
+  // The pinned ripgrep executable and its MIT text (Epic #3897). The paths are pinned to the
+  // coding-runtime owner (ripgrepRuntime.ts) by scripts/__tests__/stage-portable-ripgrep.test.mjs.
+  "runtime/native/rg.exe",
+  "runtime/licenses/ripgrep/LICENSE-MIT",
 ];
 const WINDOWS_GENERATION_PAYLOAD_PREFIXES: readonly string[] = [
   "app/dist/",

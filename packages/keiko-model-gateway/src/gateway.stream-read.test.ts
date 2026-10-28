@@ -601,7 +601,7 @@ describe("stream startup resilience", () => {
       fetchImpl: (): Promise<Response> => {
         calls += 1;
         return Promise.resolve(
-          new Response(encoder.encode(deltaLine("partial answer")), {
+          new Response(encoder.encode(deltaLine("partial answer.\n")), {
             headers: { "content-type": "text/event-stream" },
           }),
         );
@@ -620,7 +620,7 @@ describe("stream startup resilience", () => {
     await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_PROVIDER_ERROR" });
     expect(activeTimerCounts).toHaveLength(1);
     expect(activeTimerCounts[0]).toBeGreaterThan(0);
-    expect(received).toEqual(["partial answer"]);
+    expect(received).toEqual(["partial answer.\n"]);
     expect(calls).toBe(1);
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(providerRequestBudgetMs(PROVIDER));

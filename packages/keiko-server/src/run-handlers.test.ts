@@ -1,5 +1,9 @@
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
@@ -11,7 +15,16 @@ import {
 // (409 when not appliable), and that NO secret-shaped string appears in ANY response body.
 
 import { EventEmitter } from "node:events";
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -148,6 +161,7 @@ interface HandlerDepsOptions {
   readonly managedWorkspaceInstance?: WorkspaceInstance | undefined;
   readonly appSessionPaired?: boolean | undefined;
   readonly maxActiveRuns?: number | undefined;
+  readonly store?: ReturnType<typeof createInMemoryUiStore> | undefined;
 }
 
 const TEST_APP_SESSION: AppSession = {
@@ -174,12 +188,13 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
       live: false,
       stop: () => undefined,
       detach: () => undefined,
+      reportBackpressure: () => undefined,
     }),
   };
 }
 
 function handlerDeps(model: ModelPort, options: HandlerDepsOptions = {}): UiHandlerDeps {
-  const store = createInMemoryUiStore();
+  const store = options.store ?? createInMemoryUiStore();
   if (options.registerWorkspace !== false) {
     store.createProject(workspace);
   }
@@ -343,6 +358,171 @@ describe("POST /api/runs", () => {
       body: JSON.stringify({ input: {}, modelId: "m" }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/runs carries an explicitly selected private skill (#4025 AC1)", () => {
+  const MARKER = "SYNTHETIC_UNIT_TEST_SKILL_RECEIPT";
+  const SKILL_BODY = `# Test method\nName the generated tests after ${MARKER}.\n`;
+  const DIFF_ANSWER = ["```diff", TEST_DIFF.trimEnd(), "```"].join("\n");
+
+  afterEach(resetServerLogger);
+
+  function skillStore(): {
+    readonly store: ReturnType<typeof createInMemoryUiStore>;
+    readonly skill: { readonly id: string; readonly revision: number; readonly digest: string };
+  } {
+    const store = createInMemoryUiStore();
+    const imported = store.markdownSkills.import({
+      fileName: "method.md",
+      contentBase64: Buffer.from(SKILL_BODY).toString("base64"),
+    });
+    return {
+      store,
+      skill: { id: imported.id, revision: imported.revision, digest: imported.digest },
+    };
+  }
+
+  /** A model that answers each call in turn and records what reached it. */
+  function scriptedModel(
+    answers: readonly string[],
+    onCall: (index: number) => void = () => undefined,
+  ): { readonly model: ModelPort; readonly sent: string[] } {
+    const sent: string[] = [];
+    const model: ModelPort = {
+      call: (request, signal): ReturnType<ModelPort["call"]> => {
+        onCall(sent.length);
+        sent.push(JSON.stringify(request.messages));
+        return fakeModel(answers[sent.length - 1] ?? DIFF_ANSWER).call(request, signal);
+      },
+    };
+    return { model, sent };
+  }
+
+  async function launch(skill?: object, taskType?: string): Promise<Response> {
+    return fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        ...(taskType === undefined
+          ? {
+              workflowId: "unit-test-generation",
+              input: { workspaceRoot: workspace, target: { kind: "file", filePath: "src/add.ts" } },
+            }
+          : { taskType, input: { filePath: "src/add.ts", workspaceRoot: workspace } }),
+        modelId: "test-model",
+        ...(skill === undefined ? {} : { skill }),
+      }),
+    });
+  }
+
+  const markers = (sent: readonly string[]): number[] =>
+    sent.map((messages) => messages.split(MARKER).length - 1);
+
+  it("sends the selected skill once in every model call, a repair after a rejected patch included", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { store, skill } = skillStore();
+    const { model, sent } = scriptedModel(["no patch in this answer", DIFF_ANSWER]);
+    await start(model, { store });
+
+    const res = await launch(skill);
+    expect(res.status).toBe(202);
+    const { runId } = (await res.json()) as CreateResponse;
+    await awaitTerminal(runId);
+
+    expect(markers(sent)).toEqual([1, 1]);
+    expect(registry.get(runId)?.appliable?.markdownSkill).toEqual(skill);
+    expect(JSON.stringify(registry.get(runId)?.report)).not.toContain(MARKER);
+    const attached = sink.events.filter((event) => event.op === "skills.workflow.attached");
+    expect(attached.map((event) => event.extra?.phase)).toEqual(["attached", "attached"]);
+    expect(attached[0]?.extra).toMatchObject({ runId, workflow: "unit-tests" });
+    expect(JSON.stringify(sink.events)).not.toContain(MARKER);
+  });
+
+  it("sends no skill text for a run launched without a selection", async () => {
+    const { store } = skillStore();
+    const { model, sent } = scriptedModel([DIFF_ANSWER]);
+    await start(model, { store });
+
+    const res = await launch();
+    const { runId } = (await res.json()) as CreateResponse;
+    await awaitTerminal(runId);
+
+    expect(markers(sent)).toEqual([0]);
+    expect(sent[0]).not.toContain("Selected skill instructions");
+  });
+
+  it("refuses the launch when the selected skill is already gone, before any model call", async () => {
+    const { store, skill } = skillStore();
+    store.markdownSkills.delete(skill.id, skill.revision);
+    const { model, sent } = scriptedModel([DIFF_ANSWER]);
+    await start(model, { store });
+
+    const res = await launch(skill);
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: { code: "SKILL_SELECTION_CHANGED" } });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("fails the run, unapplied, when the skill is deleted after its first model call", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { store, skill } = skillStore();
+    const { model, sent } = scriptedModel(["no patch in this answer", DIFF_ANSWER], (index) => {
+      if (index === 0) store.markdownSkills.delete(skill.id, skill.revision);
+    });
+    await start(model, { store });
+
+    const res = await launch(skill);
+    const { runId } = (await res.json()) as CreateResponse;
+    await awaitTerminal(runId);
+
+    expect(sent).toHaveLength(1);
+    const record = registry.get(runId);
+    expect(record?.status).toBe("failed");
+    expect(record?.appliable).toBeUndefined();
+    expect(JSON.stringify(record?.report)).toContain("no longer available");
+    expect(
+      sink.events.find(
+        (event) => event.op === "skills.workflow.attached" && event.extra?.phase === "refused",
+      )?.extra,
+    ).toMatchObject({ runId, reason: "skill-unavailable" });
+  });
+
+  it.each([
+    [
+      "a run kind that builds no prompt of its own",
+      { id: "x", revision: 1, digest: "a".repeat(64) },
+      "explain-plan",
+    ],
+    ["a malformed selection", { id: "x", revision: 0, digest: "a".repeat(64) }, undefined],
+    [
+      "a selection with an extra field",
+      { id: "x", revision: 1, digest: "a".repeat(64), body: "x" },
+      undefined,
+    ],
+  ])("refuses %s", async (_label, skill, taskType) => {
+    const { store } = skillStore();
+    const { model, sent } = scriptedModel([DIFF_ANSWER]);
+    await start(model, { store });
+
+    const res = await launch(skill, taskType);
+
+    expect(res.status).toBe(400);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("reads no private skill without the paired app session", async () => {
+    const { store, skill } = skillStore();
+    const { model, sent } = scriptedModel([DIFF_ANSWER]);
+    await start(model, { store, appSessionPaired: false });
+
+    const res = await launch(skill);
+
+    expect(res.status).toBe(404);
+    expect(sent).toHaveLength(0);
   });
 });
 
@@ -644,6 +824,155 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
     expect(["completed", "dry-run"]).toContain(json.report.status);
   }, 60_000);
 
+  it("carries the dry run's selected skill into the gated apply, the same revision (#4025 AC1)", async () => {
+    rmSync(workspace, { recursive: true, force: true });
+    workspace = mkdtempSync(join(hostRoot ?? ".", ".keiko-ui-apply-skill-"));
+    cpSync(FIXTURE, workspace, { recursive: true });
+    const marker = "SYNTHETIC_APPLY_SKILL_RECEIPT";
+    const store = createInMemoryUiStore();
+    const imported = store.markdownSkills.import({
+      fileName: "method.md",
+      contentBase64: Buffer.from(`# Apply method\n${marker}\n`).toString("base64"),
+    });
+    const sent: string[] = [];
+    const delegate = fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n"));
+    await start(
+      {
+        call: (request, signal): ReturnType<ModelPort["call"]> => {
+          sent.push(JSON.stringify(request.messages));
+          return delegate.call(request, signal);
+        },
+      },
+      { store },
+    );
+    const created = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        workflowId: "unit-test-generation",
+        input: { workspaceRoot: workspace, target: { kind: "file", filePath: "src/add.ts" } },
+        modelId: "test-model",
+        skill: { id: imported.id, revision: imported.revision, digest: imported.digest },
+      }),
+    });
+    const { runId } = (await created.json()) as CreateResponse;
+    await awaitTerminal(runId);
+    const dryRunCalls = sent.length;
+    store.markdownSkills.replace(imported.id, imported.revision, {
+      fileName: "method.md",
+      contentBase64: Buffer.from("# Apply method\nA REPLACED METHOD.\n").toString("base64"),
+    });
+
+    const res = await fetch(`${base()}/api/runs/${runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+
+    expect(res.status).toBe(200);
+    // The dry run carried the selected revision once per request. The apply writes the reviewed
+    // patch and asks the model nothing (#4025 AC4), so no request can carry a replaced method.
+    for (const messages of sent.slice(0, dryRunCalls))
+      expect(messages.split(marker).length - 1).toBe(1);
+    expect(sent.slice(dryRunCalls)).toEqual([]);
+  }, 60_000);
+
+  // #4025 AC4, the auditor's counterexample: preview A changes one file and the model's next answer
+  // B would change two. Apply must write exactly the reviewed A, with no further model call.
+  it("writes only the reviewed patch and asks the model nothing (#4025 AC4)", async () => {
+    rmSync(workspace, { recursive: true, force: true });
+    workspace = mkdtempSync(join(hostRoot ?? ".", ".keiko-ui-apply-reviewed-"));
+    cpSync(FIXTURE, workspace, { recursive: true });
+    const unreviewed =
+      "--- /dev/null\n+++ b/tests/unreviewed.test.ts\n@@ -0,0 +1,1 @@\n+// not reviewed\n";
+    const answers = [
+      ["```diff", TEST_DIFF.trimEnd(), "```"].join("\n"),
+      ["```diff", (TEST_DIFF + unreviewed).trimEnd(), "```"].join("\n"),
+    ];
+    let calls = 0;
+    const applyLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: applyLog, level: "info" }));
+    await start({
+      call: (request, signal): ReturnType<ModelPort["call"]> => {
+        const content = answers[Math.min(calls, answers.length - 1)] ?? "";
+        calls += 1;
+        return fakeModel(content).call(request, signal);
+      },
+    });
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    const dryRunCalls = calls;
+
+    const res = await fetch(`${base()}/api/runs/${body.runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toBe(dryRunCalls);
+    expect(existsSync(join(workspace, "tests", "add.test.ts"))).toBe(true);
+    expect(existsSync(join(workspace, "tests", "unreviewed.test.ts"))).toBe(false);
+    const json = (await res.json()) as {
+      report: { applyReport: { addedTestFiles: readonly unknown[]; modelCallCount: number } };
+    };
+    expect(json.report.applyReport.addedTestFiles).toHaveLength(1);
+    expect(json.report.applyReport.modelCallCount).toBe(0);
+    // The settled apply is reconstructable from the Activity Log alone, without any body.
+    const settled = applyLog.events.find((event) => event.op === "runs.apply.settled");
+    if (settled === undefined) throw new Error("expected a runs.apply.settled line");
+    const persisted = expectActivityLogProof(
+      "runs.apply.settled.line",
+      formatActivityLogProofLine(settled),
+    );
+    expect(persisted).toMatchObject({
+      workflow: "unit-tests",
+      outcome: "applied",
+      modelCallCount: 0,
+      fileCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("describe('add'");
+    resetServerLogger();
+  }, 60_000);
+
+  // A reviewed patch that no longer fits the workspace is rejected, not regenerated: nothing is
+  // written and the model is not asked again.
+  it("refuses a reviewed patch the workspace no longer accepts, without writing (#4025 AC4)", async () => {
+    rmSync(workspace, { recursive: true, force: true });
+    workspace = mkdtempSync(join(hostRoot ?? ".", ".keiko-ui-apply-stale-"));
+    cpSync(FIXTURE, workspace, { recursive: true });
+    let calls = 0;
+    const delegate = fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n"));
+    await start({
+      call: (request, signal): ReturnType<ModelPort["call"]> => {
+        calls += 1;
+        return delegate.call(request, signal);
+      },
+    });
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    const dryRunCalls = calls;
+    // The reviewed patch creates this file; it now exists with other content.
+    mkdirSync(join(workspace, "tests"), { recursive: true });
+    writeFileSync(join(workspace, "tests", "add.test.ts"), "// written after the review\n");
+
+    const res = await fetch(`${base()}/api/runs/${body.runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toBe(dryRunCalls);
+    expect(readFileSync(join(workspace, "tests", "add.test.ts"), "utf8")).toBe(
+      "// written after the review\n",
+    );
+    const json = (await res.json()) as { report: { applyReport: { status: string } } };
+    expect(json.report.applyReport.status).not.toBe("completed");
+  }, 60_000);
+
   it("denies an exhausted apply budget before any downstream model call", async () => {
     rmSync(workspace, { recursive: true, force: true });
     workspace = mkdtempSync(join(hostRoot ?? ".", ".keiko-ui-apply-budget-"));
@@ -818,6 +1147,24 @@ async function awaitEvidence(runId: string): Promise<void> {
 }
 
 describe("FIX 2 — POST /api/runs is always dry-run (security M1)", () => {
+  it("refuses a reviewed patch supplied by the client (#4025 AC4)", async () => {
+    await start(fakeModel("noop"));
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        workflowId: "unit-test-generation",
+        input: {
+          workspaceRoot: workspace,
+          target: { kind: "file", filePath: "src/add.ts" },
+          reviewedPatch: { diff: TEST_DIFF },
+        },
+        modelId: "test-model",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("ignores apply:true in the body and still produces a dry-run (no write)", async () => {
     await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
     const created = await createRun(true);
@@ -879,6 +1226,7 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
           target: { kind: "file", filePath: "x.ts" },
         },
         limits: undefined,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
 
@@ -933,6 +1281,7 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
           target: { kind: "file", filePath: "x.ts" },
         },
         limits: testLimits,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
 
@@ -1209,10 +1558,10 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
 
 // Issue #638 — the apply handler must atomically claim the pending snapshot before awaiting
 // applyRun so two overlapping POST /api/runs/:runId/apply requests cannot both consume the
-// same patch. The race is reproduced by holding the model port's promise: the second request
-// has to enter the handler while the first is suspended in applyRun → workflow → model.call().
+// same patch. The second request enters the handler while the first is suspended in applyRun on the
+// workflow's workspace reads; the reviewed patch is written without a model call (#4025 AC4).
 describe("issue #638 — overlapping apply requests cannot reuse the same snapshot", () => {
-  it("returns 409 to the second request while the first is still awaiting the model", async () => {
+  it("returns 409 to the second request while the first is still applying", async () => {
     // start() is called so the file-level afterEach has a real HTTP server to close (the
     // handler-only test below does not depend on the HTTP path itself).
     await start(fakeModel("noop"));
@@ -1237,15 +1586,16 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
           target: { kind: "file", filePath: "x.ts" },
         },
         limits: undefined,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
 
-    let releaseModel: (response: NormalizedResponse) => void = () => undefined;
-    const modelHold = new Promise<NormalizedResponse>((resolve) => {
-      releaseModel = resolve;
-    });
-    const hangingModel: ModelPort = {
-      call: (): Promise<NormalizedResponse> => modelHold,
+    const modelCalls: string[] = [];
+    const recordingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => {
+        modelCalls.push("call");
+        return Promise.reject(new Error("the apply asks the model nothing"));
+      },
     };
 
     const deps: UiHandlerDeps = {
@@ -1256,7 +1606,7 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
       redactor: buildRedactor({}),
       registry: localRegistry,
       store: applyWorkspace.store,
-      modelPortFactory: (): ModelPort => hangingModel,
+      modelPortFactory: (): ModelPort => recordingModel,
     };
     const ctx = {
       req: {} as never,
@@ -1268,7 +1618,7 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
 
     const first = handleApplyRun(ctx, deps);
     // Yield so the first request progresses through its synchronous prologue (claiming the
-    // snapshot) and suspends at `await applyRun(...)` → workflow → model.call().
+    // snapshot) and suspends at `await applyRun(...)` on the workflow's workspace reads.
     for (let i = 0; i < 5; i += 1) await Promise.resolve();
 
     // The snapshot must have been claimed atomically before the await: a second concurrent
@@ -1277,24 +1627,10 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
     const second = await handleApplyRun(ctx, deps);
     expect(second.status).toBe(409);
 
-    // Release the model so the first request finishes and the registry settles.
-    releaseModel({
-      modelId: "m",
-      content: "",
-      finishReason: "stop",
-      toolCalls: [],
-      structuredOutput: null,
-      usage: {
-        requestId: "r",
-        promptTokens: 0,
-        completionTokens: 0,
-        latencyMs: 0,
-        costClass: "low",
-      },
-    });
     const firstResult = await first;
     expect(firstResult.status).toBe(200);
     expect(localRegistry.get("race-run")?.applyReport).toBeDefined();
+    expect(modelCalls).toEqual([]);
   });
 });
 
@@ -1407,6 +1743,7 @@ describe("apply re-proves workspace authorization at the write boundary", () => 
         kind: "unit-tests",
         payload: { workspaceRoot, target: { kind: "file", filePath: "x.ts" } },
         limits: undefined,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
   }
@@ -1473,6 +1810,7 @@ describe("apply re-proves workspace authorization at the write boundary", () => 
         kind: "unit-tests",
         payload: { target: { kind: "file", filePath: "x.ts" } },
         limits: undefined,
+        reviewedPatch: { diff: TEST_DIFF },
       },
     );
     const { deps, modelCalls } = applyDeps(createInMemoryUiStore(), registry);
@@ -1523,6 +1861,7 @@ describe("apply threads the run's own id into its verification egress probe", ()
           kind: "unit-tests",
           payload: { workspaceRoot: workspace.root, target: { kind: "file", filePath: "x.ts" } },
           limits: undefined,
+          reviewedPatch: { diff: TEST_DIFF },
         },
       );
       const deps: UiHandlerDeps = {

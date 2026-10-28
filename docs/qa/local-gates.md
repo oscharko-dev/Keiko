@@ -8,6 +8,11 @@ versions, no local setup beyond Docker.
 
 ## Why this exists
 
+The Next development child bounds its optional npm framework-version metadata request to five
+seconds and retains Next's existing `unknown` fallback. A stalled diagnostic lookup therefore
+settles before compiler startup. The product BFF's release transport keeps its own verification and
+deadlines. The end-to-end server-readiness budget remains 120 seconds.
+
 Over the twelve most recent failing CI runs the causes were:
 
 | Cause                    | Runs | Reproducible locally  |

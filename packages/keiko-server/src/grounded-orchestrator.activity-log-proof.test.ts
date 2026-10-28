@@ -1,3 +1,4 @@
+import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
 import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
@@ -170,13 +171,14 @@ describe("retrieveConnectedContextPack Activity Log proofs", () => {
     expect(serialized).not.toContain(SCOPE_FILE);
   });
 
-  it("resolves started, completion, source and selection siblings from one real retrieval", async () => {
+  it("resolves started, completion, source, selection and evidence siblings from one retrieval", async () => {
     const activityLog = createBufferedServerLogSink();
 
     const output = await retrieveConnectedContextPack(fixtureInput(), fixtureDeps(activityLog));
 
-    expect(activityLog.events).toHaveLength(5);
-    const [started, details, sourceDetails, selectionDetails, completed] = activityLog.events;
+    expect(activityLog.events).toHaveLength(6);
+    const [started, details, sourceDetails, selectionDetails, evidenceDetails, completed] =
+      activityLog.events;
 
     const startedProof = expectActivityLogProof(
       "search.connected-context.started.line",
@@ -230,6 +232,22 @@ describe("retrieveConnectedContextPack Activity Log proofs", () => {
       completeness: "complete",
       loss: "none",
     });
+
+    const evidenceProof = expectActivityLogProof(
+      "search.connected-context.evidence-details.line",
+      formatActivityLogProofLine(evidenceDetails ?? {}),
+    );
+    expect(evidenceProof).toMatchObject({
+      codeRedactionRevision: CODE_REDACTION_REVISION,
+      correlationId: CORRELATION_ID,
+      scopeIdentitySha256: startedProof.scopeIdentitySha256,
+      queryIdentitySha256: startedProof.queryIdentitySha256,
+      activityDetailStatus: "complete",
+      sourceDescriptorPathCount: 0,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(sourceProof).not.toHaveProperty("_truncatedFieldCount");
 
     const completedProof = expectActivityLogProof(
       "search.connected-context.completed.line",

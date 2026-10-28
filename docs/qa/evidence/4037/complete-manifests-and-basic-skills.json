@@ -1,0 +1,366 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded complete-manifest repair and failed basic local-model calibration; neither skill nor epic acceptance",
+  "sourceParent": "f24f10a350e1239e51d526453fece9e99eac43c9",
+  "sourceFreeze": {
+    "artifact": "checkpoint41-source-freeze-v1.json",
+    "sha256": "d294ee18128d0bafec0df78433c99b54772ef51935727f4ad1822e8b1b56945c"
+  },
+  "repair": {
+    "owner": "existing preferCompleteDocumentExcerpt and canonical ecosystem metadata registry",
+    "change": "Reuse bounded complete-source reads for canonical manifests only; explicit selections and certified windows keep their geometry. Existing current snapshot, per-window/total bytes, redaction and read authorization remain binding.",
+    "before": {
+      "cases": 6,
+      "failed": 5,
+      "healthy": 1,
+      "otherCasesFiltered": 47,
+      "log": {
+        "artifact": "checkpoint41-manifest-before.log",
+        "sha256": "8e8a0b5491c6a4414efcbaeeba0d1c04cb68ca88f3617c565d1d4969dd9f3ac6"
+      }
+    },
+    "after": {
+      "affectedSuites": 6,
+      "testsPassed": 119,
+      "log": {
+        "artifact": "checkpoint41-functional.log",
+        "sha256": "7a56e75609e9170546678b74f54027befcaa9d2d3040c68be3280da40ed30bac"
+      }
+    },
+    "activityLog": "Existing search.connected-context.completed records actual file reads and excerpt bytes; all six ecosystem controls join actual usage and assert source text absent. Evidence ranges and hashes describe the actual complete snapshot."
+  },
+  "baseline": {
+    "protocol": {
+      "artifact": "protocol-basic-v1.json",
+      "sha256": "ab3a955312dfbc41ded62bfa4cc9b88cf0ca7c2fa4b623d84cf234650d3bb980"
+    },
+    "frozenSources": 12089,
+    "sourceFreeze": {
+      "artifact": "source-freeze-v1.json",
+      "sha256": "938f867922f9672f9defbe7e21f6433d47920177825802f5429db03a12883fd0"
+    },
+    "terminalArchive": {
+      "classification": "Terminal failed first-pass calibration; four measured React correct-subject failures, one Java source-contract refusal, nineteen undispatched; no acceptance credit",
+      "archiveSha256": "0118beb4281fb184a414e5b171aafc27b0cfcc67d00cdd03d0e1bd3cc68cbbed",
+      "bytes": 913926,
+      "sourceHead": "f24f10a350e1239e51d526453fece9e99eac43c9",
+      "sourceFreezeSha256": "938f867922f9672f9defbe7e21f6433d47920177825802f5429db03a12883fd0"
+    },
+    "planned": 24,
+    "completedMeasured": 4,
+    "sourceContractRefused": 1,
+    "undispatched": 19,
+    "physicalProviderCalls": 15,
+    "canonicalReadinessCalls": 10,
+    "taskCalls": 5,
+    "cases": [
+      {
+        "id": "react-basic-v1-aaa-skill-1",
+        "language": "react",
+        "profile": "aaa",
+        "selected": true,
+        "repetition": 1,
+        "status": "completed-first-pass-semantic-review-pending",
+        "answerSha256": "f5722b2fb6fe8d20d646fb0d8eaea7a6fe598c5fd9b5bbe8aae64ffc132a21dd",
+        "measurementContract": true,
+        "inputCharged": 3419,
+        "outputCharged": 1502,
+        "executionDisposition": "observed",
+        "correctSubjectEligible": false,
+        "mutantTrialsDispatched": 0,
+        "allMutantsDetected": false,
+        "correctSubject": {
+          "typechecks": true,
+          "tests": 4,
+          "passed": 3,
+          "failed": 1,
+          "runtimeErrors": 0,
+          "reportComplete": true,
+          "endReason": "failed"
+        }
+      },
+      {
+        "id": "react-basic-v1-aaa-control-1",
+        "language": "react",
+        "profile": "aaa",
+        "selected": false,
+        "repetition": 1,
+        "status": "completed-first-pass-semantic-review-pending",
+        "answerSha256": "b8ab9c5558b9fc499b12a12a2620442b4517eaf005141ce49b458484455df002",
+        "measurementContract": true,
+        "inputCharged": 2311,
+        "outputCharged": 1896,
+        "executionDisposition": "observed",
+        "correctSubjectEligible": false,
+        "mutantTrialsDispatched": 0,
+        "allMutantsDetected": false,
+        "correctSubject": {
+          "typechecks": true,
+          "tests": 4,
+          "passed": 3,
+          "failed": 1,
+          "runtimeErrors": 0,
+          "reportComplete": true,
+          "endReason": "failed"
+        }
+      },
+      {
+        "id": "react-basic-v1-gwt-control-1",
+        "language": "react",
+        "profile": "gwt",
+        "selected": false,
+        "repetition": 1,
+        "status": "completed-first-pass-semantic-review-pending",
+        "answerSha256": "9140bf32c883ef4f46d5b0f4dd1383884f04d657fe00d83e27625974d2e0f6fb",
+        "measurementContract": true,
+        "inputCharged": 2313,
+        "outputCharged": 1627,
+        "executionDisposition": "observed",
+        "correctSubjectEligible": false,
+        "mutantTrialsDispatched": 0,
+        "allMutantsDetected": false,
+        "correctSubject": {
+          "typechecks": true,
+          "tests": 4,
+          "passed": 3,
+          "failed": 1,
+          "runtimeErrors": 0,
+          "reportComplete": true,
+          "endReason": "failed"
+        }
+      },
+      {
+        "id": "react-basic-v1-gwt-skill-1",
+        "language": "react",
+        "profile": "gwt",
+        "selected": true,
+        "repetition": 1,
+        "status": "completed-first-pass-semantic-review-pending",
+        "answerSha256": "48cccff7cb14673a2ee5b172fa5653a3ec5ecbd1b4625c21c27ee79b4c50c5ae",
+        "measurementContract": true,
+        "inputCharged": 3423,
+        "outputCharged": 2075,
+        "executionDisposition": "observed",
+        "correctSubjectEligible": false,
+        "mutantTrialsDispatched": 0,
+        "allMutantsDetected": false,
+        "correctSubject": {
+          "typechecks": true,
+          "tests": 0,
+          "passed": 0,
+          "failed": 0,
+          "runtimeErrors": 1,
+          "reportComplete": true,
+          "endReason": "failed"
+        }
+      },
+      {
+        "id": "java-basic-v1-aaa-skill-1",
+        "language": "java",
+        "profile": "aaa",
+        "selected": true,
+        "repetition": 1,
+        "status": "failed",
+        "answerSha256": "63e30858eea1aec1f49a9f2446146f6600d547c5587b0348237e421e6c2bce7c",
+        "measurementContract": false,
+        "inputCharged": 3281,
+        "outputCharged": 1622,
+        "executionDisposition": "refused",
+        "correctSubjectEligible": false,
+        "mutantTrialsDispatched": 0,
+        "allMutantsDetected": false
+      },
+      {
+        "id": "java-basic-v1-aaa-control-1",
+        "language": "java",
+        "profile": "aaa",
+        "selected": false,
+        "repetition": 1,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-gwt-control-1",
+        "language": "java",
+        "profile": "gwt",
+        "selected": false,
+        "repetition": 1,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-gwt-skill-1",
+        "language": "java",
+        "profile": "gwt",
+        "selected": true,
+        "repetition": 1,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-aaa-control-2",
+        "language": "java",
+        "profile": "aaa",
+        "selected": false,
+        "repetition": 2,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-aaa-skill-2",
+        "language": "java",
+        "profile": "aaa",
+        "selected": true,
+        "repetition": 2,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-gwt-skill-2",
+        "language": "java",
+        "profile": "gwt",
+        "selected": true,
+        "repetition": 2,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-gwt-control-2",
+        "language": "java",
+        "profile": "gwt",
+        "selected": false,
+        "repetition": 2,
+        "status": "undispatched"
+      },
+      {
+        "id": "react-basic-v1-aaa-control-2",
+        "language": "react",
+        "profile": "aaa",
+        "selected": false,
+        "repetition": 2,
+        "status": "undispatched"
+      },
+      {
+        "id": "react-basic-v1-aaa-skill-2",
+        "language": "react",
+        "profile": "aaa",
+        "selected": true,
+        "repetition": 2,
+        "status": "undispatched"
+      },
+      {
+        "id": "react-basic-v1-gwt-skill-2",
+        "language": "react",
+        "profile": "gwt",
+        "selected": true,
+        "repetition": 2,
+        "status": "undispatched"
+      },
+      {
+        "id": "react-basic-v1-gwt-control-2",
+        "language": "react",
+        "profile": "gwt",
+        "selected": false,
+        "repetition": 2,
+        "status": "undispatched"
+      },
+      {
+        "id": "react-basic-v1-aaa-skill-3",
+        "language": "react",
+        "profile": "aaa",
+        "selected": true,
+        "repetition": 3,
+        "status": "undispatched"
+      },
+      {
+        "id": "react-basic-v1-aaa-control-3",
+        "language": "react",
+        "profile": "aaa",
+        "selected": false,
+        "repetition": 3,
+        "status": "undispatched"
+      },
+      {
+        "id": "react-basic-v1-gwt-control-3",
+        "language": "react",
+        "profile": "gwt",
+        "selected": false,
+        "repetition": 3,
+        "status": "undispatched"
+      },
+      {
+        "id": "react-basic-v1-gwt-skill-3",
+        "language": "react",
+        "profile": "gwt",
+        "selected": true,
+        "repetition": 3,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-aaa-skill-3",
+        "language": "java",
+        "profile": "aaa",
+        "selected": true,
+        "repetition": 3,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-aaa-control-3",
+        "language": "java",
+        "profile": "aaa",
+        "selected": false,
+        "repetition": 3,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-gwt-control-3",
+        "language": "java",
+        "profile": "gwt",
+        "selected": false,
+        "repetition": 3,
+        "status": "undispatched"
+      },
+      {
+        "id": "java-basic-v1-gwt-skill-3",
+        "language": "java",
+        "profile": "gwt",
+        "selected": true,
+        "repetition": 3,
+        "status": "undispatched"
+      }
+    ],
+    "interpretation": "Three complete React attempts (AAA selected/control and GWT control) fail the real disabled-control interaction. GWT selected collects zero tests with one collection error because the Vitest describe import is missing. No skill benefit, Java execution or model capability boundary is established. Java build dependency/version lines and both full source files were observed, but two opening project/namespace lines violate the frozen all-material-lines contract. The attempt stops without executing its answer. All failed attempts remain unchanged.",
+    "failureClasses": {
+      "disabledPointerInteraction": 3,
+      "missingVitestDescribeCollection": 1,
+      "javaIncompleteSourceRefusal": 1
+    }
+  },
+  "measurementRepair": {
+    "originalWrapper": {
+      "artifact": "execute.py",
+      "sha256": "c98a6c67959e6ea850179df7dfffdd0b57ef829a9bd1466a9a1f62e7972b982b"
+    },
+    "candidateWrapper": {
+      "artifact": "execute-v2.py",
+      "sha256": "c96fd440ebafec84c22b6fd219f5502a25992ffd54ae0529762d4df2604a1f55"
+    },
+    "existingDispositionOwnerSha256": "de0ba158838e316f45415c637803c2a30eb1b61b5f1149d083d1b268661d20c8",
+    "guard": {
+      "artifact": "verification_disposition.py",
+      "sha256": "62e13984f1df502950c538a106724278021f1f30a317adcdd46c8b535bcaa592"
+    },
+    "controls": 11,
+    "controlsPassed": 11,
+    "receipt": {
+      "artifact": "wrapper-admission-v2-controls-final.json",
+      "sha256": "c8b77e2ac7f29532887d3b64410aab658567b07ad082b216a33b1182204de9c2"
+    },
+    "initialFailedControlRetained": {
+      "artifact": "wrapper-admission-v2-controls-initial.json",
+      "sha256": "e17e2744e5866a7402a06fbe1bf6c1b68c464f8224b2d12e365c0e9f6444ba47"
+    },
+    "scope": "Refuse incomplete/interrupted React reports using the existing disposition owner plus the existing terminal-end-reason boundary. Completed compiler status20 remains a measured generated compile failure. No historical outcome changes."
+  },
+  "limits": [
+    "Unchanged published Java and React skills are not qualified.",
+    "Basic known calibration does not replace mandatory hard tasks or untouched held-outs.",
+    "No prompt, application fixture, model-specific knob, grading floor or original case grant changed.",
+    "The manifest change has not yet been used by a new native model campaign.",
+    "Updater generation ownership/real installed updates, wider browser and source/chat qualification, final exact-head checks/review settlement and authorized merge remain open."
+  ]
+}

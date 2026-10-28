@@ -104,7 +104,7 @@ function partialStream(): { readonly response: Response; readonly cancelled: () 
   const body = new ReadableStream<Uint8Array>({
     start(controller): void {
       controller.enqueue(
-        new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'),
+        new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial.\\n"}}]}\n\n'),
       );
     },
     cancel(): void {
@@ -233,7 +233,7 @@ describe("physical admission settlement before fetch and despite spend failure",
       stream: true,
       attemptAdmission: proof.admission,
     });
-    expect((await iterator.next()).value).toEqual({ type: "delta", token: "partial" });
+    expect((await iterator.next()).value).toEqual({ type: "delta", token: "partial.\n" });
     await expect(iterator.return(undefined)).rejects.toThrow(proof.failure);
     expect(proof.settle).toHaveBeenCalledExactlyOnceWith(undefined, true, "unknown");
     expect(proof.spendSettle).toHaveBeenCalledExactlyOnceWith(undefined);

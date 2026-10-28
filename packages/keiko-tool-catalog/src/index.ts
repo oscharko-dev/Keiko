@@ -27,8 +27,9 @@ export {
   opencodeRegistrationSet,
   nativeTextSnapshotRegistrationSet,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  OPENCODE_TOOL_PROFILES,
 } from "./opencode.js";
-export type { OpenCodeNativeExtensionDefinition } from "./opencode.js";
+export type { OpenCodeNativeExtensionDefinition, OpenCodeToolProfile } from "./opencode.js";
 export { createKeikoToolCatalog } from "./composer.js";
 export type { CatalogRegistrationSet, CatalogSetEntry } from "./composer.js";
 export { assertIdentityCompatibility, assertCompatibilityTime } from "./compatibility.js";

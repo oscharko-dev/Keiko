@@ -77,6 +77,8 @@ export interface CodingSafeActivityToolPresentation {
   readonly refusalReason?: CodingSafeActivityEditRefusalReason;
   /** Elapsed bridge service time; includes governed waits, excludes model generation time. */
   readonly bridgeDurationMs?: number;
+  /** A finished native shell call's own exit status, as the runtime reported it. */
+  readonly exitCode?: number;
 }
 
 export type CodingSafeActivityMessageRole = (typeof CODING_SAFE_ACTIVITY_MESSAGE_ROLES)[number];
@@ -649,9 +651,11 @@ export function isCodingSafeActivityToolPresentation(
     "returnedPathCount",
     "refusalReason",
     "bridgeDurationMs",
+    "exitCode",
   ];
   if (exactKeys(value, allowed, "presentation").length > 0) return false;
   if (!validPresentationPaths(value) || !validPresentationCounts(value)) return false;
+  if (value.exitCode !== undefined && !Number.isSafeInteger(value.exitCode)) return false;
   return (
     value.refusalReason === undefined ||
     isOneOf(value.refusalReason, CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)

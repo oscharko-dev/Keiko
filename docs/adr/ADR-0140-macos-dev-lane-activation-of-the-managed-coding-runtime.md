@@ -98,6 +98,26 @@ both dev-lane log operations carry `lane: "npm-runtime-package"`. Windows and Li
 packaged lanes: Windows needs the native supervisor and Linux the sandbox isolation, neither of
 which this lane ships.
 
+**Amended 2026-10-24 — the runtime package carries the pinned ripgrep (#3897, #4064).** OpenCode's
+`glob` and `grep` tools run ripgrep and would otherwise download it on first use, which a
+firewalled customer on a clean `npm install -g` cannot do; only a developer override
+(`KEIKO_RIPGREP_BINARY_PATH`) made search work there. The runtime package therefore also ships the
+unmodified upstream ripgrep release pinned in `ripgrepRuntime.ts` (ADR-0163 D1 amendment of
+2026-10-23) at the portable payload's own paths: `runtime/native/rg`, its MIT text at
+`runtime/licenses/ripgrep/LICENSE-MIT` and a CycloneDX component record at
+`runtime/licenses/ripgrep/sbom.cdx.json`. `scripts/build-coding-runtime-npm-package.mjs` stages them
+through the same provisioning and `stageRipgrepTool` the portable build uses, for the TARGET's
+release, and the candidate inspection pins all three files (and the executable bit) and binds the
+release in the sealed receipt. The trust anchor is unchanged: the digest is the one compiled into
+the server (not `npmLaneRuntimeApprovals.ts`, which keeps describing only the OpenCode tree, SBOM,
+license and helper), and the server verifies `<package>/runtime/native/rg` against it at every run
+launch with the same owner, mode and symlink checks as every other layout, so the package vouches
+for nothing. The lane's native-directory check admits that one file name beside the secure-read
+helper and nothing else; the bytes are judged by the ripgrep verifier, so a missing, tampered or
+linked `rg` degrades search with a closed reason on `coding-runtime.ripgrep.resolved`
+(`layout: "npm-package"`) and never refuses the engine. Runtime packages published before this
+amendment carry no `rg`; they stay active and report `missing`.
+
 ### D3 — Verified payload, declared forgone guarantees
 
 The lane's trust anchor is the review-approved redistribution catalog
@@ -109,6 +129,63 @@ read. On macOS the dev-lane backend terminates a POSIX process group best-effort
 only for the direct child; Windows uses its native Job Object supervisor. Neither platform carries
 a platform signature chain (digest pinning replaces Developer ID/notarization or Authenticode
 evidence).
+
+The original service starts each shell child in its own process group, so the group signal ends only
+the service; on a graceful stop the service ends its own children, but a crashed service cannot
+(#3899 AC2). A command can also detach a process itself (`cmd &`, `nohup`, `setsid`); launchd adopts
+it at once, so it is never below the service, and neither the service nor the group signal ends it
+(#3901 AC3). Which processes belong to a run is therefore answered by the kernel, never inferred
+from a parent link, a working directory or a start time (PR #4064 review): every process a run
+starts inherits the run's Seatbelt instance through fork and exec, however it later detaches or
+changes its session, directory or environment, and the native profile lets a process signal only
+members of its own instance (`(target same-sandbox)`; another instance of the identical profile is
+refused). The native launch starts a sandbox member beside the service
+(`darwinSandboxMembership.ts`): a short `/usr/bin/perl` program on descriptor 3, in a process group
+of its own, which the service never holds and which forks nothing. Once the service has exited, the
+member sends every signal, and without the member nothing is signalled at all. It uses the kernel's
+broadcast signal, `kill` with PID -1, in its original non-POSIX form: the kernel walks every
+process, delivers only to those the member may signal, which are the processes of its instance,
+leaves the member itself out, and reports ESRCH when it reached none. The shell's `kill` uses the
+POSIX form, which includes the caller, which is why the member is not a shell. Signal 0 answers
+whether any process of the run besides the member exists; SIGKILL ends them all. It asks; while a
+process remains, it broadcasts SIGKILL, waits from 2 ms doubling up to 50 ms, and asks again, so a
+process forked during one broadcast is reached by the next. When the kernel answers that none
+remains, none can appear either: only a process of the instance can start another, and the member
+forks nothing. That answer is exact, but its opposite is not: XNU counts an exited, unreaped process
+(a zombie) of the same user in the broadcast check without the sandbox's test, so "occupied" can be
+a zombie anywhere on the host (PR #4064 review). The sweep then proves the end by identity
+(`darwinProcessTable.ts`): the kernel's per-boot process identity `p_uniqueid`, assigned at fork
+from a counter that only grows, kept across exec and never handed out again, with `p_puniqueid`, the
+identity of the forking process. Keiko reads the host's process table outside every sandbox
+(`proc_info` LISTPIDS, then PIDINFO with zombies), asks the member which of its live processes
+belong to the instance (the member's own `proc_info` is refused for every process of another
+instance), and reads the table again. Any member keeps the run going. The listing and the reads are
+no snapshot: a listed process can end and its PID pass to a newer process before the read, which
+then stands in its place. Just before listing, the reader therefore forks a child, reads its
+identity and reaps it (the mark); a row with a larger identity was forked after the listing began
+and may hold such a PID (PR #4064 review). Otherwise the end is proven when the first table lost no
+PID before reading it, holds no row newer than its mark, identified every process the kernel refused
+to read as another user's (Seatbelt refuses setuid programs inside a sandbox, so every process of a
+run keeps the user's uid), and names only processes that were answered as non-members while alive and
+are still alive with the same identity, processes such non-members forked, and processes forked
+before the run's root. Every process of a run descends from its root and has a larger identity; the
+root's identity is the one that forked the member, taken only while the member names the root's PID
+as its parent. No member alive at the first listing means none can appear afterwards; the root
+itself has exited and been reaped before the sweep starts. The sweep never relies on PIDs, start
+times or a parent link for ownership (listings go stale between the listing and an answer, and a PID
+with its one-second `lstart` can be handed out again, so earlier designs that froze the run from
+listings could not prove continuity). Only `clean` (nothing remained) and `reaped` settle the tree.
+A process that outlives fifty broadcasts (`survivors`), a member that no longer answers
+(`membership-unavailable`, including a host without `/usr/bin/perl`, whose member never announces
+itself) and a run whose profile has no member (`unproven`, the gateway profile) leave the tree
+unended, so the manager reports `runtime-reap-unproven` instead of a stopped runtime.
+`coding-runtime.descendants.swept` records the outcome, the SIGKILL broadcasts (`roundCount`), the
+kernel's answers (`checkCount`), the identity proofs (`identityProofCount`) and the distinct members
+they named (`memberCount`); a process table the host cannot read is `listing-failed`, and a host
+whose processes keep ending during every proof stays `unproven`. A process cannot leave its Seatbelt
+instance, so no Endpoint Security monitor (ADR-0163 D4) is needed for this proof; a member killed by
+the run's own commands turns the run's next sweep into `membership-unavailable`, never into a false
+stop.
 
 ### D4 — Honest, content-free unavailability reasons
 

@@ -1,3 +1,4 @@
+import { currentProcessId } from "@oscharko-dev/keiko-security/process-scope";
 import type {
   UpdateActivationWalCheckpoint,
   UpdateActivationWalState,
@@ -21,6 +22,7 @@ interface RecoveryResult {
   readonly status: "ready" | "recovery-required";
   readonly sessionId?: string | undefined;
   readonly reason?: RecoveryReason | undefined;
+  readonly completionDeadline?: number | undefined;
 }
 
 export interface UpdateStartupRecoveryCurrent {
@@ -365,7 +367,7 @@ function restoredIdentityMatches(
   current: UpdateStartupRecoveryCurrent,
 ): boolean {
   return (
-    current.pid === process.pid &&
+    current.pid === currentProcessId() &&
     current.launchId === context.plan.restoreLaunchId &&
     loopbackHost(current.host) &&
     current.port === context.plan.oldProcess.port &&
@@ -445,7 +447,7 @@ function currentIdentityMatches(
   current: UpdateStartupRecoveryCurrent,
 ): boolean {
   return (
-    current.pid === process.pid &&
+    current.pid === currentProcessId() &&
     current.launchId === context.plan.newLaunchId &&
     current.port === context.plan.oldProcess.port &&
     current.version === context.plan.targetVersion
@@ -564,9 +566,16 @@ async function reconcile(
 ): Promise<RecoveryResult> {
   const loaded = loadRecoveryContext(options);
   if (isRecoveryResult(loaded)) return loaded;
-  return input.phase === "pre-listen"
-    ? reconcilePreListen(options, loaded, input.current)
-    : reconcilePostListen(options, loaded, input.current);
+  if (input.phase === "pre-listen") return reconcilePreListen(options, loaded, input.current);
+  const reconciled = await reconcilePostListen(options, loaded, input.current);
+  if (
+    reconciled.status === "ready" &&
+    loaded.effectiveWal.checkpoint !== "complete" &&
+    currentIdentityMatches(loaded, input.current)
+  ) {
+    return { ...reconciled, completionDeadline: loaded.plan.deadlines.cleanupAt };
+  }
+  return reconciled;
 }
 
 export function createUpdateStartupRecovery(

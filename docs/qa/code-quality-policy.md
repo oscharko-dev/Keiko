@@ -45,9 +45,9 @@ mutating the analyzer input; active violations retain that same order. Native wo
 does not affect serialized report bytes. Only explicitly activated scopes enforce a rule. The
 remaining production assertion scopes activate as their owning workstreams migrate; the final
 qualification requires all of them. Boundary bans are adapted to validated domain contracts,
-module interception belongs to the test-seam migration, Effect rules apply only to the qualified
-native host, and array fusion/omission/growing-copy diagnostics require their accepted targeted
-review. A raw match is a diagnostic, not a proven defect or a count-based waiver.
+module interception belongs to the test-seam migration, Effect rules retain the declared historical
+`native-host` scope, and array fusion/omission/growing-copy diagnostics require their
+accepted targeted review. A raw match is a diagnostic, not a proven defect or a count-based waiver.
 
 The contracts production scope (`package:@oscharko-dev/keiko-contracts`) also enforces
 `no-chained-type-assertions` and `require-safety-comment-for-type-assertion` after its assertion
@@ -132,10 +132,22 @@ under `node_modules`, removed in `finally`; Node does not strip TypeScript insid
 There is no product runtime dependency, extra formatter or ESLint compatibility bridge.
 
 Owning tests run all 21 upstream noncosmetic fixture suites through that same compilation path:
-190 accepted and 191 rejected cases. These qualify syntax; the five Effect suites do not replace
-the native-host API qualification in #3988. The native accumulating-spread rule has a distinct
+190 accepted and 191 rejected cases. These qualify syntax; the five Effect suites do not qualify
+a current native runtime. The Node service host qualified in #3988 has been retired. Its three
+byte-pinned source snapshots now live only as historical analyzer fixture data; synthetic
+repositories preserve the native-scope and global-graph regression checks. The real retired
+checkout has no such owner, so selecting its empty `native-host` scope still fails. Neither these
+fixtures nor the dormant scope establish replacement runtime or SDK/native qualification. The native accumulating-spread rule has a distinct
 qualification workstream. Real parser and policy negatives also pin malformed syntax, missing
 visits, dropped packages, suppression and invalid scopes.
+
+The retired `check:native-host-code-quality` command is not a current runtime gate. Its five
+safe/bad Effect examples and process/parser/output-refusal controls live only in test support;
+injected execution results do not attest an Effect runtime or SDK execution. Required Core quality
+runs `check:native:linux`: the existing Linux compiler, analyzer and requested protocol scope,
+with package builds first. The default protocol-only lane does not claim kernel or staged-release
+qualification. Existing macOS/Windows native quality and actual runtime release qualification
+remain separate requirements; approved package bytes and receipts alone do not prove execution.
 
 JSON reports contain the subject SHA, policy/tool/config/source/inventory identities, exact
 scope, package/build/export metadata, all rule dispositions and counts, outcome, and relative

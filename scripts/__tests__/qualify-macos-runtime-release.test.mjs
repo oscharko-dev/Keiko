@@ -188,6 +188,30 @@ describe("macOS runtime qualification", () => {
     ).toThrow("activation manifest is invalid");
   });
 
+  it("accepts the optional pinned-tool section and refuses every malformed shape of it", () => {
+    // runtimeActivationManifest emits `nativeTools` only when the manifest carries tools (ripgrep,
+    // Epic #3897); every other key stays closed, and the section itself must be a one-element array.
+    const state = fixture();
+    const input = {
+      activationPath: state.activationPath,
+      resourceRoot: state.resourceRoot,
+      target: state.target,
+      sourceCommitSha: COMMIT,
+    };
+    const writeActivation = (extra) =>
+      writeFileSync(state.activationPath, `${JSON.stringify({ ...state.activation, ...extra })}\n`);
+
+    writeActivation({ nativeTools: [{ name: "ripgrep" }] });
+    expect(qualificationReceiptFor(input)).toMatchObject({ result: "passed" });
+
+    for (const malformed of [null, {}, "ripgrep", [], [{}, {}]]) {
+      writeActivation({ nativeTools: malformed });
+      expect(() => qualificationReceiptFor(input)).toThrow("activation manifest is invalid");
+    }
+    writeActivation({ nativeToolz: [] });
+    expect(() => qualificationReceiptFor(input)).toThrow("activation manifest is invalid");
+  });
+
   it("rejects incomplete identity, approval, verification mode, and stale receipts", () => {
     const value = fixture();
     const base = {

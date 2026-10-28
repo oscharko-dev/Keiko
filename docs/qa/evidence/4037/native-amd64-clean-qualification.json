@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "classification": "Clean uninstrumented x86_64 Linux compiler/analyzer, protocol, kernel, actual CLI/BFF and native coordinator handoff qualification; not installed release or SSD acceptance",
+  "sourceHead": "6123b9be91c7e52dc1f266bf40a1421efb66d827",
+  "sourceTree": "e136f442ebb31fb876a7945c3ee18a5188890402",
+  "qualificationHead": "27585e259802005fe255e217f471091bba7855bd",
+  "runUrl": "https://github.com/oscharko/keiko-native-amd64-qualification-20261020/actions/runs/39368816618",
+  "actualConclusion": "success",
+  "artifact": {
+    "id": 12240942889,
+    "name": "native-amd64-clean-checkpoint74-v10",
+    "archiveSha256": "9d1a77e2e6606d4ab5eada9361332f19f8198d6eddd27353c77b5dca6a9e5cfb",
+    "archiveDigestSource": "GitHub Actions artifact metadata; extracted member hashes retained below"
+  },
+  "environment": {
+    "host": "GitHub-hosted Ubuntu 22.04 x86_64; actual uname architecture asserted",
+    "node": "24.18.0",
+    "image": "node@sha256:4e9cb555d708e0829c9d93e5eeae9dfab0617b832ca436a690680e0fca735ef5",
+    "actualImageId": "sha256:fcd0f74fb415c75280d0d6d26ed68c57b6498f56f6ebcf47aecdfe7970a33861",
+    "packageOwnership": "Administrative root-owned read-only product and dependencies",
+    "processProfiles": "UID 1000 and 65534, all capabilities dropped, no-new-privileges, network none, read-only filesystem, private executable tmpfs",
+    "seccomp": "Explicit seccomp=unconfined in this isolated qualification profile; this does not establish operation under default Docker seccomp or change product policy"
+  },
+  "preparation": {
+    "lockedInstall": true,
+    "realUsearchProvisioning": true,
+    "actualUiAbsentBeforeBuild": true,
+    "actualUiAndCspPresentAfterBuild": true,
+    "diagnosticRuntimeChanges": false,
+    "sourceCleanAfterBuildAndQualification": true
+  },
+  "profiles": [
+    {
+      "uid": 1000,
+      "exitCode": 0,
+      "fullNativeQualityPassed": true,
+      "additionalProcessScopeRepetitions": 5,
+      "testsPerRepetition": 34,
+      "additionalPassedTests": 170,
+      "additionalFailedTests": 0,
+      "additionalSkippedTests": 0,
+      "logSha256": "2860e103a27d3586d418433a23c81c9b008fa2ec021ef47ae49dadfae7a8ab41",
+      "resultSha256": "8a4af69aca7042b4109830943a895acb1274088631edeaea8d209fe8622ad997"
+    },
+    {
+      "uid": 65534,
+      "exitCode": 0,
+      "fullNativeQualityPassed": true,
+      "additionalProcessScopeRepetitions": 5,
+      "testsPerRepetition": 34,
+      "additionalPassedTests": 170,
+      "additionalFailedTests": 0,
+      "additionalSkippedTests": 0,
+      "logSha256": "f3f906a63469cd2f3fce0f3aed6f0200861b254465f7e855d9077cfeb9277d83",
+      "resultSha256": "033265e02a071c2e5f22ebae2854b56afb258a5bf552f35c86892aad61300fbe"
+    }
+  ],
+  "provenScope": [
+    "Unmodified full Linux native quality command, including compiler warnings, analyzer, malformed/late protocol refusals, process containment and whole-generation reaping",
+    "Real assembled CLI starts a real BFF; independent stop confirms whole-generation reap twice",
+    "Two real native coordinator handoffs, cancellation coalescing and restoration controls using the predeclared small HTTP successor fixture",
+    "Five additional consecutive process-scope suite executions per UID, including supported report Worker ownership reads; no retry or outcome filtering"
+  ],
+  "limitations": [
+    "Native coordinator successor fixtures are small HTTP processes, not two different packaged Keiko releases.",
+    "No installed version replacement, real SSD relocation, complete persistent user-state continuity, native macOS entitlement execution or full browser acceptance is claimed.",
+    "Earlier v1-v9 failures, diagnostics and cancelled preparation remain retained; this successful uninstrumented run does not rewrite them."
+  ],
+  "memberDigests": [
+    {
+      "artifact": "host.txt",
+      "sha256": "882a2dfdd82bb327c7efb454865a07b290d62b02d644fc8c9b6f3442fec752ac"
+    },
+    {
+      "artifact": "image.txt",
+      "sha256": "43885d5d7fcdd5e0acf8fe7cbf8e356046b8dfa6764055cdc662571dc6d7a6da"
+    },
+    {
+      "artifact": "source.txt",
+      "sha256": "35a3f03f90a641bfc8b7bef812765cbf737a729c2605c1bd279d40409e35d181"
+    },
+    {
+      "artifact": "ui-precondition-after.json",
+      "sha256": "48f8d508a633f38ef9ca126aa6a5a3c4029d37621cb32c46672f84e7f6d39934"
+    },
+    {
+      "artifact": "ui-precondition-before.json",
+      "sha256": "87716abd0306eeb0a4dbdd418c115e5db70858cbace159dd4d16b7fddb6ca5f4"
+    },
+    {
+      "artifact": "uid-1000.json",
+      "sha256": "8a4af69aca7042b4109830943a895acb1274088631edeaea8d209fe8622ad997"
+    },
+    {
+      "artifact": "uid-1000.log",
+      "sha256": "2860e103a27d3586d418433a23c81c9b008fa2ec021ef47ae49dadfae7a8ab41"
+    },
+    {
+      "artifact": "uid-65534.json",
+      "sha256": "033265e02a071c2e5f22ebae2854b56afb258a5bf552f35c86892aad61300fbe"
+    },
+    {
+      "artifact": "uid-65534.log",
+      "sha256": "f3f906a63469cd2f3fce0f3aed6f0200861b254465f7e855d9077cfeb9277d83"
+    }
+  ],
+  "overallAcceptance": false,
+  "installedUpdateAcceptance": false,
+  "ssdAcceptance": false,
+  "mergeAcceptance": false
+}

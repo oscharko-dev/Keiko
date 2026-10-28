@@ -1,4 +1,15 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import {
+  createStateCodingSessionContinuity,
+  KEIKO_CODING_SESSION_RETENTION_ENV,
+  type CodingSessionContinuity,
+} from "./coding-runtime/codingSessionContinuity.js";
+import {
+  createMcpCredentialRelay,
+  egressMcpRelayUpstream,
+  type McpCredentialRelay,
+  type McpRelayUpstream,
+} from "./mcp/mcpCredentialRelay.js";
 import { createRuntimeChangesetApplyPort } from "./editor/agentRoutes.js";
 import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
@@ -30,6 +41,7 @@ import {
   loadConfigFromFile,
   loadEgressConfigFromFile,
   parseGatewayConfig,
+  listConfiguredCapabilities,
   resolveCodingSafeSidecarGatewayProfile,
   resolveOutboundHttpEgressConfig,
   selectConfiguredModel,
@@ -76,14 +88,19 @@ import {
   bindSecurityLogCorrelation,
   keikoApiKeySecretValues,
   redact,
+  redactContent,
+  resolveContentRedactionPolicy,
+  type ResolvedContentRedactionPolicy,
 } from "@oscharko-dev/keiko-security";
 import type { PortableReleaseTrustedKey } from "@oscharko-dev/keiko-security/portable-release-trust";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchRuntimeUnavailableReason,
   CommandTerminationEvidence,
+  ContentRedactionPolicy,
   DebugDeploymentPolicy,
   DebugProductSupport,
   DebugProvisioning,
@@ -142,6 +159,7 @@ import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import type { WorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
+  logChatContentPolicyResolved,
   logMemoryAuditStateCacheSeeded,
   logRuntimeShutdown,
   logTaskWorkspaceManifestReconnected,
@@ -441,6 +459,15 @@ import {
 } from "./gitDelivery/prDescriptionRoutes.js";
 import { descriptionAuthorityEnvelopeDigest } from "./gitDelivery/runBoundAuthority.js";
 import { createProductionVerifiedCommitDependencies } from "./coding-runtime/productionVerifiedCommitDependencies.js";
+import {
+  createNativeWebSearch,
+  nativeWebSearchConfigFromEnv,
+  type NativeWebSearch,
+} from "./coding-runtime/nativeWebSearch.js";
+import {
+  createGovernedSyncHeads,
+  type GovernedSyncHeads,
+} from "./coding-runtime/governedSyncHeads.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
   createProductionCodingRuntimeResolver,
@@ -454,15 +481,31 @@ import {
   type CodingAppSessionContentSource,
 } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { createBrowserApprovalService } from "./coding-app-session/browserApproval.js";
 import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
 import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
+import { abortCodingRunSessionLeases } from "./coding-app-session/codingRunSessionLease.js";
 import {
   admitCodingRunModel,
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
 } from "./coding-sidecar-gateway.js";
+import type { OpenCodeToolProfile } from "./coding-runtime/opencodeToolSchemas.js";
+
+/**
+ * The one production selection of the OpenCode tool profile (#3897). The native service runs where
+ * its kernel boundary is qualified, macOS (Seatbelt read allowlist, credential denials, egress by
+ * mode). Linux and Windows keep the governed mapped profile: the audited Linux mount plan still
+ * let a shell child read a workspace `.env`, and Windows has no native filesystem boundary yet.
+ */
+export function productionOpenCodeToolProfile(
+  platform: NodeJS.Platform = process.platform,
+): OpenCodeToolProfile {
+  return platform === "darwin" ? "native" : "direct";
+}
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
+import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
@@ -660,6 +703,12 @@ export interface GatewayDiscoveredModelMetadata {
   readonly contextWindowUndeclared?: boolean | undefined;
   readonly maxOutputTokens?: number | undefined;
   readonly toolCalling?: boolean | undefined;
+  /**
+   * Digest of the deployment(s) the gateway reported behind this alias (#3905). Absent when the
+   * discovery source states none (the serving list, a group summary), which never clears an
+   * identity recorded earlier. A change withdraws the alias's tool-calling proof.
+   */
+  readonly deploymentIdentitySha256?: string | undefined;
   readonly reasoningEfforts?: readonly ModelReasoningEffort[] | undefined;
   /**
    * True when the discovery payload explicitly declared a chat-compatible mode for this model
@@ -720,6 +769,9 @@ export interface UiHandlerDeps {
   readonly egress?: GatewayEgressConfig | undefined;
   // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data.
   readonly redactor: Redactor;
+  // #4098: the Chat content policy resolved once at startup from `KEIKO_CONTENT_REDACTION`. Absent
+  // means `redact`; only Chat reads it, never diagnostics, evidence or another surface.
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
   // RB-6 (GEN-OBS-DIAGNOSTICS-901/602/603) — operator diagnostic sink for server-side error causes.
   // Optional: when undefined the server falls back to the default stderr sink. Tests inject a
   // capturing sink to assert that a handler throw / mid-stream failure emits a correlation-keyed,
@@ -787,6 +839,8 @@ export interface UiHandlerDeps {
     ((request: GitDeliveryDescriptionAuthorityMintRequest) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
+        /** Server-owned tool profile the runtime was composed with; read by the readiness route. */
+        readonly toolProfile?: OpenCodeToolProfile;
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
         readonly verifyObserved: (runId: string) => void;
@@ -801,6 +855,10 @@ export interface UiHandlerDeps {
   // instead of a second listener. `resolve()` is `undefined` whenever no run is active.
   readonly toolFacadeBridge?:
     { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined } | undefined;
+  // #3903 AC3: the MCP relay a native run's credentialed remote servers are reached through, on
+  // the SAME attested loopback port; the runtime host binds it, coding-sidecar-mcp-relay.ts serves it.
+  readonly mcpRelay?:
+    { readonly relay: McpCredentialRelay; readonly upstream: McpRelayUpstream } | undefined;
   readonly codingSidecarGatewayCancellationRegistry?:
     { readonly signalFor: (runId: string) => AbortSignal | undefined } | undefined;
   readonly codingSidecarGatewayEvidenceAggregator?:
@@ -867,6 +925,8 @@ export interface UiHandlerDeps {
    * "unverified" and never silently to "verified".
    */
   readonly codingRuntimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  /** What the qualified runtime is (#3904 AC4); absent reads as not reported. */
+  readonly codingRuntimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
@@ -1253,6 +1313,13 @@ export interface BuildHandlerDepsOptions {
    */
   readonly codingRuntimeResearchEgressEnabled?: boolean | undefined;
   readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
+  /**
+   * Test seam for the gateway readiness probes (the same field as `UiHandlerDeps`), accepted at
+   * build time because the configured-conversation readiness starts during construction and
+   * derives its own dependency views before a caller could set the field on the result (#3897,
+   * coding performance fixture). Production never sets it.
+   */
+  readonly gatewayReadinessFetch?: typeof fetch | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
   // stays clean while sidecar routing evidence still persists.
@@ -1830,6 +1897,25 @@ export function currentConversationReadinessObservation(
   return ageMs >= 0 && ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? true : undefined;
 }
 
+/**
+ * True when the CURRENT generation holds a successful basic-chat observation that has aged past
+ * `CONVERSATION_READINESS_MAX_AGE_MS`. `currentConversationReadinessObservation` folds that case
+ * into `undefined`, exactly like a model nobody probed; this is the one place that tells them apart
+ * (#3905), and the models wire carries it as `conversationReadinessStale`. A failed observation
+ * never goes stale, and a malformed or future timestamp stays unknown.
+ */
+export function currentConversationReadinessStale(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): boolean {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const observation = holder.verifiedCapability(modelId);
+  if (observation?.generation !== holder.generation()) return false;
+  if (observation.fields.conversationReady !== true) return false;
+  return conversationReadinessAgeMs(observation) >= CONVERSATION_READINESS_MAX_AGE_MS;
+}
+
 function configuredChatContextProfile(
   config: GatewayConfig,
   modelId: string,
@@ -2128,6 +2214,20 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
     env,
   );
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
+}
+
+// #4098: the private Chat history redactor. Under the default policy it is the live redactor
+// itself; only the deployment opt-out keeps authorized content and removes the credential floor.
+function runtimeContentRedactString(
+  env: EnvSource,
+  runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
+  redactString: (value: string) => string,
+  policy: ResolvedContentRedactionPolicy,
+): (value: string) => string {
+  if (policy.policy === "redact") return redactString;
+  return (value): string =>
+    redactContent(value, "preserve", runtimeRedactionSecrets(env, runtimeConfig, egress));
 }
 
 export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
@@ -2657,6 +2757,15 @@ interface PersistenceRuntimeContext {
   readonly env: EnvSource;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly bootstrapCorrelationId: string;
+  readonly redactContentString: (value: string) => string;
+}
+
+function privateUiStore(
+  db: DatabaseSync,
+  redactString: (value: string) => string,
+  redactContentString: (value: string) => string,
+): UiStore {
+  return buildUiStoreOverDatabase(db, { redactString, redactContentString });
 }
 
 function composePersistence(
@@ -2683,7 +2792,7 @@ function composePersistence(
     runtime.diagnostics,
     runtime.bootstrapCorrelationId,
   );
-  const store = buildUiStoreOverDatabase(db, { redactString });
+  const store = privateUiStore(db, redactString, runtime.redactContentString);
   const relationship: RelationshipHandlerDeps = {
     scopeResolver: (): { readonly workspaceId: string } => ({
       workspaceId: resolveLoopbackWorkspaceId(runtime.env),
@@ -3741,6 +3850,7 @@ function resolveTrustAndManagedLspControl(args: BuildPeripheralsArgs): {
 
 function adoptPortableRecoveryOwnership(
   args: BuildPeripheralsArgs,
+  updateStateDir: string,
 ): UpdateSessionRecoveryOwnership | undefined {
   const encoded = args.options.env[PORTABLE_RECOVERED_LAUNCH_ENV];
   const recovered = readPortableRecoveredLaunchDescriptor(encoded);
@@ -3756,7 +3866,7 @@ function adoptPortableRecoveryOwnership(
   const ownership =
     recovered === undefined
       ? undefined
-      : adoptStateDirUpdateSessionLockForRecovery(args.runtimeStateDir, recovered);
+      : adoptStateDirUpdateSessionLockForRecovery(updateStateDir, recovered);
   if (recovered !== undefined && ownership === undefined) {
     throw new TypeError("portable recovered launch ownership could not be adopted");
   }
@@ -3802,6 +3912,7 @@ function resolvedUpdatePreflight(
 
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
 function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
+  const updateStateDir = resolveRuntimeStateDir(args.options.env);
   const updateCandidateAuthority = createUpdateCandidateAuthority({
     activityLog: processServerLogSink(),
     diagnostics: args.options.diagnostics,
@@ -3828,14 +3939,14 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
     resolveTrustAndManagedLspControl(args);
   const debugActivationControl = buildDebugActivationControl(args);
-  const updateSessionLock = createStateDirUpdateSessionLock(args.runtimeStateDir, {
+  const updateSessionLock = createStateDirUpdateSessionLock(updateStateDir, {
     diagnostics: args.options.diagnostics,
     securityLogSink: processServerLogSink(),
   });
-  const recoveryOwnership = adoptPortableRecoveryOwnership(args);
+  const recoveryOwnership = adoptPortableRecoveryOwnership(args, updateStateDir);
   const portableHandoffRuntime = createProductionPortableHandoffRuntime({
     env: args.options.env,
-    stateDir: args.runtimeStateDir,
+    stateDir: updateStateDir,
     currentVersion: KEIKO_PRODUCT_VERSION,
     localState: updateLocalState,
     sessionLock: updateSessionLock,
@@ -4238,14 +4349,15 @@ function buildPersistenceBundle(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
   bootstrapCorrelationId: string,
+  redactContentString: (value: string) => string,
 ): PersistenceBundle {
   const persistence = composeUiPersistence(
     options,
     resolvedUiDbPath,
     redactString,
     bootstrapCorrelationId,
+    redactContentString,
   );
-  const { store, dispose, relationship } = persistence;
   try {
     const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
       options,
@@ -4255,10 +4367,10 @@ function buildPersistenceBundle(
       redactString,
     );
     return {
-      uiStore: store,
+      uiStore: persistence.store,
       workspaceScriptTrust,
-      dispose,
-      relationship,
+      dispose: persistence.dispose,
+      relationship: persistence.relationship,
       codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
       codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
@@ -4268,7 +4380,7 @@ function buildPersistenceBundle(
         options.diagnostics,
       ),
       preferredProjectPath: seedInitialProject(
-        store,
+        persistence.store,
         resolvedUiDbPath,
         options.initialProjectPath,
         workspaceScriptTrust,
@@ -4277,7 +4389,7 @@ function buildPersistenceBundle(
       ),
     };
   } catch (error) {
-    dispose?.();
+    persistence.dispose?.();
     throw error;
   }
 }
@@ -4307,6 +4419,7 @@ function composeUiPersistence(
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   bootstrapCorrelationId: string,
+  redactContentString: (value: string) => string,
 ): ReturnType<typeof composePersistence> {
   return composePersistence(
     options.store,
@@ -4314,7 +4427,12 @@ function composeUiPersistence(
     options.codingRuntimeDescriptionJobStore,
     resolvedUiDbPath,
     redactString,
-    { env: options.env, diagnostics: options.diagnostics, bootstrapCorrelationId },
+    {
+      env: options.env,
+      diagnostics: options.diagnostics,
+      bootstrapCorrelationId,
+      redactContentString,
+    },
   );
 }
 
@@ -4394,6 +4512,12 @@ interface UiHandlerDepsAssemblyArgs {
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
   readonly bootstrapCorrelationId: string;
+  /** #4098: the Chat content policy resolved once from the deployment environment. */
+  readonly contentPolicy: ResolvedContentRedactionPolicy;
+  /** The one native session continuity service the runtime host and the orchestrator share. */
+  readonly codingSessionContinuity: CodingSessionContinuity;
+  /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
+  readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4768,6 +4892,19 @@ interface UiHandlerRuntimeServices {
   readonly workspaceLifecycle: WorkspaceLifecycleService | undefined;
 }
 
+// Relayed MCP requests leave through Keiko's own egress configuration (proxy and CA).
+function mcpRelayDeps(args: UiHandlerDepsAssemblyArgs): Pick<UiHandlerDeps, "mcpRelay"> {
+  if (args.mcpCredentialRelay === undefined) return {};
+  return {
+    mcpRelay: {
+      relay: args.mcpCredentialRelay,
+      upstream: egressMcpRelayUpstream(() =>
+        resolveOutboundHttpEgressConfig(undefined, args.options.env),
+      ),
+    },
+  };
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
@@ -4804,6 +4941,10 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionReadStatus: prDescriptionReceiptStatus.readStatus,
     ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
     voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
+    ...mcpRelayDeps(args),
+    ...(args.options.gatewayReadinessFetch === undefined
+      ? {}
+      : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -4822,7 +4963,15 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   return installConversationReadinessInitialization(deps);
 }
 
-function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
+/**
+ * Starts the configured conversation readiness checks and wires their shutdown into the graph's own
+ * `dispose`. The graph keeps its identity: the Workbench description dispatcher, the semantic search
+ * lease and every cache keyed by the graph (the PR-description application services among them) were
+ * attached to this exact object, and the server hands the SAME object to its routes. Returning a
+ * spread copy (#3676) left the mounted review route reading an empty cache for a proposal the
+ * dispatcher had just retained, so a generated description could never be reviewed.
+ */
+export function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
   const startup = createGatewayStartupChecks(deps);
   startup.start(deps.gatewayConfig?.initializationCorrelationId);
   // A provider-stated window replaces an assumed one wherever it is observed: in every overflow
@@ -4837,8 +4986,8 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
       startup.start(correlationId ?? newCorrelationId());
     });
   });
-  return {
-    ...deps,
+  const disposeServices = deps.dispose;
+  return Object.assign(deps, {
     refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
@@ -4846,9 +4995,9 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
       await startup.stop();
       await conversationShutdown;
       await stopAssumedContextWindowDiscovery(deps);
-      await deps.dispose?.();
+      await disposeServices?.();
     },
-  };
+  });
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {
@@ -4913,8 +5062,15 @@ function buildAssemblyCodingAppSessionChannel(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
 ): ReturnType<typeof createCodingAppSessionChannel> {
+  const store = args.bundle.uiStore.browserApprovals;
+  const registry = createSessionRegistry({
+    activityLog: args.options.activityLog ?? processServerLogSink(),
+    observeApprovalExpiry: store?.observeTime,
+  });
   return createCodingAppSessionChannel({
-    registry: createSessionRegistry(),
+    registry,
+    browserApproval:
+      store === undefined ? undefined : createBrowserApprovalService({ registry, store }),
     pairingPort:
       args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
     contentSource:
@@ -4956,6 +5112,7 @@ function buildUiCodingRuntimeControlPlane(
   );
   return createCodingRuntimeControlPlane({
     historyStore: args.bundle.uiStore,
+    sessionContinuity: args.codingSessionContinuity,
     issueIntake: createProductionCodingRuntimeIssueIntake({
       store: args.bundle.uiStore,
       env: args.options.env,
@@ -5006,6 +5163,10 @@ function createUiCodingRuntimeRepositoryInstructions(
     enabled: configuredCodingRuntimeRepositoryInstructionsEnabled(
       args.options.env[KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV],
     ),
+    // A native run's own instruction plugin loads the file (#3900 AC3); the initial turn then
+    // attaches no block, so the instructions reach the model once.
+    delivery:
+      productionOpenCodeToolProfile() === "native" ? "native-instructions" : "initial-context",
     source: codingRuntimeHost?.secureWorkspaceTextRead,
     activityLog: processServerLogSink(),
   });
@@ -5317,6 +5478,7 @@ type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &
     | "uiDbPath"
     | "preferredProjectPath"
     | "conversationAttachmentStore"
+    | "contentRedaction"
   >;
 
 function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerDeps {
@@ -5327,6 +5489,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     env: args.options.env,
     egress: args.egress,
     redactor: args.liveRedactor,
+    contentRedaction: args.contentPolicy.policy,
     diagnostics: args.options.diagnostics,
     activityLog: args.options.activityLog ?? processServerLogSink(),
     store: args.bundle.uiStore,
@@ -5363,8 +5526,7 @@ function buildRuntimeUiHandlerDeps(
 ): RuntimeUiHandlerDeps {
   const codingRuntimeControlPlaneDeps = buildCodingRuntimeControlPlaneDeps(
     services.codingRuntimeControlPlane,
-    services.runtimeComposition.unavailableReason,
-    services.runtimeComposition.evidenceClass,
+    services.runtimeComposition,
   );
   return {
     codingAppSessionChannel: services.codingAppSessionChannel,
@@ -5580,6 +5742,25 @@ async function runTeardownSteps(steps: readonly (() => void | Promise<void>)[]):
   if (failures.length > 1) throw new TeardownFaults(failures, "runtime-teardown-faulted");
 }
 
+// Coding run state ends with its graph: the projection is purged, and a run lease must not outlive
+// the graph either, so each held one ends as aborted and its observation stops.
+function codingRunTeardownSteps(
+  services: UiHandlerRuntimeServices,
+  correlationId: string,
+): readonly (() => void)[] {
+  return [
+    (): void => {
+      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll(
+        "shutdown",
+        correlationId,
+      );
+    },
+    (): void => {
+      abortCodingRunSessionLeases(services.codingAppSessionChannel);
+    },
+  ];
+}
+
 async function disposeRuntimeServices(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
@@ -5594,12 +5775,7 @@ async function disposeRuntimeServices(
     (): void => {
       services.runtimeComposition.dispose?.();
     },
-    (): void => {
-      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll(
-        "shutdown",
-        correlationId,
-      );
-    },
+    ...codingRunTeardownSteps(services, correlationId),
     async (): Promise<void> => {
       await shutdownHostLspPool();
     },
@@ -5757,6 +5933,7 @@ interface CodingRuntimeControlPlaneDeps {
   codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
   codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
   codingRuntimeEvidenceClass?: UiHandlerDeps["codingRuntimeEvidenceClass"];
+  codingRuntimeVersion?: UiHandlerDeps["codingRuntimeVersion"];
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
   runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
   gitDeliveryAuthority?: UiHandlerDeps["gitDeliveryAuthority"];
@@ -5802,10 +5979,13 @@ function codingRuntimeControlPlanePassthroughDeps(
 
 function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
-  unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined,
-  evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined,
+  composition: Pick<
+    ProductionRuntimeComposition,
+    "unavailableReason" | "evidenceClass" | "runtimeVersion"
+  >,
 ): CodingRuntimeControlPlaneDeps {
   if (controlPlane === undefined) return {};
+  const { unavailableReason, evidenceClass, runtimeVersion } = composition;
   return {
     codingRuntimeOrchestrator: controlPlane.orchestrator,
     codingRuntimeEventHub: controlPlane.eventHub,
@@ -5815,7 +5995,10 @@ function buildCodingRuntimeControlPlaneDeps(
       : {}),
     ...(!controlPlane.runtimeHostQualified
       ? { codingRuntimeUnavailableReason: unavailableReason ?? "runtime-unqualified" }
-      : { codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified" }),
+      : {
+          codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified",
+          ...(runtimeVersion === undefined ? {} : { codingRuntimeVersion: runtimeVersion }),
+        }),
     ...(controlPlane.cancellationRegistry !== undefined
       ? {
           codingSidecarGatewayCancellationRegistry: controlPlane.cancellationRegistry,
@@ -5875,6 +6058,7 @@ interface ProductionRuntimeComposition {
   readonly resolver: ProductionCodingRuntimeResolver | undefined;
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
   readonly materializedPatches?: MaterializedPatchRegistry | undefined;
   readonly dispose?: (() => void) | undefined;
@@ -5884,6 +6068,7 @@ interface ProductionRuntimePortResolution {
   readonly ports: ProductionCodingRuntimePorts | undefined;
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly activated: boolean;
 }
 
@@ -5915,6 +6100,47 @@ function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds 
   };
 }
 
+// #3903 AC4: an approved Code Mode `worktree_create` becomes a managed task workspace through the
+// existing lifecycle and provisioning owners.
+function nativeWorktreeProvisioning(
+  workspaceLifecycle: WorkspaceLifecycleService,
+  bundle: Pick<PersistenceBundle, "workspaceProvisioning">,
+): ReturnType<typeof createNativeWorktreeProvisionPort> {
+  return createNativeWorktreeProvisionPort({
+    lifecycle: workspaceLifecycle,
+    provisioning: bundle.workspaceProvisioning,
+  });
+}
+
+function configuredChatModelIds(args: UiHandlerDepsAssemblyArgs): readonly string[] {
+  const config = args.runtimeConfig.current();
+  return config === undefined
+    ? []
+    : listConfiguredCapabilities(config)
+        .filter((capability) => capability.kind === "chat")
+        .map((capability) => capability.id);
+}
+
+// A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
+// activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
+function activeWorkspaceRoot(workspaceLifecycle: WorkspaceLifecycleService): string | undefined {
+  try {
+    return workspaceLifecycle.getActive()?.binding.activeRoot;
+  } catch (error) {
+    if (isIdentityProofFailure(error)) return undefined;
+    throw error;
+  }
+}
+
+// #3903 AC3: the operator's admitted web search integration; none keeps the honest refusal.
+function nativeWebSearchFor(args: UiHandlerDepsAssemblyArgs): NativeWebSearch {
+  return createNativeWebSearch({
+    config: nativeWebSearchConfigFromEnv(args.options.env),
+    activityLog: processServerLogSink(),
+    egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
+  });
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -5937,6 +6163,8 @@ function resolveProductionRuntimePorts(
   }
   const activation = resolveProductionOpenCodeActivation({
     historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
+    sessionContinuity: args.codingSessionContinuity,
+    ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
@@ -5948,22 +6176,18 @@ function resolveProductionRuntimePorts(
       });
       return result.status === "available" ? result.runMetadata : undefined;
     },
+    // #3903 AC1: the chat models a native run's agents may use; each one still has to resolve.
+    gatewayCodingModelIds: (): readonly string[] => configuredChatModelIds(args),
     activityLog: processServerLogSink(),
-    // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
-    // activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
-    resolveWorkspaceRoot: (): string | undefined => {
-      try {
-        return workspaceLifecycle.getActive()?.binding.activeRoot;
-      } catch (error) {
-        if (isIdentityProofFailure(error)) return undefined;
-        throw error;
-      }
-    },
+    nativeWorktrees: nativeWorktreeProvisioning(workspaceLifecycle, args.bundle),
+    nativeWebSearch: nativeWebSearchFor(args),
+    resolveWorkspaceRoot: () => activeWorkspaceRoot(workspaceLifecycle),
   });
   return {
     ports: activation.ports,
     unavailableReason: activation.unavailableReason,
     evidenceClass: activation.evidenceClass,
+    runtimeVersion: activation.runtimeVersion,
     activated: activation.ports !== undefined,
   };
 }
@@ -6050,7 +6274,9 @@ function productionRuntimeResolver(
     return unqualifiedComposition("runtime-unqualified");
   }
   const envelopeBounds = configuredRuntimeEnvelopeBounds(args.options.env);
-  const readiness = createOpenCodeGatewayReadinessRegistry();
+  // The Coding Workbench runs the original OpenCode service with its native tools (#3897); the
+  // mapped `direct`/`code-mode` profiles remain selectable only through this server-owned value.
+  const readiness = createOpenCodeGatewayReadinessRegistry(productionOpenCodeToolProfile());
   const resolution = resolveProductionRuntimePorts(
     args,
     runtimeEvidence,
@@ -6082,9 +6308,18 @@ function productionRuntimeResolver(
     }),
     readiness,
     mutationPorts,
-    // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
-    resolution.evidenceClass ?? "functional-not-platform-qualified",
+    activatedRuntimeFacts(resolution),
   );
+}
+
+function activatedRuntimeFacts(
+  resolution: ProductionRuntimePortResolution,
+): Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion"> {
+  return {
+    // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
+    evidenceClass: resolution.evidenceClass ?? "functional-not-platform-qualified",
+    runtimeVersion: resolution.runtimeVersion,
+  };
 }
 
 // The two server-owned ports of a runtime mutation, created once per composition: the final claim
@@ -6123,16 +6358,22 @@ function qualifiedRuntimeResolver(
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
   const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
-  const verifiedCommit = runtimeVerifiedCommitDependencies(input);
+  // #3902 AC2: the heads a governed fast-forward writes, recorded by the runtime Git service and
+  // accepted by the workspace authority beside the verified commit's receipt.
+  const governedSyncHeads = createGovernedSyncHeads();
+  const verifiedCommit = runtimeVerifiedCommitDependencies(input, governedSyncHeads);
   const draftDelivery = runtimeDraftDeliveryDependencies(input);
   return createProductionCodingRuntimeResolver({
-    workspaceAuthority: runtimeWorkspaceAuthority(
-      args,
-      input.workspaceLifecycle,
-      input.managedTaskWorkspaceRoot,
-      input.deploymentCeiling,
-      input.envelopeBounds,
-    ),
+    workspaceAuthority: {
+      ...runtimeWorkspaceAuthority(
+        args,
+        input.workspaceLifecycle,
+        input.managedTaskWorkspaceRoot,
+        input.deploymentCeiling,
+        input.envelopeBounds,
+      ),
+      governedSyncHead: governedSyncHeads.latest,
+    },
     ...input.ports,
     serverRuntimeChangeset: createRuntimeChangesetApplyPort({
       runtimeMutationLease: input.runtimeMutationLeaseBroker,
@@ -6170,9 +6411,10 @@ function qualifiedRuntimeResolver(
 
 function runtimeVerifiedCommitDependencies(
   input: QualifiedRuntimeResolverInput,
+  governedSyncHeads: GovernedSyncHeads,
 ): ReturnType<typeof createProductionVerifiedCommitDependencies> {
   const { args } = input;
-  return createProductionVerifiedCommitDependencies(
+  const verified = createProductionVerifiedCommitDependencies(
     {
       store: args.bundle.uiStore,
       evidenceStore: args.evidenceStore,
@@ -6185,6 +6427,9 @@ function runtimeVerifiedCommitDependencies(
     },
     args.bundle.codingRuntimeSnapshotStore,
   );
+  return verified === undefined
+    ? undefined
+    : { ...verified, recordGovernedSyncHead: governedSyncHeads.record };
 }
 
 function runtimeDraftDeliveryDependencies(
@@ -6212,7 +6457,7 @@ function qualifiedProductionRuntimeComposition(
   resolver: ProductionCodingRuntimeResolver,
   readiness: OpenCodeGatewayReadinessRegistry,
   mutationPorts: RuntimeMutationPorts,
-  evidenceClass: CodingWorkbenchRuntimeEvidenceClass,
+  evidence: Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion">,
 ): ProductionRuntimeComposition {
   const { runtimeMutationLeaseBroker, materializedPatches } = mutationPorts;
   return {
@@ -6225,7 +6470,7 @@ function qualifiedProductionRuntimeComposition(
       },
     },
     unavailableReason: undefined,
-    evidenceClass,
+    ...evidence,
     runtimeMutationLease: runtimeMutationLeaseBroker,
     materializedPatches,
     dispose: (): void => {
@@ -6267,6 +6512,35 @@ function buildInitialGatewayState(
   };
 }
 
+/** The one native session continuity service of this server, over the state directory (S02/S03). */
+function buildCodingSessionContinuity(
+  options: BuildHandlerDepsOptions,
+  resolvedUiDbPath: string,
+  bundle: PersistenceBundle,
+): CodingSessionContinuity {
+  return createStateCodingSessionContinuity({
+    stateDir: dirname(resolvedUiDbPath),
+    retention: options.env[KEIKO_CODING_SESSION_RETENTION_ENV],
+    history: bundle.uiStore.codingHistory,
+    activityLog: processServerLogSink(),
+  });
+}
+
+function localKnowledgeKeys(env: EnvSource): ReturnType<typeof createLocalKnowledgeKeyProvider> {
+  return createLocalKnowledgeKeyProvider({ env, securityLogSink: processServerLogSink() });
+}
+
+// #4098: the Chat content policy is resolved once per deps graph and recorded on the startup
+// correlation, so a misspelled opt-out is visible as a warning instead of a silent default.
+function resolveLoggedContentPolicy(
+  env: EnvSource,
+  correlationId: string,
+): ResolvedContentRedactionPolicy {
+  const policy = resolveContentRedactionPolicy(env);
+  logChatContentPolicyResolved(processServerLogSink(), correlationId, policy);
+  return policy;
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const bootstrapCorrelationId = newCorrelationId();
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
@@ -6283,20 +6557,20 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench"));
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({
-    env: options.env,
-    securityLogSink: processServerLogSink(),
-  });
+  const localKnowledgeKeyProvider = localKnowledgeKeys(options.env);
+  const contentPolicy = resolveLoggedContentPolicy(options.env, bootstrapCorrelationId);
   const bundle = buildPersistenceBundle(
     options,
     resolvedUiDbPath,
     redactString,
     evidenceStore,
     bootstrapCorrelationId,
+    runtimeContentRedactString(options.env, runtimeConfig, egress, redactString, contentPolicy),
   );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
-  const deps = assembleUiHandlerDeps({
+  const codingSessionContinuity = buildCodingSessionContinuity(options, resolvedUiDbPath, bundle);
+  return assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
     resolvedEvidenceDir,
@@ -6312,8 +6586,10 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
     bootstrapCorrelationId,
+    contentPolicy,
+    codingSessionContinuity,
+    mcpCredentialRelay: createMcpCredentialRelay(),
   });
-  return deps;
 }
 
 /**

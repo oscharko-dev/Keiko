@@ -4,7 +4,9 @@ import { join } from "node:path";
 import type {
   CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchRuntimeUnavailableReason,
+  McpServerDefinition,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createFetchEditorAgentHttpTransport,
@@ -20,8 +22,34 @@ import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/index.js";
+import { loadMcpServerRegistry } from "../mcp/mcpServerRegistry.js";
+import { loadOperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
+import {
+  createRemoteSkillsPort,
+  loadSkillSourceRegistry,
+  type RemoteSkillsPort,
+} from "./opencodeRemoteSkills.js";
+import { validateMcpOAuthIssuer } from "../mcp/mcpOAuthIssuer.js";
+import {
+  createMcpOAuthCredentialStore,
+  type McpOAuthCredentialStore,
+} from "../mcp/mcpOAuthCredentialStore.js";
+import type { McpOAuthIssuerPort } from "./opencodeRuntimeComposition.js";
+import {
+  resolveOutboundHttpEgressConfig,
+  type OutboundHttpEgressConfig,
+} from "@oscharko-dev/keiko-model-gateway";
+import { KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV } from "./opencodeNativeExternalRoots.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import {
+  configuredCodingRuntimeRepositoryInstructionsEnabled,
+  KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV,
+} from "./codingRuntimeRepositoryInstructions.js";
+import {
+  configuredCodingRuntimeRepositoryItemsEnabled,
+  KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV,
+} from "./codingRuntimeRepositoryItems.js";
 import {
   discoverDevLaneOpenCode,
   discoverNpmLaneOpenCode,
@@ -33,6 +61,7 @@ import {
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import type {
   ProductionOpenCodeBackendInput,
   ResolvedPortableOpenCodeRuntime,
@@ -135,6 +164,10 @@ const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
 
 export interface ProductionOpenCodeActivationInput {
   readonly historyCapture?: ProductionOpenCodeBackendInput["historyCapture"];
+  /** The server's native session continuity service (S02/S03, #3904); absent keeps fresh sessions. */
+  readonly sessionContinuity?: ProductionOpenCodeBackendInput["sessionContinuity"];
+  /** The server's MCP relay for credentialed remote servers (#3903 AC3); absent admits none. */
+  readonly mcpRelay?: ProductionOpenCodeBackendInput["mcpRelay"];
   readonly env: NodeJS.ProcessEnv;
   /** Host identity injection for deterministic tests; production omits both. */
   readonly platform?: NodeJS.Platform | undefined;
@@ -147,6 +180,8 @@ export interface ProductionOpenCodeActivationInput {
   >;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
+  /** The gateway's coding-capable model ids right now (#3903 AC1); absent offers none beside a run's. */
+  readonly gatewayCodingModelIds?: (() => readonly string[]) | undefined;
   /** Explicit test/composition override; packaged production constructs its own verified port. */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   /** Live active-task-workspace root resolution for the dev-lane secure-read port. */
@@ -160,6 +195,10 @@ export interface ProductionOpenCodeActivationInput {
   readonly activityLog?: ServerLogSink | undefined;
   /** The configured Authority Envelope duration (ms) the backend's safe-activity retention follows. */
   readonly runtimeMaxDurationMs?: number | undefined;
+  /** Keiko's managed task-workspace owner for an approved Code Mode `worktree_create` (#3903 AC4). */
+  readonly nativeWorktrees?: ProductionOpenCodeBackendInput["nativeWorktrees"];
+  /** The web search integration the operator admitted for native runs (#3903 AC3). */
+  readonly nativeWebSearch?: ProductionOpenCodeBackendInput["nativeWebSearch"];
 }
 
 export type ProductionOpenCodeActivationResult =
@@ -167,11 +206,14 @@ export type ProductionOpenCodeActivationResult =
       readonly ports: ProductionOpenCodePorts;
       /** How strong the activated runtime's evidence is; never optional on the success branch. */
       readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
+      /** What the activated runtime is, from its verified release metadata (#3904 AC4). */
+      readonly runtimeVersion: CodingWorkbenchRuntimeVersion;
       readonly unavailableReason?: undefined;
     }
   | {
       readonly ports?: undefined;
       readonly evidenceClass?: undefined;
+      readonly runtimeVersion?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
@@ -193,6 +235,88 @@ export function productionOpenCodeLoopbackEndpoints(
       };
 }
 
+const MEMOIZED_RUNS_MAX = 8;
+
+/** One value per run id, the few most recent runs only. */
+function memoizedPerRun<Value>(load: (runId: string) => Value): (runId: string) => Value {
+  const loaded = new Map<string, Value>();
+  return (runId) => {
+    const held = loaded.get(runId);
+    if (held !== undefined) return held;
+    const value = load(runId);
+    if (loaded.size >= MEMOIZED_RUNS_MAX) loaded.delete(loaded.keys().next().value ?? "");
+    loaded.set(runId, value);
+    return value;
+  };
+}
+
+// The operator's decisions on the workspace's Markdown items (#3903) and its AGENTS.md (#3900 AC3).
+function repositoryOptions(env: NodeJS.ProcessEnv): {
+  readonly repositoryItemsEnabled: boolean;
+  readonly repositoryInstructionsEnabled: boolean;
+  readonly instructionSourceEgress: () => OutboundHttpEgressConfig | undefined;
+} {
+  return {
+    // #3900 AC3: a Full access run's remote instruction sources take Keiko's own egress.
+    instructionSourceEgress: () => resolveOutboundHttpEgressConfig(undefined, env),
+    repositoryItemsEnabled: configuredCodingRuntimeRepositoryItemsEnabled(
+      env[KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV],
+    ),
+    repositoryInstructionsEnabled: configuredCodingRuntimeRepositoryInstructionsEnabled(
+      env[KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV],
+    ),
+  };
+}
+
+// #3903 AC3: a remote server's expected OAuth issuer is validated before each native launch,
+// through Keiko's own egress configuration (proxy and CA) with loopback targets refused; its
+// credential is kept in Keiko's vault, which opens on first use, never at activation. Remote skill
+// sources are pulled through the same egress for a Full access run (#3903 AC3).
+function mcpOAuthPorts(input: ProductionOpenCodeActivationInput): {
+  readonly mcpOAuthIssuer: McpOAuthIssuerPort;
+  readonly mcpCredentials: McpOAuthCredentialStore;
+  readonly remoteSkills: RemoteSkillsPort;
+} {
+  return {
+    mcpOAuthIssuer: (server, oauth, correlationId, signal) =>
+      validateMcpOAuthIssuer(server, oauth, {
+        egress: resolveOutboundHttpEgressConfig(undefined, input.env),
+        activityLog: input.activityLog ?? processServerLogSink(),
+        correlationId,
+        signal,
+      }),
+    mcpCredentials: createMcpOAuthCredentialStore({
+      stateDir: input.runtimeStateDir,
+      env: input.env,
+    }),
+    remoteSkills: createRemoteSkillsPort({
+      registry: () => loadSkillSourceRegistry(input.runtimeStateDir),
+      egress: () => resolveOutboundHttpEgressConfig(undefined, input.env),
+      activityLog: input.activityLog ?? processServerLogSink(),
+    }),
+  };
+}
+
+/** The backend inputs a deployment may leave out; an absent one adds no key. */
+function optionalBackendInputs(
+  input: ProductionOpenCodeActivationInput,
+): Partial<Parameters<typeof createProductionOpenCodeBackend>[0]> {
+  return {
+    ...(input.gatewayCodingModelIds === undefined
+      ? {}
+      : { gatewayCodingModelIds: input.gatewayCodingModelIds }),
+    ...(input.activityLog ? { activityLog: input.activityLog } : {}),
+    ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+    ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
+    ...(input.nativeWebSearch ? { nativeWebSearch: input.nativeWebSearch } : {}),
+    ...(input.fetch ? { fetch: input.fetch } : {}),
+    ...(input.runtimeMaxDurationMs === undefined
+      ? {}
+      : { runtimeMaxDurationMs: input.runtimeMaxDurationMs }),
+  };
+}
+
 function activatedPorts(
   input: ProductionOpenCodeActivationInput,
   portable: ResolvedPortableOpenCodeRuntime,
@@ -202,8 +326,27 @@ function activatedPorts(
   return {
     backend: createProductionOpenCodeBackend({
       historyCapture: input.historyCapture,
+      sessionContinuity: input.sessionContinuity,
       portable,
       runtimeStateRoot: input.runtimeStateDir,
+      processEnv: input.env,
+      // #3903: the native profile admits the workspace's Markdown agents, commands and skills as
+      // sanitized copies, read through this same helper.
+      secureWorkspaceTextRead,
+      ...repositoryOptions(input.env),
+      // #3903 AC2: the operator's digest-pinned plugins, read at each native run's prepare.
+      operatorPluginRegistry: () => loadOperatorPluginRegistry(input.runtimeStateDir),
+      ...mcpOAuthPorts(input),
+      // #3903 (C04): the operator's MCP server registry, read once for each native run at its
+      // launch; the run's sandbox and its runtime binding see the same load.
+      mcpServers: memoizedPerRun(
+        (correlationId: string): readonly McpServerDefinition[] =>
+          loadMcpServerRegistry({
+            stateDir: input.runtimeStateDir,
+            activityLog: input.activityLog ?? processServerLogSink(),
+            correlationId,
+          }).servers,
+      ),
       gatewayUrl: endpoints.gatewayUrl,
       resolveGatewayRunMetadata:
         input.resolveGatewayRunMetadata ??
@@ -213,12 +356,9 @@ function activatedPorts(
       toolFacadeUrl: endpoints.toolFacadeUrl,
       runtimeEvidence: input.runtimeEvidence,
       gatewayReadiness: input.gatewayReadiness,
-      ...(input.activityLog ? { activityLog: input.activityLog } : {}),
-      ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
-      ...(input.fetch ? { fetch: input.fetch } : {}),
-      ...(input.runtimeMaxDurationMs === undefined
-        ? {}
-        : { runtimeMaxDurationMs: input.runtimeMaxDurationMs }),
+      // #3900 AC5: the operator's accepted external references, resolved per native run.
+      externalReadRoots: input.env[KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV],
+      ...optionalBackendInputs(input),
     }),
     secureWorkspaceTextRead,
     editorAgentClient:
@@ -254,7 +394,23 @@ export function resolveProductionOpenCodeActivation(
   }
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
+    runtimeVersion: runtimeVersionFacts(runtime.portable),
     ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
+  };
+}
+
+/**
+ * The version the activated runtime's verified sidecar metadata names, beside the version this
+ * build pins and where the runtime came from. Only a dev-lane runtime carries a `lane`; every
+ * other activated runtime is the packaged portable release.
+ */
+function runtimeVersionFacts(
+  portable: ResolvedPortableOpenCodeRuntime,
+): CodingWorkbenchRuntimeVersion {
+  return {
+    opencode: portable.sidecar.summary.upstreamVersion,
+    pinned: OPENCODE_PINNED_VERSION,
+    origin: "lane" in portable ? portable.lane : "portable-release",
   };
 }
 

@@ -73,10 +73,16 @@ export function preparedModuleReceipt(subject) {
     throw new TypeError("symbol-module-facts-changed");
   return witness.receipt;
 }
-const TOOL_CATALOG_FIXTURES = new Set([
+const EXACT_TEST_INFRASTRUCTURE = new Set([
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogDefinition.ts",
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogRuntimeFixture.ts",
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.ts",
+  "packages/keiko-server/src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts",
+  "native/portable-launcher/test-app-owner-macos.mjs",
+  "native/runtime-supervisor/linux/app-owner-cli-fixture.mjs",
+  "native/runtime-supervisor/linux/process_scope_decoder_worker_fixture.mjs",
+  "native/runtime-supervisor/linux/process_scope_node_fixture.mjs",
+  "native/runtime-supervisor/process_scope_observer_worker_fixture.mjs",
 ]);
 export function policyDigest(bytes) {
   return hash("sha256", bytes, "hex");
@@ -127,7 +133,7 @@ function classifyNonProduction(path) {
   }
   if (
     isTestPath(path) ||
-    TOOL_CATALOG_FIXTURES.has(path) ||
+    EXACT_TEST_INFRASTRUCTURE.has(path) ||
     /(?:^|\/)vitest\.setup\.[cm]?[jt]s$/u.test(path)
   ) {
     return classified("tests", false, "test-or-fixture");

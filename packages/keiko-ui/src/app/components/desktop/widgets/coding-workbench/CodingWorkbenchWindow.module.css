@@ -374,8 +374,8 @@
   border-radius: var(--radius-pill);
 }
 
-.cmpContextSummary {
-  margin-block-start: var(--space-3) !important;
+.cmpContextUsage .cmpContextSummary {
+  margin-block-start: var(--space-3);
   border-block-start: 1px solid var(--border-subtle);
   padding-block-start: var(--space-3);
 }
@@ -399,11 +399,26 @@
   min-width: 0;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(6rem, 1fr) minmax(0, auto);
   border-end-start-radius: inherit;
   border-end-end-radius: inherit;
   overflow: hidden;
   background: transparent;
+}
+
+/* Readiness can reflow without moving controls in the separate composer grid row. */
+.cmpSessionContent {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  /* Keep a usable transcript line below its padding when readiness expands. */
+  grid-template-rows: minmax(0, auto) minmax(3rem, 1fr);
+  overflow: clip;
+}
+
+.cmpSessionContent > :first-child {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sessionStream {
@@ -568,6 +583,9 @@
   border-end-end-radius: inherit;
   width: min(100% - 2 * var(--space-5), 760px);
   min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
   justify-self: center;
   padding: var(--space-2) 0 var(--space-4);
   background: transparent;
@@ -1201,6 +1219,14 @@
   overflow-wrap: anywhere;
 }
 
+/* #3897: the entries of a native ask are model-selected text (a multi-line command, long paths).
+   Their list shares the bounded, scrollable commit-message block; this only tells them apart. */
+.cmp-approval-native-resource + .cmp-approval-native-resource {
+  margin-block-start: var(--space-2);
+  border-block-start: 1px solid var(--border-subtle);
+  padding-block-start: var(--space-2);
+}
+
 /* One content column; compact disclosures share a 32px baseline. */
 .timeline {
   display: flex;
@@ -1312,14 +1338,6 @@
   border-left: 2px solid var(--border-subtle);
   padding-left: var(--space-3);
   color: var(--text-secondary);
-}
-
-.cmpReasoningBadge {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-2);
-  color: var(--feedback-warning);
-  font-size: var(--text-caption);
 }
 
 .cmpReasoningNote {
@@ -1459,6 +1477,13 @@ details[open] > .cmpActivitySummary::after {
   text-overflow: ellipsis;
   vertical-align: top;
   white-space: nowrap;
+}
+
+/* Why a call ended as it did: a plain fact in the card's secondary text, not a second alarm. */
+.cmpToolOutcome {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
 }
 
 .toolCount {

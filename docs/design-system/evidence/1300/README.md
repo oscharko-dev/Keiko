@@ -81,3 +81,66 @@ ghost text, agent prompts) is proven by
   MemoriaViva/Relationships, Files/Editor, and desktop/constrained Git-client scenarios), shell present
   in every mode/viewport, required selectors present, and 0 page errors, visible error notices, crashed
   window bodies, unexpected API requests, or unavailable workspace-trust states.
+
+## SonarCloud CSS maintenance — 2026-10-24
+
+The original four producers were regenerated for the reported CSS maintenance on Node 24.22.0
+(macOS arm64). Component fidelity retains 427 probes with zero gated or recorded differences;
+editor token fidelity retains zero gated differences and all 14 reference captures; the seven-mode
+accessibility proof retains zero serious/critical violations and zero unresolved incomplete findings.
+The 108 running-app captures retain zero page errors, unexpected API requests, missing selectors,
+crashed windows or unavailable workspace-trust states. The browser fixture now supplies the three
+existing browser-approval, empty-draft and absent-skill reads through exact paths and canonical empty
+responses. Unexpected requests still fail closed.
+
+The additional [CSS preservation producer](../sonarcloud-2026-10-24/css-preservation.mjs) compares
+32 fixtures against the pinned pre-change source, including interaction states, pseudo-elements,
+late-loaded Monaco styles and the changed CSS Modules. It records 34,944 equal computed values and
+binds the producer and source digests in its sibling proof JSON. This remains fixture qualification.
+The separate running-editor smoke is not green; its menu-selection and desktop-hover failures also
+reproduce with the original stylesheet. See the complete
+[SonarCloud review record](../../../qa/sonarcloud-blocker-medium-2026-10-24.json) for the actual gate
+outcomes and limitations. No failure or rule was suppressed to produce these artifacts.
+
+## Merge into PR #4064 — 2026-10-24
+
+The producers bind `package.json`, `package-lock.json` and `packages/keiko-ui/package.json`, which
+the merge of `dev` into PR #4064 changes (its own dependency and package updates). The same four
+original producers were rerun on the merged tree on Node 24.22.0 (macOS arm64) and all passed:
+component fidelity with zero gated differences and no missing selectors, editor token fidelity with
+all 14 reference captures, the seven-mode accessibility proof with zero serious/critical violations
+and zero unresolved incomplete findings, and all 108 running-app captures with zero page errors,
+unexpected API requests, missing selectors, crashed windows or unavailable workspace-trust states.
+No gate, fixture or rule was changed.
+
+## Coding runtime pin 1.1.4 — 2026-10-26
+
+The pin of the optional coding-runtime packages to 1.1.4 changes `package.json` and
+`package-lock.json`, which these producers bind. The same four original producers were rerun on the
+pinned tree on Node 24.22.0 (macOS arm64) and all passed: component fidelity with 427 probes and
+zero gated or recorded differences, editor token fidelity with 160 gated probes, zero gated
+differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## Release 1.3.0 — 2026-10-26
+
+The 1.3.0 version bump changes `package.json`, `package-lock.json` and
+`packages/keiko-ui/package.json`, which these producers bind. The same four original producers were
+rerun on the release tree on Node 24.22.0 (macOS arm64) and all passed: component fidelity with 427
+probes and zero gated or recorded differences, editor token fidelity with 160 gated probes, zero
+gated differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## qs override 6.16.1 — 2026-10-27
+
+Raising the `qs` override to 6.16.1 for GHSA-6pq8-jhm2-2vcw (#4098) changes `package.json` and
+`package-lock.json`, which these producers bind. The same four original producers were rerun on that
+tree on Node 24.18.0 (macOS arm64) and all passed: component fidelity with zero gated differences,
+editor token fidelity with all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app captures
+with zero page errors, unexpected API requests, missing selectors, crashed windows or unavailable
+workspace-trust states. No gate, fixture or rule was changed.

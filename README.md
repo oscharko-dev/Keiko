@@ -34,7 +34,7 @@
   ·
   <a href="#install-with-npm">npm</a>
   ·
-  <a href="#whats-in-12">What's in 1.2</a>
+  <a href="#whats-new-in-130">What's new in 1.3</a>
   ·
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md">Contributing</a>
   ·
@@ -89,6 +89,43 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's new in 1.3.0
+
+- **A stronger coding engine, still under your control.** On macOS the Coding Workbench now runs the original OpenCode 2.1.4 engine with its own tools for searching, reading, editing and running checks. Keiko's three modes — Ask for approval, Supervised workspace and Full access — still decide what it may do, and models are reached only through your configured gateway.
+- **Work the way you think.** Plan first or build right away, undo the latest turn, queue follow-up messages, and read formulas and diagrams directly in the task timeline.
+- **Pick up where you left off.** Continue or branch off a finished task, export it as JSON or Markdown, or import a saved task into Coding History. Secrets in imported text are masked before it is stored.
+- **Honest status.** Without a network, web lookups and remote skills end promptly with a clear message instead of waiting. The Workbench shows which coding engine is installed and the latest Keiko release.
+
+Your tasks and Coding History carry over unchanged; the first new run of an earlier task starts a fresh engine session with that task's history as context. The macOS desktop packages and npm installations include the new engine. On Linux the Workbench keeps Keiko's own coding tools, and Windows Coding remains unavailable (see Honest limits).
+
+## What's new in 1.2.6
+
+- **Portable updates on macOS.** Application lifecycle and update restart no longer depend on Apple Developer membership or Endpoint Security activation. Keiko release signatures continue to authenticate update artifacts.
+- **Consecutive updates and workspace continuity.** Native cleanup finishes before startup reports ready, completed sessions release their ownership, and restart retains the selected workspace and existing state. This patch adds no database schema migration.
+- **Future release metadata.** Signed manifests carry future release impacts, and archives declare measured expanded sizes. Invalid, altered or oversized inputs remain refused.
+
+Already published 1.2.5 installations need the verified updater bootstrap before automatic updates.
+Back up local state and preserve private keys during that repair. The [repair evidence](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/portable-updater-repair-4055.md)
+distinguishes local bootstrap and fixture qualification from the live public-release SSD test,
+which remains pending deployment. Installed Windows and Linux cross-version qualification is not
+claimed by the macOS repair.
+
+## What's new in 1.2.5
+
+- **Chat and connected Files.** Source transitions hold or cancel generation until the selected scope is acknowledged. Reconnection and shared conversation creation preserve request ownership and avoid replaying accepted sends.
+- **Browser access and private drafts.** Approve another browser explicitly, optionally remember its access with expiration, and revoke it through the existing session controls. Draft acknowledgements remain bound to their originating conversation and revision.
+- **Updater status and recovery.** Setup requirements are distinguished from an available newer version. Native handoff, cancellation and recovery retain bounded process and installation ownership checks.
+- **Source fidelity and privacy.** Recursive evidence collection retains certified source relationships within existing grants. Credential redaction preserves supported code syntax, and copying an answer preserves its code formatting. Patched Vite tooling and private native-host MCP build inputs address newly reviewed security advisories.
+
+Repository skill examples for import into Chat cover [Java/Spring Boot](scripts/testing/chat-skills-lab/skills/java-spring-unit-tests.md)
+and [React/MUI/Vitest](scripts/testing/chat-skills-lab/skills/react-mui-vitest-tests.md).
+These compact instructions remain model-agnostic and reviewable. Repeatable generated-test benefit,
+installed update cycles, SSD continuity and complete browser/retrieval acceptance remain in
+[follow-up #4051](https://github.com/oscharko-dev/Keiko/issues/4051); this release does not certify them.
+The local UI store advances from V44 to V46 for browser approvals and shared Chat creation intents.
+Back up local state before upgrading; older binaries cannot read the newer schema. Existing manual
+update eligibility remains unchanged.
 
 ## What's new in 1.2.4
 

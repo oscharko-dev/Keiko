@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
-function isContained(root, candidate) {
+export function isUiStaticPathContained(root, candidate) {
   const relativePath = relative(root, candidate);
   return (
     relativePath === "" ||
@@ -10,7 +10,7 @@ function isContained(root, candidate) {
 }
 
 function assertContained(root, candidate) {
-  if (!isContained(root, candidate)) {
+  if (!isUiStaticPathContained(root, candidate)) {
     throw new Error("UI static root must stay inside the repository");
   }
 }

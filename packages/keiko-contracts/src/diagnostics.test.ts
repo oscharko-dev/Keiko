@@ -1,3 +1,4 @@
+import { clientDefectContext, isClientDefectContext } from "./client-defect-signature.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
 import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
@@ -26,6 +27,7 @@ import {
   CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
   CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
+  CLIENT_MODULE_LOAD_FAILURES,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
@@ -653,6 +655,7 @@ describe("isClientStageIngestRequest", () => {
           ...(stage === "chat history deletion"
             ? { deletion: { requestedCount: 1, deletedCount: 0, failedCount: 0 } }
             : {}),
+          ...(stage === "browser approval" ? { browserApproval: { operation: "key-load" } } : {}),
         }),
       ).toBe(true);
     }
@@ -1457,12 +1460,16 @@ describe("capture diagnostic vocabulary", () => {
 
 describe("client module and markdown identity boundaries", () => {
   const base = { message: "diagnostic", clientTs: "2026-09-19T00:00:00.000Z" };
-  it.each(["git-sync", "git-history", "git-read", "widget-locale"])(
-    "accepts the closed module %s",
-    (moduleLoadFailure) => {
-      expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure })).toBe(true);
-    },
-  );
+  it.each([
+    "git-sync",
+    "git-history",
+    "git-read",
+    "widget-locale",
+    "browser-approval",
+    "update-startup",
+  ])("accepts the closed module %s", (moduleLoadFailure) => {
+    expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure })).toBe(true);
+  });
   it("accepts the known module and a short provider message identity", () => {
     expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "git-sync" })).toBe(true);
     expect(
@@ -2577,3 +2584,45 @@ it("binding ingress responsibility refuses malformed closed offers through publi
   ])
     expect(publicBindingReport(input)).toBe(false);
 });
+
+it("keeps browser approval lifecycle evidence closed and free of key or approval identities", () => {
+  const started = {
+    kind: "stage",
+    stage: "browser approval",
+    phase: "started",
+    ordinal: 1,
+    browserApproval: { operation: "key-load" },
+  };
+  const settled = {
+    ...started,
+    phase: "settled",
+    durationMs: 0,
+    browserApproval: { operation: "key-load", outcome: "available" },
+  };
+  expect(isClientStageIngestRequest(started)).toBe(true);
+  expect(isClientStageIngestRequest(settled)).toBe(true);
+  expect(isClientStageIngestRequest({ ...started, browserApproval: undefined })).toBe(false);
+  expect(
+    isClientStageIngestRequest({ ...settled, browserApproval: { operation: "key-load" } }),
+  ).toBe(false);
+  expect(isClientStageIngestRequest({ ...settled, phase: "started" })).toBe(false);
+  expect(isClientStageIngestRequest({ ...settled, stage: "window chunk" })).toBe(false);
+  for (const browserApproval of [
+    { operation: "private-key", outcome: "available" },
+    { operation: "key-load", outcome: "private contents" },
+    { operation: "key-load", outcome: "available", privateKey: {} },
+    { operation: "key-load", outcome: "available", approvalId: "private-identity" },
+  ]) {
+    expect(isClientStageIngestRequest({ ...settled, browserApproval })).toBe(false);
+  }
+});
+
+it.each(CLIENT_MODULE_LOAD_FAILURES)(
+  "admits the actual produced module context for %s after dev synchronization",
+  (moduleLoadFailure) => {
+    const context = clientDefectContext({ moduleLoadFailure });
+    expect(context).toHaveLength(1);
+    expect(isClientDefectContext(context)).toBe(true);
+    expect(isClientDefectContext([...context, "module:unknown-module"])).toBe(false);
+  },
+);

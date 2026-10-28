@@ -1,11 +1,13 @@
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
-import { CODING_HISTORY_MESSAGE_MAX_CHARS } from "../store/codingHistory.js";
+import { codingHistoryChunkEnd } from "../store/codingHistory.js";
 import { contentFreeErrorClass } from "../diagnostics-log.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { createHash } from "node:crypto";
 import type {
   CodingSafeActivityMessage,
+  CodingWorkbenchRuntimeForkRequest,
   CodingWorkbenchRuntimeStartRequest,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingHistoryDetail,
@@ -15,17 +17,29 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type {
+  CodingHistoryFork,
+  CodingHistoryForkPlan,
+  CodingHistoryTaskScope,
+} from "../store/codingHistory.js";
 import type { UiStore } from "../store/types.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodingSafeActivityContent } from "./codingSafeActivityProjection.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
-
-// Keep source offsets stable across streaming captures without splitting a UTF-16 surrogate pair.
-function nativeChunkEnd(content: string, offset: number): number {
-  const end = Math.min(content.length, offset + CODING_HISTORY_MESSAGE_MAX_CHARS);
-  return (content.codePointAt(end - 1) ?? 0) > 0xffff ? end - 1 : end;
-}
+import {
+  runCodingTaskExport,
+  type CodingTaskExportOptions,
+  type CodingTaskExportRequest,
+  type CodingTaskExportResult,
+} from "./codingTaskExport.js";
+import {
+  runCodingTaskImport,
+  type CodingTaskImportPorts,
+  type CodingTaskImportRequest,
+  type CodingTaskImportResult,
+  type CodingTaskImportTarget,
+} from "./codingTaskImport.js";
 
 const HISTORY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -42,6 +56,7 @@ const HISTORY_OPERATION = defineActivityLogOperation({
       values: [
         "created",
         "continued",
+        "forked",
         "captured",
         "context-presented",
         "context-restored",
@@ -108,6 +123,7 @@ const HISTORY_OPERATION = defineActivityLogOperation({
 type HistoryEvent =
   | "created"
   | "continued"
+  | "forked"
   | "captured"
   | "context-presented"
   | "context-restored"
@@ -258,6 +274,37 @@ function operatorConversation<T extends { readonly role: string }>(
   return conversation;
 }
 
+/** The Coding History scope of a task workspace: its repository, identity and task branch. */
+function taskScopeOf(instance: WorkspaceInstance): CodingHistoryTaskScope {
+  return {
+    projectPath: instance.repositoryRoot,
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    branch: instance.taskBranch,
+  };
+}
+
+function forkSourceFields(
+  fork: CodingWorkbenchRuntimeForkRequest,
+  active: ActiveWorkspaceView,
+  source: WorkspaceInstance | undefined,
+): CodingHistoryTaskScope & {
+  readonly sourceId: string;
+  readonly beforeMessageId?: string;
+  readonly sourceScope?: CodingHistoryTaskScope;
+  readonly title: string;
+  readonly modelId: string;
+} {
+  return {
+    sourceId: fork.taskId,
+    ...(fork.beforeMessageId === undefined ? {} : { beforeMessageId: fork.beforeMessageId }),
+    ...taskScopeOf(active.instance),
+    ...(source === undefined ? {} : { sourceScope: taskScopeOf(source) }),
+    title: "",
+    modelId: "coding",
+  };
+}
+
 export function createNativeHistoryCapture(
   store: UiStore,
   log: ServerLogSink | undefined,
@@ -301,6 +348,57 @@ export class CodingRuntimeHistory {
     return detail;
   }
 
+  /**
+   * The user-controlled local export of one task (#3904). The lookup is the operator-bound read
+   * `detail` uses, so a task of another operator is as unavailable here as it is there; a caller
+   * without an app session never reaches the store.
+   */
+  public exportTask(
+    request: CodingTaskExportRequest,
+    options: Omit<CodingTaskExportOptions, "format">,
+  ): CodingTaskExportResult {
+    return runCodingTaskExport(
+      this.log,
+      request,
+      () => {
+        const operator = this.operator();
+        return operator === undefined
+          ? undefined
+          : this.store.codingHistory?.detail(request.taskId, operator);
+      },
+      options,
+    );
+  }
+
+  /**
+   * The user-controlled import of one saved task (#3904 AC4): a new task of this operator in the
+   * active workspace. A caller without an app session, or with no workspace to import into, never
+   * has the file read. The task has no run of its own, so continuing it forks it.
+   */
+  public importTask(
+    request: CodingTaskImportRequest,
+    active: ActiveWorkspaceView | undefined,
+    ports: Omit<CodingTaskImportPorts, "target">,
+  ): Promise<CodingTaskImportResult> {
+    return runCodingTaskImport(this.log, request, { ...ports, target: this.importTarget(active) });
+  }
+
+  private importTarget(active: ActiveWorkspaceView | undefined): CodingTaskImportTarget {
+    const history = this.store.codingHistory;
+    const operatorDigest = this.operator();
+    if (history === undefined || operatorDigest === undefined) return "unavailable";
+    if (active === undefined) return "no-workspace";
+    const scope = taskScopeOf(active.instance);
+    return (task) =>
+      history.importTask({
+        ...scope,
+        title: task.title,
+        modelId: "coding",
+        operatorDigest,
+        messages: task.messages,
+      });
+  }
+
   public previousRunId(id: string): string | undefined {
     const operator = this.operator();
     return operator === undefined
@@ -314,13 +412,30 @@ export class CodingRuntimeHistory {
 
   public admits(id: string | undefined, active: ActiveWorkspaceView): boolean {
     if (id === undefined) return true;
+    return this.taskIn(id, active.instance);
+  }
+
+  /**
+   * Whether a fork may start from `id`: a task of the active workspace, or of the managed
+   * workspace the active one was provisioned from (#3903 AC4, #3902 AC3).
+   */
+  public admitsForkSource(
+    id: string,
+    active: ActiveWorkspaceView,
+    source: WorkspaceInstance | undefined,
+  ): boolean {
+    return this.taskIn(id, active.instance) || (source !== undefined && this.taskIn(id, source));
+  }
+
+  private taskIn(id: string, instance: WorkspaceInstance): boolean {
     const operator = this.operator();
     const task = operator === undefined ? undefined : this.store.codingHistory?.get(id, operator);
+    const scope = taskScopeOf(instance);
     return (
-      task?.workspaceId === active.instance.workspaceId &&
-      task.taskId === active.instance.taskId &&
-      task.branch === active.instance.taskBranch &&
-      task.projectPath === active.instance.repositoryRoot
+      task?.workspaceId === scope.workspaceId &&
+      task.taskId === scope.taskId &&
+      task.branch === scope.branch &&
+      task.projectPath === scope.projectPath
     );
   }
 
@@ -356,6 +471,56 @@ export class CodingRuntimeHistory {
       projectRegistered: request.conversationId === undefined && projectRegistered,
       projectDigest: digest(active.instance.repositoryRoot),
     });
+  }
+
+  /**
+   * What a fork of another task would inherit, or `undefined` when it cannot be made: the source is
+   * not this operator's, not in the active workspace, or the fork point is not one of its user turns.
+   */
+  public planFork(
+    fork: CodingWorkbenchRuntimeForkRequest,
+    active: ActiveWorkspaceView,
+    source?: WorkspaceInstance,
+  ): CodingHistoryForkPlan | undefined {
+    const operatorDigest = this.operator();
+    if (operatorDigest === undefined) return undefined;
+    return this.store.codingHistory?.planFork({
+      ...forkSourceFields(fork, active, source),
+      operatorDigest,
+    });
+  }
+
+  /**
+   * Begins the run as a new task that shows the fork source's conversation ahead of the fork point,
+   * then the run's own intent. The source task is untouched.
+   */
+  public beginFork(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+    source?: WorkspaceInstance,
+  ): CodingHistoryFork {
+    const history = this.store.codingHistory;
+    const operatorDigest = this.operator();
+    if (history === undefined || operatorDigest === undefined || request.fork === undefined)
+      throw new Error("Coding History unavailable.");
+    const forked = history.fork({
+      ...forkSourceFields(request.fork, active, source),
+      title: request.taskIntent.trim().slice(0, 100),
+      modelId: request.modelId ?? "coding",
+      operatorDigest,
+      runId,
+      intent: request.taskIntent,
+    });
+    recordHistory(this.log, "forked", {
+      correlationId: runId,
+      conversationId: forked.task.id,
+      runId,
+      messageCount: forked.inheritedCount + 1,
+      sourceMessageCount: forked.sourceCount,
+      projectDigest: digest(active.instance.repositoryRoot),
+    });
+    return forked;
   }
 
   public initialContext(runId: string): string | undefined {
@@ -434,7 +599,8 @@ export class CodingRuntimeHistory {
     const content = stripUnsafeFormatChars(message.content);
     let written = 0;
     for (let offset = 0; offset < content.length;) {
-      const end = nativeChunkEnd(content, offset);
+      // Source offsets stay stable across streaming captures.
+      const end = codingHistoryChunkEnd(content, offset);
       const sourceId =
         offset === 0 ? message.messageId : `${digest(message.messageId)}:${String(offset)}`;
       if (

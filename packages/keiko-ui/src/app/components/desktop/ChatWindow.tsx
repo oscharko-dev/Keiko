@@ -2551,6 +2551,24 @@ function ComposerBar({
 // role="alert" so screen readers announce immediately on mount. Uses gw-error
 // CSS class (var(--fg) text) for WCAG AA contrast compliance.
 // Stable id enables aria-describedby wiring from disabled controls (AC #2).
+function ChatSourceTransitionStatus({
+  transition,
+}: {
+  readonly transition: ChatSessionApi["groundingScopeTransition"];
+}): ReactNode {
+  const t = useTranslate();
+  if (transition === undefined) return null;
+  return (
+    <p className={styles.cmpDraftNotice} role="status" aria-live="polite">
+      {t(
+        transition === "pending"
+          ? "chat.grounding.sourceUpdatePending"
+          : "chat.grounding.sourceUpdateFailed",
+      )}
+    </p>
+  );
+}
+
 function NoModelAlert(): ReactNode {
   const t = useTranslate();
   return (
@@ -3676,10 +3694,11 @@ function ComposerCoreImpl({
   );
 
   const handleDraftChange = useCallback(
-    (next: string, cursor: number): void => {
-      setDraft(next);
+    (next: string, cursor: number): number | void => {
+      const revision = setDraft(next);
       if (cursor < 0) setRepositoryMention(null);
       else updateRepositoryMentionFromTextarea(next, cursor);
+      return revision;
     },
     [setDraft, updateRepositoryMentionFromTextarea],
   );
@@ -3766,6 +3785,7 @@ function ComposerCoreImpl({
           input={
             <MarkdownComposer
               value={draft}
+              valueRevision={session.draftRevision}
               placeholder={placeholder}
               inputRef={taRef}
               documentKey={activeChat?.id ?? "new-chat"}
@@ -5367,7 +5387,7 @@ function EmptyOrNoChatState({
 // (per whether a chat is open) vs. the question map + conversation thread + grounded panel +
 // sent-documents note.
 function ChatWindowLog({
-  scrollRef,
+  regionRef,
   stickRef,
   onLogScroll,
   pendingQuestionScrollRef,
@@ -5396,7 +5416,7 @@ function ChatWindowLog({
   lastSentDocuments,
   lastSentImages,
 }: {
-  readonly scrollRef: RefObject<HTMLDivElement | null>;
+  readonly regionRef: Ref<HTMLDivElement>;
   readonly stickRef: CurrentRef<boolean>;
   readonly onLogScroll: () => void;
   readonly pendingQuestionScrollRef: CurrentRef<string | null>;
@@ -5429,7 +5449,7 @@ function ChatWindowLog({
   return (
     <div
       className="chatw-scroll"
-      ref={scrollRef}
+      ref={regionRef}
       role="log"
       aria-label={t("chat.conversation")}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
@@ -5743,6 +5763,7 @@ export function ChatWindow({
   const displayedError = presentChatSessionError(error, optionalT);
   const ready =
     !chatSkillBlocksSend(session.markdownSkill) &&
+    session.groundingScopeTransition === undefined &&
     isComposerReadyToSend(draft, sending, loading, noEligibleModels) &&
     canonicalVoiceTurnRequiresRetry !== true;
   const visible = useMemo(() => visibleOnly(messages), [messages]);
@@ -5772,6 +5793,7 @@ export function ChatWindow({
   const {
     stickRef,
     onScroll: onLogScroll,
+    regionRef: logRegionRef,
     resume: followNewest,
   } = useFollowNewest(
     scrollRef,
@@ -5884,7 +5906,7 @@ export function ChatWindow({
           live-region semantics the previous aria-live="polite" provided.
           C090 — onScroll tracks whether the reader is near the bottom. */}
       <ChatWindowLog
-        scrollRef={scrollRef}
+        regionRef={logRegionRef}
         stickRef={stickRef}
         onLogScroll={onLogScroll}
         pendingQuestionScrollRef={pendingQuestionScrollRef}
@@ -5938,6 +5960,7 @@ export function ChatWindow({
         focusComposer={() => composerInputRef.current?.focus()}
       />
       <ChatDraftStatus draft={draft} persistence={session.draftPersistence} />
+      <ChatSourceTransitionStatus transition={session.groundingScopeTransition} />
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}

@@ -29,6 +29,7 @@ import {
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
 import { ApiError, postEditorAgentSessionSnapshot } from "./api";
 import { reportClientDiagnostic, type ClientDiagnosticMeta } from "./client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "./coding-workbench-interaction";
 import { clientErrorEvidence } from "./client-error-evidence";
 import { bffRequestErrorKind } from "./http";
 import { useRunLockedRoot } from "./useCodingWorkbenchChanges";
@@ -338,9 +339,10 @@ export function useCodingWorkbenchEditorBridge(
     }
     decidingRef.current = false;
     const diff = parseUnifiedDiff(action.changeset?.patch ?? "");
-    reportClientDiagnostic(
-      `[keiko] coding workbench changeset review prepared: files ${String(diff.files.length)}`,
-    );
+    reportCodingWorkbenchInteraction({
+      interaction: "changeset-review-prepared",
+      fileCount: diff.files.length,
+    });
     setPending({
       action,
       diff,

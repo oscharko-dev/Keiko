@@ -37,7 +37,11 @@ import {
   type ModelTokenAccounting,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { gatewayRouteDeadlineMs } from "./gateway-route-deadline.js";
+import type { MarkdownSkillDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
+import { renderMarkdownSkillInstructions } from "./markdown-skill-prompt.js";
 import type {
+  ChatMessageContentPart,
   CodingWorkbenchModelSource,
   CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchSidecarGatewayResult,
@@ -74,6 +78,7 @@ import {
 } from "./coding-runtime/opencodeLaunchProfile.js";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
+  createOpenCodeNativeToolAdvertisement,
   opencodeGatewayOfferLifetimeMs,
   hasExactOpenCodeVisibleToolContract,
   openCodeVisibleToolNames,
@@ -103,6 +108,24 @@ import {
 } from "./sse-write.js";
 import { startSseHeartbeat } from "./sse.js";
 import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogToolFacadeBridge.js";
+import {
+  CODING_SIDECAR_IMAGE_REJECTION_MESSAGES,
+  CODING_SIDECAR_IMAGE_REJECTIONS,
+  CODING_SIDECAR_MAX_IMAGE_PARTS,
+  countImageContentParts,
+  isImageUrlContentPartCandidate,
+  parseImageUrlContentPart,
+  type CodingSidecarImageRejection,
+} from "./coding-sidecar-image-parts.js";
+import {
+  CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES,
+  CODING_SIDECAR_DOCUMENT_REJECTIONS,
+  CODING_SIDECAR_MAX_DOCUMENT_PARTS,
+  countDocumentContentParts,
+  isFileContentPartCandidate,
+  parseFileContentPart,
+  type CodingSidecarDocumentRejection,
+} from "./coding-sidecar-document-parts.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
@@ -270,6 +293,9 @@ const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
 const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
 
+/** A media part count on the request line: present only when the request carries such parts. */
+const MEDIA_PART_COUNT_FIELD = { type: "integer", dataClass: "count", required: false } as const;
+
 const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -294,6 +320,13 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // `inputMessageCount` describe what is actually sent upstream. A count; the reasoning is never
     // recorded. `required: false` only because a record written before this field existed lacks it.
     droppedReasoningMessageCount: { type: "integer", dataClass: "count", required: false },
+    // #3897 S14: how many validated image parts the request carries; present only when it carries
+    // any. The count is part of what `estimatedPromptTokens` is charged for (the gateway's image
+    // allowance per image); the images themselves are never recorded.
+    imageCount: MEDIA_PART_COUNT_FIELD,
+    // #3906: how many validated PDF document parts the request carries; present only when it
+    // carries any. Like an image, each takes the gateway's media allowance; never recorded itself.
+    documentCount: MEDIA_PART_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -303,6 +336,33 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
   failureClasses: ["coding-sidecar-gateway-request"],
   proofIds: ["coding-sidecar.gateway.request-validated.line"],
   releaseImpact: "patch",
+});
+
+// #4025, #3897 review: the private skill a run's task turn was bound to, attached to one productive
+// dispatch. Its identity (revision and digest) and sizes only; the skill body is never recorded.
+const CODING_SIDECAR_GATEWAY_SKILL_ATTACHED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.skill-attached",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logSkillAttached",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    skillRevision: { type: "integer", dataClass: "count", required: true },
+    skillDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    skillByteCount: { type: "integer", dataClass: "count", required: true },
+    // The request's estimate with the skill attached, the figure admission is checked against.
+    estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.skill-attached.line"],
+  releaseImpact: "minor",
 });
 
 const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLogOperation({
@@ -403,6 +463,8 @@ type CodingSidecarGatewayRejectionReason =
   | "body-empty-messages"
   | "message-shape-invalid"
   | "content-part-unsupported"
+  | CodingSidecarImageRejection
+  | CodingSidecarDocumentRejection
   | "tools-not-openai-compatible"
   | "invalid-sampling"
   | "input-messages-exceeded"
@@ -421,6 +483,7 @@ type CodingSidecarGatewayRejectionReason =
   | "spend-budget-invalid"
   | "spend-pricing-unavailable"
   | "spend-budget-exceeded"
+  | "skill-unavailable"
   | "unclassified-rejection";
 
 const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
@@ -441,6 +504,16 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
         "body-empty-messages",
         "message-shape-invalid",
         "content-part-unsupported",
+        "image-part-invalid",
+        "image-mime-unsupported",
+        "image-part-too-large",
+        "image-count-exceeded",
+        "image-input-unsupported",
+        "document-part-invalid",
+        "document-mime-unsupported",
+        "document-part-too-large",
+        "document-count-exceeded",
+        "document-input-unsupported",
         "tools-not-openai-compatible",
         "invalid-sampling",
         "input-messages-exceeded",
@@ -459,6 +532,7 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
         "spend-budget-invalid",
         "spend-pricing-unavailable",
         "spend-budget-exceeded",
+        "skill-unavailable",
         "unclassified-rejection",
       ],
     },
@@ -860,6 +934,26 @@ function logGatewayRejection(
   );
 }
 
+// One row per image refusal (#3897 S14); the messages are the fixed strings the image-part module
+// owns, so a message change and its reason cannot drift apart.
+const IMAGE_REJECTION_REASON_ROWS: readonly {
+  readonly test: (message: string) => boolean;
+  readonly reason: CodingSidecarImageRejection;
+}[] = CODING_SIDECAR_IMAGE_REJECTIONS.map((reason) => ({
+  test: (message: string): boolean => message === CODING_SIDECAR_IMAGE_REJECTION_MESSAGES[reason],
+  reason,
+}));
+
+// One row per document refusal (#3906), with the same single owner of the messages.
+const DOCUMENT_REJECTION_REASON_ROWS: readonly {
+  readonly test: (message: string) => boolean;
+  readonly reason: CodingSidecarDocumentRejection;
+}[] = CODING_SIDECAR_DOCUMENT_REJECTIONS.map((reason) => ({
+  test: (message: string): boolean =>
+    message === CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES[reason],
+  reason,
+}));
+
 // One row per message literal `badRequest`/`validationErrorForChatRequest` actually builds — a
 // message change and this table must move together. A future unmatched shape receives the explicit
 // `unclassified-rejection` reason instead of borrowing one of these known meanings.
@@ -900,6 +994,8 @@ const BAD_REQUEST_MESSAGE_REASONS: readonly {
       message === "Request body message content included an unsupported content part.",
     reason: "content-part-unsupported",
   },
+  ...IMAGE_REJECTION_REASON_ROWS,
+  ...DOCUMENT_REJECTION_REASON_ROWS,
   {
     test: (message) =>
       message.startsWith("Request body temperature") || message.startsWith("Request body top_p"),
@@ -1049,7 +1145,10 @@ export interface CodingSidecarGatewayChatCompletionRequest {
 
 export interface CodingSidecarGatewayChatMessage {
   readonly role: "system" | "user" | "assistant" | "tool";
+  /** The message text. With image parts it is the joined text parts; `contentParts` is complete. */
   readonly content: string;
+  /** Present only on a message that carries at least one validated image part (#3897 S14). */
+  readonly contentParts?: readonly ChatMessageContentPart[] | undefined;
   readonly toolCalls?: readonly NormalizedToolCall[] | undefined;
   readonly toolCallId?: string | undefined;
 }
@@ -1124,14 +1223,19 @@ function chatFactoryFor(deps: UiHandlerDeps, gateway: Gateway): CodingSidecarGat
 // Workbench. This route is the only one that sets the last two: an interactive surface that borrows
 // the latency profile for its timeout floors (the commit draft) keeps the fail-fast attempt count
 // and receives its answer without the model's reasoning.
+// The OpenCode runtime is its own producer and uses the gateway as infrastructure only (owner
+// decision, 2026-10-27, #4098): it receives the model's answer, reasoning and structured output as
+// written, never Keiko's content heuristics, which replaced a quoted diff with `[REDACTED]`. The
+// gateway still removes the credential floor, and tool-call arguments keep their own redaction.
 const CODING_TURN_GATEWAY_POLICY = {
   latencyProfile: "coding-workbench",
   outagePolicy: "outage-window",
   reasoningDelivery: "forward",
   answerRepair: "steered",
+  contentRedaction: "preserve",
 } as const satisfies Pick<
   GatewayCallRequest,
-  "latencyProfile" | "outagePolicy" | "reasoningDelivery" | "answerRepair"
+  "latencyProfile" | "outagePolicy" | "reasoningDelivery" | "answerRepair" | "contentRedaction"
 >;
 
 function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {
@@ -1165,15 +1269,17 @@ function unavailableError(): RouteResult {
 type ParsedMessagePiece<T> =
   | { readonly kind: "ok"; readonly value: T }
   | { readonly kind: "content-part-unsupported" }
+  | { readonly kind: "image-rejected"; readonly reason: CodingSidecarImageRejection }
+  | { readonly kind: "document-rejected"; readonly reason: CodingSidecarDocumentRejection }
   | { readonly kind: "invalid" };
 
 /**
- * OpenAI-compatible content part accepted from the model: `{type:"text", text}` only. A bare
- * single-part prompt still arrives as `content: string`, but when the server sends a multi-part
- * prompt (opencodeHttpClient.ts `promptParts`: the task text plus the issue context as a
- * synthetic part), OpenCode's AI-SDK provider re-shapes the outgoing user message as an OpenAI
- * content-part ARRAY instead (#3390). Every other content-part type (image_url, input_audio,
- * file, or anything unrecognized) is rejected closed, never silently dropped.
+ * OpenAI-compatible content part accepted from the model: `{type:"text", text}`, or a validated
+ * `image_url` data URL (below). A bare single-part prompt still arrives as `content: string`, but
+ * when the server sends a multi-part prompt (opencodeHttpClient.ts `promptParts`: the task text
+ * plus the issue context as a synthetic part), OpenCode's AI-SDK provider re-shapes the outgoing
+ * user message as an OpenAI content-part ARRAY instead (#3390). Every other content-part type
+ * (input_audio, file, or anything unrecognized) is rejected closed, never silently dropped.
  */
 function isTextContentPart(
   value: unknown,
@@ -1181,27 +1287,54 @@ function isTextContentPart(
   return isRecord(value) && value.type === "text" && typeof value.text === "string";
 }
 
+interface ParsedMessageContent {
+  readonly text: string;
+  /** Set only when the message carries an image part; then it holds every part, in order. */
+  readonly contentParts?: readonly ChatMessageContentPart[];
+}
+
+function parseContentPart(part: unknown): ParsedMessagePiece<ChatMessageContentPart> {
+  if (isTextContentPart(part)) return { kind: "ok", value: { type: "text", text: part.text } };
+  if (isImageUrlContentPartCandidate(part)) {
+    const image = parseImageUrlContentPart(part);
+    if (image.kind === "ok") return { kind: "ok", value: image.part };
+    if (image.kind === "unsupported") return { kind: "content-part-unsupported" };
+    return { kind: "image-rejected", reason: image.reason };
+  }
+  if (isFileContentPartCandidate(part)) {
+    const document = parseFileContentPart(part);
+    if (document.kind === "ok") return { kind: "ok", value: document.part };
+    if (document.kind === "unsupported") return { kind: "content-part-unsupported" };
+    return { kind: "document-rejected", reason: document.reason };
+  }
+  return isRecord(part) && typeof part.type === "string"
+    ? { kind: "content-part-unsupported" }
+    : { kind: "invalid" };
+}
+
 /**
  * Collapses an accepted OpenAI content-part array to the single string the Model Gateway core
- * consumes, joining parts with a blank line. The synthetic issue-context part is untrusted
+ * consumes, joining text parts with a blank line. The synthetic issue-context part is untrusted
  * repository data, so it is kept inside the same user turn it arrived in rather than becoming a
- * second, unaccounted-for message. Part count and total byte size ride on the existing
- * `readJsonObject` request-body budget already enforced before this runs — no new limit is added.
+ * second, unaccounted-for message. A message with an image part additionally keeps its complete,
+ * ordered part list: the gateway projects `contentParts` over `content` (#3897 S14). Part count and
+ * total byte size ride on the existing `readJsonObject` request-body budget enforced before this
+ * runs; images add the per-image and per-request bounds of the image-part module.
  */
-function parseMessageContent(value: unknown): ParsedMessagePiece<string> {
-  if (typeof value === "string") return { kind: "ok", value };
+function parseMessageContent(value: unknown): ParsedMessagePiece<ParsedMessageContent> {
+  if (typeof value === "string") return { kind: "ok", value: { text: value } };
   if (!Array.isArray(value) || value.length === 0) return { kind: "invalid" };
-  const texts: string[] = [];
+  const parts: ChatMessageContentPart[] = [];
   for (const part of value) {
-    if (isTextContentPart(part)) {
-      texts.push(part.text);
-      continue;
-    }
-    if (isRecord(part) && typeof part.type === "string")
-      return { kind: "content-part-unsupported" };
-    return { kind: "invalid" };
+    const parsed = parseContentPart(part);
+    if (parsed.kind !== "ok") return parsed;
+    parts.push(parsed.value);
   }
-  return { kind: "ok", value: texts.join("\n\n") };
+  const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
+  return {
+    kind: "ok",
+    value: parts.some((part) => part.type !== "text") ? { text, contentParts: parts } : { text },
+  };
 }
 
 function parseMessageEntry(value: unknown): ParsedMessagePiece<CodingSidecarGatewayChatMessage> {
@@ -1212,9 +1345,32 @@ function parseMessageEntry(value: unknown): ParsedMessagePiece<CodingSidecarGate
   return { kind: "ok", value: { ...base.value, ...continuation } };
 }
 
+// A tool-calling assistant message may carry `content: null`; every other message parses its
+// content. OpenAI-compatible providers take images from a user message only; the runtime carries a
+// read image in a user turn, so an image on any other role is not a shape this route forwards.
+function parseRoleContent(
+  entry: Readonly<Record<string, unknown>>,
+  role: CodingSidecarGatewayChatMessage["role"],
+): ParsedMessagePiece<ParsedMessageContent> {
+  if (
+    entry.content === null &&
+    role === "assistant" &&
+    parseContinuationToolCalls(entry.tool_calls) !== undefined
+  ) {
+    return { kind: "ok", value: { text: "" } };
+  }
+  const content = parseMessageContent(entry.content);
+  if (content.kind === "ok" && content.value.contentParts !== undefined && role !== "user") {
+    return content.value.contentParts.some((part) => part.type === "file")
+      ? { kind: "document-rejected", reason: "document-part-invalid" }
+      : { kind: "image-rejected", reason: "image-part-invalid" };
+  }
+  return content;
+}
+
 function parseMessageBase(
   value: unknown,
-): ParsedMessagePiece<Pick<CodingSidecarGatewayChatMessage, "role" | "content">> {
+): ParsedMessagePiece<Pick<CodingSidecarGatewayChatMessage, "role" | "content" | "contentParts">> {
   if (
     !isRecord(value) ||
     typeof value.role !== "string" ||
@@ -1222,14 +1378,17 @@ function parseMessageBase(
   ) {
     return { kind: "invalid" };
   }
-  const content =
-    value.content === null &&
-    value.role === "assistant" &&
-    parseContinuationToolCalls(value.tool_calls) !== undefined
-      ? { kind: "ok" as const, value: "" }
-      : parseMessageContent(value.content);
+  const content = parseRoleContent(value, value.role);
   if (content.kind !== "ok") return content;
-  return { kind: "ok", value: { role: value.role, content: content.value } };
+  const { text, contentParts } = content.value;
+  return {
+    kind: "ok",
+    value: {
+      role: value.role,
+      content: text,
+      ...(contentParts === undefined ? {} : { contentParts }),
+    },
+  };
 }
 
 function parseMessageContinuation(
@@ -1368,17 +1527,34 @@ function parseMessages(value: unknown): ParsedMessages | RouteResult | undefined
       continue;
     }
     const parsed = parseMessageEntry(entry);
-    if (parsed.kind === "content-part-unsupported") {
-      return badRequest("Request body message content included an unsupported content part.");
-    }
-    if (parsed.kind === "invalid") {
-      return badRequest(
-        `Request body messages must be well-formed chat messages (entries: ${String(value.length)}).`,
-      );
-    }
+    if (parsed.kind !== "ok") return messageParseRefusal(parsed, value.length);
     messages.push(parsed.value);
   }
+  if (countImageContentParts(messages) > CODING_SIDECAR_MAX_IMAGE_PARTS) {
+    return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-count-exceeded"]);
+  }
+  if (countDocumentContentParts(messages) > CODING_SIDECAR_MAX_DOCUMENT_PARTS) {
+    return badRequest(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES["document-count-exceeded"]);
+  }
   return messages.length === 0 ? undefined : { messages, droppedReasoningMessageCount };
+}
+
+function messageParseRefusal(
+  parsed: Exclude<ParsedMessagePiece<unknown>, { readonly kind: "ok" }>,
+  entryCount: number,
+): RouteResult {
+  if (parsed.kind === "content-part-unsupported") {
+    return badRequest("Request body message content included an unsupported content part.");
+  }
+  if (parsed.kind === "image-rejected") {
+    return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES[parsed.reason]);
+  }
+  if (parsed.kind === "document-rejected") {
+    return badRequest(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES[parsed.reason]);
+  }
+  return badRequest(
+    `Request body messages must be well-formed chat messages (entries: ${String(entryCount)}).`,
+  );
 }
 
 function badRequest(message: string): RouteResult {
@@ -1427,10 +1603,12 @@ function isMatchingModelAlias(
   model: string | undefined,
   modelAlias: string,
   runtimeAuthenticated: boolean,
+  routedToAgentModel = false,
 ): boolean {
-  return runtimeAuthenticated
-    ? model === OPENCODE_RUNTIME_MODEL_ALIAS
-    : model === undefined || model === modelAlias;
+  // A runtime request names the run's alias, or the further gateway model its agent was routed to
+  // (#3903 AC1, `agentModelProfile`); never the run's own upstream model id.
+  if (!runtimeAuthenticated) return model === undefined || model === modelAlias;
+  return model === OPENCODE_RUNTIME_MODEL_ALIAS || (routedToAgentModel && model === modelAlias);
 }
 
 /**
@@ -1452,14 +1630,18 @@ function toolCatalogFor(
   tools: readonly ToolDefinition[] | undefined,
   offer: GatewayToolCatalogOffer,
 ): GatewayCallRequest["toolCatalog"] {
-  return isExactManagedToolSet(tools, offer.toolProfile)
-    ? createOpenCodeGatewayToolCatalogAdvertisement(
-        Date.now(),
-        offer.coverage,
-        offer.offerLifetimeMs,
-        offer.toolProfile,
-      )
-    : undefined;
+  if (!isExactManagedToolSet(tools, offer.toolProfile)) return undefined;
+  // The native profile (#3897) forwards OpenCode's own admitted definitions as data; the mapped
+  // profiles advertise the Keiko catalog projection.
+  if (offer.toolProfile === "native" && tools !== undefined) {
+    return createOpenCodeNativeToolAdvertisement(tools, Date.now(), offer.offerLifetimeMs);
+  }
+  return createOpenCodeGatewayToolCatalogAdvertisement(
+    Date.now(),
+    offer.coverage,
+    offer.offerLifetimeMs,
+    offer.toolProfile,
+  );
 }
 
 function toolRequestFields(
@@ -1937,12 +2119,40 @@ async function readChatCompletionRequest(
   return parsed;
 }
 
+// Image input is native-profile only and only for a model whose configuration declares it, the same
+// declaration the native provider binding carries (#3897 S14). The runtime of a text-only model or
+// of a mapped profile declares no image input, so a request carrying one is outside its contract.
+function imageInputRefusal(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
+  toolProfile: OpenCodeToolProfile,
+): RouteResult | undefined {
+  if (countImageContentParts(parsed.messages) === 0) return undefined;
+  if (runMetadata.supportsImageInput === true && toolProfile === "native") return undefined;
+  return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-input-unsupported"]);
+}
+
+// PDF input follows the image rule (#3906): native profile only, and only for a model whose
+// `document_input` capability the configuration or readiness probe established. Anything else is
+// refused openly instead of silently dropping the document the model was meant to read.
+function documentInputRefusal(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
+  toolProfile: OpenCodeToolProfile,
+): RouteResult | undefined {
+  if (countDocumentContentParts(parsed.messages) === 0) return undefined;
+  if (runMetadata.supportsDocumentInput === true && toolProfile === "native") return undefined;
+  return badRequest(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES["document-input-unsupported"]);
+}
+
 function validationErrorForChatRequest(
   parsed: CodingSidecarGatewayChatCompletionRequest | RouteResult,
   modelAlias: string,
   runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
   runtimeAuthenticated: boolean,
   estimatedPromptTokens: number,
+  toolProfile: OpenCodeToolProfile,
+  routedToAgentModel = false,
 ): RouteResult | undefined {
   if (isRouteResult(parsed)) {
     return parsed;
@@ -1951,9 +2161,13 @@ function validationErrorForChatRequest(
   if (invalidSamplingMessage !== undefined) {
     return badRequest(invalidSamplingMessage);
   }
+  const mediaRefusal =
+    imageInputRefusal(parsed, runMetadata, toolProfile) ??
+    documentInputRefusal(parsed, runMetadata, toolProfile);
+  if (mediaRefusal !== undefined) return mediaRefusal;
   const invalidBudget = budgetValidationError(parsed, runMetadata, estimatedPromptTokens);
   if (invalidBudget !== undefined) return invalidBudget;
-  if (!isMatchingModelAlias(parsed.model, modelAlias, runtimeAuthenticated)) {
+  if (!isMatchingModelAlias(parsed.model, modelAlias, runtimeAuthenticated, routedToAgentModel)) {
     return {
       status: 400,
       body: errorBody("INVALID_MODEL", "Request model does not match the selected profile."),
@@ -2344,6 +2558,7 @@ function isStreamInterruption(error: unknown): boolean {
 }
 
 function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
+  if (error instanceof BoundSkillAttemptRefused) return "turn-rejected";
   const modelCause = modelTurnFailureCode(error);
   if (modelCause !== undefined) return modelCause;
   return isStreamInterruption(error) ? "stream-incomplete" : "provider-failed";
@@ -2358,6 +2573,7 @@ function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode 
 // rejected, check that the gateway is running".
 function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
   if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
+  if (error instanceof BoundSkillAttemptRefused) return "turn-rejected";
   const modelCause = modelTurnFailureCode(error);
   if (modelCause !== undefined) return modelCause;
   return error instanceof GatewayError && !isStreamInterruption(error)
@@ -2390,6 +2606,7 @@ function runtimeRetryFor(
   failureCode: CodingWorkbenchTurnFailureCode,
 ): RuntimeRetry {
   if (gatewaySpendRejectionReason(error) !== undefined) return "refused";
+  if (error instanceof BoundSkillAttemptRefused) return "refused";
   if (repairFailedAgain(error, failureCode)) return "refused";
   // The gateway already owns bounded schema/transport correction. Repeating the identical
   // malformed turn in OpenCode adds no correction and can loop without an attempt limit.
@@ -2728,6 +2945,8 @@ function noteToolAdoptionGap(
   runId: string,
   messages: readonly CodingSidecarGatewayChatMessage[],
 ): void {
+  // The fingerprint names the mapped `keiko_*` tools; a native run calls OpenCode's own.
+  if (gatewayReadinessRegistry(deps)?.toolProfile === "native") return;
   if (!hasToolAdoptionGapFingerprint(messages)) return;
   if (gatewayReadinessRegistry(deps)?.noteAdoptionGapDiagnosed(runId) === false) return;
   emitServerDiagnostic(deps.diagnostics, {
@@ -3057,6 +3276,8 @@ interface GatewayChatDelivery {
   // enforces for this model plus the bridge's settlement grace (`opencodeGatewayOfferLifetimeMs`),
   // so a legitimately long generation never comes back to an expired offer.
   readonly offerLifetimeMs: number;
+  // Narrows every physical attempt, a retry included, to the run's bound skill (#4025 AC5).
+  readonly protectRequest?: ((request: GatewayCallRequest) => GatewayCallRequest) | undefined;
 }
 
 interface PinnedGatewayBinding {
@@ -3081,7 +3302,7 @@ function requestForGatewayDelivery(
   signal: AbortSignal,
   retryObserver: GatewayRetryObserver,
 ): GatewayCallRequest {
-  return {
+  const request: GatewayCallRequest = {
     ...buildChatRequest(
       parsed,
       delivery.modelAlias,
@@ -3097,6 +3318,7 @@ function requestForGatewayDelivery(
     ),
     retryObserver,
   };
+  return delivery.protectRequest?.(request) ?? request;
 }
 
 async function executeGatewayChat(
@@ -3133,24 +3355,24 @@ async function dispatchGatewayChat(
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, upstreamStreamingSupported } = delivery;
   const retries = gatewayRetryTrace(ctx, deps, runId);
-  const request = requestForGatewayDelivery(
-    ctx,
-    parsed,
-    delivery,
-    cancellation.signal,
-    retries.observer,
-  );
-  const dispatch = {
-    deps,
-    binding,
-    modelAlias,
-    request,
-    runId,
-    cancellation,
-    promptTokenReservation: delivery.promptTokenReservation,
-  } satisfies GatewayChatDispatchContext;
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
+    const dispatch = {
+      deps,
+      binding,
+      modelAlias,
+      // Built inside the settlement: a bound skill that is already gone refuses here (#4025 AC5).
+      request: requestForGatewayDelivery(
+        ctx,
+        parsed,
+        delivery,
+        cancellation.signal,
+        retries.observer,
+      ),
+      runId,
+      cancellation,
+      promptTokenReservation: delivery.promptTokenReservation,
+    } satisfies GatewayChatDispatchContext;
     if (parsed.stream && upstreamStreamingSupported) {
       return await streamGatewayChat(ctx, dispatch);
     }
@@ -3229,22 +3451,34 @@ function settleFailedGatewayChat(
     NO_GATEWAY_OUTPUT,
     settledRepair(outputRepairOf(error)),
   );
-  const spendReason = gatewaySpendRejectionReason(error);
-  const failureCode = spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected";
+  const failureCode =
+    gatewaySpendRejectionReason(error) === undefined
+      ? gatewayTurnFailureCode(error)
+      : "turn-rejected";
   const runtimeRetry = runtimeRetryFor(error, failureCode);
   const turnFailureRecorded =
     !cancelled && reportGatewayTurnFailure(ctx, deps, runId, { failureCode, runtimeRetry, error });
   emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
-  if (spendReason !== undefined && bufferedStream === undefined) {
-    logGatewayRejection(ctx, runId, 403, spendReason);
-    return forbiddenGatewayRequest();
-  }
+  const refusal = bufferedStream === undefined ? refusalAnswer(ctx, runId, error) : undefined;
+  if (refusal !== undefined) return refusal;
   const refused = !cancelled && runtimeRetry === "refused";
   if (bufferedStream === undefined) return refused ? providerRejectionError() : unavailableError();
   return refused
     ? settleBufferedOpenAiStreamRejection(bufferedStream)
     : settleBufferedOpenAiStreamError(bufferedStream, "error");
+}
+
+// What the route answers for an attempt it refused itself, before any output reached the runtime:
+// the spend budget's refusal, or the bound skill's (#4025 AC5).
+function refusalAnswer(ctx: RouteContext, runId: string, error: unknown): RouteResult | undefined {
+  const spendReason = gatewaySpendRejectionReason(error);
+  if (spendReason !== undefined) {
+    logGatewayRejection(ctx, runId, 403, spendReason);
+    return forbiddenGatewayRequest();
+  }
+  if (!(error instanceof BoundSkillAttemptRefused)) return undefined;
+  return error.capabilityRevoked ? unauthorizedGatewayRequest() : skillSelectionChanged(ctx);
 }
 
 async function executeBufferedGatewayChat(
@@ -4506,15 +4740,44 @@ function logChatRequestRejection(
 interface ValidatedChatRequest {
   readonly parsed: CodingSidecarGatewayChatCompletionRequest;
   readonly estimatedPromptTokens: number;
+  /** The profile the request runs on: the run's own, or its agent's gateway model (#3903 AC1). */
+  readonly resolved: AvailableGatewayProfile;
+}
+
+/**
+ * A native run's agent may name another model the gateway serves (#3903 AC1, owner decision
+ * 2026-10-25): the request then runs on that model's own profile -- its bounds, accounting and
+ * provider -- under the run's capability and prompt budget. A model the gateway does not serve keeps
+ * the run's profile, whose alias check then refuses the request.
+ */
+function agentModelProfile(
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest | RouteResult,
+  resolved: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+): AvailableGatewayProfile {
+  if (!authentication.runtimeAuthenticated || isRouteResult(parsed)) return resolved;
+  const model = parsed.model;
+  if (model === undefined || model === OPENCODE_RUNTIME_MODEL_ALIAS) return resolved;
+  if ((gatewayReadinessRegistry(deps)?.toolProfile ?? "direct") !== "native") return resolved;
+  const routed = resolveGatewayProfile(deps, model, authentication.admittedAtMs);
+  // The run's own model keeps the run's alias: its upstream id is never a runtime model name.
+  if (!isAvailableGatewayProfile(routed) || routed.result.modelAlias === resolved.result.modelAlias)
+    return resolved;
+  return routed;
 }
 
 async function readValidatedChatRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  resolved: AvailableGatewayProfile,
+  runProfile: AvailableGatewayProfile,
   authentication: AuthenticatedGatewayRequest,
 ): Promise<RouteResult | ValidatedChatRequest> {
-  const parsed = await readChatCompletionRequest(ctx, resolved.result.runMetadata.maxRequestBytes);
+  const parsed = await readChatCompletionRequest(
+    ctx,
+    runProfile.result.runMetadata.maxRequestBytes,
+  );
+  const resolved = agentModelProfile(deps, parsed, runProfile, authentication);
   const estimatedPromptTokens = isRouteResult(parsed)
     ? 0
     : promptTokenEstimate(parsed, promptTokenAccounting(resolved));
@@ -4524,6 +4787,8 @@ async function readValidatedChatRequest(
     resolved.result.runMetadata,
     authentication.runtimeAuthenticated,
     estimatedPromptTokens,
+    gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
+    resolved !== runProfile,
   );
   if (validationError !== undefined) {
     logChatRequestRejection(
@@ -4538,7 +4803,7 @@ async function readValidatedChatRequest(
     return validationError;
   }
   if (isRouteResult(parsed)) return parsed;
-  return { parsed, estimatedPromptTokens };
+  return { parsed, estimatedPromptTokens, resolved };
 }
 
 async function runHandleCodingSidecarGatewayChatCompletions(
@@ -4547,12 +4812,12 @@ async function runHandleCodingSidecarGatewayChatCompletions(
 ): Promise<RouteResult | typeof STREAMING> {
   const authentication = authenticateGatewayRequest(ctx, deps);
   if (isRouteResult(authentication)) return authentication;
-  const resolved = resolveAuthenticatedGatewayProfile(deps, authentication);
-  if (!isAvailableGatewayProfile(resolved))
-    return unavailableGatewayProfile(ctx, deps, resolved, authentication);
-  const validated = await readValidatedChatRequest(ctx, deps, resolved, authentication);
+  const runProfile = resolveAuthenticatedGatewayProfile(deps, authentication);
+  if (!isAvailableGatewayProfile(runProfile))
+    return unavailableGatewayProfile(ctx, deps, runProfile, authentication);
+  const validated = await readValidatedChatRequest(ctx, deps, runProfile, authentication);
   if (isRouteResult(validated)) return validated;
-  const { parsed, estimatedPromptTokens } = validated;
+  const { parsed, estimatedPromptTokens, resolved } = validated;
   logValidatedRequestBounds(
     ctx,
     authentication.runId,
@@ -4568,24 +4833,259 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     resolved.result.modelAlias,
   );
   if (admission.kind === "handled") return admission.result;
+  const productive = withBoundRunSkill(ctx, deps, resolved, authentication, validated);
+  if (isRouteResult(productive)) return productive;
   return executeBudgetedGatewayChat(
     ctx,
     deps,
     resolved,
-    parsed,
+    productive.parsed,
     authentication,
-    estimatedPromptTokens,
-    {
-      modelAlias: resolved.result.modelAlias,
-      maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
-      upstreamStreamingSupported: upstreamGatewayStreamingSupported(
-        deps,
-        resolved.result.supportsStreaming,
-      ),
-      ...(authentication.reasoningEffort === undefined
-        ? {}
-        : { reasoningEffort: authentication.reasoningEffort }),
+    productive.estimatedPromptTokens,
+    productiveChatOptions(ctx, deps, resolved, authentication, productive),
+  );
+}
+
+function productiveChatOptions(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  resolved: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+  productive: ProductiveChatRequest,
+): Parameters<typeof executeBudgetedGatewayChat>[6] {
+  const { estimatedPromptTokens, skillTurnMessageId } = productive;
+  return {
+    ...boundSkillProtection(ctx, deps, authentication, skillTurnMessageId),
+    modelAlias: resolved.result.modelAlias,
+    maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
+    upstreamStreamingSupported: upstreamGatewayStreamingSupported(
+      deps,
+      resolved.result.supportsStreaming,
+    ),
+    ...(authentication.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: authentication.reasoningEffort }),
+  };
+}
+
+type BoundRunSkill =
+  | { readonly kind: "none" }
+  | { readonly kind: "bound"; readonly skill: MarkdownSkillDocument; readonly messageId: string }
+  | { readonly kind: "unavailable" };
+
+/** A productive dispatch, and the task turn whose bound skill it carries. */
+interface ProductiveChatRequest extends ValidatedChatRequest {
+  readonly skillTurnMessageId?: string | undefined;
+}
+
+// The run's capability, authenticated again: a stopped, revoked or expired run sends no attempt.
+function runCapabilityStillBound(
+  deps: UiHandlerDeps,
+  authentication: AuthenticatedGatewayRequest,
+): boolean {
+  const authenticated = runtimeCapabilityAuthenticator(deps)?.authenticate(
+    authentication.capability,
+    "model-gateway",
+  );
+  return authenticatedRuntimeBinding(authenticated)?.runId === authentication.runId;
+}
+
+/**
+ * The check every physical attempt passes before it reaches the provider, a gateway retry and a
+ * stream retry included (#4025 AC5): the turn's bound revision must still resolve, intact, and the
+ * run's capability must still be current. Resolving once before the call let a retry carry a skill
+ * deleted after the first attempt. Composes with, never replaces, the request's own admission.
+ */
+function boundSkillProtection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  authentication: AuthenticatedGatewayRequest,
+  messageId: string | undefined,
+): Pick<GatewayChatDelivery, "protectRequest"> {
+  if (messageId === undefined) return {};
+  const { runId } = authentication;
+  const authority = (): boolean => runCapabilityStillBound(deps, authentication);
+  const refused = (error: unknown): BoundSkillAttemptRefused => {
+    const revoked = !runCapabilityStillBound(deps, authentication);
+    if (revoked) logGatewayRejection(ctx, runId, 401, "capability-invalid");
+    else logGatewayRejection(ctx, runId, 409, "skill-unavailable");
+    return new BoundSkillAttemptRefused(error, revoked);
+  };
+  return {
+    protectRequest: (request): GatewayCallRequest => {
+      let guarded: GatewayCallRequest;
+      try {
+        guarded = protectMarkdownSkillRequest(
+          request,
+          deps.store.markdownSkills,
+          messageId,
+          authority,
+        );
+      } catch (error) {
+        throw refused(error);
+      }
+      const admit = guarded.attemptAdmission;
+      if (admit === undefined) return guarded;
+      return {
+        ...guarded,
+        attemptAdmission: (input): ReturnType<typeof admit> => {
+          try {
+            return admit(input);
+          } catch (error) {
+            throw refused(error);
+          }
+        },
+      };
     },
+  };
+}
+
+/**
+ * An attempt the bound skill's own check refused (#4025 AC5): the turn's revision was deleted or
+ * failed its integrity check, or the run's capability is no longer current. The turn is final, as
+ * the same refusal before the first attempt is: a runtime retry would be refused again.
+ */
+class BoundSkillAttemptRefused extends Error {
+  public constructor(
+    cause: unknown,
+    public readonly capabilityRevoked: boolean,
+  ) {
+    super("The skill selected for this coding task is no longer available.", { cause });
+    this.name = "BoundSkillAttemptRefused";
+  }
+}
+
+function skillSelectionChanged(ctx: RouteContext): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "SKILL_SELECTION_CHANGED",
+      "The skill selected for this coding task is no longer available.",
+      ctx.correlationId,
+    ),
+  };
+}
+
+/**
+ * The private Markdown skill the run's task turn was bound to when the run began (#4025, #3897
+ * review): Coding History stores the task intent as the conversation's user message, which takes
+ * the conversation's skill selection of that moment as its immutable turn binding. The binding is
+ * resolved again for every dispatch, as Chat does for every attempt: a replaced skill keeps its
+ * bound revision, and a deleted one is unavailable, so it never keeps flowing silently.
+ */
+function boundRunSkill(ctx: RouteContext, deps: UiHandlerDeps, runId: string): BoundRunSkill {
+  const messageId = deps.store.codingHistory?.intentMessageId(runId);
+  if (messageId === undefined) return { kind: "none" };
+  try {
+    const skill = deps.store.markdownSkills.forTurn(messageId);
+    return skill === undefined ? { kind: "none" } : { kind: "bound", skill, messageId };
+  } catch {
+    // The store refuses a deleted skill or a failed integrity check (409/500): the dispatch is
+    // refused with that closed reason instead of being sent without the selected method.
+    logGatewayRejection(ctx, runId, 409, "skill-unavailable");
+    return { kind: "unavailable" };
+  }
+}
+
+/** The skill's instructions lead the request's first user message, the task turn of the run. */
+function withSkillInstructions(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  skill: MarkdownSkillDocument,
+): CodingSidecarGatewayChatCompletionRequest {
+  const instructions = renderMarkdownSkillInstructions(skill);
+  const index = parsed.messages.findIndex((message) => message.role === "user");
+  if (index < 0) {
+    const leading = parsed.messages.findIndex((message) => message.role !== "system");
+    const at = leading < 0 ? parsed.messages.length : leading;
+    const messages = [...parsed.messages];
+    messages.splice(at, 0, { role: "user", content: instructions });
+    return { ...parsed, messages };
+  }
+  return {
+    ...parsed,
+    messages: parsed.messages.map((message, position) =>
+      position === index ? withLeadingText(message, instructions) : message,
+    ),
+  };
+}
+
+function withLeadingText(
+  message: CodingSidecarGatewayChatMessage,
+  text: string,
+): CodingSidecarGatewayChatMessage {
+  const { contentParts } = message;
+  return {
+    ...message,
+    content: text + message.content,
+    ...(contentParts === undefined
+      ? {}
+      : { contentParts: [{ type: "text" as const, text }, ...contentParts] }),
+  };
+}
+
+/**
+ * Attaches the run's bound skill to a productive dispatch and admits the request again with it, so
+ * the estimate, the prompt bound and the output allowance all count the skill like any other
+ * prompt content (#3897 review: no unbudgeted text). Readiness challenges were answered before.
+ */
+function withBoundRunSkill(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  resolved: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+  validated: ValidatedChatRequest,
+): RouteResult | ProductiveChatRequest {
+  const bound = boundRunSkill(ctx, deps, authentication.runId);
+  if (bound.kind === "none") return validated;
+  if (bound.kind === "unavailable") {
+    const refusal = skillSelectionChanged(ctx);
+    reportGatewayTurnRejection(ctx, deps, authentication.runId, refusal);
+    return refusal;
+  }
+  const parsed = withSkillInstructions(validated.parsed, bound.skill);
+  const estimatedPromptTokens = promptTokenEstimate(parsed, promptTokenAccounting(resolved));
+  const validationError = validationErrorForChatRequest(
+    parsed,
+    resolved.result.modelAlias,
+    resolved.result.runMetadata,
+    authentication.runtimeAuthenticated,
+    estimatedPromptTokens,
+    gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
+    // The first validation admitted a model other than the run alias only as a routed agent model.
+    validated.parsed.model !== OPENCODE_RUNTIME_MODEL_ALIAS,
+  );
+  if (validationError !== undefined) {
+    logChatRequestRejection(ctx, deps, authentication.runId, validationError, {
+      parsed,
+      bounds: resolved.result.runMetadata,
+      estimatedPromptTokens,
+    });
+    return validationError;
+  }
+  logSkillAttached(ctx, authentication.runId, bound.skill, estimatedPromptTokens);
+  return { parsed, estimatedPromptTokens, resolved, skillTurnMessageId: bound.messageId };
+}
+
+function logSkillAttached(
+  ctx: RouteContext,
+  runId: string,
+  skill: MarkdownSkillDocument,
+  estimatedPromptTokens: number,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_SKILL_ATTACHED_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
+      {
+        runId,
+        skillRevision: skill.revision,
+        skillDigest: skill.digest,
+        skillByteCount: skill.byteCount,
+        estimatedPromptTokens,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
   );
 }
 
@@ -4659,11 +5159,24 @@ function logValidatedRequestBounds(
         inputMessageCount: request.messages.length,
         offeredToolCount: request.tools?.length ?? 0,
         droppedReasoningMessageCount: request.droppedReasoningMessageCount,
+        ...imageCountEvidence(request),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
+}
+
+function imageCountEvidence(request: CodingSidecarGatewayChatCompletionRequest): {
+  readonly imageCount?: number;
+  readonly documentCount?: number;
+} {
+  const imageCount = countImageContentParts(request.messages);
+  const documentCount = countDocumentContentParts(request.messages);
+  return {
+    ...(imageCount === 0 ? {} : { imageCount }),
+    ...(documentCount === 0 ? {} : { documentCount }),
+  };
 }
 
 function executeBudgetedGatewayChat(
@@ -4677,6 +5190,7 @@ function executeBudgetedGatewayChat(
     readonly modelAlias: string;
     readonly maxOutputTokens: number;
     readonly upstreamStreamingSupported: boolean;
+    readonly protectRequest?: GatewayChatDelivery["protectRequest"];
   },
 ): Promise<RouteResult | typeof STREAMING> {
   const promptTokenReservation = reserveGatewayPromptBudget(
@@ -4695,11 +5209,14 @@ function executeBudgetedGatewayChat(
     ...profile,
     promptTokenReservation,
     toolProfile: gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
-    toolCatalogCoverage: resolveToolCatalogHandlerCoverage(
-      deps,
-      authentication.runId,
-      ctx.correlationId,
-    ),
+    // The native profile (#3897) forwards OpenCode's own tool definitions: the mapped handler
+    // coverage neither applies nor is advertised, and its availability line would name `keiko_*`
+    // tools the run never offers (#3897 lab, T7). `gateway.tool-catalog.projected` records the
+    // native contract instead.
+    toolCatalogCoverage:
+      gatewayReadinessRegistry(deps)?.toolProfile === "native"
+        ? undefined
+        : resolveToolCatalogHandlerCoverage(deps, authentication.runId, ctx.correlationId),
     offerLifetimeMs: opencodeGatewayOfferLifetimeMs(
       codingSidecarGatewayRequestDeadlineMs(binding.config, profile.modelAlias),
     ),

@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "classification": "Lab proxy startup/lifetime error ownership; no skill or updater acceptance",
+  "sourceParent": "f664eb3bc8bd698977069e0f73e6ad9e9d8d7ab4",
+  "sourceFreeze": {
+    "artifact": "checkpoint51-source-freeze-v2.json",
+    "sha256": "cf125736ac124aaad9fe40faefd03aa028901c4f5461283c89bba05020523b19"
+  },
+  "implementation": [
+    "Shared listenProxy rejects the original asynchronous or synchronous bind failure before BFF construction and releases its own error and listening handlers on either settlement, preserving pre-existing Node server handlers.",
+    "Existing physical recorder receives a body-free current-case indicator for lifetime server errors. Late callbacks cannot revive a failed construction.",
+    "The same shared listener owner is intended for prospective observers; no frozen v5 input is edited."
+  ],
+  "verification": {
+    "samePublicConstructorControls": {
+      "beforeFailed": 3,
+      "beforeHealthy": 2,
+      "before": {
+        "artifact": "checkpoint51-proxy-before-v2.log",
+        "sha256": "adaa48d6470ed410b252641eefffed948c8780fdfb0925c683c674d71bf61e8d"
+      },
+      "afterFivePassed": true
+    },
+    "expandedStartupCasesPassed": 8,
+    "actualLoopback": [
+      "successful fixture-owned ephemeral bind with released startup handler",
+      "actual EADDRINUSE refusal preserves original error and healthy existing blocker"
+    ],
+    "allLab": {
+      "suites": 7,
+      "testsPassed": 88,
+      "log": {
+        "artifact": "checkpoint51-all-lab-tests-v2.log",
+        "sha256": "2fab4fa7aaa2be79a36a34d613951f8b1da9de4ac6117a1a35faeb0fbc5d5b48"
+      }
+    },
+    "independentBefore": {
+      "artifact": "runtime-proxy-listen-errors-before-independent.json",
+      "sha256": "904c6dd00aa73b0d40688e83feef950cf39ea48faf848fae46a9f0d7c26fd284"
+    },
+    "actualReadyHandlerRegression": {
+      "beforeFailed": 1,
+      "beforeHealthy": 1,
+      "before": {
+        "artifact": "checkpoint51-ready-handler-before.log",
+        "sha256": "47a308f2f73db2f152dc8ee28ce2b121af11cf3cfb7314b64000ba204d0bbddb"
+      },
+      "afterPassed": 2,
+      "baseline": "Each actual HTTP server records its pre-existing listening handler count before admission; failure and success return to that exact count."
+    },
+    "retainedEarlierCandidate": {
+      "artifact": "checkpoint51-proxy-startup-calibrated-independent.json",
+      "sha256": "21adbad97ac462d0d629aa060357e35514fc58b898b296228bed76082effa18c"
+    },
+    "independentFinal": {
+      "artifact": "checkpoint51-proxy-startup-final-v2-independent.json",
+      "sha256": "97d309668e07f0afd69628f7991befe828076629c7c38289f6288e1ca1410757",
+      "constructorControlsPassed": 4,
+      "actualHttpControlsPassed": 2
+    }
+  },
+  "retainedCommissioningFailure": {
+    "artifact": "checkpoint51-proxy-before.log",
+    "sha256": "0b0fe798035407482569cec4b14f0a42b33f004c2b13a5fa1793296bf6770834"
+  },
+  "limits": [
+    "Contained fixtures and controlled BFF/session ports do not qualify a whole live-provider campaign.",
+    "Stopped v5 remains seven completed workflows, failed case8 and sixteen undispatched; its files, grants and outcomes remain immutable.",
+    "Both native P1s, full skills/browser/search/source acceptance and exact-head integration remain open. No issue checkbox or full disposition changes."
+  ]
+}

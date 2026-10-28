@@ -6,20 +6,19 @@ window is backgrounded or minimized and remains available while the foreground u
 or contains only a load error. Keyboard modality is established with a real Tab press before moving
 focus; programmatic focus after a pointer click must not steal the foreground.
 
-This set was regenerated on 2026-10-16 UTC from PR #4013 signed source head
-`823c661568dfa7efad06ea12d187332ed5733f4a`, after repairing Git parser diagnostic
-correlation in the existing UI API layer. The run used macOS arm64, Node 24.18.0,
-npm 11.16.0, Next.js 16.3.8 and Playwright 1.63.0. The unchanged eight-test Chromium
-suite passed in 55.1 seconds, including the real-BFF outage journey. All eight UI
-source hashes and four harness hashes bind the measured source.
+This set was regenerated on 2026-10-12 (UTC) from PR #3913 signed source head
+`2eb5752bc9f5192b19a79117df4a5964d9707c57` in the main macOS arm64 checkout using Node 24.18.0,
+npm 11.16.0, Next.js 16.3.8, and Playwright 1.63.0. The unchanged eight-test Chromium suite passed
+in 41.6 seconds, including the real-BFF outage journey. The unchanged evidence freshness gate and
+its three focused contract controls also passed. All eight UI source hashes and four harness
+hashes match that inspected source head.
 
 The original producer recreated all 17 tracked artifacts: 14 screenshots and three JSON records.
-All fourteen screenshots are byte-identical to the preceding committed captures; the three JSON
-records now bind the repaired API source. No new visual difference required a capture comparison.
-The existing native `ButtonText` behavior for both startup-notice actions in forced-colors mode
-remains unchanged. This is macOS browser and fixture qualification; it does not claim Linux updater
-execution, production update success, native N−1→N replacement, provider readiness or final
-integrated-head acceptance.
+`11-progress-state.png` and `13-reconnecting-state-mocked.png` changed PNG bytes relative to the
+previous committed set; the other 12 screenshots remained
+byte-identical. All three JSON records now bind the actual inspected
+sources. This is macOS browser and fixture qualification; it does not claim Linux execution,
+production update success, native N−1→N replacement, or final integrated-head acceptance.
 
 The current suite includes the real-BFF outage journey. Both the main server and the outage
 harness use isolated copies of the fake-key gateway fixture, preserving the tracked source
@@ -30,11 +29,23 @@ same Node 24.18.0 runtime. All eight unchanged tests passed; only `11-progress-s
 PNG bytes, and the three JSON records now bind the updated English/German message sources.
 The evidence freshness check passed. This remains updater fixture evidence, not Chat scope proof.
 
-The 2026-10-19 merge of PR #4013 source `bbc778f` with `dev` source `babee4b` recaptured
-all 17 artifacts through the same producer before committing the merge. All eight unchanged
-Chromium tests passed in 56.3 seconds, including the real-BFF outage journey, and the evidence
-freshness check passed against the combined eight UI source and four harness hashes. This is
-macOS arm64 updater fixture evidence with the same limits described below.
+The source-intent repair for #4040 regenerated the original producer again on 2026-10-18
+using Node 24.18.0. All eight unchanged Chromium cases passed in 46.7 seconds, including
+the real-BFF outage case. Two PNGs changed bytes (`10-responsive-manual-path.png` and
+`11-progress-state.png`); the three JSON records now bind the current message catalogs.
+The evidence freshness gate passed. This remains updater evidence, not Chat acceptance.
+
+The selected-skill handoff for governed agent runs (#4025 AC1, PR #4064) regenerated the original
+producer on 2026-10-24 with Node 24.22.0, because it changes `api.ts` and the optional message
+catalogs. All nine Chromium cases passed in 1.1 minutes, including the real-BFF outage case.
+Twelve PNGs changed bytes at unchanged dimensions; the three JSON records now bind the current
+sources. The evidence freshness gate passed. This remains updater evidence, not skill acceptance.
+
+Merging `dev` with the Sonar repair (#4069) into PR #4064 moved the record to source provenance
+version 2 while this branch still changes `api.ts` and the message catalogs, so the original
+producer ran again on 2026-10-24 with Node 24.22.0. All nine Chromium cases passed in 1.1 minutes,
+including the real-BFF outage case; only `11-progress-state.png` changed bytes. The three JSON
+records bind the merged sources, and the evidence freshness gate passed.
 
 ## Reproduce
 
@@ -79,3 +90,63 @@ Production-signed release qualification is tracked separately in the
 [repair ledger](../../../qa/built-in-updater-repair-3405.md).
 
 Historical #1696 screenshots and JSON remain in [their original directory](../1696/README.md).
+
+## Customer updater presentation — #4047
+
+The startup notice uses availability-specific headings and distinguishes a required portable setup
+from a confirmed newer version. Its notice-only translations follow the already-lazy widget into
+the existing optional catalog. The original freshness producer now binds eleven UI sources,
+including both optional catalogs and their translation owner; four harness inputs remain separate.
+Three failure-first controls demonstrate that changing any newly bound translation source was
+previously missed. The original eight-case browser producer plus the new setup-only reload/details regression
+regenerated all 17 original artifacts on macOS arm64 with pinned Node 24.18.0. The nine
+Chromium cases passed in 54.6 seconds, including real-BFF outage and the normal/critical
+setup-only reload/details checks. All three records bind 11 UI sources and 4 harness inputs;
+`10-responsive-manual-path.png`, `11-progress-state.png`, and
+`13-reconnecting-state-mocked.png` changed PNG bytes. The unchanged numerical freshness and
+Editor isolation gates pass. This remains UI/fixture evidence; actual signed package replacement,
+restart and SSD qualification are separate #4047 obligations.
+
+The subsequent #4047 repair preserves the unchanged startup import-boundary control: the thin
+preflight/dismissal controller loads its optional-catalog view only when a visible notice is
+admitted. A current or suppressed report does not load that view. The original control reproduced
+locally as 1 failure/3 healthy controls before the repair and all four pass afterwards. Two existing
+UI lint suppressions were removed. The final nine-case producer passed in 47.3 seconds and binds
+12 UI sources, including the deferred presentation, plus the same four harness inputs. All 17
+artifacts were regenerated through the original producer with tracked evidence enabled; only
+`10-responsive-manual-path.png`, `11-progress-state.png`, and
+`13-reconnecting-state-mocked.png` changed screenshot bytes in this increment. This still qualifies UI and the declared BFF recovery fixture, not native replacement.
+
+A rejected optional notice-view import is contained locally. The failure-first control uses the
+installed Next.js App Router loader and the real shell boundary, rather than the different Pages
+loader that plain test resolution selects. It reproduces one desktop-loss failure with one healthy
+suppressed-current control before repair. The repaired path records body-free failure evidence,
+keeps the workspace mounted, and offers the existing Updates entry and dismissal using core
+translations. The final three owning suites pass 77 cases, complete UI coverage passes 10,694 cases
+(one existing skip), and the original nine-case browser producer passes again in 1.3 minutes.
+
+The immediate-dismissal correction for #4047 then adds four failure-first action controls. The
+common dismissal owner emits the existing presentation transition when the action occurs,
+including the optional-view load-failure fallback. Its three owning suites pass 80 cases and
+complete UI coverage passes 10,697 cases with one existing skip. The original nine-case browser
+producer passes in 1.4 minutes and regenerates the same 17 artifacts, binding the same twelve UI
+sources and four harness inputs. This does not establish native package replacement or restart.
+
+The browser-approval integration for #4043 regenerated these updater artifacts again on
+2026-10-19 using the original nine-case producer and Node 24.18.0. All nine cases passed
+in 1.1 minutes after the final Sonar repairs, including the real-BFF outage and setup-only
+notification controls.
+All 17 artifacts were regenerated; 12 screenshot files changed bytes, while the three JSON
+records bind the current twelve UI sources and four harness inputs. The evidence freshness
+gate passes. This is updater presentation and declared BFF recovery evidence; native package
+replacement, process-generation ownership and SSD qualification remain separate obligations.
+
+The SonarCloud CSS maintenance on 2026-10-24 regenerated the original nine-case Chromium producer
+on macOS arm64 with Node 24.22.0. All nine cases passed in 56.8 seconds, including the real-BFF
+outage case; the unchanged freshness gate passed. These updater fixtures qualify presentation and
+BFF recovery only. They do not replace the separate Editor smoke or native update qualification.
+
+Source provenance version 2 stores each owned input as an explicit `{ path, sha256 }` record.
+The checker rejects duplicates, extra row fields, unsupported versions and any changed source path
+or digest. Harness hashes retain their existing exact map. This identifies public checksums as
+checksums while preserving the complete input binding and all visual/accessibility thresholds.

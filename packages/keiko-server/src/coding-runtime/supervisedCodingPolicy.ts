@@ -514,7 +514,8 @@ function riskForActionKind(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): "medium" | "high" | "critical" {
   if (actionKind === "merge" || actionKind === "system-mutation") return "critical";
-  if (actionKind === "commit") return "medium";
+  // A fetch changes only remote-tracking refs; a pull fast-forwards the worktree (#3902 AC2).
+  if (actionKind === "commit" || actionKind === "git-fetch") return "medium";
   return "high";
 }
 

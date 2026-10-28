@@ -4,6 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
+// This suite owns manifest/pair ordering; optional renewal is exercised by the browser boot suite.
+vi.mock("./browser-approval-client", () => ({
+  createLocalBrowserApprovalClient: vi
+    .fn()
+    .mockReturnValue({ restore: vi.fn().mockResolvedValue(false) }),
+}));
+
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
 const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
 const MANIFEST_PATH = "/api/workspaces";

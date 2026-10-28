@@ -47,6 +47,8 @@ export interface GitStageExecRequest {
 
 export interface GitUnstageExecRequest {
   readonly pathspecs: readonly string[];
+  /** The head, base and staged tree the unstaging was reviewed against (#3902 AC2). */
+  readonly verified?: GitVerifiedCommitPrecondition;
 }
 
 export interface GitCommitExecRequest {

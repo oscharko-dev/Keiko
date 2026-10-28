@@ -1,4 +1,4 @@
-# Public API surface — 1.2.4
+# Public API surface — 1.3.0
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,23 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.3.0: root exports and CLI entrypoints remain unchanged. The macOS optional coding-runtime
+  dependencies move to 1.1.4 (OpenCode 2.1.4). The local server adds authenticated Coding History
+  import and export routes for the Workbench UI. No customer database schema migration is introduced.
+- 1.2.7: root exports and CLI entrypoints remain unchanged. Portable update coordination, locking
+  and recovery share the canonical runtime-state directory independently of UI database storage.
+  No customer database schema migration is introduced. Published source updaters require the
+  documented one-time bootstrap before using the corrected handoff.
+- 1.2.6: root exports and CLI entrypoints remain unchanged. Portable updater admission consumes
+  authenticated future release-impact entries and measured archive expansion metadata. Native
+  macOS application ownership is independent of the optional Endpoint Security Coding backend.
+  Existing workspace state and database schemas are retained.
+- 1.2.5: the root exports and CLI entrypoints remain unchanged. Existing authenticated local
+  session routes add bounded browser approval, expiration and revocation. Forward-only SQLite
+  migrations V45 and V46 persist browser approvals and shared Chat creation intents. Source
+  ownership, updater recovery and syntax-preserving privacy are hardened through existing
+  contracts. Compact test-generation skills add instructions without execution authority or
+  a demonstrated universal model-quality guarantee; unfulfilled acceptance remains in #4051.
 - 1.2.4: the root exports and CLI entrypoints remain unchanged. Chat gateway waiting,
   connected-source selection, restored source presentation and repository retrieval are hardened
   through existing contracts. Java/Spring Boot and React/MUI/Vitest Markdown skill candidates

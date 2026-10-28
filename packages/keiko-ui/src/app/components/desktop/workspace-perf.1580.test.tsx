@@ -110,10 +110,15 @@ describe("Issue #1580 — workspace re-render performance", () => {
     });
   });
 
-  function renderWorkspace(ws: UseWorkspaceResult) {
+  async function renderWorkspace(ws: UseWorkspaceResult): Promise<{
+    readonly rerender: (next: UseWorkspaceResult) => void;
+  }> {
     const wsRef = createRef<HTMLDivElement>();
     const openPalette = (): void => undefined;
     const result = render(<Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} />);
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     // wsRef is a WindowFrame prop; reuse it across rerenders so it stays stable.
     const rerender = (next: UseWorkspaceResult): void => {
       result.rerender(<Workspace ws={next} wsRef={wsRef} openPalette={openPalette} />);
@@ -121,7 +126,7 @@ describe("Issue #1580 — workspace re-render performance", () => {
     return { rerender };
   }
 
-  it("does not re-render any window when only the view (pan/zoom) changes", () => {
+  it("does not re-render any window when only the view (pan/zoom) changes", async () => {
     const api = makeApi({ x: 0, y: 0, zoom: 1 });
     const wins = [
       appWindow({ id: "agents-1", type: "agents" }),
@@ -129,7 +134,7 @@ describe("Issue #1580 — workspace re-render performance", () => {
     ];
     const conns: Connection[] = [];
     const ws = workspace(api, { wins, conns });
-    const { rerender } = renderWorkspace(ws);
+    const { rerender } = await renderWorkspace(ws);
 
     expect([...bodyRenders].sort()).toEqual(["agents-1", "agents-2"]);
     bodyRenders.length = 0;
@@ -140,12 +145,12 @@ describe("Issue #1580 — workspace re-render performance", () => {
     expect(bodyRenders).toEqual([]);
   });
 
-  it("rebuilds no window body when a window is dragged (geometry-only change)", () => {
+  it("rebuilds no window body when a window is dragged (geometry-only change)", async () => {
     const api = makeApi({ x: 0, y: 0, zoom: 1 });
     const win1 = appWindow({ id: "agents-1", type: "agents" });
     const win2 = appWindow({ id: "agents-2", type: "agents", x: 600 });
     const ws = workspace(api, { wins: [win1, win2] });
-    const { rerender } = renderWorkspace(ws);
+    const { rerender } = await renderWorkspace(ws);
     bodyRenders.length = 0;
 
     // Drag agents-1: a new object for the moved window, the other untouched. The
@@ -156,12 +161,12 @@ describe("Issue #1580 — workspace re-render performance", () => {
     expect(bodyRenders).toEqual([]);
   });
 
-  it("rebuilds only the changed window's body when its cfg changes", () => {
+  it("rebuilds only the changed window's body when its cfg changes", async () => {
     const api = makeApi({ x: 0, y: 0, zoom: 1 });
     const win1 = appWindow({ id: "agents-1", type: "agents" });
     const win2 = appWindow({ id: "agents-2", type: "agents", x: 600 });
     const ws = workspace(api, { wins: [win1, win2] });
-    const { rerender } = renderWorkspace(ws);
+    const { rerender } = await renderWorkspace(ws);
     bodyRenders.length = 0;
 
     // Resize agents-1 (w changes → ew changes → body breakpoints may change) AND
@@ -173,7 +178,7 @@ describe("Issue #1580 — workspace re-render performance", () => {
     expect(bodyRenders).toEqual(["agents-1"]);
   });
 
-  it("refreshes a window's linked context when ANOTHER window changes (no stale context)", () => {
+  it("refreshes a window's linked context when ANOTHER window changes (no stale context)", async () => {
     // Stateful linked resolver: agents-1 derives its grounding root from a connected
     // source, which we flip mid-flight. The api object stays referentially stable.
     let currentRoot: string | null = "root-A";
@@ -184,7 +189,7 @@ describe("Issue #1580 — workspace re-render performance", () => {
     const win1 = appWindow({ id: "agents-1", type: "agents" });
     const win2 = appWindow({ id: "agents-2", type: "agents", x: 600 });
     const ws = workspace(api, { wins: [win1, win2] });
-    const { rerender } = renderWorkspace(ws);
+    const { rerender } = await renderWorkspace(ws);
 
     expect(capturedRoots.filter((r) => r.id === "agents-1").pop()?.root).toBe("root-A");
     bodyRenders.length = 0;
@@ -204,14 +209,14 @@ describe("Issue #1580 — workspace re-render performance", () => {
   // the same wins/conns/api identities must NOT re-render any window body. This fails
   // if the PERSISTENCE-001 equality guard is removed (the storage-sync path would swap
   // in a fresh wins array with new identities, re-rendering every window body).
-  it("re-renders no window body when a no-op remote snapshot keeps identities (BENCHMARK-009)", () => {
+  it("re-renders no window body when a no-op remote snapshot keeps identities (BENCHMARK-009)", async () => {
     const api = makeApi({ x: 0, y: 0, zoom: 1 });
     const wins = [
       appWindow({ id: "agents-1", type: "agents" }),
       appWindow({ id: "agents-2", type: "agents", x: 600 }),
     ];
     const ws = workspace(api, { wins });
-    const { rerender } = renderWorkspace(ws);
+    const { rerender } = await renderWorkspace(ws);
     bodyRenders.length = 0;
 
     // A polled/storage snapshot equal to the current state produces the SAME wins
@@ -223,7 +228,7 @@ describe("Issue #1580 — workspace re-render performance", () => {
 
   // GEN-PERF-BENCHMARK-009 — mounting 50 windows renders each body exactly once (no
   // duplicate/cascading body rebuilds), and a subsequent no-op re-render rebuilds none.
-  it("mounts 50 windows with exactly one body render each and zero on a no-op re-render (BENCHMARK-009)", () => {
+  it("mounts 50 windows with exactly one body render each and zero on a no-op re-render (BENCHMARK-009)", async () => {
     const api = makeApi({ x: 0, y: 0, zoom: 1 });
     const wins = Array.from({ length: 50 }, (_, i) =>
       appWindow({
@@ -234,7 +239,7 @@ describe("Issue #1580 — workspace re-render performance", () => {
       }),
     );
     const ws = workspace(api, { wins });
-    const { rerender } = renderWorkspace(ws);
+    const { rerender } = await renderWorkspace(ws);
 
     // Exactly one body render per window at mount (no cascading rebuilds).
     expect(bodyRenders).toHaveLength(50);

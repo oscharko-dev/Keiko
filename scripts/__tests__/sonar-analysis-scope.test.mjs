@@ -240,6 +240,14 @@ describe("Sonar analysis scope", () => {
     expect(isCoverableProductSource("scripts/gate.mjs")).toBe(true);
     expect(isCoverableProductSource("packages/a/src/a.tsx")).toBe(true);
     expect(isCoverableProductSource("packages/a/src/a.test.ts")).toBe(false);
+    for (const path of [
+      "native/runtime-supervisor/linux/test-support.app-owner.mjs",
+      "native/runtime-supervisor/linux/test-support.app-handoff-root.mjs",
+      "native/runtime-supervisor/macos/app-runtime.test.mjs",
+    ]) {
+      expect(classifyAnalysisPath(path, nativeSources)).toBe("test");
+      expect(isCoverableProductSource(path)).toBe(false);
+    }
     expect(coverageDisposition("scripts/gate.mjs", nativeSources)).toBe("lcov");
     expect(coverageDisposition("scripts/check.sh", nativeSources)).toBe("shell-guardrails");
     expect(coverageDisposition("scripts/check.ps1", nativeSources)).toBe("shell-guardrails");

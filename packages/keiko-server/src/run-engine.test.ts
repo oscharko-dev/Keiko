@@ -38,6 +38,7 @@ const REJECT_MODEL: ModelPort = {
 
 let workspaceRoot: string;
 let registry: RunRegistry;
+const REVIEWED_DIFF = "--- /dev/null\n+++ b/tests/a.test.ts\n@@ -0,0 +1 @@\n+export {};\n";
 const GOVERNANCE_NOW = "2026-07-31T08:00:00.000Z";
 const GOVERNANCE_SESSION: AppSession = {
   sessionId: "sess_0123456789abcdef01234567",
@@ -594,7 +595,12 @@ describe("applyRun — verification egress probe threading", () => {
     const { applyRun: apply } = await import("./run-engine.js");
 
     await apply(
-      { kind: "unit-tests", payload: { workspaceRoot }, limits: undefined },
+      {
+        kind: "unit-tests",
+        payload: { workspaceRoot },
+        limits: undefined,
+        reviewedPatch: { diff: REVIEWED_DIFF },
+      },
       { call: () => Promise.reject(new Error("unused")) },
       "m",
       (value) => value,
@@ -631,7 +637,12 @@ describe("applyRun — verification egress probe threading", () => {
       const runId = `run-${randomUUID()}`;
 
       await apply(
-        { kind: "unit-tests", payload: { workspaceRoot }, limits: undefined },
+        {
+          kind: "unit-tests",
+          payload: { workspaceRoot },
+          limits: undefined,
+          reviewedPatch: { diff: REVIEWED_DIFF },
+        },
         { call: () => Promise.reject(new Error("unused")) },
         "m",
         (value) => value,

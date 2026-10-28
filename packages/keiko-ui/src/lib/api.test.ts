@@ -4370,6 +4370,8 @@ describe("Git-to-Chat connect/refresh API (#3400)", () => {
     { gitChangeScopes: [] },
     { gitChangeScopes: [{ ...gitChangeScopeFixture(), snapshotDigest: "b".repeat(64) }] },
     { updatedAt: "not-a-timestamp" },
+    { status: "closed" },
+    { status: "archived" },
   ])("refuses an incoherent committed Git chat %j", async (patch) => {
     vi.stubGlobal(
       "fetch",
@@ -4384,6 +4386,31 @@ describe("Git-to-Chat connect/refresh API (#3400)", () => {
     await expect(
       connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
     ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  // The server serialises `status` only for a closed chat (store/chats.ts maps a null column to an
+  // absent field), so the wire shape of an open chat carries no `status` at all. The fixture above
+  // spells "open", which the real server never sends; this pins the shape it does send.
+  it.each([
+    {
+      name: "connect",
+      status: "connected",
+      call: (): Promise<unknown> =>
+        connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
+    },
+    {
+      name: "refresh",
+      status: "current",
+      call: (): Promise<unknown> => refreshGitChangeScope("chat-1", "rel-1"),
+    },
+  ])("accepts an open chat whose wire shape omits status on $name", async ({ call, status }) => {
+    const { status: _omitted, ...wireChat } = committedGitChatFixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ status, scope: gitChangeScopeFixture(), chat: wireChat })),
+    );
+    const result = await call();
+    expect(result).toMatchObject({ status, chat: { id: "chat-1" } });
   });
 
   it("shares the supplied attempt correlation across Git connect and refresh without putting it in the body", async () => {

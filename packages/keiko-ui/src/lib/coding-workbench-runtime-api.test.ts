@@ -21,10 +21,18 @@ import {
   resumeCodingWorkbenchRuntime,
   startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
+  submitCodingWorkbenchRuntimeFollowUp,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
 
 const UPDATED_AT = "2026-07-13T12:00:00.000Z";
+
+// Keep start replay assertions scoped to their owning transport; browser renewal is tested separately.
+vi.mock("./browser-approval-client", () => ({
+  createLocalBrowserApprovalClient: vi
+    .fn()
+    .mockReturnValue({ restore: vi.fn().mockResolvedValue(false) }),
+}));
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -326,6 +334,7 @@ describe("Coding Workbench runtime API", () => {
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
       runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build", "plan"],
     };
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(readiness));
     vi.stubGlobal("fetch", fetchMock);
@@ -348,6 +357,73 @@ describe("Coding Workbench runtime API", () => {
       code: "CONTRACT_VALIDATION_FAILED",
       status: 502,
     });
+  });
+
+  it("refuses a readiness projection that advertises an unknown, duplicated or missing agent list", async () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+    };
+    for (const selectableAgents of [
+      undefined,
+      [],
+      ["plan"],
+      ["build", "general"],
+      ["build", "build"],
+    ]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(jsonResponse({ ...readiness, selectableAgents })),
+      );
+      await expect(
+        getCodingWorkbenchRuntimeReadiness("supervised-coding"),
+        `list ${JSON.stringify(selectableAgents)}`,
+      ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+    }
+  });
+
+  it("posts the selected primary agent with a follow-up and with a start", async () => {
+    // A fresh Response per call: the body of a Response is single-use.
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(snapshot())));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await submitCodingWorkbenchRuntimeFollowUp("run-1", {
+      requestId: "request-3",
+      expectedRevision: 4,
+      taskIntent: "outline the change",
+      agent: "plan",
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/coding-workbench/runtime/runs/run-1/follow-up",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "request-3",
+          expectedRevision: 4,
+          taskIntent: "outline the change",
+          agent: "plan",
+        }),
+      }),
+    );
+
+    await startCodingWorkbenchRuntime({
+      requestId: "request-4",
+      taskIntent: "outline the change",
+      requestedMode: "governed-assist",
+      runtimePreference: "managed-gateway",
+      projectMemory: { enabled: true },
+      agent: "plan",
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/coding-workbench/runtime/runs",
+      expect.objectContaining({
+        body: expect.stringContaining('"agent":"plan"'),
+      }),
+    );
   });
 
   it("posts a revision-bound approval to an encoded run route with CSRF protection", async () => {

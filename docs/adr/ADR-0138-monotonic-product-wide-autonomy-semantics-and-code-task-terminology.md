@@ -261,6 +261,24 @@ is:
    binding nor an approval channel and therefore continues to reject delivery execute in every
    mode.
 
+   **The coding runtime's governed fetch and pull (#3902 AC2, PR #4064 review).** A native or
+   mapped run reaches the same sync owner through one tool, `keiko_git_sync` (`pull: false`
+   fetches the upstream, `pull: true` fast-forwards the run's branch to it); the shell's own
+   `git fetch`/`git pull` stay reserved in every mode. The decision is the owner's own:
+   `codingToolAuthorityPort.ts` asks `gitOperationEnvelopeDecision`
+   (`runBoundAuthority.ts`), the function `authorizeGitDelivery` decides the Git Client's Fetch
+   and Pull through, so the two cannot drift. Full access admits the operation within the
+   envelope's own delivery and network scope; below it, the `approval-required` disposition is
+   redeemed only by the operator's approval of that exact call on the run's governed ask lane
+   (actions `git-fetch`/`git-pull`, a one-use proof bound to the call and its operation), never
+   by a store claim the model could reach. The effect is `runSyncExecute` itself (fixed argv,
+   hardened runner, bounds, closed outcomes, sync evidence ledger), with the run's live authority
+   proven again immediately before the remote dispatch. A fast-forward moves the run's head, which
+   the run's authority is bound to: like a head Keiko's verified commit wrote, the head the
+   governed pull wrote is restamped as the workspace's verified head and recorded for that run
+   (`governedSyncHeads.ts`), and `trustedHeadMatches` accepts it only for that run, that
+   workspace and that exact head. A head anyone else wrote still revokes the run.
+
 Every existing policy consumer named above must be enumerated and regression-tested in the
 implementing child (#2385) before merge; no surface may keep a local copy of the old matrix or
 introduce a Code-local parallel matrix.

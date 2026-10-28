@@ -50,6 +50,14 @@ const SETTLED_FIELDS = [
   "failureBasis",
   "modelCallFailure",
   "refusalReasonCode",
+  // The run's own roll-up: native OpenCode tools are counted here, not as governed editor
+  // mutations, so a native run's edits show on the settled line (#3897).
+  "toolInvocationCount",
+  "workspaceReadCount",
+  "editCount",
+  "editRefusedCount",
+  "verificationCount",
+  "operatorDecisionCount",
 ];
 const RUN_SETTLED = "coding-runtime.run.settled";
 const DRIVERS = new Set(["wb-ui", "wb-run", "manual"]);

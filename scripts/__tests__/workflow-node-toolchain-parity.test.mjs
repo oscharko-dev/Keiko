@@ -235,8 +235,8 @@ describe("workflow Node toolchain parity", () => {
     // macOS 15 pull-request replay brings the total to 33; the Windows gateway proof adds one.
     // The four-target portable secure-read matrix adds one pinned setup-node definition.
     // The required static-policy matrix adds one setup definition with two exact runtime legs.
-    // The isolated Firefox smoke matrix adds one governed setup definition for both shards.
-    expect(withSetupNode).toHaveLength(37);
+    // Firefox adds one definition; the owner-dispatched coding-runtime publisher adds another.
+    expect(withSetupNode).toHaveLength(38);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

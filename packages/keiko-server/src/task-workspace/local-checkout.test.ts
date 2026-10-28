@@ -98,6 +98,8 @@ beforeEach(() => {
   git("config", "user.email", "test@example.invalid");
   git("config", "user.name", "Keiko Test");
   git("config", "core.autocrlf", "false");
+  git("config", "commit.gpgsign", "false");
+  git("config", "tag.gpgsign", "false");
   writeFileSync(join(root, "README.md"), "fixture\n");
   git("add", "README.md");
   git("commit", "-qm", "fixture");

@@ -45,11 +45,16 @@ import type { ProductionCodingRuntimeResolverInput } from "../../../packages/kei
 import {
   createFunctionalRuntimeResolver,
   functionalGatewayConfig,
+  functionalReadinessFetch,
   productionDiscoveryBffDeps,
   scriptedResponse,
   scriptedTranscript,
   type ScriptState,
 } from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
+import {
+  FUNCTIONAL_REPOSITORY_SKILL_NAME,
+  functionalRepositorySkillText,
+} from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/skillDiscoveryProof.js";
 import { readProductionWorkspaceHead } from "../../../packages/keiko-server/src/coding-runtime/productionWorkspaceHeadReader.js";
 import { researchRequestLineText } from "../../../packages/keiko-server/src/coding-runtime/researchEgressPort.js";
 import {
@@ -198,6 +203,13 @@ export interface CodingRuntimeJourneyServerConfig {
   /** Test-only lower provider response; all BFF admission, authority, and persistence stay real. */
   readonly chatResponse?: ((request: GatewayRequest) => NormalizedResponse) | undefined;
   readonly gatewayConfig?: GatewayConfig | undefined;
+  /**
+   * The provider transport of the gateway's readiness probes for a journey that brings its own
+   * `gatewayConfig`. Without it such a provider is probed over the real transport, which suits a
+   * local model mock that answers a plain chat call; a mock that only accepts its own requests
+   * supplies the answer a working endpoint would give instead, so no probe ever reaches it.
+   */
+  readonly gatewayReadinessFetch?: typeof functionalReadinessFetch | undefined;
 }
 
 interface JourneyComposition {
@@ -232,6 +244,14 @@ function configureFixtureCommitSigning(repository: string, stateDir: string, ema
   git(repository, ["config", "commit.gpgsign", "true"]);
 }
 
+// #3897: a native run lists the repository's skills from the sanitized copies Keiko admits (#3903),
+// so the skill-discovery proof needs a real repository skill to find in the runtime's own listing.
+function writeRepositorySkillFixture(repository: string): void {
+  const directory = join(repository, ".opencode", "skills", FUNCTIONAL_REPOSITORY_SKILL_NAME);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "SKILL.md"), functionalRepositorySkillText());
+}
+
 function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, stateDir: string): void {
   const repository = config.repositoryRoot(stateDir);
   mkdirSync(dirname(join(repository, config.targetRelativePath)), { recursive: true });
@@ -249,6 +269,7 @@ function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, state
       },
     }),
   );
+  if (config.proveSkillDiscovery === true) writeRepositorySkillFixture(repository);
   git(repository, ["add", "."]);
   git(repository, ["commit", "-q", "-m", `${config.fixtureId} fixture`]);
   if (config.commit === true) {
@@ -432,10 +453,10 @@ function scriptedModelDeps(
   // The PR-description application cache is scoped to that graph, so returning a spread clone
   // would retain the generated artifact in one cache and make the mounted HTTP review route read
   // an empty cache even though both resolve the same authority binding.
+  // The configuration and its runtime holder stay the composed server's own: the holder carries
+  // the readiness probe's fresh basic-chat evidence that admits a new run (ADR-0171). Replacing
+  // either with a copy leaves that evidence unreadable and the Workbench never enables Start.
   return Object.assign(deps, {
-    config: scriptedGatewayConfig(),
-    configPresent: true,
-    gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
       async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
@@ -444,7 +465,7 @@ function scriptedModelDeps(
   });
 }
 
-function scriptedGatewayConfig(): GatewayConfig {
+export function scriptedGatewayConfig(): GatewayConfig {
   const config = functionalGatewayConfig();
   return {
     ...config,
@@ -464,11 +485,16 @@ function researchResolverSeams(research: CodingRuntimeResearchJourneyConfig): {
     ProductionCodingRuntimeResolverInput["childModelPortFactory"]
   >;
   readonly childModelId: string;
+  readonly gatewayEgress: NonNullable<ProductionCodingRuntimeResolverInput["gatewayEgress"]>;
 } {
   const fetchImpl = research.hermeticFetch();
   return {
     researchEgressEnabled: true,
     researchFetchImpl: fetchImpl,
+    // Production offers the research tool only while the gateway resolves an outbound transport
+    // (#3414-AC9), so the journey models a deployment that configured one. The hermetic fetch above
+    // still answers every request; no socket is opened.
+    gatewayEgress: () => ({ noProxy: [] }),
     childModelPortFactory: () => ({
       call: (): Promise<NormalizedResponse> => {
         const response = research.childModelResponse();
@@ -542,6 +568,13 @@ function scriptedResolver(
       });
 }
 
+function journeyReadinessFetch(
+  config: CodingRuntimeJourneyServerConfig,
+): typeof functionalReadinessFetch | undefined {
+  if (config.gatewayReadinessFetch !== undefined) return config.gatewayReadinessFetch;
+  return config.gatewayConfig === undefined ? functionalReadinessFetch : undefined;
+}
+
 function scriptedUiHandlerDepsOptions(
   config: CodingRuntimeJourneyServerConfig,
   services: JourneyWorkspaceServices,
@@ -550,6 +583,7 @@ function scriptedUiHandlerDepsOptions(
   resolver: ReturnType<typeof scriptedResolver>,
 ): Parameters<typeof buildUiHandlerDeps>[0] {
   const chatResponse = config.chatResponse;
+  const readinessFetch = journeyReadinessFetch(config);
   return {
     configPath: undefined,
     evidenceDir: join(bffStateRoot, "evidence"),
@@ -570,6 +604,10 @@ function scriptedUiHandlerDepsOptions(
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
     codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+    // The fixture provider answers the readiness probes for the default journey configuration; a
+    // journey with its own provider (a local model mock) is probed over the real transport unless
+    // it names the transport that answers for that provider.
+    ...(readinessFetch === undefined ? {} : { gatewayReadinessFetch: readinessFetch }),
     ...(chatResponse === undefined
       ? {}
       : {
@@ -619,14 +657,17 @@ function scriptedJourneyModelDeps(
   );
 }
 
-function writeChatGatewayConfig(
+/**
+ * The journey's provider profile as the composed server's own gateway configuration file, which
+ * `buildUiHandlerDeps` loads like any other, so its runtime holder owns the readiness evidence.
+ */
+function writeJourneyGatewayConfig(
   config: CodingRuntimeJourneyServerConfig,
   bffStateRoot: string,
 ): void {
-  if (config.chatResponse === undefined) return;
   writeFileSync(
     join(bffStateRoot, "ui-db", "keiko.config.json"),
-    `${JSON.stringify(config.gatewayConfig ?? functionalGatewayConfig(), null, 2)}\n`,
+    `${JSON.stringify(config.gatewayConfig ?? scriptedGatewayConfig(), null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
 }
@@ -654,7 +695,7 @@ function scriptedComposition(
   for (const dir of ["state", "ui-db", "evidence"]) {
     mkdirSync(join(bffStateRoot, dir), { recursive: true, mode: 0o700 });
   }
-  writeChatGatewayConfig(config, bffStateRoot);
+  writeJourneyGatewayConfig(config, bffStateRoot);
   const script = journeyScript(config, stateDir);
   const holder: { deps?: UiHandlerDeps } = {};
   const commit = commitFixtureFor(config, stateDir, services, holder);
@@ -788,16 +829,33 @@ interface ObservedGatewayCatalogBinding {
   readonly handlerSetDigest: string;
 }
 
+// #3897: a native run advertises the original runtime's own tool set, pinned by its digest, instead
+// of a bound catalog. The digest and the runtime version are the native counterpart of the binding.
+interface ObservedNativeToolSet {
+  readonly runtime: { readonly id: string; readonly version: string };
+  readonly toolSetDigest: string;
+}
+
 function observedGatewayCatalogBinding(
   request: GatewayRequest,
 ): ObservedGatewayCatalogBinding | undefined {
-  const binding = request.toolCatalog?.offered.binding;
-  if (binding === undefined) return undefined;
+  const catalog = request.toolCatalog;
+  if (catalog?.kind !== "bound") return undefined;
+  const { binding } = catalog.offered;
   return {
     catalogRevision: binding.catalogRevision,
     profile: { id: binding.profile.id, version: binding.profile.version },
     projectionDigest: binding.projectionDigest,
     handlerSetDigest: binding.handlerSetDigest,
+  };
+}
+
+function observedNativeToolSet(request: GatewayRequest): ObservedNativeToolSet | undefined {
+  const catalog = request.toolCatalog;
+  if (catalog?.kind !== "native") return undefined;
+  return {
+    runtime: { id: catalog.runtime.id, version: catalog.runtime.version },
+    toolSetDigest: catalog.toolSetDigest,
   };
 }
 
@@ -814,12 +872,22 @@ function sameGatewayCatalogBinding(
   );
 }
 
+function sameNativeToolSet(left: ObservedNativeToolSet, right: ObservedNativeToolSet): boolean {
+  return (
+    left.runtime.id === right.runtime.id &&
+    left.runtime.version === right.runtime.version &&
+    left.toolSetDigest === right.toolSetDigest
+  );
+}
+
 export function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
   const outputPath = process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH;
   if (outputPath === undefined || outputPath.length === 0) return undefined;
   let requestCount = 0;
   let catalogBindingRequestCount = 0;
+  let nativeToolSetRequestCount = 0;
   let catalogBinding: ObservedGatewayCatalogBinding | undefined;
+  let nativeToolSet: ObservedNativeToolSet | undefined;
   const outputLimits = new Set<number>();
   return (request): void => {
     requestCount += 1;
@@ -835,6 +903,14 @@ export function gatewayObserver(): ((request: GatewayRequest) => void) | undefin
       catalogBinding = observedBinding;
       catalogBindingRequestCount += 1;
     }
+    const observedNative = observedNativeToolSet(request);
+    if (observedNative !== undefined) {
+      if (nativeToolSet !== undefined && !sameNativeToolSet(nativeToolSet, observedNative)) {
+        throw new TypeError("Real-binary native tool set changed during one journey");
+      }
+      nativeToolSet = observedNative;
+      nativeToolSetRequestCount += 1;
+    }
     mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
     writeFileSync(
       outputPath,
@@ -844,6 +920,8 @@ export function gatewayObserver(): ((request: GatewayRequest) => void) | undefin
         outputTokenLimits: [...outputLimits].sort((left, right) => left - right),
         catalogBinding: catalogBinding ?? null,
         catalogBindingRequestCount,
+        nativeToolSet: nativeToolSet ?? null,
+        nativeToolSetRequestCount,
         contentFieldsRecorded: false,
       })}\n`,
       { mode: 0o600 },

@@ -23,7 +23,8 @@ on:
   pull_request:
     # Metadata is merge-relevant evidence: the review-suppression gate reads the PR title/body, and
     # a base retarget changes the candidate boundary. `edited` therefore must produce a fresh
-    # required verdict even though it does not change repository bytes.
+    # required verdict even though it does not change repository bytes. Closed metadata events
+    # have no live merge candidate; every candidate job rejects them before checkout.
     types: [opened, reopened, synchronize, ready_for_review, edited]
     branches:
       - dev
@@ -74,6 +75,7 @@ concurrency:
 jobs:
   protected-branch-gate:
     name: Protected branch gate
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:
@@ -127,6 +129,7 @@ jobs:
   # error yields false and the full matrix runs (#2699).
   change-scope:
     name: Change scope
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -139,7 +142,7 @@ jobs:
       # able to edit its own classifier and suppress the native install checks (CWE-807). The code
       # that decides therefore comes from the BASE revision, which the pull request cannot influence;
       # only the SHA range it is asked about comes from the event. Full history so the range resolves.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
           fetch-depth: 0
@@ -195,6 +198,7 @@ jobs:
   # scripts/resolve-verified-tree-evidence.mjs for the closed list, and ADR-0178 for the decision.
   verified-tree:
     name: Verified tree
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -207,10 +211,10 @@ jobs:
       evidence-head-sha: ${{ steps.resolve.outputs.evidence-head-sha }}
       evidence-tree-sha: ${{ steps.resolve.outputs.evidence-tree-sha }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -232,18 +236,18 @@ jobs:
   semantic-duplication:
     name: Semantic duplication
     needs: verified-tree
-    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -272,6 +276,7 @@ jobs:
   # heads. The official release binary is SHA-256 pinned and all output is redacted.
   secret-scan:
     name: Secret scan
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -280,12 +285,12 @@ jobs:
       GITLEAKS_VERSION: "8.30.1"
       GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -357,7 +362,7 @@ jobs:
   code-quality-policy:
     name: Static code-quality policy (Node ${{ matrix.node }})
     needs: verified-tree
-    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     strategy:
@@ -367,12 +372,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
@@ -406,7 +411,7 @@ jobs:
   core-quality:
     name: Core quality
     needs: [verified-tree, code-quality-policy]
-    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     # Bounded per .coderabbit.yaml's workflow policy. The job has run 11m50s-12m10s across recent
     # dev runs, so 30 minutes is ~2.5x headroom: generous against runner variance, still a bound
@@ -415,12 +420,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -482,7 +487,7 @@ jobs:
       - run: npm run lint:typed
         env:
           NODE_OPTIONS: --max-old-space-size=12288
-      - run: npm run check:native-host-code-quality
+      - run: npm run check:native:linux
       - run: npm run format:check
       - name: UI i18n guard
         env:
@@ -606,7 +611,7 @@ jobs:
     # The coverage chain feeds the SonarCloud analysis, which files under the branch the scanner
     # names: a proven tree's pull-request analysis never advances `dev`'s branch history. So this
     # chain runs on every push to `dev` even when the tree is proven (ADR-0178 D1, 2026-09-25).
-    if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -617,7 +622,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Unchanged from the serial job: package tests read real repository history.
           fetch-depth: 0
@@ -625,7 +630,7 @@ jobs:
           # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
           # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -638,7 +643,7 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
-        # Restore-only. The measuring jobs sit on the critical path, and on a cold key all five
+        # Restore-only. The measuring jobs sit on the critical path, and on a cold key all six
         # would otherwise tar and compress a several-hundred-megabyte `~/.npm` in their post-job
         # step for exactly one of them to win the reservation. `coverage-sonar` runs last and owns
         # the save.
@@ -704,7 +709,7 @@ jobs:
         run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/5 --reporter=github-actions
       - name: Upload package coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-blob-packages-${{ matrix.shard }}
           # Vitest names a sharded blob `blob-<index>-<count>.json`, so the five uploads merge into
@@ -723,20 +728,20 @@ jobs:
     name: Coverage suite (keiko-ui)
     needs: verified-tree
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
-    if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
           # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -778,7 +783,7 @@ jobs:
         run: npm run test:coverage:ui
       - name: Upload keiko-ui coverage evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report-ui
           # Exactly the two artefacts the downstream gates read (the ratchet's summary and the LCOV
@@ -794,7 +799,7 @@ jobs:
     name: Coverage shard (scripts ${{ matrix.shard }}/2)
     needs: verified-tree
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
-    if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -804,14 +809,14 @@ jobs:
       matrix:
         shard: [1, 2]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
           # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -848,7 +853,7 @@ jobs:
         run: npm run test:coverage:scripts:shard -- --shard=${{ matrix.shard }}/2 --reporter=github-actions
       - name: Upload script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-blob-scripts-${{ matrix.shard }}
           path: .vitest-reports/
@@ -875,7 +880,7 @@ jobs:
     # of reused pull-request evidence had left `dev`'s overview, new-code period and version events
     # at the last full run. The `ci` aggregate treats its `success` as an always-on gate that ran
     # and fails closed on any other state, so a red `dev` analysis turns the run red.
-    if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     needs:
       - verified-tree
       - coverage-packages
@@ -923,16 +928,16 @@ jobs:
             exit 1
           fi
           echo "Every coverage suite succeeded."
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
+          # use: the measuring checkouts feed one merged verdict, and `refs/pull/N/merge` is rewritten
           # whenever the head or base moves. Skew would have the shards measure one tree while the
           # gates and the scanner judge another, with nothing to detect it (Issue #2704).
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -946,22 +951,20 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore and maintain the npm download cache
         # The one job that also SAVES. It runs after the measuring jobs, so a cold key costs exactly
-        # one post-job compression instead of six racing ones.
+        # one post-job compression instead of seven racing ones.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
-      - name: Build workspace producers for the original OpenCode host
+      - name: Build workspace producers for coverage report merges
         run: npm run build:packages
-      - name: Install locked original OpenCode host dependencies
-        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
       # Reassembly happens before ANY evaluation, and the `needs:` edges above make that ordering
       # structural rather than a convention: a per-file floor read off one shard's partial summary
       # would silently under-report, so no gate below ever sees a shard-local view.
       - name: Download package coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           # The reporter default directory the shard script writes to, so that script followed by
           # `test:coverage:packages:merge` composes locally too, with no artifact relocation. Named
@@ -972,13 +975,13 @@ jobs:
           merge-multiple: true
       - name: Download keiko-ui coverage evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-report-ui
           path: packages/keiko-ui/coverage
       - name: Download script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: coverage-blob-scripts-*
           path: .vitest-reports-scripts
@@ -1039,11 +1042,6 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # The same native merge reconstructs the second coverage scope in its own report directory.
         run: npm run test:coverage:scripts:merge
-      # The native Node reporter appends to the final LCOV once, after Vitest regenerates it from
-      # both script blobs. Appending inside a shard would be discarded by the later blob merge.
-      - name: Add measured original host coverage to the script report
-        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        run: npm run test:coverage:opencode-service-host
       - name: Discard the shard blobs now that the merged coverage exists
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
@@ -1170,7 +1168,7 @@ jobs:
   portable-secure-read:
     name: Portable secure-read smoke (${{ matrix.platform_target }})
     needs: [change-scope, verified-tree]
-    if: ${{ !cancelled() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1188,11 +1186,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -1206,20 +1204,14 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci --ignore-scripts
-      - name: Build workspace producers for the original OpenCode host
-        run: npm run build:packages
-      - name: Install the locked private OpenCode host graph
-        run: npm ci --prefix native/opencode-service-host --ignore-scripts --workspaces=false --bin-links=false
-      - name: Qualify the original OpenCode service, transport and process lifecycle
-        run: npm run test:opencode-service-host
       - name: Compile and functionally qualify the real secure-read helper
         run: node scripts/qualify-portable-secure-read.mjs ${{ matrix.platform_target }}
 
   ci:
-    name: ci
-    # `always()`, not `!cancelled()`: the required aggregate reports on every run, a cancelled one
-    # included, and fails closed there. It waits on its needs, so it holds a run open only briefly.
-    if: ${{ always() }}
+    name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ci' || 'inactive PR - ci' }}
+    # `always()`, not `!cancelled()`: admitted runs report even when a need is cancelled and fail
+    # closed. Closed PR events are excluded below; admitted runs wait briefly on their needs.
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     needs:
       - change-scope
       - protected-branch-gate
@@ -1364,21 +1356,21 @@ jobs:
           echo "All required CI dependencies succeeded."
 
   build-scan-sbom-smoke:
-    name: Build, scan, SBOM, smoke
+    name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'Build, scan, SBOM, smoke' || 'inactive PR - Build, scan, SBOM, smoke' }}
     # Keep early feature-branch PRs fast. These release/package gates still run on merges to
     # feat/keiko-editor, on dev/release PRs, and on manual workflow_dispatch runs.
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
     needs: verified-tree
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -1443,13 +1435,13 @@ jobs:
           if [ "$code" -ne 2 ]; then echo "expected exit 2, got $code"; exit 1; fi
           echo "unknown-command exit code correct: $code"
       - name: Upload SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-cyclonedx
           path: sbom.cdx.json
           retention-days: 90
       - name: Upload workspace SBOMs (Issue #169 AC4)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: workspace-sboms-cyclonedx
           path: sbom/
@@ -1465,7 +1457,7 @@ jobs:
     # would skip this matrix. The aggregate still fails closed on the classifier failure; running the
     # matrix preserves diagnostic evidence instead of hiding a second defect behind the first one.
     # Unlike `always()`, it lets the cancellation of a superseded run stop the matrix (ADR-0157).
-    if: ${{ !cancelled() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1478,11 +1470,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -1586,7 +1578,7 @@ jobs:
   node-26-compatibility:
     name: Node 26 compatibility (shard ${{ matrix.shard }}/2)
     needs: [change-scope, verified-tree]
-    if: ${{ !cancelled() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -1596,13 +1588,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The full test suite compares support registries with immutable release commits.
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26.8.1"
           package-manager-cache: false
@@ -1645,8 +1637,8 @@ jobs:
   firefox-smoke:
     name: Firefox smoke (shard ${{ matrix.shard }}/4)
     needs: verified-tree
-    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
-    timeout-minutes: 20
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1656,11 +1648,11 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -1692,7 +1684,7 @@ jobs:
         run: npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/4
       - name: Upload Firefox smoke traces on failure
         if: ${{ failure() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-smoke-firefox-shard-${{ matrix.shard }}-of-4
           path: test-results/
@@ -1700,32 +1692,36 @@ jobs:
           retention-days: 7
 
   ui:
-    name: ui
+    name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ui' || 'inactive PR - ui' }}
     needs: [verified-tree, firefox-smoke]
-    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Require complete Firefox smoke shards
+      - name: Verify required Firefox smoke shards
         env:
-          KEIKO_FIREFOX_RESULT: ${{ needs.firefox-smoke.result }}
+          VERIFIED_TREE_RESULT: ${{ needs.verified-tree.result }}
+          FIREFOX_RESULT: ${{ needs.firefox-smoke.result }}
+          FIREFOX_REQUIRED: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: |
-          set -euo pipefail
-          if [[ "$KEIKO_FIREFOX_RESULT" == "success" ]]; then
-            exit 0
+          if [ "$VERIFIED_TREE_RESULT" != "success" ]; then
+            echo "Verified-tree resolution did not succeed."
+            exit 1
           fi
-          echo "Firefox smoke shards did not succeed: $KEIKO_FIREFOX_RESULT"
-          exit 1
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+          if [ "$FIREFOX_REQUIRED" = "true" ] && [ "$FIREFOX_RESULT" != "success" ]; then
+            echo "All required Firefox smoke shards must succeed."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The immutable D12 evidence gate recomputes the subject for its pinned baseline commit.
           # Keep that commit reachable instead of relying on the default single-commit checkout.
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
@@ -1802,7 +1798,7 @@ jobs:
         # version, so a mismatch installs browsers the runner's own test library never asked for and
         # decouples the CI evidence from the dependency graph the tests actually execute against.
         # `npm ci` above already installed this binary at the locked version.
-        run: ./node_modules/.bin/playwright install --with-deps chromium firefox webkit
+        run: ./node_modules/.bin/playwright install --with-deps chromium webkit
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
@@ -1825,7 +1821,7 @@ jobs:
       # without the machine it happened on. Uploaded only on failure, so a green run carries no cost.
       - name: Upload browser smoke traces on failure
         if: ${{ failure() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-smoke-traces
           path: test-results/
@@ -1852,7 +1848,7 @@ jobs:
       # gate above. Raw traces can contain workspace fixture text and remain outside this boundary.
       - name: Upload redacted performance evidence
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: performance-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1884,7 +1880,7 @@ jobs:
           echo "$body" | grep -q '"status":"ok"'
       - name: Upload UI SBOM
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-sbom-cyclonedx
           path: ui-sbom.cdx.json
@@ -1904,27 +1900,27 @@ jobs:
     # Candidate npm processes never receive OIDC authority. This push-only job reads this run's
     # completed SBOM artifacts and attests their document bytes; it executes no repository code.
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sbom-cyclonedx
           path: root-sbom
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: workspace-sboms-cyclonedx
           path: workspace-sboms
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ui-sbom-cyclonedx
           path: ui-sbom
       - name: Attest build provenance for root SBOM
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: root-sbom/sbom.cdx.json
       - name: Attest build provenance for workspace SBOMs
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: workspace-sboms/workspace-*.cdx.json
       - name: Attest build provenance for UI SBOM
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ui-sbom/ui-sbom.cdx.json

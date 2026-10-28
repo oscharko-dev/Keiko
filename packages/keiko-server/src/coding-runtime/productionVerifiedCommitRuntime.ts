@@ -13,6 +13,7 @@ import type {
   VerifiedCommitServiceOptions,
 } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
+import type { GovernedSyncHead } from "./governedSyncHeads.js";
 import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 export interface VerifiedCommitRuntimeDependencies extends Omit<
@@ -21,6 +22,8 @@ export interface VerifiedCommitRuntimeDependencies extends Omit<
 > {
   readonly resolveWorkspace: (root: string) => WorkspaceInfo | undefined;
   readonly buffersClean: (root: string, runId: string) => boolean;
+  /** Records the head a governed fast-forward of a run wrote (governedSyncHeads.ts, #3902 AC2). */
+  readonly recordGovernedSyncHead?: ((head: GovernedSyncHead) => void) | undefined;
 }
 export interface VerifiedCommitRuntimeBinding {
   readonly runId: string;
@@ -129,6 +132,8 @@ export function requestRuntimeStageApproval(
 ): void {
   const proposal = service?.review(proposalId);
   if (proposal === undefined) return;
+  // The operator approves what the proposal does: staging, or giving staged changes back (#3902 AC2).
+  const unstage = proposal.command.kind === "unstage";
   const event: CodingWorkbenchRuntimeEvent = {
     schemaVersion: "1",
     eventId: `event-${proposalId}`,
@@ -139,8 +144,8 @@ export function requestRuntimeStageApproval(
       requestId: proposalId,
       kind: "workspace-write",
       actionClass: "workspace-write",
-      reasonCode: "stage-approval-required",
-      actionKind: "git-stage",
+      reasonCode: unstage ? "unstage-approval-required" : "stage-approval-required",
+      actionKind: unstage ? "git-unstage" : "git-stage",
       scopeLabel: "workspace-scope",
       risk: "medium",
       policyReason: "approval-required",

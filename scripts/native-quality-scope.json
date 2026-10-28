@@ -4,7 +4,7 @@
     {
       "path": "native/portable-launcher/keiko-portable-launcher.c",
       "language": "c",
-      "platforms": ["macos", "windows"],
+      "platforms": ["macos", "windows", "linux"],
       "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
     },
     {
@@ -246,6 +246,234 @@
         "native-static-analysis",
         "system-extension-boundary"
       ]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_protocol.h",
+      "language": "c",
+      "platforms": ["macos", "linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/keiko_runtime_supervisor.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/qualification_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/qualification_observer.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/coordinator_encoder_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/deadline_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/owner_channel_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-runtime-owner-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-process-scope-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_root_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_receiver_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/owner_receiver_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-handoff-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-owner-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-parent-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-process-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-successor-linux.h",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app_control_root_fixture.c",
+      "language": "c",
+      "platforms": ["linux"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "kernel-generation-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-control-macos.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-handoff-macos.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-envelope-posix.h",
+      "language": "c",
+      "platforms": ["macos", "linux"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-parent-macos.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-runtime-owner-macos.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_app_runtime.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_app_job.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_process_scope.h",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
     }
   ]
 }

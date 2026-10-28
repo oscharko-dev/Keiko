@@ -6,12 +6,14 @@
     "@oscharko-dev/keiko-quality-intelligence",
     "@oscharko-dev/keiko-sandbox",
     "@oscharko-dev/keiko-tool-catalog",
+    "fallow",
     "ws"
   ],
   "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep", "ssh-keygen"],
   "workspaces": {
     ".": {
       "playwright": false,
+      "ignoreDependencies": ["java-parser"],
       "entry": [
         "src/**/*.ts!",
         "scripts/*.mjs!",
@@ -23,7 +25,10 @@
         "tests/e2e/**/*.mts!",
         "tests/e2e/config/**/*.ts!",
         "tests/e2e/support/**/*.{ts,mjs}!",
-        "tests/e2e/servers/**/*.mts!"
+        "tests/e2e/servers/**/*.mts!",
+        "native/**/*.test.mjs",
+        "native/**/test-*.mjs",
+        "docs/design-system/evidence/1300/browser/capture.mjs"
       ],
       "project": ["src/**/*.ts", "scripts/**/*.mjs", "tests/**/*.{ts,mts,mjs}", "native/**/*.mjs"],
       "ignore": [
@@ -80,27 +85,6 @@
     },
     "packages/keiko-workflows": {
       "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
-    },
-    "native/opencode-service-host": {
-      "entry": [
-        "host.mjs",
-        "entry.mjs",
-        "compatibility.test.mjs",
-        "entry.test.mjs",
-        "guard-seams.test.mjs",
-        "host.test.mjs"
-      ],
-      "project": ["*.mjs"],
-      "vitest": false,
-      "ignoreDependencies": ["@effect/platform-node-shared"],
-      "ignoreUnresolved": [
-        "^\\./keiko-native-file-io-codec\\.mjs$",
-        "^\\./keiko-workspace-path-policy/ignore\\.js$",
-        "^\\./keiko-governed-tools\\.mjs$",
-        "^\\./keiko-governed-tools-code-mode\\.mjs$",
-        "^\\./keiko-host-packet-data\\.mjs$",
-        "^\\./keiko-native-context\\.mjs$"
-      ]
     }
   }
 }

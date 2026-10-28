@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -15,6 +15,7 @@ import {
   type UpdateLocalStateManager,
 } from "./update-local-state.js";
 import { hashPortableHandoffTree } from "./update-portable-handoff-builder.js";
+import { writePosixRegistrationFixture } from "./__tests__/portable-registration.js";
 import {
   createPortableHandoffPlan,
   writePortableHandoffPlan,
@@ -29,7 +30,11 @@ import {
   appendPortableHandoffReceipt,
   type PortableHandoffReceiptKind,
 } from "./update-portable-handoff-receipts.js";
-import type { UpdateSessionLock } from "./update-session-lock.js";
+import { createStateDirUpdateSessionLock, type UpdateSessionLock } from "./update-session-lock.js";
+import { buildUiHandlerDeps } from "./deps.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const roots: string[] = [];
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
@@ -137,16 +142,14 @@ async function productionFixture(outcome: FixtureOutcome = "restored"): Promise<
   mkdirSync(stateDir, { recursive: true });
   const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
   const initialized = localState.writeRuntimeState(localState.readRuntimeState());
-  const registration = JSON.stringify({
-    schemaVersion: 1,
-    status: "managed",
-    updateEligible: true,
-    stable: true,
-    platformTarget: "macos-arm64",
-    packageVersion: outcome === "restored" ? "1.2.2" : "1.2.3",
-    installRootIdentitySha256: createHash("sha256").update(realpathSync(managedRoot)).digest("hex"),
+  const { registration } = writePosixRegistrationFixture({
+    managedRoot,
+    stateDir,
+    target: "macos-arm64",
+    version: outcome === "restored" ? "1.2.2" : "1.2.3",
+    home: root,
+    now: NOW,
   });
-  writeFileSync(join(stateDir, "portable-install-state.json"), registration);
   const currentTreeSha256 = await hashPortableHandoffTree(managedRoot, {
     deadline: Date.now() + 30_000,
   });
@@ -292,6 +295,67 @@ async function productionFixture(outcome: FixtureOutcome = "restored"): Promise<
   }
   return { activationId, localState, plan, sessionId, stateDir };
 }
+
+describe("portable handoff state directory composition", () => {
+  it.each(["ui", "../separate-ui"])(
+    "recovers the real handoff and releases its lock with UI data in %s",
+    async (uiDirectory) => {
+      const fixture = await productionFixture("complete");
+      const activityLog = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+      const lock = createStateDirUpdateSessionLock(fixture.stateDir);
+      expect(
+        lock.acquire({
+          sessionId: fixture.sessionId,
+          targetVersion: fixture.plan.targetVersion,
+          startedAt: new Date(NOW).toISOString(),
+          pid: process.pid,
+        }),
+      ).toBe(true);
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: join(fixture.stateDir, "evidence"),
+        uiDbPath: join(fixture.stateDir, uiDirectory, "keiko-ui.db"),
+        env: {
+          KEIKO_STATE_DIR: fixture.stateDir,
+          KEIKO_MEMORY_DIR: join(fixture.stateDir, "memory"),
+        },
+        modelPortFactory: (): undefined => undefined,
+      });
+      try {
+        const beforeRecovery = activityLog.events.length;
+        const current = {
+          pid: process.pid,
+          launchId: fixture.plan.newLaunchId,
+          host: "127.0.0.1" as const,
+          port: fixture.plan.oldProcess.port,
+          version: fixture.plan.targetVersion,
+        };
+        expect(deps.updateStartupRecovery).toBeDefined();
+        for (const phase of ["pre-listen", "post-listen"] as const) {
+          await expect(
+            deps.updateStartupRecovery?.reconcile({ phase, current }),
+          ).resolves.toMatchObject({ status: "ready" });
+        }
+        expect(fixture.localState.readRuntimeState().activationWal).toBeUndefined();
+        expect(lock.isLocked()).toBe(false);
+        expect(
+          activityLog.events
+            .slice(beforeRecovery)
+            .find((event) => event.op === "update.runtime.state-write"),
+        ).toMatchObject({
+          op: "update.runtime.state-write",
+          correlationId: "unknown-correlation-id",
+          errorKind: undefined,
+          extra: { state: "written" },
+        });
+      } finally {
+        await deps.dispose?.();
+        resetServerLogger();
+      }
+    },
+  );
+});
 
 describe("production portable handoff process identity", () => {
   const validEnv = {
@@ -465,8 +529,17 @@ describe("production portable handoff recovery", () => {
 
   it("atomically settles a complete activation as succeeded and remains ready", async () => {
     const fixture = await productionFixture("complete");
+    const realLock = createStateDirUpdateSessionLock(fixture.stateDir);
+    expect(
+      realLock.acquire({
+        sessionId: fixture.sessionId,
+        targetVersion: fixture.plan.targetVersion,
+        startedAt: new Date(NOW).toISOString(),
+        pid: process.pid,
+      }),
+    ).toBe(true);
     const runtime = createProductionPortableHandoffRuntime({
-      sessionLock,
+      sessionLock: realLock,
       env: {},
       stateDir: fixture.stateDir,
       currentVersion: fixture.plan.targetVersion,
@@ -495,6 +568,7 @@ describe("production portable handoff recovery", () => {
       sessionId: fixture.sessionId,
       lifecycle: { phase: "succeeded" },
     });
+    expect(realLock.isLocked()).toBe(false);
 
     const restarted = createProductionPortableHandoffRuntime({
       sessionLock,

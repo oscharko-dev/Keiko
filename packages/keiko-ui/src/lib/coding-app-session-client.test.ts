@@ -29,11 +29,48 @@ import {
   type ClientDiagnosticMeta,
 } from "./client-diagnostics";
 
+// The existing repair tests own local-session transport and single-flight behavior. The separate
+// browser client suite verifies cryptographic renewal and protected post-proof inspection.
+const rememberedRestore = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+vi.mock("./browser-approval-client", () => ({
+  createLocalBrowserApprovalClient: vi.fn(() => ({ restore: rememberedRestore })),
+}));
+
 const attestation = {
   requestId: "req_launcher-1",
   issuedAtMs: 1_720_000_000_000,
   claim: "c".repeat(64),
 };
+
+describe("remembered browser restoration after local-session confirmation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("orders remembered restoration after acknowledgement without treating it as authentication", async () => {
+    const ordered: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (): Promise<Response> => {
+        ordered.push("acknowledged");
+        return new Response(JSON.stringify({ schemaVersion: "1" }));
+      }),
+    );
+    rememberedRestore.mockImplementationOnce(async (): Promise<boolean> => {
+      ordered.push("restore");
+      return false;
+    });
+    await expect(ensureLocalCodingAppSession()).resolves.toBe(true);
+    expect(ordered).toEqual(["acknowledged", "restore"]);
+  });
+
+  it("preserves acknowledged confirmation when the optional restoration module fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ schemaVersion: "1" }))),
+    );
+    rememberedRestore.mockRejectedValueOnce(new DOMException("Unavailable", "NotSupportedError"));
+    await expect(ensureLocalCodingAppSession()).resolves.toBe(true);
+  });
+});
 
 function seams(fragment: string): {
   seams: CodingAppSessionPairingSeams;

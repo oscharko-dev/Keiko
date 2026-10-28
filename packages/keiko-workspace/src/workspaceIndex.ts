@@ -47,8 +47,8 @@ import {
 type MaybePromise<T> = T | Promise<T>;
 
 // Matching authority changes with decoding semantics, even when source bytes and stat metadata
-// stay unchanged. Version 9 rejects negatives recorded by the prior markup declaration probe.
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 9;
+// stay unchanged. Older records cannot certify the current source privacy projection.
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 16;
 
 export interface WorkspaceIndexCandidatePathPolicy {
   readonly include: readonly string[];
@@ -69,6 +69,9 @@ export interface WorkspaceIndexScopeKey {
   readonly omitLowValueWorkspaceFiles: boolean;
   readonly maxBytesPerFileScanned: number;
   readonly maxFilesScanned: number;
+  // #4098: a Chat index built under the content opt-out hashes preserved terms, so it is stored
+  // apart from every default index; absent keeps the default key byte for byte.
+  readonly contentRedaction?: "preserve" | undefined;
 }
 
 export interface WorkspaceIndexDiscoveredFile {
@@ -722,6 +725,7 @@ function storageKey(scopeKey: WorkspaceIndexScopeKey): string {
       ...(scopeKey.queryMatchShard === undefined
         ? {}
         : { queryMatchShard: scopeKey.queryMatchShard }),
+      ...(scopeKey.contentRedaction === "preserve" ? { contentRedaction: "preserve" } : {}),
     }),
   )}`;
 }
@@ -762,6 +766,9 @@ export function buildWorkspaceIndexScopeKey(
     omitLowValueWorkspaceFiles: policy.omitLowValueWorkspaceFiles,
     maxBytesPerFileScanned,
     maxFilesScanned,
+    ...(scope.workspace.contentRedaction === "preserve"
+      ? { contentRedaction: "preserve" as const }
+      : {}),
   };
 }
 

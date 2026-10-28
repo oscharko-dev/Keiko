@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "6b39a992ef619b3074fbc4c23ed79d50db183552",
+  "sourceFreeze": {
+    "artifact": "checkpoint73-source-freeze-v1.json",
+    "sha256": "72f8d02a6fe47dde1add3c2f7013e4da1e07be58879ce8144b760bdc51684017"
+  },
+  "compiledFreeze": {
+    "artifact": "checkpoint73-compiled-freeze-v1.json",
+    "sha256": "58cf44acd6625608f1262c795b130ff497fc3e1fb4cc6c8123f4085dc6e8c24c"
+  },
+  "sourceFileCount": 7557,
+  "compiledFileCount": 6621,
+  "verification": {
+    "affectedTests": {
+      "passed": 3521,
+      "failed": 0,
+      "existingSkipped": 1,
+      "files": 187
+    },
+    "uiCoverage": {
+      "passed": 10857,
+      "failed": 0,
+      "existingSkipped": 1,
+      "files": 563
+    },
+    "workspaceBrowser": {
+      "passed": 8,
+      "failed": 0,
+      "engine": "chromium",
+      "initialProject": "explicit-owned-readable-fixture"
+    },
+    "checks": [
+      {
+        "artifact": "checkpoint73-typecheck-v2.json",
+        "sha256": "8e709e502ff725009b4b27fb3d23ff5a473c23cd8bf3c15e977c26d8d0d5c3f2",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-activity-log-v1.json",
+        "sha256": "0abc244154726687ef3a317ec4ef482474b12dc16e8c75c3cfc8bb023eb9219d",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-root-lint-v2.json",
+        "sha256": "fcdacb7101ebcd7268c22857a462e4f821ac4d23cc05cb13ba9a9a5176bf2166",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-ui-lint-v2.json",
+        "sha256": "d2eb7515ab38eafbb0f899c37f2dc957df2a73890406f93e4875639bb96fef0a",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-ui-coverage-v2.json",
+        "sha256": "931dd93bdf0121daa3ce44fa783d8dcfb5fadae9eaa8899a6ac53892477c5c0b",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-affected-tests-green-v3.json",
+        "sha256": "d301e91ecac5f5bf3c844b60f0f287947b9e6f3ba64c39da414286c7bc18cf91",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-workspace-surfaces-green-v3.json",
+        "sha256": "8398a7f710156bc75c4f9a4a20a7d3cb36ad0edcd6d427661a2ce49dc198e304",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-e2e-wiring-v1.json",
+        "sha256": "1217965200696c9e7adcc49dcfac62fdfa103494614c1dcaae0a4c150548e6d9",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-editor-evidence-v1.json",
+        "sha256": "10564d8aea5a3492ac6d3597633a4ea4701a43d889ad27c7aa5baddd57edfc84",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-adr-index-v1.json",
+        "sha256": "3b7ed9101785d418725c08cb2bccb1899c6dce8f5dce87d3960c9e971ee48a77",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-context-quality-v1.json",
+        "sha256": "3f8f68da1de25c8f7271621cfa9f5c8a127ae688fa3a70491f2b6d160fb96418",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-retrieval-quality-v1.json",
+        "sha256": "fe796e96ea712068903bc3a3d11307583d8cd21b37b368988b6b5b1eb3e4750d",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-grounded-retrieval-quality-v1.json",
+        "sha256": "bb101874158d9ffe582485167b7ac19c84f8eba75a792ec04a878cd9315c004e",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-grounded-faithfulness-v1.json",
+        "sha256": "88425f77e4d4931ed6c459c6dad151d173add95a0912b5bc8c7f6800b6d27897",
+        "exitCode": 0
+      },
+      {
+        "artifact": "checkpoint73-sonar-v1.json",
+        "sha256": "f20e119bac954b2f7115cda91d85f5b0ec7e31ee9248218d301dd720e8ca64eb",
+        "exitCode": 0
+      }
+    ]
+  },
+  "overallAcceptance": false,
+  "mergeAcceptance": false,
+  "skillsAndModelPromptsChanged": false,
+  "classification": "Actual browser hit-testing repair for canvas controls above ordinary windows",
+  "sources": [
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/Workspace.tsx",
+      "sha256": "00de94f0c365e19bf9998d44918c2b669b1fad02fded2e839f9b7f1bd0769ca3"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/WorkspaceControls.module.css",
+      "sha256": "4afe2039ff70cce28b3d161f16064819022f221e86e4f4088e69b24de546b904"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/Workspace.test.tsx",
+      "sha256": "1a522dba90e679016525181594c9deec8df3a6469ff413e81a34f22d445d493e"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/globals.css.test.ts",
+      "sha256": "31a58cc564e75fd17f7a2e0f6c2a9f1e830f032809d60be131fb091d99e7f090"
+    },
+    {
+      "path": "tests/e2e/footer-window-palette-layering.spec.ts",
+      "sha256": "7bbd63fc973340c233940abfbb719a762a276056414b072ac9a35370de829ee3"
+    }
+  ],
+  "failure": {
+    "artifact": "checkpoint73-workspace-controls-red-v1.log",
+    "sha256": "295301898b541bda08d5d1a96873449e8727a3c25e369418ec97a925a692a22a",
+    "failed": 1,
+    "controlOwnsHitPoint": false,
+    "ordinaryWindowInterceptsHitPoint": true
+  },
+  "repair": "Use one prefixed component-scoped class at stacking level 3 above the existing scene level 2. Preserve global CSS, the bounded legacy CSS module inventory, fullscreen hiding and normal window ownership. Record palette opening through the existing body-free client diagnostic writer.",
+  "browserRegression": {
+    "newWindowAndZoomOwnTheirHitPoints": true,
+    "paletteOpensByNormalClick": true,
+    "escapeClosesPalette": true,
+    "fullscreenStillHidesCanvasControls": true,
+    "forcedClicksUsed": false,
+    "timeoutsOrAssertionsWeakened": false
+  },
+  "retainedEnvironmentFailure": {
+    "artifact": "checkpoint73-workspace-surfaces-v2-failed.trace.zip",
+    "sha256": "760cd2dfd445675e7a223a70514932aa9fa370e01e4c7d3f65441bf929db4c1b",
+    "passed": 7,
+    "failed": 1,
+    "deniedRoutes": ["/api/editor/settings", "/api/editor/settings/events"],
+    "disposition": "The default managed-checkout project lies on an excluded read surface. The unchanged complete suite passes with the explicitly owned readable initial project. Deny policy and zero-console-error assertion remain unchanged."
+  },
+  "globalStylesUnchanged": true,
+  "retainedInitialUiCoverage": {
+    "artifact": "checkpoint73-ui-coverage-v1.json",
+    "sha256": "d964f8dc6f6beb71a6c6f5f9573701108e4fcc1300746a9548035f2ef315ca33",
+    "passed": 10771,
+    "failed": 2,
+    "existingSkipped": 1,
+    "failedFiles": 3,
+    "disposition": "A newly added class violated the bounded legacy module inventory; a separate prefixed component-scoped module preserves the register. Two Node Worker import suites were blocked by Vite browser-worker transformation; the explicit NodeWorker name preserves runtime semantics and restores those suites."
+  }
+}

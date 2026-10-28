@@ -22,6 +22,35 @@ import {
   type UsearchWorkerData,
 } from "./usearch-worker-protocol.js";
 
+const ownerHarness = vi.hoisted<{
+  enabled: boolean;
+  binary: bigint | undefined;
+  parent: bigint | undefined;
+  calls: { readonly descriptor: number; readonly dev: bigint; readonly ino: bigint }[];
+}>(() => ({ enabled: false, binary: undefined, parent: undefined, calls: [] }));
+
+vi.mock("@oscharko-dev/keiko-security/process-scope", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@oscharko-dev/keiko-security/process-scope")>();
+  const { fstatSync } = await import("node:fs");
+  return {
+    ...original,
+    fileDescriptorOwnerUid: (
+      descriptor: number,
+      stat: {
+        readonly dev: bigint;
+        readonly ino: bigint;
+        readonly mode: bigint;
+        readonly uid: bigint;
+      },
+    ): bigint | undefined => {
+      if (!ownerHarness.enabled) return original.fileDescriptorOwnerUid(descriptor, stat);
+      ownerHarness.calls.push({ descriptor, dev: stat.dev, ino: stat.ino });
+      return fstatSync(descriptor).isDirectory() ? ownerHarness.parent : ownerHarness.binary;
+    },
+  };
+});
+
 const workerThreadHarness = vi.hoisted<{ data: unknown }>(() => ({ data: undefined }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -199,6 +228,8 @@ function removeRuntimeFixture(runtime: RuntimeFixture): void {
 
 afterEach(() => {
   workerThreadHarness.data = undefined;
+  ownerHarness.enabled = false;
+  ownerHarness.calls = [];
   vi.restoreAllMocks();
   vi.resetModules();
 });
@@ -358,6 +389,52 @@ describe("USearch index worker", () => {
         expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(
           USEARCH_ERROR.runtimeInvalid,
         );
+      } finally {
+        removeRuntimeFixture(runtime);
+      }
+    },
+  );
+
+  it.skipIf(process.getuid === undefined).each([
+    { name: "unknown binary", binary: undefined, parent: 0n },
+    { name: "unknown parent", binary: 0n, parent: undefined },
+    { name: "foreign binary", binary: 4_294_967_295n, parent: 0n },
+    { name: "foreign parent", binary: 0n, parent: 4_294_967_295n },
+  ])("refuses $name ownership even when local stat appears trusted", async ({ binary, parent }) => {
+    const runtime = createRuntimeFixture("side-effect");
+    const harness = createWorkerHarness(runtime);
+    Object.assign(ownerHarness, { enabled: true, binary, parent });
+    try {
+      await executeWorker(harness.data);
+      expect(existsSync(`${runtime.path}.executed`)).toBe(false);
+      expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(
+        USEARCH_ERROR.runtimeInvalid,
+      );
+    } finally {
+      removeRuntimeFixture(runtime);
+    }
+  });
+
+  it.skipIf(process.getuid === undefined).each(["root", "caller"] as const)(
+    "checks both held objects with lossless metadata for an admitted %s owner",
+    async (kind) => {
+      const runtime = createRuntimeFixture("success");
+      const harness = createWorkerHarness(runtime);
+      const uid = kind === "root" ? 0n : BigInt(process.getuid?.() ?? -1);
+      Object.assign(ownerHarness, { enabled: true, binary: uid, parent: uid });
+      vi.spyOn(Atomics, "wait").mockImplementation((): "ok" => {
+        Atomics.store(harness.control, USEARCH_CONTROL.command, USEARCH_COMMAND.close);
+        return "ok";
+      });
+      try {
+        await executeWorker(harness.data);
+        expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(USEARCH_ERROR.none);
+        expect(new Set(ownerHarness.calls.map((call) => call.descriptor)).size).toBe(2);
+        expect(
+          ownerHarness.calls.every(
+            (call) => typeof call.dev === "bigint" && typeof call.ino === "bigint",
+          ),
+        ).toBe(true);
       } finally {
         removeRuntimeFixture(runtime);
       }

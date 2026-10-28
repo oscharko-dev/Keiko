@@ -1,4 +1,4 @@
-import type { GatewayToolCatalogAdvertisement } from "./governed-tool-bridge.js";
+import type { GatewayToolAdvertisement } from "./governed-tool-bridge.js";
 import type { BoundToolInvocation } from "./governed-tool-lifecycle.js";
 // Gateway-layer WIRE contract types: model identity, request/response shapes, streaming envelope,
 // and tool-call normalisation. Credential-bearing or runtime-port shapes (ModelProviderConfig,
@@ -189,6 +189,23 @@ export interface ModelCapability {
    * into a dead model picker until a manual probe (customer field incident, 0.3.11).
    */
   readonly conversationReady?: boolean | undefined;
+  /**
+   * Transient server observation, never persisted: the current configuration generation holds a
+   * SUCCESSFUL basic-chat observation of this model that is older than the readiness freshness
+   * bound, so `conversationReady` is absent. It tells "was ready, needs a fresh check" apart from
+   * "never probed in this process"; both are unknown for admission, and an observed `false` is never
+   * stale. Absent in every other state (#3905).
+   */
+  readonly conversationReadinessStale?: true | undefined;
+  /**
+   * Transient server observation, never persisted: this chat model's forced tool-call proof lapsed
+   * or was withdrawn (for example because the gateway re-pointed the alias) and the server's own
+   * automatic verification of it is still open: queued, running, or retrying after an inconclusive
+   * attempt. It is what lets the Coding Workbench keep a human choice pending instead of replacing
+   * it (`isCodingWorkbenchProofRenewing`). Absent when no renewal is open, which includes a refuted
+   * proof, a verification that gave up, and a model the server never renews (#3905).
+   */
+  readonly toolCallingRenewalPending?: true | undefined;
   /** Observed repository-citation behavior; absent means unknown and grants no execution authority. */
   readonly citationBehaviour?: "cites" | "cites-after-repair" | "never" | undefined;
   /**
@@ -410,6 +427,23 @@ export function codingWorkbenchModelEligibility(
     isToolCallingVerificationFresh(capability.toolCallingVerification, at)
     ? "eligible"
     : "tool-calling-unverified";
+}
+
+/**
+ * Whether the Workbench does not offer this model right now only because the server is renewing
+ * its tool-call proof. The server says so on the models wire (`toolCallingRenewalPending`); the
+ * rest is structural, so a flagged model that is not a chat model, that was refuted, that never
+ * claimed tool calling, that was observed unready, or that is already eligible is not "renewing".
+ * A human choice of a renewing model is kept pending with Start withheld; a choice that is not
+ * renewing falls back to a usable alternative (#3905).
+ */
+export function isCodingWorkbenchProofRenewing(capability: ModelCapability): boolean {
+  return (
+    capability.toolCallingRenewalPending === true &&
+    capability.conversationReady !== false &&
+    capability.toolCallingVerification?.status !== "unsupported" &&
+    codingWorkbenchModelEligibility(capability) === "tool-calling-unverified"
+  );
 }
 
 /**
@@ -688,7 +722,20 @@ export interface ChatMessageImageUrlContentPart {
   };
 }
 
-export type ChatMessageContentPart = ChatMessageTextContentPart | ChatMessageImageUrlContentPart;
+/**
+ * A PDF document, inline: the OpenAI-compatible `file` part with a `data:application/pdf;base64,`
+ * URL, the shape the `document_input` readiness probe verifies (`supportsDocumentInput`).
+ */
+export interface ChatMessageFileContentPart {
+  readonly type: "file";
+  readonly file: {
+    readonly filename: string;
+    readonly file_data: string;
+  };
+}
+
+export type ChatMessageContentPart =
+  ChatMessageTextContentPart | ChatMessageImageUrlContentPart | ChatMessageFileContentPart;
 
 export interface ChatMessage {
   readonly role: "system" | "user" | "assistant" | "tool";
@@ -783,7 +830,7 @@ export function assertValidGatewaySamplingParameters(parameters: GatewaySampling
 
 export interface GatewayRequest {
   /** Server-produced projection/offer. Tool-bearing requests require this exact bound arm. */
-  readonly toolCatalog?: GatewayToolCatalogAdvertisement | undefined;
+  readonly toolCatalog?: GatewayToolAdvertisement | undefined;
   readonly modelId: string;
   readonly messages: readonly ChatMessage[];
   readonly responseFormat?: ResponseFormat | undefined;

@@ -14,6 +14,12 @@ Governing decisions:
 - [Portable Launch And Setup Guide](portable-launch-setup-guide.md)
 - [Release / Publish Workflow](release-publish-workflow.md)
 
+The archive's `artifact.uncompressedSizeBytes` is measured from the finished ZIP after each
+repack and checked again during assembly and publication. Portable manifests are bounded to
+1 MiB and may carry the stable release-impact catalog in `releaseImpact.catalog`. The full
+catalog is covered by the Keiko release signature; an installed reader must validate its entries
+and exact target binding before using it for future compatibility decisions.
+
 ## Product Contract
 
 Portable v1 is an archive-backed delivery path for stable public releases with platform-specific
@@ -434,10 +440,10 @@ new digests/evidence/signing status, and ship through the normal reviewed releas
 payload is an inseparable child of that whole-product release: it has no independent promotion,
 self-update, downgrade, rollback, or recovery channel.
 
-OpenCode `2.0.10` is pinned to tag commit
-`b8cedc1a7a5e2916bbb65dc1d4b620729c261638`. Its HTTP/SSE adapter compatibility is bound to the raw
+OpenCode `2.1.4` is pinned to tag commit
+`68bc26b7da1990ce10ffecfbc1e09eb13aa5d824`. Its HTTP/SSE adapter compatibility is bound to the raw
 bytes of `packages/protocol/openapi.json` at that commit, SHA-256
-`1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec`. The digest input is
+`4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9`. The digest input is
 `upstream-raw-bytes`; canonicalized or reformatted JSON is not interchangeable. Codex is absent
 from approved payloads and support claims until separate human redistribution and subscription-auth
 approval is recorded. Pending or missing approval fails closed as `redistribution-unapproved` and
@@ -477,6 +483,7 @@ required contract vocabulary.
     "assetName": "keiko-windows-x64.zip",
     "archiveFormat": "zip",
     "sizeBytes": 12345678,
+    "uncompressedSizeBytes": 23456789,
     "sha256": "64-hex-artifact-digest"
   },
   "provenance": {
@@ -583,9 +590,9 @@ required contract vocabulary.
         "owner": "anomalyco",
         "repository": "opencode",
         "name": "opencode",
-        "version": "2.0.10",
-        "tag": "v2.0.10",
-        "commit": "b8cedc1a7a5e2916bbb65dc1d4b620729c261638"
+        "version": "2.1.4",
+        "tag": "v2.1.4",
+        "commit": "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824"
       },
       "adapterCompatibility": {
         "adapterName": "keiko-coding-sidecar",
@@ -594,8 +601,8 @@ required contract vocabulary.
       },
       "protocolSchema": {
         "path": "packages/protocol/openapi.json",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/b8cedc1a7a5e2916bbb65dc1d4b620729c261638/packages/protocol/openapi.json",
-        "sha256": "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/protocol/openapi.json",
+        "sha256": "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
         "hashAlgorithm": "sha256",
         "hashEncoding": "lowercase-hex",
         "digestInput": "upstream-raw-bytes",
@@ -613,17 +620,17 @@ required contract vocabulary.
       },
       "license": {
         "spdxId": "MIT",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/b8cedc1a7a5e2916bbb65dc1d4b620729c261638/LICENSE",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/LICENSE",
         "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
       },
       "archive": {
-        "url": "https://opencode.ai/files/bin/2.0.10/opencode-windows-x64.zip",
+        "url": "https://opencode.ai/files/bin/2.1.4/opencode-windows-x64.zip",
         "sizeBytes": 90799413,
         "sha256": "1b0aa36b36ecdb73ff4c2a11c6ff10963b6949686597e0a2989540871e970c3d",
         "platformTarget": "windows-x64"
       },
       "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
-      "executableTreeSha256": "eec767a3240bb604808a4d08279326bcbba8a7b19044d3450808e2ade6cdfb84",
+      "executableTreeSha256": "2687b2468a3174167e1750b9370d58dfe3949aeafa9e58aceaddf0b948007470",
       "executableSha256": "64-hex-opencode-executable-digest",
       "platformTarget": "windows-x64",
       "payloadRootPath": "runtime/sidecars/opencode-compatible",
@@ -811,9 +818,9 @@ required contract vocabulary.
             "owner": "anomalyco",
             "repository": "opencode",
             "name": "opencode",
-            "version": "2.0.10",
-            "tag": "v2.0.10",
-            "commit": "b8cedc1a7a5e2916bbb65dc1d4b620729c261638"
+            "version": "2.1.4",
+            "tag": "v2.1.4",
+            "commit": "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824"
           },
           "adapterCompatibility": {
             "adapterName": "keiko-coding-sidecar",
@@ -822,8 +829,8 @@ required contract vocabulary.
           },
           "protocolSchema": {
             "path": "packages/protocol/openapi.json",
-            "url": "https://raw.githubusercontent.com/anomalyco/opencode/b8cedc1a7a5e2916bbb65dc1d4b620729c261638/packages/protocol/openapi.json",
-            "sha256": "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+            "url": "https://raw.githubusercontent.com/anomalyco/opencode/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/protocol/openapi.json",
+            "sha256": "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
             "hashAlgorithm": "sha256",
             "hashEncoding": "lowercase-hex",
             "digestInput": "upstream-raw-bytes",
@@ -841,17 +848,17 @@ required contract vocabulary.
           },
           "license": {
             "spdxId": "MIT",
-            "url": "https://raw.githubusercontent.com/anomalyco/opencode/b8cedc1a7a5e2916bbb65dc1d4b620729c261638/LICENSE",
+            "url": "https://raw.githubusercontent.com/anomalyco/opencode/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/LICENSE",
             "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
           },
           "archive": {
             "platformTarget": "windows-x64",
-            "url": "https://opencode.ai/files/bin/2.0.10/opencode-windows-x64.zip",
+            "url": "https://opencode.ai/files/bin/2.1.4/opencode-windows-x64.zip",
             "sizeBytes": 90799413,
             "sha256": "1b0aa36b36ecdb73ff4c2a11c6ff10963b6949686597e0a2989540871e970c3d"
           },
           "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
-          "executableTreeSha256": "eec767a3240bb604808a4d08279326bcbba8a7b19044d3450808e2ade6cdfb84",
+          "executableTreeSha256": "2687b2468a3174167e1750b9370d58dfe3949aeafa9e58aceaddf0b948007470",
           "executableSha256": "64-hex-opencode-executable-digest",
           "platformTarget": "windows-x64",
           "payloadRootPath": "runtime/sidecars/opencode-compatible",
@@ -920,6 +927,17 @@ Validation rules:
   exactly one `keiko-secure-workspace-read` entry at the fixed target path. The entry binds target,
   architecture, `KSR1`/`KSS1`, source commit and tree, unsigned and final signed-byte digests,
   signature/notarization state, and one CycloneDX `bom-ref`; it is not a sidecar runtime.
+- `nativeTools` is additive in schema v1 and carries the pinned third-party executables a payload
+  ships beside the Keiko-built helpers: today exactly one `ripgrep` entry (`kind: native-tool`),
+  the search dependency of the OpenCode coding runtime. Legacy manifests without it remain
+  parseable; every newly staged artifact contains it. The entry is the upstream release Keiko
+  approves per target, not a Keiko build: it binds the version, the upstream commit, the exact
+  archive URL and SHA-256, the extracted executable's SHA-256 (`unsignedSha256`, always the upstream
+  identity) and the shipped digest after any platform signing (`shippedSha256`), the fixed paths
+  `runtime/native/rg` (`rg.exe` on Windows) and `runtime/licenses/ripgrep/LICENSE-MIT`, the MIT text
+  digest, signature/notarization state, and one CycloneDX `bom-ref`. The complete array is duplicated
+  in the activation manifest and `reviewedBinding`; drift fails closed. It is not a sidecar runtime
+  and not a Node addon, so `nativeAddons` keeps its exactly-one-addon rule.
 - `runtimeQualification` is required for production Linux and macOS artifacts and has exactly
   `schemaVersion`, `path`, `sha256`, and `backend`. Linux requires
   `.portable/runtime-qualification.json` with backend `linux-namespace-gateway`, plus the fixed
@@ -941,8 +959,8 @@ Validation rules:
 - `sidecarRuntimes[]` remains optional only for legacy manifest parsing. Newly produced staging,
   candidate, and published manifests require exactly one entry named `opencode-compatible` at the
   exact payload root `runtime/sidecars/opencode-compatible`.
-- OpenCode entries are exact-key bound to repository `anomalyco/opencode`, version `2.0.10`, tag
-  `v2.0.10`, commit `b8cedc1a7a5e2916bbb65dc1d4b620729c261638`, and HTTP/SSE transport.
+- OpenCode entries are exact-key bound to repository `anomalyco/opencode`, version `2.1.4`, tag
+  `v2.1.4`, commit `68bc26b7da1990ce10ffecfbc1e09eb13aa5d824`, and HTTP/SSE transport.
 - OpenCode protocol compatibility is the raw-byte SHA-256 of commit-addressed
   `packages/protocol/openapi.json`; `hashAlgorithm`, `hashEncoding`, and `digestInput` must be `sha256`,
   `lowercase-hex`, and `upstream-raw-bytes` respectively.

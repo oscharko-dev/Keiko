@@ -23,6 +23,7 @@ import type { ClientDiagnosticCitationActivation } from "@oscharko-dev/keiko-con
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
+import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 
 import type { ChatConnectedScope, GroundedEvidenceCitation } from "@/lib/types";
 import {
@@ -411,7 +412,7 @@ function stripEvidenceSourceLabel(raw: string): string {
 // `[path/to/file.ts:1-4] [source: api] path/to/file.ts:1-4`.
 // The source label is transport metadata, and the repeated path creates duplicate editor links.
 // Normalize that common evidence cluster into one selectable/clickable repository reference.
-export function sanitizeRepositoryEvidenceText(source: string): string {
+function sanitizeEvidenceProse(source: string): string {
   return tidyEvidenceText(
     source
       .replace(
@@ -435,6 +436,20 @@ export function sanitizeRepositoryEvidenceText(source: string): string {
       )
       .replace(SOURCE_LABEL_PATTERN, stripEvidenceSourceLabel),
   );
+}
+
+export function sanitizeRepositoryEvidenceText(source: string): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const range of markdownCodeRanges(source)) {
+    parts.push(
+      sanitizeEvidenceProse(source.slice(cursor, range.start)),
+      source.slice(range.start, range.end),
+    );
+    cursor = range.end;
+  }
+  parts.push(sanitizeEvidenceProse(source.slice(cursor)));
+  return parts.join("");
 }
 
 function isSafeRawReferencePath(path: string): boolean {

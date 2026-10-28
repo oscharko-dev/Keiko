@@ -351,6 +351,43 @@ describe("captureSalientFromTurn", () => {
     }
   });
 
+  // #4098: the Chat content opt-out preserves an answer for its reader; memory proposals keep the
+  // default projection, so the salience model never receives the preserved document text.
+  it.each([
+    ["preserve", false],
+    [undefined, true],
+  ] as const)(
+    "hands the salience model the default projection under content policy %s",
+    async (contentRedaction, passedThrough) => {
+      const seen: string[] = [];
+      const model: ModelPort = {
+        call(request): Promise<NormalizedResponse> {
+          seen.push(request.messages.map((message) => message.content).join("\n"));
+          return fakeModel("[]").call(request, new AbortController().signal);
+        },
+      };
+      const deps = makeDeps({
+        memoryVault: makeVault(),
+        modelPortFactory: () => model,
+        ...(contentRedaction === undefined ? {} : { contentRedaction }),
+      });
+      const answer = "The customer hotline is +49 30 12345678.";
+      scheduleMemorySalienceCapture(
+        deps,
+        { content: USER_TEXT, memory: { enabled: true } },
+        context(),
+        "gpt-test",
+        answer,
+        "desktop",
+        "assistant-policy",
+      );
+      await vi.waitFor(() => {
+        expect(seen).toHaveLength(1);
+      });
+      expect(seen[0]?.includes("+49 30 12345678")).toBe(passedThrough);
+    },
+  );
+
   it("persists salient candidates and surfaces them as wire actions", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });

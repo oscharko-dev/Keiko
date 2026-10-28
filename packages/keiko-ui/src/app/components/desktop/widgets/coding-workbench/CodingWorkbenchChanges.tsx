@@ -4,11 +4,7 @@
 import { useMemo, useState, type ReactNode, type UIEvent } from "react";
 import type { GitChangedFile } from "@oscharko-dev/keiko-contracts";
 
-import {
-  useCodingWorkbenchChanges,
-  type CodingWorkbenchChangesClient,
-  type UseCodingWorkbenchChangesResult,
-} from "@/lib/useCodingWorkbenchChanges";
+import type { UseCodingWorkbenchChangesResult } from "@/lib/useCodingWorkbenchChanges";
 import type { CodingWorkbenchPairingState } from "@/lib/coding-workbench-live-state";
 import { DiffFileSection, type DiffViewLabels } from "../cards/shared/diffView";
 import {
@@ -23,26 +19,6 @@ const VISIBLE_ROWS = 24;
 const OVERSCAN_ROWS = 6;
 const ROW_HEIGHT = 54;
 
-export interface CodingWorkbenchChangesProps {
-  readonly root: string | null;
-  readonly runId: string | undefined;
-  readonly changeSignal: string | null;
-  readonly bindingPending: boolean;
-  /**
-   * The root this run was SUBMITTED against (`useCodingWorkbenchRunWorkspace`), so a Start whose
-   * response lands after the operator moved the workspace pointer cannot caption another
-   * workspace's git status as this run's changes (#3381 review).
-   */
-  readonly submittedRoot?: string | null | undefined;
-  /**
-   * The window's server-confirmed pairing dimension (release-audit F-08): the run root always
-   * lives under the managed task-workspace area, which is readable only through a launcher-paired
-   * app session (ADR-0141), so a read denial in a confirmed-unpaired window names that condition.
-   */
-  readonly pairing: CodingWorkbenchPairingState;
-  readonly client?: CodingWorkbenchChangesClient | undefined;
-}
-
 // #3610 (W11): "1 changed file", never "1 changed files".
 function changedFilesText(count: number, t: CodingWorkbenchTranslate): string {
   return count === 1
@@ -50,9 +26,23 @@ function changedFilesText(count: number, t: CodingWorkbenchTranslate): string {
     : t("codingWorkbench.changes.changedFiles", { count });
 }
 
-export function CodingWorkbenchChanges(props: CodingWorkbenchChangesProps): ReactNode {
+/**
+ * The Changes disclosure over a result its caller already owns. The Workbench window reads the
+ * run's changes once (`useCodingWorkbenchChanges`) and feeds the same result to this list and to
+ * its journey summary, instead of mounting a second hook that reads the same git status again.
+ * `pairing` is the window's server-confirmed pairing dimension (release-audit F-08): the run root
+ * always lives under the managed task-workspace area, which is readable only through a
+ * launcher-paired app session (ADR-0141), so a read denial in a confirmed-unpaired window names
+ * that condition.
+ */
+export function CodingWorkbenchChangesView({
+  changes,
+  pairing,
+}: {
+  readonly changes: UseCodingWorkbenchChangesResult;
+  readonly pairing: CodingWorkbenchPairingState;
+}): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const changes = useCodingWorkbenchChanges(props);
   if (changes.status === "idle" || changes.status === "loading") return null;
   return (
     <details
@@ -65,7 +55,7 @@ export function CodingWorkbenchChanges(props: CodingWorkbenchChangesProps): Reac
           : t("codingWorkbench.changes.title")}
       </summary>
       <div className={styles.cmpChangesContent}>
-        <ChangesContent changes={changes} pairing={props.pairing} t={t} />
+        <ChangesContent changes={changes} pairing={pairing} t={t} />
       </div>
     </details>
   );

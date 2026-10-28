@@ -14,6 +14,20 @@ export {
 } from "./backends.js";
 export type { WrappedCommand } from "./backends.js";
 export { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
+export {
+  NATIVE_OPENSSL_ENV_NAMES,
+  nativeHomeDeniedReadRoots,
+  nativeOpenSslNodeOptions,
+  nativeOpenSslReadRoots,
+  nativeToolchainReadRoots,
+} from "./native-toolchain-roots.js";
+export {
+  NATIVE_LINKED_FILES_MAX,
+  NATIVE_LINKED_FILE_SCAN_ENTRIES_MAX,
+  scanNativeLinkedFiles,
+  type NativeLinkedFileScan,
+  type NativeLinkedFileScanLimits,
+} from "./native-linked-files.js";
 export { planIsolatedRun, GATEWAY_UNSUPPORTED_ON_HOST_REASON } from "./plan.js";
 export {
   DEBUG_CAPSULE_RUNTIME_MOUNT,
@@ -83,5 +97,12 @@ export type {
   NetworkPolicy,
   SandboxAttestation,
   SandboxBackend,
+  RuntimeGatewayEgress,
   RuntimeGatewayFilesystem,
+  RuntimeGatewayProfile,
 } from "./types.js";
+
+export {
+  LINUX_GATEWAY_SERVICE_ENV,
+  parseRuntimeLoopbackServiceEndpoint,
+} from "./runtime-service.js";

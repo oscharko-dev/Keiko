@@ -4,6 +4,11 @@ import {
   type DiscoveryAliasRole,
   type RerankerSetupResolution,
 } from "./gateway-discovery-log.js";
+import {
+  aliasDeploymentIdentity,
+  deploymentDigest,
+  unionDeploymentDigests,
+} from "./gateway-deployment-identity.js";
 import { gatewaySpendBudgetForEnv, reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 // First-run gateway setup for non-technical UI users. The browser provides a base URL, API token,
 // and optionally a Figma PAT; the loopback BFF builds the local provider config, performs a real
@@ -864,6 +869,19 @@ function providerCatalogOrigin(
   return origin === undefined ? {} : { catalogOrigin: origin };
 }
 
+// The deployment the latest discovery observed behind the alias (#3905). A source that states none
+// keeps the identity recorded earlier: a degraded listing is silence, not a change of deployment.
+function providerDeploymentIdentity(
+  modelId: string,
+  options: ProviderRawOptions,
+): Pick<ModelProviderConfig, "deploymentIdentitySha256"> {
+  const retained = (options.stored ?? options.current)?.providers.find(
+    (provider) => provider.modelId === modelId,
+  )?.deploymentIdentitySha256;
+  const identity = options.modelMetadata?.[modelId]?.deploymentIdentitySha256 ?? retained;
+  return identity === undefined ? {} : { deploymentIdentitySha256: identity };
+}
+
 function providerRaw(
   modelId: string,
   baseUrl: string,
@@ -884,6 +902,7 @@ function providerRaw(
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     ...genericEndpointProtocolRaw(options),
     ...providerCatalogOrigin(modelId, options),
+    ...providerDeploymentIdentity(modelId, options),
     ...modelTokenCounterMetadata(options, modelId),
     capability: {
       ...defaultCapability,
@@ -1311,6 +1330,14 @@ function storedCatalogOrigin(
   return provider.catalogOrigin === undefined ? {} : { catalogOrigin: provider.catalogOrigin };
 }
 
+function storedDeploymentIdentity(
+  provider: ModelProviderConfig,
+): Pick<ModelProviderConfig, "deploymentIdentitySha256"> {
+  return provider.deploymentIdentitySha256 === undefined
+    ? {}
+    : { deploymentIdentitySha256: provider.deploymentIdentitySha256 };
+}
+
 function rawProviderFromCurrent(
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
@@ -1322,6 +1349,7 @@ function rawProviderFromCurrent(
     ...rawProviderCredential(provider),
     apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     ...storedCatalogOrigin(provider),
+    ...storedDeploymentIdentity(provider),
     ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
     ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
     ...(provider.outputTokenParameter === undefined
@@ -1612,6 +1640,8 @@ type DiscoveryVoiceRole = "speech-input" | "speech-output" | "realtime";
 
 interface ClassifiedDiscoveryModel {
   readonly deploymentCount?: number;
+  /** Sorted digests of the replicas the gateway reported behind this alias (#3905). */
+  readonly deploymentIdentities?: readonly string[];
   readonly undeclaredContext?: boolean;
   readonly deploymentConflict?: boolean;
   readonly declaredNonChat?: boolean;
@@ -1800,9 +1830,27 @@ function discoveryEntries(data: readonly unknown[], runtime: boolean): Classifie
       if (runtime) throw new Error("runtime model catalog contains an invalid entry");
       continue;
     }
-    collectDiscoveryDeployment(byId, classified);
+    collectDiscoveryDeployment(byId, withReportedDeployment(classified, item));
   }
   return [...byId.values()];
+}
+
+// The management record of a LiteLLM deployment states which backend an alias routes to; the
+// serving list and the group summary state none. A record without any of the fields adds nothing.
+function withReportedDeployment(
+  classified: ClassifiedDiscoveryModel,
+  item: unknown,
+): ClassifiedDiscoveryModel {
+  if (!isRecord(item)) return classified;
+  const info = nestedRecord(item, "model_info");
+  const params = nestedRecord(item, "litellm_params");
+  const digest = deploymentDigest({
+    deploymentId: info?.id,
+    model: params?.model,
+    provider: params?.custom_llm_provider,
+    apiBase: params?.api_base,
+  });
+  return digest === undefined ? classified : { ...classified, deploymentIdentities: [digest] };
 }
 
 function collectDiscoveryDeployment(
@@ -1810,11 +1858,16 @@ function collectDiscoveryDeployment(
   incoming: ClassifiedDiscoveryModel,
 ): void {
   const existing = byId.get(incoming.id);
+  const identities = unionDeploymentDigests(
+    existing?.deploymentIdentities,
+    incoming.deploymentIdentities,
+  );
   byId.set(incoming.id, {
     ...mergeDiscoveryDeployment(existing, incoming),
     deploymentCount: (existing?.deploymentCount ?? 0) + 1,
     undeclaredContext:
       existing?.undeclaredContext === true || incoming.metadata.contextWindow === undefined,
+    ...(identities === undefined ? {} : { deploymentIdentities: identities }),
   });
 }
 
@@ -1967,9 +2020,14 @@ function discoveredModelLists(
 // A replica set in which one deployment declared no window merges to the conservative fallback;
 // the metadata says so, so setup keeps that window assumed instead of treating 4,096 as declared.
 function discoveredMetadata(entry: ClassifiedDiscoveryModel): GatewayDiscoveredModelMetadata {
-  return entry.undeclaredContext === true && entry.metadata.contextWindow !== undefined
-    ? { ...entry.metadata, contextWindowUndeclared: true }
-    : entry.metadata;
+  const declared =
+    entry.undeclaredContext === true && entry.metadata.contextWindow !== undefined
+      ? { ...entry.metadata, contextWindowUndeclared: true }
+      : entry.metadata;
+  const deploymentIdentitySha256 = aliasDeploymentIdentity(entry.deploymentIdentities);
+  return deploymentIdentitySha256 === undefined
+    ? declared
+    : { ...declared, deploymentIdentitySha256 };
 }
 
 // Declared before name-inferred, then by id. Two lanes are ORDERED, not merely listed — the rerank
@@ -2307,7 +2365,7 @@ interface StartupCatalogResult {
 }
 type StartupCatalogRecorder = (
   outcome: "applied" | "unchanged" | "stale" | "cancelled" | "failed",
-  updatedModelCount: number,
+  delta: CatalogDelta,
   retryable: boolean,
   errorKind?: ActivityLogErrorKind,
 ) => void;
@@ -2324,13 +2382,16 @@ function startupCatalogLogger(
   const configuredModelCount = config.providers.filter((candidate) =>
     catalogConnectionMatches(candidate, provider),
   ).length;
-  return (outcome, updatedModelCount, retryable, errorKind): void => {
+  return (outcome, delta, retryable, errorKind): void => {
     logAutomaticCatalog(deps, {
       correlationId,
       outcome,
       ...(background === undefined ? {} : { phase: "catalog", ...background }),
       configuredModelCount,
-      updatedModelCount,
+      updatedModelCount: delta.updated,
+      addedModelCount: delta.added,
+      removedModelCount: delta.removed,
+      deploymentChangedModelCount: delta.deploymentChanged,
       elapsedMs: Math.max(0, Date.now() - startedAt),
       retryable,
       ...(errorKind === undefined ? {} : { errorKind }),
@@ -2382,7 +2443,8 @@ export async function refreshLiteLlmGatewayCatalog(
       deps.activityLog,
     );
     const retryable = catalogFailureRetryable(outcome, failure);
-    log(outcome === "cancelled" ? "cancelled" : "failed", 0, retryable, failure.errorKind);
+    const closing = outcome === "cancelled" ? "cancelled" : "failed";
+    log(closing, NO_CATALOG_DELTA, retryable, failure.errorKind);
     return { succeeded: false, retryable };
   }
 }
@@ -2396,12 +2458,67 @@ function catalogFailureRetryable(outcome: string, failure: SetupMetadataFailure)
   );
 }
 
-function catalogChangeCount(before: GatewayConfig, after: GatewayConfig): number {
-  const previous = new Map(listConfiguredCapabilities(before).map((model) => [model.id, model]));
-  const next = new Map(listConfiguredCapabilities(after).map((model) => [model.id, model]));
-  return [...new Set([...previous.keys(), ...next.keys()])].filter(
-    (id) => JSON.stringify(previous.get(id)) !== JSON.stringify(next.get(id)),
-  ).length;
+/**
+ * What one catalog reconciliation did to the configured models, as counts. `updated` counts every
+ * model whose record differs, including the added and removed ones; `deploymentChanged` counts the
+ * models whose observed deployment identity was first recorded or replaced, which withdraws the
+ * tool-calling proof they carried.
+ */
+interface CatalogDelta {
+  readonly added: number;
+  readonly removed: number;
+  readonly updated: number;
+  readonly deploymentChanged: number;
+}
+
+const NO_CATALOG_DELTA: CatalogDelta = Object.freeze({
+  added: 0,
+  removed: 0,
+  updated: 0,
+  deploymentChanged: 0,
+});
+
+interface CatalogRecord {
+  readonly capability: ModelCapability;
+  readonly deploymentIdentitySha256: string | undefined;
+}
+
+function catalogRecords(config: GatewayConfig): ReadonlyMap<string, CatalogRecord> {
+  return new Map(
+    listConfiguredCapabilities(config).map((capability) => [
+      capability.id,
+      {
+        capability,
+        deploymentIdentitySha256: config.providers.find(
+          (provider) => provider.modelId === capability.id,
+        )?.deploymentIdentitySha256,
+      },
+    ]),
+  );
+}
+
+function deploymentRebound(
+  previous: CatalogRecord | undefined,
+  next: CatalogRecord | undefined,
+): boolean {
+  return (
+    previous !== undefined &&
+    next?.deploymentIdentitySha256 !== undefined &&
+    previous.deploymentIdentitySha256 !== next.deploymentIdentitySha256
+  );
+}
+
+function catalogDelta(before: GatewayConfig, after: GatewayConfig): CatalogDelta {
+  const previous = catalogRecords(before);
+  const next = catalogRecords(after);
+  const ids = [...new Set([...previous.keys(), ...next.keys()])];
+  return {
+    added: ids.filter((id) => !previous.has(id)).length,
+    removed: ids.filter((id) => !next.has(id)).length,
+    updated: ids.filter((id) => JSON.stringify(previous.get(id)) !== JSON.stringify(next.get(id)))
+      .length,
+    deploymentChanged: ids.filter((id) => deploymentRebound(previous.get(id), next.get(id))).length,
+  };
 }
 
 function currentCatalogConnection(
@@ -2443,7 +2560,7 @@ function applyStartupCatalog(
   const current = holder.current();
   const configured = currentCatalogConnection(holder, generation, provider);
   if (current === undefined || configured === undefined) {
-    log("stale", 0, true);
+    log("stale", NO_CATALOG_DELTA, true);
     return { succeeded: false, retryable: true };
   }
   const updated = refreshedLiteLlmCatalog(
@@ -2453,10 +2570,10 @@ function applyStartupCatalog(
     normalizeDiscoveryResult(result),
   );
   if (!commitStartupCatalog(holder, current, updated, generation, correlationId)) {
-    log("stale", 0, true);
+    log("stale", NO_CATALOG_DELTA, true);
     return { succeeded: false, retryable: true };
   }
-  log(updated === current ? "unchanged" : "applied", catalogChangeCount(current, updated), false);
+  log(updated === current ? "unchanged" : "applied", catalogDelta(current, updated), false);
   return { succeeded: true, retryable: false };
 }
 
@@ -2601,25 +2718,69 @@ function refreshedLiteLlmCatalog(
   discovery: SetupCandidateModels,
 ): GatewayConfig {
   const inventory = reconcileCatalogInventory(config, configured, connection, discovery);
-  const refreshed = listConfiguredCapabilities(inventory).reduce((updated, model) => {
-    const provider = inventory.providers.find((candidate) => candidate.modelId === model.id);
-    const metadata = discovery.modelMetadata[model.id];
-    if (
-      model.kind !== "chat" ||
-      provider === undefined ||
-      !catalogConnectionMatches(provider, connection) ||
-      metadata === undefined
-    )
-      return updated;
-    const replacement = catalogDeclaredCapability(model, metadata);
-    return {
-      ...updated,
-      capabilities: listConfiguredCapabilities(updated).map((existing) =>
-        existing.id === model.id ? replacement : existing,
-      ),
-    };
-  }, inventory);
+  const refreshed = listConfiguredCapabilities(inventory).reduce(
+    (updated, model) => refreshedCatalogModel(updated, inventory, connection, discovery, model),
+    inventory,
+  );
   return JSON.stringify(refreshed) === JSON.stringify(config) ? config : refreshed;
+}
+
+function refreshedCatalogModel(
+  updated: GatewayConfig,
+  inventory: GatewayConfig,
+  connection: ModelProviderConfig,
+  discovery: SetupCandidateModels,
+  model: ModelCapability,
+): GatewayConfig {
+  const provider = inventory.providers.find((candidate) => candidate.modelId === model.id);
+  const metadata = discovery.modelMetadata[model.id];
+  if (
+    model.kind !== "chat" ||
+    provider === undefined ||
+    !catalogConnectionMatches(provider, connection) ||
+    metadata === undefined
+  )
+    return updated;
+  const observed = withObservedDeployment(
+    provider,
+    catalogDeclaredCapability(model, metadata),
+    metadata.deploymentIdentitySha256,
+  );
+  return {
+    ...updated,
+    providers: updated.providers.map((existing) =>
+      existing.modelId === provider.modelId ? observed.provider : existing,
+    ),
+    capabilities: listConfiguredCapabilities(updated).map((existing) =>
+      existing.id === model.id ? observed.capability : existing,
+    ),
+  };
+}
+
+/**
+ * Records the deployment the catalog reports behind the alias and withdraws a tool-calling proof
+ * that was issued for any other (#3905). The alias, endpoint and protocol did not move, so no other
+ * part of the proof's binding notices a gateway that re-pointed the alias; the readiness queue then
+ * renews the withdrawn proof like any lapsed one. The binding is checked whether or not the identity
+ * moved this refresh: an alias restored from the accepted source carries its old proof onto a
+ * provider that was rebuilt from the latest discovery. An unobserved deployment changes nothing.
+ */
+function withObservedDeployment(
+  provider: ModelProviderConfig,
+  capability: ModelCapability,
+  observed: string | undefined,
+): { readonly provider: ModelProviderConfig; readonly capability: ModelCapability } {
+  const current =
+    observed === undefined ? provider : { ...provider, deploymentIdentitySha256: observed };
+  const proof = capability.toolCallingVerification;
+  const proofStale =
+    capability.toolCalling &&
+    proof !== undefined &&
+    proof.configurationFingerprint !== toolCallingConfigurationFingerprint(current);
+  return {
+    provider: current,
+    capability: proofStale ? { ...capability, toolCalling: false } : capability,
+  };
 }
 
 function catalogDeclaredLimit(
@@ -7126,23 +7287,43 @@ function reportChatSmokeAdmission(
 // silently accepted with no configuration signal, no log line, and no opt-in trail — a deliberate
 // product choice (local sidecar providers, Ollama-style, #2387 research egress), not a defect. The
 // gap is purely observability: an operator investigating an unexpected Gateway Setup acceptance had
-// no record that a loopback target was the one silently let through. Body-free by construction, the
-// same pattern as `reportDiscoveryTruncation` above — a fixed code, never the raw baseUrl/host/port.
+// no record that a loopback target was the one silently let through. The acceptance is ordinary
+// evidence, so it has its own line at info: as an error-level `server.diagnostic.failure` every
+// successful local setup read as a failure (Keiko 1.3.0 test, #3897). Body-free by construction —
+// the request's correlation and the closed target class, never the raw baseUrl/host/port.
+const GATEWAY_SETUP_TARGET_ACCEPTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.setup.target.accepted",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-setup.reportLoopbackTargetAccepted",
+  fields: {
+    targetClass: { type: "string", dataClass: "closed-enum", required: true, values: ["loopback"] },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-setup-target"],
+  proofIds: ["gateway.setup.target.accepted.line"],
+  releaseImpact: "patch",
+});
+
 function reportLoopbackTargetAccepted(
-  diagnostics: ServerDiagnosticSink | undefined,
   correlationId: string | undefined,
   baseUrl: string,
+  sink: ServerLogSink = processServerLogSink(),
 ): void {
   if (gatewaySetupTargetClass(baseUrl) !== "loopback") return;
-  emitServerDiagnostic(diagnostics, {
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    timestamp: new Date().toISOString(),
-    operation: "POST /api/gateway/setup",
-    source: "gateway-setup.candidate",
-    errorClass: "GatewaySetupLoopbackTargetAccepted",
-    message: "Gateway Setup accepted a loopback candidate target.",
-    code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
-  });
+  sink.write(
+    activityLogEvent(
+      GATEWAY_SETUP_TARGET_ACCEPTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), level: "info" },
+      { targetClass: "loopback", completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 // Isolates the chat-smoke-test call from verifySetupCandidate: on a temporary gateway failure,
@@ -7175,7 +7356,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(input.baseUrl, "candidate", input.egress);
-  reportLoopbackTargetAccepted(input.diagnostics, input.correlationId, input.baseUrl);
+  reportLoopbackTargetAccepted(input.correlationId, input.baseUrl);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
   input.signal?.throwIfAborted();

@@ -567,15 +567,19 @@ async function restartNextChild() {
   });
 }
 
+function requestReadiness(url, fetchImpl = globalThis.fetch) {
+  return fetchImpl(url, { cache: "no-store", signal: globalThis.AbortSignal.timeout(5000) });
+}
+
 async function fetchOk(url, validate = async () => true) {
-  const response = await globalThis.fetch(url, { cache: "no-store" });
+  const response = await requestReadiness(url);
   if (!response.ok) return `HTTP ${String(response.status)}`;
   return (await validate(response)) ? "ok" : "unexpected response";
 }
 
 export async function probeApiReadiness(url, fetchImpl = globalThis.fetch) {
   try {
-    const response = await fetchImpl(url, { cache: "no-store" });
+    const response = await requestReadiness(url, fetchImpl);
     if (!response.ok) {
       return { result: `HTTP ${String(response.status)}`, allowSameOriginMicrophone: false };
     }
@@ -886,8 +890,13 @@ function nextArgs() {
 // ".next/dev/dev/types" include, and rewrite the committed packages/keiko-ui/tsconfig.json on every
 // local smoke run. This runner keeps NODE_ENV=test for its own test gates; the child runs as the
 // development server it is.
-export function nextChildEnv(port) {
-  return { NODE_ENV: "development", PORT: String(port) };
+export function nextChildEnv(port, nodeOptions = process.env.NODE_OPTIONS) {
+  const bootstrap = new URL("./next-dev-bootstrap.mjs", import.meta.url).href;
+  return {
+    NODE_ENV: "development",
+    PORT: String(port),
+    NODE_OPTIONS: `${nodeOptions ?? ""} --import=${bootstrap}`.trim(),
+  };
 }
 
 function startNext() {
