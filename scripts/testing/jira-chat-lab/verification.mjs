@@ -268,22 +268,46 @@ function volumes(container) {
   }));
 }
 
+export async function waitForLicensedRecovery(
+  {
+    ready,
+    license,
+    now = Date.now,
+    pause = () => new Promise((resolve) => globalThis.setTimeout(resolve, 2000)),
+  },
+  timeoutMs = 300_000,
+) {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    if (await ready()) {
+      try {
+        await license();
+        return;
+      } catch {
+        // Docker health can precede Jira's license plugin. Only this read is retried.
+        console.log(JSON.stringify({ operation: "jira-lab-recovery", case: "license-not-ready" }));
+      }
+    }
+    await pause();
+  }
+  throw new TypeError(
+    "Restarted Jira did not become licensed and healthy within the recovery wait",
+  );
+}
 async function healthy(session, services) {
-  const deadline = Date.now() + 300_000;
-  while (Date.now() < deadline) {
-    const [current] = JSON.parse(await docker(["inspect", services.jira.Id]));
-    if (current.State.Health?.Status === "healthy") {
+  await waitForLicensedRecovery({
+    license: () => requireLicense(session),
+    ready: async () => {
+      const [current] = JSON.parse(await docker(["inspect", services.jira.Id]));
+      if (current.State.Health?.Status !== "healthy") return false;
       const after = await inspectServices(session);
       for (const service of ["jira", "tls", "database"]) {
         assert.equal(after[service].Id, services[service].Id);
         assert.deepEqual(volumes(after[service]), volumes(services[service]));
       }
-      await requireLicense(session);
-      return;
-    }
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 2000));
-  }
-  throw new TypeError("Restarted Jira did not become healthy within the bounded recovery wait");
+      return true;
+    },
+  });
 }
 
 async function restoreService(group, actions) {
@@ -380,6 +404,8 @@ async function main() {
       mode === "pat" ? qualifyPat(context, group, delay) : qualifyAvailability(context, group),
   });
   await requireLicense(session);
+  assert.equal(group.results.length, mode === "pat" ? 2 : 1);
+  assert.notEqual(process.exitCode, 1);
   privateJson(
     join(session.directory, `verification-${mode}-${id}.json`),
     {

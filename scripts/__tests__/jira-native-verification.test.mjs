@@ -10,6 +10,7 @@ import {
   validateServices,
   verifyInvalidation,
   withStoppedService,
+  waitForLicensedRecovery,
 } from "../testing/jira-chat-lab/verification.mjs";
 
 function actions(group) {
@@ -241,4 +242,37 @@ it("retains an uncertain PAT creation intent and refuses a second dispatch after
   expect(JSON.parse(readFileSync(f.group.pendingPath)).phase).toBe("pat-creation-may-have-started");
   await expect(createOwnedToken(f.context, f.group)).rejects.toThrow("cannot resume");
   expect(labRequest.mock.calls.filter((call) => call[1] === "POST")).toHaveLength(1);
+});
+
+function recoveryReadiness() {
+  let elapsed = 0;
+  return {
+    ready: vi.fn(async () => true),
+    license: vi.fn(async () => 9000),
+    now: () => elapsed,
+    pause: vi.fn(async () => {
+      elapsed += 2000;
+    }),
+  };
+}
+it("waits for licensed readiness after Docker reports healthy without repeating any write", async () => {
+  const actions = recoveryReadiness();
+  actions.license.mockRejectedValueOnce(new TypeError("License endpoint is still initializing"));
+  await expect(waitForLicensedRecovery(actions, 6000)).resolves.toBeUndefined();
+  expect(actions.ready).toHaveBeenCalledTimes(2);
+  expect(actions.license).toHaveBeenCalledTimes(2);
+  expect(actions.pause).toHaveBeenCalledOnce();
+});
+it("keeps an unavailable license bounded and never claims healthy recovery", async () => {
+  const actions = recoveryReadiness();
+  actions.license.mockRejectedValue(new TypeError("License is unavailable"));
+  await expect(waitForLicensedRecovery(actions, 4000)).rejects.toThrow("within the recovery wait");
+  expect(actions.license).toHaveBeenCalledTimes(2);
+});
+it("never treats changed service identity or volume checks as a retryable license startup", async () => {
+  const actions = recoveryReadiness();
+  actions.ready.mockRejectedValueOnce(new TypeError("Service ownership changed"));
+  await expect(waitForLicensedRecovery(actions, 6000)).rejects.toThrow("ownership changed");
+  expect(actions.license).not.toHaveBeenCalled();
+  expect(actions.pause).not.toHaveBeenCalled();
 });

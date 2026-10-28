@@ -22,6 +22,7 @@ import {
   createDefaultEmbeddingCapability,
   toolCallingConfigurationFingerprint,
 } from "../../../packages/keiko-model-gateway/dist/index.js";
+import { createProviderSecretResolver } from "../../../packages/keiko-server/dist/credentialVault.js";
 import { probeGatewayToolCalling } from "../../../packages/keiko-server/dist/gateway-tool-calling-probe.js";
 import {
   mintLauncherPairingAttestation,
@@ -89,29 +90,66 @@ function assertLiveModelOptions(modelId, modelRetries, embeddingModelId) {
   )
     throw new TypeError("A distinct nonempty embedding model is required");
 }
+function selectedGatewayProvider(modelId) {
+  const configPath = process.env.KEIKO_JIRA_LAB_GATEWAY_CONFIG;
+  if (configPath === undefined) return undefined;
+  const raw = JSON.parse(readPrivateFile(configPath));
+  const secretResolver = createProviderSecretResolver({ configPath, env: process.env });
+  const config = parseGatewayConfig(raw, {}, { secretResolver });
+  const selected = config.providers.find((provider) => provider.modelId === modelId);
+  if (selected === undefined) throw new TypeError("Selected laboratory model is not configured");
+  if (!new Set(["127.0.0.1", "localhost", "[::1]"]).has(new URL(selected.baseUrl).hostname))
+    throw new TypeError("Jira qualification requires a local model Gateway");
+  const {
+    apiKey,
+    apiKeySecretRef: _reference,
+    apiKeySourceModelId: _source,
+    ...provider
+  } = selected;
+  if (typeof apiKey !== "string" || apiKey.length === 0)
+    throw new TypeError("Configured laboratory model credential is unavailable");
+  const token = modelId.replace(/[^A-Za-z0-9]/gu, "_").toUpperCase();
+  return { provider, env: { [`KEIKO_MODEL_${token}_API_KEY`]: apiKey } };
+}
 function liveModelProviders(modelId, { modelRetries = 0, embeddingModelId } = {}) {
   assertLiveModelOptions(modelId, modelRetries, embeddingModelId);
-  const provider = {
-    modelId,
-    baseUrl: "http://127.0.0.1:11434/v1",
-    apiKey: "ollama-local",
-    timeoutMs: 45000,
-    maxRetries: modelRetries,
-    retryBaseDelayMs: 1,
-  };
+  const sources = [modelId, ...(embeddingModelId === undefined ? [] : [embeddingModelId])].map(
+    (id) => {
+      const selected = selectedGatewayProvider(id);
+      return {
+        provider: {
+          ...(selected?.provider ?? {
+            modelId: id,
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: "ollama-local",
+          }),
+          timeoutMs: selected?.provider.timeoutMs ?? 45000,
+          maxRetries: modelRetries,
+          retryBaseDelayMs: 1,
+        },
+        env: selected?.env ?? {},
+      };
+    },
+  );
   return {
-    provider,
-    additionalProviders:
-      embeddingModelId === undefined ? [] : [{ ...provider, modelId: embeddingModelId }],
+    provider: sources[0].provider,
+    env: Object.assign({}, ...sources.map((source) => source.env)),
+    additionalProviders: sources.slice(1).map((source) => source.provider),
     embeddingCapabilities:
       embeddingModelId === undefined ? [] : [createDefaultEmbeddingCapability(embeddingModelId)],
   };
 }
-export async function configureModel(deps, modelId, session, configPath, options) {
-  const { provider, additionalProviders, embeddingCapabilities } = liveModelProviders(
-    modelId,
-    options,
-  );
+function prepareLiveModel(root, session, modelId, options) {
+  const prepared = liveModelProviders(modelId, options);
+  return {
+    env: prepared.env,
+    configure: (deps) =>
+      configureModel(deps, modelId, session, join(root, "keiko.config.json"), options, prepared),
+  };
+}
+export async function configureModel(deps, modelId, session, configPath, options, prepared) {
+  const { provider, additionalProviders, embeddingCapabilities, env } =
+    prepared ?? liveModelProviders(modelId, options);
   const capability = {
     ...createDefaultChatCapability(modelId),
     contextWindow: 32768,
@@ -127,20 +165,23 @@ export async function configureModel(deps, modelId, session, configPath, options
     },
     egress: { caBundlePath: join(session.directory, "secrets", "tls", "ca.pem") },
   };
-  const probe = await probeGatewayToolCalling(parseGatewayConfig(raw), provider);
+  const parsed = parseGatewayConfig(raw, env);
+  const resolved = parsed.providers.find((entry) => entry.modelId === modelId);
+  assert.ok(resolved);
+  const probe = await probeGatewayToolCalling(parsed, resolved);
   assert.equal(probe, "verified");
   const proof = {
     status: "verified",
     checkedAt: new Date().toISOString(),
     probe: "gateway-tool-calling-v1",
-    configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    configurationFingerprint: toolCallingConfigurationFingerprint(resolved),
   };
   const configured = {
     ...raw,
     capabilities: [{ ...capability, toolCallingVerification: proof }, ...embeddingCapabilities],
   };
   writeFileSync(configPath, JSON.stringify(configured), { mode: 0o600 });
-  deps.gatewayConfig.set(parseGatewayConfig(configured), true);
+  deps.gatewayConfig.set(parseGatewayConfig(configured, env), true);
   deps.gatewayConfig.recordVerifiedCapability(
     modelId,
     { conversationReady: true },
@@ -298,7 +339,7 @@ async function readTurn(origin, cookie, chat, projectPath, modelId) {
     controller.abort();
   }
 }
-function createLiveDeps(root, session, secret, retainState, restoring = false) {
+function createLiveDeps(root, session, secret, retainState, restoring = false, modelEnv = {}) {
   const credentialKey = restoring
     ? readPrivateFile(join(root, "credential-key"))
     : randomBytes(32).toString("base64");
@@ -313,6 +354,7 @@ function createLiveDeps(root, session, secret, retainState, restoring = false) {
     evidenceDir: join(root, "evidence"),
     uiDbPath: join(root, "ui.db"),
     env: {
+      ...modelEnv,
       [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
       KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: credentialKey,
     },
@@ -426,14 +468,13 @@ export async function withLiveChat({
   mkdirSync(projectPath, { recursive: true });
   const secret = randomBytes(48).toString("hex");
   stateReady?.(root);
-  const deps = createLiveDeps(root, session, secret, retainState, restoreState !== undefined);
+  const model = prepareLiveModel(root, session, modelId, { modelRetries, embeddingModelId });
+  const restoring = restoreState !== undefined;
+  const deps = createLiveDeps(root, session, secret, retainState, restoring, model.env);
   decorateCredentialTransport(deps, decorateAtlassianHttp);
   let server;
   try {
-    await configureModel(deps, modelId, session, join(root, "keiko.config.json"), {
-      modelRetries,
-      embeddingModelId,
-    });
+    await model.configure(deps);
     if (!deps.store.listProjects().some((project) => project.path === projectPath))
       deps.store.createProject(projectPath);
     const port = await unusedPort();

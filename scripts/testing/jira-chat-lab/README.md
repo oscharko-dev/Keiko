@@ -27,6 +27,17 @@ Jira reads verify project counts, current field values, comment counts and chang
 history. The comments case reads the hostile-comment fixture while requiring zero
 model-requested mutations. No API token or fixture content is printed.
 
+To qualify an already configured local Gateway such as LiteLLM, set
+`KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json` and pass its exact
+configured model identifier. The helper reads that private configuration and its existing
+provider vault through the production resolver. It supplies the resolved credential only
+through the existing transient model environment override; it never copies the key into a
+new config or vault. Missing models, unavailable credentials and non-loopback Gateways fail
+before probing. The ordinary production tool-calling probe still runs against the selected
+Gateway and preserves its configured request timeout. The bounded retry setting remains
+specific to each qualification group. With no explicit source, the original local Ollama
+configuration and its 45-second timeout remain available.
+
 The driver fsyncs a private group/intent before dispatch and retains both that record
 and its product database on failure. A pending group prevents another run. Read its
 private state and reconcile Jira independently before archiving the pending record;
@@ -376,7 +387,9 @@ node scripts/testing/jira-chat-lab/restricted-chat.mjs /absolute/private/session
 
 Restricted groups explicitly configure `modelRetries: 1` for the existing bounded Gateway schema
 repair; other live helpers default to zero, physical model attempts retain budget accounting, and
-Jira mutation POSTs are never retried. Each restricted receipt records this configuration.
+Jira mutation POSTs are never retried. Each restricted receipt records this configuration. Catalog and lifecycle read fixtures also ask
+an explicit natural Jira question; exact tool arguments, outcomes, budgets and single-effect
+checks remain unchanged. An incomplete model group never counts as qualification.
 
 The focused group contains eight cases: the isolated identity's visible and hidden issues,
 its denied comment, the editor identity's read/edit and denied transition, and omitted required
@@ -525,7 +538,11 @@ an external revocation before receiving evidence of it.
 The availability group validates the exact synthetic Compose project, pinned Jira image,
 loopback port and existing service identities. It stops only that Jira container; TLS, PostgreSQL
 and persistent volumes remain present. The real BFF verification must become `unreachable` and
-invalidate the old verified generation. The same Jira container is restarted in `finally`, even
+invalidate the old verified generation. Recovery requires both container health and the valid
+license endpoint: Jira can report `healthy` before its license plugin is ready. Only that
+read-only readiness check is retried within the existing five-minute limit; service identity
+and volume mismatches fail immediately, and no mutation is repeated. The same Jira container
+is restarted in `finally`, even
 if the verification or recovery-intent journal fails. Recovery requires Docker's configured Jira
 health check, the original service and volume identities, a valid license and the ordinary
 HTTPS/read/write preflight, followed by successful BFF reverification. No volumes are removed and
