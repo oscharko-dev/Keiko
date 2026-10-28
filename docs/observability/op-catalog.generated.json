@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5a042eb0198af83a0d2eca7abd4331f427ac128f8fd656bf1babcf6f2c3ce2b0",
+    "catalogDigest": "03216c932ea94d826dcebf5a1d02b4c5cc8ac69109b54ac6ce4dec4a4cb28c76",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -7049,7 +7049,7 @@
         "failureClasses": ["coding-runtime-compaction"],
         "proofIds": ["coding-runtime.compaction.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:185",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1160"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1165"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9729,7 +9729,7 @@
         "failureClasses": ["coding-runtime-session-continuity"],
         "proofIds": ["coding-runtime.native-turn.interrupted.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:233",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1137"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1142"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10621,7 +10621,7 @@
         "failureClasses": ["coding-runtime-readiness"],
         "proofIds": ["coding-runtime.readiness.failed.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:133",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:906"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:894"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10727,7 +10727,7 @@
         "failureClasses": ["coding-runtime-readiness"],
         "proofIds": ["coding-runtime.readiness.phase.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:148",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:950"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:938"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101861,7 +101861,7 @@
     {
       "op": "coding-runtime.monitor",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1101",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1106",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
