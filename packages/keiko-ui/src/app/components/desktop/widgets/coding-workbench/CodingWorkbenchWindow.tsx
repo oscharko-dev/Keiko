@@ -185,6 +185,7 @@ import {
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
+  visibleStatusNotice,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 import {
@@ -1311,6 +1312,18 @@ function WorkbenchAlert({
   );
 }
 
+/** A polite status (never an alert) for a live stream the browser is reconnecting by itself. */
+function WorkbenchStatusNotice({
+  state,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const message = visibleStatusNotice(state, t);
+  if (message === null) return null;
+  return <output className={styles.cmpStreamNotice}>{message}</output>;
+}
+
 function workbenchFailureReport(failure: CodingWorkbenchClientError | null): ReactNode {
   if (failure === null) return null;
   return (
@@ -1393,13 +1406,13 @@ function WorkbenchContent({ alert, workbenchLabel, ...columns }: WorkbenchConten
     <section
       className={styles.shell}
       aria-label={workbenchLabel}
-      aria-busy={state.mutation.status === "pending"}
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
       <WorkbenchHeader columns={columns} />
       <div className={styles.body}>
         <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
+        <WorkbenchStatusNotice state={state} />
         <WorkbenchColumns {...columns} />
       </div>
     </section>
@@ -1434,20 +1447,6 @@ function WorkbenchHeader({
       />
     </header>
   );
-}
-
-// Epic #3384 cascade, end-to-end run 2026-09-05: after a stop, this window's activity feed showed
-// "Reconnect activity" and stayed disconnected even once a different run started — the operator
-// had to click Reconnect (or reload the page) before seeing anything for it. `retry` is a stable,
-// pure epoch-bump (`useCodingWorkbenchSafeActivity`); calling it once per newly observed run id is
-// therefore always safe, whatever the feed's current status happens to be.
-function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => void): void {
-  const seenRunIdRef = useRef<string | undefined>(runId);
-  useEffect(() => {
-    if (runId === undefined || runId === seenRunIdRef.current) return;
-    seenRunIdRef.current = runId;
-    retry();
-  }, [runId, retry]);
 }
 
 // Lab ledger F2 (#3873): a streamed answer grows inside one message, whose activity timestamp stays
@@ -1604,14 +1603,6 @@ function WorkbenchColumns({
     bindingPending: workspaceBindingPending,
     submittedRoot: runBoundRoot,
   });
-  // Epic #3384 cascade: a run this window observes as a NEW run id — a status poll or stream
-  // catching up after a stop, or a run started from another paired client — must not leave the
-  // activity feed sitting on "Reconnect activity" until the operator clicks it (or reloads the
-  // page). `activity`'s own connection effect already reacts to a `runId` change; this reconnects
-  // it EVEN WHEN the feed's projected status is currently a failure/terminal one that would
-  // otherwise wait for a manual retry (`useCodingWorkbenchSafeActivity`'s own resync only fires
-  // for an ALREADY-known run's runtime events, never for the transition onto a brand new one).
-  useReconnectActivityOnNewRun(state.run.value?.runId, activity.retry);
   // The session stream is a bounded scroll region below the header; a run's newest activity lands
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
   // scrolled up into the history, and start following again for every new run (#3257 Wave 0).
@@ -2435,6 +2426,7 @@ function ApprovalDecisionControls({
           className={cx(styles.button, styles.buttonPrimary)}
           type="button"
           disabled={busy || !evidenceBound}
+          aria-busy={busy}
           {...(evidenceBound ? {} : { "aria-describedby": APPROVAL_EVIDENCE_NOTE_ID })}
           onClick={() => onDecision("approved")}
         >
@@ -2444,6 +2436,7 @@ function ApprovalDecisionControls({
           className={styles.button}
           type="button"
           disabled={busy}
+          aria-busy={busy}
           onClick={() => onDecision("denied")}
         >
           {t("codingWorkbench.approval.deny")}
@@ -2889,6 +2882,7 @@ function RecoveryPanel({
           className={cx(styles.button, styles.buttonPrimary)}
           type="button"
           disabled={busy || !state.canRetry || taskIntent.trim().length === 0}
+          aria-busy={busy}
           onClick={() => void actions.retry(taskIntent)}
         >
           {t("codingWorkbench.recovery.retry")}
@@ -2898,6 +2892,7 @@ function RecoveryPanel({
           className={styles.button}
           type="button"
           disabled={busy}
+          aria-busy={busy}
           onClick={() => void actions.acknowledgeRecovery()}
         >
           {t("codingWorkbench.recovery.acknowledge")}

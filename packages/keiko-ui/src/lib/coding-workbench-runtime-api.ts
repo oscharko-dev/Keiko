@@ -62,6 +62,22 @@ import { secureRandomId } from "./secure-random";
 
 const RUNTIME_ROOT = "/api/coding-workbench/runtime";
 
+// A request the BFF accepts but never answers would hold the serialized mutation queue and the run
+// refresh join forever, taking away Stop/Approve/Deny (stability audit item 1). The bounds are
+// generous: a Start can legitimately wait on workspace preparation, so it gets the longest one.
+const RUNTIME_STATUS_TIMEOUT_MS = 20_000;
+const RUNTIME_MUTATION_TIMEOUT_MS = 60_000;
+const RUNTIME_START_TIMEOUT_MS = 180_000;
+
+function withRuntimeDeadline(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
+}
+
+function isDeadlineError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "TimeoutError";
+}
+
 export interface CodingWorkbenchRuntimeApiError {
   readonly code: string;
   readonly message: string;
@@ -88,6 +104,13 @@ export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchR
       ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
       ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),
       ...(modelRefusalReason === undefined ? {} : { modelRefusalReason }),
+    };
+  }
+  if (isDeadlineError(error)) {
+    return {
+      code: "CODING_RUNTIME_REQUEST_TIMEOUT",
+      message: "The runtime request did not answer in time.",
+      retryable: true,
     };
   }
   return {
@@ -248,6 +271,7 @@ function postSnapshot<T>(
   body: T,
   signal?: AbortSignal,
   repairedCorrelationId?: string,
+  timeoutMs: number = RUNTIME_MUTATION_TIMEOUT_MS,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return bffFetchJson(
     path,
@@ -255,7 +279,7 @@ function postSnapshot<T>(
       method: "POST",
       cache: "no-store",
       body: JSON.stringify(body),
-      ...(signal ? { signal } : {}),
+      signal: withRuntimeDeadline(timeoutMs, signal),
     },
     {
       validator: snapshotValidator,
@@ -303,7 +327,13 @@ async function retryStartAfterSessionRepair(
     throw denied;
   }
   try {
-    const snapshot = await postSnapshot(`${RUNTIME_ROOT}/runs`, input, undefined, correlationId);
+    const snapshot = await postSnapshot(
+      `${RUNTIME_ROOT}/runs`,
+      input,
+      undefined,
+      correlationId,
+      RUNTIME_START_TIMEOUT_MS,
+    );
     report("replayed");
     return snapshot;
   } catch (error) {
@@ -353,7 +383,7 @@ export function getCodingWorkbenchRuntimeReadiness(
 export function getCodingWorkbenchRuntimeStatus(): Promise<CodingWorkbenchRuntimeSnapshot> {
   return bffFetchJson(
     `${RUNTIME_ROOT}/status`,
-    { cache: "no-store" },
+    { cache: "no-store", signal: AbortSignal.timeout(RUNTIME_STATUS_TIMEOUT_MS) },
     {
       validator: snapshotValidator,
     },
@@ -363,14 +393,24 @@ export function getCodingWorkbenchRuntimeStatus(): Promise<CodingWorkbenchRuntim
 export function getCodingWorkbenchRuntimeSnapshot(
   runId: string,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return bffFetchJson(runPath(runId), { cache: "no-store" }, { validator: snapshotValidator });
+  return bffFetchJson(
+    runPath(runId),
+    { cache: "no-store", signal: AbortSignal.timeout(RUNTIME_STATUS_TIMEOUT_MS) },
+    { validator: snapshotValidator },
+  );
 }
 
 export async function startCodingWorkbenchRuntime(
   input: CodingWorkbenchRuntimeStartRequest,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   try {
-    return await postSnapshot(`${RUNTIME_ROOT}/runs`, input);
+    return await postSnapshot(
+      `${RUNTIME_ROOT}/runs`,
+      input,
+      undefined,
+      undefined,
+      RUNTIME_START_TIMEOUT_MS,
+    );
   } catch (error) {
     if (!isPreBodyStartDenial(error)) throw error;
     return retryStartAfterSessionRepair(input, error);

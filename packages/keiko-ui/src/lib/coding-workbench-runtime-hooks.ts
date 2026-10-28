@@ -1,4 +1,5 @@
 import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
+import { ApiError } from "./api";
 import { newClientCorrelationId } from "./bff-correlation";
 import { reportGatewayProfileRefresh, reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
@@ -440,6 +441,31 @@ export function useCodingWorkbenchRuntimeResources(
 // same not-found result as an unknown run, so the refusal cannot say whether the session was revoked.
 const RUN_NOT_FOUND_CODE = "CODING_RUNTIME_RUN_NOT_FOUND";
 
+// A control the BFF accepted but never answered failed on the client's own deadline; no server line
+// can describe it, so the client records it (body-free: only the closed error kind).
+const REQUEST_TIMEOUT_CODE = "CODING_RUNTIME_REQUEST_TIMEOUT";
+
+function reportMutationTimeout(failure: { readonly correlationId?: string }): void {
+  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+  reportClientDiagnostic("[keiko] coding workbench run control timed out", {
+    kind: "other",
+    errorKind: "timeout",
+    ...(failure.correlationId === undefined ? {} : { correlationId: failure.correlationId }),
+  });
+}
+
+// The window's own readiness gate refuses with a conflict-coded error before any request is sent,
+// so there is no newer server state to read after it.
+const LOCAL_GATE_REFUSAL_CODE = "CODING_RUNTIME_ACTION_UNAVAILABLE";
+
+// A 409 from the server means it holds a state this window has not seen yet (a stale revision, a
+// run another paired client already settled): re-read so the newer snapshot can supersede the alert.
+function isServerConflict(error: unknown): boolean {
+  return (
+    error instanceof ApiError && error.status === 409 && error.code !== LOCAL_GATE_REFUSAL_CODE
+  );
+}
+
 function useRuntimeMutationQueue({
   stateRef,
   refreshRun,
@@ -469,6 +495,8 @@ function useRuntimeMutationQueue({
           const failure = codingWorkbenchRuntimeApiError(error);
           dispatch({ kind: "mutation-failed", error: failure });
           if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
+          if (failure.code === REQUEST_TIMEOUT_CODE) reportMutationTimeout(failure);
+          if (isServerConflict(error)) await refreshRun();
         }
       };
       const result = mutationTail.current.then(execute, execute);

@@ -8851,3 +8851,222 @@ describe("post-completion undo window", () => {
     expect(windowLines(run).at(-1)).toMatchObject({ event: "closed", reason: "shutdown" });
   });
 });
+
+// Lifecycle races (runtime audit findings 1, 2 and 11): a mutation that awaited must decide from
+// the run's CURRENT row, never the snapshot it read before the await. The real SQLite store is
+// used because it enforces the monotonic revision that the in-memory fixture store does not.
+describe("coding runtime lifecycle races", () => {
+  const RACE_PERMISSION = {
+    schemaVersion: "1" as const,
+    eventId: "permission-1",
+    runId: "run-1",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "permission-requested" as const,
+    permissionRequest: {
+      requestId: "permission-1",
+      kind: "workspace-write" as const,
+      actionClass: "workspace-write" as const,
+      reasonCode: "approval-required" as const,
+      actionKind: "file-edit" as const,
+      expiresAt: "2026-01-01T00:01:00.000Z",
+    },
+  };
+
+  function raceFixture(
+    wrap?: (store: CodingRuntimeSnapshotStore) => CodingRuntimeSnapshotStore,
+  ): ReturnType<typeof fixture> & {
+    readonly diagnosticRecords: readonly ServerDiagnosticRecord[];
+  } {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const captured = captureDiagnostics();
+    const store = createCodingRuntimeSnapshotStore(db);
+    let minted = 0;
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      captured.diagnostics,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (): string => `run-${String(++minted)}`,
+      wrap === undefined ? store : wrap(store),
+    );
+    return Object.assign(f, { diagnosticRecords: captured.records });
+  }
+
+  async function runningRace(f: ReturnType<typeof raceFixture>): Promise<void> {
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "task-submitted",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+  }
+
+  function lifecycleCodes(f: ReturnType<typeof raceFixture>): readonly (string | undefined)[] {
+    return f.diagnosticRecords
+      .filter((record) => record.operation === "coding-runtime.lifecycle")
+      .map((record) => record.code);
+  }
+
+  it("returns a clean result when Stop wins while an approval decision awaits the runtime", async () => {
+    const f = raceFixture();
+    await runningRace(f);
+    await f.orchestrator.ingest(RACE_PERMISSION);
+    const revision = f.orchestrator.status().revision;
+    let release: ((settled: boolean) => void) | undefined;
+    f.permissionPort.resolve.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const decision = f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: revision,
+    });
+    await vi.waitFor(() => {
+      expect(f.permissionPort.resolve).toHaveBeenCalled();
+    });
+
+    const stopped = await f.orchestrator.stop("run-1", { requestId: "run-1" });
+    release?.(true);
+
+    expect(stopped.ok).toBe(true);
+    await expect(decision).resolves.toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(f.orchestrator.status().state).toBe("cancelled");
+    expect(lifecycleCodes(f)).toContain("stage=lifecycle:reason=stale-transition");
+  });
+
+  it("returns a clean result when an operator Stop overtakes a failure-redacted stop", async () => {
+    const f = raceFixture();
+    await runningRace(f);
+    let finish: (() => void) | undefined;
+    f.manager.stop.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = (): void => {
+            resolve({ ok: true, status: "stopped" });
+          };
+        }),
+    );
+    const ingested = f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "failure",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "failure-redacted",
+      failureCode: "runtime-failed",
+      failureSummary: "runtime-failed",
+      retryable: true,
+    });
+    await vi.waitFor(() => {
+      expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+    });
+
+    const stopped = await f.orchestrator.stop("run-1", { requestId: "run-1" });
+    finish?.();
+
+    expect(stopped.ok).toBe(true);
+    const outcome = await ingested;
+    expect(typeof outcome.ok).toBe("boolean");
+    expect(f.orchestrator.status().state).toBe("cancelled");
+    expect(lifecycleCodes(f)).toContain("stage=lifecycle:reason=stale-transition");
+  });
+
+  it("logs a rejected settlement with its error class and moves the run to recovery-required", async () => {
+    let failSucceededOnce = true;
+    const f = raceFixture((store) => ({
+      ...store,
+      transition: (runId, change): CodingRuntimeSnapshot => {
+        if (change.state === "succeeded" && failSucceededOnce) {
+          failSucceededOnce = false;
+          throw new RangeError("snapshot store unavailable");
+        }
+        return store.transition(runId, change);
+      },
+    }));
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+
+    await f.orchestrator.start(start);
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+    });
+    expect(lifecycleCodes(f)).toContain("stage=lifecycle:reason=settlement-failed");
+    const record = f.diagnosticRecords.find(
+      (candidate) => candidate.code === "stage=lifecycle:reason=settlement-failed",
+    );
+    expect(record?.errorClass).toBe("RangeError");
+    expect(JSON.stringify(record)).not.toContain("snapshot store unavailable");
+  });
+  // Audit finding 6: a failed stop at an undo window's close left the manager in recovery-required
+  // with its slot taken, and every later start was refused with runtime-already-running.
+  it("reaps a settled run's stale runtime slot before the next start", async () => {
+    const f = raceFixture();
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    f.manager.health.mockReturnValue({
+      status: "recovery-required",
+      activeRunId: "run-1",
+      failureCode: "runtime-reap-unproven",
+      restartDenied: true,
+    });
+    f.manager.reconcile.mockImplementationOnce(() => {
+      f.manager.health.mockReturnValue({ status: "stopped" });
+      return Promise.resolve({ ok: true, status: "stopped" });
+    });
+
+    const second = await f.orchestrator.start({ ...start, requestId: "request-2" });
+
+    expect(second.ok).toBe(true);
+    expect(f.manager.reconcile).toHaveBeenCalledWith("run-1");
+    const reconciled = f.manager.reconcile.mock.invocationCallOrder[0] ?? Infinity;
+    const restarted = f.manager.start.mock.invocationCallOrder[1] ?? 0;
+    expect(reconciled).toBeLessThan(restarted);
+    expect(lifecycleCodes(f)).toContain("stage=lifecycle:reason=stale-slot-reaped");
+  });
+
+  it("keeps the next start going and names a stale slot that cannot be reaped", async () => {
+    const f = raceFixture();
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    f.manager.health.mockReturnValue({
+      status: "recovery-required",
+      activeRunId: "run-1",
+      failureCode: "runtime-reap-unproven",
+      restartDenied: true,
+    });
+    f.manager.reconcile.mockRejectedValueOnce(new TypeError("reap exploded"));
+
+    const second = await f.orchestrator.start({ ...start, requestId: "request-2" });
+
+    expect(second).toBeDefined();
+    expect(lifecycleCodes(f)).toContain("stage=lifecycle:reason=stale-slot-reap-failed");
+    const failed = f.diagnosticRecords.find(
+      (record) => record.code === "stage=lifecycle:reason=stale-slot-reap-failed",
+    );
+    expect(failed?.errorClass).toBe("TypeError");
+  });
+});

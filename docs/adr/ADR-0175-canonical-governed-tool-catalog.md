@@ -235,7 +235,13 @@ ports, not loopback HTTP. Missing/wrong handlers fail closed before advertising;
 returns `failed / handler-unavailable` or `handler-mismatch` without effect.
 
 Bounds in the normative table are **maximum safety ceilings, not performance targets**. Each
-handler/profile may tighten them; neither model nor adapter may enlarge them. #2952 measures
+handler/profile may tighten them; neither model nor adapter may enlarge them. The one reviewed
+exception is the governed changeset edit, whose arguments are file content: its call and each of
+its strings are bounded by the changeset cap of ADR-0125 D3 (`CHANGESET_EDIT_ARGUMENT_LIMITS`,
+owner decision 2026-10-28), named by the contract (`toolArgumentLimits`) and honoured by the
+descriptor, the capture and the history gate alike; the native file-content tools `edit`, `write`
+and `patch` are captured under the same ceilings. Every other tool keeps the table verbatim, and
+the table itself is unchanged. #2952 measures
 performance and #3415 calibrates narrower catalog-specific thresholds. JSON object depth is root=1;
 width is keys per object, byte bounds count UTF-8 serialization, and integer metrics are finite,
 nonnegative safe integers. Input and output limits apply before parsing/allocation where possible.
@@ -246,7 +252,8 @@ argument text `state.raw` while pending), and the fail-closed history gate that 
 re-applies `TOOL_CATALOG_LIMITS` to them rather than its 4096-character metadata bound: a body the
 catalog admitted cannot be refused by the record of its own dispatch. The per-pull history response
 budget is derived from the same ceilings (the ordinary metadata rows plus eight catch-up calls of
-three argument-bearing rows each). A 19 KiB `keiko_changeset_edit` patch — inside the 64 KiB patch
+three argument-bearing rows each, one of which may be a changeset-edit call at its own ceiling:
+one whole such call fits a pull, a second per pull is outside the budget and fails closed). A 19 KiB `keiko_changeset_edit` patch — inside the 64 KiB patch
 contract — was refused by the metadata bound on 2026-09-10 and the run ended `runtime-failed` on its
 first edit, with a diagnostic naming only the digest of the event type; the refused part's closed
 labels (type, tool, status, byte size, refusing gate) now travel in that diagnostic's `code`.

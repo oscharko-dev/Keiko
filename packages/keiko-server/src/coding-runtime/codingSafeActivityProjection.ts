@@ -1076,13 +1076,23 @@ function applyTool(
     return "accepted";
   }
   if (signal.tool === undefined) return "tool-name-missing";
-  if (located.turn.tools.length >= limits.maxToolsPerTurn) {
-    located.turn.truncated = true;
-    return "accepted";
+  return insertTool(located.turn, signal, signal.tool, limits);
+}
+
+function insertTool(
+  turn: MutableTurn,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+  tool: string,
+  limits: ResolvedLimits,
+): SignalApplication {
+  const saturated = turn.tools.length >= limits.maxToolsPerTurn;
+  if (saturated) {
+    turn.truncated = true;
+    if (!evictOldestSettledTool(turn)) return "capacity-dropped";
   }
-  located.turn.tools.push({
+  turn.tools.push({
     callId: signal.callId,
-    tool: signal.tool,
+    tool,
     state: signal.state,
     occurredAt: signal.occurredAt,
     ...(signal.presentation === undefined
@@ -1091,7 +1101,21 @@ function applyTool(
           presentation: Object.freeze({ ...signal.presentation }),
         }),
   });
-  return "accepted";
+  return saturated ? "capacity-dropped" : "accepted";
+}
+
+/**
+ * At the per-turn bound the newest call replaces the oldest settled one, as a full message list
+ * replaces its oldest assistant message. Dropping the newest call instead froze everything derived
+ * from the feed (the run phase, the Changes refresh signal) for the rest of a long turn. Each
+ * displacement is a capacity drop, so the feed's bounded loss counter keeps advancing; a call that
+ * has not settled is never displaced.
+ */
+function evictOldestSettledTool(turn: MutableTurn): boolean {
+  const index = turn.tools.findIndex(({ state }) => state !== "pending" && state !== "running");
+  if (index < 0) return false;
+  turn.tools.splice(index, 1);
+  return true;
 }
 
 /** Replaces the whole snapshot; the upstream plan tool always writes the full step list. */

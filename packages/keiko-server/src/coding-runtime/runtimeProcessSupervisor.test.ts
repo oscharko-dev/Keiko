@@ -10,6 +10,7 @@ import {
   type RuntimeQualificationIdentity,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import type {
   LongLivedRuntimeSandboxDecision,
   LongLivedRuntimeSandboxRequest,
@@ -123,6 +124,36 @@ describe("runtime process supervisor", () => {
       expect.objectContaining({ parentLifetime: "stdin-eof" }),
       expect.anything(),
     );
+  });
+
+  // Audit finding 12: a spawn that threw reduced to the closed `spawn-failed` code, so a helper
+  // digest mismatch, an unavailable pipe or a missing executable left no cause on the log.
+  it("records the error class and frames of a failed spawn on the confinement-failed line", () => {
+    const request = launchRequest("darwin");
+    const fake = backend(true, request.qualification);
+    fake.spawn.mockImplementation(() => {
+      throw new TypeError("native-runtime-helper-pipes-unavailable /secret/path");
+    });
+    const log = createBufferedServerLogSink();
+    const supervisor = createRuntimeProcessSupervisor({
+      backend: fake.value,
+      qualifications: [request.qualification],
+      planSandbox: enforcingSandbox,
+      activityLog: log,
+    });
+
+    expect(supervisor.spawnOwnedTree(request)).toEqual({ ok: false, failureCode: "spawn-failed" });
+
+    const lines = log.events.filter((event) => event.op === "runtime.confinement.failed");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      level: "error",
+      correlationId: "unknown-correlation-id",
+      errorKind: "validation-failed",
+    });
+    expect(lines[0]?.extra).toMatchObject({ launchPhase: "process-spawn" });
+    expect(lines[0]?.extra).toHaveProperty("frames");
+    expect(JSON.stringify(lines[0])).not.toContain("/secret/path");
   });
 
   it("performs zero spawn without an exact release qualification", () => {

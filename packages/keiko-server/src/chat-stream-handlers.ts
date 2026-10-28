@@ -29,7 +29,7 @@ import { logChatResponseMessages } from "./chat-activity.js";
 // JSON RouteResult BEFORE any SSE header so the client can fall back to the buffered route.
 
 import { SSE_HEADERS, startSseHeartbeat } from "./sse.js";
-import { recordSseStreamFrame, writeOrDestroy } from "./sse-write.js";
+import { recordSseStreamFrame, whenSseWritable, writeSseFrame } from "./sse-write.js";
 import {
   STREAMING,
   errorBody,
@@ -127,8 +127,8 @@ interface StreamedTurn {
 
 // Iterates the gateway stream: writes one redacted `token` event per delta, returns the terminal
 // response from the `done` chunk. Returns undefined if the signal aborted (no `done` arrived).
-// Backpressure (res.write → false) aborts the controller and destroys the socket via writeOrDestroy
-// so a slow client is detected immediately rather than buffering without bound.
+// writeSseFrame queues a frame above Node's high-water mark and waits for drain. Only a reader
+// that makes no progress within the shared stalled-reader bound aborts the controller and socket.
 // Terminal reason for a stream that did not reach `done`: an intentional user cancel vs a backpressure
 // kill (slow client). Threaded out so the caller can emit a DISTINCT terminal signal and avoid
 // relabeling a backpressure termination as a user cancel (GEN-PERF-CHAT-006).
@@ -199,7 +199,7 @@ function tokenPublisher(
     while (from < text.length && !controller.signal.aborted) {
       const end = tokenChunkEnd(text, from, tokenChunkCapacity(ctx.res, text.length - from));
       termination.tokenFrames += 1;
-      writeOrDestroy(
+      writeSseFrame(
         ctx.res,
         sseMessage({ event: "token", data: { text: text.slice(from, end) } }),
         controller,
@@ -229,6 +229,8 @@ async function streamConversation(
   const publish = tokenPublisher(ctx, controller, termination);
   try {
     for (;;) {
+      await whenSseWritable(ctx.res);
+      if (requestIsAborted(controller.signal)) return undefined;
       const next = await iterator.next();
       if (next.done === true) return undefined;
       const chunk = next.value;
@@ -255,7 +257,7 @@ async function streamConversation(
 // backpressure termination as a user cancel.
 //
 // Every terminal frame is recorded via `recordSseStreamFrame` BEFORE the write (#2902 audit finding
-// 0 follow-up), not only the per-token `writeOrDestroy` calls inside `streamConversation`. Without
+// 0 follow-up), not only the per-token `writeSseFrame` calls inside `streamConversation`. Without
 // this, a stream that errors or is cancelled before its first token (e.g. the model throws on the
 // very first `callStream` iteration) never calls `recordSseStreamFrame` at all: the per-stream state
 // — and the `res.on("close", …)` listener that emits the terminal `sse.stream.closed` line — is only
@@ -769,7 +771,7 @@ function registerReadConsentStream(
             : undefined;
       if (identity === undefined || sent.has(identity)) continue;
       sent.add(identity);
-      writeOrDestroy(ctx.res, sseMessage(event), controller, undefined, ctx.correlationId);
+      writeSseFrame(ctx.res, sseMessage(event), controller, undefined, ctx.correlationId);
     }
   });
 }
@@ -786,7 +788,7 @@ async function executeAdmittedDesktopChatStream(
     ctx.res.writeHead(200, SSE_HEADERS);
     markStreamStarted();
     // correlationId (#2902 w5-sse-counters) is threaded here AND into streamConversation's
-    // per-token writeOrDestroy call: whichever write actually happens first attaches it to the
+    // per-token writeSseFrame call: whichever write actually happens first attaches it to the
     // terminal `sse.stream.closed` line (sse-write.ts's per-stream state is set-once-wins). The
     // heartbeat's own write is deferred to its interval timer, so in practice the first model
     // token — not the heartbeat — is usually the write that sets it.

@@ -2,7 +2,7 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 
 import { type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   accessSync,
@@ -40,7 +40,6 @@ import type {
   CodingWorkbenchRuntimeEvent,
   McpServerDefinition,
 } from "@oscharko-dev/keiko-contracts";
-import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
@@ -160,7 +159,7 @@ import type {
   PromptInputsRequest,
 } from "./opencodePromptInputs.js";
 import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
-import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
+import { CODING_TOOL_MAX_BODY_BYTES, CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./codingToolIpc.js";
 import {
   OPENCODE_PROMPT_FILE_MAX_BYTES,
   openCodeV2PromptFileData,
@@ -348,6 +347,7 @@ interface TestQuestionRequest {
 }
 
 interface OpenCodeRuntimeCompositionModule {
+  readonly openCodeRipgrepPlaceholderPath: (runRoot: string) => string;
   readonly nativeSessionDescendsFromRun: (
     sessions: readonly Readonly<Record<string, unknown>>[],
     sessionID: string,
@@ -362,6 +362,7 @@ interface OpenCodeRuntimeCompositionModule {
     readonly activityLog?: ServerLogSink;
     readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
     readonly toolProfile?: "direct" | "code-mode" | "native" | undefined;
+    readonly ripgrepVerified?: boolean | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
@@ -674,6 +675,7 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly ripgrepVerified?: boolean;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /** Extra sessions the runtime's session list reports (native child sessions, #3897). */
   readonly childSessions?: readonly Record<string, unknown>[];
@@ -1010,6 +1012,12 @@ function runtimeMode(
   control: StartBridgeControl | undefined,
 ): NonNullable<StartBridgeControl["mode"]> {
   return control?.mode ?? "supervised-coding";
+}
+
+function optionalRipgrepVerified(control: StartBridgeControl | undefined): {
+  readonly ripgrepVerified?: boolean;
+} {
+  return control?.ripgrepVerified === undefined ? {} : { ripgrepVerified: control.ripgrepVerified };
 }
 
 function optionalActivityLog(control: StartBridgeControl | undefined): {
@@ -1496,6 +1504,7 @@ async function startBridgeFixture(
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
     ...optionalActivityLog(control),
+    ...optionalRipgrepVerified(control),
     ...optionalRepositoryItems(control),
     ...optionalOperatorPlugins(control),
     ...optionalMcp(control),
@@ -1569,6 +1578,39 @@ async function startBridgeFixture(
     },
   };
 }
+
+// Stress ledger F5 (2026-10-28): OpenCode downloads ripgrep from GitHub when it finds none, so an
+// unverified launch must leave its own refusing placeholder where the runtime looks before that.
+it.each([
+  [false, true],
+  [true, false],
+  [undefined, false],
+] as const)(
+  "places the refusing ripgrep placeholder only for an unverified launch (verified: %s)",
+  async (ripgrepVerified, placed) => {
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      ripgrepVerified === undefined ? undefined : { ripgrepVerified },
+    );
+    try {
+      const { openCodeRipgrepPlaceholderPath } = await compositionModule();
+      const placeholder = openCodeRipgrepPlaceholderPath(
+        join(fixture.stateBaseRoot, fixture.preparation.runId),
+      );
+      expect(existsSync(placeholder)).toBe(placed);
+      if (placed && process.platform !== "win32") {
+        expect(statSync(placeholder).mode & 0o777).toBe(0o700);
+        const refused = spawnSync(placeholder, ["--version"], { encoding: "utf8" });
+        expect(refused.status).toBe(2);
+        expect(refused.stdout).toBe("");
+        expect(refused.stderr).toContain("ripgrep is unavailable");
+      }
+    } finally {
+      await fixture.stop();
+    }
+  },
+);
 
 it("selects native stdin ownership only after the production V2 prepare and keeps it open", async () => {
   const pipe = new PassThrough();
@@ -5430,7 +5472,8 @@ describe("private OpenCode tool bridge", () => {
   // than once, so the fixture answers every pull with a fresh response.
   it("reconciles a governed edit whose argument rows fill the patch contract", async () => {
     const records: ServerDiagnosticRecord[] = [];
-    const patch = "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES);
+    // The largest string the catalog admits as an argument (see opencodeProtocol.test.ts).
+    const patch = "x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes);
     const input = changesetArguments(patch);
     const fixture = await startBridgeFixture(
       { execute: vi.fn(() => Promise.resolve(completed)) },
@@ -5636,12 +5679,12 @@ describe("private OpenCode tool bridge", () => {
     const fixture = await startBridgeFixture(facade);
     // Padding with ASCII spaces keeps `Buffer.byteLength(body, "utf8")` equal to `body.length`,
     // so the body constructed for N bytes is EXACTLY N bytes -- the same off-by-one-sensitive
-    // boundary `preflightToolRequest`'s `Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES`
+    // boundary `preflightToolRequest`'s `Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_REQUEST_BODY_BYTES`
     // check guards.
     const paddedObjectOfSize = (bytes: number): string => `{${" ".repeat(bytes - 2)}}`;
     try {
-      const exact = paddedObjectOfSize(CODING_TOOL_MAX_BODY_BYTES);
-      expect(Buffer.byteLength(exact, "utf8")).toBe(CODING_TOOL_MAX_BODY_BYTES);
+      const exact = paddedObjectOfSize(CODING_TOOL_MAX_REQUEST_BODY_BYTES);
+      expect(Buffer.byteLength(exact, "utf8")).toBe(CODING_TOOL_MAX_REQUEST_BODY_BYTES);
       await expect(
         fixture.runtime.toolBridge.handle({
           method: "POST",
@@ -5650,7 +5693,7 @@ describe("private OpenCode tool bridge", () => {
         }),
       ).resolves.toMatchObject({ status: 200 });
       expect(facade.execute).toHaveBeenCalledOnce();
-      const oversized = paddedObjectOfSize(CODING_TOOL_MAX_BODY_BYTES + 1);
+      const oversized = paddedObjectOfSize(CODING_TOOL_MAX_REQUEST_BODY_BYTES + 1);
       await expect(
         fixture.runtime.toolBridge.handle({
           method: "POST",
@@ -5662,6 +5705,29 @@ describe("private OpenCode tool bridge", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  // Owner decision 2026-10-28: the request that carries a governed edit is bounded by the
+  // changeset-edit argument ceiling. The deadline of such a request must be read from the edit
+  // itself: a body over the old 256 KiB bound used to fall back to the 30 s default, cutting a
+  // waiting approval off.
+  it("reads the approval deadline of a changeset edit above the response bound", async () => {
+    const { toolBridgeRequestDeadlineMs } = await compositionModule();
+    const edit = (newString: string): string =>
+      JSON.stringify({
+        action: "edit",
+        actionId: "edit-large",
+        idempotencyKey: "edit-large-key",
+        changeset: {
+          edits: [{ file: "src/data.json", oldString: "", newString, replaceAll: false }],
+          files: [{ file: "src/data.json", expectedContentHash: "a".repeat(64) }],
+        },
+      });
+    const small = toolBridgeRequestDeadlineMs(30, edit("x"));
+    expect(small).toBeGreaterThan(30);
+    expect(toolBridgeRequestDeadlineMs(30, edit("x".repeat(CODING_TOOL_MAX_BODY_BYTES + 1)))).toBe(
+      small,
+    );
   });
 
   describe("a declared Content-Length", () => {
@@ -5689,7 +5755,7 @@ describe("private OpenCode tool bridge", () => {
       ["a leading-zero declaration", "01"],
       ["a fractional declaration", "1.5"],
       ["an unsafe-integer declaration", "9007199254740993"],
-      ["a declaration over the byte budget", String(CODING_TOOL_MAX_BODY_BYTES + 1)],
+      ["a declaration over the byte budget", String(CODING_TOOL_MAX_REQUEST_BODY_BYTES + 1)],
     ])("rejects %s with 413 before invoking the facade", async (_label, declared) => {
       await expect(declaredLengthOutcome(declared)).resolves.toEqual({
         status: 413,
@@ -5697,7 +5763,7 @@ describe("private OpenCode tool bridge", () => {
       });
     });
 
-    it.each(["0", String(CODING_TOOL_MAX_BODY_BYTES)])(
+    it.each(["0", String(CODING_TOOL_MAX_REQUEST_BODY_BYTES)])(
       "admits the declaration %s within the byte budget",
       async (declared) => {
         await expect(declaredLengthOutcome(declared)).resolves.toEqual({

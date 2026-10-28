@@ -235,6 +235,9 @@ export function useCodingWorkbenchRuntimeStream({
       dispatch({ kind: "stream-set", stream: { runId, cursor, connected: true } });
       if (resnapshot) void refreshRun();
     },
+    onReconnecting: () => {
+      dispatch({ kind: "stream-reconnecting" });
+    },
     onError: (error) => {
       const mapped = codingWorkbenchRuntimeApiError(error);
       dispatch({ kind: "resource-failed", resource: "stream", status: "error", error: mapped });

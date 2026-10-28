@@ -2619,12 +2619,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.stopAfterIssueFailure",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
       "owner": "CodingRuntimeOrchestrator.stopExpiredPausedRuntime",
       "kind": "unregistered-catch",
       "count": 1
@@ -3124,12 +3118,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/researchGrantRegistry.ts",
       "owner": "InMemoryResearchGrantRegistry.invalidateRun",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/runtimeProcessSupervisor.ts",
-      "owner": "RuntimeProcessSupervisorImpl.spawnOwnedTree",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -5900,12 +5888,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/sse-write.ts",
-      "owner": "writeOrDestroy",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/static.ts",
       "owner": "resolveContainedPath",
       "kind": "unregistered-catch",
@@ -7984,12 +7966,6 @@
     {
       "path": "packages/keiko-ui/src/lib/coding-workbench-event-retention.ts",
       "owner": "useCodingWorkbenchRuntimeEventStream",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
-      "owner": "execute",
       "kind": "unregistered-catch",
       "count": 1
     },

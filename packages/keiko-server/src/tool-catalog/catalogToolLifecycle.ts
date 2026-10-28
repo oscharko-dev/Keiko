@@ -1,7 +1,9 @@
 import { captureCatalogJson, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
   TOOL_CATALOG_LIMITS,
   TOOL_RESULT_REASONS,
+  toolArgumentLimits,
   type CatalogJsonObject,
   type CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -404,6 +406,8 @@ function validDiagnostics(key: string, value: CatalogJsonValue | undefined): boo
 function metricMaximum(key: string): number {
   if (key === "resultCount") return TOOL_CATALOG_LIMITS.maxArrayItems;
   if (key === "durationMs") return Number.MAX_SAFE_INTEGER;
+  // The largest per-tool argument ceiling; `inputBytesWithinTool` holds each tool to its own.
+  if (key === "inputBytes") return CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes;
   return TOOL_CATALOG_LIMITS.maxResultBytes;
 }
 function validMetric(key: string, value: CatalogJsonValue): boolean {
@@ -469,7 +473,19 @@ function terminalReservation(value: CatalogJsonObject): void {
         value.budgetDisposition === "not-reserved",
     );
 }
+// A call's argument bytes are bounded by the ceiling of the tool the event names: the generic one
+// unless the tool has its own (`toolArgumentLimits`), and always the generic one without a tool.
+function inputBytesWithinTool(value: CatalogJsonObject): void {
+  if (value.inputBytes === undefined) return;
+  const tool = value.toolRef ?? null;
+  const canonicalId = tool === null ? undefined : object(tool).canonicalId;
+  const maximum = toolArgumentLimits(
+    typeof canonicalId === "string" ? canonicalId : "",
+  ).maxArgumentBytes;
+  requireLifecycle(typeof value.inputBytes === "number" && value.inputBytes <= maximum);
+}
 function phaseShape(phase: ToolLifecyclePhase, value: CatalogJsonObject): void {
+  inputBytesWithinTool(value);
   if (phase === "terminal") {
     terminalStatus(value);
     terminalReservation(value);

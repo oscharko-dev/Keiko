@@ -52,7 +52,10 @@ import type {
   WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES,
+  EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
+  EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
@@ -118,7 +121,7 @@ import {
   type RouteResult,
 } from "../routes.js";
 import { readyMessage, SSE_HEADERS, startSseHeartbeat } from "../sse.js";
-import { writeOrDestroy } from "../sse-write.js";
+import { writeSseFrame } from "../sse-write.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
 import { handleGitStatus, handleGitStructuredDiff, handleGitBlame } from "../gitRoutes.js";
@@ -177,6 +180,9 @@ type EditorAgentActionRouteDeps = UiHandlerDeps;
 type EditorAgentEitherRouteDeps = EditorAgentActionRouteDeps | EditorAgentRouteDeps;
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
+// An editor action may carry a whole changeset (a patch plus its prepared preview), sized by the
+// changeset contract; the session, snapshot and scope requests keep the 1 MiB bound.
+const MAX_AGENT_ACTION_BODY_BYTES = EDITOR_AGENT_ACTION_MAX_BODY_BYTES;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES;
 const MAX_ACTIVE_BRIDGE_STREAMS = 256;
 
@@ -727,7 +733,7 @@ function inspectChangeset(
   const inspection = inspectPatch(
     workspaceInfoFromRoot(snapshot.workspaceRoot),
     action.changeset?.patch ?? "",
-    { fs, lineBreakMarkers },
+    { fs, lineBreakMarkers, limits: EDITOR_AGENT_CHANGESET_PATCH_LIMITS },
   );
   const validation = inspection.validation;
   const issues = firstChangesetIssueGroup(action, snapshot, inspection);
@@ -1107,6 +1113,7 @@ function inspectAdmissionAction(
     return {
       patch: inspectPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), action.patch ?? "", {
         fs,
+        limits: EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
       }),
     };
   }
@@ -1916,6 +1923,7 @@ function projectChangeset(
     const projectedValidation = validatePatch(workspaceInfoFromRoot(snapshot.workspaceRoot), diff, {
       fs,
       lineBreakMarkers,
+      limits: EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS,
     });
     const issues = projectedChangesetIssues(projected, projectedValidation);
     return issues.length === 0
@@ -1963,6 +1971,7 @@ function applyChangeset(
       signal: signal ?? new AbortController().signal,
       fs,
       lineBreakMarkers: projection.lineBreakMarkers,
+      limits: EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS,
       ...(editorAgentPatchWriterForTests === undefined
         ? {}
         : { writer: editorAgentPatchWriterForTests }),
@@ -3885,7 +3894,7 @@ export async function handleEditorAgentActions(
   ctx: RouteContext,
   deps?: EditorAgentEitherRouteDeps,
 ): Promise<RouteResult> {
-  const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
+  const body = await readJsonObject(ctx.req, MAX_AGENT_ACTION_BODY_BYTES);
   if (isRouteResult(body)) return body;
   const parsed = parseEditorAgentActionsPostBody(body);
   if (!parsed.ok) {
@@ -4145,14 +4154,14 @@ function openAgentSseStream(
   const subscriber = (event: EditorAgentEvent): void => {
     if (controller.signal.aborted) return;
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-    writeOrDestroy(res, frame, controller, undefined, correlationId);
+    writeSseFrame(res, frame, controller, undefined, correlationId);
   };
   const dispose = connectEditorAgentSessions(connections, bridgeStreamId, subscriber);
   if (dispose === undefined) return asHandlerOutcome(bridgeCapabilityError());
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
   // Refused, the ready frame aborts the controller and destroys the stream like any event frame.
-  writeOrDestroy(res, readyMessage(), controller, undefined, correlationId);
+  writeSseFrame(res, readyMessage(), controller, undefined, correlationId);
   ctx.req.on("close", () => {
     res.end();
   });

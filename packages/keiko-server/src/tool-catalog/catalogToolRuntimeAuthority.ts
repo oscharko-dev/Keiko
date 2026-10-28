@@ -12,11 +12,14 @@ import {
   createToolRef,
   validateToolArguments,
 } from "@oscharko-dev/keiko-tool-catalog";
-import type {
-  CatalogJsonObject,
-  CatalogDigest,
-  CatalogJsonValue,
-  CatalogProfile,
+import {
+  GENERIC_TOOL_ARGUMENT_LIMITS,
+  toolArgumentLimits,
+  type CatalogJsonObject,
+  type CatalogDigest,
+  type CatalogJsonValue,
+  type CatalogProfile,
+  type ToolArgumentLimits,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
@@ -41,9 +44,19 @@ export function catalogBudgetOperation<T>(operation: () => T): T {
     throw new CatalogDispatchFault("failed", "budget-port-failed", error);
   }
 }
+// The ceilings the invocation is captured under follow the tool it names; the descriptor's own
+// bounds still decide what its arguments may be (`validateToolArguments`). A reference that cannot
+// be read as plain data is captured, and rejected, under the generic ceilings.
+function invocationLimits(source: unknown): ToolArgumentLimits {
+  if (typeof source !== "object" || source === null) return GENERIC_TOOL_ARGUMENT_LIMITS;
+  const ref = Object.getOwnPropertyDescriptor(source, "toolRef")?.value as unknown;
+  if (typeof ref !== "object" || ref === null) return GENERIC_TOOL_ARGUMENT_LIMITS;
+  const id = Object.getOwnPropertyDescriptor(ref, "canonicalId")?.value as unknown;
+  return typeof id === "string" ? toolArgumentLimits(id) : GENERIC_TOOL_ARGUMENT_LIMITS;
+}
 function captureInvocationObject(source: unknown): CatalogJsonObject {
   try {
-    const value = captureCatalogJson(source);
+    const value = captureCatalogJson(source, undefined, invocationLimits(source));
     requireDispatch(
       value !== null && typeof value === "object" && !Array.isArray(value),
       "invalid",
@@ -200,7 +213,11 @@ export function captureHandlerAction<Consumer extends CatalogConsumer = CodingCa
     "handler-mismatch",
   );
   const actionFor = executionOverride?.actionFor ?? handler.binding.actionFor;
-  const captured = captureCatalogJson(actionFor(args, identity));
+  const captured = captureCatalogJson(
+    actionFor(args, identity),
+    undefined,
+    toolArgumentLimits(handler.descriptor.toolRef.canonicalId),
+  );
   const parsed = consumer.captureAction(handler, captured, executionOverride, profile);
   requireDispatch(
     parsed?.actionId === identity.actionId && parsed.idempotencyKey === identity.idempotencyKey,
@@ -226,6 +243,7 @@ export async function approveCatalogAction<
   state: CatalogBindingState<Consumer>,
   request: Consumer["action"],
   context: Consumer["context"],
+  handler: CatalogBoundHandler<Consumer>,
 ): Promise<Consumer["action"]> {
   const preview = state.input.authorityPort.preview(context.authority, request);
   if (preview.ok) return request;
@@ -237,7 +255,12 @@ export async function approveCatalogAction<
   );
   const approved = await state.input.approvalPort.request(request, context);
   requireDispatch(approved !== undefined, "denied", "approval-rejected");
-  const captured = captureCatalogJson(approved);
+  // The admitted descriptor owns the ceiling; a consumer's action text cannot widen it.
+  const captured = captureCatalogJson(
+    approved,
+    undefined,
+    toolArgumentLimits(handler.descriptor.toolRef.canonicalId),
+  );
   const parsed = state.input.consumerPort.captureApprovedAction(captured);
   requireDispatch(
     parsed !== undefined && withoutProof(parsed) === withoutProof(request),

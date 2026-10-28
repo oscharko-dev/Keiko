@@ -1598,7 +1598,8 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
     resourceDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     // Why the live authority refused an allowed effect (outcome `authority-refused`): the budget,
-    // an expired or revoked envelope, a class outside it, a drifted binding, or no owner at all.
+    // an expired or revoked envelope, a class outside it, an edit over the changeset cap, a drifted
+    // binding, or no owner at all.
     authorityReason: {
       type: "string",
       dataClass: "closed-enum",
@@ -1609,6 +1610,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "revoked",
         "authority-resolution-failed",
         "action-not-authorized",
+        "patch-too-large",
         "drift",
         "unavailable",
         "other",
@@ -1659,6 +1661,7 @@ type NativeAuthorityReasonLog =
   | "revoked"
   | "authority-resolution-failed"
   | "action-not-authorized"
+  | "patch-too-large"
   | "drift"
   | "unavailable"
   | "other";
@@ -1671,6 +1674,7 @@ export function nativeAuthorityReasonLogValue(reason: string): NativeAuthorityRe
     case "revoked":
     case "authority-resolution-failed":
     case "action-not-authorized":
+    case "patch-too-large":
     case "unavailable":
       return reason;
     default:

@@ -52,6 +52,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "„{title}“ wurde aus einer Datei importiert. Deine nächste Nachricht setzt sie als neue Aufgabe fort, die diesen Verlauf behält und „{title}“ nicht verändert.",
   "codingWorkbench.history.finish": "Aufgabe abschließen",
   "codingWorkbench.history.fork": "Aufgabe verzweigen",
+  "codingWorkbench.history.showEarlier": "Frühere Nachrichten anzeigen ({count} ausgeblendet)",
   "codingWorkbench.history.forkFrom": "Ab hier verzweigen",
   "codingWorkbench.history.forkNotice":
     "Deine nächste Nachricht startet eine neue Aufgabe, die von „{title}“ abzweigt. Die neue Aufgabe behält diesen Verlauf bis zum Verzweigungspunkt und verändert „{title}“ nicht.",
@@ -611,6 +612,20 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.subagent": "Subagent",
   "codingWorkbench.timeline.tool.todo": "Aufgabenliste",
   "codingWorkbench.timeline.tool.question": "Rückfrage",
+  "codingWorkbench.timeline.tool.changeset_edit": "Dateien ändern",
+  "codingWorkbench.timeline.tool.verification": "Verifikation",
+  "codingWorkbench.timeline.tool.research_fetch": "Recherche-Abruf",
+  "codingWorkbench.timeline.tool.skill_discover": "Skill-Erkennung",
+  "codingWorkbench.timeline.tool.keiko_skill": "Skill",
+  "codingWorkbench.timeline.tool.child_agent": "Untergeordneter Agent",
+  "codingWorkbench.timeline.tool.git_diff": "Git-Diff",
+  "codingWorkbench.timeline.tool.git_stage": "Git-Staging",
+  "codingWorkbench.timeline.tool.git_commit": "Git-Commit",
+  "codingWorkbench.timeline.tool.git_push": "Git-Push",
+  "codingWorkbench.timeline.tool.pull_request": "Pull Request",
+  "codingWorkbench.timeline.tool.git_execute": "Git-Vorgang",
+  "codingWorkbench.timeline.tool.git_sync": "Git-Synchronisierung",
+  "codingWorkbench.timeline.tool.ci_status": "CI-Status",
   "codingWorkbench.changes.title": "Änderungen",
   "codingWorkbench.changes.idle": "Starte einen Lauf, um seine Workspace-Änderungen zu prüfen.",
   "codingWorkbench.changes.loading": "Neueste begrenzte Änderungen werden geladen…",
@@ -1361,6 +1376,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.runRefreshFailed": "Lauf konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.eventStreamRefreshFailed":
     "Ereignisstrom konnte nicht aktualisiert werden.",
+  "codingWorkbench.status.eventStreamReconnecting":
+    "Die Live-Aktualisierung wurde unterbrochen. Verbindung zum Ereignisstrom wird wiederhergestellt…",
   "codingWorkbench.issue.resolving": "Verlinktes Issue wird gelesen…",
   "codingWorkbench.issue.error.multiple-issues":
     "Dieser Prompt nennt mehrere Issues. Wähle ein Haupt-Issue für diese Aufgabe und sende ihn erneut.",

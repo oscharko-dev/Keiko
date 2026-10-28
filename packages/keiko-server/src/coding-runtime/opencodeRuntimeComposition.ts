@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type {
@@ -64,6 +64,7 @@ import type { CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
 import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import {
   CODING_TOOL_MAX_BODY_BYTES,
+  CODING_TOOL_MAX_REQUEST_BODY_BYTES,
   CODING_TOOL_MAX_IN_FLIGHT,
   parseCodingToolRequest,
   type CodingToolActionRequest,
@@ -108,6 +109,7 @@ import {
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
+  type OpenCodeV2MessageWindow,
   type OpenCodeV2PromptInputs,
 } from "./opencodeV2HttpClient.js";
 import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
@@ -495,6 +497,13 @@ export type McpOAuthIssuerPort = (
 export interface OpenCodeRuntimeCompositionInput {
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
+  /**
+   * False when this launch's pinned ripgrep did not verify (ADR-0163). The run's private OpenCode
+   * tool directory then holds a refusing `rg`, so the runtime's own lookup finds it before its
+   * GitHub download: search fails visibly instead of fetching an unverified binary at run time.
+   * Absent or true leaves that directory untouched.
+   */
+  readonly ripgrepVerified?: boolean | undefined;
   /**
    * The host environment the manager may copy the launch's allowlisted names from (#3897). The
    * mapped profiles allowlist nothing, so they keep launching with an empty inheritance; the native
@@ -1827,6 +1836,7 @@ async function materializePrepare(
   runRoot: string,
 ): Promise<OpenCodeLifecyclePrepareResult> {
   createPrivateState(runRoot);
+  if (input.ripgrepVerified === false) refuseRipgrepDownload(runRoot);
   const continuation = seedRun(input, request, runRoot);
   await bridge.start();
   const mcpChecks = await nativeMcpChecks(input, request);
@@ -2454,6 +2464,7 @@ async function handshake(
       maxTurnWaitMs: input.maxTurnWaitMs,
       contextGeometry: input.contextGeometry,
       ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
       readiness: readinessV2Ports(input, bridge, run, client, endpoint, request),
       governedSink: input.governedEventSink,
       ...adapterSafeActivitySink(input, run),
@@ -2506,6 +2517,7 @@ function readinessV2Ports(
   request: OpenCodeLifecycleHandshakeRequest,
 ): Parameters<typeof createOpenCodeRuntimeAdapter>[0]["readiness"] {
   let fixedSessionId: string | undefined;
+  const reportTruncation = truncationReporter(input.diagnostics, run.runId);
   let sessionCreation: Promise<string> | undefined;
   let streamCount = 0;
   let startupRead = false;
@@ -2606,11 +2618,17 @@ function readinessV2Ports(
       if (fixedSessionId === undefined) throw new Error("opencode-v2-session-missing");
       let messages: readonly Readonly<Record<string, unknown>>[] = [];
       try {
-        messages = await client.messages(fixedSessionId, signal);
+        // A session past the read bound keeps its run alive on the newest window (audit 2026-10,
+        // finding 3); the complete read stays strict for the continuation of a retained session.
+        const window = await client.recentMessages(fixedSessionId, signal);
+        messages = window.messages;
+        reportTruncation(window);
         // A continued session already holds the messages of earlier runs, which Coding History has
         // and the timeline must not show again: the projection starts after them.
         const ownMessages = withoutBaseline(messages, run.continuation?.baselineIds);
-        const events = history.project(fixedSessionId, ownMessages, checkpoints[fixedSessionId]);
+        const events = history.project(fixedSessionId, ownMessages, checkpoints[fixedSessionId], {
+          truncated: window.truncated,
+        });
         observeNativeStepChanges(input, run, ownMessages);
         staged.clear();
         for (const event of events) {
@@ -2846,6 +2864,27 @@ function v2HistoryFailureReason(error: unknown): string {
   if (error instanceof Error && KNOWN_V2_HISTORY_FAILURES.has(error.message))
     return `reason=${error.message}`;
   return "reason=transport-invalid";
+}
+
+// Once per run: the history read bound cut older messages off the live timeline's window.
+function truncationReporter(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+): (window: OpenCodeV2MessageWindow) => void {
+  let reported = false;
+  return (window): void => {
+    if (!window.truncated || reported) return;
+    reported = true;
+    emitServerDiagnostic(diagnostics, {
+      correlationId: runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.history",
+      source: "opencode.history",
+      errorClass: "OpenCodeHistoryTruncated",
+      message: "runtime-history-failed",
+      code: `stage=history:reason=window-truncated:windowMessageCount=${String(window.messages.length)}`,
+    });
+  };
 }
 
 function recordOpenCodeV2HistoryFailure(
@@ -3233,6 +3272,35 @@ function createPrivateState(runRoot: string): void {
   }
 }
 
+// OpenCode looks for `rg` on PATH, then in `<data home>/opencode/bin`, and only then downloads one
+// from GitHub. The run's HOME is private and XDG_DATA_HOME is never set, so that directory is
+// `<run>/home/.local/share/opencode/bin`. The placeholder there ends the lookup: on POSIX it is a
+// script that refuses with a fixed message, on Windows the same bytes are not a runnable image.
+const REFUSING_RIPGREP =
+  "#!/bin/sh\necho 'ripgrep is unavailable in this Keiko run: the pinned binary did not verify' >&2\nexit 2\n";
+
+export function openCodeRipgrepPlaceholderPath(
+  runRoot: string,
+  platform = process.platform,
+): string {
+  return join(
+    runRoot,
+    "home",
+    ".local",
+    "share",
+    "opencode",
+    "bin",
+    platform === "win32" ? "rg.exe" : "rg",
+  );
+}
+
+function refuseRipgrepDownload(runRoot: string): void {
+  const path = openCodeRipgrepPlaceholderPath(runRoot);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, REFUSING_RIPGREP, { encoding: "utf8", mode: 0o700 });
+  chmodSync(path, 0o700);
+}
+
 function materialize(
   runRoot: string,
   config: string,
@@ -3308,7 +3376,9 @@ export function toolBridgeRequestDeadlineMs(
   body: string | undefined,
 ): number {
   const request =
-    body === undefined ? undefined : parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES);
+    body === undefined
+      ? undefined
+      : parseCodingToolRequest(body, CODING_TOOL_MAX_REQUEST_BODY_BYTES);
   const budgetMs = request === undefined ? undefined : openCodeCatalogSettlementBudgetMs(request);
   return budgetMs !== undefined && budgetMs > DEFAULT_SANDBOX_POLICY.defaultTimeoutMs
     ? budgetMs + GOVERNED_TOOL_SETTLEMENT_GRACE_MS
@@ -4560,10 +4630,10 @@ function preflightToolRequest(
     return { outcome: "rejected", status: 401, body: "" };
   }
   const declaredLength = declaredBodyLength(headers.get("content-length"));
-  if (declaredLength === undefined || declaredLength > CODING_TOOL_MAX_BODY_BYTES) {
+  if (declaredLength === undefined || declaredLength > CODING_TOOL_MAX_REQUEST_BODY_BYTES) {
     return { outcome: "rejected", status: 413, body: "" };
   }
-  if (body !== undefined && Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
+  if (body !== undefined && Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_REQUEST_BODY_BYTES) {
     return { outcome: "rejected", status: 413, body: "" };
   }
   return { outcome: "admitted" };
@@ -4589,7 +4659,7 @@ async function executeToolRequest(
     return { status: 400, body: "" };
   }
   const service: ToolService = {
-    request: parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES),
+    request: parseCodingToolRequest(body, CODING_TOOL_MAX_REQUEST_BODY_BYTES),
     startedAtMs: Date.now(),
   };
   const actionId = service.request?.actionId;

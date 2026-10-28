@@ -446,6 +446,7 @@ describe("native authority evidence (#3897 review)", () => {
       "authority-resolution-failed",
       "action-not-authorized",
       "unavailable",
+      "patch-too-large",
     ])
       expect(nativeAuthorityReasonLogValue(reason)).toBe(reason);
     for (const drift of ["workspace-drift", "task-drift", "branch-drift", "budget-drift"])

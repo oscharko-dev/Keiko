@@ -2175,6 +2175,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      toolCallFragmentsPositional: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      toolCallFragmentsDropped: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       codeRedactionRevision: {
         type: "integer",
         dataClass: "count",
@@ -2230,6 +2240,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       {
         field: "outputExhausted",
         values: [true],
+      },
+      {
+        field: "toolCallFragmentsDropped",
+        positive: true,
       },
     ],
   },
@@ -4057,6 +4071,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "pending-decision-focused",
           "repository-trust-bound",
           "changeset-review-prepared",
+          "history-repository-switched",
+          "event-stream-reconnecting",
         ],
       },
       section: {
@@ -9694,6 +9710,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "revoked",
           "authority-resolution-failed",
           "action-not-authorized",
+          "patch-too-large",
           "drift",
           "unavailable",
           "other",
@@ -20310,6 +20327,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "gateway.readiness.busy-retained",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-readiness.retainBusyConversationReadiness",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
+      },
+      busySignal: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["probe-timeout", "gateway-overloaded"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-readiness"],
+    proofIds: ["gateway.readiness.busy-retained.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.readiness.compatibility-retry",
     category: "gateway",
     owner: "keiko-model-gateway",
@@ -24410,6 +24465,52 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["git-delivery-approval"],
     proofIds: ["git.delivery.sync.approval.minted.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "git.diff.view-bounded",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "gitDiffView.redactedDiffViewBody",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      truncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      shownBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      maxBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      credentialFloorFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["git-diff-view-bounded"],
+    proofIds: ["git.diff.view-bounded.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -35593,7 +35694,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["request-failed", "source-skipped", "request-refused"],
+        values: ["request-failed", "source-skipped", "request-refused", "provider-busy"],
       },
       validationReasons: {
         type: "string-array",
@@ -36547,6 +36648,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      drainWaitCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       reason: {
         type: "string",

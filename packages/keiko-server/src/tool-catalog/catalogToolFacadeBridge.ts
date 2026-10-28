@@ -1,11 +1,13 @@
 import type { CatalogBindingPreparation } from "./catalogToolBinder.js";
 import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import { randomUUID } from "node:crypto";
-import type {
-  CatalogJsonValue,
-  ToolDescriptor,
-  ToolResultReason,
-  ToolResultStatus,
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  GOVERNED_CHANGESET_EDIT_TOOL_ID,
+  type CatalogJsonValue,
+  type ToolDescriptor,
+  type ToolResultReason,
+  type ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   EditorAgentConflictCode,
@@ -217,14 +219,18 @@ function editCatalogAction(
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
 ): CatalogAction {
   return {
-    toolId: "keiko.changeset.edit",
-    arguments: captureCatalogJson({
-      changeset: {
-        ...request.changeset,
-        selectedFiles:
-          request.changeset.selectedFiles ?? request.changeset.files.map((file) => file.file),
+    toolId: GOVERNED_CHANGESET_EDIT_TOOL_ID,
+    arguments: captureCatalogJson(
+      {
+        changeset: {
+          ...request.changeset,
+          selectedFiles:
+            request.changeset.selectedFiles ?? request.changeset.files.map((file) => file.file),
+        },
       },
-    }),
+      undefined,
+      CHANGESET_EDIT_ARGUMENT_LIMITS,
+    ),
   };
 }
 
@@ -409,7 +415,7 @@ function representative(
   const base = { actionId: identity.actionId, idempotencyKey: identity.idempotencyKey };
   const workspace = workspaceRepresentative(canonicalId, base);
   if (workspace !== undefined) return workspace;
-  if (canonicalId === "keiko.changeset.edit")
+  if (canonicalId === GOVERNED_CHANGESET_EDIT_TOOL_ID)
     return {
       ...base,
       action: "edit",

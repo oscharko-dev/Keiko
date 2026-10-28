@@ -44,8 +44,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 import {
-  CODING_TOOL_MAX_BODY_BYTES,
   CODING_TOOL_MAX_IN_FLIGHT,
+  CODING_TOOL_MAX_REQUEST_BODY_BYTES,
   CODING_TOOL_MAX_READ_BYTES,
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
@@ -172,7 +172,7 @@ export function createCodingToolFacade(
 ): CodingToolFacade {
   const context: ExecutionContext = {
     ports,
-    maxBodyBytes: boundedOption(options.maxBodyBytes, CODING_TOOL_MAX_BODY_BYTES),
+    maxBodyBytes: boundedOption(options.maxBodyBytes, CODING_TOOL_MAX_REQUEST_BODY_BYTES),
     maxInFlight: boundedOption(options.maxInFlight, CODING_TOOL_MAX_IN_FLIGHT),
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,

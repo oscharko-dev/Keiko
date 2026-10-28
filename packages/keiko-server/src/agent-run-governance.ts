@@ -12,6 +12,7 @@ import {
   codingWorkbenchPolicyEffectFor,
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -50,7 +51,9 @@ const AGENT_RUN_AUTHORITY_CAPABILITIES = {
     maxRuntimeMs: AGENT_RUN_AUTHORITY_LIFETIME_MS,
     maxToolCalls: 4,
     maxPromptTokens: 128_000,
-    maxPatchBytes: 65_536,
+    // One apply reserves one changeset: the cap of the governed editor path (owner decision
+    // 2026-10-28), not a separate figure.
+    maxPatchBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
   },
 } as const;
 

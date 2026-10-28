@@ -50,6 +50,15 @@ regexTarget = "line"
 regexes = ['''idempotencyKey: "idempotency-1",''']
 
 [[allowlists]]
+description = "PR #4102: the editor-action fixtures idempotency-1 and idempotency-2 in one immutable checkpoint of the changeset-size contract test. They are test metadata (the idempotency keys of synthetic editor actions), not credentials; the generic-api-key rule matches the key name and its entropy. Later commits use the non-secret-shaped idem-1 and idem-2. Only these exact historical fixture lines in this one commit are exempt."
+condition = "AND"
+commits = ["668fc8584bf14062e3cbba632e255dcd9a9bb7a1"]
+paths = ['''packages/keiko-contracts/src/editor-agent\.changeset-size\.test\.ts''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''idempotencyKey: "idempotency-[12]",''']
+
+[[allowlists]]
 description = "PR #4064: the synthetic MCP relay credential of exactly the admitted minimum length in one immutable checkpoint of the relay test. It is a generated test value that proves the relay scrubs a reflected credential, not a credential of any service; the generic-api-key rule matches its entropy. Later commits assemble it at run time. Only this exact historical fixture line in this one commit is exempt."
 condition = "AND"
 commits = ["84dddde8921ef6b0b80b0d7a69df5bc648790e42"]
@@ -201,3 +210,12 @@ regexes = [
   '''MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun''',
   '''^sk_live_AbCdEfGhIjKlMnOp1234"$''',
 ]
+
+[[allowlists]]
+description = "PR #4116: a made-up RSA private-key block in one immutable checkpoint of the diff credential-floor test, used only to prove that the raw Git diff view still masks a private key inside an unparsed hunk. No real credential was involved; the following commit assembles it from fragments, so the squash-merged tree carries no literal. Scoped to that commit, that test file, the private-key and generic-api-key rules and the synthetic body, so every other finding remains enforced."
+condition = "AND"
+commits = ["f0b9195dca21653d047b651e03ad56e30eb78051"]
+paths = ['''^packages/keiko-security/src/redaction-diff-credential-floor\.test\.ts$''']
+targetRules = ["private-key", "generic-api-key"]
+regexTarget = "match"
+regexes = ['''MIIEowIBAAKCAQEAuZ9b5XyQfloorfixture''']

@@ -186,7 +186,11 @@ composition and copied into every newly minted envelope: the cumulative prompt-t
 positive decimal integers from 1 to 480), from which both `budget.maxRuntimeMs` and `expiresAt`
 derive. An invalid value fails the composition closed; neither setting can alter an existing
 envelope or reset its usage, and a run that exhausts either bound still fails closed at its next
-delegation. Native context compaction changes subsequent request size, not cumulative accounting.
+delegation. The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
+envelope is minted with `CODING_RUNTIME_PATCH_BUDGET_BYTES` (64 MiB, owner decision 2026-10-28;
+previously 256 KiB), eight changesets of the per-changeset cap of ADR-0125 D3, charged by the size of
+the diff each edit renders. Native context compaction changes subsequent request size, not
+cumulative accounting.
 
 The pinned V2 runtime's admitted compaction history projects running, retained-tail, completed, and
 failed facts onto the existing `coding-runtime.compaction` Activity Log operation. Native compaction
@@ -719,7 +723,14 @@ policy decides `allowed`, every effect still runs through the governed delivery 
 delivery-truth rule decides whether the run delivered. Merge and Authority Envelope widening
 require their own human approval in every mode (ADR-0087).
 
-A run's runtime database is private per-run state and is removed with the run's state root. The one
+A run's runtime database is private per-run state and is removed with the run's state root. A crash
+or a disposal that failed can leave that root behind, so the server sweeps it once at startup: every
+directory under the owned `<state>/coding-runtime/opencode` base whose run is neither live nor
+recoverable (no snapshot, or a settled one) is removed, never following a symbolic link, never
+leaving the owned base, and recording only counts on a body-free diagnostic. The live run window
+reads the newest 4096 messages of a longer session (marked truncated, never replacing the captured
+Coding History conversation) instead of failing every read; the strict complete read above that
+bound still refuses a longer session for continuation. The one
 runtime state that outlives a run is the retained session entry of D10 (S02, S03, #3904): it is
 server-owned under the state directory, outside every workspace and run root, one entry per task
 and bounded, and it is never authority, because a later run mints, bounds and approves its own.

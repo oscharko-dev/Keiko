@@ -194,6 +194,34 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
+// #4115: a single-slot local model that is still busy with another generation lets the chat probe
+// time out (or answers 429/503). That is no verdict on a model this configuration generation
+// already proved ready, so the proof is kept and renewed instead of being replaced with not-ready,
+// which hid the model from the Workbench picker while standalone OpenCode simply waited for it.
+const GATEWAY_READINESS_BUSY_RETAINED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.busy-retained",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.retainBusyConversationReadiness",
+  fields: {
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    busySignal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["probe-timeout", "gateway-overloaded"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.busy-retained.line"],
+  releaseImpact: "patch",
+});
+
 // Every readiness check a person starts in the settings dialog. The Coding Workbench's automatic
 // run and the on-demand probe a conversation entry point runs keep the automatic operations
 // (`gateway.readiness.automatic.*`). Only the automatic run used to leave a line, so a check run
@@ -1004,6 +1032,15 @@ function isFetchNetworkFailure(errorValue: unknown): boolean {
   return errorValue instanceof TypeError && errorValue.message === "fetch failed";
 }
 
+/** The probe outwaited or was turned away by a busy provider; unreachable is not busy. */
+function busySignal(
+  warning: string | undefined,
+): "probe-timeout" | "gateway-overloaded" | undefined {
+  if (warning === PROBE_TIMED_OUT_WARNING) return "probe-timeout";
+  if (warning === PROBE_GATEWAY_BUSY_WARNING) return "gateway-overloaded";
+  return undefined;
+}
+
 export function probeInconclusive(probe: GatewayReadinessProbeResult): boolean {
   return (
     probe.status === "failed" &&
@@ -1052,18 +1089,43 @@ function reportProbeFailure(
   probeError: unknown,
 ): GatewayReadinessProbeResult {
   const failure = nativeProbeAbortReason(probeError);
+  const warning = providerWarning(failure);
+  const record = serverDiagnosticFromError({
+    correlationId,
+    operation: "gateway.readiness",
+    source: `gateway-readiness.${name}`,
+    error: failure,
+    summary: "A gateway readiness probe could not be completed.",
+    redact: (message): string => String(deps.redactor(message)),
+  });
+  // #4115: a probe that outwaited a busy provider is a warning, not a gateway error.
   emitServerDiagnostic(
     deps.diagnostics,
-    serverDiagnosticFromError({
+    busySignal(warning) === undefined ? record : { ...record, diagnosticOutcome: "provider-busy" },
+  );
+  return result(name, "failed", start, evidence, warning);
+}
+
+// #4115: an overload status turns the probe away like a timeout outwaits it, so it carries the same
+// closed provider-busy warning diagnostic. Any other unsuccessful status writes none here.
+function reportBusyStatus(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  name: GatewayReadinessProbeName,
+  response: Response,
+): void {
+  if (busySignal(transientStatusWarning(response)) === undefined) return;
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
       correlationId,
       operation: "gateway.readiness",
       source: `gateway-readiness.${name}`,
-      error: failure,
+      error: new Error(unsuccessfulEvidence("Gateway", response)),
       summary: "A gateway readiness probe could not be completed.",
       redact: (message): string => String(deps.redactor(message)),
     }),
-  );
-  return result(name, "failed", start, evidence, providerWarning(failure));
+    diagnosticOutcome: "provider-busy",
+  });
 }
 
 function unsupportedStatus(response: Response): boolean {
@@ -1149,6 +1211,7 @@ async function probeChat(
       ],
     });
     if (!response.ok) {
+      reportBusyStatus(deps, correlationId, "chat", response);
       return result(
         "chat",
         "failed",
@@ -1657,6 +1720,7 @@ async function probeLongContext(
     const response = await providerRequest(deps, config, provider, correlationId, body);
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
+      reportBusyStatus(deps, correlationId, "long_context", response);
       return result(
         "long_context",
         status,
@@ -1860,7 +1924,9 @@ function recordReadinessObservation(
   deps: UiHandlerDeps,
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
+  correlationId: string,
 ): void {
+  if (retainBusyConversationReadiness(deps, report, observedGeneration, correlationId)) return;
   deps.gatewayConfig?.recordVerification(
     gatewayVerificationFromProbeOutcome(report.overallStatus),
     observedGeneration,
@@ -1906,6 +1972,50 @@ function retainedFeatureObservation(
   return Object.keys(previous.fields).some((key) => key !== "conversationReady")
     ? previous
     : undefined;
+}
+
+/**
+ * #4115: keeps and renews a same-generation basic-chat proof when the chat probe only outwaited a
+ * busy provider (timeout) or was turned away by its overload status. Every other failure, an
+ * unreachable provider, a model never proved ready and a replaced configuration keep the ordinary
+ * not-ready recording.
+ */
+function retainBusyConversationReadiness(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+  correlationId: string,
+): boolean {
+  const chat = report.probes.find((probe) => probe.name === "chat");
+  const signal = chat?.status === "failed" ? busySignal(chat.warning) : undefined;
+  if (signal === undefined) return false;
+  const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
+  if (!renewableConversationProof(previous, observedGeneration)) return false;
+  deps.gatewayConfig?.recordVerifiedCapability(
+    report.modelId,
+    previous.fields,
+    previous.checkedAt,
+    observedGeneration,
+    report.checkedAt,
+  );
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_BUSY_RETAINED_OPERATION,
+      { correlationId },
+      { ...modelIdEvidence(report.modelId), busySignal: signal },
+    ),
+  );
+  return true;
+}
+
+// A same-generation success with a valid proof time. A future or malformed time is unknown and
+// never renewable; an expired but valid proof is (#4115).
+function renewableConversationProof(
+  previous: VerifiedModelCapabilityObservation | undefined,
+  observedGeneration: number | undefined,
+): previous is VerifiedModelCapabilityObservation {
+  if (previous === undefined || previous.generation !== observedGeneration) return false;
+  return previous.fields.conversationReady === true && conversationReadinessAgeMs(previous) >= 0;
 }
 
 function recordFailedReadinessObservation(
@@ -2041,7 +2151,7 @@ export async function runGatewayReadiness(
   // config holder so the surfaces that used to infer readiness from configuration alone (the editor
   // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
-  recordReadinessObservation(deps, report, observedGeneration);
+  recordReadinessObservation(deps, report, observedGeneration, correlationId);
   // Read BEFORE the tool-calling reconcile: persisting that conclusion bumps the generation, and
   // the context-window reconcile must tell "we just wrote it" from "the config was replaced".
   const probedCurrentConfig =

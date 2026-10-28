@@ -18,6 +18,7 @@ import {
   connectResponseHeaderExceedsLimit,
   gatewayTrustedCaCertificates,
   gatewayFetch,
+  GatewayResponseBodyValidationError,
   type GatewayFetchOptions,
   httpsProxyTunnelKey,
   isMissingIssuerError,
@@ -1798,6 +1799,29 @@ describe("readSseStream", () => {
     const big = `data: {"x":"${"y".repeat(200)}"}\n`;
     const response = streamingResponse([big]);
     await expect(collect(readSseStream(response, 100))).rejects.toThrow(/size limit/);
+  });
+
+  it("reports a stream over maxBytes as a size-exceeded body validation error", async () => {
+    const big = `data: {"x":"${"y".repeat(200)}"}\n`;
+    const failure = await collect(readSseStream(streamingResponse([big]), 100)).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(GatewayResponseBodyValidationError);
+    expect(failure).toMatchObject({ validation: "size-exceeded" });
+  });
+
+  it("reports a complete data line that is not JSON as an invalid body, not a bare SyntaxError", async () => {
+    const response = streamingResponse(['data: {"a":1}\n', "data: {not json}\n"]);
+    const failure = await collect(readSseStream(response)).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GatewayResponseBodyValidationError);
+    expect(failure).toMatchObject({ validation: "json-invalid" });
+  });
+
+  it("leaves a data line cut off before its newline a plain SyntaxError (a possible transport cut)", async () => {
+    const response = streamingResponse(['data: {"a":1}\n', 'data: {"b":']);
+    const failure = await collect(readSseStream(response)).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(SyntaxError);
+    expect(failure).not.toBeInstanceOf(GatewayResponseBodyValidationError);
   });
 
   it("yields nothing when the response body is null", async () => {

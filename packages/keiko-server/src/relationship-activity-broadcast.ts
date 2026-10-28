@@ -10,12 +10,12 @@
 //
 // This module owns ONE refresh timer and ONE ping timer per (scope, workspaceId),
 // computes each tick once, serializes each frame once, and fans the bytes out through
-// writeOrDestroy so a non-draining client is aborted+destroyed instead of buffered.
+// writeSseFrame so a non-draining client is aborted+destroyed instead of buffered.
 // Both timers are unref'd (matching sse.ts startSseHeartbeat) so open streams never
 // hold the process alive during shutdown.
 
 import type { ServerResponse } from "node:http";
-import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+import { writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
 
 /** One serialized SSE frame for one activity snapshot, keyed for change detection. */
 export interface ActivityFrame {
@@ -61,7 +61,7 @@ function writeTo(subscriber: ActivitySubscriber, frame: string): void {
   // A subscriber whose socket died mid-fan-out is skipped; its abort listener has
   // already detached it and writing to a destroyed response would throw.
   if (subscriber.controller.signal.aborted) return;
-  writeOrDestroy(
+  writeSseFrame(
     subscriber.res,
     frame,
     subscriber.controller,
@@ -147,7 +147,7 @@ function emitJoinState(broadcaster: Broadcaster, joiner: ActivitySubscriber): vo
  * Attaches one SSE connection to the shared broadcaster for `workspaceId`, creating it
  * (and its two unref'd timers) on first use and tearing it down when the last
  * subscriber detaches. Returns an idempotent unsubscribe; aborting the subscriber's
- * controller (e.g. via a writeOrDestroy backpressure kill) detaches it as well.
+ * controller (e.g. via a writeSseFrame backpressure kill) detaches it as well.
  */
 export function subscribeActivityBroadcast(
   scope: object,

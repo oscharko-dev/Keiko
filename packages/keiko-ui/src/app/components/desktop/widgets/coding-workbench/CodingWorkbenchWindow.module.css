@@ -576,6 +576,23 @@
   margin-inline: 0;
 }
 
+/* A polite status (a stream the browser is reconnecting): present, but not an alarm. */
+.cmpStreamNotice {
+  display: flex;
+  min-width: 0;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin: var(--space-3) var(--space-6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  font-size: var(--text-label);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
 .composerDock {
   position: relative;
   z-index: 2;
@@ -2023,7 +2040,8 @@ details[open] > .cmpActivitySummary::after {
 .timeline[data-virtual="true"] {
   max-height: 60vh;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /* Chain to the session stream at the list's edges so the wheel never dead-ends inside it. */
+  overscroll-behavior: auto;
 }
 
 .cmpConversation {

@@ -2,7 +2,7 @@ import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import { createHash } from "node:crypto";
 
 import type { VerificationKind } from "@oscharko-dev/keiko-contracts";
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { toolArgumentLimitsByToolName } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -327,14 +327,39 @@ function isNonNegativeInteger(value: unknown): boolean {
   return Number.isInteger(value) && (value as number) >= 0;
 }
 
+export interface OpenCodeV2ProjectionReuse {
+  readonly reusedMessageCount: number;
+  readonly projectedMessageCount: number;
+}
+
+export interface OpenCodeV2HistoryProjectionOptions {
+  /** Defaults to true. Off rebuilds every message each call, the reference the reuse is proven against. */
+  readonly reuseMessages?: boolean | undefined;
+}
+
+/** What the messages of one `project` call are: the whole session, or only its newest window. */
+export interface OpenCodeV2HistoryWindow {
+  /**
+   * Older messages exist and were not read. They produce no candidates and so no events, and the
+   * conversation Coding History captured earlier is kept rather than replaced by the window.
+   */
+  readonly truncated?: boolean | undefined;
+}
+
 export interface OpenCodeV2HistoryProjection {
   project(
     sessionId: string,
     messages: readonly Readonly<Record<string, unknown>>[],
     checkpoint: number | undefined,
+    window?: OpenCodeV2HistoryWindow,
   ): readonly OpenCodeReconciliationEvent[];
   takeSignal(event: OpenCodeReconciliationEvent): CodingSafeActivitySignal | undefined;
   clearSignals(): void;
+  /**
+   * How the last `project` call spent its work: settled assistant messages reused from the previous
+   * call, and those projected again. Counts only, for the projection line and its proofs.
+   */
+  lastReuse(): OpenCodeV2ProjectionReuse;
   /**
    * Notes one event of the runtime's event stream. A streamed part is persisted only empty and
    * complete, so the text and reasoning deltas the stream carries are what the next `project` shows
@@ -403,7 +428,10 @@ function assertToolInput(
   const valid =
     state.status === "streaming" ? typeof input === "string" : record(input) !== undefined;
   const inputBytes = valid ? Buffer.byteLength(JSON.stringify(input), "utf8") : 0;
-  if (valid && inputBytes <= TOOL_CATALOG_LIMITS.maxArgumentBytes) return;
+  // A changeset edit carries file content up to the changeset cap; every other tool keeps the
+  // generic catalog argument bound.
+  const limits = toolArgumentLimitsByToolName(typeof part.name === "string" ? part.name : "");
+  if (valid && inputBytes <= limits.maxArgumentBytes) return;
   throw new OpenCodeV2HistoryError(
     `reason=argument-bound:eventSha256=${digest(part).slice(0, 16)}:toolSha256=${digest(part.name).slice(0, 16)}:statusSha256=${digest(state.status ?? null).slice(0, 16)}:partBytes=${String(Buffer.byteLength(JSON.stringify(part), "utf8"))}`,
   );
@@ -923,6 +951,83 @@ function idleCandidate(id: string, outcome: unknown, children: BackgroundChildre
     : candidate(key, "terminal", outcome);
 }
 
+// A settled assistant message projects to the same candidates as long as nothing it depends on has
+// changed: its own serialized form, the user message it answers, and the live text fed into it. The
+// retained message is compared by value, so the reuse can never show an older read.
+interface ReusedMessage {
+  readonly message: Readonly<Record<string, unknown>>;
+  readonly parentMessageId: string | undefined;
+  readonly candidates: readonly Candidate[];
+}
+
+interface MessageReuse {
+  readonly memo: Map<string, ReusedMessage>;
+  readonly seen: Set<string>;
+  reused: number;
+  projected: number;
+}
+
+function newMessageReuse(): MessageReuse {
+  return { memo: new Map(), seen: new Set(), reused: 0, projected: 0 };
+}
+
+function jsonEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== "object" || typeof right !== "object" || left === null || right === null)
+    return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const leftKeys = Object.keys(left);
+  if (leftKeys.length !== Object.keys(right).length) return false;
+  return leftKeys.every(
+    (key) =>
+      Object.hasOwn(right, key) &&
+      jsonEqual((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]),
+  );
+}
+
+function assistantCandidatesReusing(
+  message: Readonly<Record<string, unknown>>,
+  parentMessageId: string | undefined,
+  live: OpenCodeV2LiveText,
+  toolProfile: OpenCodeToolProfile,
+  children: BackgroundChildren,
+  reuse: MessageReuse,
+): readonly Candidate[] {
+  const id = message.id;
+  // An unreadable identity takes the ordinary path and its ordinary error.
+  if (typeof id !== "string")
+    return messageCandidates(message, parentMessageId, live, toolProfile, children);
+  reuse.seen.add(id);
+  const previous = reuse.memo.get(id);
+  const settled = !live.tracks(id);
+  if (
+    settled &&
+    previous !== undefined &&
+    previous.parentMessageId === parentMessageId &&
+    jsonEqual(previous.message, message)
+  ) {
+    reuse.reused += 1;
+    return previous.candidates;
+  }
+  const candidates = messageCandidates(message, parentMessageId, live, toolProfile, children);
+  reuse.projected += 1;
+  // A message live text is still being fed into is decided by that text too, so it is not retained;
+  // one whose live text retired during this call projected to what its history alone shows.
+  if (!live.tracks(id)) reuse.memo.set(id, { message, parentMessageId, candidates });
+  else reuse.memo.delete(id);
+  return candidates;
+}
+
+// Counts the call and forgets the messages it no longer saw, so the retained set follows the history.
+function settleReuse(reuse: MessageReuse): OpenCodeV2ProjectionReuse {
+  for (const id of reuse.memo.keys()) if (!reuse.seen.has(id)) reuse.memo.delete(id);
+  const counts = { reusedMessageCount: reuse.reused, projectedMessageCount: reuse.projected };
+  reuse.seen.clear();
+  reuse.reused = 0;
+  reuse.projected = 0;
+  return counts;
+}
+
 function allCandidates(
   sessionId: string,
   messages: readonly Readonly<Record<string, unknown>>[],
@@ -930,6 +1035,7 @@ function allCandidates(
   known: ReadonlyMap<string, KnownCandidate>,
   toolProfile: OpenCodeToolProfile,
   activity?: HistoryActivity,
+  reuse?: MessageReuse,
 ): readonly Candidate[] {
   const result: Candidate[] = [candidate(`${sessionId}:created`, "observation", sessionId)];
   const children: BackgroundChildren = { launched: new Set(), reported: new Set() };
@@ -945,7 +1051,9 @@ function allCandidates(
           )
         : undefined;
     result.push(
-      ...messageCandidates(message, parentMessageId, live, toolProfile, children, userDisplay),
+      ...(reuse !== undefined && message.type === "assistant"
+        ? assistantCandidatesReusing(message, parentMessageId, live, toolProfile, children, reuse)
+        : messageCandidates(message, parentMessageId, live, toolProfile, children, userDisplay)),
       ...changedNativeRetryCandidates(message, parentMessageId, known),
     );
   }
@@ -1115,16 +1223,32 @@ function recordHistoryProjection(
   );
 }
 
+function sameConversation(
+  left: readonly CodingHistoryMessage[] | undefined,
+  right: readonly CodingHistoryMessage[],
+): boolean {
+  if (left?.length !== right.length) return false;
+  return left.every((message, index) => {
+    const other = right[index];
+    return (
+      message.messageId === other?.messageId &&
+      message.role === other.role &&
+      message.content === other.content
+    );
+  });
+}
+
+// An unchanged conversation is recognised by comparing it with the last one accepted, not by hashing
+// it again on every read.
 function conversationCapture(
   activity: HistoryActivity | undefined,
 ): (candidates: readonly Candidate[]) => void {
-  let capturedDigest: string | undefined;
+  let captured: readonly CodingHistoryMessage[] | undefined;
   return (candidates): void => {
     if (activity?.captureMessages === undefined) return;
     const conversation = conversationMessages(candidates);
-    const currentDigest = digest(conversation);
-    if (currentDigest !== capturedDigest && activity.captureMessages(conversation))
-      capturedDigest = currentDigest;
+    if (!sameConversation(captured, conversation) && activity.captureMessages(conversation))
+      captured = conversation;
   };
 }
 
@@ -1178,53 +1302,102 @@ function stepCallIds(content: unknown): readonly string[] {
   });
 }
 
+class HistoryProjection implements OpenCodeV2HistoryProjection {
+  private known: ReadonlyMap<string, KnownCandidate> = new Map();
+  private pending: PendingProjection | undefined;
+  private pendingStart = -1;
+  private readonly toolProfile: OpenCodeToolProfile;
+  private readonly capture: (candidates: readonly Candidate[]) => void;
+  private readonly activeSignals = new Map<string, CodingSafeActivitySignal>();
+  private readonly live = createOpenCodeV2LiveText();
+  private readonly reuse: MessageReuse | undefined;
+  private reuseOfLastProject: OpenCodeV2ProjectionReuse = {
+    reusedMessageCount: 0,
+    projectedMessageCount: 0,
+  };
+
+  constructor(
+    private readonly activity: HistoryActivity | undefined,
+    options: OpenCodeV2HistoryProjectionOptions | undefined,
+  ) {
+    this.toolProfile = activity?.toolProfile ?? "direct";
+    openCodeVisibleToolNames(this.toolProfile);
+    this.capture = conversationCapture(activity);
+    this.reuse = options?.reuseMessages === false ? undefined : newMessageReuse();
+  }
+
+  lastReuse(): OpenCodeV2ProjectionReuse {
+    return this.reuseOfLastProject;
+  }
+
+  project(
+    sessionId: string,
+    messages: readonly Readonly<Record<string, unknown>>[],
+    checkpoint: number | undefined,
+    window?: OpenCodeV2HistoryWindow,
+  ): readonly OpenCodeReconciliationEvent[] {
+    const position = checkpoint ?? -1;
+    if (this.pending !== undefined && position === this.pendingStart + this.pending.events.length) {
+      // This snapshot is privately owned; subsequent staging always copies before writing.
+      this.known = this.pending.nextKnown;
+      this.pending = undefined;
+    }
+    if (this.pending !== undefined && position !== this.pendingStart) {
+      throw new Error("opencode-v2-checkpoint-invalid");
+    }
+    this.pending ??= this.projectFresh(sessionId, messages, position, window);
+    this.pendingStart = position;
+    for (const [key, signal] of this.pending.signals) this.activeSignals.set(key, signal);
+    return this.pending.events;
+  }
+
+  private projectFresh(
+    sessionId: string,
+    messages: readonly Readonly<Record<string, unknown>>[],
+    position: number,
+    window: OpenCodeV2HistoryWindow | undefined,
+  ): PendingProjection {
+    const candidates = allCandidates(
+      sessionId,
+      messages,
+      this.live,
+      this.known,
+      this.toolProfile,
+      this.activity,
+      this.reuse,
+    );
+    if (this.reuse !== undefined) this.reuseOfLastProject = settleReuse(this.reuse);
+    const pending = makePending(sessionId, position, this.known, candidates);
+    // A truncated window never replaces the conversation captured from the complete history.
+    if (window?.truncated !== true) this.capture(candidates);
+    recordHistoryProjection(this.activity, pending, this.live);
+    recordNativeQuestions(this.activity, pending);
+    return pending;
+  }
+
+  takeSignal(event: OpenCodeReconciliationEvent): CodingSafeActivitySignal | undefined {
+    const key = `${event.aggregateId}\u0000${String(event.sequence)}`;
+    const signal = this.activeSignals.get(key);
+    this.activeSignals.delete(key);
+    return signal;
+  }
+
+  clearSignals(): void {
+    this.activeSignals.clear();
+  }
+
+  observeLiveEvent(sessionId: string, event: Readonly<Record<string, unknown>>): void {
+    this.live.observe(sessionId, event);
+  }
+
+  freezeLiveText(): void {
+    this.live.freeze();
+  }
+}
+
 export function createOpenCodeV2HistoryProjection(
   activity?: HistoryActivity,
+  options?: OpenCodeV2HistoryProjectionOptions,
 ): OpenCodeV2HistoryProjection {
-  const toolProfile = activity?.toolProfile ?? "direct";
-  openCodeVisibleToolNames(toolProfile);
-  let known: ReadonlyMap<string, KnownCandidate> = new Map();
-  let pending: PendingProjection | undefined;
-  let pendingStart = -1;
-  const capture = conversationCapture(activity);
-  const activeSignals = new Map<string, CodingSafeActivitySignal>();
-  const live = createOpenCodeV2LiveText();
-  return {
-    project(sessionId, messages, checkpoint): readonly OpenCodeReconciliationEvent[] {
-      const position = checkpoint ?? -1;
-      if (pending !== undefined && position === pendingStart + pending.events.length) {
-        // This snapshot is privately owned; subsequent staging always copies before writing.
-        known = pending.nextKnown;
-        pending = undefined;
-      }
-      if (pending !== undefined && position !== pendingStart) {
-        throw new Error("opencode-v2-checkpoint-invalid");
-      }
-      if (pending === undefined) {
-        const candidates = allCandidates(sessionId, messages, live, known, toolProfile, activity);
-        pending = makePending(sessionId, position, known, candidates);
-        capture(candidates);
-        recordHistoryProjection(activity, pending, live);
-        recordNativeQuestions(activity, pending);
-      }
-      pendingStart = position;
-      for (const [key, signal] of pending.signals) activeSignals.set(key, signal);
-      return pending.events;
-    },
-    takeSignal(event): CodingSafeActivitySignal | undefined {
-      const key = `${event.aggregateId}\u0000${String(event.sequence)}`;
-      const signal = activeSignals.get(key);
-      activeSignals.delete(key);
-      return signal;
-    },
-    clearSignals(): void {
-      activeSignals.clear();
-    },
-    observeLiveEvent(sessionId, event): void {
-      live.observe(sessionId, event);
-    },
-    freezeLiveText(): void {
-      live.freeze();
-    },
-  };
+  return new HistoryProjection(activity, options);
 }

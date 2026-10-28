@@ -4,7 +4,12 @@ import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { toolArgumentLimitsByToolName } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+  type ToolArgumentLimits,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { ToolCatalogError, captureCatalogJson } from "@oscharko-dev/keiko-tool-catalog";
 
 import {
@@ -79,31 +84,48 @@ const MAX_HISTORY_INFO_DEPTH = 8;
 /**
  * A durable tool part records the governed call's arguments twice: parsed as `state.input` (every
  * status) and as the provider's raw text `state.raw` (pending). Both were admitted upstream under
- * the catalog ceilings (ADR-0175 D4, `TOOL_CATALOG_LIMITS`), so the same ceilings -- not the
- * 4096-character metadata bound -- re-bound them here, and this is the largest part one call can
- * therefore leave: the metadata budget plus two argument bodies. Run 2026-09-10: a 19 KiB
- * `keiko_changeset_edit` patch, inside the 64 KiB patch contract, failed the metadata bound, the
- * whole `POST /sync/history` pull threw, and the run ended `runtime-failed` on its first edit.
+ * the catalog ceilings (ADR-0175 D4, `TOOL_CATALOG_LIMITS`; the governed changeset edit and the
+ * native file-content tools carry their own, `CHANGESET_EDIT_ARGUMENT_LIMITS`), so the same
+ * ceilings -- not the 4096-character metadata bound -- re-bound them here, and this is the largest
+ * part one call can therefore leave: the metadata budget plus two argument bodies of the largest
+ * ceiling. Run 2026-09-10: a 19 KiB `keiko_changeset_edit` patch, inside the patch contract of the
+ * time, failed the metadata bound, the whole `POST /sync/history` pull threw, and the run ended
+ * `runtime-failed` on its first edit.
  */
 export const OPENCODE_HISTORY_TOOL_PART_MAX_BYTES =
-  MAX_HISTORY_INFO_BYTES + 2 * TOOL_CATALOG_LIMITS.maxArgumentBytes;
+  MAX_HISTORY_INFO_BYTES + 2 * CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes;
 // One governed call leaves at most three argument-bearing rows (pending, running, settled): the
 // pending row carries both bodies, the other two carry `state.input` once each.
-const HISTORY_TOOL_CALL_ROWS_MAX_BYTES =
-  3 * MAX_HISTORY_INFO_BYTES + 4 * TOOL_CATALOG_LIMITS.maxArgumentBytes;
+function historyToolCallRowsMaxBytes(argumentLimits: ToolArgumentLimits): number {
+  return 3 * MAX_HISTORY_INFO_BYTES + 4 * argumentLimits.maxArgumentBytes;
+}
 /** Argument-bearing calls one catch-up pull is budgeted for after a stream reconnect. */
 export const OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS = 8;
+/**
+ * Of those calls, how many may be changeset-edit calls (or native file-content calls) at their own,
+ * far larger argument ceiling (owner decision 2026-10-28: an edit of up to 8 MiB is never
+ * refused). One whole such call fits a pull; the rest of the budget is ordinary calls, so the
+ * response bound grows by one call's rows, not by a multiple of the whole catch-up allowance.
+ */
+export const OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS = 1;
 // The per-pull budget every non-argument row shared before tool bodies were admitted at all.
 const HISTORY_METADATA_ROWS_MAX_BYTES = 1024 * 1024;
 /**
  * `POST /sync/history` returns every durable row after the checkpoints, so one pull after a stream
  * reconnect can carry a whole turn. The response budget therefore covers the ordinary metadata rows
- * plus the argument-bearing rows of OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS calls; a pull above it
- * still fails closed (`opencode-history-oversized`) and is recorded by its closed reason.
+ * plus the argument-bearing rows of OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS calls, of which
+ * OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS may be at the changeset-edit ceiling; a pull above
+ * it still fails closed (`opencode-history-oversized`) and is recorded by its closed reason.
  */
 export const OPENCODE_HISTORY_RESPONSE_MAX_BYTES =
   HISTORY_METADATA_ROWS_MAX_BYTES +
-  OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS * HISTORY_TOOL_CALL_ROWS_MAX_BYTES;
+  (OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS - OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS) *
+    historyToolCallRowsMaxBytes({
+      maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+      maxStringBytes: TOOL_CATALOG_LIMITS.maxStringBytes,
+    }) +
+  OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS *
+    historyToolCallRowsMaxBytes(CHANGESET_EDIT_ARGUMENT_LIMITS);
 const MAX_JSON_DEPTH = 64;
 const ID = /^(?:evt_|ses_|per|que)[A-Za-z0-9_-]+$/u;
 const PERMISSION_ID = /^per_[A-Za-z0-9_-]+$/u;
@@ -1416,7 +1438,8 @@ function toolPartBodyGate(
   part: Record<string, unknown>,
   state: Record<string, unknown>,
 ): OpenCodeHistoryPartGate | undefined {
-  if (!boundedToolArguments(state.input) || !boundedRawToolArguments(state.raw)) {
+  const limits = toolArgumentLimitsByToolName(typeof part.tool === "string" ? part.tool : "");
+  if (!boundedToolArguments(state.input, limits) || !boundedRawToolArguments(state.raw, limits)) {
     return "argument-bound";
   }
   const bodiless = { ...part, state: { ...state, ...blankedToolArguments(state) } };
@@ -1434,10 +1457,10 @@ function toolPartBodyGate(
 
 // A non-record is left to the tool-state gate, which refuses it under its own name; a record is
 // validated exactly as the gateway validated it (byte, string-byte, depth, key and item ceilings).
-function boundedToolArguments(input: unknown): boolean {
+function boundedToolArguments(input: unknown, limits: ToolArgumentLimits): boolean {
   if (!isRecord(input)) return true;
   try {
-    captureCatalogJson(input);
+    captureCatalogJson(input, undefined, limits);
     return true;
   } catch (error) {
     if (error instanceof ToolCatalogError) return false;
@@ -1447,8 +1470,8 @@ function boundedToolArguments(input: unknown): boolean {
 
 // The raw text is the canonical argument JSON the gateway handed the runtime, so it can never
 // legitimately exceed the argument ceiling; a non-string is again the tool-state gate's refusal.
-function boundedRawToolArguments(raw: unknown): boolean {
-  return typeof raw !== "string" || bytes(raw) <= TOOL_CATALOG_LIMITS.maxArgumentBytes;
+function boundedRawToolArguments(raw: unknown, limits: ToolArgumentLimits): boolean {
+  return typeof raw !== "string" || bytes(raw) <= limits.maxArgumentBytes;
 }
 
 function blankedToolArguments(state: Record<string, unknown>): Record<string, unknown> {

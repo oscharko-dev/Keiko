@@ -16,7 +16,10 @@
 // structured "Provider unavailable" descriptor when its controller is left undefined.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/editor-agent";
+import {
+  EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+  EDITOR_AGENT_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
 import {
   postEditorAgentResult,
   postEditorAgentResultRequest,
@@ -338,7 +341,11 @@ export function useCodingWorkbenchEditorBridge(
       return;
     }
     decidingRef.current = false;
-    const diff = parseUnifiedDiff(action.changeset?.patch ?? "");
+    // The operator decides about the whole changeset, so the review parses all of it (up to the
+    // changeset cap), not the 512 KB display cut of the other diff surfaces.
+    const diff = parseUnifiedDiff(action.changeset?.patch ?? "", {
+      maxBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+    });
     reportCodingWorkbenchInteraction({
       interaction: "changeset-review-prepared",
       fileCount: diff.files.length,

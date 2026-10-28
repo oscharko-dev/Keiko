@@ -61,6 +61,12 @@ export interface ProjectionPorts {
   readonly completeSource?: boolean;
   readonly privateLiteralValues?: Set<string>;
   readonly inferUnifiedDiff?: boolean;
+  /**
+   * Diff views only (#4114): the credential floor that replaces whole-file masking when a file's
+   * hunks do not parse on their own. It must preserve line breaks so lines map back 1:1.
+   */
+  readonly unparsedDiffHunkFloor?: (text: string) => string;
+  readonly onUnparsedDiffHunkFloor?: () => void;
 }
 
 interface CodeRegion {

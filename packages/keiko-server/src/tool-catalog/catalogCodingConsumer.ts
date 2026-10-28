@@ -12,6 +12,7 @@ import type {
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import {
+  CODING_TOOL_MAX_REQUEST_BODY_BYTES,
   codingToolRequiredActionClasses,
   parseCodingToolRequest,
   type CodingToolActionRequest,
@@ -110,5 +111,5 @@ export const codingCatalogConsumer: CatalogConsumerPort = Object.freeze({
   requiredEffects: codingToolRequiredActionClasses,
   captureAction: captureHandlerRequest,
   captureApprovedAction: (value: CatalogJsonValue): CodingToolActionRequest | undefined =>
-    parseCodingToolRequest(JSON.stringify(value), 262_144),
+    parseCodingToolRequest(JSON.stringify(value), CODING_TOOL_MAX_REQUEST_BODY_BYTES),
 });

@@ -1388,3 +1388,74 @@ describe("OpenCode V2 session inbox", () => {
     await expect(client.recentMessageIds(SESSION)).rejects.toMatchObject({ status: 404 });
   });
 });
+
+// Audit finding 3: a session past the 4096-message read bound used to fail every history read, and
+// four failed reads ended the live run. The monitor now reads the newest window and says so.
+describe("OpenCode V2 recent message window", () => {
+  const SESSION = "ses_window_1";
+
+  // Newest first, like the runtime's `order=desc` pages; even indexes are user messages, odd ones
+  // the assistant message that answers the user message before it.
+  function conversation(total: number): readonly Record<string, unknown>[] {
+    return Array.from({ length: total }, (_, index) => ({
+      id: `msg_${String(index).padStart(6, "0")}`,
+      type: index % 2 === 0 ? "user" : "assistant",
+    }));
+  }
+
+  function pagedHistory(total: number): typeof globalThis.fetch {
+    const all = conversation(total);
+    return vi.fn<typeof globalThis.fetch>((input) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      );
+      const cursor = url.searchParams.get("cursor");
+      const start = cursor === null ? 0 : Number(cursor);
+      const page = all
+        .slice(0)
+        .reverse()
+        .slice(start, start + 100);
+      const next = start + 100 < total ? String(start + 100) : null;
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: page, cursor: { next } }), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+  }
+
+  function clientFor(total: number): ReturnType<typeof createOpenCodeV2HttpClient> {
+    return createOpenCodeV2HttpClient({
+      endpoint: "http://127.0.0.1:1984/",
+      password: "test-only",
+      fetch: pagedHistory(total),
+    });
+  }
+
+  it("returns the newest messages, oldest first, and marks a session past the bound truncated", async () => {
+    const window = await clientFor(5_000).recentMessages(SESSION);
+
+    expect(window.truncated).toBe(true);
+    expect(window.messages.length).toBeLessThanOrEqual(4_096);
+    expect(window.messages.length).toBeGreaterThan(4_000);
+    expect(window.messages.at(-1)?.id).toBe("msg_004999");
+    // A window never opens on an assistant message whose user message was cut off.
+    expect(window.messages[0]?.type).toBe("user");
+    const ids = window.messages.map((message) => message.id as string);
+    expect(ids).toEqual([...ids].sort());
+  });
+
+  it("returns a session within the bound whole and untruncated", async () => {
+    const window = await clientFor(250).recentMessages(SESSION);
+
+    expect(window.truncated).toBe(false);
+    expect(window.messages).toEqual(await clientFor(250).messages(SESSION));
+    expect(window.messages).toHaveLength(250);
+  });
+
+  it("keeps the complete read strict: a longer session is still refused for continuation", async () => {
+    await expect(clientFor(5_000).messages(SESSION)).rejects.toThrow(
+      "opencode-v2-history-oversized",
+    );
+  });
+});

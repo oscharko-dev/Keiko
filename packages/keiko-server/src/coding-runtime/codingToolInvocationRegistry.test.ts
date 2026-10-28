@@ -7,6 +7,7 @@ import {
   CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN,
   createCodingToolInvocationRegistry,
 } from "./codingToolInvocationRegistry.js";
+import { CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./codingToolIpc.js";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -66,12 +67,17 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
     registry.revokeRun(request.runId);
     expect(registry.inspect(request)).toEqual({ kind: "revoked" });
   });
-  it("caps each run at eight entries, 262,144 bytes per entry, and 2 MiB in aggregate", () => {
+  // Owner decision 2026-10-28: an entry is one tool request, and the largest request is a governed
+  // changeset edit at the request bound. The pin keeps its three bounds -- entries per run, bytes per
+  // entry, bytes in aggregate -- and states each from the contract, not from the old 256 KiB.
+  it("caps each run at eight entries, the request bound per entry, and two such edits plus 2 MiB in aggregate", () => {
     const registry = createCodingToolInvocationRegistry({ now: () => 0 });
 
     expect(CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN).toBe(8);
-    expect(CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY).toBe(262_144);
-    expect(CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES).toBe(2 * 1024 * 1024);
+    expect(CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY).toBe(CODING_TOOL_MAX_REQUEST_BODY_BYTES);
+    expect(CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES).toBe(
+      2 * CODING_TOOL_MAX_REQUEST_BODY_BYTES + 2 * 1024 * 1024,
+    );
     for (let index = 0; index < CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN; index += 1) {
       expect(
         registry.stage(
@@ -85,14 +91,29 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
     expect(registry.stage(stagedEdit({ actionId: "ninth", idempotencyKey: "ninth" })).kind).toBe(
       "busy",
     );
+    const large = createCodingToolInvocationRegistry({ now: () => 0 });
     expect(
-      registry.stage(
-        stagedEdit({ actionId: "large", idempotencyKey: "large", payload: Buffer.alloc(262_145) }),
+      large.stage(
+        stagedEdit({
+          actionId: "large",
+          idempotencyKey: "large",
+          payload: Buffer.alloc(CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY + 1),
+        }),
       ).kind,
     ).toBe("invalid");
+    // A payload far above the old 256 KiB, up to the request bound, is staged.
+    expect(
+      large.stage(
+        stagedEdit({
+          actionId: "big",
+          idempotencyKey: "big",
+          payload: Buffer.alloc(CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY),
+        }),
+      ).kind,
+    ).toBe("staged");
 
     const aggregate = createCodingToolInvocationRegistry({ now: () => 0 });
-    for (let index = 0; index < 8; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       expect(
         aggregate.stage(
           stagedEdit({
@@ -104,6 +125,29 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
         ).kind,
       ).toBe("staged");
     }
+    // The third cap-sized edit does not fit: busy, a transient answer, not a size refusal.
+    expect(
+      aggregate.stage(
+        stagedEdit({
+          runId: "run-third",
+          actionId: "aggregate-third",
+          idempotencyKey: "aggregate-key-third",
+          payload: Buffer.alloc(CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY),
+        }),
+      ).kind,
+    ).toBe("busy");
+    // The ordinary 2 MiB still fits beside the two edits, and not one byte more.
+    const ordinary = 2 * 1024 * 1024;
+    expect(
+      aggregate.stage(
+        stagedEdit({
+          runId: "run-ordinary",
+          actionId: "ordinary",
+          idempotencyKey: "ordinary-key",
+          payload: Buffer.alloc(ordinary),
+        }),
+      ).kind,
+    ).toBe("staged");
     expect(
       aggregate.stage(
         stagedEdit({

@@ -83,6 +83,14 @@ unwraps its `DOMException` reason before classification and diagnostics. Deadlin
 cancellation remain inconclusive, including on the native transport, and retain bounded recovery
 instead of becoming a conclusive capability rejection. The existing readiness completion event
 records the inconclusive-probe count without request or response bodies.
+A busy provider is no verdict on a model already proved ready (#4115, 2026-10-28). When the chat
+probe only times out or receives a transient overload status, a same-generation positive basic-chat
+observation is kept with its fields and renewed at the probe's time, so a single-slot local model that
+is still serving another generation stays selectable and admitted, as standalone OpenCode waits for
+it. The gateway verification state is left unchanged, the probe diagnostic is a `provider-busy` warning
+instead of an error, and `gateway.readiness.busy-retained` records the closed busy signal and model
+digest. An unreachable provider, a model never proved ready and a replaced configuration keep the
+ordinary not-ready recording.
 A conversation's first provider dispatch still requires fresh readiness. A completed successful
 call gives only that turn's existing model-port wrapper a continuation witness, valid for the same
 five-minute interval from completion. A bounded follow-up or citation repair can use it when the

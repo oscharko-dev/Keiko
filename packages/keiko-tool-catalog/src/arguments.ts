@@ -1,6 +1,7 @@
-import type {
-  CatalogJsonValue,
-  ToolDescriptor,
+import {
+  toolArgumentLimits,
+  type CatalogJsonValue,
+  type ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { verifyToolDescriptor } from "./descriptor.js";
@@ -14,7 +15,11 @@ export function validateToolArguments(
   descriptor: ToolDescriptor,
 ): CatalogJsonValue {
   const verified = verifyToolDescriptor(descriptor);
-  const captured = copyCatalogJson(value, verified.bounds.maxArgumentBytes);
+  const captured = copyCatalogJson(
+    value,
+    verified.bounds.maxArgumentBytes,
+    toolArgumentLimits(verified.toolRef.canonicalId),
+  );
   // The mismatch account rides on the error so the rejecting layer can name the declared property
   // that was missing or invalid -- in its log and in the model's one correction -- without quoting
   // the arguments.

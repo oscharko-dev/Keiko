@@ -8,6 +8,7 @@ import {
   createOpenCodeV2HistoryProjection,
   OPENCODE_V2_STEP_CHANGE_FILES_MAX,
   OpenCodeV2HistoryError,
+  type OpenCodeV2ProjectionReuse,
   openCodeV2StepChanges,
 } from "./opencodeV2History.js";
 import { createOpenCodeReconciler } from "./opencodeReconciler.js";
@@ -215,6 +216,42 @@ describe("OpenCode V2 native tool history", () => {
     expect(() => projection.project("ses_invalid", history, undefined)).toThrow(
       "opencode-v2-tool-invalid",
     );
+  });
+
+  // 2026-10-28 owner decision: a changeset edit carries file content up to the 8 MiB changeset cap,
+  // so its history row may exceed the generic 256 KiB argument bound; every other tool keeps it.
+  it.each([
+    ["keiko_changeset_edit", true],
+    ["keiko_workspace_read", false],
+  ] as const)("bounds a %s history input above 256 KiB by its own tool limit", (name, accepted) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const history = [
+      { id: "msg_user", type: "user", time: { created: 0 }, text: "Task" },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        time: { created: 1 },
+        content: [
+          {
+            type: "tool",
+            id: "call_large",
+            name,
+            time: { created: 1 },
+            state: { status: "streaming", input: "x".repeat(300 * 1024) },
+          },
+        ],
+      },
+    ];
+    const refusal = ((): unknown => {
+      try {
+        projection.project("ses_large", history, undefined);
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    })();
+    if (accepted) expect(refusal).toBeUndefined();
+    else expect((refusal as OpenCodeV2HistoryError).safeCode).toMatch(/^reason=argument-bound:/u);
   });
 
   it.each(["Help", "He", ""])(
@@ -2635,5 +2672,173 @@ describe("native step changes from the runtime's snapshot", () => {
     expect(bounded?.truncated).toBe(true);
     const [odd] = openCodeV2StepChanges([step({ snapshot: { files: ["a.ts", 7] } })]);
     expect(odd).toMatchObject({ files: ["a.ts"], truncated: true });
+  });
+});
+
+// Audit finding 4: every history sync re-projected the whole session. A settled assistant message
+// whose serialized form is unchanged, with no live text being fed into it, is now reused from the
+// previous projection; the output stays identical to a projection that rebuilds everything.
+describe("OpenCode V2 history projection reuse", () => {
+  const SESSION = "ses_reuse";
+  const LIVE = "msg_live";
+
+  function turn(index: number, text: string): readonly Record<string, unknown>[] {
+    return [
+      { id: `msg_user_${String(index)}`, type: "user", time: { created: 1 }, text: "Task" },
+      {
+        id: `msg_done_${String(index)}`,
+        type: "assistant",
+        time: { created: 2 },
+        content: [
+          { type: "text", text },
+          {
+            type: "tool",
+            id: `call_${String(index)}`,
+            name: "question",
+            time: { created: 2 },
+            state: { status: "completed", input: { questions: ["q"] }, output: "x".repeat(2_000) },
+          },
+        ],
+      },
+    ];
+  }
+
+  function session(
+    turns: number,
+    changedIndex?: number,
+    liveText?: string,
+  ): readonly Record<string, unknown>[] {
+    const settled = Array.from({ length: turns }, (_, index) =>
+      turn(
+        index,
+        index === changedIndex ? "Completed answer. And one more thing." : "Completed answer.",
+      ),
+    ).flat();
+    return liveText === undefined
+      ? settled
+      : [
+          ...settled,
+          { id: "msg_user_live", type: "user", time: { created: 3 }, text: "Next" },
+          {
+            id: LIVE,
+            type: "assistant",
+            time: { created: 4 },
+            content: [{ type: "text", text: liveText }],
+          },
+        ];
+  }
+
+  // The same pulls, replayed against a projection that rebuilds everything every time.
+  function pair(): {
+    readonly pull: (messages: readonly Record<string, unknown>[]) => {
+      readonly reused: OpenCodeV2ProjectionReuse;
+    };
+    readonly live: (event: Record<string, unknown>) => void;
+  } {
+    const reusing = createOpenCodeV2HistoryProjection();
+    const rebuilding = createOpenCodeV2HistoryProjection(undefined, { reuseMessages: false });
+    let checkpoint: number | undefined;
+    return {
+      live: (event): void => {
+        reusing.observeLiveEvent(SESSION, event);
+        rebuilding.observeLiveEvent(SESSION, event);
+      },
+      pull: (messages): { readonly reused: OpenCodeV2ProjectionReuse } => {
+        const events = reusing.project(SESSION, structuredClone(messages), checkpoint);
+        const baseline = rebuilding.project(SESSION, structuredClone(messages), checkpoint);
+        expect(events).toEqual(baseline);
+        expect(events.map((event) => reusing.takeSignal(event))).toEqual(
+          baseline.map((event) => rebuilding.takeSignal(event)),
+        );
+        checkpoint = events.at(-1)?.sequence ?? checkpoint;
+        return { reused: reusing.lastReuse() };
+      },
+    };
+  }
+
+  it("reuses every unchanged settled assistant message and projects only what changed", () => {
+    const both = pair();
+    expect(both.pull(session(20)).reused).toEqual({
+      reusedMessageCount: 0,
+      projectedMessageCount: 20,
+    });
+    expect(both.pull(session(20)).reused).toEqual({
+      reusedMessageCount: 20,
+      projectedMessageCount: 0,
+    });
+    expect(both.pull(session(20, 7)).reused).toEqual({
+      reusedMessageCount: 19,
+      projectedMessageCount: 1,
+    });
+    expect(both.pull(session(21, 7)).reused).toEqual({
+      reusedMessageCount: 20,
+      projectedMessageCount: 1,
+    });
+  });
+
+  it("never reuses a message that live text is being fed into, and stays identical to a rebuild", () => {
+    const both = pair();
+    const data = { sessionID: SESSION, assistantMessageID: LIVE, ordinal: 0 };
+    both.pull(session(3, undefined, ""));
+    both.live({ id: "evt_1", type: "session.text.started", data });
+    for (const [index, delta] of ["Hel", "lo ", "wor", "ld"].entries()) {
+      both.live({
+        id: `evt_d${String(index)}`,
+        type: "session.text.delta",
+        data: { ...data, delta },
+      });
+      const { reused } = both.pull(session(3, undefined, ""));
+      expect(reused).toEqual({ reusedMessageCount: 3, projectedMessageCount: 1 });
+    }
+    // The history catches up with the complete part: the live text retires and the message is final.
+    both.pull(session(3, undefined, "Hello world"));
+    expect(both.pull(session(3, undefined, "Hello world")).reused).toEqual({
+      reusedMessageCount: 4,
+      projectedMessageCount: 0,
+    });
+  });
+
+  it("projects a settled message again when live text starts for it after it was reused", () => {
+    const both = pair();
+    both.pull(session(2, undefined, "Hello world"));
+    expect(both.pull(session(2, undefined, "Hello world")).reused.reusedMessageCount).toBe(3);
+    both.live({
+      id: "evt_late",
+      type: "session.text.started",
+      data: { sessionID: SESSION, assistantMessageID: LIVE, ordinal: 0 },
+    });
+    expect(both.pull(session(2, undefined, "Hello world")).reused).toEqual({
+      reusedMessageCount: 2,
+      projectedMessageCount: 1,
+    });
+  });
+});
+
+describe("OpenCode V2 history window", () => {
+  const messages = [
+    { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" },
+    {
+      id: "msg_assistant",
+      type: "assistant",
+      time: { created: 2 },
+      content: [{ type: "text", text: "Answer" }],
+    },
+  ];
+
+  it("projects a truncated window but never replaces the captured conversation with it", () => {
+    const captureMessages = vi.fn().mockReturnValue(true);
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "window-run",
+      activityLog: undefined,
+      captureMessages,
+    });
+
+    const events = projection.project("ses_window", messages, undefined, { truncated: true });
+
+    expect(events.length).toBeGreaterThan(0);
+    expect(captureMessages).not.toHaveBeenCalled();
+    // Once the checkpoint is committed, a complete read captures the conversation as before.
+    projection.project("ses_window", messages, events.at(-1)?.sequence);
+    expect(captureMessages).toHaveBeenCalledOnce();
   });
 });
