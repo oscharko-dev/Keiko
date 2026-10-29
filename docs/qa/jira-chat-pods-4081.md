@@ -1,7 +1,7 @@
 # Epic #4081: Jira access Pods in Chat
 
-Current individual acceptance: **28/55** (#4082 AC1/AC2/AC3/AC4/AC5, #4083 AC1/AC2/AC3/AC4/AC5/AC7, #4084 AC1/AC2/AC3, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC5/AC6, #4085 AC5/AC7 and #4086 AC1/AC7).
-The remaining 27 criteria and final integrated qualification are open.
+Current individual acceptance: **30/55** (#4082 AC1/AC2/AC3/AC4/AC5, #4083 AC1/AC2/AC3/AC4/AC5/AC7, #4084 AC1/AC2/AC3, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC5/AC6, #4085 AC1/AC5/AC7 and #4086 AC1/AC4/AC7).
+The remaining 25 criteria and final integrated qualification are open.
 
 ## Delivery contract
 
@@ -208,9 +208,9 @@ Status: **Accepted.** The current production-Gateway ordinary/mixed suites pass 
 
 ### #4085 — Create and manage Jira access Pods in the existing Knowledge Pods hub
 
-- [ ] **AC1:** The existing Knowledge Pods hub offers Data and Jira creation. A Jira Pod is created using name, address and PAT against the real local lab through the production API; Data creation and existing saved Pods, including synced Jira knowledge Pods, still work and remain distinguishable.
+- [x] **AC1:** The existing Knowledge Pods hub offers Data and Jira creation. A Jira Pod is created using name, address and PAT against the real local lab through the production API; Data creation and existing saved Pods, including synced Jira knowledge Pods, still work and remain distinguishable.
 
-Status: **Partial — not accepted**. The existing Hub offers Data and Jira creation. Rebuilt real-browser groups create, verify and connect Jira through production APIs, and a lifecycle group covers rename/rotation/reverification/removal. Direct Data-surface controls preserve a real Data capsule. Complete saved/synced-Jira compatibility and final-artifact qualification remain open.
+Status: **Accepted.** The actual licensed in-app-browser journey creates, verifies and binds a Jira Pod with name/address/PAT through the production API, including the new56c32 runtime. Current Hub/graph tests retain ordinary Data creation/list behavior and distinct Live-Jira controls. The production sync test creates a genuinely synced Jira knowledge capsule and preserves indexing/composition/Data routes; saved Cloud/Data compatibility and the already accepted AC7 capability boundary provide complementary unchanged-baseline proofs. This completes the creation/distinguishability criterion, not all Hub lifecycle/UI gates.
 
 - [ ] **AC2:** The PAT is write-only, cleared on save/cancel/unmount and never returned in later reads, stored in browser persistence, placed in URLs, screenshots, analytics or error strings. Duplicate submits/retries do not create duplicate Pods or orphan credentials.
 
@@ -250,9 +250,9 @@ Status: **Partial — not accepted**. The shared explicit replacement interactio
 
 Status: **Partial — not accepted**. Real-browser creation/connection/read/comment writes passed, followed by rebuilt keyboard/Ask and drag/Full groups with independent one-effect counts. Separate buffered and SSE normal-Chat groups completed all 14 operations with remote readbacks on a preceding artifact. Complete browser operation coverage, cross-instance source presentation and final-artifact acceptance remain open.
 
-- [ ] **AC4:** The read-grant request appears when the current binding/credential generation has no valid grant; a still-valid grant, including one restored after restart, does not prompt again. Approval UI appears exactly when current policy requires it; both identify the proposed scope or action and support deny/cancel. Stale grants or approvals after disconnect/token change cannot execute; pending/expired/unknown/partial/error states are truthful.
+- [x] **AC4:** The read-grant request appears when the current binding/credential generation has no valid grant; a still-valid grant, including one restored after restart, does not prompt again. Approval UI appears exactly when current policy requires it; both identify the proposed scope or action and support deny/cancel. Stale grants or approvals after disconnect/token change cannot execute; pending/expired/unknown/partial/error states are truthful.
 
-Status: **Partial — not accepted**. Current-state GET controls actionable cards; exact previews, disclosure, deny and closed outcomes have UI/route/live-mode proofs. The latest actual-Chat lifecycle group reuses valid consent after a fresh Node process, requires new disclosure after rotation, and asks once for its exact streamed write. History recovery cannot revive work, and cancelled pending decisions revoke. Full browser cold restart, stale/expired/partial states and final-artifact qualification remain open.
+Status: **Accepted.** Current grant/approval UI and owner tests prove subject/generation-bound reuse (including store reopen and retained real-process restart), exact action disclosure and decisions, stale refusal, and truthful pending/revoked/unknown/unconfirmed/error states. The new real licensed56c32 browser case closes expiry presentation with Permission revoked / Not sent to Jira, canonical not-dispatched and zero matching mutation attempts/effects. A separate regression exposed missing partial-result presentation: completed Jira pages marked truncated now show an EN/DE limited-result notice without inventing a next page. Four relevant suites pass44/44 with actual-contract partial/complete controls. The existing settlement log already records the closed truncated flag; mutation outcome states are unchanged.
 
 - [ ] **AC5:** Reload, network interruption, Pod removal, Jira shutdown and token replacement preserve the authoritative state without stale access. Retry, reconnect and Regenerate never silently repeat a completed or uncertain Jira mutation; retain its canonical outcome and show safe reconciliation. Browser tests lose the response after Jira accepts a write, deliver duplicates and regenerate, then assert remote effect counts. Restored bindings cannot recreate missing/expired grants or approvals. All content-bearing presentation follows existing retention/redaction rules and is excluded from diagnostics/evidence.
 
@@ -3613,3 +3613,23 @@ The complete current UI coverage lane passes613suites and11,968tests, with one e
 coverage is91.78% statements,85.28% branches,93.22% functions and94.38% lines. Full current root
 typecheck/lint/format, real local Sonar and the complete seven-gate Activity Log chain all pass.
 Final source-bound UI producers, remaining acceptance and exact-head CI remain open.
+
+### Live Pod creation and truthful partial-state acceptance — 2026-10-29
+
+#4085 AC1 and #4086 AC4 are individually accepted: **30/55**, with **25 open**. Actual licensed
+UI creation/verification complements unchanged Data creation, saved/synced-Jira capsule and
+Live-boundary proofs. The partial-state red regression fails in both languages before the repair;
+completed truncated Jira pages now explicitly disclose the limited result. The current flag is
+already registered in the existing settlement log, so the UI projects the canonical observation
+without introducing another state, authority or logger. Four relevant suites pass44/44, along
+with strict root/UI types and scoped lint/format. Other MCP and mutation outcome labels remain
+unchanged. Fresh final UI coverage and original source-bound producers remain required.
+
+The remaining Hub lifecycle proof now has a stronger existing-route/Data test: after direct
+Live credential deletion, Data capsule reads/listings/set membership/storage are unchanged; the
+removed binding/grant are gone and an unrelated Live Pod/Chat/grant remains. Related suites pass
+235/235. The real browser helper additionally checks loaded DOM and public metadata after actual
+reloads following rename, rotation, reverification and removal. Its one-time fixture seed avoids
+overwriting restored layout/edges: an actual installed-Chromium diagnostic passes, while the old
+unconditional seed resets both. The full real lifecycle/reload group has not yet run, so AC4 is
+still open. No unsupported Playwright API or unqualified live pass is retained.

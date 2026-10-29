@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { JiraChatTools } from "./JiraChatTools";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
 function exchange(outcome: string | undefined): ChatToolExchange {
   return {
@@ -21,6 +23,61 @@ function exchange(outcome: string | undefined): ChatToolExchange {
     },
   };
 }
+
+it.each([
+  ["en", true],
+  ["en", false],
+  ["de", true],
+  ["de", false],
+] as const)(
+  "truthfully presents a bounded Jira page in %s with partial=%s",
+  async (locale, partial) => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+    const original = exchange(undefined);
+    if (original.result?.status !== "completed") throw new Error("Missing completed fixture");
+    // localJiraPage/remoteJiraPage expose nextStartAt, and the production Chat adapter
+    // maps that nonterminal page to truncated/result-cap without inventing a tool status.
+    const read: ChatToolExchange = {
+      call: { id: "paged-read", name: "jira_projects", arguments: { startAt: 0, maxResults: 1 } },
+      result: {
+        ...original.result,
+        page: { truncated: partial, reason: partial ? "result-cap" : "none", cursor: null },
+        data: {
+          outcome: "succeeded",
+          items: [{ id: "10001", key: "SYN", name: "Synthetic project" }],
+          startAt: 0,
+          total: partial ? 2 : 1,
+          ...(partial ? { nextStartAt: 1 } : {}),
+        },
+      },
+    };
+    const notice =
+      locale === "de"
+        ? "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten."
+        : "Partial Jira result. Some available data is not included.";
+    try {
+      render(
+        <I18nProvider>
+          <JiraChatTools
+            transcript={{ schemaVersion: 1, exchanges: [read] }}
+            turnState="completed"
+          />
+        </I18nProvider>,
+      );
+      expect(screen.getByText(locale === "de" ? "Abgeschlossen" : "Completed")).toBeVisible();
+      if (partial) expect(screen.getByText(notice)).toBeVisible();
+      else expect(screen.queryByText(notice)).toBeNull();
+      await userEvent
+        .setup()
+        .click(screen.getByText(locale === "de" ? "Jira-Ergebnis ansehen" : "View Jira result"));
+      expect(screen.getByText(/Synthetic project/)).toBeVisible();
+      expect(screen.queryByRole("button", { name: /retry|erneut|next page/i })).toBeNull();
+    } finally {
+      localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  },
+);
 
 it("shows distinct saved Jira instance URLs for historical results with the same ticket key", async () => {
   const urls = [

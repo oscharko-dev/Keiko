@@ -57,6 +57,13 @@ export function JiraReadConsent({
     </section>
   );
 }
+function hasPartialJiraResult(exchange: ChatToolExchange): boolean {
+  return (
+    !exchange.call.name.startsWith("mcp_") &&
+    exchange.result?.status === "completed" &&
+    exchange.result.page.truncated
+  );
+}
 function JiraToolExchange({
   exchange,
   turnState,
@@ -73,6 +80,7 @@ function JiraToolExchange({
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
+      {hasPartialJiraResult(exchange) ? <p>{t("chat.jira.partial")}</p> : null}
       {exchange.result?.data == null ? null : (
         <details>
           <summary>{t(mcp ? "chat.mcp.details" : "chat.jira.details")}</summary>

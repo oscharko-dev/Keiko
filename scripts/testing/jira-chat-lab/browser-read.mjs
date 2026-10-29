@@ -16,23 +16,27 @@ export async function openBrowser(chat) {
   page.setDefaultTimeout(20000);
   await page.addInitScript(
     ({ id, title }) => {
-      globalThis.window.localStorage.setItem(
-        "keiko.workspace.v4",
-        JSON.stringify([
-          {
-            id: "jira-browser-chat",
-            type: "chat",
-            x: 32,
-            y: 30,
-            w: 1000,
-            h: 900,
-            z: 10,
-            cfg: { chatId: id, title },
-            max: false,
-          },
-        ]),
-      );
-      globalThis.window.localStorage.removeItem("keiko.conns.v1");
+      const seeded = "keiko.jira-browser-fixture.seeded.v1";
+      if (globalThis.window.sessionStorage.getItem(seeded) !== "true") {
+        globalThis.window.localStorage.setItem(
+          "keiko.workspace.v4",
+          JSON.stringify([
+            {
+              id: "jira-browser-chat",
+              type: "chat",
+              x: 32,
+              y: 30,
+              w: 1000,
+              h: 900,
+              z: 10,
+              cfg: { chatId: id, title },
+              max: false,
+            },
+          ]),
+        );
+        globalThis.window.localStorage.removeItem("keiko.conns.v1");
+        globalThis.window.sessionStorage.setItem(seeded, "true");
+      }
     },
     { id: chat.id, title: chat.title },
   );

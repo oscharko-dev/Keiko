@@ -2294,8 +2294,15 @@ describe("Jira Live Pod direct Data-surface isolation", () => {
     },
   );
 
-  it("refuses mixed Live/Data set membership without changing the existing Data Pod capabilities", async () => {
+  it("refuses mixed Live/Data membership and preserves Data after direct Live credential deletion", async () => {
+    const otherPodId = await readyJiraPod();
     const { podId, dataId, deps } = await livePodDataBoundaryFixture();
+    const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherPodId });
+    const otherBefore = structuredClone(fixtureStore.findChatById(other.id));
+    const otherCredential = credentialForPod(otherPodId);
+    const credential = credentialForPod(podId);
+    const grants = [bound, other].map((chat) => retainedChatReadGrant(chat));
     const probeCount = fakePortRequests.length;
     const createSet = (capsuleIds: readonly string[]): Promise<Response> =>
       fetch(`${baseUrl()}/api/local-knowledge/capsule-sets`, {
@@ -2313,7 +2320,8 @@ describe("Jira Live Pod direct Data-surface isolation", () => {
     });
     const dataRead = await fetch(`${baseUrl()}/api/local-knowledge/capsules/${dataId}`);
     expect(dataRead.status).toBe(200);
-    expect((await dataRead.json()) as unknown).toMatchObject({ capsule: { id: dataId } });
+    const dataBefore: unknown = await dataRead.json();
+    expect(dataBefore).toMatchObject({ capsule: { id: dataId } });
     const dataIndex = await fetch(`${baseUrl()}/api/local-knowledge/capsules/${dataId}/index`, {
       method: "POST",
       headers: csrfHeaders(),
@@ -2321,6 +2329,40 @@ describe("Jira Live Pod direct Data-surface isolation", () => {
     });
     // The Data route admits this identity, then correctly rejects its empty source set.
     expect(dataIndex.status).toBe(409);
+    const readDataCollections = (): Promise<readonly unknown[]> =>
+      Promise.all(
+        ["capsules", "capsule-sets"].map(async (collection): Promise<unknown> => {
+          const response = await fetch(`${baseUrl()}/api/local-knowledge/${collection}`);
+          expect(response.status).toBe(200);
+          return response.json() as Promise<unknown>;
+        }),
+      );
+    const collectionsBefore = await readDataCollections();
+    const knowledge = openKnowledgeStoreForDeps(deps);
+    try {
+      const storedBefore = structuredClone(listCapsules(knowledge.store));
+      expect(storedBefore.map((capsule) => capsule.id)).toEqual([dataId]);
+      const deleted = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}`,
+        { method: "DELETE", headers: csrfHeaders() },
+      );
+      expect(deleted.status).toBe(200);
+      expect(wiring.custody.getMetadata(credential.authRef)).toBeUndefined();
+      expect(fixtureStore.findChatById(bound.id)?.jiraPodBinding).toBeUndefined();
+      expect(wiring.custody.getMetadata(otherCredential.authRef)).toEqual(otherCredential);
+      expect(fixtureStore.findChatById(other.id)).toEqual(otherBefore);
+      expect(grants.map((state) => state())).toEqual(["revoked", "granted"]);
+      const afterDelete = await fetch(`${baseUrl()}/api/local-knowledge/capsules/${dataId}`);
+      expect(afterDelete.status).toBe(200);
+      expect((await afterDelete.json()) as unknown).toEqual(dataBefore);
+      expect(await readDataCollections()).toEqual(collectionsBefore);
+      expect(listCapsules(knowledge.store)).toEqual(storedBefore);
+      expect(
+        knowledge.store._internal.db.prepare("SELECT COUNT(*) AS count FROM indexing_jobs").get(),
+      ).toMatchObject({ count: 0 });
+    } finally {
+      knowledge.close();
+    }
     expect(fakePortRequests).toHaveLength(probeCount);
     expect(deps.localKnowledgeEmbeddingRequest).not.toHaveBeenCalled();
   });
