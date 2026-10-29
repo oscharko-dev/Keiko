@@ -4,11 +4,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { sseBackpressureReporter, type SseBackpressureSignal } from "./sse-write.js";
-import {
-  BrowserToolError,
-  type BrowserEventEnvelope,
-  type BrowserSessionManager,
-} from "@oscharko-dev/keiko-tools";
+import { BrowserToolError, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   SSE_HEADERS,
@@ -310,7 +306,11 @@ export function openBrowserSseStream(
     (stop) =>
       manager.subscribe(sessionId, (event) => {
         seq += 1;
-        writeBrowserEvent(res, event, seq, redactor, controller, onBackpressure);
+        // KEIKO-0674: reuse the WeakMap-keyed redactedEventJson helper (GEN-PERF-FANOUT-001) so a fan-
+        // out of the same browser event to K subscribers pays the redact+serialize cost once, not K
+        // times. Every other SSE fan-out path (agent-run/container/command-runner/terminal) already
+        // routes through this helper; this one was the last inline call to redactor()+JSON.stringify.
+        writeNamespacedSseEvent(res, event, seq, "browser", redactor, controller, onBackpressure);
         if (event.kind === "session-closed") {
           stop();
           res.end();
@@ -319,19 +319,4 @@ export function openBrowserSseStream(
     onBackpressure,
     correlationId,
   );
-}
-
-function writeBrowserEvent(
-  res: ServerResponse,
-  event: BrowserEventEnvelope,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // KEIKO-0674: reuse the WeakMap-keyed redactedEventJson helper (GEN-PERF-FANOUT-001) so a fan-
-  // out of the same browser event to K subscribers pays the redact+serialize cost once, not K
-  // times. Every other SSE fan-out path (agent-run/container/command-runner/terminal) already
-  // routes through this helper; this one was the last inline call to redactor()+JSON.stringify.
-  writeNamespacedSseEvent(res, event, seq, "browser", redactor, controller, onBackpressure);
 }

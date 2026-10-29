@@ -11,7 +11,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseCommandTaskRunRequest } from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js";
-import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   SSE_HEADERS,
@@ -207,22 +206,11 @@ export function openCommandSseStream(
     () =>
       manager.subscribe((event) => {
         seq += 1;
-        writeCommandEvent(res, event, seq, redactor, controller, onBackpressure);
+        // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
+        // the per-connection `id:` cursor differs between them.
+        writeNamespacedSseEvent(res, event, seq, "command", redactor, controller, onBackpressure);
       }),
     onBackpressure,
     correlationId,
   );
-}
-
-function writeCommandEvent(
-  res: ServerResponse,
-  event: CommandRunnerEvent,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
-  // the per-connection `id:` cursor differs between them.
-  writeNamespacedSseEvent(res, event, seq, "command", redactor, controller, onBackpressure);
 }

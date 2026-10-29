@@ -12,7 +12,6 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseContainerRunRequest } from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
-import type { ContainerRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import type { ContainerRunInput, ContainerRunnerManager } from "./containerRunner.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -267,22 +266,11 @@ export function openContainerSseStream(
     () =>
       manager.subscribe((event) => {
         seq += 1;
-        writeContainerEvent(res, event, seq, redactor, controller, onBackpressure);
+        // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
+        // the per-connection `id:` cursor differs between them.
+        writeNamespacedSseEvent(res, event, seq, "container", redactor, controller, onBackpressure);
       }),
     onBackpressure,
     correlationId,
   );
-}
-
-function writeContainerEvent(
-  res: ServerResponse,
-  event: ContainerRunnerEvent,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
-  // the per-connection `id:` cursor differs between them.
-  writeNamespacedSseEvent(res, event, seq, "container", redactor, controller, onBackpressure);
 }

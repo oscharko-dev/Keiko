@@ -10,7 +10,6 @@
 //   GET    /api/editor/verification/events                SSE stream of content-free lifecycle events
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { EditorVerificationEvent } from "@oscharko-dev/keiko-contracts";
 import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import {
   SSE_HEADERS,
@@ -289,22 +288,19 @@ export function openVerificationSseStream(
     () =>
       manager.subscribe((event) => {
         seq += 1;
-        writeVerificationEvent(res, event, seq, redactor, controller, onBackpressure);
+        // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only the
+        // per-connection `id:` cursor differs between them.
+        writeNamespacedSseEvent(
+          res,
+          event,
+          seq,
+          "verification",
+          redactor,
+          controller,
+          onBackpressure,
+        );
       }),
     onBackpressure,
     correlationId,
   );
-}
-
-function writeVerificationEvent(
-  res: ServerResponse,
-  event: EditorVerificationEvent,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only the
-  // per-connection `id:` cursor differs between them.
-  writeNamespacedSseEvent(res, event, seq, "verification", redactor, controller, onBackpressure);
 }
