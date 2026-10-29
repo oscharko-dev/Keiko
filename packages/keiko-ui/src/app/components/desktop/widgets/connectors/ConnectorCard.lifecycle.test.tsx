@@ -60,6 +60,35 @@ function rotated(): AtlassianConnectorMetadata {
   };
 }
 describe("Jira Pod lifecycle in the existing Hub", () => {
+  it.each([
+    { capabilities: ["live-read"] as const, writable: false },
+    { capabilities: ["live-read", "live-write"] as const, writable: true },
+  ])(
+    "explains only the server-advertised Jira capabilities (writable: $writable)",
+    async ({ capabilities, writable }) => {
+      if (LIVE.deployment !== "data-center" || LIVE.livePod === undefined)
+        throw new TypeError("Missing Live Pod fixture");
+      const connector = { ...LIVE, livePod: { ...LIVE.livePod, capabilities } };
+      render(
+        <ConnectorCard
+          connector={connector}
+          client={client()}
+          onDeleted={vi.fn()}
+          onUpdated={vi.fn()}
+        />,
+      );
+      const card = await screen.findByTestId("acx-connector");
+      expect(card).toHaveTextContent("search and read Jira issues and metadata");
+      if (writable) {
+        expect(card).toHaveTextContent("create, edit, assign, comment on or change the status");
+        expect(card).toHaveTextContent("Jira permissions and Chat approvals govern each action");
+      } else {
+        expect(card).toHaveTextContent("after your consent");
+        expect(card).toHaveTextContent("Access still depends on the Jira account permissions");
+        expect(card).not.toHaveTextContent("create, edit, assign, comment on or change the status");
+      }
+    },
+  );
   it("exposes Live actions without Data indexing, sync, export or invented storage state", async () => {
     render(<AtlassianConnectorsPanel client={client()} jiraLive />);
     const card = await screen.findByTestId("acx-connector");

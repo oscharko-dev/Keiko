@@ -221,9 +221,9 @@ Status: **Partial — not accepted**. Authoritative verification metadata, uncer
 
 Status: **Partial — not accepted**. Generation-bound rename/rotation/removal and canonical GET recovery use existing owners. Route tests cover alternate credential entry points, shared-Pod Chats, unrelated Pods and stale replies. A rebuilt real-browser lifecycle group verifies rename, distinct token replacement, grant revocation, reverification and removal of credential/binding/edge. Complete process restart and in-flight approval races remain open.
 
-- [ ] **AC5:** The ordinary Jira form requires no email, MCP configuration or vector-index setup. The initial implemented ticket capabilities are explained plainly without claiming all Jira APIs or guaranteed write permissions.
+- [x] **AC5:** The ordinary Jira form requires no email, MCP configuration or vector-index setup. The initial implemented ticket capabilities are explained plainly without claiming all Jira APIs or guaranteed write permissions.
 
-Status: **Partial — not accepted**. The Jira form requires name, HTTPS address and PAT only. It omits email/MCP/index configuration and explains bounded read/write capabilities with Jira permissions and Chat approval constraints. Focused UI tests pass; final design/browser qualification remains open.
+Status: **Verified**. The current paired in-app browser created a synthetic Jira Pod through exactly name, HTTPS address and PAT, then verified it against the licensed local Jira. No email, MCP or indexing setup was required. Its actual card explains the implemented ticket operations and Jira-permission/Chat-approval limits. The 35-test form/Hub/card group additionally proves the server-advertised read-only and read/write descriptions; UI typecheck, lint and formatting pass. See [individual AC5 acceptance](#individual-acceptance--4085-ac5). Complete accessibility and aggregate UI gates remain separate AC6 obligations.
 
 - [ ] **AC6:** The relevant design-state matrix, keyboard/focus/screen-reader behavior, English/German text, light/dark/high-contrast and reduced-motion/zoom proofs pass with synthetic visible data. UI and wired browser gates pass.
 
@@ -3174,3 +3174,28 @@ seconds remaining. Its complete receipt and unchanged 6,938-file artifact invent
 are checked; the earlier incomplete group is not counted as a passing result.
 Full coverage, portable performance, aggregate architecture/dependency qualification,
 remaining licensed/browser groups, Sonar and final-head CI/review acceptance remain open.
+
+## Individual acceptance — #4085 AC5
+
+The canonical issue was reread on 2026-10-29 and its criterion is unchanged. On the
+`f13310c03` implementation, the paired in-app browser opened the existing Knowledge
+Pods Hub, entered exactly a name, HTTPS address and generated lab PAT, saved the Pod
+and used its verification action against the actual local Jira. The form required
+no account email, MCP configuration, model selection, embedding or vector-index setup.
+The PAT was supplied privately to the masked field and the form was unmounted after
+save. The displayed card reports Connection verified and names search/read plus
+create, edit, assign, comment and transition, explicitly subject to Jira permissions
+and Chat approvals. Private form and verified-card captures retain synthetic data only.
+
+Two additional capability-bound presentation cases prove that the card advertises only
+reads for the server's read-only projection, while the read/write projection describes
+the implemented mutations and their permission constraints. Together with the existing
+form, Hub and card cases, all 35 tests in five suites pass. Strict UI typecheck, the
+UI lint lane and formatting pass. Existing EN/DE catalog entries are reused unchanged.
+This closes AC5 only; no full Jira CRUD, lifecycle, accessibility or final-gate acceptance
+is inferred from this setup proof. The matrix now has **5 verified criteria out of 55**
+(#4089 AC1/AC2/AC3/AC7 and #4085 AC5), with 50 still partial.
+
+The previously failing Firefox scope case also passed its targeted Linux reproduction
+and all eight tests of the complete affected scope file. The prior CI failure remains
+a prior failure; no timeout or product change was introduced to manufacture a pass.
