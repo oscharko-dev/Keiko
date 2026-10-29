@@ -1255,17 +1255,17 @@ function sameSafetyAssessment(
   );
 }
 
-function toValidScorecard(value: unknown): PromptCandidateScorecard | undefined {
-  const result = validatePromptCandidateScorecard(value);
+function toValidScorecard(
+  result: PromptEnhancerValidation<PromptCandidateScorecard>,
+): PromptCandidateScorecard | undefined {
   return result.ok ? result.value : undefined;
 }
 
 function collectSafetyAssessmentErrors(
-  value: unknown,
+  result: PromptEnhancerValidation<PromptSafetyAssessment>,
   label: string,
   errors: string[],
 ): PromptSafetyAssessment | undefined {
-  const result = validatePromptSafetyAssessment(value);
   if (!result.ok) {
     errors.push(`${label} must be a valid PromptSafetyAssessment`);
     return undefined;
@@ -1310,8 +1310,8 @@ function collectRankedErrors(
     errors.push("selection.winner must be the first ranked candidate");
     admissions.push(false);
   }
-  const firstScorecard = toValidScorecard(firstRanked);
-  const winnerScorecard = toValidScorecard(winner);
+  const firstScorecard = toValidScorecard(validatePromptCandidateScorecard(firstRanked));
+  const winnerScorecard = toValidScorecard(validatePromptCandidateScorecard(winner));
   if (
     firstScorecard !== undefined &&
     winnerScorecard !== undefined &&
@@ -1320,7 +1320,9 @@ function collectRankedErrors(
     errors.push("selection.winner must exactly match the first ranked candidate");
     admissions.push(false);
   }
-  const scorecards = ranked.map((entry: unknown) => toValidScorecard(entry));
+  const scorecards = ranked.map((entry: unknown) =>
+    toValidScorecard(validatePromptCandidateScorecard(entry)),
+  );
   scorecards.forEach((entry, index) => {
     const next = scorecards[index + 1];
     if (entry !== undefined && next !== undefined && compareRankedScorecards(entry, next) > 0) {
@@ -1342,7 +1344,9 @@ function collectRankedPromptMember(
     errors.push(`selection.rankedPrompts[${String(index)}] must be a valid EnhancedPrompt`);
     return false;
   }
-  const rankedEntry = Array.isArray(ranked) ? toValidScorecard(ranked[index]) : undefined;
+  const rankedEntry = Array.isArray(ranked)
+    ? toValidScorecard(validatePromptCandidateScorecard(ranked[index]))
+    : undefined;
   if (rankedEntry !== undefined && result.value.promptId !== rankedEntry.candidateId) {
     errors.push(
       `selection.rankedPrompts[${String(index)}].promptId must match the ranked candidateId`,
@@ -1406,7 +1410,9 @@ function collectRankedSafetyAssessmentListErrors(
       errors.push("selection.rankedSafetyAssessments must not include rejected assessments");
       admitted = false;
     }
-    const rankedEntry = Array.isArray(ranked) ? toValidScorecard(ranked[index]) : undefined;
+    const rankedEntry = Array.isArray(ranked)
+      ? toValidScorecard(validatePromptCandidateScorecard(ranked[index]))
+      : undefined;
     if (rankedEntry !== undefined && assessment.promptId !== rankedEntry.candidateId) {
       errors.push(
         `selection.rankedSafetyAssessments[${String(index)}].promptId must match the ranked candidateId`,
@@ -1430,9 +1436,10 @@ function collectAssessmentMembers(
   let admitted = true;
   for (let index = 0; index < extent; index += 1) {
     const entry: unknown = assessments[index];
+    const label = `selection.rankedSafetyAssessments[${String(index)}]`;
     const assessment = collectSafetyAssessmentErrors(
-      entry,
-      `selection.rankedSafetyAssessments[${String(index)}]`,
+      validatePromptSafetyAssessment(entry),
+      label,
       errors,
     );
     if (assessment === undefined) admitted = false;
@@ -1449,7 +1456,7 @@ function collectWinnerSafetyAssessmentErrors(
 ): boolean {
   let admitted = true;
   const winnerAssessment = collectSafetyAssessmentErrors(
-    input.winnerSafetyAssessment,
+    validatePromptSafetyAssessment(input.winnerSafetyAssessment),
     "selection.winnerSafetyAssessment",
     errors,
   );
@@ -1462,7 +1469,7 @@ function collectWinnerSafetyAssessmentErrors(
     admitted = false;
   }
   if (winnerAssessment === undefined) admitted = false;
-  const winner = toValidScorecard(input.winner);
+  const winner = toValidScorecard(validatePromptCandidateScorecard(input.winner));
   if (
     winner !== undefined &&
     winnerAssessment !== undefined &&
