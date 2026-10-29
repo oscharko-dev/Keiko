@@ -3559,7 +3559,7 @@ of a new Pod against this instance have passed; the additional expiry-display te
 The actual Gemma browser run exposed a separate pre-effect failure: the registered Activity Log
 reported `gateway.tool-catalog.rejected`, `invalid-arguments`, `expired-compatibility` for a native
 Jira comment response. The shared binder capped every offer at30seconds, shorter than the existing
-90-second Chat authority/consumer deadline. The normalizer therefore refused valid delayed model
+admitted Chat authority/consumer deadline (the default harness window is five minutes). The normalizer therefore refused valid delayed model
 output before a consent card could appear. This diagnostic had no Jira mutation effect.
 
 Signed56c32e3e2 changes only the expiry formula to the earlier of the existing consumer deadline and
@@ -3578,3 +3578,38 @@ The stable isolated5aed44080 complete package coverage run now finishes with exi
 86.44% branches,96.05% functions and94.08% lines. These are the actual reported skips and counts,
 with no new skip introduced. This complete run predates the offer/bootstrap repairs and is not
 misrepresented as a complete qualification of the later final head.
+
+### Actual expiry UI confirmation and bounded bootstrap recovery — 2026-10-29
+
+The clean immutable56c32e3e2 runtime now passes the actual in-app-browser expiry case with
+Gemma4-31b-it through Docker LiteLLM and the newly licensed Jira10.3.26. Normal UI creation,
+verification and server-confirmed binding precede a native comment-tool invocation. The real
+90-second dispatch/consent timer expires without a decision: UI shows `Permission revoked` and
+`Not sent to Jira`; the canonical exchange is `not-dispatched`, the turn completes, and independent
+remote state has zero matching comments and no matching mutation dispatch. The dispatch timer is
+separate from the unchanged five-minute consumer envelope; the earlier90-second-envelope wording
+was inaccurate. Prior `GATEWAY_MALFORMED_TOOL_CALL` symptoms included catalog expiry, not necessarily
+malformed model arguments. The registered log identifies the pre-fix rejection class explicitly.
+
+The complete private receipt SHA-256 is
+`6a21dcf67820b678089352df1ba3386745958a3e6b5ac0b9d576bdf177e6cf02`. Opening/closing license
+budgets are8,593/8,044seconds. Its7,316-file inventory is unchanged before/after, digest
+`c02de0a14eecfe795a3b63c9da697bdfd6e0857f0c9d32da77d69774f78e29c5`. This is a real
+license-valid completed UI observation of both fixes, not a replay of an uncertain earlier intent.
+
+The repeated Firefox startup failure also exposed a separate timing defect: the old inline
+watchdog spent a reload retry at8seconds while initial resources were still progressing. A red
+regression reproduces it. The existing8-second hydration window now starts on load or relevant
+script/stylesheet failure; a separate60-second resource cap retains recovery for never-settling
+requests. One idempotent callback preserves the two-reload bound, mounted-workspace guard and
+localized accessible fallback. Preload/icon failures do not arm recovery early. Existing client
+diagnostics record only validated retry counts1/2 after successful recovery; hostile markers are
+cleared without logging their content. No second transport or logger is introduced.
+
+Final owner tests pass44/44; root/UI strict types, scoped lint and format pass. The exact final
+Firefox480px German case passes1/1. The full affected64-case Linux shard passes on the preceding
+bootstrap artifact, before the narrow cleanup/test repairs; that result is scoped accordingly.
+The complete current UI coverage lane passes613suites and11,968tests, with one existing skip;
+coverage is91.78% statements,85.28% branches,93.22% functions and94.38% lines. Full current root
+typecheck/lint/format, real local Sonar and the complete seven-gate Activity Log chain all pass.
+Final source-bound UI producers, remaining acceptance and exact-head CI remain open.

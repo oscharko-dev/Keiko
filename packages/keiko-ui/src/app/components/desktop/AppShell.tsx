@@ -353,8 +353,12 @@ export const UpdateStartupNotice = dynamic(
   { ssr: false, loading: () => null },
 );
 
-function clearAppBootRecoveryReloadMarker(): void {
+export function clearAppBootRecoveryReloadMarker(): void {
   try {
+    const retries = window.sessionStorage.getItem(APP_BOOT_RECOVERY_RELOAD_KEY);
+    if (retries === "1" || retries === "2") {
+      reportClientDiagnostic(`[keiko] App boot recovered after ${retries} automatic reloads.`);
+    }
     window.sessionStorage.removeItem(APP_BOOT_RECOVERY_RELOAD_KEY);
   } catch {
     // Session storage can be blocked; successful mount should still proceed.
