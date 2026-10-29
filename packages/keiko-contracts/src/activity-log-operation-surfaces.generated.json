@@ -592,6 +592,7 @@
   "update.portable-asset.redirect-refused": "runtime-packages",
   "update.portable-fetch.failed": "runtime-packages",
   "update.portable.native-control": "runtime-packages",
+  "update.registry.checked": "runtime-packages",
   "update.release-trust.verify": "runtime-packages",
   "update.remediation.lease": "runtime-packages",
   "update.runtime.event": "runtime-packages",

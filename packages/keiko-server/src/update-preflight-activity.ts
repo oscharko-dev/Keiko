@@ -12,6 +12,7 @@ import type {
   PortableAssetRedirectFailureReason,
   PortableFetchFailureReason,
 } from "./update-preflight-portable-shared.js";
+import type { RegistryCheckFailure, RegistryOutcome } from "./update-preflight-registry.js";
 
 export type PortableFetchAssetKind =
   "release-evidence" | "release-metadata" | "manifest" | "checksum";
@@ -361,6 +362,97 @@ export function recordUpdateInstallMode(
         ...(mode.installKind === undefined ? {} : { installKind: mode.installKind }),
         ...(mode.reason === undefined ? {} : { reason: mode.reason }),
         ...(mode.portable === undefined ? {} : { target: mode.portable.target }),
+        durationMs,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+const UPDATE_REGISTRY_CHECKED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.registry.checked",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-preflight-activity.recordRegistryCheck",
+  fields: {
+    status: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ok", "unavailable", "malformed"],
+    },
+    failure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "deadline-exceeded",
+        "request-aborted",
+        "network-unavailable",
+        "unexpected-failure",
+        "http-status",
+        "size-exceeded",
+        "json-invalid",
+        "malformed-version",
+      ],
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    updateAvailable: { type: "boolean", dataClass: "closed-enum", required: true },
+    durationMs: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-runtime"],
+  proofIds: ["update.registry.checked.failure"],
+  releaseImpact: "patch",
+});
+
+function registryErrorKind(failure: RegistryCheckFailure): ActivityLogErrorKind {
+  switch (failure) {
+    case "deadline-exceeded":
+    case "request-aborted":
+    case "network-unavailable":
+    case "unexpected-failure":
+      return portableFetchErrorKind(failure);
+    case "http-status":
+      return "unavailable";
+    case "size-exceeded":
+    case "json-invalid":
+    case "malformed-version":
+      return "validation-failed";
+  }
+}
+
+/** One line per package-manager registry check, so an unusable registry names its cause (#3904). */
+export function recordRegistryCheck(
+  sink: ServerLogSink | undefined,
+  registry: RegistryOutcome,
+  updateAvailable: boolean,
+  durationMs: number,
+  correlationId?: string,
+): void {
+  const failure = registry.failure;
+  sink?.write(
+    activityLogEvent(
+      UPDATE_REGISTRY_CHECKED_OPERATION,
+      failure === undefined
+        ? { level: "info", correlationId: correlationIdOrUnknown(correlationId) }
+        : {
+            level: "warn",
+            correlationId: correlationIdOrUnknown(correlationId),
+            errorKind: registryErrorKind(failure),
+          },
+      {
+        status: registry.status,
+        ...(failure === undefined ? {} : { failure }),
+        ...(registry.httpStatus === undefined ? {} : { httpStatus: registry.httpStatus }),
+        updateAvailable,
         durationMs,
         completeness: "complete",
         loss: "none",

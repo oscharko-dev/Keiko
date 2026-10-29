@@ -94,6 +94,12 @@ independent trust root. For supported public releases, npm registry metadata is 
 truth, especially the exact package version and the active dist-tag. Release-impact metadata decides
 compatibility and remediation eligibility; package installability alone is not full update success.
 
+The package-manager preflight reads the active `latest` dist-tag from the registry's dist-tags
+document (`/-/package/<name>/dist-tags`), whose size does not grow with the number of published
+versions. The abbreviated packument it read before outgrew its response cap at 1.3.2, and every
+check then reported an unreachable registry (#3904). Each check records `update.registry.checked`
+with its closed status, failure class, HTTP status and update decision.
+
 The release-impact catalog is the structured v1 source of truth for non-packument fields. It is
 source-controlled, append-only for published entries, bundled into the root package, and may be
 mirrored through GitHub Release metadata for server-side lookup of newer target releases. The update

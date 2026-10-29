@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "432a64040ff50dd74e7fe15145b8aeef4f01021d0a6ce64f88f55fe628afad80"
+    "catalogDigest": "e45e52bd94eca7cb3755b3cfc2ddd4355015c8b6be64b2d3b602437320691b77"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 611,
-    "proofCount": 634,
-    "resolvedProofCount": 634,
-    "failureClassCount": 382,
+    "operationCount": 613,
+    "proofCount": 636,
+    "resolvedProofCount": 636,
+    "failureClassCount": 383,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -584,6 +584,7 @@
       "operations": [
         "chat.tool-authority.operation",
         "dap.debug-runtime.selected",
+        "editor.agent.action-queue",
         "editor.agent.bridge-registration",
         "editor.agent.changeset-provenance",
         "editor.buffer-safety.state",
@@ -782,6 +783,7 @@
         "update.portable-asset.redirect-refused",
         "update.portable-fetch.failed",
         "update.portable.native-control",
+        "update.registry.checked",
         "update.release-trust.verify",
         "update.remediation.lease",
         "update.runtime.event",
@@ -943,6 +945,7 @@
     "editor-producer-turn": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-availability": ["editor-delivery.dependency-failure"],
     "editor-bridge-registration": ["editor-delivery.dependency-failure"],
+    "editor-action-queue-refusal": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-authority": ["editor-delivery.rejection"],
     "embedding-batch": ["memory-knowledge.rejection", "model-gateway.rejection"],
     "embedding-batch-grouping": ["memory-knowledge.dependency-failure"],
@@ -1874,6 +1877,7 @@
     "dap.debug-runtime.selected.emitted-line": [
       "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
     ],
+    "editor.agent.action-queue.refusal": ["packages/keiko-server/src/editor/agentRoutes.test.ts"],
     "editor.agent.bridge-registration.lifecycle": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"
     ],
@@ -2986,6 +2990,9 @@
     ],
     "update.portable.native-control.lifetime": [
       "packages/keiko-server/src/update-native-handoff-activity.test.ts"
+    ],
+    "update.registry.checked.failure": [
+      "packages/keiko-server/src/update-preflight-activity.test.ts"
     ],
     "update.release-trust.verify.status": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"

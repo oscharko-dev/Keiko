@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 382,
-  "completeClassCount": 382,
+  "supportedClassCount": 383,
+  "completeClassCount": 383,
   "completeness": "complete",
   "classes": [
     {
@@ -44586,6 +44586,7 @@
         "state": [
           "update.install-mode.detected",
           "update.portable.native-control",
+          "update.registry.checked",
           "update.remediation.lease",
           "update.runtime.event",
           "update.runtime.state-write"
@@ -44601,6 +44602,10 @@
         },
         {
           "op": "update.portable.native-control",
+          "mode": "correlation"
+        },
+        {
+          "op": "update.registry.checked",
           "mode": "correlation"
         },
         {
@@ -44620,6 +44625,7 @@
       "resourceSignals": [
         "update.install-mode.detected",
         "update.portable.native-control",
+        "update.registry.checked",
         "update.remediation.lease",
         "update.runtime.event",
         "update.runtime.state-write"
@@ -44719,6 +44725,54 @@
             "causeChain": false
           },
           "proofIds": ["update.portable.native-control.lifetime"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "update.registry.checked",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "failure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "httpStatus",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "status",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "updateAvailable",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["update.registry.checked.failure"],
           "replayReferences": [],
           "missingObligations": []
         },
