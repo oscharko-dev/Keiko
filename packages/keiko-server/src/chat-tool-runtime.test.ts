@@ -46,6 +46,7 @@ interface Options {
   readonly repeat?: boolean;
   readonly batchSize?: number;
   readonly promptTokens?: number;
+  readonly beforeMcpWriteResult?: () => Promise<void>;
 }
 function context(body: Record<string, unknown>, params: Record<string, string> = {}): RouteContext {
   return {
@@ -216,10 +217,11 @@ function fixture(options: Options = {}): Fixture {
         },
       },
     ],
-    call: (name, _args, invocation) => {
+    call: async (name, _args, invocation) => {
       if (!invocation.beforeEffect()) throw new Error("Expected admitted MCP effect");
       effects.push(name === "get_status" ? "mcp-read" : "mcp-write");
-      return Promise.resolve({ content: [{ type: "text", text: "synthetic-mcp-observation" }] });
+      if (name === "create_note") await options.beforeMcpWriteResult?.();
+      return { content: [{ type: "text", text: "synthetic-mcp-observation" }] };
     },
     close: () => Promise.resolve(),
   };
@@ -341,6 +343,18 @@ async function approveWrite(f: Fixture, kind: ChatToolWriteApprovalView["kind"])
     ).status,
   ).toBe(200);
 }
+async function expectFirstMutationAwaitingResult(f: Fixture): Promise<void> {
+  await vi.waitFor(() => {
+    expect(f.effects).toEqual(["mcp-write"]);
+  });
+  const blocked = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
+  // The remote effect has started, but its result/receipt/journal settlement is still pending.
+  // The second source must not even publish a call or request its read/action consent yet.
+  expect(blocked?.exchanges.map((exchange) => exchange.call.id)).toEqual(["call-1-0"]);
+  expect(blocked?.exchanges[0]?.result).toBeUndefined();
+  expect(blocked?.readGrants?.map((grant) => grant.kind)).toEqual(["mcp-chat-read"]);
+  expect(f.calls).toHaveLength(1);
+}
 it("offers both sources through one ordinary Chat handler and retains independent disclosures", async () => {
   const f = fixture();
   const pending = send(f);
@@ -381,12 +395,26 @@ it("offers both sources through one ordinary Chat handler and retains independen
   ).toEqual(["call-1-0", "call-1-1"]);
 });
 it("approves and journals writes from both sources independently on the same accepted turn", async () => {
-  const f = fixture({ write: true });
+  let releaseFirst!: () => void;
+  const firstResult = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const f = fixture({ write: true, beforeMcpWriteResult: () => firstResult });
   const pending = send(f);
   void pending.catch(() => undefined);
-  await approveRead(f, "mcp-chat-read");
-  expect(f.effects).toEqual([]);
-  await approveWrite(f, "mcp-chat-write");
+  try {
+    await approveRead(f, "mcp-chat-read");
+    expect(f.effects).toEqual([]);
+    await approveWrite(f, "mcp-chat-write");
+    await expectFirstMutationAwaitingResult(f);
+  } finally {
+    releaseFirst();
+  }
+  await pendingRead(f, "jira-chat-read");
+  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+    mutationOutcome: "succeeded",
+    result: { status: "completed" },
+  });
   await approveRead(f, "jira-chat-read");
   expect(f.effects).toEqual(["mcp-write"]);
   await approveWrite(f, "jira-chat-write");

@@ -3811,3 +3811,53 @@ reloads following rename, rotation, reverification and removal. Its one-time fix
 overwriting restored layout/edges: an actual installed-Chromium diagnostic passes, while the old
 unconditional seed resets both. The full real lifecycle/reload group has not yet run, so AC4 is
 still open. No unsupported Playwright API or unqualified live pass is retained.
+
+## Post-publication qualification and review follow-up (2026-10-29)
+
+The running Main UI at parent `89e7c66d0` additionally completes a fresh ordinary Chat
+read and a fresh OpenCode task against the same centrally configured synthetic MCP server.
+Actual Gemma through Docker LiteLLM returns the remote marker in both surfaces. Chat redeems
+fresh consent and exact action approval; OpenCode redeems its sandbox and native-action
+approvals and finishes `Succeeded`, revision 9, after 126 seconds with zero changed files.
+Two earlier manually delayed Chat attempts end before dispatch (`effectStarted:false`); their
+diagnostics and unrelated unavailable-server startup diagnostics are retained separately.
+The body-free Main UI receipt has SHA-256 `019b393f50a79161dbafabaabe8edd71d6fbf66bbc82235596fcc1149c019546`.
+These extra reads do not replace the independent earlier Jira or mutation-fault groups.
+
+The public Cloud zero-issue validator reproduces one `typescript:S9382` finding on the older
+`b439a3d0c` analysis, while the pinned local analyzer passes. The existing mixed-source write
+test now holds the first MCP result pending and proves that the second call, consent and
+model continuation cannot start before its receipt/journal/transcript settlement. A temporary
+`Promise.all` mutant fails this assertion; the serial original is restored. All 66 cases in
+the three owner files, root inclusive types, lint and formatting pass. The precise inline
+exception follows the documented S9382 dependency convention in `local-sonar.md`; executable
+tokens and dispatch ordering are unchanged. The Cloud validator must still analyze the
+delivered repair head and report zero unresolved issues.
+
+A deeper provenance audit found nine author-closed conversations whose repairs had no later
+producer assessment. Those nine conversations were reopened. The producing reviewer then
+[verified seven repairs and accepted one evidenced refutation](https://github.com/oscharko-dev/Keiko/pull/4093#issuecomment-6496279136)
+on exact head `89e7c66d0`, with no new actionable defect in the inspected scope. The producing reviewer subsequently
+[accepted the remaining architecture/performance repair](https://github.com/oscharko-dev/Keiko/pull/4093#issuecomment-6496879444)
+after inspecting both successful exact-head aggregate logs, including all 78 negative fixtures.
+Each of the nine conversations was resolved individually only after its matching assessment.
+A skipped full review is not approval; its file-count and temporary quota limits remain
+disclosed. No resolve/approve override, finding dismissal or review filter is used.
+The source-publication checkpoint remains 46/55; live final acceptance belongs to the canonical
+epic/child issues after actual required-check and producer-settlement results.
+
+The same parent-head CI scanner also exposes one real LCOV importer limit: the retained
+scripts coverage artifact `12893994710` records `DA:43,2448021578` for
+`scripts/lib/zip-archive.mjs`. The count is valid measured work; Sonar's integer parser
+cannot represent it. No counter is capped or removed. The existing ZIP owner instead uses
+Node's native `zlib.crc32`, removing the per-byte JavaScript work and private table.
+Nine empty/golden/binary cases verify both header checksums and both readers. Complete
+before/after ZIP pairs are byte-identical on the pinned Node 24.18.0 and 26.3.0 runtimes:
+entries 7,054 bytes (`08de303821161e5fa6ac38ec691a4c18821b6902c4f3ccedc7f5b70126a52f7f`)
+and directory 7,162 bytes (`ecb79680f9bdfcc43b0fc184ef94d8194d7b078b67b0d686f0ae6a2ad0b3081b`).
+All eight complete ZIP/Portable/Packaging owner files pass 887/887 cases on the pinned runtime;
+the focused Node 24 ZIP/adapter lane passes 58/58 and Node 26 ZIP passes 44/44.
+The old loop's coverage/report defect and original CI scanner warning remain retained.
+Fresh full scripts coverage, the exact scanner-log validator and delivered-head Cloud
+analysis determine the final reporting verdict; the archive format and all admission/safety
+checks remain unchanged.

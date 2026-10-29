@@ -446,7 +446,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         "denied",
         "budget-exhausted",
       );
-      for (const call of response.toolCalls) await this.dispatch(call);
+      for (const call of response.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
     }
     requireDispatch(false, "denied", "budget-exhausted");
   }
