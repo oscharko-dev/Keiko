@@ -241,6 +241,11 @@ describe("support report code inventory", () => {
     );
     source(
       root,
+      "packages/keiko-contracts/src/governed-tool-catalog.ts",
+      'export const GOVERNED_PATCH_APPLY_TOOL_ID = "keiko.patch.apply"; const label = "customer-label";',
+    );
+    source(
+      root,
       "packages/keiko-git/src/runner.ts",
       'const config = ["alias.fetch=", "pager.push=false"];',
     );
@@ -263,6 +268,7 @@ describe("support report code inventory", () => {
       "activity-log-reader",
       "keiko.file.read",
       "keiko.child.workspace.read",
+      "keiko.patch.apply",
       "legacy-native",
       "ConnectTimeoutError",
     ])
