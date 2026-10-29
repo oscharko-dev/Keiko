@@ -9,6 +9,8 @@
 //     silently.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFailingRecordingSink } from "../../../tests/support/recording-log-sink.js";
+import { defineSynchronousLogDeliveryContract } from "../../../tests/support/synchronous-log-delivery-contract.js";
 import {
   defineClassifierObservationContract,
   inheritedFallbackCause,
@@ -130,16 +132,7 @@ describe("emitConsolidationLogEvent", () => {
     sink: ConsolidationLogSink;
     events: ConsolidationLogEvent[];
   } {
-    const events: ConsolidationLogEvent[] = [];
-    return {
-      sink: {
-        write: (event): void => {
-          if (failingOps.includes(event.op)) throw failure();
-          events.push(event);
-        },
-      },
-      events,
-    };
+    return createFailingRecordingSink<ConsolidationLogEvent>(failingOps, failure);
   }
 
   it("does nothing at all when no sink is wired", () => {
@@ -360,109 +353,36 @@ describe("#3918 synchronous port delivery observations", () => {
     }
   });
 
-  it("reads the write method once and preserves its receiver and exact event", () => {
-    resetActivityLogLossCountersForTests();
-    try {
-      let getterReads = 0;
-      let writes = 0;
-      const event: ConsolidationLogEvent = {
-        category: "consolidation",
-        get op(): never {
-          throw new TypeError("healthy delivery must not inspect the event");
-        },
-      };
-      const sink: ConsolidationLogSink = {
-        get write(): (received: ConsolidationLogEvent) => void {
-          getterReads += 1;
-          expect(this).toBe(sink);
-          return function (this: ConsolidationLogSink, received: ConsolidationLogEvent): void {
-            expect(this).toBe(sink);
-            expect(received).toBe(event);
-            writes += 1;
-          };
-        },
-      };
-      emitConsolidationLogEvent(sink, event);
-      expect(getterReads).toBe(1);
-      expect(writes).toBe(1);
-      expect(activityLogLossCounters()["port-sink-failed"]).toBe(0);
-      expect(activityLogLossCounters()["port-unwired"]).toBe(0);
-    } finally {
-      resetActivityLogLossCountersForTests();
-    }
-  });
-
-  it("counts a getter failure before operation and cause inspection", () => {
-    resetActivityLogLossCountersForTests();
-    try {
-      const trace: string[] = [];
-      const failure = new Error("opaque primary transport failure");
-      Object.defineProperty(failure, "code", {
-        get(this: Error): string {
-          expect(this).toBe(failure);
-          trace.push(`cause-code:${activityLogLossCounters()["port-sink-failed"].toString()}`);
-          return "ENOSPC";
-        },
-      });
-      const event: ConsolidationLogEvent = {
-        category: "consolidation",
-        get op(): "consolidation.summary.fallback" {
-          trace.push(`op:${activityLogLossCounters()["port-sink-failed"].toString()}`);
-          return "consolidation.summary.fallback";
-        },
-      };
-      const notices: ConsolidationLogEvent[] = [];
-      let getterReads = 0;
-      const sink: ConsolidationLogSink = {
-        get write(): (received: ConsolidationLogEvent) => void {
-          trace.push("write-get");
-          getterReads += 1;
-          if (getterReads === 1) throw failure;
-          return (received): void => {
-            trace.push("notice-write");
-            notices.push(received);
-          };
-        },
-      };
-      emitConsolidationLogEvent(sink, event);
-      expect(trace).toEqual(["write-get", "op:1", "cause-code:1", "write-get", "notice-write"]);
-      expect(notices.map((notice) => notice.op)).toEqual(["consolidation.log.sink-failed"]);
-      expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
-    } finally {
-      resetActivityLogLossCountersForTests();
-    }
-  });
-
-  it("preserves an operation-getter failure escaping the owning continuation", () => {
-    resetActivityLogLossCountersForTests();
-    try {
-      const failure = new TypeError("opaque failed-event operation");
-      const event: ConsolidationLogEvent = {
-        category: "consolidation",
-        get op(): never {
-          expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
-          throw failure;
-        },
-      };
-      let getterReads = 0;
-      const sink: ConsolidationLogSink = {
-        get write(): (received: ConsolidationLogEvent) => void {
-          getterReads += 1;
-          throw new TypeError("primary write getter failed");
-        },
-      };
-      let observed: unknown;
-      try {
-        emitConsolidationLogEvent(sink, event);
-      } catch (error) {
-        observed = error;
-      }
-      expect(observed).toBe(failure);
-      expect(getterReads).toBe(1);
-      expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
-    } finally {
-      resetActivityLogLossCountersForTests();
-    }
+  defineSynchronousLogDeliveryContract<
+    ConsolidationLogEvent,
+    ConsolidationLogSink,
+    "consolidation.summary.fallback"
+  >({
+    emit: emitConsolidationLogEvent,
+    makeSink: (readWrite): ConsolidationLogSink => ({
+      get write(): (received: ConsolidationLogEvent) => void {
+        return readWrite(this);
+      },
+    }),
+    unreadOperationEvent: (readOp): ConsolidationLogEvent => ({
+      category: "consolidation",
+      get op(): never {
+        return readOp();
+      },
+    }),
+    countedOperationEvent: (readOp): ConsolidationLogEvent => ({
+      category: "consolidation",
+      get op(): "consolidation.summary.fallback" {
+        return readOp();
+      },
+    }),
+    droppedOp: "consolidation.summary.fallback",
+    noticeOp: "consolidation.log.sink-failed",
+    healthyInspectionFailure: (): TypeError =>
+      new TypeError("healthy delivery must not inspect the event"),
+    primaryFailure: (): Error => new Error("opaque primary transport failure"),
+    operationFailure: (): TypeError => new TypeError("opaque failed-event operation"),
+    writeGetterFailure: (): TypeError => new TypeError("primary write getter failed"),
   });
 });
 

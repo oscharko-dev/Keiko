@@ -9,6 +9,7 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFailingRecordingSink } from "../../../tests/support/recording-log-sink.js";
 import { defineClassifierObservationContract } from "../../../tests/support/log-classifier-observations.js";
 import {
   activityLogEvent,
@@ -186,16 +187,7 @@ describe("emitSecurityLogEvent", () => {
     sink: SecurityLogSink;
     events: SecurityLogEvent[];
   } {
-    const events: SecurityLogEvent[] = [];
-    return {
-      sink: {
-        write: (event): void => {
-          if (failingOps.includes(event.op)) throw failure();
-          events.push(event);
-        },
-      },
-      events,
-    };
+    return createFailingRecordingSink<SecurityLogEvent>(failingOps, failure);
   }
 
   it("does nothing at all when no sink is wired", () => {
