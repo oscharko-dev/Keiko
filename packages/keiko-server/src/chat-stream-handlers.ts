@@ -239,14 +239,10 @@ async function streamConversation(
       // #3878: the gateway hands reasoning only to the Coding Workbench; a conversation answer
       // never shows it, so a reasoning chunk (none reaches this surface today) is passed over.
       if (chunk.type === "reasoning") continue;
-      if (chunk.type === "delta") {
-        await publish(publication.push(chunk.token));
-        if (requestIsAborted(controller.signal)) return undefined;
-        continue;
-      }
-      await publish(publication.finish());
+      const isDelta = chunk.type === "delta";
+      await publish(isDelta ? publication.push(chunk.token) : publication.finish());
       if (requestIsAborted(controller.signal)) return undefined;
-      return { response: chunk.response };
+      if (!isDelta) return { response: chunk.response };
     }
   } finally {
     releaseStreamIterator(ctx, deps, iterator);
