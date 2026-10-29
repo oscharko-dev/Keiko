@@ -21,12 +21,7 @@
 // must still agree with the canonical implementation on the exact rejection message).
 
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
-import {
-  knowledgeRejectedTextMembers,
-  knowledgeCapturedExtentMembers,
-  knowledgeFinalExtentFailureMembers,
-} from "./__tests__/support/protocol-observation-mechanics.js";
+import { defineKnowledgeTextArrayObservationContract } from "../../../tests/support/knowledge-text-array-observations.js";
 import type {
   LibraryParserTripleExpected,
   LibraryParserTripleFacts,
@@ -462,106 +457,20 @@ import type {
 } from "./local-knowledge.js";
 import type { KnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
 
-it.each(["source", "public"])("preserves captured extent observations through %s", (surface) => {
-  const validate = surface === "source" ? validateKnowledgeCapsule : publicValidateKnowledgeCapsule;
-  for (const state of ["stable", "growth", "shrink", "invalid"]) {
-    const trace: string[] = [];
-    const members = knowledgeCapturedExtentMembers(["healthy"], trace, state);
-    const input = { ...capsuleInput(), tags: members };
-    const result = validate(input);
-    if (state === "stable") {
-      expect(result.ok).toBe(true);
-      if (result.ok) expect(result.value).toBe(input);
-    } else {
-      expect(result).toEqual({
-        ok: false,
-        errors: [
-          state !== "invalid"
-            ? "capsule.tags must not change length during validation"
-            : "capsule.tags must have a valid array length",
-        ],
-      });
-    }
-    expect(trace).toEqual(state === "invalid" ? ["length"] : ["length", "0", "length"]);
-  }
+defineKnowledgeTextArrayObservationContract({
+  source: validateKnowledgeCapsule,
+  public: publicValidateKnowledgeCapsule,
+  inputWithTags: (tags: unknown[]): object => ({ ...capsuleInput(), tags }),
+  diagnostics: {
+    changedExtent: "capsule.tags must not change length during validation",
+    invalidExtent: "capsule.tags must have a valid array length",
+    invalidMember: "capsule.tags entry must be a browser-safe non-empty trimmed string",
+  },
+  finalExtentFailure: (): TypeError => new TypeError("fixture-final-extent"),
+  laterMemberFailure: (): TypeError => new TypeError("Later text member must not be inspected"),
+  rejectedFinalExtentRefusal: "Rejected text array must not read final extent",
+  sparseFinalExtentRefusal: "Sparse text refusal must not read final extent",
 });
-
-it.each(["source", "public"])("propagates final extent getter failure through %s", (surface) => {
-  const validate = surface === "source" ? validateKnowledgeCapsule : publicValidateKnowledgeCapsule;
-  const trace: string[] = [];
-  const refusal = new TypeError("fixture-final-extent");
-  const members = knowledgeFinalExtentFailureMembers(["healthy"], trace, refusal);
-  const input = { ...capsuleInput(), tags: members };
-  let observed: unknown;
-  try {
-    validate(input);
-  } catch (error) {
-    observed = error;
-  }
-  expect(observed).toBe(refusal);
-  expect(trace).toEqual(["length", "0", "length"]);
-});
-
-it.each(["source", "public"] as const)(
-  "stops at the first invalid text member before later index or final extent through %s",
-  (surface) => {
-    const validate =
-      surface === "source" ? validateKnowledgeCapsule : publicValidateKnowledgeCapsule;
-    const trace: string[] = [];
-    const values: unknown[] = [7];
-    Object.defineProperty(values, "1", {
-      get: (): never => {
-        throw new TypeError("Later text member must not be inspected");
-      },
-    });
-    const members = knowledgeRejectedTextMembers(
-      values,
-      trace,
-      "Rejected text array must not read final extent",
-    );
-    expect(validate({ ...capsuleInput(), tags: members })).toEqual({
-      ok: false,
-      errors: ["capsule.tags entry must be a browser-safe non-empty trimmed string"],
-    });
-    expect(trace).toEqual(["get:length", "get:0"]);
-  },
-);
-
-it.each(["source", "public"] as const)(
-  "reads a sparse text member directly and skips final extent after refusal through %s",
-  (surface) => {
-    const validate =
-      surface === "source" ? validateKnowledgeCapsule : publicValidateKnowledgeCapsule;
-    const trace: string[] = [];
-    const members = knowledgeRejectedTextMembers(
-      new Array<unknown>(1),
-      trace,
-      "Sparse text refusal must not read final extent",
-    );
-    expect(validate({ ...capsuleInput(), tags: members })).toEqual({
-      ok: false,
-      errors: ["capsule.tags entry must be a browser-safe non-empty trimmed string"],
-    });
-    expect(trace).toEqual(["get:length", "get:0"]);
-  },
-);
-
-it.each(["source", "public"] as const)(
-  "retains inherited text members and the success-only final extent through %s",
-  (surface) => {
-    const validate =
-      surface === "source" ? validateKnowledgeCapsule : publicValidateKnowledgeCapsule;
-    const trace: string[] = [];
-    const values = new Array<unknown>(1);
-    Object.setPrototypeOf(values, Object.defineProperty([], "0", { get: (): string => "healthy" }));
-    const members = observeIndexedMembers(values, trace);
-    const input = { ...capsuleInput(), tags: members };
-    const result = validate(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(input);
-    expect(trace).toEqual(["get:length", "get:0", "get:length"]);
-  },
-);
 
 function assertCapsulePresentUndefinedTypes(): void {
   expectTypeOf<Required<SourceKnowledgeCapsule>["description"]>().toEqualTypeOf<
