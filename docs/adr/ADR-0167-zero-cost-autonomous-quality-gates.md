@@ -127,7 +127,13 @@ Complete owned production static membership supplies relevant import/reference f
 root/subpath and named/star/default/namespace exposure denies a private loan. Closed `types` plus
 `import` and `types` plus `default` targets are recognized by that private exposure walk without
 changing public-proof qualification. Concrete helper-linked dynamic/computed dispatch, foreign or
-unregistered callers and observed escapes withhold helper slots. Unrelated unresolved runtime loaders
+unregistered callers and observed escapes withhold helper slots. A relevant foreign incoming reference
+already supplies that rejection, so the resolver checks its existing owner predicate before broader
+public-exposure work. It caches only the unsupported-reference fact, never a public or private
+classification. The complete graph, downstream denial, root slots, all-input currentness and
+subsequent explicit source charging remain unchanged. Without this conclusive rejection, the
+existing public-producer proof and complete reachability fallback remain authoritative.
+Unrelated unresolved runtime loaders
 remain a disclosed static-analysis limitation, not certified consumers or a universal refusal.
 Topology validation is deferred to canonical helper-export reachability and relevant manifest entry
 targets; an unrelated workspace's absent `exports` is not a global refusal. Relevant packages without

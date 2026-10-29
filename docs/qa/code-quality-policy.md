@@ -519,17 +519,28 @@ flags in the private exposure walk before canonical alias resolution; they do no
 public exposure. Semantic default imports, including `{ default as local }`, remain outside the admitted
 helper-edge grammar; their presence never conceals observed value escapes.
 
-Before following incoming modules to decide whether an imported raw helper is private, the
-resolver first tries the existing canonical public-exposure proof on the producer source's own
-supported runtime entries. A positively proven public value export withholds the helper immediately;
+The existing relevant incoming-reference predicate can establish that a raw helper already has a
+foreign incoming reference. The resolver checks that owner mismatch before broader exposure work and caches
+only the existing unsupported-reference result; it does not classify the helper as public or
+change its privacy cache. The complete raw graph, downstream denial and independently valid root
+slots remain intact. Irrelevant or type-only bindings cannot supply this early rejection.
+
+When no such foreign incoming reference already establishes rejection, the resolver first tries the existing
+canonical public-exposure proof on the producer source's own supported runtime entries. A
+positively proven public value export withholds the helper immediately;
 its native/policy accounting and legitimate root slots remain unchanged. This can avoid constructing
 an unrelated incoming owner's full Program merely to establish an already sufficient public
 rejection. An empty, unsupported, untyped, type-only or nonmatching early result supplies no privacy
 certificate and retains the complete existing reachability fallback. The same owning checker,
 canonical identity, export visibility, output provenance, currentness, alias limits and source-byte
-admission remain authoritative. No UI/package source filter, negative early cache, budget reset or
+admission remain authoritative. No UI/package source filter, new cache, budget reset or
 capacity change is introduced. Whole-owner work-admission proofs compare actual resolver byte and
-Program observations with a generous control and retain private/barrel/type-only fallback refusals.
+Program observations with a generous control. Direct-foreign small/large controls retain exact
+helper rejection and root slots within an actually measured source grant; a later explicit request
+still admits and charges the avoided source normally. The fallback regression uses a same-owner
+renamed reexport barrel before its foreign consumer, so a direct owner mismatch cannot replace the
+required reachability walk or its source-budget refusal. Private and type-only controls retain
+their existing behavior. All-input currentness still covers sources not admitted by this shortcut.
 
 The resolver builds one snapshot-bound module index for the complete owned production membership.
 The mandatory inventory syntax visitors

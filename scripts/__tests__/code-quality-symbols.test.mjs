@@ -3026,7 +3026,14 @@ describe("separate collective private-helper capacity contract (#3918)", () => {
   }, 60_000);
 });
 
-function configureExposureConsumer(own) {
+function configureExposureConsumer(own, incoming = "direct", unusedSource = null) {
+  if (incoming === "barrel") {
+    own.put(
+      "packages/alpha/src/exposure-barrel.ts",
+      'export { isRecord as renamedRecord } from "./helper.js";\n',
+    );
+    emitSymbolFixture(own.root);
+  }
   const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
   own.put("packages/exposure-ui/package.json", {
     name: "exposure-ui",
@@ -3036,12 +3043,7 @@ function configureExposureConsumer(own) {
     exports: {},
   });
   own.put("packages/exposure-ui/tsconfig.json", config);
-  own.put(
-    "packages/exposure-ui/src/consumer.ts",
-    'import { isRecord } from "../../alpha/dist/helper.js";\n' +
-      'import type { Bound } from "fixture-bound";\n' +
-      "export const observed = isRecord(null); export type Domain = Bound;\n",
-  );
+  own.put("packages/exposure-ui/src/consumer.ts", exposureConsumerSource(incoming));
   own.dependencyPath = "packages/exposure-ui/node_modules/fixture-bound/package.json";
   own.put(own.dependencyPath, {
     name: "fixture-bound",
@@ -3053,7 +3055,36 @@ function configureExposureConsumer(own) {
     "packages/exposure-ui/node_modules/fixture-bound/index.d.ts",
     "export interface Bound { readonly value: number; }\n",
   );
+  if (unusedSource !== null) {
+    own.unusedSourcePath = "packages/exposure-ui/src/unused-source.ts";
+    own.put(own.unusedSourcePath, `export const unused = ${JSON.stringify(unusedSource)};\n`);
+  }
   emitSymbolFixture(own.root, "packages/exposure-ui");
+}
+
+function exposureConsumerSource(incoming) {
+  const imports = {
+    direct: 'import { isRecord } from "../../alpha/dist/helper.js";\n',
+    barrel: 'import { renamedRecord as isRecord } from "../../alpha/dist/exposure-barrel.js";\n',
+    "type-only": 'import type { isRecord as Guard } from "../../alpha/dist/helper.js";\n',
+    "inline-type-only":
+      'import { guard, type isRecord as Guard } from "../../alpha/dist/helper.js";\n',
+    unrelated: 'import { guard } from "../../alpha/dist/helper.js";\n',
+  };
+  const observations = {
+    direct: "export const observed = isRecord(null); ",
+    barrel: "export const observed = isRecord(null); ",
+    "type-only": "export type ImportedGuard = typeof Guard; ",
+    "inline-type-only":
+      "export const observed = guard(1); export type ImportedGuard = typeof Guard; ",
+    unrelated: "export const observed = guard(1); ",
+  };
+  return (
+    imports[incoming] +
+    'import type { Bound } from "fixture-bound";\n' +
+    observations[incoming] +
+    "export type Domain = Bound;\n"
+  );
 }
 
 function resetExposureResolver(own, options = {}) {
@@ -3068,10 +3099,14 @@ function resetExposureResolver(own, options = {}) {
   }));
 }
 
-async function exposureConsumerFixture(variant = "public-subpath") {
+async function exposureConsumerFixture(
+  variant = "public-subpath",
+  incoming = "direct",
+  unusedSource = null,
+) {
   const own = createPrivateModuleParserFixture(variant);
   fixtures.push(own);
-  configureExposureConsumer(own);
+  configureExposureConsumer(own, incoming, unusedSource);
   own.subject = await collectPolicySubject(own.root);
   resetExposureResolver(own);
   return own;
@@ -3124,7 +3159,9 @@ describe("public raw producer exposure ordering (#3918)", () => {
   it.each(["direct", "public-named", "colocated-type-reexport", "colocated-inline-type-reexport"])(
     "retains the full incoming-owner walk without a direct public witness for %s",
     async (variant) => {
-      const own = await exposureConsumerFixture(variant);
+      // A same-owner renamed reexport keeps this a real fallback: there is no direct foreign
+      // incoming entry on the producer, and only canonical reachability reaches the consumer.
+      const own = await exposureConsumerFixture(variant, "barrel");
       const control = measuredExposureControl(own);
       expect(control.slots.length).toBeGreaterThan(0);
       resetExposureResolver(own, { sourceBytes: control.sourceBytes });
@@ -3152,6 +3189,97 @@ describe("public raw producer exposure ordering (#3918)", () => {
       ).toThrow("symbol-subject-changed");
     },
     30_000,
+  );
+});
+
+function expectForeignHelperDenial(slots) {
+  expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toEqual([]);
+  const paths = new Set(["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"]);
+  expect(slots.filter((slot) => paths.has(slot.path))).toHaveLength(2);
+}
+
+describe("conclusive foreign raw-helper incoming denial (#3918)", () => {
+  it("withholds a directly foreign-called helper within actual small-source admission bytes", async () => {
+    const small = await exposureConsumerFixture("direct", "direct", "healthy");
+    const large = await exposureConsumerFixture(
+      "direct",
+      "direct",
+      "fixture-owned unused UI source é ".repeat(8192),
+    );
+    const row = preparedModuleReceipt(large.subject).rows.find(
+      (entry) => entry.path === large.unusedSourcePath,
+    );
+    expect(row).toBeDefined();
+    expect(row.references).toEqual([]);
+    const expected = small.resolver.collectiveRawCheckingSlots(small.rawRoots, privateCapacityRule);
+    expectForeignHelperDenial(expected);
+    const control = small.resolver.stats();
+    expect(control.sourceBytes).toBeGreaterThan(0);
+    resetExposureResolver(large, { sourceBytes: control.sourceBytes });
+    const slots = large.resolver.collectiveRawCheckingSlots(large.rawRoots, privateCapacityRule);
+    expect(slots).toEqual(expected);
+    expectForeignHelperDenial(slots);
+    const actual = large.resolver.stats();
+    expect(actual.sourceBytes).toBeLessThanOrEqual(control.sourceBytes);
+    expect(actual.created).toBe(control.created);
+  }, 60_000);
+
+  it("charges the complete foreign source when it is explicitly requested after denial", async () => {
+    const own = await exposureConsumerFixture(
+      "direct",
+      "direct",
+      "fixture-owned deferred UI source é ".repeat(4096),
+    );
+    expectForeignHelperDenial(
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+    );
+    const input = own.subject.inventory.files.find((file) => file.path === own.unusedSourcePath);
+    expect(input).toBeDefined();
+    const before = own.resolver.stats().sourceBytes;
+    expect(own.resolver.sourceIdentity(own.unusedSourcePath)).toEqual({
+      path: own.unusedSourcePath,
+      sha256: input.sha256,
+    });
+    expect(own.resolver.stats().sourceBytes - before).toBe(
+      readFileSync(join(own.root, own.unusedSourcePath)).length,
+    );
+  }, 30_000);
+
+  it.each([
+    "packages/exposure-ui/package.json",
+    "packages/exposure-ui/tsconfig.json",
+    "packages/exposure-ui/src/consumer.ts",
+    "packages/exposure-ui/src/unused-source.ts",
+  ])(
+    "revalidates a cached foreign denial after %s changes",
+    async (path) => {
+      const own = await exposureConsumerFixture("direct", "direct", "healthy");
+      expectForeignHelperDenial(
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      );
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, readFileSync(absolute, "utf8") + "\n");
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      ).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+
+  it.each(["type-only", "inline-type-only", "unrelated"])(
+    "retains healthy helper loans for an irrelevant foreign %s binding",
+    async (incoming) => {
+      const control = await privateModuleSymbolFixture();
+      const own = await exposureConsumerFixture("direct", incoming, "healthy");
+      const expected = control.resolver.collectiveRawCheckingSlots(
+        control.rawRoots,
+        privateCapacityRule,
+      );
+      const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+      expect(slots).toEqual(expected);
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toHaveLength(1);
+    },
+    60_000,
   );
 });
 

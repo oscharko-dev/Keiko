@@ -3025,16 +3025,22 @@ function privateRawReferenceFacts(state, index) {
   const key = canonicalRawStateKey(state.identity, -1);
   if (index.references.has(key)) return index.references.get(key);
   const facts = [];
-  if (privateRawPublicExposure(state, index)) facts.push({ kind: "unsupported" });
   const path = state.identity.producer.path;
   const incoming = (index.incoming.get(path) ?? []).filter((entry) =>
     privateIncomingRelevant(state, index, entry),
   );
+  // A relevant foreign incoming reference already withholds this helper and its downstream slots.
+  if (
+    incoming.some(
+      (entry) => state.compiler.context(entry.path).owner !== state.compiler.context(path).owner,
+    )
+  ) {
+    facts.push({ kind: "unsupported" });
+    index.references.set(key, facts);
+    return facts;
+  }
+  if (privateRawPublicExposure(state, index)) facts.push({ kind: "unsupported" });
   for (const entry of incoming) {
-    if (state.compiler.context(entry.path).owner !== state.compiler.context(path).owner) {
-      facts.push({ kind: "unsupported" });
-      continue;
-    }
     const owned = privateOwnedSource(state.compiler, entry.path);
     if (!owned || privateUnsupportedImport(state, owned, entry))
       facts.push({ kind: "unsupported" });
