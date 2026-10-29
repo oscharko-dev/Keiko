@@ -1096,6 +1096,7 @@ async function hybridGatewayAnswer(
   options: GroundedAnswerOptions,
 ): Promise<GroundedAnswerResult> {
   const countsBefore = capturePluralSynthesisCounts(ctx.synthesisBudget);
+  ctx.sourceEvidenceCount = options.sourceEvidenceCount;
   ctx.lastPrompt = [
     { role: "system", content: system },
     { role: "user", content: user },
@@ -1104,6 +1105,8 @@ async function hybridGatewayAnswer(
   const profile =
     ctx.deps === undefined ? undefined : currentContextProfileForModel(ctx.deps, ctx.modelId);
   const response = await callPluralGroundedSynthesis({
+    deps: ctx.deps,
+    evidenceCount: ctx.sourceEvidenceCount,
     model: ctx.model,
     signal: ctx.signal,
     budget: ctx.synthesisBudget,
@@ -1174,6 +1177,7 @@ interface HybridGatewayRepairContext {
   readonly correlationId: string | undefined;
   readonly deps: UiHandlerDeps | undefined;
   lastPrompt: readonly GatewayChatMessage[] | undefined;
+  sourceEvidenceCount?: number | undefined;
 }
 
 function hybridRepairMessages(
@@ -1242,6 +1246,8 @@ async function hybridGatewayRepair(
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await callPluralGroundedSynthesis({
+    deps: ctx.deps,
+    evidenceCount: ctx.sourceEvidenceCount,
     model: ctx.model,
     signal,
     budget: ctx.synthesisBudget,
@@ -2971,6 +2977,7 @@ async function hybridAnswerAttempt(
   logFittedHybridSelection(promptCtx, sent, system, user);
   const assistant = normalizeGroundedAnswerPayload(
     await answerer.answer(system, user, {
+      sourceEvidenceCount: sent.length,
       modelInputTokensMax: budget.modelInputTokensMax - usage.promptTokens,
       modelOutputTokensMax: budget.modelOutputTokensMax - usage.completionTokens,
       ...(budget.elapsedMsMax === null

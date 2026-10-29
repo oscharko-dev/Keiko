@@ -1,5 +1,7 @@
 "use client";
 
+import { JiraChatConnection } from "./JiraChatConnection";
+import { JiraChatTools } from "./JiraChatTools";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
 import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
@@ -1151,6 +1153,7 @@ function ChatBubbleImpl({
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
         />
+        <JiraChatTools transcript={message.toolTranscript} turnState={message.turnState} />
         <ResponseVersionSelector
           message={message}
           selectedVersion={selectedResponseVersion}
@@ -4252,9 +4255,10 @@ function staticGroundingOptions(
   loading: boolean,
   liveFilesAvailable: boolean,
   t: I18nTranslate,
+  noneLabel: string,
 ): ScopeOption[] {
   const options: ScopeOption[] = [
-    { value: "none", label: t("chat.grounding.modelOnly"), disabled: loading },
+    { value: "none", label: noneLabel, disabled: loading },
     {
       value: "files",
       label: t("chat.grounding.liveFiles"),
@@ -4289,6 +4293,7 @@ function catalogGroundingOptions(
 
 function GroundingModeSelect({
   value,
+  noneLabel,
   loading,
   disabled,
   liveFilesAvailable,
@@ -4299,6 +4304,7 @@ function GroundingModeSelect({
   onValueChange,
 }: {
   readonly value: string;
+  readonly noneLabel: string;
   readonly loading: boolean;
   readonly disabled: boolean;
   readonly liveFilesAvailable: boolean;
@@ -4309,7 +4315,7 @@ function GroundingModeSelect({
   readonly onValueChange: (next: string) => void;
 }): ReactNode {
   const options = [
-    ...staticGroundingOptions(value, loading, liveFilesAvailable, t),
+    ...staticGroundingOptions(value, loading, liveFilesAvailable, t, noneLabel),
     ...catalogGroundingOptions(capsuleChoices, capsuleSetChoices, loading),
   ];
   return (
@@ -4329,12 +4335,14 @@ function GroundingModeSelect({
 function GroundingCatalogStatus({
   loading,
   empty,
+  emptyLabel,
   error,
   onRetry,
   t,
 }: {
   readonly loading: boolean;
   readonly empty: boolean;
+  readonly emptyLabel: string;
   readonly error: string | null;
   /** Present only when the catalog itself failed to load: a failed load is retryable, not empty. */
   readonly onRetry: (() => void) | undefined;
@@ -4347,9 +4355,7 @@ function GroundingCatalogStatus({
           {t("chat.grounding.catalogLoading")}
         </span>
       ) : null}
-      {empty ? (
-        <span className="scope-connect-hint">{t("chat.grounding.catalogEmpty")}</span>
-      ) : null}
+      {empty ? <span className="scope-connect-hint">{emptyLabel}</span> : null}
       {error !== null ? (
         <span role="alert" className="scope-connect-error">
           {error}
@@ -4394,6 +4400,23 @@ function knowledgeScopeChoices(
   };
 }
 
+function groundingTerminology(
+  chat: Chat,
+  t: I18nTranslate,
+): { label: string; none: string; empty: string } {
+  if (chat.jiraPodBinding !== undefined)
+    return {
+      label: t("chat.grounding.dataLabel"),
+      none: t("chat.grounding.noDataSources"),
+      empty: t("chat.grounding.dataCatalogEmpty"),
+    };
+  return {
+    label: t("chat.grounding.label"),
+    none: t("chat.grounding.modelOnly"),
+    empty: t("chat.grounding.catalogEmpty"),
+  };
+}
+
 function LocalKnowledgeScopeControl({
   chat,
   onChatChanged,
@@ -4424,6 +4447,7 @@ function LocalKnowledgeScopeControl({
   }
 
   const value = groundedModeValue(chat);
+  const terminology = groundingTerminology(chat, t);
   const { capsuleChoices, capsuleSetChoices, catalogEmpty } = knowledgeScopeChoices(
     chat,
     catalog,
@@ -4445,9 +4469,10 @@ function LocalKnowledgeScopeControl({
       className={`scope-grounding ${scopeNoticeStyles.cmpGrounding}`}
       data-connected={connected ? "true" : "false"}
     >
-      <span className="scope-grounding-label mono">{t("chat.grounding.label")}</span>
+      <span className="scope-grounding-label mono">{terminology.label}</span>
       <GroundingModeSelect
         value={value}
+        noneLabel={terminology.none}
         loading={loading}
         disabled={controlsDisabled}
         liveFilesAvailable={liveFilesAvailable}
@@ -4462,6 +4487,7 @@ function LocalKnowledgeScopeControl({
       <GroundingCatalogStatus
         loading={loading}
         empty={catalogEmpty && !connected}
+        emptyLabel={terminology.empty}
         error={displayedError}
         onRetry={error === null && loadFailure !== null ? refresh : undefined}
         t={t}
@@ -4520,6 +4546,7 @@ function ChatScopeHeaderImpl({
         catalog={catalog}
         connected={connected}
       />
+      <JiraChatConnection key={chat.id} chat={chat} onChatChanged={onChatChanged} />
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
       ) : null}

@@ -1,3 +1,4 @@
+import type { ToolEffectGuard } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
   ActivityLogErrorKind,
   CodingWorkbenchAuthorityEnvelope,
@@ -26,15 +27,10 @@ export interface CodingToolProducerBinding {
   readonly expiresAt: string;
 }
 
-export interface CodingToolMutationGuard {
-  /** Actual catalog invocation clock/deadline, supplied only by server admission. */
-  readonly executionBudget?:
-    { readonly nowMs: () => number; readonly deadlineAtMs: number } | undefined;
+export interface CodingToolMutationGuard extends ToolEffectGuard {
   /** Server-held one-use delivery execution lease, never populated from IPC. */
   readonly deliveryApproval?: object;
   readonly stageApproval?: object;
-  /** Must be called at the final governed mutation/commit boundary. */
-  readonly check: () => boolean;
   /** Server-private live authority projection for narrower auxiliary composition. */
   readonly resolveParentAuthority?:
     (() => CodingWorkbenchAuthorityEnvelope | undefined) | undefined;
@@ -394,6 +390,8 @@ export interface CodingToolNativeInvocation {
   readonly sessionId: string;
   readonly messageId: string;
   readonly callId: string;
+  /** Server-minted identity of one inner MCP policy request; never a producer field. */
+  readonly mcpActionDigest?: string;
 }
 
 /**

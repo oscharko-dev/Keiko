@@ -11,17 +11,31 @@ import {
 } from "./atlassian-connection-verification.js";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import type {
-  AtlassianHttpPort,
-  AtlassianHttpRequest,
-  AtlassianHttpResult,
+  AtlassianHttpBodyPort,
+  AtlassianHttpBodyRequest,
+  AtlassianHttpBodyResult,
 } from "./atlassian-http-port.js";
 
-function recordingPort(result: AtlassianHttpResult): {
-  readonly port: AtlassianHttpPort;
-  readonly requests: AtlassianHttpRequest[];
+function response(
+  status: number,
+  bodyText = JSON.stringify({ accountId: "synthetic-id", active: true }),
+): AtlassianHttpBodyResult {
+  const text = status === 204 ? "" : bodyText;
+  return {
+    kind: "response",
+    status,
+    bodyText: text,
+    bodyBytes: Buffer.byteLength(text),
+    truncated: false,
+  };
+}
+
+function recordingPort(result: AtlassianHttpBodyResult): {
+  readonly port: AtlassianHttpBodyPort;
+  readonly requests: AtlassianHttpBodyRequest[];
 } {
-  const requests: AtlassianHttpRequest[] = [];
-  const port: AtlassianHttpPort = (request) => {
+  const requests: AtlassianHttpBodyRequest[] = [];
+  const port: AtlassianHttpBodyPort = (request) => {
     requests.push(request);
     return Promise.resolve(result);
   };
@@ -85,16 +99,16 @@ describe("buildAtlassianVerificationRequest", () => {
 describe("verifyAtlassianConnection — closed status union", () => {
   it.each([
     [200, "ok"],
-    [204, "ok"],
+    [204, "invalid-response"],
     [401, "auth-failed"],
     [403, "forbidden"],
-    [302, "unreachable"],
-    [301, "unreachable"],
+    [302, "redirect-refused"],
+    [301, "redirect-refused"],
     [404, "unreachable"],
     [429, "unreachable"],
     [500, "unreachable"],
   ])("maps HTTP %i to %s", async (status, expected) => {
-    const { port, requests } = recordingPort({ kind: "response", status });
+    const { port, requests } = recordingPort(response(status));
     const outcome = await verifyAtlassianConnection(port, {
       provider: "jira",
       baseUrl: "https://acme.example",
@@ -102,6 +116,7 @@ describe("verifyAtlassianConnection — closed status union", () => {
     expect(outcome).toBe(expected);
     expect(isAtlassianConnectionVerificationStatus(outcome)).toBe(true);
     expect(requests).toHaveLength(1);
+    expect(requests[0]?.maxBodyBytes).toBe(65_536);
   });
 
   it("maps a transport timeout to timeout", async () => {
@@ -119,7 +134,7 @@ describe("verifyAtlassianConnection — closed status union", () => {
   });
 
   it("contacts ONLY the configured base URL, exactly once, on the base host", async () => {
-    const { port, requests } = recordingPort({ kind: "response", status: 302 });
+    const { port, requests } = recordingPort(response(302));
     await verifyAtlassianConnection(port, {
       provider: "confluence",
       baseUrl: "https://docs.acme.example",
@@ -130,5 +145,46 @@ describe("verifyAtlassianConnection — closed status union", () => {
     expect(target.host).toBe("docs.acme.example");
     expect(target.protocol).toBe("https:");
     expect(target.pathname).toBe(ATLASSIAN_VERIFY_CONNECTION_PATHS.confluence);
+  });
+});
+
+describe("Cloud verification identity and content boundary", () => {
+  it.each([
+    "<html>Login</html>",
+    "null",
+    "[]",
+    "{}",
+    '{"accountId":"fixture","active":false}',
+    '{"accountId":" ","active":true}',
+    '{"accountId":"fixture","type":"anonymous"}',
+  ])("rejects untrusted or unauthenticated JSON/HTML without echoing contents", async (body) => {
+    for (const provider of ["jira", "confluence"] as const) {
+      const { port } = recordingPort(response(200, body));
+      expect(
+        await verifyAtlassianConnection(port, { provider, baseUrl: "https://cloud.example" }),
+      ).toBe("invalid-response");
+    }
+  });
+
+  it.each([
+    { truncated: true, bodyBytes: 10 },
+    { truncated: false, bodyBytes: 65_537 },
+  ])("refuses incomplete or oversized identity responses", async (bounds) => {
+    const { port } = recordingPort({
+      kind: "response",
+      status: 200,
+      bodyText: '{"accountId":"fixture","active":true}',
+      ...bounds,
+    });
+    expect(
+      await verifyAtlassianConnection(port, { provider: "jira", baseUrl: "https://cloud.example" }),
+    ).toBe("invalid-response");
+  });
+
+  it("keeps certificate failures distinct from network errors", async () => {
+    const { port } = recordingPort({ kind: "network-error", reason: "tls" });
+    expect(
+      await verifyAtlassianConnection(port, { provider: "jira", baseUrl: "https://cloud.example" }),
+    ).toBe("tls-failed");
   });
 });

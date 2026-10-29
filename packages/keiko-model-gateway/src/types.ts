@@ -5,6 +5,7 @@
 // `verbatimModuleSyntax` is on, so type-only names use `export type`.
 
 import type {
+  AtlassianNetworkConfig,
   ModelCapability,
   NormalizedResponse,
   GatewayRequest,
@@ -146,6 +147,9 @@ export interface RerankerConfig {
 }
 
 export interface OutboundHttpEgressConfig {
+  /** Internal narrowing constraints; never parsed from environment or generic egress config. */
+  readonly requiredTargetClass?: "public" | "private" | "loopback";
+  readonly deniedLoopbackPorts?: readonly number[];
   readonly httpProxy?: string | undefined;
   readonly httpsProxy?: string | undefined;
   readonly noProxy?: readonly string[] | undefined;
@@ -220,6 +224,8 @@ export interface GroundedAnswersConfig {
 export type GatewayFeatureSwitch = "on" | "off";
 
 export interface GatewayConfig {
+  /** File-owned exact connector targets; setup requests cannot create or widen this block. */
+  readonly atlassian?: AtlassianNetworkConfig;
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   // #3873: how long a coding-workbench call keeps retrying a transiently unavailable provider and

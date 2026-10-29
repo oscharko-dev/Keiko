@@ -1,3 +1,5 @@
+import { updateChatToolTranscript } from "./chatToolTranscript.js";
+import { createChatToolMutationStore } from "./chatToolMutations.js";
 import { withImmediateTransaction } from "./transaction.js";
 import { replayChatCreationIntent, withChatCreationIntent } from "./chatCreationIntents.js";
 import { readChatDraft, updateChatDraft } from "./chatDrafts.js";
@@ -44,6 +46,7 @@ import {
   errorRecord,
   isSqliteCorruptionError,
 } from "@oscharko-dev/keiko-security/sqlite-corruption";
+import { createChatReadGrantStore } from "./chatToolReadGrants.js";
 import type {
   Chat,
   ChatMessage,
@@ -83,6 +86,7 @@ import {
   touchChat as sqlTouchChat,
   mutateGitChangeScopes as sqlMutateGitChangeScopes,
   updateChat as sqlUpdateChat,
+  invalidateJiraPod as sqlInvalidateJiraPod,
 } from "./chats.js";
 import {
   type ClientTurnRecord,
@@ -647,14 +651,20 @@ function completeChatTurnRecord(
       assistantMessageId,
     );
     if (plan.kind !== "commit") return plan;
-    const assistant = persistStagedAssistant(
-      db,
-      options,
-      assistantMessageId,
-      plan.pendingAssistant,
-    );
+    persistStagedAssistant(db, options, assistantMessageId, plan.pendingAssistant);
     sqlLinkAssistantToClientTurn(db, chatId, assistantMessageId, storedTurnId);
-    return { kind: "completed", userMessage: plan.userMessage, assistantMessage: assistant };
+    const committed = sqlFindClientTurn(db, chatId, storedTurnId);
+    if (
+      committed.state !== "completed" ||
+      committed.userMessage === undefined ||
+      committed.assistantMessage === undefined
+    )
+      throw new UiStoreError("INTERNAL", "Canonical turn completion was not observable.", 500);
+    return {
+      kind: "completed",
+      userMessage: committed.userMessage,
+      assistantMessage: committed.assistantMessage,
+    };
   });
   if (result.kind === "completed") staged.delete(assistantMessageId);
   return result;
@@ -723,6 +733,8 @@ function createMessageBatch(
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
   const store: UiStore = {
+    chatToolReadGrants: createChatReadGrantStore(db),
+    chatToolMutations: createChatToolMutationStore(db, options.now),
     markdownSkills: createMarkdownSkillStore(db, options.now),
     browserApprovals: createBrowserApprovalStore(db),
     listProjects: () => sqlListProjects(db),
@@ -753,6 +765,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
     updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
       sqlUpdateChat(db, id, patch, options.now(), updateOptions),
+    invalidateJiraPod: (podId, generation, correlationId) =>
+      sqlInvalidateJiraPod(db, podId, generation, options.now(), correlationId),
     mutateGitChangeScopes: (
       id: string,
       mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],
@@ -776,6 +790,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     chatHistoryRevision: (chatId): number => sqlChatHistoryRevision(db, chatId),
     countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
+    updateChatToolTranscript: (id, update, correlationId): void => {
+      updateChatToolTranscript(db, id, update, options.redactString, correlationId);
+    },
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);
       sqlTouchChat(db, msg.chatId, options.now());

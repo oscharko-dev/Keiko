@@ -127,6 +127,10 @@
       "types": "./dist/unified-diff.d.ts",
       "import": "./dist/unified-diff.js"
     },
+    "./runtime/chat-tool-authority": {
+      "types": "./dist/chat-tool-authority.d.ts",
+      "import": "./dist/chat-tool-authority.js"
+    },
     "./runtime/code-task-acceptance": {
       "types": "./dist/code-task-acceptance.d.ts",
       "import": "./dist/code-task-acceptance.js"
@@ -862,6 +866,10 @@
     "./runtime/activity-log-diagnostic-fields": {
       "types": "./dist/activity-log-diagnostic-fields.d.ts",
       "import": "./dist/activity-log-diagnostic-fields.js"
+    },
+    "./runtime/managed-mcp": {
+      "types": "./dist/managed-mcp.d.ts",
+      "import": "./dist/managed-mcp.js"
     }
   },
   "scripts": {

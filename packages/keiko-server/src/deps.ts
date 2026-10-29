@@ -1,3 +1,19 @@
+import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
+import type { ChatToolTurnPort } from "./chat-tool-turn.js";
+import {
+  installMcpChatCatalogRuntime,
+  type McpChatCatalogRuntime,
+} from "./mcp/mcpChatCatalogRuntime.js";
+import { createMcpSettingsStore, type McpSettingsStore } from "./mcp/mcpSettingsStore.js";
+import {
+  createConfiguredMcpConnections,
+  type ConfiguredMcpConnections,
+} from "./mcp/mcpConfiguredConnections.js";
+import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
+import {
+  installJiraChatCatalogRuntime,
+  type JiraChatCatalogRuntime,
+} from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
 import {
   createStateCodingSessionContinuity,
@@ -132,7 +148,10 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  isCodingWorkbenchMode,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { IncomingMessage } from "node:http";
@@ -527,6 +546,7 @@ import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextCo
 import { createGovernedJiraCodeContextHttpPort } from "./coding-context/jiraCodeContextPort.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
+import { invalidateJiraPodChats, type JiraChatAccessOwners } from "./atlassian/jiraPodLifecycle.js";
 // KEIKO-0565: DI-scoped Atlassian connector registries. The classes are imported (not just their
 // types) so buildUiHandlerDeps can construct one instance per BFF process without depending on
 // the module-level singleton.
@@ -767,7 +787,14 @@ export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredM
 export type ContextProfileResolver = (modelId: string) => ContextProfile;
 export type CodingSidecarGatewayModelSourceResolver = () => CodingWorkbenchModelSource;
 
-export interface UiHandlerDeps {
+// Shared by composition input and its assembled output; the instance belongs to one server graph.
+interface AgentAuthorityRegistryDependency {
+  readonly agentAuthorityRegistry?: EditorAgentAuthorityRegistry | undefined;
+}
+
+export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
+  readonly mcpSettings?: McpSettingsStore;
+  readonly mcpConnections?: ConfiguredMcpConnections;
   /** Server-only, request-scoped revalidation of the paired session using a private skill. */
   readonly markdownSkillAuthority?: (() => boolean) | undefined;
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
@@ -959,8 +986,15 @@ export interface UiHandlerDeps {
   // built without buildUiHandlerDeps), which is the one case current behaviour is preserved for.
   readonly atlassianActionApprovalRegistry?: AtlassianActionApprovalRegistry | undefined;
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
-  // Server-owned deployment ceiling for Autonomous Delivery requests. Undefined fails closed to the
-  // lowest authority posture instead of accepting the request-supplied ceiling.
+  /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
+  readonly jiraChatCatalog?: JiraChatCatalogRuntime;
+  /** Accepted Chat turn scope reused by grounded preparation, tools and answer repair. */
+  readonly chatToolTurn?: ChatToolTurnPort;
+  readonly mcpChatCatalog?: McpChatCatalogRuntime;
+  /** Projection of the existing Memory admission for the productive grounded phase only. */
+  readonly groundedMemoryContextAvailable?: boolean;
+  // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
+  // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
@@ -981,6 +1015,8 @@ export interface UiHandlerDeps {
   // legacy tests that do not exercise /api/atlassian-connectors/* keep their fixtures unchanged;
   // the routes degrade to 503 when absent.
   readonly atlassianConnectorCredentials?: AtlassianConnectorCredentialDeps | undefined;
+  /** Existing server-owned local operator identity; never supplied by a browser or tool. */
+  readonly serverPrincipal?: (() => string | undefined) | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
   // Optional deployment replacement for the default mode-independent memory category denylist.
@@ -1259,7 +1295,7 @@ export interface UiHandlerDeps {
     ((request: RealtimeNegotiationRequest) => Promise<RealtimeNegotiationOutcome>) | undefined;
 }
 
-export interface BuildHandlerDepsOptions {
+export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependency {
   /** Server-composed upstream seam shared by preview, provisioning and runtime intake. */
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
   // Path to a gateway config file (`keiko ui --config`); undefined → no config inspector data.
@@ -1316,9 +1352,9 @@ export interface BuildHandlerDepsOptions {
    * wave's production composition (content routing is W1.5+); tests inject a deterministic payload.
    */
   readonly codingAppSessionContentSource?: CodingAppSessionContentSource | undefined;
-  // Explicit deployment ceiling for coding-runtime authority. Precedence: this option, then the
-  // KEIKO_CODING_DEPLOYMENT_CEILING environment value, then the all-mode product default. An
-  // unrecognized explicit value fails closed to governed-assist.
+  // This coding-runtime ceiling intersects KEIKO_CODING_DEPLOYMENT_CEILING; stricter wins.
+  // The all-mode product default applies only when neither is set. An unrecognized explicit
+  // value fails closed to governed-assist.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
   /**
    * Read-only public research egress (#2387). Enabled by default: this only opens the
@@ -1339,8 +1375,8 @@ export interface BuildHandlerDepsOptions {
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
   // stays clean while sidecar routing evidence still persists.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
-  // Optional server-owned Autonomous Delivery ceiling. When absent, autonomous confirmation and
-  // execution fail closed to governed-assist.
+  // Retained compatibility clamp: may only narrow the shared Coding/connector deployment ceiling.
+  // Absence uses the normal shared resolver; no retired confirmation/execution routes are restored.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   // KEIKO-0565: injectable Atlassian action-approval and sync-job registries. Production wiring
   // constructs one instance per BFF process; test wiring can inject fresh instances to keep test
@@ -2602,6 +2638,12 @@ function buildMemoryVault(
 // scope needs a scope-carrying write path plus a migration of existing rows, not a read filter.
 const DEFAULT_LOOPBACK_WORKSPACE_ID = "local";
 const DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID = "local-operator" as MemoryReviewerId;
+
+function serverOperatorPrincipal(options: BuildHandlerDepsOptions): () => string | undefined {
+  return (
+    options.codingRuntimeServerPrincipal ?? ((): string => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID)
+  );
+}
 
 function buildLoopbackMemoryAuthorization(
   memoryVault: MemoryVaultStore,
@@ -4435,6 +4477,7 @@ interface UiHandlerDepsAssemblyArgs {
   readonly codingSessionContinuity: CodingSessionContinuity;
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
   readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
+  readonly mcpConnections?: ConfiguredMcpConnections | undefined;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4462,11 +4505,7 @@ function codingSidecarGatewayModelSourceFields(
 function autonomousDeliveryFields(
   options: BuildHandlerDepsOptions,
 ): Pick<UiHandlerDeps, "autonomousDeliveryDeploymentCeiling"> {
-  return {
-    ...(options.autonomousDeliveryDeploymentCeiling === undefined
-      ? {}
-      : { autonomousDeliveryDeploymentCeiling: options.autonomousDeliveryDeploymentCeiling }),
-  };
+  return { autonomousDeliveryDeploymentCeiling: resolveCodingRuntimeDeploymentCeiling(options) };
 }
 
 // KEIKO-0565: DI-scoped Atlassian action-approval and sync-job registries. buildUiHandlerDeps
@@ -4480,12 +4519,17 @@ function autonomousDeliveryFields(
 // value that skips this factory (e.g. a hand-rolled test double).
 function atlassianConnectorRegistryFields(
   options: BuildHandlerDepsOptions,
-): Pick<UiHandlerDeps, "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"> {
+  store: UiStore,
+): Pick<UiHandlerDeps, "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"> & {
+  readonly agentAuthorityRegistry: EditorAgentAuthorityRegistry;
+} {
   const approvalRegistry =
-    options.atlassianActionApprovalRegistry ?? new AtlassianActionApprovalRegistry();
+    options.atlassianActionApprovalRegistry ??
+    new AtlassianActionApprovalRegistry(Date.now, store.chatToolReadGrants);
   const syncRegistry = options.atlassianSyncJobRegistry ?? new AtlassianSyncJobRegistry();
   return {
     atlassianActionApprovalRegistry: approvalRegistry,
+    agentAuthorityRegistry: options.agentAuthorityRegistry ?? new EditorAgentAuthorityRegistry(),
     atlassianSyncJobRegistry: syncRegistry,
   };
 }
@@ -4495,9 +4539,14 @@ function atlassianConnectorRegistryFields(
 // outbound request from the live runtime config (first-run onboarding updates are honored).
 function atlassianConnectorCredentialFields(
   args: UiHandlerDepsAssemblyArgs,
+  accessOwners: JiraChatAccessOwners,
 ): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
   return {
     atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
+      onLivePodInvalidated: (podId, generation, correlationId) => {
+        invalidateJiraPodChats(args.bundle.uiStore, podId, generation, correlationId, accessOwners);
+      },
+      networkConfig: () => args.runtimeConfig.current()?.atlassian,
       configPath: args.runtimeConfig.storagePath,
       env: args.options.env,
       egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
@@ -4822,9 +4871,32 @@ function mcpRelayDeps(args: UiHandlerDepsAssemblyArgs): Pick<UiHandlerDeps, "mcp
   };
 }
 
+function buildMcpSettings(args: UiHandlerDepsAssemblyArgs): McpSettingsStore {
+  return createMcpSettingsStore({
+    stateDir: dirname(args.resolvedUiDbPath),
+    env: args.options.env,
+    activityLog: args.options.activityLog ?? processServerLogSink(),
+  });
+}
+
+function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
+  mcpSettings: McpSettingsStore;
+  mcpConnections: ConfiguredMcpConnections;
+} {
+  const mcpSettings = buildMcpSettings(args);
+  const mcpConnections = createConfiguredMcpConnections({
+    settings: mcpSettings,
+    stateDir: dirname(args.resolvedUiDbPath),
+    log: args.options.activityLog ?? processServerLogSink(),
+    egress: () => resolveOutboundHttpEgressConfig(undefined, args.options.env),
+  });
+  return { mcpSettings, mcpConnections };
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
+  const { mcpSettings, mcpConnections } = buildMcpServices(args);
   const dapRuntime = createDapRuntimeReference(args.options);
-  const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
+  const services = assembleUiHandlerRuntimeServices({ ...args, mcpConnections }, dapRuntime);
   // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
   // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
   // than each call building an independent, uncoordinated bridge over the same durable store.
@@ -4833,7 +4905,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // buildIntegrationUiHandlerDeps, so createUiHandlerDispose can capture and reset the SAME
   // instances this graph's deps object exposes -- see its own comment for why disposal must reach
   // these registries, not just construct them fresh per graph.
-  const atlassianRegistries = atlassianConnectorRegistryFields(args.options);
+  const atlassianRegistries = atlassianConnectorRegistryFields(args.options, args.bundle.uiStore);
   // #2906 round 3: constructed once per composed deps graph (mirrors atlassianRegistries above)
   // so createUiHandlerDispose can reset the SAME instance this graph's deps object exposes --
   // see denialWindows.ts for why this must not be a module singleton.
@@ -4845,11 +4917,14 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // fallback exists for.
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
   const deps: UiHandlerDeps = {
+    mcpSettings,
+    mcpConnections,
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
-    ...buildIntegrationUiHandlerDeps(args),
+    ...buildIntegrationUiHandlerDeps(args, atlassianRegistries),
     ...buildOptionalUiHandlerDeps(args, services),
     ...atlassianRegistries,
+    serverPrincipal: serverOperatorPrincipal(args.options),
     codingAppSessionDenialWindows,
     gitChangeSnapshotService: services.gitChangeSnapshotService,
     // #3399: the durable PR-description status bridge over the SAME node evidence store every
@@ -4867,6 +4942,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       services,
       atlassianRegistries,
       codingAppSessionDenialWindows,
+      mcpConnections,
     ),
   };
   attachWorkbenchDescriptionSupport(
@@ -4877,7 +4953,18 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     deps,
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
-  return installConversationReadinessInitialization(deps);
+  return installConversationReadinessInitialization(installChatToolCatalogs(deps, args.options));
+}
+
+function installChatToolCatalogs(
+  deps: UiHandlerDeps,
+  options: UiHandlerDepsAssemblyArgs["options"],
+): UiHandlerDeps {
+  const log = {
+    primary: options.activityLog ?? processServerLogSink(),
+    diagnostics: options.diagnostics ?? defaultServerDiagnosticSink,
+  };
+  return installMcpChatCatalogRuntime(installJiraChatCatalogRuntime(deps, log), log);
 }
 
 /**
@@ -5040,9 +5127,7 @@ function buildUiCodingRuntimeControlPlane(
     snapshots: args.bundle.codingRuntimeSnapshotStore,
     evidence: codingRuntimeEvidenceAggregator,
     workspaceLifecycle: args.bundle.workspaceLifecycle,
-    serverPrincipal:
-      args.options.codingRuntimeServerPrincipal ??
-      ((): string | undefined => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
+    serverPrincipal: serverOperatorPrincipal(args.options),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
     projectMemory,
     repositoryInstructions,
@@ -5502,8 +5587,11 @@ type IntegrationUiHandlerDeps = ReturnType<typeof autonomousDeliveryFields> &
     | "consolidationJobs"
   >;
 
-function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): IntegrationUiHandlerDeps {
-  const atlassian = atlassianConnectorCredentialFields(args);
+function buildIntegrationUiHandlerDeps(
+  args: UiHandlerDepsAssemblyArgs,
+  accessOwners: JiraChatAccessOwners,
+): IntegrationUiHandlerDeps {
+  const atlassian = atlassianConnectorCredentialFields(args, accessOwners);
   return {
     ...autonomousDeliveryFields(args.options),
     ...atlassian,
@@ -5715,9 +5803,11 @@ async function disposeRuntimeServices(
     // OWN fresh registry has no record of that still-running job and could admit a duplicate for
     // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
     // active job's controller and drops pending approvals/activity before the bundle itself goes
-    // away, so nothing on this graph outlives it as observable state on the NEXT graph.
+    // away. Already granted Chat disclosure consent is the one durable exception: its original
+    // subject, proof and expiry survive, never a turn authority, pending action or usage budget.
     (): void => {
-      atlassianRegistries.atlassianActionApprovalRegistry?.reset();
+      atlassianRegistries.atlassianActionApprovalRegistry?.dispose(correlationId);
+      atlassianRegistries.agentAuthorityRegistry.reset(correlationId);
     },
     (): void => {
       atlassianRegistries.atlassianSyncJobRegistry?.reset();
@@ -5762,55 +5852,71 @@ function createUiHandlerDispose(
   services: UiHandlerRuntimeServices,
   atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
   codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
+  mcpConnections: ConfiguredMcpConnections,
 ): UiHandlerDeps["dispose"] {
-  return async (): Promise<void> => {
-    const activityLog = args.options.activityLog ?? processServerLogSink();
-    const correlationId = randomUUID();
-    const startedAtMs = Date.now();
-    const { openSseStreamCount, activeRunCount } = runtimeShutdownStartState(services);
-    markServerShuttingDown();
-    logRuntimeShutdown(activityLog, correlationId, {
-      state: "started",
-      openSseStreamCount,
-      activeRunCount,
-    });
-    // What the teardown achieved for the live run, not merely "the call did not throw". A refused
-    // shutdown resolves normally with `{ok: false}` (a run in `recovery-required`, for one), and
-    // recording that as a clean stop told the one artifact a customer site has the opposite of what
-    // happened (owner review, PR #3452). "not-applicable" is its own answer: no control plane means
-    // there was nothing to stop, which is not the same as stopping cleanly.
-    let runtimeShutdown: RuntimeShutdownOutcome = "not-applicable";
-    try {
-      runtimeShutdown = await shutdownCodingRuntime(services, correlationId);
-    } catch (error) {
-      runtimeShutdown = "faulted";
-      throw error;
-    } finally {
-      await thenSealActivityLog(args.options, () =>
-        disposeRuntimeServicesRecorded(
-          () =>
-            disposeRuntimeServices(
-              args,
-              services,
-              atlassianRegistries,
-              codingAppSessionDenialWindows,
-              correlationId,
-            ),
-          (cleanup) => {
-            logRuntimeShutdown(activityLog, correlationId, {
-              state: "completed",
-              durationMs: Date.now() - startedAtMs,
-              openSseStreamCount,
-              activeRunCount,
-              runtimeShutdown,
-              ...cleanup,
-            });
-          },
-          runtimeShutdown === "faulted",
-        ),
-      );
-    }
-  };
+  return (): Promise<void> =>
+    disposeUiHandler(
+      args,
+      services,
+      atlassianRegistries,
+      codingAppSessionDenialWindows,
+      mcpConnections,
+    );
+}
+async function disposeUiHandler(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+  atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
+  codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
+  mcpConnections: ConfiguredMcpConnections,
+): Promise<void> {
+  const activityLog = args.options.activityLog ?? processServerLogSink();
+  const correlationId = randomUUID();
+  const startedAtMs = Date.now();
+  const { openSseStreamCount, activeRunCount } = runtimeShutdownStartState(services);
+  markServerShuttingDown();
+  logRuntimeShutdown(activityLog, correlationId, {
+    state: "started",
+    openSseStreamCount,
+    activeRunCount,
+  });
+  // What the teardown achieved for the live run, not merely "the call did not throw". A refused
+  // shutdown resolves normally with `{ok: false}` (a run in `recovery-required`, for one), and
+  // recording that as a clean stop told the one artifact a customer site has the opposite of what
+  // happened (owner review, PR #3452). "not-applicable" is its own answer: no control plane means
+  // there was nothing to stop, which is not the same as stopping cleanly.
+  let runtimeShutdown: RuntimeShutdownOutcome = "not-applicable";
+  try {
+    await mcpConnections.close();
+    runtimeShutdown = await shutdownCodingRuntime(services, correlationId);
+  } catch (error) {
+    runtimeShutdown = "faulted";
+    throw error;
+  } finally {
+    await thenSealActivityLog(args.options, () =>
+      disposeRuntimeServicesRecorded(
+        () =>
+          disposeRuntimeServices(
+            args,
+            services,
+            atlassianRegistries,
+            codingAppSessionDenialWindows,
+            correlationId,
+          ),
+        (cleanup) => {
+          logRuntimeShutdown(activityLog, correlationId, {
+            state: "completed",
+            durationMs: Date.now() - startedAtMs,
+            openSseStreamCount,
+            activeRunCount,
+            runtimeShutdown,
+            ...cleanup,
+          });
+        },
+        runtimeShutdown === "faulted",
+      ),
+    );
+  }
 }
 
 function runtimeShutdownStartState(services: UiHandlerRuntimeServices): {
@@ -5952,23 +6058,36 @@ function buildRuntimeMutationLeaseDependency(
 export const KEIKO_CODING_DEPLOYMENT_CEILING_ENV = "KEIKO_CODING_DEPLOYMENT_CEILING";
 
 /**
- * Option precedence, then explicit deployment configuration, then the all-mode product default.
+ * Intersect explicit deployment configuration, then apply the all-mode product default.
  * An unrecognized explicit value fails closed; the selected run mode remains the human authority
  * decision and readiness reports the effective ceiling.
  */
 function resolveCodingRuntimeDeploymentCeiling(
   options: BuildHandlerDepsOptions,
 ): CodingWorkbenchMode {
-  return resolveConfiguredDeploymentCeiling(options) ?? "autonomous-delivery";
+  const ceiling = resolveConfiguredDeploymentCeiling(options) ?? "autonomous-delivery";
+  const legacy = options.autonomousDeliveryDeploymentCeiling;
+  if (legacy === undefined) return ceiling;
+  // The retained compatibility option may narrow every consumer, never widen the shared ceiling.
+  return resolveEffectiveCodingWorkbenchMode(
+    ceiling,
+    isCodingWorkbenchMode(legacy) ? legacy : "governed-assist",
+  );
 }
 
 function resolveConfiguredDeploymentCeiling(
   options: BuildHandlerDepsOptions,
 ): CodingWorkbenchMode | undefined {
-  const configured =
-    options.codingRuntimeDeploymentCeiling ?? options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV];
-  if (configured === undefined) return undefined;
-  return isCodingWorkbenchMode(configured) ? configured : "governed-assist";
+  let ceiling: CodingWorkbenchMode | undefined;
+  for (const configured of [
+    options.codingRuntimeDeploymentCeiling,
+    options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV],
+  ]) {
+    if (configured === undefined) continue;
+    const mode = isCodingWorkbenchMode(configured) ? configured : "governed-assist";
+    ceiling = ceiling === undefined ? mode : resolveEffectiveCodingWorkbenchMode(ceiling, mode);
+  }
+  return ceiling;
 }
 
 interface ProductionRuntimeComposition {
@@ -6058,6 +6177,21 @@ function nativeWebSearchFor(args: UiHandlerDepsAssemblyArgs): NativeWebSearch {
   });
 }
 
+function nativeMcpMutationJournalFor(
+  args: UiHandlerDepsAssemblyArgs,
+): ReturnType<typeof createNativeMcpMutationJournal> | undefined {
+  const store = args.bundle.uiStore;
+  const snapshots = args.bundle.codingRuntimeSnapshotStore;
+  if (
+    snapshots === undefined ||
+    store.chatToolMutations?.preparedNative === undefined ||
+    store.chatToolMutations.unsettledNative === undefined ||
+    store.codingHistory === undefined
+  )
+    return undefined;
+  return createNativeMcpMutationJournal({ store, snapshots, log: processServerLogSink() });
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -6082,6 +6216,8 @@ function resolveProductionRuntimePorts(
     historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
     sessionContinuity: args.codingSessionContinuity,
     ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
+    ...(args.mcpConnections === undefined ? {} : { mcpConnections: args.mcpConnections }),
+    mcpMutations: nativeMcpMutationJournalFor(args),
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,

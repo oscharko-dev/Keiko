@@ -1,3 +1,9 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  formatActivityLogProofLine,
+  expectActivityLogProof,
+} from "../../../../tests/support/activity-log-proof.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 // Issue #2242 — Confluence sync composition tests: routes + service + provider adapter + sync
 // lane + local-knowledge sink, end to end. Hermetic: the transport is the in-memory Confluence
 // fixture from keiko-connectors (mirroring createInMemoryManualFetcher — no atlassian.net, no
@@ -771,4 +777,82 @@ describe("Confluence sync — governed (agent-initiated) start correlation", () 
       correlationId: "req-governed-thread-01",
     });
   });
+});
+
+it.each(["{", "[]"])(
+  "reconstructs malformed sync metadata through the registered Activity Log",
+  async (bodyText) => {
+    const { deps, credential } = depsFor(() =>
+      Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText,
+        bodyBytes: bodyText.length,
+        truncated: false,
+      }),
+    );
+    const logs = createBufferedServerLogSink();
+    const credentials = deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new Error("Missing fixture credentials");
+    const started = await startSync(
+      { ...deps, atlassianConnectorCredentials: { ...credentials, activityLog: logs } },
+      credential,
+      { spaceKeys: ["ENG"] },
+    );
+    const terminal = await awaitTerminal(started.job.jobId);
+    expect(terminal).toMatchObject({ status: "failed", failureReason: "malformed-payload" });
+    const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    if (event === undefined) throw new Error("Missing sync outcome");
+    const line = formatActivityLogProofLine(event);
+    expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
+      actionType: "sync-space",
+      outcome: "failed",
+      failureReason: "malformed-payload",
+    });
+    expect(analyzeLogText(line).timelines).toHaveLength(1);
+    expect(line).not.toContain(BASE_URL);
+    expect(line).not.toContain(credential.authRef);
+  },
+);
+
+it("retains a malformed item failure in the registered partial-sync outcome", async () => {
+  const port = createInMemoryConfluenceFixture({
+    baseUrl: BASE_URL,
+    spaces: [
+      {
+        key: "ENG",
+        id: "100",
+        pages: [
+          { pageId: "1", title: "Valid", storageBody: "<p>Valid page</p>" },
+          { pageId: "2", title: "Invalid", storageBody: "<p>Invalid</p>", malformedBody: true },
+        ],
+      },
+    ],
+  });
+  const { deps, credential } = depsFor(port);
+  const logs = createBufferedServerLogSink();
+  const credentials = deps.atlassianConnectorCredentials;
+  if (credentials === undefined) throw new Error("Missing fixture credentials");
+  const started = await startSync(
+    { ...deps, atlassianConnectorCredentials: { ...credentials, activityLog: logs } },
+    credential,
+    { spaceKeys: ["ENG"] },
+  );
+  expect(await awaitTerminal(started.job.jobId)).toMatchObject({
+    status: "partial",
+    failureReasons: ["malformed-payload"],
+  });
+  const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
+  expect(events).toHaveLength(1);
+  const event = events[0];
+  if (event === undefined) throw new Error("Missing partial outcome");
+  const line = formatActivityLogProofLine(event);
+  expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
+    actionType: "sync-space",
+    outcome: "partial",
+    failureReason: "malformed-payload",
+  });
+  expect(analyzeLogText(line).timelines).toHaveLength(1);
 });

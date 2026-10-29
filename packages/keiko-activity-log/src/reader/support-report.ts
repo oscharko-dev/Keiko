@@ -775,11 +775,12 @@ function reportFailureClasses(
 }
 
 // The received closure must show its members directly, as the query engine requires of its own
-// closure: every incident correlation and every parent a retained line names needs at least one
-// directly recorded line. A timeline derived only through a child never proves its parent.
+// closure: every incident correlation and every registered causal parent needs a directly recorded
+// line. Non-causal context may borrow parent IDs without extending that closure (ADR-0173 D20).
 function closureMemberReasons(
   incident: SupportIncidentPrivateProjection,
   events: readonly SupportReportEvent[],
+  registry: SupportReaderRegistry,
 ): readonly DiagnosticSufficiencyReason[] {
   const observed = new Set(events.map((event) => event.record.correlationId));
   const members = [
@@ -787,6 +788,10 @@ function closureMemberReasons(
     ...incident.correlation.childCorrelationIds,
   ].filter((value): value is string => value !== undefined);
   const parents = events
+    .filter(
+      ({ record }) =>
+        typeof record.op !== "string" || registry.operations.get(record.op)?.causal !== "none",
+    )
     .map((event) => event.record.parentCorrelationId)
     .filter(
       (value): value is string =>
@@ -856,7 +861,7 @@ function projectedEvidenceReasons(
   return reasons([
     ...projected,
     ...(failureRetained ? [] : (["evidence-not-retained"] as const)),
-    ...closureMemberReasons(incident, events),
+    ...closureMemberReasons(incident, events, registry),
     ...lifetimeStartReasons(lifetimes, events),
   ]);
 }

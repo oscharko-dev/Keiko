@@ -112,6 +112,13 @@ export interface CodingHistoryStore {
    * conversation's skill selection of that moment as its immutable turn binding (#4025).
    */
   readonly intentMessageId: (runId: string) => string | undefined;
+  /** Bind an accepted human turn before its native prompt is sent; retries keep the same row. */
+  readonly bindNativeTurn: (runId: string, nativeMessageId: string, text: string) => string;
+  readonly nativeTurn: (
+    runId: string,
+  ) =>
+    | { readonly chatId: string; readonly userMessageId: string; readonly turnRef: string }
+    | undefined;
   readonly bindRun: (id: string, runId: string) => void;
   readonly update: (
     id: string,
@@ -415,7 +422,7 @@ function bindRun(
   if (existing !== undefined) throw invalidRequest("Run already belongs to another coding task.");
   withImmediateTransaction(db, () => {
     db.prepare(
-      "INSERT INTO coding_history_runs SELECT ?, ?, COALESCE(MAX(sequence), 0) + 1 FROM coding_history_runs WHERE chat_id = ?",
+      "INSERT INTO coding_history_runs (run_id, chat_id, sequence) SELECT ?, ?, COALESCE(MAX(sequence), 0) + 1 FROM coding_history_runs WHERE chat_id = ?",
     ).run(runId, id, id);
     db.prepare("UPDATE coding_history_tasks SET status = 'active' WHERE chat_id = ?").run(id);
     db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?").run(now(), id);
@@ -521,6 +528,7 @@ function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<str
          JOIN chat_messages stored ON stored.id = intent.message_id
         WHERE run.chat_id = ?
           AND echo.source_id <> 'intent'
+          AND echo.message_id <> intent.message_id
           AND echoed.role = 'user'
           AND stored.role = 'user'
           AND echoed.content = stored.content
@@ -592,6 +600,99 @@ function readIntentMessageId(db: DatabaseSync, runId: string): string | undefine
   return typeof row?.message_id === "string" ? row.message_id : undefined;
 }
 
+function nativeTurn(db: DatabaseSync, runId: string): ReturnType<CodingHistoryStore["nativeTurn"]> {
+  const row = db
+    .prepare(
+      "SELECT chat_id, active_user_message_id, active_native_turn_ref FROM coding_history_runs WHERE run_id=?",
+    )
+    .get(runId);
+  return typeof row?.chat_id === "string" &&
+    typeof row.active_user_message_id === "string" &&
+    typeof row.active_native_turn_ref === "string"
+    ? {
+        chatId: row.chat_id,
+        userMessageId: row.active_user_message_id,
+        turnRef: row.active_native_turn_ref,
+      }
+    : undefined;
+}
+
+function bindNativeTurn(
+  db: DatabaseSync,
+  store: UiStore,
+  now: () => number,
+  runId: string,
+  nativeMessageId: string,
+  text: string,
+): string {
+  assertId(runId);
+  assertId(nativeMessageId);
+  if (!/^msg_[A-Za-z0-9_-]+$/u.test(nativeMessageId))
+    throw invalidRequest("Invalid native turn identity.");
+  return withImmediateTransaction(db, () => {
+    const current = nativeTurn(db, runId);
+    if (current?.turnRef === nativeMessageId) return current.userMessageId;
+    const run = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id=?").get(runId);
+    if (typeof run?.chat_id !== "string") throw invalidRequest("Coding turn owner unavailable.");
+    const prior = db
+      .prepare(
+        "SELECT message_id FROM coding_history_message_bindings WHERE run_id=? AND source_id=?",
+      )
+      .get(runId, nativeMessageId);
+    if (prior !== undefined) throw invalidRequest("Coding turn already superseded.");
+    const messageId = bindNativeTurnMessage(db, store, now, {
+      runId,
+      nativeMessageId,
+      text,
+      chatId: run.chat_id,
+      initial: current === undefined,
+    });
+    db.prepare(
+      "UPDATE coding_history_runs SET active_native_turn_ref=?, active_user_message_id=? WHERE run_id=?",
+    ).run(nativeMessageId, messageId, runId);
+    return messageId;
+  });
+}
+
+function bindNativeTurnMessage(
+  db: DatabaseSync,
+  store: UiStore,
+  now: () => number,
+  input: {
+    readonly runId: string;
+    readonly nativeMessageId: string;
+    readonly text: string;
+    readonly chatId: string;
+    readonly initial: boolean;
+  },
+): string {
+  const { runId, nativeMessageId } = input;
+  if (input.initial) {
+    const messageId = readIntentMessageId(db, runId);
+    if (messageId === undefined) throw invalidRequest("Coding intent unavailable.");
+    db.prepare("INSERT INTO coding_history_message_bindings VALUES (?,?,?)").run(
+      runId,
+      nativeMessageId,
+      messageId,
+    );
+    return messageId;
+  }
+  appendMessage(db, store, now, {
+    id: input.chatId,
+    runId,
+    sourceId: nativeMessageId,
+    role: "user",
+    content: input.text,
+  });
+  const row = db
+    .prepare(
+      "SELECT message_id FROM coding_history_message_bindings WHERE run_id=? AND source_id=?",
+    )
+    .get(runId, nativeMessageId);
+  if (typeof row?.message_id !== "string") throw invalidRequest("Coding turn message unavailable.");
+  return row.message_id;
+}
+
 export function createCodingHistoryStore(
   db: DatabaseSync,
   store: UiStore,
@@ -628,6 +729,9 @@ export function createCodingHistoryStore(
       return typeof row?.chat_id === "string" ? readTask(db, store, row.chat_id) : undefined;
     },
     intentMessageId: (runId) => readIntentMessageId(db, runId),
+    bindNativeTurn: (runId, nativeMessageId, text) =>
+      bindNativeTurn(db, store, now, runId, nativeMessageId, text),
+    nativeTurn: (runId) => nativeTurn(db, runId),
     bindRun: (id, runId): void => {
       bindRun(db, store, id, runId, now);
     },

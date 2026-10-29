@@ -402,3 +402,12 @@ describe("canonical localized Files edges", () => {
     expect(relLabel(snap("browser"), snap("chat"), { t })).toBe("durchsucht");
   });
 });
+
+it("labels a live Jira connection as tools while retaining Data Pod knowledge labels", () => {
+  expect(relLabel(snap("connector", { selectedKind: "jira-live" }), snap("chat"))).toBe(
+    "uses tools",
+  );
+  expect(relLabel(snap("connector", { selectedKind: "capsule" }), snap("chat"))).toBe(
+    "uses knowledge",
+  );
+});

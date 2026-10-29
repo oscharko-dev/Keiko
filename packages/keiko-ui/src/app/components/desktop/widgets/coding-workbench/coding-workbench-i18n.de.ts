@@ -1,6 +1,8 @@
+import { DE_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 import type { CodingWorkbenchMessageCatalog } from "./coding-workbench-i18n.en";
 
 export const DE_CODING_WORKBENCH_MESSAGES = {
+  ...DE_AUTONOMY_MODE_LABELS,
   "codingWorkbench.progress.working": "Arbeitet",
   "codingWorkbench.progress.approval": "Wartet auf deine Freigabe",
   "codingWorkbench.progress.question": "Deine Antwort wird benötigt",
@@ -321,17 +323,14 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.none": "Keine",
   "codingWorkbench.mode.eyebrow": "Autonomie",
   "codingWorkbench.mode.unconfirmed": "Warten auf Serverbestätigung",
-  "codingWorkbench.mode.governed-assist.label": "Um Genehmigung bitten",
   "codingWorkbench.mode.governed-assist.short":
     "Liest frei; fragt vor jeder Dateiänderung und jedem Befehl",
   "codingWorkbench.mode.governed-assist.description":
     "Lesen und Suchen laufen ohne Rückfrage; jede Dateiänderung und jeder Befehl erfordern eine Genehmigung, Internetzugriff gibt es nicht. Git-Commit, -Push und Pull Request übernimmt Keiko nach separater Genehmigung, nie die Shell des Agenten. Dateien außerhalb des Arbeitsbereichs und geheime Dateien wie .env und Schlüssel sind nie zugänglich.",
-  "codingWorkbench.mode.supervised-coding.label": "Überwachter Workspace",
   "codingWorkbench.mode.supervised-coding.short":
     "Routinemäßige Änderungen und geprüfte Projektbefehle laufen; andere Befehle fragen",
   "codingWorkbench.mode.supervised-coding.description":
     "Routinemäßige Änderungen im Arbeitsbereich und geprüfte Projektbefehle laufen; andere Befehle erfordern eine Genehmigung, Internetzugriff gibt es nicht. Git-Commit, -Push und Pull Request übernimmt Keiko nach separater Genehmigung, nie die Shell des Agenten. Dateien außerhalb des Arbeitsbereichs und geheime Dateien wie .env und Schlüssel sind nie zugänglich.",
-  "codingWorkbench.mode.autonomous-delivery.label": "Vollzugriff",
   "codingWorkbench.mode.autonomous-delivery.short":
     "Arbeitet ohne Rückfrage im Rahmen der Aufgabenbefugnis; Internet nur hier",
   "codingWorkbench.mode.autonomous-delivery.description":
@@ -1131,7 +1130,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":
-    "Keiko startet einen neuen Lauf. Vorherige Änderungen werden nicht wiederholt.",
+    "Eine vorherige Aktion kann Dateien oder ein externes System bereits verändert haben. Prüfe ihr Ergebnis, bevor du einen neuen Lauf startest. Keiko wiederholt die Aktion nicht automatisch.",
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
   "codingWorkbench.header.notReady": "Nicht startbereit",

@@ -1336,6 +1336,53 @@ describe("AppShell grounding connections", () => {
     expect(api.updateConnBoundScope).not.toHaveBeenCalled();
   });
 
+  it("removes only an obsolete Jira edge after canonical replacement and preserves Data Pod links", async () => {
+    const api = workspaceApi();
+    const canonical = chat({
+      jiraPodBinding: {
+        podId: "jira-two",
+        bindingGeneration: 2,
+        authenticationGeneration: 1,
+        connectedAtMs: 1,
+      },
+    });
+    const session = mocks.state.session;
+    if (session === undefined) throw new TypeError("Missing session");
+    mocks.state.session = { ...session, activeChat: canonical, chats: [canonical] };
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        win("chat", { chatId: canonical.id }, "chat-window"),
+        win("connector", { selectedKind: "jira-live", selectedId: "jira-one" }, "jira-window"),
+        win("connector", { selectedKind: "capsule", selectedId: "data-one" }, "data-window"),
+      ],
+      [
+        {
+          id: "jira-edge",
+          a: "jira-window",
+          b: "chat-window",
+          boundChatWindowId: "chat-window",
+          boundConnectorKind: "jira-live",
+          boundConnectorId: "jira-one",
+        },
+        {
+          id: "data-edge",
+          a: "data-window",
+          b: "chat-window",
+          boundChatWindowId: "chat-window",
+          boundConnectorKind: "capsule",
+          boundConnectorId: "data-one",
+        },
+      ],
+      api,
+    );
+    await renderMounted();
+    await waitFor(() =>
+      expect(api.removeConn).toHaveBeenCalledWith("jira-edge", { unbind: false }),
+    );
+    expect(api.removeConn).not.toHaveBeenCalledWith("data-edge", expect.anything());
+    expect(mocks.updateChatLocalKnowledgeScopes).not.toHaveBeenCalled();
+  });
+
   it("tracks pointer and keyboard modality for focus ring policy", async () => {
     await renderMounted();
 

@@ -80,6 +80,11 @@ import {
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
 import { handleReadChatDraft, handleSaveChatDraft } from "./chat-draft-routes.js";
 import {
+  handleGetMcpSettings,
+  handlePutMcpSettings,
+  handleConnectMcpServer,
+} from "./mcp/mcpSettingsRoutes.js";
+import {
   handleDeleteConversationAttachment,
   handleUploadConversationAttachment,
 } from "./conversation-attachment-routes.js";
@@ -384,6 +389,7 @@ import {
 import {
   handleCreateAtlassianConnectorCredential,
   handleDeleteAtlassianConnectorCredential,
+  handleUpdateAtlassianConnectorCredential,
   handleListAtlassianConnectorCredentials,
   handleVerifyAtlassianConnectorCredential,
 } from "./atlassian/credentialRoutes.js";
@@ -400,6 +406,8 @@ import {
   handleListAtlassianConnectorActionApprovals,
   handleRejectAtlassianConnectorActionApproval,
 } from "./atlassian/writeActionRoutes.js";
+import { CHAT_READ_CONSENT_ROUTE_GROUP } from "./atlassian/chatReadConsentRoutes.js";
+import { CHAT_WRITE_APPROVAL_ROUTE_GROUP } from "./atlassian/chatWriteApprovalRoutes.js";
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
@@ -518,6 +526,13 @@ function dispatchGitChangeApplyDescription(
 // two desktop chat routes, desktop terminal JSON routes, and read-only Files widget routes.
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
+  { method: "GET", pattern: "/api/mcp/servers", handler: handleGetMcpSettings },
+  { method: "PUT", pattern: "/api/mcp/servers", handler: handlePutMcpSettings },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/connect",
+    handler: handleConnectMcpServer,
+  },
   { method: "GET", pattern: "/api/health", handler: health },
   ...WORKSPACE_MANIFEST_ROUTE_GROUP,
   ...EDITOR_LOCAL_HISTORY_ROUTE_GROUP,
@@ -1416,7 +1431,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody. Write-only
   // after creation: create answers authRef + metadata (never the secret), list is metadata-only,
   // delete removes ciphertext + metadata and invalidates the authRef, and verify runs one bounded
-  // probe against the configured base URL returning the closed status union. POST/DELETE inherit
+  // probe against the configured base URL returning the closed status union. POST/PATCH/DELETE inherit
   // the server CSRF + JSON content-type gate.
   {
     method: "GET",
@@ -1427,6 +1442,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/atlassian-connectors/credentials",
     handler: handleCreateAtlassianConnectorCredential,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/atlassian-connectors/credentials/:authRef",
+    handler: handleUpdateAtlassianConnectorCredential,
   },
   {
     method: "DELETE",
@@ -1681,6 +1701,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/diagnostics/report/download/:downloadId",
     handler: handleDownloadSupportReport,
   },
+  ...CHAT_READ_CONSENT_ROUTE_GROUP,
+  ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
 ];
 
 interface PreparedRoute {

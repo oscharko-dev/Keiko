@@ -1,3 +1,4 @@
+import { recordAtlassianActionOutcome } from "./actionOutcomeActivity.js";
 // Content-free activity emission for governed connector actions (Issue #2244, ADR-0128 D6).
 //
 // Every action attempt — allowed (executed), review-required (pending created / approved-and-
@@ -14,6 +15,7 @@ import type {
   AtlassianConnectorActionReviewReason,
   AtlassianConnectorActionType,
   AtlassianConnectorActivityOutcome,
+  AtlassianConnectorActivityRecord,
   AtlassianConnectorActivityReasonCode,
   AtlassianConnectorPendingApproval,
 } from "@oscharko-dev/keiko-contracts";
@@ -41,7 +43,10 @@ import { resolveAtlassianSyncJobRegistry } from "./syncService.js";
 // `UiHandlerDeps` directly; it structurally satisfies this narrower Pick.
 export type AtlassianActivityRegistryDeps = Pick<
   UiHandlerDeps,
-  "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"
+  | "atlassianActionApprovalRegistry"
+  | "atlassianSyncJobRegistry"
+  | "atlassianConnectorCredentials"
+  | "autonomousDeliveryDeploymentCeiling"
 >;
 
 export interface AtlassianActionActivityInput {
@@ -67,7 +72,7 @@ export function recordAtlassianActionActivity(
   deps: AtlassianActivityRegistryDeps,
   input: AtlassianActionActivityInput,
 ): void {
-  resolveAtlassianSyncJobRegistry(deps).recordActivity({
+  const record: AtlassianConnectorActivityRecord = {
     schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
     activityId: randomUUID(),
     occurredAt: input.occurredAt ?? Date.now(),
@@ -84,7 +89,13 @@ export function recordAtlassianActionActivity(
     ...(input.jqlDigest === undefined ? {} : { jqlDigest: input.jqlDigest }),
     ...(input.resultCount === undefined ? {} : { resultCount: input.resultCount }),
     ...(input.resultIssueKeys === undefined ? {} : { resultIssueKeys: input.resultIssueKeys }),
-  });
+  };
+  resolveAtlassianSyncJobRegistry(deps).recordActivity(record);
+  recordAtlassianActionOutcome(
+    deps.atlassianConnectorCredentials ?? {},
+    record,
+    deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
+  );
 }
 
 export interface BuildPendingApprovalInput {

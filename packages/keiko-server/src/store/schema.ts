@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 46;
+export const SCHEMA_VERSION = 54;
 
 interface Migration {
   readonly version: number;
@@ -1711,6 +1711,142 @@ export const MIGRATIONS: readonly Migration[] = [
       intent_sha256 TEXT NOT NULL CHECK (length(intent_sha256) = 64),
       chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL
     ) STRICT;`,
+  },
+  {
+    version: 47,
+    sql: `CREATE TABLE chat_tool_mutations (
+      invocation_id TEXT PRIMARY KEY CHECK (length(invocation_id) BETWEEN 1 AND 128),
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      user_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+      turn_ref TEXT NOT NULL CHECK (length(turn_ref) BETWEEN 1 AND 256),
+      actor_id TEXT NOT NULL CHECK (length(actor_id) BETWEEN 1 AND 128),
+      pod_id TEXT NOT NULL CHECK (length(pod_id) BETWEEN 1 AND 128),
+      binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+      authentication_generation INTEGER NOT NULL CHECK (authentication_generation > 0),
+      authority_digest TEXT NOT NULL CHECK (length(authority_digest) = 64),
+      action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+      operation TEXT NOT NULL CHECK (operation IN ('jira.create','jira.edit','jira.assign','jira.comment','jira.transition')),
+      correlation_id TEXT NOT NULL CHECK (length(correlation_id) BETWEEN 1 AND 128),
+      phase TEXT NOT NULL CHECK (phase IN ('prepared','dispatched','acknowledged','settled')),
+      outcome TEXT CHECK (outcome IS NULL OR outcome IN ('not-dispatched','rejected','succeeded','succeeded-unconfirmed','unknown')),
+      http_status INTEGER CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
+      created_at INTEGER NOT NULL CHECK (created_at >= 0),
+      updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+      UNIQUE(chat_id, turn_ref, action_digest),
+      CHECK ((phase = 'settled') = (outcome IS NOT NULL)),
+      CHECK (phase != 'acknowledged' OR (http_status IS NOT NULL AND http_status BETWEEN 200 AND 299)),
+      CHECK (phase != 'prepared' OR http_status IS NULL),
+      CHECK (outcome NOT IN ('succeeded','succeeded-unconfirmed') OR (http_status IS NOT NULL AND http_status BETWEEN 200 AND 299)),
+      CHECK (outcome != 'not-dispatched' OR http_status IS NULL)
+    ) STRICT;
+    CREATE INDEX chat_tool_mutations_turn ON chat_tool_mutations(chat_id, turn_ref);
+    CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
+      WHERE phase IN ('dispatched','acknowledged');`,
+  },
+  {
+    version: 48,
+    // A response can be replaced after commit. Repair retained observations before work resumes.
+    sql: `UPDATE chat_tool_mutations SET outcome = 'unknown'
+      WHERE phase = 'settled' AND outcome = 'rejected' AND http_status IS NOT NULL;`,
+  },
+  {
+    version: 49,
+    sql: "ALTER TABLE chats ADD COLUMN jira_state_json TEXT;",
+  },
+  {
+    version: 50,
+    sql: `ALTER TABLE chat_messages ADD COLUMN tool_transcript_json TEXT;
+      CREATE TRIGGER chat_tool_transcript_revision AFTER UPDATE OF tool_transcript_json ON chat_messages
+      WHEN OLD.tool_transcript_json IS NOT NEW.tool_transcript_json
+      BEGIN UPDATE chats SET history_revision = history_revision + 1 WHERE id = OLD.chat_id; END;`,
+  },
+  {
+    version: 51,
+    sql: `CREATE TABLE chat_tool_read_grants (
+      grant_id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      entry_json TEXT NOT NULL CHECK (length(entry_json) BETWEEN 1 AND 8192)
+    ) STRICT;
+    CREATE INDEX idx_chat_tool_read_grants_chat ON chat_tool_read_grants(chat_id);`,
+  },
+  {
+    version: 52,
+    sql: `CREATE TABLE chat_tool_mutations_next (
+      invocation_id TEXT PRIMARY KEY CHECK (length(invocation_id) BETWEEN 1 AND 128),
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      user_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+      turn_ref TEXT NOT NULL CHECK (length(turn_ref) BETWEEN 1 AND 256),
+      actor_id TEXT NOT NULL CHECK (length(actor_id) BETWEEN 1 AND 128),
+      pod_id TEXT CHECK (length(pod_id) BETWEEN 1 AND 128),
+      binding_generation INTEGER CHECK (binding_generation > 0),
+      authentication_generation INTEGER CHECK (authentication_generation > 0),
+      authority_digest TEXT NOT NULL CHECK (length(authority_digest) = 64),
+      action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+      operation TEXT NOT NULL CHECK (length(operation) BETWEEN 1 AND 128),
+      source_kind TEXT NOT NULL CHECK (source_kind IN ('jira','configured-mcp')),
+      configuration_digest TEXT CHECK (configuration_digest IS NULL OR length(configuration_digest) = 64),
+      server_name TEXT CHECK (server_name IS NULL OR length(server_name) BETWEEN 1 AND 64),
+      tool_name TEXT CHECK (tool_name IS NULL OR length(tool_name) BETWEEN 1 AND 64),
+      protocol_outcome TEXT CHECK (protocol_outcome IS NULL OR protocol_outcome IN ('success','error')),
+      correlation_id TEXT NOT NULL CHECK (length(correlation_id) BETWEEN 1 AND 128),
+      phase TEXT NOT NULL CHECK (phase IN ('prepared','dispatched','acknowledged','settled')),
+      outcome TEXT CHECK (outcome IS NULL OR outcome IN ('not-dispatched','rejected','succeeded','succeeded-unconfirmed','unknown')),
+      http_status INTEGER CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
+      created_at INTEGER NOT NULL CHECK (created_at >= 0),
+      updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+      UNIQUE(chat_id, turn_ref, action_digest),
+      CHECK ((phase = 'settled') = (outcome IS NOT NULL)),
+      CHECK (phase != 'acknowledged' OR ((http_status IS NOT NULL AND http_status BETWEEN 200 AND 299) OR (protocol_outcome IS NOT NULL AND protocol_outcome = 'success'))),
+      CHECK (phase != 'prepared' OR (http_status IS NULL AND protocol_outcome IS NULL)),
+      CHECK (outcome NOT IN ('succeeded','succeeded-unconfirmed') OR ((http_status IS NOT NULL AND http_status BETWEEN 200 AND 299) OR (protocol_outcome IS NOT NULL AND protocol_outcome = 'success'))),
+      CHECK (outcome != 'not-dispatched' OR (http_status IS NULL AND protocol_outcome IS NULL)),
+      CHECK ((source_kind = 'jira' AND pod_id IS NOT NULL AND binding_generation IS NOT NULL AND authentication_generation IS NOT NULL
+        AND operation IN ('jira.create','jira.edit','jira.assign','jira.comment','jira.transition')
+        AND configuration_digest IS NULL AND server_name IS NULL AND tool_name IS NULL AND protocol_outcome IS NULL)
+        OR (source_kind = 'configured-mcp' AND pod_id IS NULL AND binding_generation IS NULL AND authentication_generation IS NULL
+        AND configuration_digest IS NOT NULL AND server_name IS NOT NULL AND tool_name IS NOT NULL AND http_status IS NULL
+        AND (outcome != 'rejected' OR protocol_outcome IS NULL)))
+    ) STRICT;
+    INSERT INTO chat_tool_mutations_next (
+      invocation_id,chat_id,user_message_id,turn_ref,actor_id,pod_id,binding_generation,authentication_generation,
+      authority_digest,action_digest,operation,correlation_id,phase,outcome,http_status,created_at,updated_at,source_kind)
+    SELECT invocation_id,chat_id,user_message_id,turn_ref,actor_id,pod_id,binding_generation,authentication_generation,
+      authority_digest,action_digest,operation,correlation_id,phase,outcome,http_status,created_at,updated_at,'jira'
+    FROM chat_tool_mutations;
+    DROP TABLE chat_tool_mutations;
+    ALTER TABLE chat_tool_mutations_next RENAME TO chat_tool_mutations;
+    CREATE INDEX chat_tool_mutations_turn ON chat_tool_mutations(chat_id, turn_ref);
+    CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
+      WHERE phase IN ('dispatched','acknowledged');`,
+  },
+  {
+    version: 53,
+    // Coding uses the same effect journal and its existing real History message/run owners.
+    sql: `ALTER TABLE coding_history_runs ADD COLUMN active_native_turn_ref TEXT;
+      ALTER TABLE coding_history_runs ADD COLUMN active_user_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL;
+      ALTER TABLE chat_tool_mutations ADD COLUMN consumer_kind TEXT NOT NULL DEFAULT 'chat' CHECK (consumer_kind IN ('chat','coding'));
+      ALTER TABLE chat_tool_mutations ADD COLUMN coding_run_id TEXT REFERENCES coding_runtime_snapshots(run_id) ON DELETE CASCADE
+        CHECK ((consumer_kind = 'chat' AND coding_run_id IS NULL) OR (consumer_kind = 'coding' AND coding_run_id IS NOT NULL));
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_session_id TEXT
+        CHECK ((consumer_kind = 'chat' AND native_session_id IS NULL) OR (consumer_kind = 'coding' AND native_session_id IS NOT NULL AND length(native_session_id) BETWEEN 1 AND 256));
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_message_id TEXT
+        CHECK ((consumer_kind = 'chat' AND native_message_id IS NULL) OR (consumer_kind = 'coding' AND native_message_id IS NOT NULL AND length(native_message_id) BETWEEN 1 AND 256));
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_call_id TEXT
+        CHECK ((consumer_kind = 'chat' AND native_call_id IS NULL) OR (consumer_kind = 'coding' AND native_call_id IS NOT NULL AND length(native_call_id) BETWEEN 1 AND 256));
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_arguments_digest TEXT
+        CHECK ((consumer_kind = 'chat' AND native_arguments_digest IS NULL) OR (consumer_kind = 'coding' AND native_arguments_digest IS NOT NULL AND length(native_arguments_digest) = 64));
+      CREATE INDEX chat_tool_mutations_native_dispatch ON chat_tool_mutations(coding_run_id, native_session_id, server_name, tool_name, native_arguments_digest)
+        WHERE consumer_kind = 'coding' AND phase = 'prepared';`,
+  },
+  {
+    version: 54,
+    // Chat keeps its single active effect; native observed replies await one persisted parent call.
+    sql: `DROP INDEX chat_tool_mutations_active;
+      CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
+        WHERE phase = 'dispatched' OR (phase = 'acknowledged' AND consumer_kind = 'chat');
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_mcp_action_digest TEXT
+      CHECK (native_mcp_action_digest IS NULL OR (consumer_kind = 'coding'
+        AND length(native_mcp_action_digest) = 64 AND native_mcp_action_digest NOT GLOB '*[^0-9a-f]*'));`,
   },
 ];
 

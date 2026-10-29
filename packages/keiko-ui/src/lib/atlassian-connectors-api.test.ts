@@ -8,6 +8,9 @@ import {
   approveAtlassianConnectorAction,
   cancelAtlassianConnectorSyncJob,
   createAtlassianConnector,
+  decideJiraChatReadConsent,
+  decideJiraChatWriteApproval,
+  getJiraChatWriteApproval,
   defaultAtlassianConnectorsClient,
   deleteAtlassianConnector,
   getAtlassianConnectorApproval,
@@ -18,6 +21,8 @@ import {
   rejectAtlassianConnectorAction,
   startAtlassianConnectorSync,
   verifyAtlassianConnector,
+  updateAtlassianConnector,
+  ATLASSIAN_CONNECTORS_CHANGED_EVENT,
 } from "./atlassian-connectors-api";
 
 interface RecordedCall {
@@ -63,6 +68,57 @@ const METADATA = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+it("updates the existing credential with its expected generation and publishes only a body-free refresh hint", async () => {
+  const changed = vi.fn();
+  window.addEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, changed);
+  try {
+    const calls = stubFetch(200, METADATA);
+    await updateAtlassianConnector(METADATA.authRef, {
+      expectedGeneration: 7,
+      apiToken: "synthetic-replacement-pat",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: `/api/atlassian-connectors/credentials/${encodeURIComponent(METADATA.authRef)}`,
+      method: "PATCH",
+      headers: { "X-Keiko-CSRF": "1" },
+    });
+    expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({
+      expectedGeneration: 7,
+      apiToken: "synthetic-replacement-pat",
+    });
+    expect(changed).toHaveBeenCalledOnce();
+    expect(changed.mock.calls[0]?.[0]).toBeInstanceOf(Event);
+    expect(changed.mock.calls[0]?.[0]).not.toHaveProperty("detail");
+    stubFetch(200, { credentials: [] });
+    await listAtlassianConnectors();
+    expect(changed).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, changed);
+  }
+});
+
+it("publishes a refresh hint after a lost mutation response and never repeats the mutation", async () => {
+  const changed = vi.fn();
+  window.addEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, changed);
+  const fetch = vi.fn(async (): Promise<Response> => {
+    throw new TypeError("Connection lost");
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    await expect(
+      updateAtlassianConnector(METADATA.authRef, {
+        expectedGeneration: 1,
+        displayName: "Renamed Pod",
+      }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, changed);
+  }
 });
 
 describe("atlassian-connectors-api — routes and methods", () => {
@@ -159,6 +215,7 @@ describe("atlassian-connectors-api — write-only token", () => {
     });
     // The create request is the ONE hop the token makes.
     expect(calls[0]?.body).toContain("s3cr3t-token");
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ authScheme: "basic-api-token" });
     // The returned metadata carries no token field.
     expect(JSON.stringify(metadata)).not.toContain("s3cr3t-token");
     expect((metadata as unknown as Record<string, unknown>).apiToken).toBeUndefined();
@@ -191,5 +248,147 @@ describe("atlassian-connectors-api — body-safe errors", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).message).toContain("HTTP 500");
     expect((error as ApiError).code).toBe("INTERNAL");
+  });
+});
+
+it("observes a Chat write approval with GET and posts only its concrete decision and digest", async () => {
+  const approval = {
+    kind: "jira-chat-write",
+    approvalId: "approval-1",
+    chatId: "chat-1",
+    podId: "11111111-1111-4111-8111-111111111111",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: "action-1",
+    operation: "jira.edit",
+    actionDigest: "a".repeat(64),
+    requestedAt: 1000,
+    expiresAt: 2000,
+    state: "pending",
+  } as const;
+  const getCalls = stubFetch(200, { approval });
+  expect(await getJiraChatWriteApproval(approval.approvalId)).toEqual(approval);
+  expect(getCalls).toHaveLength(1);
+  expect(getCalls[0]).toMatchObject({
+    url: "/api/atlassian-connectors/action-approvals/approval-1/chat-write-approval",
+    method: "GET",
+    body: undefined,
+  });
+  const postCalls = stubFetch(200, { approval: { ...approval, state: "approved" } });
+  expect(await decideJiraChatWriteApproval(approval, "approve")).toMatchObject({
+    state: "approved",
+  });
+  expect(postCalls).toHaveLength(1);
+  expect(postCalls[0]).toMatchObject({
+    url: "/api/atlassian-connectors/action-approvals/approval-1/chat-write-approval",
+    method: "POST",
+    headers: { "X-Keiko-CSRF": "1" },
+  });
+  expect(JSON.parse(postCalls[0]?.body ?? "null")).toEqual({
+    decision: "approve",
+    actionDigest: approval.actionDigest,
+  });
+});
+
+it.each([null, {}, { state: "pending" }])(
+  "fails closed on malformed Chat approval data %j",
+  async (approval) => {
+    stubFetch(200, { approval });
+    await expect(getJiraChatWriteApproval("approval-1")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  },
+);
+
+const READ_GRANT = {
+  kind: "jira-chat-read",
+  grantId: "grant-1",
+  chatId: "chat-1",
+  podId: "11111111-1111-4111-8111-111111111111",
+  bindingGeneration: 1,
+  authenticationGeneration: 1,
+  state: "pending",
+  disclosureVersion: "jira-chat-read-v1",
+  requestedAt: 1000,
+  expiresAt: 2000,
+} as const;
+
+it.each(["approve", "reject"] as const)(
+  "validates the read-consent %s response against the exact requested scope",
+  async (decision) => {
+    const approval = { ...READ_GRANT, state: decision === "approve" ? "granted" : "rejected" };
+    const calls = stubFetch(200, { approval });
+    expect(await decideJiraChatReadConsent(READ_GRANT, decision)).toEqual(approval);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: "/api/atlassian-connectors/action-approvals/grant-1/chat-read-consent",
+      method: "POST",
+      headers: { "X-Keiko-CSRF": "1" },
+    });
+    expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({
+      decision,
+      disclosureVersion: READ_GRANT.disclosureVersion,
+    });
+  },
+);
+
+it.each([
+  null,
+  {},
+  { ...READ_GRANT, state: "unexpected" },
+  { ...READ_GRANT, actorDigest: "private" },
+  { ...READ_GRANT, authorityId: "private" },
+  { ...READ_GRANT, expiresAt: 500 },
+])("rejects malformed or private read-consent projection %j", async (approval) => {
+  stubFetch(200, { approval });
+  await expect(decideJiraChatReadConsent(READ_GRANT, "approve")).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+  });
+});
+
+it.each([
+  { grantId: "another-grant" },
+  { chatId: "another-chat" },
+  { podId: "22222222-2222-4222-8222-222222222222" },
+  { bindingGeneration: 2 },
+  { authenticationGeneration: 2 },
+  { disclosureVersion: "unknown-disclosure" },
+  { requestedAt: 1001 },
+  { expiresAt: 2001 },
+])("rejects read-consent subject substitution %j", async (changed) => {
+  stubFetch(200, { approval: { ...READ_GRANT, state: "granted", ...changed } });
+  await expect(decideJiraChatReadConsent(READ_GRANT, "approve")).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+  });
+});
+
+const MCP_READ_GRANT = {
+  kind: "mcp-chat-read",
+  grantId: "mcp-grant",
+  chatId: "chat-1",
+  configurationDigest: "a".repeat(64),
+  state: "pending",
+  disclosureVersion: "mcp-chat-read-v1",
+  requestedAt: 1000,
+  expiresAt: 2000,
+} as const;
+it("retains the configured MCP disclosure and exact configuration identity", async () => {
+  const approval = { ...MCP_READ_GRANT, state: "granted" };
+  const calls = stubFetch(200, { approval });
+  expect(await decideJiraChatReadConsent(MCP_READ_GRANT, "approve")).toEqual(approval);
+  expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({
+    decision: "approve",
+    disclosureVersion: "mcp-chat-read-v1",
+  });
+});
+it("refuses a consent response for a replaced MCP configuration", async () => {
+  stubFetch(200, {
+    approval: { ...MCP_READ_GRANT, state: "granted", configurationDigest: "b".repeat(64) },
+  });
+  await expect(decideJiraChatReadConsent(MCP_READ_GRANT, "approve")).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
   });
 });

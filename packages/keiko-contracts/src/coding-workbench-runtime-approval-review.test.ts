@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { mcpToolAction } from "./mcp-servers.js";
 
 import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
@@ -286,6 +287,17 @@ describe("native action review boundaries (#3897)", () => {
     const atLimit = `p${"a".repeat(63)}`;
     expect(errorsFor(nativeReview(shellAction({ permission: atLimit })))).toEqual([]);
     expect(errorsFor(nativeReview(shellAction({ permission: `${atLimit}a` })))).toEqual([
+      NATIVE_PERMISSION_ERROR,
+    ]);
+  });
+
+  it("keeps the complete bounded MCP tool identity in the private action review", () => {
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(64));
+    expect(errorsFor(nativeReview(shellAction({ permission })))).toEqual([]);
+    expect(errorsFor(nativeReview(shellAction({ permission: `${permission}x` })))).toEqual([
+      NATIVE_PERMISSION_ERROR,
+    ]);
+    expect(errorsFor(nativeReview(shellAction({ permission: `${"s".repeat(65)}_tool` })))).toEqual([
       NATIVE_PERMISSION_ERROR,
     ]);
   });

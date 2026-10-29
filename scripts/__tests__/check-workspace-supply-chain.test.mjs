@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   APPROVED_LICENSES,
+  projectProductionSbom,
   addTypeScriptRuntimeToSbom,
   isLicenseExpressionApproved,
   offendersForComponent,
@@ -414,3 +415,79 @@ function runLicensePreflight(locks) {
     rmSync(fixture, { recursive: true, force: true });
   }
 }
+
+describe("projectProductionSbom", () => {
+  function fixture() {
+    const component = (name) => ({
+      "bom-ref": `${name}@1.0.0`,
+      name,
+      version: "1.0.0",
+      licenses: [{ license: { id: "MIT" } }],
+      hashes: [{ alg: "SHA-512", content: "preserved" }],
+    });
+    const node = (name, dependencies = {}) => ({ name, version: "1.0.0", dependencies });
+    const child = node("shared-child");
+    const shared = node("shared-validator", { "shared-child": child });
+    return {
+      sbom: {
+        metadata: { component: component("root") },
+        components: ["catalog", "shared-validator", "shared-child", "dev-tool"].map(component),
+        dependencies: [
+          { ref: "root@1.0.0", dependsOn: ["catalog@1.0.0", "dev-tool@1.0.0"] },
+          { ref: "catalog@1.0.0", dependsOn: ["shared-validator@1.0.0"] },
+          { ref: "dev-tool@1.0.0", dependsOn: ["shared-validator@1.0.0"] },
+          { ref: "shared-validator@1.0.0", dependsOn: ["shared-child@1.0.0"] },
+          { ref: "shared-child@1.0.0", dependsOn: [] },
+        ],
+      },
+      tree: node("root", {
+        catalog: node("catalog", { "shared-validator": shared, "uninstalled-optional": {} }),
+      }),
+    };
+  }
+
+  it("retains shared prod/dev components and complete production edges without shipping dev tools", () => {
+    const { sbom, tree } = fixture();
+    const before = structuredClone(sbom);
+    const result = projectProductionSbom(sbom, tree);
+    expect(result.components.map((entry) => entry.name)).toEqual([
+      "catalog",
+      "shared-validator",
+      "shared-child",
+    ]);
+    expect(result.components[1]).toEqual(before.components[1]);
+    expect(result.dependencies).toEqual([
+      { ref: "catalog@1.0.0", dependsOn: ["shared-validator@1.0.0"] },
+      { ref: "root@1.0.0", dependsOn: ["catalog@1.0.0"] },
+      { ref: "shared-child@1.0.0", dependsOn: [] },
+      { ref: "shared-validator@1.0.0", dependsOn: ["shared-child@1.0.0"] },
+    ]);
+    expect(sbom).toEqual(before);
+  });
+
+  it("refuses an npm --omit=dev document that lost a shared productive component", () => {
+    const { sbom, tree } = fixture();
+    sbom.components = sbom.components.filter((entry) => entry.name !== "shared-validator");
+    expect(() => projectProductionSbom(sbom, tree)).toThrow(
+      "SBOM is missing a productive dependency component.",
+    );
+  });
+
+  it("unions repeated productive identities and refuses incomplete identities or a foreign root", () => {
+    const { sbom, tree } = fixture();
+    tree.dependencies["shared-validator"] = { name: "shared-validator", version: "1.0.0" };
+    expect(projectProductionSbom(sbom, tree).dependencies).toContainEqual({
+      ref: "shared-validator@1.0.0",
+      dependsOn: ["shared-child@1.0.0"],
+    });
+    expect(() => projectProductionSbom(sbom, { name: "root" })).toThrow(
+      "npm production dependency identity is incomplete.",
+    );
+    expect(() => projectProductionSbom(sbom, { name: "foreign", version: "1.0.0" })).toThrow(
+      "SBOM and npm production root do not match.",
+    );
+    expect(() => projectProductionSbom(sbom, null)).toThrow(
+      "Invalid npm production dependency node.",
+    );
+  });
+});

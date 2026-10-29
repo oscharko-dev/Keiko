@@ -73,7 +73,9 @@ function nativeCallUsage(patchBytes: number | undefined): CodingWorkbenchRuntime
  * The reservation identity of one native invocation: the run and the runtime's own session,
  * message and call ids, digested into one bounded word. Two checks of one invocation share it, so
  * the authority's replay ledger answers `authority-replayed` for the second; a child session has
- * its own session id and so its own identity on the same run budget.
+ * its own session id and so its own identity on the same run budget. Inner MCP actions additionally
+ * carry a server-minted per-request identity: the producer repeats the enclosing Code Mode call id
+ * for different tools and even separate physical reads with identical arguments.
  */
 function nativeInvocationIdentity(
   runId: string | undefined,
@@ -82,7 +84,13 @@ function nativeInvocationIdentity(
   if (runId === undefined || invocation === undefined) return undefined;
   const digest = createHash("sha256")
     .update(
-      JSON.stringify([runId, invocation.sessionId, invocation.messageId, invocation.callId]),
+      JSON.stringify([
+        runId,
+        invocation.sessionId,
+        invocation.messageId,
+        invocation.callId,
+        ...(invocation.mcpActionDigest === undefined ? [] : [invocation.mcpActionDigest]),
+      ]),
       "utf8",
     )
     .digest("hex");

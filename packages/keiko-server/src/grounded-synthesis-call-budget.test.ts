@@ -158,3 +158,69 @@ describe("factory-owned physical synthesis allowance", () => {
     );
   });
 });
+
+it("retains cumulative usage while classifying only the confirmed tool-call attempt as orchestration", () => {
+  const budget = createGroundedSynthesisCallBudget();
+  const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+    inputTokensMax: 1000,
+    outputTokensMax: 100,
+  });
+  tracker
+    .admission({ promptTokens: 100, maxOutputTokens: 100 })
+    ?.settle({ promptTokens: 100, completionTokens: 5 }, true, "none");
+  tracker
+    .admission({ promptTokens: 100, maxOutputTokens: 95 })
+    ?.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+  tracker.confirmToolRound();
+  expect(budget.remaining()).toBe(1);
+  expect(budget.pendingUsage()).toEqual({ promptTokens: 200, completionTokens: 10 });
+  expect(() => {
+    tracker.confirmToolRound();
+  }).toThrow();
+  tracker
+    .admission({ promptTokens: 100, maxOutputTokens: 90 })
+    ?.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+  expect(budget.remaining()).toBe(0);
+  expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
+});
+
+it.each(["pending", "undispatched", "unknown"] as const)(
+  "never reclassifies a %s attempt to recover synthesis authority",
+  (state) => {
+    const budget = createGroundedSynthesisCallBudget();
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 1000,
+      outputTokensMax: 100,
+    });
+    const reservation = tracker.admission({ promptTokens: 100, maxOutputTokens: 100 });
+    if (state === "undispatched") reservation?.settle(undefined, false, "none");
+    if (state === "unknown") reservation?.settle(undefined, true, "unknown");
+    expect(() => {
+      tracker.confirmToolRound();
+    }).toThrow();
+    expect(budget.remaining()).toBe(state === "undispatched" ? 2 : 1);
+  },
+);
+
+it("never replenishes token or deadline grants when complete tool rounds release synthesis slots", () => {
+  const budget = createGroundedSynthesisCallBudget();
+  let now = 1;
+  const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+    inputTokensMax: 220,
+    outputTokensMax: 80,
+    deadlineAtMs: 100,
+    nowMs: () => now,
+  });
+  for (let round = 0; round < 2; round++) {
+    tracker
+      .admission({ promptTokens: 100, maxOutputTokens: 80 })
+      ?.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+    tracker.confirmToolRound();
+  }
+  expect(budget.remaining()).toBe(2);
+  expect(budget.pendingUsage()).toEqual({ promptTokens: 200, completionTokens: 10 });
+  expect(tracker.admission({ promptTokens: 21, maxOutputTokens: 80 })).toBeUndefined();
+  expect(tracker.admission({ promptTokens: 20, maxOutputTokens: 80 })?.maxOutputTokens).toBe(70);
+  now = 100;
+  expect(() => tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toThrow();
+});
