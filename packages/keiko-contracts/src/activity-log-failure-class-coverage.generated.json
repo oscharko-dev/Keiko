@@ -9360,6 +9360,12 @@
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
             {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
               "name": "eventKind",
               "type": "string",
               "dataClass": "closed-enum",
@@ -9370,6 +9376,12 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
             },
             {
               "name": "liveRunId",
@@ -9384,10 +9396,16 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
           "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
+            "frames": true,
+            "causeChain": true
           },
           "proofIds": ["coding-runtime.event.dropped.emitted-line"],
           "replayReferences": [],
@@ -19443,10 +19461,22 @@
           "analyzerProjection": "capability",
           "safeContextFields": [
             {
+              "name": "manifestRevision",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "previousManifestRevision",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "reason",
@@ -19455,7 +19485,7 @@
               "required": false
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

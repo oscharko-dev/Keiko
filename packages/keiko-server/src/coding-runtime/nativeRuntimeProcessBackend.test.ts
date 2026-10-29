@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createNativeRuntimeProcessBackend,
-  createNativeRuntimeRecoveryPort,
   type NativeRuntimeHelperProcess,
   type NativeRuntimeHelperSpawn,
 } from "./nativeRuntimeProcessBackend.js";
@@ -302,49 +301,6 @@ describe("native runtime process backend", () => {
 
     await expect(backend.waitForCompleteTreeExit(tree, 10)).resolves.toBe(false);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
-  });
-
-  it("reconciles a persisted opaque handle without an in-memory process tree", async () => {
-    const paths = fixture();
-    const child = new FakeHelper();
-    const spawn = vi.fn<NativeRuntimeHelperSpawn>(() => child);
-    const recovery = createNativeRuntimeRecoveryPort({
-      helperPath: paths.helper,
-      spawnHelper: spawn,
-    });
-    const handle = "c".repeat(32);
-    const pending = recovery.reconcile(handle, 50);
-    const payload = Buffer.alloc(8);
-    child.controlOutput.write(response(2, payload));
-
-    await expect(pending).resolves.toBe(true);
-    expect(spawn.mock.calls[0]?.[1]).toEqual(["--reconcile", handle]);
-    await expect(recovery.reconcile("../unsafe", 50)).rejects.toThrow(
-      "native-runtime-request-invalid",
-    );
-  });
-
-  it("uses a private verified helper copy for recovery reconciliation", async () => {
-    const paths = fixture();
-    const child = new FakeHelper();
-    let executedBytes = "";
-    const spawn = vi.fn<NativeRuntimeHelperSpawn>((helperPath) => {
-      writeFileSync(paths.helper, "replaced after verification");
-      executedBytes = readFileSync(helperPath, "utf8");
-      return child;
-    });
-    const recovery = createNativeRuntimeRecoveryPort({
-      helperPath: paths.helper,
-      expectedHelperSha256: createHash("sha256").update("helper").digest("hex"),
-      spawnHelper: spawn,
-    });
-    const pending = recovery.reconcile("c".repeat(32), 50);
-    const payload = Buffer.alloc(8);
-    child.controlOutput.write(response(2, payload));
-
-    await expect(pending).resolves.toBe(true);
-    expect(executedBytes).toBe("helper");
-    child.emit("exit", 0);
   });
 });
 

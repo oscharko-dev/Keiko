@@ -8874,6 +8874,7 @@ describe("coding runtime lifecycle races", () => {
 
   function raceFixture(
     wrap?: (store: CodingRuntimeSnapshotStore) => CodingRuntimeSnapshotStore,
+    activityLog?: ServerLogSink,
   ): ReturnType<typeof fixture> & {
     readonly diagnosticRecords: readonly ServerDiagnosticRecord[];
   } {
@@ -8887,7 +8888,7 @@ describe("coding runtime lifecycle races", () => {
       undefined,
       [],
       captured.diagnostics,
-      undefined,
+      activityLog,
       undefined,
       undefined,
       undefined,
@@ -8978,6 +8979,64 @@ describe("coding runtime lifecycle races", () => {
     expect(typeof outcome.ok).toBe("boolean");
     expect(f.orchestrator.status().state).toBe("cancelled");
     expect(lifecycleCodes(f)).toContain("stage=lifecycle:reason=stale-transition");
+  });
+
+  // #4105: the runtime manager's event callback has no caller, so a handling failure used to vanish
+  // behind the serial queue's swallowing tail and `keiko support analyze` saw nothing.
+  it("logs a runtime event whose ingest was rejected by a stale snapshot write", async () => {
+    const captured = captureActivityLog();
+    let rejectOnce = true;
+    const f = raceFixture(
+      (store) => ({
+        ...store,
+        transition: (runId, change): CodingRuntimeSnapshot => {
+          if (change.state === "failed" && rejectOnce) {
+            rejectOnce = false;
+            throw new Error("runtime revision must increase");
+          }
+          return store.transition(runId, change);
+        },
+      }),
+      captured.activityLog,
+    );
+    await runningRace(f);
+
+    f.orchestrator.receiveRuntimeEvent({
+      schemaVersion: "1",
+      eventId: "failure",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "failure-redacted",
+      failureCode: "runtime-failed",
+      failureSummary: "runtime-failed",
+      retryable: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        captured.records.some(
+          (candidate) =>
+            candidate.op === "coding-runtime.event.dropped" &&
+            candidate.extra?.reason === "ingest-rejected",
+        ),
+      ).toBe(true);
+    });
+    const rejected = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.event.dropped",
+    );
+    if (rejected === undefined) throw new Error("expected an event.dropped line");
+    const line = formatActivityLogProofLine(rejected);
+    expect(expectActivityLogProof("coding-runtime.event.dropped.emitted-line", line)).toMatchObject(
+      {
+        eventKind: "failure-redacted",
+        eventRunId: "run-1",
+        reason: "ingest-rejected",
+        liveRunId: "run-1",
+        frames: expect.arrayContaining([expect.any(String)]) as string[],
+      },
+    );
+    expect(JSON.parse(line)).toMatchObject({ level: "warn", errorKind: "internal" });
+    expect(line).not.toContain("runtime revision must increase");
   });
 
   it("logs a rejected settlement with its error class and moves the run to recovery-required", async () => {

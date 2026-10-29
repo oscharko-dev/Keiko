@@ -156,11 +156,13 @@ import {
   editorAgentSnapshotLocation,
   editorAgentRootContainmentReason,
   isEditorAgentRootBoundaryDenial,
+  refreshReplacedProjectRoot,
   resolveEditorAgentActionRoot,
   resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
   resolveEditorAgentRuntimeRoot,
   type EditorAgentRootBoundaryReason,
+  type EditorAgentRootResolution,
   serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
 
@@ -1243,6 +1245,24 @@ function refusedBridgeRoot(
   return rootBoundaryError(reason);
 }
 
+// A folder replaced at the same path is adopted on its next registration (#4117, owner decision
+// 2026-10-29) and the root resolved again; a binding minted against the former identity then fails
+// that second resolution, so only a fresh registration holds the new one.
+function resolveBridgeSessionRoot(
+  snapshot: EditorAgentSessionSnapshot,
+  store: EditorAgentRouteDeps["store"],
+  correlationId: string | undefined,
+): EditorAgentRootResolution {
+  const resolved = resolveEditorAgentSessionRoot(snapshot, store);
+  if (resolved.ok || resolved.reason !== "root-binding-invalid" || store === undefined) {
+    return resolved;
+  }
+  const refresh = refreshReplacedProjectRoot(snapshot, store, correlationId);
+  if (refresh === undefined) return resolved;
+  recordBridgeRegistration("identity-refreshed", correlationId, undefined, refresh);
+  return resolveEditorAgentSessionRoot(snapshot, store);
+}
+
 // The snapshot bound to its server-resolved root, or the logged refusal of a root that does not
 // own it (#4117).
 function admitBridgeSnapshot(
@@ -1250,7 +1270,7 @@ function admitBridgeSnapshot(
   deps: EditorAgentRouteDeps | undefined,
   correlationId: string | undefined,
 ): { readonly snapshot: EditorAgentSessionSnapshot } | { readonly refused: RouteResult } {
-  const root = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
+  const root = resolveBridgeSessionRoot(request.snapshot, deps?.store, correlationId);
   if (!root.ok) return { refused: refusedBridgeRoot(root.reason, correlationId) };
   const pathReason = editorAgentRootContainmentReason(
     root.root,

@@ -6257,7 +6257,11 @@ describe("applyChangeset size bounds (owner decision 2026-10-28)", () => {
 });
 
 describe("Coding Workbench bridge registration evidence (#4117)", () => {
-  function bridgeRequest(root: string, correlationId: string): RouteContext {
+  function bridgeRequest(
+    root: string,
+    correlationId: string,
+    rootBinding?: Record<string, unknown>,
+  ): RouteContext {
     return {
       ...context(
         {
@@ -6268,6 +6272,7 @@ describe("Coding Workbench bridge registration evidence (#4117)", () => {
             sessionId: "coding-workbench-edit-run-4117",
             windowId: "coding-workbench",
             workspaceRoot: root,
+            ...(rootBinding === undefined ? {} : { rootBinding }),
             activePaneId: null,
             panes: [],
             dirtyFiles: [],
@@ -6285,31 +6290,90 @@ describe("Coding Workbench bridge registration evidence (#4117)", () => {
     };
   }
 
-  it("names why a project folder replaced at the same path refuses the bridge", async () => {
+  function bridgeStoreFixture(): {
+    readonly root: string;
+    readonly store: ReturnType<typeof createInMemoryUiStore>;
+    readonly deps: UiHandlerDeps;
+    readonly sink: ReturnType<typeof createBufferedServerLogSink>;
+    readonly cleanup: () => void;
+  } {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bridge-4117-")));
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
     const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    return {
+      root,
+      store,
+      deps,
+      sink,
+      cleanup: (): void => {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+        resetServerLogger();
+      },
+    };
+  }
+
+  function registrationLines(sink: ReturnType<typeof createBufferedServerLogSink>): string[] {
+    return sink.events
+      .filter((event) => event.op === "editor.agent.bridge-registration")
+      .map(formatActivityLogProofLine);
+  }
+
+  function replaceFolder(root: string): void {
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root);
+  }
+
+  function manifestRevision(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    root: string,
+  ): number | undefined {
+    return store.findWorkspaceManifestRecordByProject(root)?.revision;
+  }
+
+  function currentRootBinding(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    root: string,
+  ): Record<string, unknown> {
+    const record = store.findWorkspaceManifestRecordByProject(root);
+    if (record === undefined) throw new Error("expected a workspace manifest");
+    const manifest = JSON.parse(record.recordJson) as {
+      workspaceId: string;
+      manifestRef: string;
+      revision: number;
+      manifestDigest: string;
+      roots: { rootRef: string; identityDigest: string }[];
+    };
+    const descriptor = manifest.roots[0];
+    return {
+      workspaceId: manifest.workspaceId,
+      manifestRef: manifest.manifestRef,
+      manifestRevision: manifest.revision,
+      manifestDigest: manifest.manifestDigest,
+      rootRef: descriptor?.rootRef,
+      rootIdentityDigest: descriptor?.identityDigest,
+    };
+  }
+
+  it("adopts a project folder replaced at the same path on its next registration", async () => {
+    const fixture = bridgeStoreFixture();
+    const { root, store, deps, sink } = fixture;
     try {
       const admitted = await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000001"), deps);
       expect(admitted.status).toBe(200);
+      const before = manifestRevision(store, root);
       // The lab recreates its repository at the same path: a new folder object.
-      rmSync(root, { recursive: true, force: true });
-      mkdirSync(root);
+      replaceFolder(root);
 
-      const refused = await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000002"), deps);
+      const adopted = await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000002"), deps);
 
-      expect(refused).toMatchObject({
-        status: 403,
-        body: { error: { code: "EDITOR_AGENT_ROOT_BINDING_INVALID" } },
-      });
-      const records = sink.events.filter(
-        (event) => event.op === "editor.agent.bridge-registration",
-      );
-      const lines = records.map(formatActivityLogProofLine);
-      expect(lines).toHaveLength(2);
+      expect(adopted.status).toBe(200);
+      expect(manifestRevision(store, root)).toBe((before ?? 0) + 1);
+      const lines = registrationLines(sink);
+      expect(lines).toHaveLength(3);
       expectActivityLogProof("editor.agent.bridge-registration.lifecycle", lines[1] ?? "");
       expect(JSON.parse(lines[0] ?? "")).toMatchObject({
         level: "info",
@@ -6317,17 +6381,101 @@ describe("Coding Workbench bridge registration evidence (#4117)", () => {
         correlationId: "bridge-000001",
       });
       expect(JSON.parse(lines[1] ?? "")).toMatchObject({
-        level: "warn",
-        errorKind: "authority-denied",
-        outcome: "refused",
-        reason: "root-binding-invalid",
+        level: "info",
+        outcome: "identity-refreshed",
+        previousManifestRevision: before,
+        manifestRevision: (before ?? 0) + 1,
+        correlationId: "bridge-000002",
+      });
+      expect(JSON.parse(lines[2] ?? "")).toMatchObject({
+        outcome: "rotated",
         correlationId: "bridge-000002",
       });
       expect(lines.join("")).not.toContain(root);
     } finally {
-      store.close();
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps a binding minted against the replaced folder invalid after the refresh", async () => {
+    const fixture = bridgeStoreFixture();
+    const { root, store, deps, sink } = fixture;
+    try {
+      const stale = currentRootBinding(store, root);
+      replaceFolder(root);
+
+      const refused = await handleEditorAgentSnapshot(
+        bridgeRequest(root, "bridge-000005", stale),
+        deps,
+      );
+
+      expect(refused).toMatchObject({
+        status: 403,
+        body: { error: { code: "EDITOR_AGENT_ROOT_BINDING_INVALID" } },
+      });
+      expect(JSON.parse(registrationLines(sink).at(-1) ?? "")).toMatchObject({
+        outcome: "refused",
+        reason: "root-binding-invalid",
+      });
+      const fresh = await handleEditorAgentSnapshot(
+        bridgeRequest(root, "bridge-000006", currentRootBinding(store, root)),
+        deps,
+      );
+      expect(fresh.status).toBe(200);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("does not create a manifest revision for an unchanged folder", async () => {
+    const fixture = bridgeStoreFixture();
+    const { root, store, deps, sink } = fixture;
+    try {
+      const before = manifestRevision(store, root);
+      await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000007"), deps);
+      const again = await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000008"), deps);
+
+      expect(again.status).toBe(200);
+      expect(manifestRevision(store, root)).toBe(before);
+      expect(registrationLines(sink).join("")).not.toContain("identity-refreshed");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("refuses without refreshing when the replaced folder is gone or became an alias", async () => {
+    const fixture = bridgeStoreFixture();
+    const { root, store, deps, sink } = fixture;
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bridge-4117-else-")));
+    try {
+      const before = manifestRevision(store, root);
       rmSync(root, { recursive: true, force: true });
-      resetServerLogger();
+
+      const missing = await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000009"), deps);
+
+      symlinkSync(elsewhere, root);
+      const aliased = await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000010"), deps);
+
+      for (const refused of [missing, aliased]) {
+        expect(refused).toMatchObject({
+          status: 403,
+          body: { error: { code: "EDITOR_AGENT_ROOT_BINDING_INVALID" } },
+        });
+      }
+      expect(manifestRevision(store, root)).toBe(before);
+      const lines = registrationLines(sink);
+      expect(lines.join("")).not.toContain("identity-refreshed");
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        level: "warn",
+        errorKind: "authority-denied",
+        outcome: "refused",
+        reason: "root-binding-invalid",
+        correlationId: "bridge-000009",
+      });
+      expect(lines.join("")).not.toContain(root);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+      fixture.cleanup();
     }
   });
 
