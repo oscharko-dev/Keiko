@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -330,6 +330,52 @@ function assertMutationRejected(rawSource) {
   );
 }
 
+async function qualifyMcpStdioOwner(helper, runtime, root) {
+  const provider = join(root, "MCP provider & quoted name.exe");
+  await copyFile(runtime, provider);
+  const child = spawn(helper, ["--stdio-owner", provider], {
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  const reader = streamReader(child.stdout);
+  const exited = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
+  const pids = [];
+  try {
+    const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
+    const report = await readBytes(reader, 12).finally(() => clearTimeout(deadline));
+    assert.equal(report.subarray(0, 4).toString(), "KRQ1");
+    pids.push(report.readUInt32LE(4), report.readUInt32LE(8));
+    child.kill();
+    await exited;
+    const until = Date.now() + 2000;
+    for (const pid of pids) {
+      let running = true;
+      while (running && Date.now() < until) {
+        try {
+          process.kill(pid, 0);
+        } catch (error) {
+          if (error.code !== "ESRCH") throw error;
+          running = false;
+        }
+        if (running) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(running, false, "MCP native job must remove the provider and grandchild");
+    }
+  } finally {
+    child.kill();
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") process.emitWarning("MCP native qualification cleanup failed");
+      }
+    }
+  }
+}
+
 await assertSourceContract();
 // Codex on #3202: validate the ENTIRE argv on Windows too — parallel to the macOS harness's
 // KNOWN_FLAGS check. A typo like `--helpr <path>` or a bare `--helper` (no value) previously
@@ -361,6 +407,7 @@ if (process.platform === "win32") {
     const runtime = join(root, "qualification-fixture.exe");
     if (suppliedHelper === undefined) await compile(source, helper);
     await compile(fixtureSource, runtime);
+    await qualifyMcpStdioOwner(helper, runtime, root);
     await qualifyWindows(helper, runtime, root);
     await assertControlEofFailsClosed(helper, runtime, root);
   } finally {

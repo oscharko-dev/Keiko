@@ -178,6 +178,28 @@ describe("MCP Settings", () => {
   });
 });
 
+it("offers sign-out for stored OAuth credentials while the server is disabled", async () => {
+  api.mockResolvedValueOnce({
+    ...saved,
+    servers: saved.servers.map((server) => ({
+      ...server,
+      enabled: false,
+      transport: {
+        kind: "remote",
+        url: "https://synthetic.example.test/mcp",
+        oauth: { issuer: "https://identity.example.test", clientId: "synthetic-client" },
+      },
+    })),
+    connections: [
+      { name: "notes", state: "disabled", toolCount: null, authentication: "authorized" },
+    ],
+  });
+  panel();
+  expect(await screen.findByRole("button", { name: "Sign out" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Check connection" })).toBeDisabled();
+});
+
 it("keeps a disabled server disabled when editing and does not start its transport", async () => {
   const disabled = {
     ...saved,

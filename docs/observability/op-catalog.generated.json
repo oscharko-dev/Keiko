@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fd7114ba3ecabe77035438bcdac0dc657434ebff93c93386075da09171af1526",
+    "catalogDigest": "9253f51443460c940bd96b4caa36643adb3fbc963735d8e5b08af901b9e8dde8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -30806,6 +30806,12 @@
             "dataClass": "count",
             "required": true
           },
+          "processOwner": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["posix-process-group", "windows-job"]
+          },
           "invocationId": {
             "type": "string",
             "dataClass": "opaque-id",
@@ -30820,7 +30826,7 @@
         "proofIds": ["mcp.managed.lifecycle.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-mcp/src/activity.ts:12",
-        "emitterSites": ["packages/keiko-mcp/src/activity.ts:68"]
+        "emitterSites": ["packages/keiko-mcp/src/activity.ts:77"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31635,9 +31641,9 @@
         "failureClasses": ["portable-native-helper-binding"],
         "proofIds": ["portable.runtime.native-helper-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:204",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:205",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:239"
+          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:240"
         ]
       },
       {
@@ -43997,6 +44003,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "client-editor-line-ending",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["client.editor.line-ending.adopted"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["client.editor.line-ending.adopted"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["client.editor.line-ending.adopted"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["client.editor.line-ending.adopted"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "client-binding",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -44008,13 +44035,14 @@
             "client.files-scope.decision"
           ],
           "end": ["client.binding.resolved"],
-          "failure": ["client.binding.target-missing"],
+          "failure": ["client.binding.project-open-exhausted", "client.binding.target-missing"],
           "loss": []
         },
         "requiredCausalOperations": [
           "client.binding.candidates-offered",
           "client.binding.choice-kept",
           "client.binding.choice-withdrawn",
+          "client.binding.project-open-exhausted",
           "client.binding.resolved",
           "client.binding.target-missing",
           "client.files-scope.decision"
@@ -44024,6 +44052,7 @@
           "client.binding.candidates-offered",
           "client.binding.choice-kept",
           "client.binding.choice-withdrawn",
+          "client.binding.project-open-exhausted",
           "client.binding.resolved",
           "client.binding.target-missing",
           "client.files-scope.decision"
@@ -47202,6 +47231,27 @@
           "digest",
           "loss-state"
         ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "editor-bridge-registration",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["editor.agent.bridge-registration"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["editor.agent.bridge-registration"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["editor.agent.bridge-registration"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["editor.agent.bridge-registration"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -53753,8 +53803,8 @@
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
       "supportedClassCount": 382,
-      "completeClassCount": 379,
-      "completeness": "incomplete",
+      "completeClassCount": 382,
+      "completeness": "complete",
       "classes": [
         {
           "failureClass": "activity-log-contract",
@@ -58342,8 +58392,8 @@
               "missingObligations": []
             }
           ],
-          "missingObligations": ["causal-edges", "executable-proof", "lifecycle-failure"],
-          "completeness": "incomplete"
+          "missingObligations": [],
+          "completeness": "complete"
         },
         {
           "failureClass": "client-citation-activation",
@@ -59257,6 +59307,7 @@
         },
         {
           "failureClass": "client-editor-line-ending",
+          "requirementContract": "client-editor-line-ending",
           "productSurfaces": ["keiko-server"],
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
@@ -59307,8 +59358,8 @@
               "missingObligations": []
             }
           ],
-          "missingObligations": ["client-editor-line-ending", "failure-class-contract"],
-          "completeness": "incomplete"
+          "missingObligations": [],
+          "completeness": "complete"
         },
         {
           "failureClass": "client-evidence-inspection",
@@ -73303,6 +73354,7 @@
         },
         {
           "failureClass": "editor-bridge-registration",
+          "requirementContract": "editor-bridge-registration",
           "productSurfaces": ["keiko-server"],
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
@@ -73353,8 +73405,8 @@
               "missingObligations": []
             }
           ],
-          "missingObligations": ["editor-bridge-registration", "failure-class-contract"],
-          "completeness": "incomplete"
+          "missingObligations": [],
+          "completeness": "complete"
         },
         {
           "failureClass": "editor-local-history-rekey",
@@ -89263,6 +89315,12 @@
                   "required": true
                 },
                 {
+                  "name": "processOwner",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "reason",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -101416,56 +101474,7 @@
         }
       ]
     },
-    "violations": [
-      {
-        "code": "failure-class-contract-unsatisfied",
-        "site": "typedRegistry.failureClassContracts.client-binding",
-        "correctiveAction": "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
-        "detail": "lifecycle-failure"
-      },
-      {
-        "code": "failure-class-contract-unsatisfied",
-        "site": "typedRegistry.failureClassContracts.client-binding",
-        "correctiveAction": "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
-        "detail": "causal-edges"
-      },
-      {
-        "code": "failure-class-contract-unsatisfied",
-        "site": "typedRegistry.failureClassContracts.client-binding",
-        "correctiveAction": "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
-        "detail": "executable-proof"
-      },
-      {
-        "code": "failure-class-contract-missing",
-        "site": "typedRegistry.failureClassContracts.client-editor-line-ending",
-        "correctiveAction": "Declare the failure class and all of its obligations before using it in an operation.",
-        "detail": "client-editor-line-ending"
-      },
-      {
-        "code": "failure-class-contract-missing",
-        "site": "typedRegistry.failureClassContracts.editor-bridge-registration",
-        "correctiveAction": "Declare the failure class and all of its obligations before using it in an operation.",
-        "detail": "editor-bridge-registration"
-      },
-      {
-        "code": "failure-class-incomplete",
-        "site": "typedRegistry.failureClassCoverage.client-binding",
-        "correctiveAction": "Add the missing registered completeness, loss, and executable proof obligations.",
-        "detail": "causal-edges,executable-proof,lifecycle-failure"
-      },
-      {
-        "code": "failure-class-incomplete",
-        "site": "typedRegistry.failureClassCoverage.client-editor-line-ending",
-        "correctiveAction": "Add the missing registered completeness, loss, and executable proof obligations.",
-        "detail": "client-editor-line-ending,failure-class-contract"
-      },
-      {
-        "code": "failure-class-incomplete",
-        "site": "typedRegistry.failureClassCoverage.editor-bridge-registration",
-        "correctiveAction": "Add the missing registered completeness, loss, and executable proof obligations.",
-        "detail": "editor-bridge-registration,failure-class-contract"
-      }
-    ]
+    "violations": []
   },
   "legacyDiscovery": {
     "dynamicCount": 92,
@@ -105316,7 +105325,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:194",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:195",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105632,7 +105641,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1636",
+      "site": "packages/keiko-server/src/deps.ts:1637",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106435,7 +106444,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2403",
+      "site": "packages/keiko-server/src/deps.ts:2404",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106477,6 +106486,13 @@
       "op": "mcp.connection",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:134",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "mcp.connection",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:22",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106626,7 +106642,7 @@
     {
       "op": "portable.runtime.native-helper-bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:207",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:208",
       "package": "keiko-server"
     },
     {
@@ -106932,7 +106948,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4667",
+      "site": "packages/keiko-server/src/deps.ts:4668",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107092,7 +107108,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3260",
+      "site": "packages/keiko-server/src/deps.ts:3261",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

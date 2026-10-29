@@ -669,7 +669,7 @@ export function parseCodingWorkbenchMcpAuthorizationRequest(
 export interface McpServerConnectionView {
   readonly authentication?: "none" | "required" | "authorized";
   readonly name: string;
-  readonly state: "disabled" | "idle" | "connecting" | "connected" | "failed";
+  readonly state: "disabled" | "idle" | "connecting" | "connected" | "failed" | "unsupported";
   /** Discovered tools of this live generation, absent when no connection is usable. */
   readonly toolCount: number | null;
 }

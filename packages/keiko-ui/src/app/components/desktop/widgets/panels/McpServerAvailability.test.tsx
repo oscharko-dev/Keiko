@@ -58,6 +58,17 @@ it("recovers from a failed snapshot using only a fresh central read", async () =
   expect(await screen.findByText("available · Connected · Tools: 1")).toBeInTheDocument();
   expect(api).toHaveBeenCalledTimes(2);
 });
+it("distinguishes unsupported local execution from conversation permission", async () => {
+  api.mockResolvedValue({
+    ...snapshot,
+    servers: [server("local-unavailable")],
+    connections: [{ name: "local-unavailable", state: "unsupported", toolCount: null }],
+  });
+  render(<McpServerAvailability />);
+  expect(
+    await screen.findByText(/local-unavailable · Local MCP is unavailable/iu),
+  ).toBeInTheDocument();
+});
 it("cancels a pending central read when its consumer closes", async () => {
   let resolve: (value: McpSettingsSnapshot) => void = () => undefined;
   api.mockReturnValue(

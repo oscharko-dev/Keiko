@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isAbsolute, posix, win32 } from "node:path";
+import { posix, win32 } from "node:path";
 import {
   Client,
   fromJsonSchema,
@@ -28,6 +28,11 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { ManagedMcpError } from "./definitions.js";
 import { recordManagedMcp } from "./activity.js";
 import { installExternalMetadataAdmission } from "./external-metadata.js";
+import {
+  ownedStdioLaunch,
+  isNativeMcpLocalAbsolutePath,
+  type McpNativeStdioOwner,
+} from "./owned-stdio.js";
 
 export type ExternalMcpTransportOptions =
   | {
@@ -47,6 +52,7 @@ export type ExternalMcpTransportOptions =
       readonly cwd: string;
       /** Explicit process environment, supplied only after the server admits the launch. */
       readonly environment: Readonly<Record<string, string>>;
+      readonly nativeOwner?: McpNativeStdioOwner;
     };
 export interface ExternalMcpClientOptions {
   readonly transport: ExternalMcpTransportOptions;
@@ -66,7 +72,7 @@ function captured<T>(value: T): T {
 }
 
 function admittedLocalPath(value: string): boolean {
-  return isAbsolute(value) && isMcpLocalAbsolutePath(value);
+  return isNativeMcpLocalAbsolutePath(value);
 }
 
 function transportFor(
@@ -76,7 +82,12 @@ function transportFor(
   if (options.kind === "remote") {
     if (!URL.canParse(options.url)) throw new ManagedMcpError("not-admitted");
     const url = new URL(options.url);
-    if (url.protocol !== "https:" || url.username !== "" || url.password !== "")
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.searchParams.has("access_token")
+    )
       throw new ManagedMcpError("not-admitted");
     const fetch: typeof globalThis.fetch = (request, init) =>
       options.fetch(request, init, contexts.getStore());
@@ -97,10 +108,13 @@ function transportFor(
   if (!admittedLocalPath(options.command[0]) || !admittedLocalPath(options.cwd))
     throw new ManagedMcpError("not-admitted");
   return new StdioClientTransport({
-    command: options.command[0],
-    args: options.command.slice(1),
+    ...ownedStdioLaunch(
+      options.command,
+      mcpStdioEnvironment(options),
+      options.cwd,
+      options.nativeOwner,
+    ),
     cwd: options.cwd,
-    env: mcpStdioEnvironment(options),
     stderr: "ignore",
     maxBufferSize: MAX_BYTES,
   });
@@ -247,12 +261,15 @@ class ExternalClient implements ExternalMcpConnection {
       throw new ManagedMcpError("protocol-error");
     this.#tools = captured(listed.tools) as readonly AdmittedTool[];
     this.#digest = sha256Hex(canonicalise(this.#tools));
+    const processOwner = process.platform === "win32" ? "windows-job" : "posix-process-group";
     recordManagedMcp(
       this.options.log,
       this.options.correlationId,
       "listed",
       this.#tools.length,
       this.#digest,
+      "none",
+      this.options.transport.kind === "local" ? { processOwner } : {},
     );
   }
   async call(
@@ -340,7 +357,7 @@ class ExternalClient implements ExternalMcpConnection {
       this.#tools.length,
       this.#digest,
       reason,
-      context.invocationId,
+      { invocationId: context.invocationId },
     );
   }
   async close(): Promise<void> {

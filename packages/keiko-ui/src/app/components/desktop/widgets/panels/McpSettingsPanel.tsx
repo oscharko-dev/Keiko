@@ -462,9 +462,9 @@ function ServerAuthorization({
   model,
   server,
 }: Pick<ServerViewProps, "model" | "server">): ReactNode {
-  if (!server.enabled || server.transport.kind !== "remote" || server.transport.oauth === undefined)
-    return null;
+  if (server.transport.kind !== "remote" || server.transport.oauth === undefined) return null;
   const connection = model.state.snapshot?.connections?.find((entry) => entry.name === server.name);
+  if (!server.enabled && connection?.authentication !== "authorized") return null;
   return (
     <McpServerAuthorization
       name={server.name}

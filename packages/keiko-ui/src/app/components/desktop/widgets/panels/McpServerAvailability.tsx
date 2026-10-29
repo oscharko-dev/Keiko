@@ -18,6 +18,7 @@ export function mcpConnectionStatus(
   t: I18nTranslate,
 ): string {
   if (state === "unavailable") return t("settings.mcp.statusUnavailable");
+  if (state === "unsupported") return t("settings.mcp.localUnsupported");
   if (state === "connected") return t("settings.mcp.connected", { count: count ?? 0 });
   if (state === "disabled") return t("settings.mcp.disabled");
   if (state === "connecting") return t("settings.mcp.connecting");

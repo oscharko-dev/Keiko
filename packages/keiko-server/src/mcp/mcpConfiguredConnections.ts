@@ -17,6 +17,8 @@ import {
   connectExternalMcp,
   createMcpRelayEndpoint,
   ManagedMcpError,
+  supportsOwnedMcpStdio,
+  type McpNativeStdioOwner,
   type ExternalMcpTransportOptions,
 } from "@oscharko-dev/keiko-mcp";
 import {
@@ -41,6 +43,7 @@ export interface ConfiguredMcpConnections {
   readonly close: () => Promise<void>;
 }
 interface Options {
+  readonly nativeOwner?: McpNativeStdioOwner | undefined;
   readonly authorization?: McpAuthorization;
   readonly settings: McpSettingsStore;
   readonly stateDir: string;
@@ -200,7 +203,13 @@ function localTransport(
   const identity = createHash("sha256").update(server.name).digest("hex");
   const cwd = join(options.stateDir, "mcp-runtime", identity);
   savePrivateJson(join(cwd, "owner.json"), { schemaVersion: 1 });
-  return { kind: "local", command: server.transport.command, cwd, environment };
+  return {
+    kind: "local",
+    command: server.transport.command,
+    cwd,
+    environment,
+    ...(options.nativeOwner === undefined ? {} : { nativeOwner: options.nativeOwner }),
+  };
 }
 
 function oauthCredentials(options: Options, server: McpServerDefinition): readonly string[] {
@@ -290,6 +299,18 @@ function endpointFor(
   return endpoint;
 }
 
+function unsupportedLocalServer(options: Options, server: McpServerDefinition): boolean {
+  return (
+    server.transport.kind === "local" &&
+    !supportsOwnedMcpStdio(process.platform, options.nativeOwner)
+  );
+}
+function currentEntry(
+  entry: ConnectionEntry | undefined,
+  generation: AbortSignal,
+): entry is ConnectionEntry {
+  return !generation.aborted && entry !== undefined && !entry.signal.aborted;
+}
 function connectionView(
   options: Options,
   connections: ReadonlyMap<string, ConnectionEntry>,
@@ -302,9 +323,11 @@ function connectionView(
     toolCount: null,
   } as const;
   if (!server.enabled) return idle;
+  if (unsupportedLocalServer(options, server))
+    return { name: server.name, state: "unsupported", toolCount: null };
   const generation = currentGeneration(options, server, correlationId);
   const entry = connections.get(server.name);
-  if (generation.aborted || entry === undefined || entry.signal.aborted) return idle;
+  if (!currentEntry(entry, generation)) return idle;
   if (entry.failed || entry.client?.signal.aborted === true)
     return { name: server.name, state: "failed", toolCount: null };
   return entry.client === undefined

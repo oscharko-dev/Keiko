@@ -147,13 +147,63 @@ function importEnvironmentFiles(update: McpSettingsUpdate): McpSettingsUpdate {
 
 function validUpdate(update: McpSettingsUpdate): McpSettingsUpdate {
   const input = parseMcpSettingsUpdate(update);
-  const validated =
+  const parsed =
     input === undefined ? undefined : parseMcpSettingsUpdate(importEnvironmentFiles(input));
+  const validated =
+    parsed === undefined ? undefined : parseMcpSettingsUpdate(sealBearerUrls(parsed));
   if (validated === undefined) throw new TypeError("MCP settings are invalid");
   const document = { schemaVersion: 1, servers: validated.servers };
   if (Buffer.byteLength(JSON.stringify(document), "utf8") + 64 > 64 * 1024)
     throw new TypeError("MCP settings exceed the registry size limit");
   return validated;
+}
+
+/** Legacy bearer URLs become the existing encrypted Authorization-header configuration. */
+function sealBearerUrls(update: McpSettingsUpdate): McpSettingsUpdate {
+  const secrets = { ...update.secrets };
+  const servers = update.servers.map((server): McpServerDefinition => {
+    if (server.transport.kind !== "remote") return server;
+    const url = new URL(server.transport.url);
+    const values = url.searchParams.getAll("access_token");
+    if (values.length === 0) return server;
+    const token = values[0];
+    if (
+      values.length !== 1 ||
+      token === undefined ||
+      token === "" ||
+      Object.keys(server.transport.headers ?? {}).some(
+        (name) => name.toLowerCase() === "authorization",
+      )
+    )
+      throw new TypeError("MCP URI credentials are ambiguous");
+    url.searchParams.delete("access_token");
+    if (server.transport.oauth !== undefined)
+      return { ...server, transport: { ...server.transport, url: url.href } };
+    const reference = `KEIKO_MCP_SECRET_${randomUUID().replaceAll("-", "").toUpperCase()}`;
+    secrets[reference] = { server: server.name, value: token };
+    return {
+      ...server,
+      transport: {
+        ...server.transport,
+        url: url.href,
+        headers: {
+          ...server.transport.headers,
+          Authorization: { secretEnv: reference, prefix: "Bearer " },
+        },
+      },
+    };
+  });
+  return { ...update, servers, secrets };
+}
+
+function secretEntries(
+  update: McpSettingsUpdate,
+): { reference: string; server: McpServerDefinition; value: string }[] {
+  return Object.entries(update.secrets).map(([reference, entry]) => {
+    const server = update.servers.find((candidate) => candidate.name === entry.server);
+    if (server === undefined) throw new TypeError("MCP secret binding is invalid");
+    return { reference, server, value: entry.value };
+  });
 }
 
 function reconcileSecrets(
@@ -192,6 +242,35 @@ class SettingsStore implements McpSettingsStore {
         .digest("hex"),
     };
   }
+  private migrateBearerUrls(
+    state: McpSettingsSnapshot,
+    correlationId: string,
+  ): McpSettingsSnapshot {
+    const update = sealBearerUrls({
+      expectedRevision: state.revision,
+      servers: state.servers,
+      secrets: {},
+    });
+    if (JSON.stringify(update.servers) === JSON.stringify(state.servers)) return state;
+    const validated = validUpdate(update);
+    const entries = secretEntries(validated);
+    this.#secrets.put(entries);
+    savePrivateJson(join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE), {
+      schemaVersion: 1,
+      generation: randomUUID(),
+      servers: validated.servers,
+    });
+    const migrated = readSettings(this.input, correlationId);
+    recordMcpSettingsUpdate(
+      this.input.activityLog,
+      correlationId,
+      "reconciled",
+      migrated,
+      entries.length,
+    );
+    return migrated;
+  }
+
   private scopeCredentialContext(
     state: McpSettingsSnapshot,
     correlationId: string,
@@ -273,7 +352,10 @@ class SettingsStore implements McpSettingsStore {
   readonly read = (correlationId: string): McpSettingsSnapshot => {
     let current: McpSettingsSnapshot;
     try {
-      current = this.scopeCredentialContext(readSettings(this.input, correlationId), correlationId);
+      current = this.scopeCredentialContext(
+        this.migrateBearerUrls(readSettings(this.input, correlationId), correlationId),
+        correlationId,
+      );
     } catch (error) {
       this.reconcileGenerations(snapshot([]));
       throw error;
@@ -333,11 +415,7 @@ class SettingsStore implements McpSettingsStore {
       recordMcpSettingsUpdate(this.input.activityLog, correlationId, "conflict", current, 0);
       return { ok: false, snapshot: current };
     }
-    const entries = Object.entries(validated.secrets).map(([reference, entry]) => {
-      const server = validated.servers.find((candidate) => candidate.name === entry.server);
-      if (server === undefined) throw new TypeError("MCP secret binding is invalid");
-      return { reference, server, value: entry.value };
-    });
+    const entries = secretEntries(validated);
     const activeReferences = new Set(current.servers.flatMap(mcpServerSecretReferences));
     for (const entry of entries) {
       if (

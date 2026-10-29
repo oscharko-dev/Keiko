@@ -29498,6 +29498,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      processOwner: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["posix-process-group", "windows-job"],
+      },
       invocationId: {
         type: "string",
         dataClass: "opaque-id",

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
   "supportedClassCount": 382,
-  "completeClassCount": 379,
-  "completeness": "incomplete",
+  "completeClassCount": 382,
+  "completeness": "complete",
   "classes": [
     {
       "failureClass": "activity-log-contract",
@@ -4551,8 +4551,8 @@
           "missingObligations": []
         }
       ],
-      "missingObligations": ["causal-edges", "executable-proof", "lifecycle-failure"],
-      "completeness": "incomplete"
+      "missingObligations": [],
+      "completeness": "complete"
     },
     {
       "failureClass": "client-citation-activation",
@@ -5460,6 +5460,7 @@
     },
     {
       "failureClass": "client-editor-line-ending",
+      "requirementContract": "client-editor-line-ending",
       "productSurfaces": ["keiko-server"],
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
@@ -5510,8 +5511,8 @@
           "missingObligations": []
         }
       ],
-      "missingObligations": ["client-editor-line-ending", "failure-class-contract"],
-      "completeness": "incomplete"
+      "missingObligations": [],
+      "completeness": "complete"
     },
     {
       "failureClass": "client-evidence-inspection",
@@ -19413,6 +19414,7 @@
     },
     {
       "failureClass": "editor-bridge-registration",
+      "requirementContract": "editor-bridge-registration",
       "productSurfaces": ["keiko-server"],
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
@@ -19463,8 +19465,8 @@
           "missingObligations": []
         }
       ],
-      "missingObligations": ["editor-bridge-registration", "failure-class-contract"],
-      "completeness": "incomplete"
+      "missingObligations": [],
+      "completeness": "complete"
     },
     {
       "failureClass": "editor-local-history-rekey",
@@ -35175,6 +35177,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "processOwner",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "reason",

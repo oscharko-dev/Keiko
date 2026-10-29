@@ -126,7 +126,7 @@
       }
     },
     "keiko-mcp": {
-      "files": 8,
+      "files": 11,
       "uncoveredFiles": 0,
       "uncoveredLines": 2,
       "totalLines": 157,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 969,
+      "files": 970,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,

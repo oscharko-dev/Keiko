@@ -1,4 +1,13 @@
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -7,6 +16,54 @@ import type {
   ManagedMcpLogPort,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { connectExternalMcp, mcpStdioEnvironment } from "./external-client.js";
+
+it.skipIf(process.platform === "win32")(
+  "closes the real SDK transport and its provider descendants",
+  async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-sdk-tree-")));
+    const record = join(root, "owned.json");
+    let connection: ExternalMcpConnection | undefined;
+    try {
+      connection = await connectExternalMcp({
+        signal: new AbortController().signal,
+        correlationId: "stdio-owned-tree",
+        log: {
+          write: (): void => {
+            /* synthetic test sink */
+          },
+        },
+        transport: {
+          kind: "local",
+          command: [
+            process.execPath,
+            fileURLToPath(new URL("./__tests__/browser-server.fixture.ts", import.meta.url)),
+            join(root, "effects.jsonl"),
+            record,
+          ],
+          cwd: root,
+          environment: {},
+        },
+      });
+      expect(connection.tools).toHaveLength(2);
+      const pids = JSON.parse(readFileSync(record, "utf8")) as number[];
+      await connection.close();
+      connection = undefined;
+      for (const pid of pids)
+        await expect
+          .poll(
+            () =>
+              spawnSync("/bin/ps", ["-p", String(pid), "-o", "pid="], {
+                encoding: "utf8",
+              }).stdout.trim(),
+            { timeout: 2000 },
+          )
+          .toBe("");
+    } finally {
+      await connection?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 it.skipIf(process.platform === "win32")(
   "starts an absolute MCP launcher with its sibling runtime without inheriting PATH",

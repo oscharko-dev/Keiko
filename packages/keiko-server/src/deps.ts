@@ -6,6 +6,7 @@ import {
 } from "./mcp/mcpChatCatalogRuntime.js";
 import { createMcpSettingsStore, type McpSettingsStore } from "./mcp/mcpSettingsStore.js";
 import { createMcpAuthorization, type McpAuthorization } from "./mcp/mcpAuthorization.js";
+import { discoverMcpNativeProcessOwner } from "./mcpNativeProcessOwner.js";
 import {
   createConfiguredMcpConnections,
   type ConfiguredMcpConnections,
@@ -4896,6 +4897,7 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
   });
   const mcpConnections = createConfiguredMcpConnections({
     authorization: mcpAuthorization,
+    nativeOwner: discoverMcpNativeProcessOwner(args.options.env),
     settings: mcpSettings,
     stateDir: dirname(args.resolvedUiDbPath),
     log: args.options.activityLog ?? processServerLogSink(),

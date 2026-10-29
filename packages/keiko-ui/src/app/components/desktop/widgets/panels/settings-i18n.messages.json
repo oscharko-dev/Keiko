@@ -1494,5 +1494,9 @@
   "settings.mcp.environmentValues": {
     "en": "Environment values (.env syntax)",
     "de": "Umgebungsvariablen (.env-Syntax)"
+  },
+  "settings.mcp.localUnsupported": {
+    "en": "Local MCP is unavailable on this installation. Use a remote MCP server.",
+    "de": "Lokales MCP ist auf dieser Installation nicht verfügbar. Verwende einen entfernten MCP-Server."
   }
 }

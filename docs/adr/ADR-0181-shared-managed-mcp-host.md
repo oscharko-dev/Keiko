@@ -215,6 +215,22 @@ validated system directory for DLL lookup and uses the private connection direct
 profiles and temporary files. Explicit Windows environment keys are case-folded; collisions
 fail closed. Registry paths accept fully qualified drive paths as well as POSIX absolute
 paths; UNC shares, device namespaces and drive-relative paths remain denied.
+The execution boundary additionally requires the native host path form; a Windows root-relative
+POSIX-looking path never inherits the current drive. Local stdio runs behind a byte-preserving
+lifetime owner: ordinary POSIX descendants share an owned process group; Windows uses the existing
+digest-admitted native supervisor with a non-breakaway, kill-on-close Job Object before launching
+the Node owner. Interpreter and loader variables are encoded for the provider, so they cannot
+execute inside the lifetime owner. The native owner is an MCP host-process lifetime scope, not a
+Coding sandbox or a grant of Coding authority. Windows installations without an admitted owner
+report local MCP as unsupported and continue to support remote transports. Daemonized provider
+services should use remote MCP; the POSIX process group is not a sandbox against deliberately
+escaping operator-trusted code.
+
+Legacy resource URLs containing access_token are normalized by Settings into the existing
+encrypted Authorization-header custody before they can be returned or persisted. Startup applies
+the same migration. OAuth-configured entries remove the obsolete URL bearer and use their bound
+authorization instead. Conflicting or repeated bearer sources fail closed; the protocol adapter
+refuses any remaining bearer query URL before network dispatch.
 
 The configured connection owner shares one client per current server definition. Registry
 commits synchronously abort the old generation when its server changes, is disabled or is

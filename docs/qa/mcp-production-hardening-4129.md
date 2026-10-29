@@ -150,8 +150,12 @@ missing-system-root test now uses host-independent invalid values.
 
 An additional confirmed lifecycle defect remains open: a real local MCP server's ordinary child
 process survived closing its SDK connection. Both isolated reproductions reported the survivor;
-the owned synthetic processes were then terminated. Complete descendant ownership and cleanup
-must be repaired before final production acceptance.
+the owned synthetic processes were then terminated. The POSIX lifetime owner now removes ordinary descendants on close, cancellation, input end,
+output failure and provider exit. The same independent real-SDK probe reports no survivor and
+158 ms close time. A checked-in SDK regression and process tests cover this repair. Windows
+uses the existing native helper in a dedicated non-breakaway Job Object mode; the native
+qualification harness exercises a provider and C grandchild with a quoted executable path.
+Native Windows execution remains pending; macOS source-contract validation is not Windows proof.
 
 The complete initial package run finished with 2,763 passing suites and four failures. One required
 the repository's exact approved toolchain rather than the broader supported contributor range;
@@ -159,3 +163,17 @@ the two verify-route cases and that toolchain case all passed under Node 24.18.0
 The fourth failure loaded an older cached contract export after source changed during the long
 run. The final complete run must use frozen sources and the approved pair. A fresh focused MCP
 coverage run passed 117 tests, 95.55% lines and 85.07% branches; this is not the full quality gate.
+
+The staged App Browser build now verifies sign-out while an OAuth server is disabled, a required
+new login after re-enabling, cancellation, and a fresh successful PKCE consent. Repeated Workbench
+management links select MCP again after visiting Models. These are working-tree qualification,
+not the final integrated-head release certificate.
+
+An additional reproduced credential defect persisted a resource URL access_token in cleartext
+and returned it to Settings. The shared Settings owner now normalizes this legacy bearer form
+into the existing encrypted Authorization header before persistence or public projection. Startup
+performs the same migration, preserving SSE/private-network options; OAuth entries discard the
+obsolete URL token and require their normal bound authorization. Ambiguous credentials are refused.
+The SDK adapter independently refuses raw access_token URLs. The original reproduction failed
+before the repair; registry, restart, legacy migration, ambiguity, OAuth and no-dispatch controls
+now pass. No new credential service or execution configuration was introduced.
