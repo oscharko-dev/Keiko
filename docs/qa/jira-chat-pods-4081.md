@@ -3409,3 +3409,12 @@ The complete UI coverage lane passes613 suites and11953 tests (one existing skip
 427 component comparisons,160 editor probes,seven accessibility modes and108 browser captures
 without runtime/unknown-route failures. These are scoped evidence runs; full final-head CI
 and the remaining42 acceptance criteria are still open.
+
+The complete post-repair Activity Log chain initially passed six gates and correctly rejected
+stale catalog performance evidence. The canonical producer now measures clean `40002310b`
+against `246efd463` in the isolated approved Linux environment. Both builds, all six unchanged
+performance ceilings, all25 producer tests and the current-producer gate pass. Three generated
+artifacts are copied byte-for-byte from that run; the budget changes only its calibration digest.
+The obsolete diagnostic package-coverage run was stopped after its failures were reproduced;
+it cannot qualify a source tree changed during the run. The final package run uses the approved
+Node24.18.0/npm11.16.0 pair and the committed repaired source.
