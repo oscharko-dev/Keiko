@@ -76,6 +76,23 @@ export function totalDiffRows(files: readonly GitEditorDiffFile[]): number {
   return rows;
 }
 
+export interface DiffTotals {
+  readonly fileCount: number;
+  readonly rows: number;
+  readonly bytes: number;
+}
+
+export function diffTotals(files: readonly GitEditorDiffFile[]): DiffTotals {
+  let rows = 0;
+  let bytes = 0;
+  for (const file of files) {
+    const metrics = diffFileMetrics(file);
+    rows += metrics.rows;
+    bytes += metrics.bytes;
+  }
+  return { fileCount: files.length, rows, bytes };
+}
+
 export function isWindowedDiff(files: readonly GitEditorDiffFile[]): boolean {
   return totalDiffRows(files) > DIFF_WINDOW_THRESHOLD_ROWS;
 }

@@ -356,6 +356,7 @@ function DiffContent({
         <output className="rv-truncated">{t("codingWorkbench.changes.diff.truncated")}</output>
       ) : null}
       <CodingWorkbenchDiffFiles
+        surface="run-changes"
         files={changes.diff.files}
         idPrefix="coding-workbench-change-file"
         labels={labels}

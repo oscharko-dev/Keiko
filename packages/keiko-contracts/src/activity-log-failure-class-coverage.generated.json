@@ -4787,6 +4787,24 @@
               "required": false
             },
             {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "totalByteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "totalLineCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "workspaceId",
               "type": "string",
               "dataClass": "opaque-id",

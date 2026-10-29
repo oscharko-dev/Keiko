@@ -2150,6 +2150,9 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // The server refused to register the run's editor bridge: the root boundary refused the run's
   // root, or another tab holds the run's lease. Closed reason only (#4117).
   "bridge-registration-refused",
+  // A diff above the window threshold switched to the windowed view: one file and one page of its
+  // lines at a time. Counts and the closed surface only, never a path or diff text (#4108).
+  "diff-windowed",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2188,8 +2191,20 @@ export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"
 export type ClientCodingWorkbenchBridgeRefusal =
   (typeof CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS)[number];
 
+/** The Coding Workbench surface that switched a diff to the windowed view. */
+export const CLIENT_CODING_WORKBENCH_DIFF_SURFACES = [
+  "changeset-review",
+  "run-changes",
+  "answer-diff",
+] as const;
+export type ClientCodingWorkbenchDiffSurface =
+  (typeof CLIENT_CODING_WORKBENCH_DIFF_SURFACES)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
+/** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
+export const CLIENT_CODING_WORKBENCH_DIFF_LINE_COUNT_MAX = 16_777_216;
+export const CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX = 1_073_741_824;
 
 export type ClientDiagnosticCodingWorkbenchInteraction =
   | {
@@ -2215,6 +2230,13 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | {
       readonly interaction: "bridge-registration-refused";
       readonly refusal: ClientCodingWorkbenchBridgeRefusal;
+    }
+  | {
+      readonly interaction: "diff-windowed";
+      readonly surface: ClientCodingWorkbenchDiffSurface;
+      readonly fileCount: number;
+      readonly totalLineCount: number;
+      readonly totalByteCount: number;
     };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
@@ -2231,6 +2253,9 @@ const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
+);
+const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2269,6 +2294,15 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "changeset-review-prepared": {
     fileCount: (value) =>
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX),
+  },
+  "diff-windowed": {
+    surface: (value) => isSetMember(value, CODING_WORKBENCH_DIFF_SURFACE_SET),
+    fileCount: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX),
+    totalLineCount: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_LINE_COUNT_MAX),
+    totalByteCount: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
   },
 };
 

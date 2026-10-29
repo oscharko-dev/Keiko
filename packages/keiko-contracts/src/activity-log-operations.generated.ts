@@ -4166,6 +4166,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "event-stream-reconnecting",
           "history-workspace-switched",
           "bridge-registration-refused",
+          "diff-windowed",
         ],
       },
       section: {
@@ -4219,6 +4220,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 256,
       },
       fileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["changeset-review", "run-changes", "answer-diff"],
+      },
+      totalLineCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      totalByteCount: {
         type: "integer",
         dataClass: "count",
         required: false,

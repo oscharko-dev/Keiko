@@ -1,18 +1,20 @@
 "use client";
 
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { ClientCodingWorkbenchDiffSurface } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { GitEditorDiffFile } from "@oscharko-dev/keiko-contracts";
 
+import { reportCodingWorkbenchDiffWindowed } from "@/lib/coding-workbench-interaction";
 import { useLocale } from "@/lib/i18n";
 import { DiffFileSection, type DiffViewLabels } from "../cards/shared/diffView";
 import {
   DIFF_WINDOW_PAGE_ROWS,
   diffFileMetrics,
+  diffTotals,
   formatDiffBytes,
   isWindowedDiff,
   sliceDiffPage,
   type DiffPage,
-  totalDiffRows,
 } from "../cards/shared/diffWindow";
 import {
   useCodingWorkbenchTranslate,
@@ -32,16 +34,21 @@ function ignoreSectionRef(): void {
 }
 
 export function CodingWorkbenchDiffFiles({
+  surface,
   files,
   idPrefix,
   labels,
 }: {
+  /** Which Workbench surface shows the diff, for the one-time windowing report. */
+  readonly surface: ClientCodingWorkbenchDiffSurface;
   readonly files: readonly GitEditorDiffFile[];
   readonly idPrefix: string;
   readonly labels: DiffViewLabels;
 }): ReactNode {
   const windowed = useMemo(() => isWindowedDiff(files), [files]);
-  if (windowed) return <WindowedDiff files={files} idPrefix={idPrefix} labels={labels} />;
+  if (windowed) {
+    return <WindowedDiff surface={surface} files={files} idPrefix={idPrefix} labels={labels} />;
+  }
   return (
     <>
       {files.map((file, index) => (
@@ -71,7 +78,16 @@ interface DiffWindowState {
   readonly selectPage: (page: number) => void;
 }
 
-function useDiffWindowState(files: readonly GitEditorDiffFile[]): DiffWindowState {
+function useNumberFormat(): (value: number) => string {
+  const locale = useLocale();
+  return useMemo(() => new Intl.NumberFormat(locale).format, [locale]);
+}
+
+function useDiffWindowState(
+  surface: ClientCodingWorkbenchDiffSurface,
+  files: readonly GitEditorDiffFile[],
+): DiffWindowState {
+  useReportWindowed(surface, files);
   const [position, setPosition] = useState<WindowPosition>({ file: 0, page: 0 });
   const fileIndex = Math.min(position.file, files.length - 1);
   const file = files[fileIndex];
@@ -87,19 +103,40 @@ function useDiffWindowState(files: readonly GitEditorDiffFile[]): DiffWindowStat
   return { fileIndex, file, view, selectFile, selectPage };
 }
 
+// One body-free report when a diff switches to the windowed view, not one per page turn: the
+// counts of the diff identify it, so an equal re-render of the same diff reports nothing again.
+function useReportWindowed(
+  surface: ClientCodingWorkbenchDiffSurface,
+  files: readonly GitEditorDiffFile[],
+): void {
+  const reported = useRef<string | null>(null);
+  useEffect(() => {
+    const totals = diffTotals(files);
+    const signature = `${surface}:${String(totals.fileCount)}:${String(totals.rows)}:${String(totals.bytes)}`;
+    if (reported.current === signature) return;
+    reported.current = signature;
+    reportCodingWorkbenchDiffWindowed(surface, {
+      fileCount: totals.fileCount,
+      totalLineCount: totals.rows,
+      totalByteCount: totals.bytes,
+    });
+  }, [surface, files]);
+}
+
 function WindowedDiff({
+  surface,
   files,
   idPrefix,
   labels,
 }: {
+  readonly surface: ClientCodingWorkbenchDiffSurface;
   readonly files: readonly GitEditorDiffFile[];
   readonly idPrefix: string;
   readonly labels: DiffViewLabels;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const locale = useLocale();
-  const formatNumber = useMemo(() => new Intl.NumberFormat(locale).format, [locale]);
-  const { fileIndex, file, view, selectFile, selectPage } = useDiffWindowState(files);
+  const formatNumber = useNumberFormat();
+  const { fileIndex, file, view, selectFile, selectPage } = useDiffWindowState(surface, files);
   if (file === undefined || view === null) return null;
   const pages = (
     <WindowPages page={view.page} pageCount={view.pageCount} onSelect={selectPage} t={t} />
@@ -123,18 +160,42 @@ function WindowedDiff({
         t={t}
       />
       {pages}
-      <DiffFileSection
-        key={`${file.path}:${String(fileIndex)}`}
+      <WindowedFileSection
         file={file}
-        index={fileIndex}
+        fileIndex={fileIndex}
+        view={view}
         idPrefix={idPrefix}
-        sectionRef={ignoreSectionRef}
         labels={labels}
-        windowHunks={view.hunks}
-        showFileTruncated={view.page === view.pageCount - 1}
       />
       {pages}
     </>
+  );
+}
+
+function WindowedFileSection({
+  file,
+  fileIndex,
+  view,
+  idPrefix,
+  labels,
+}: {
+  readonly file: GitEditorDiffFile;
+  readonly fileIndex: number;
+  readonly view: DiffPage;
+  readonly idPrefix: string;
+  readonly labels: DiffViewLabels;
+}): ReactNode {
+  return (
+    <DiffFileSection
+      key={`${file.path}:${String(fileIndex)}`}
+      file={file}
+      index={fileIndex}
+      idPrefix={idPrefix}
+      sectionRef={ignoreSectionRef}
+      labels={labels}
+      windowHunks={view.hunks}
+      showFileTruncated={view.page === view.pageCount - 1}
+    />
   );
 }
 
@@ -177,13 +238,13 @@ function WindowNotice({
   readonly formatNumber: (value: number) => string;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const bytes = files.reduce((sum, file) => sum + diffFileMetrics(file).bytes, 0);
+  const totals = diffTotals(files);
   return (
     <p className={styles.changesNotice}>
       {t("codingWorkbench.diffWindow.notice", {
-        rows: formatNumber(totalDiffRows(files)),
-        files: files.length,
-        size: formatDiffBytes(bytes, formatNumber),
+        rows: formatNumber(totals.rows),
+        files: totals.fileCount,
+        size: formatDiffBytes(totals.bytes, formatNumber),
         page: formatNumber(DIFF_WINDOW_PAGE_ROWS),
       })}
     </p>

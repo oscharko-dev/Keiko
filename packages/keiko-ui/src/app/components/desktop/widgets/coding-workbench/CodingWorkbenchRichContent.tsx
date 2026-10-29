@@ -228,7 +228,12 @@ function DiffSections({
 }): ReactNode {
   return (
     <div className="rv-body">
-      <CodingWorkbenchDiffFiles files={files} idPrefix={idPrefix} labels={labels} />
+      <CodingWorkbenchDiffFiles
+        surface="answer-diff"
+        files={files}
+        idPrefix={idPrefix}
+        labels={labels}
+      />
     </div>
   );
 }

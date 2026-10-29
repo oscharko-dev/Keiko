@@ -1,8 +1,17 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  isClientDiagnosticIngestRequest,
+  CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  fanOutClientDiagnostic,
+  resetClientDiagnosticPostStateForTests,
+} from "@/lib/install-client-diagnostics";
 import type { CodingWorkbenchChangesetReview } from "@/lib/useCodingWorkbenchEditorBridge";
 
 import { parseUnifiedDiff, type DiffParseResult } from "../cards/shared/diffParser";
@@ -10,6 +19,7 @@ import {
   DIFF_WINDOW_PAGE_ROWS,
   DIFF_WINDOW_THRESHOLD_ROWS,
   diffFileMetrics,
+  totalDiffRows,
 } from "../cards/shared/diffWindow";
 import { diffLabels } from "./CodingWorkbenchChanges";
 import { CodingWorkbenchDiffFiles } from "./CodingWorkbenchWindowedDiff";
@@ -55,7 +65,12 @@ describe("CodingWorkbenchDiffFiles (#4108)", () => {
   it("renders a small diff in full with no windowing chrome", () => {
     const { files } = parse(syntheticPatch(2, 2, 20));
     const { container } = render(
-      <CodingWorkbenchDiffFiles files={files} idPrefix="t-small" labels={labels} />,
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={files}
+        idPrefix="t-small"
+        labels={labels}
+      />,
     );
     expect(container.querySelectorAll("section")).toHaveLength(2);
     expect(visibleRows(container)).toBe(2 * 2 * 20);
@@ -69,7 +84,12 @@ describe("CodingWorkbenchDiffFiles (#4108)", () => {
     const rows = files.reduce((sum, file) => sum + diffFileMetrics(file).rows, 0);
     expect(rows).toBeGreaterThan(DIFF_WINDOW_THRESHOLD_ROWS);
     const { container } = render(
-      <CodingWorkbenchDiffFiles files={files} idPrefix="t-large" labels={labels} />,
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={files}
+        idPrefix="t-large"
+        labels={labels}
+      />,
     );
 
     expect(container.querySelectorAll("section")).toHaveLength(1);
@@ -88,7 +108,12 @@ describe("CodingWorkbenchDiffFiles (#4108)", () => {
     const user = userEvent.setup();
     const { files } = parse(syntheticPatch(1, 3, 1_000));
     const { container } = render(
-      <CodingWorkbenchDiffFiles files={files} idPrefix="t-pages" labels={labels} />,
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={files}
+        idPrefix="t-pages"
+        labels={labels}
+      />,
     );
     let total = 0;
     for (let page = 1; page <= 3; page += 1) {
@@ -105,7 +130,14 @@ describe("CodingWorkbenchDiffFiles (#4108)", () => {
   it("keeps keyboard focus on the page control and ignores the exhausted direction", async () => {
     const user = userEvent.setup();
     const { files } = parse(syntheticPatch(1, 3, 1_000));
-    render(<CodingWorkbenchDiffFiles files={files} idPrefix="t-key" labels={labels} />);
+    render(
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={files}
+        idPrefix="t-key"
+        labels={labels}
+      />,
+    );
     const next = screen.getAllByRole("button", { name: "Next lines" })[0];
     const previous = screen.getAllByRole("button", { name: "Previous lines" })[0];
     if (next === undefined || previous === undefined) throw new Error("expected page controls");
@@ -128,7 +160,12 @@ describe("CodingWorkbenchDiffFiles (#4108)", () => {
     const user = userEvent.setup();
     const { files } = parse(syntheticPatch(3, 1, 2_100));
     const { container } = render(
-      <CodingWorkbenchDiffFiles files={files} idPrefix="t-files" labels={labels} />,
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={files}
+        idPrefix="t-files"
+        labels={labels}
+      />,
     );
     await user.click(screen.getAllByRole("button", { name: "Next lines" })[0] as HTMLElement);
     expect(screen.getByRole("status").textContent).toContain("lines 1,001 to 2,000");
@@ -150,7 +187,14 @@ describe("CodingWorkbenchDiffFiles (#4108)", () => {
     const file = parsed.files[0];
     if (file === undefined) throw new Error("expected a file");
     const truncated = { ...file, truncated: true };
-    render(<CodingWorkbenchDiffFiles files={[truncated]} idPrefix="t-trunc" labels={labels} />);
+    render(
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={[truncated]}
+        idPrefix="t-trunc"
+        labels={labels}
+      />,
+    );
     expect(screen.queryByText(/incomplete/u)).toBeNull();
     await user.click(screen.getAllByRole("button", { name: "Next lines" })[0] as HTMLElement);
     await user.click(screen.getAllByRole("button", { name: "Next lines" })[0] as HTMLElement);
@@ -160,7 +204,12 @@ describe("CodingWorkbenchDiffFiles (#4108)", () => {
   it("has no axe violations in windowed mode", async () => {
     const { files } = parse(syntheticPatch(3, 3, 700));
     const { container } = render(
-      <CodingWorkbenchDiffFiles files={files} idPrefix="t-axe" labels={labels} />,
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={files}
+        idPrefix="t-axe"
+        labels={labels}
+      />,
     );
     expect(await axe(container)).toHaveNoViolations();
     // axe walks the full 1,000-row page, which is slow under coverage instrumentation.
@@ -255,4 +304,168 @@ describe("changeset review at the 8 MiB limit (#4108)", () => {
     expect(onApprove).not.toHaveBeenCalled();
     expect(onDeny).not.toHaveBeenCalled();
   });
+});
+
+afterEach(() => {
+  cleanup();
+  resetClientDiagnosticWriter();
+  resetClientDiagnosticPostStateForTests();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+function windowedReports(writer: ReturnType<typeof vi.fn>): readonly unknown[][] {
+  return writer.mock.calls.filter((call) =>
+    JSON.stringify(call[1]).includes('"interaction":"diff-windowed"'),
+  );
+}
+
+describe("windowing evidence (#4108, AGENTS.md section 8)", () => {
+  it("reports one body-free diff-windowed interaction when a diff switches to the window", () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const { files } = parse(syntheticPatch(3, 3, 700));
+
+    render(
+      <CodingWorkbenchDiffFiles
+        surface="changeset-review"
+        files={files}
+        idPrefix="t-log"
+        labels={labels}
+      />,
+    );
+
+    const expected = {
+      interaction: "diff-windowed",
+      surface: "changeset-review",
+      fileCount: 3,
+      totalLineCount: totalDiffRows(files),
+      totalByteCount: files.reduce((sum, file) => sum + diffFileMetrics(file).bytes, 0),
+    };
+    expect(expected.totalLineCount).toBe(6_300);
+    expect(windowedReports(writer)).toEqual([
+      [
+        "[keiko] coding workbench interaction: diff-windowed",
+        { codingWorkbenchInteraction: expected, correlationId: undefined },
+      ],
+    ]);
+    // Counts and the closed surface only: no path and no diff text.
+    const serialized = JSON.stringify(writer.mock.calls);
+    expect(serialized).not.toContain("module-000");
+    expect(serialized).not.toContain("const added_");
+  });
+
+  it("does not report again on page turns, file switches or an equal re-render", async () => {
+    const user = userEvent.setup();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const { files } = parse(syntheticPatch(3, 1, 2_100));
+    const view = render(
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={files}
+        idPrefix="t-once"
+        labels={labels}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Next lines" })[0] as HTMLElement);
+    await user.click(
+      within(screen.getByRole("list", { name: "Files in this diff" })).getAllByRole(
+        "button",
+      )[1] as HTMLElement,
+    );
+    view.rerender(
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={[...files]}
+        idPrefix="t-once"
+        labels={labels}
+      />,
+    );
+
+    expect(windowedReports(writer)).toHaveLength(1);
+  });
+
+  it("reports again for a different diff on the same surface", () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const first = parse(syntheticPatch(3, 3, 700)).files;
+    const second = parse(syntheticPatch(2, 3, 900)).files;
+    const view = render(
+      <CodingWorkbenchDiffFiles
+        surface="answer-diff"
+        files={first}
+        idPrefix="t-next"
+        labels={labels}
+      />,
+    );
+    view.rerender(
+      <CodingWorkbenchDiffFiles
+        surface="answer-diff"
+        files={second}
+        idPrefix="t-next"
+        labels={labels}
+      />,
+    );
+    expect(windowedReports(writer)).toHaveLength(2);
+  });
+
+  it("reports nothing for a diff of 2,000 rows or fewer", () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const { files } = parse(syntheticPatch(2, 2, 500));
+    expect(totalDiffRows(files)).toBe(DIFF_WINDOW_THRESHOLD_ROWS);
+
+    render(
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={files}
+        idPrefix="t-none"
+        labels={labels}
+      />,
+    );
+
+    expect(writer).not.toHaveBeenCalled();
+  });
+
+  it.each(CLIENT_CODING_WORKBENCH_DIFF_SURFACES)(
+    "reaches the wire through the real transport as a valid report for %s",
+    (surface) => {
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+      setClientDiagnosticWriter(fanOutClientDiagnostic);
+      const { files } = parse(syntheticPatch(3, 3, 700));
+
+      render(
+        <CodingWorkbenchDiffFiles
+          surface={surface}
+          files={files}
+          idPrefix="t-wire"
+          labels={labels}
+        />,
+      );
+
+      const bodies = fetchMock.mock.calls.map(
+        (call) => JSON.parse((call[1] as RequestInit).body as string) as Record<string, unknown>,
+      );
+      const posted = bodies.filter(
+        (body) =>
+          (body.codingWorkbenchInteraction as { interaction?: string } | undefined)?.interaction ===
+          "diff-windowed",
+      );
+      expect(posted).toHaveLength(1);
+      const [report] = posted;
+      expect(report?.codingWorkbenchInteraction).toEqual({
+        interaction: "diff-windowed",
+        surface,
+        fileCount: 3,
+        totalLineCount: 6_300,
+        totalByteCount: files.reduce((sum, file) => sum + diffFileMetrics(file).bytes, 0),
+      });
+      expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+      expect(JSON.stringify(report)).not.toContain("module-000");
+    },
+  );
 });

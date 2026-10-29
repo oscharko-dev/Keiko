@@ -2490,6 +2490,7 @@ export function ChangesetReviewPanel({
           <p className={styles.helpText}>{t("codingWorkbench.changesetReview.empty")}</p>
         ) : (
           <CodingWorkbenchDiffFiles
+            surface="changeset-review"
             files={review.diff.files}
             idPrefix="coding-workbench-changeset-review-file"
             labels={labels}

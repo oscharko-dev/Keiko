@@ -1074,7 +1074,10 @@ and a changeset received for review (`fileCount`). It also records a history tas
 repository or workspace that was not activated (`history-repository-switched`,
 `history-workspace-switched`; #4118) and a refused editor bridge registration
 (`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
-refused request's correlation and the run as parent; #4117). These were warn/unknown
+refused request's correlation and the run as parent; #4117) and a diff that switched to the
+windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `run-changes` or
+`answer-diff`, and `fileCount`, `totalLineCount`, `totalByteCount`; once per diff, not per page turn;
+never a path or diff text; #4108). These were warn/unknown
 `client.diagnostic` notes before and buried the rare real browser failures. The server side of
 that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
 `refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
