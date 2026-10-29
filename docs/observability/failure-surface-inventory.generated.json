@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0a283b5f17ffb36bf3b56abb969818a969a459658c6bbb559bb6d13c35f3defa"
+    "catalogDigest": "432a64040ff50dd74e7fe15145b8aeef4f01021d0a6ce64f88f55fe628afad80"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 610,
-    "proofCount": 633,
-    "resolvedProofCount": 633,
-    "failureClassCount": 381,
+    "operationCount": 611,
+    "proofCount": 634,
+    "resolvedProofCount": 634,
+    "failureClassCount": 382,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -137,6 +137,7 @@
         "reference-id.issued",
         "request",
         "runs.apply.settled",
+        "runs.patch.refused",
         "server.diagnostic.failure",
         "skills.library.operation",
         "skills.workflow.attached",
@@ -1130,6 +1131,7 @@
     "speech-tts-request": ["model-gateway.dependency-failure"],
     "sse-resume-decision": ["bff.dependency-failure"],
     "workflow-run-apply": ["bff.dependency-failure"],
+    "workflow-run-patch-refusal": ["bff.rejection"],
     "sse-stream": ["bff.dependency-failure"],
     "startup-recovery-failed": ["lifecycle-crash.crash"],
     "store-encryption-checkpoint": ["memory-knowledge.dependency-failure"],
@@ -1600,7 +1602,8 @@
     ],
     "coding-runtime.history-projection.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
-      "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
+      "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts",
+      "packages/keiko-server/src/coding-runtime/opencodeV2HistoryIncremental.test.ts"
     ],
     "coding-runtime.history.export.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingHistoryRoutes.test.ts",
@@ -2604,6 +2607,7 @@
     ],
     "request.close-line": ["packages/keiko-server/src/server.activity-log-proof.test.ts"],
     "runs.apply.settled.line": ["packages/keiko-server/src/run-handlers.test.ts"],
+    "runs.patch.refused.line": ["packages/keiko-server/src/sink.test.ts"],
     "runtime.confinement.failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
     ],

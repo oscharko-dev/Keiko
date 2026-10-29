@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 381,
-  "completeClassCount": 381,
+  "supportedClassCount": 382,
+  "completeClassCount": 382,
   "completeness": "complete",
   "classes": [
     {
@@ -46846,6 +46846,74 @@
             "causeChain": false
           },
           "proofIds": ["runs.apply.settled.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "workflow-run-patch-refusal",
+      "requirementContract": "workflow-run-patch-refusal",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["runs.patch.refused"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "runs.patch.refused",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["runs.patch.refused"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "runs.patch.refused",
+          "owner": "keiko-server",
+          "category": "http",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "fileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "patchBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "workflow",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["runs.patch.refused.line"],
           "replayReferences": [],
           "missingObligations": []
         }
