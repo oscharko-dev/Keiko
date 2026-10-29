@@ -1080,6 +1080,16 @@ lease is retried with backoff. `gateway.setup.target.accepted` records,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
 
+`client.editor.line-ending.adopted` records, at info and on the routine budget, that the Editor's
+Monaco model adopted the line ending of text Keiko wrote into it (#4123): `lineEnding` (`lf`,
+`crlf`) and `source` (`buffer-sync` for a controlled sync such as a reload from disk, `host-edit`).
+Monaco gives a model created without a line break the platform default, so a Windows browser would
+otherwise normalize a reloaded LF file to CRLF and report the unchanged buffer as an unsaved human
+edit. The adoption shares the write's undo step. `client.binding.resolved` carries the optional
+`projectOpenAttemptCount` when a Chat's project open had to be repeated because a competing
+workspace update overtook it; the repeat is bounded. Closed values and counts only, never text or
+paths.
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal

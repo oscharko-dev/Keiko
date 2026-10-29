@@ -84,6 +84,8 @@ import {
   CLIENT_FILES_SCOPE_DECISIONS,
   CLIENT_UPDATE_NOTICE_KINDS,
   CLIENT_UPDATE_NOTICE_PRESENTATIONS,
+  CLIENT_EDITOR_LINE_ENDINGS,
+  CLIENT_EDITOR_LINE_ENDING_SOURCES,
   CLIENT_GROUNDING_MUTATION_SURFACES,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
@@ -789,6 +791,8 @@ const CLIENT_BINDING_FIELDS = {
   // How many list loads decided the outcome, when more than the line names; the line is then
   // `partial` with `loss: event-location-unknown`, never silently complete.
   decidingLoadCount: { type: "integer", dataClass: "count", required: false },
+  // How many times the window opened the chat's project before it held, when more than once (#4123).
+  projectOpenAttemptCount: { type: "integer", dataClass: "count", required: false },
   // The other list loads a legacy binding's verdict depended on, beyond the line's correlation id.
   relatedCorrelationIds: {
     type: "string-array",
@@ -1481,6 +1485,39 @@ const CLIENT_UPDATE_NOTICE_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["client-update-notice"],
   proofIds: ["client.update-notice.presented.line"],
+  releaseImpact: "patch",
+});
+
+// #4123: the Editor's model adopted the line ending of text the host wrote into it, so a reloaded
+// or host-edited buffer keeps the exact text instead of a normalized copy that reads as dirty.
+const CLIENT_EDITOR_LINE_ENDING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.editor.line-ending.adopted",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientEditorLineEnding",
+  fields: {
+    lineEnding: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_EDITOR_LINE_ENDINGS,
+    },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_EDITOR_LINE_ENDING_SOURCES,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-editor-line-ending"],
+  proofIds: ["client.editor.line-ending.adopted.line"],
   releaseImpact: "patch",
 });
 
@@ -2240,6 +2277,27 @@ function logClientSupportReportPrepared(
   return true;
 }
 
+function logClientEditorLineEnding(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const report = request.editorLineEnding;
+  if (report === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_EDITOR_LINE_ENDING_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        lineEnding: report.lineEnding,
+        source: report.source,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
 function logClientUpdateNotice(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -2405,6 +2463,7 @@ function logClosedClientReport(
     logClientSupportReportPrepared(request, correlationId) ||
     logClientFilesScopeDecision(request, correlationId) ||
     logClientUpdateNotice(request, correlationId) ||
+    logClientEditorLineEnding(request, correlationId) ||
     logRetrievalClientReport(request, correlationId) ||
     logCodingClientReport(request, correlationId)
   );
@@ -2682,6 +2741,9 @@ function clientBindingFields(request: ClientBindingIngestRequest): ClientBinding
     bindingDigest: clientBindingDigest(request.windowRef),
     ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
     ...(unnamed ? { decidingLoadCount: deciding } : {}),
+    ...(request.projectOpenAttemptCount === undefined
+      ? {}
+      : { projectOpenAttemptCount: request.projectOpenAttemptCount }),
     completeness: unnamed ? "partial" : "complete",
     loss: unnamed ? "event-location-unknown" : "none",
   };
@@ -3002,6 +3064,7 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
     report.supportReportPreparation !== undefined ||
     report.filesScopeDecision !== undefined ||
     report.updateNotice !== undefined ||
+    report.editorLineEnding !== undefined ||
     report.codingRunRestore !== undefined ||
     report.scopeNotice !== undefined ||
     report.citationActivation !== undefined

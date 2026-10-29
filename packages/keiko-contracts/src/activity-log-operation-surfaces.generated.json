@@ -59,6 +59,7 @@
   "client.diagnostic": "client-diagnostics",
   "client.diagnostic.rate-limited": "client-diagnostics",
   "client.diagnostic.rejected": "client-diagnostics",
+  "client.editor.line-ending.adopted": "client-diagnostics",
   "client.evidence.inspected": "client-diagnostics",
   "client.files-scope.decision": "client-diagnostics",
   "client.git-operation.attempted": "client-diagnostics",

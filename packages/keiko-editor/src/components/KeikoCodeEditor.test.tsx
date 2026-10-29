@@ -47,6 +47,7 @@ interface CapturedEditor {
   pushUndoStop: ReturnType<typeof vi.fn>;
   pushEditOperations: ReturnType<typeof vi.fn>;
   pushStackElement: ReturnType<typeof vi.fn>;
+  pushEOL: ReturnType<typeof vi.fn>;
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
 
@@ -123,7 +124,12 @@ function registerFakeNavigationProvider(
 // `onMount` (KEIKO-0033): the real `@monaco-editor/react` resolves through a dynamic `import()`
 // chain, not same-tick. `vi.hoisted` so the mock factory below (itself hoisted above these
 // `import`s) can close over the same mutable box the tests set.
-const hostMountControl = vi.hoisted(() => ({ extraMountMicrotasks: 0 }));
+// `modelEol` is the line ending Monaco gives a model it creates: the platform default when the
+// initial text has no line break (CRLF for a Windows user agent, #4123).
+const hostMountControl = vi.hoisted(() => ({
+  extraMountMicrotasks: 0,
+  modelEol: "\n" as "\n" | "\r\n",
+}));
 
 vi.mock("@monaco-editor/react", () => {
   interface FakeSelection {
@@ -255,7 +261,9 @@ vi.mock("@monaco-editor/react", () => {
     pushUndoStop: ReturnType<typeof vi.fn>;
     pushEditOperations: ReturnType<typeof vi.fn>;
     pushStackElement: ReturnType<typeof vi.fn>;
+    pushEOL: ReturnType<typeof vi.fn>;
     modelText: string;
+    modelEol: "\n" | "\r\n";
     modelLanguage: string;
     modelVersion: number;
     modelContentListener: (() => void) | null;
@@ -287,7 +295,9 @@ vi.mock("@monaco-editor/react", () => {
       pushUndoStop: vi.fn(() => true),
       pushEditOperations: vi.fn(),
       pushStackElement: vi.fn(),
+      pushEOL: vi.fn(),
       modelText: "",
+      modelEol: hostMountControl.modelEol,
       modelLanguage: "plaintext",
       modelVersion: 1,
       modelContentListener: null,
@@ -299,10 +309,7 @@ vi.mock("@monaco-editor/react", () => {
       (_source: string, edits: readonly { readonly text: string }[]): boolean => {
         const text = edits[0]?.text;
         if (text === undefined) return false;
-        s.modelText = text;
-        s.modelVersion += 1;
-        s.modelContentListener?.();
-        s.onChange?.(text);
+        writeModelText(s, text);
         return true;
       },
     );
@@ -316,13 +323,17 @@ vi.mock("@monaco-editor/react", () => {
       (_cursorState: null, edits: readonly { readonly text: string }[]): null => {
         const text = edits[0]?.text;
         if (text === undefined) return null;
-        s.modelText = text;
-        s.modelVersion += 1;
-        s.modelContentListener?.();
-        s.onChange?.(text);
+        writeModelText(s, text);
         return null;
       },
     );
+    // Monaco's `pushEOL`: 0 is LF, 1 is CRLF; the whole model is rewritten in the new sequence.
+    s.pushEOL.mockImplementation((eol: 0 | 1): void => {
+      const next = eol === 0 ? "\n" : "\r\n";
+      if (next === s.modelEol) return;
+      s.modelEol = next;
+      writeModelText(s, s.modelText);
+    });
     s.fakeEditor = {
       addAction: (descriptor): { dispose: () => void } => {
         s.actionRuns.set(descriptor.id, descriptor.run);
@@ -402,6 +413,8 @@ vi.mock("@monaco-editor/react", () => {
         },
         pushEditOperations: s.pushEditOperations,
         pushStackElement: s.pushStackElement,
+        getEOL: (): string => s.modelEol,
+        pushEOL: s.pushEOL,
       }),
       onDidChangeModel: (): { dispose: () => void } => ({ dispose: vi.fn() }),
       getContainerDomNode: (): HTMLElement => s.container.current ?? document.createElement("div"),
@@ -443,9 +456,18 @@ vi.mock("@monaco-editor/react", () => {
       pushUndoStop: s.pushUndoStop,
       pushEditOperations: s.pushEditOperations,
       pushStackElement: s.pushStackElement,
+      pushEOL: s.pushEOL,
       disposed: s.disposed,
     };
     return s;
+  }
+  // Monaco normalizes every inserted line break to the model's own line ending, and the
+  // @monaco-editor/react change callback reads the resulting model value.
+  function writeModelText(s: MockState, text: string): void {
+    s.modelText = text.replace(/\r\n|\r|\n/gu, s.modelEol);
+    s.modelVersion += 1;
+    s.modelContentListener?.();
+    s.onChange?.(s.modelText);
   }
   function scheduleMountOnce(state: MockState, onMount: MockProps["onMount"]): void {
     if (!state.mounted) {
@@ -525,6 +547,7 @@ beforeEach(() => {
   captured.options = null;
   captured.keepCurrentModel = null;
   hostMountControl.extraMountMicrotasks = 0;
+  hostMountControl.modelEol = "\n";
 });
 
 afterEach(() => {
@@ -787,6 +810,94 @@ describe("KeikoCodeEditor — controlled editing", () => {
     expect(captured.editor?.pushStackElement).toHaveBeenCalledTimes(2);
     expect(captured.editor?.setModelValue).not.toHaveBeenCalled();
     expect(onContentChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reloaded LF text exact and clean in a model Monaco created with CRLF (#4123)", async () => {
+    // An empty file gives Monaco no line break to detect, so a Windows user agent creates the
+    // model with CRLF. Reloading LF text from disk must not leave a normalized CRLF buffer behind
+    // that no longer matches the host's text and is reported as a human edit.
+    hostMountControl.modelEol = "\r\n";
+    const onContentChange = vi.fn();
+    const onLineEndingAdopted = vi.fn();
+    const { rerender } = render(
+      <KeikoCodeEditor
+        {...baseProps({ onContentChange, onLineEndingAdopted, buffer: buildBuffer({ text: "" }) })}
+      />,
+    );
+    await flushMount();
+    onContentChange.mockClear();
+
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          onContentChange,
+          onLineEndingAdopted,
+          buffer: buildBuffer({ text: "export const e = 'external edit';\n" }),
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe("export const e = 'external edit';\n");
+    });
+    expect(captured.editor?.pushEOL).toHaveBeenCalledWith(0);
+    // One undo step: the replacement and its line ending share one stack element pair.
+    expect(captured.editor?.pushStackElement).toHaveBeenCalledTimes(2);
+    expect(onContentChange).not.toHaveBeenCalled();
+    expect(onLineEndingAdopted).toHaveBeenCalledExactlyOnceWith("lf", "buffer-sync");
+  });
+
+  it("applies a host edit with LF text to a CRLF model as that exact text and origin (#4123)", async () => {
+    hostMountControl.modelEol = "\r\n";
+    const onContentChange = vi.fn();
+    const onLineEndingAdopted = vi.fn();
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          onContentChange,
+          onLineEndingAdopted,
+          buffer: buildBuffer({ text: "" }),
+          hostEditRequest: { id: "eol-1", text: "const renamed = 1;\n", origin: "applied-patch" },
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe("const renamed = 1;\n");
+    });
+    expect(captured.editor?.pushEOL).toHaveBeenCalledWith(0);
+    expect(onContentChange).toHaveBeenCalledTimes(1);
+    expect(onContentChange).toHaveBeenCalledWith(
+      { text: "const renamed = 1;\n", sizeBytes: 19 },
+      "applied-patch",
+    );
+    expect(onLineEndingAdopted).toHaveBeenCalledExactlyOnceWith("lf", "host-edit");
+  });
+
+  it("leaves the line ending alone for text without a line break (#4123)", async () => {
+    hostMountControl.modelEol = "\r\n";
+    const onContentChange = vi.fn();
+    const onLineEndingAdopted = vi.fn();
+    const { rerender } = render(
+      <KeikoCodeEditor
+        {...baseProps({ onContentChange, onLineEndingAdopted, buffer: buildBuffer({ text: "" }) })}
+      />,
+    );
+    await flushMount();
+    onContentChange.mockClear();
+
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({ onContentChange, onLineEndingAdopted, buffer: buildBuffer({ text: "x" }) })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe("x");
+    });
+    expect(captured.editor?.pushEOL).not.toHaveBeenCalled();
+    expect(onContentChange).not.toHaveBeenCalled();
+    expect(onLineEndingAdopted).not.toHaveBeenCalled();
   });
 
   it("uses a host-provided accessible editor label", () => {

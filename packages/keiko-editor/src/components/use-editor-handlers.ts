@@ -82,6 +82,7 @@ import {
   attachRetainedEditorModel,
   EditorModelOwnershipError,
   updateRetainedEditorModelProtection,
+  writeModelTextWithLineEnding,
   writeRetainedEditorModelValue,
   type EditorModelProtection,
   type RetainedEditorModelAttachment,
@@ -333,9 +334,10 @@ function modelAlreadyHoldsHostEdit(
 function applyHostEditRequest(
   request: NonNullable<KeikoCodeEditorProps["hostEditRequest"]>,
   refs: EditorRefs,
-  onContentChange: KeikoCodeEditorProps["onContentChange"],
+  handlers: Pick<KeikoCodeEditorProps, "onContentChange" | "onLineEndingAdopted">,
   programmaticChangeRef: ProgrammaticEditorChangeRef,
 ): void {
+  const { onContentChange, onLineEndingAdopted } = handlers;
   const editor = refs.editorRef.current;
   const range = editor === null ? null : wholeModelRange(editor);
   if (editor?.executeEdits === undefined || range === null) {
@@ -343,9 +345,18 @@ function applyHostEditRequest(
     return;
   }
   if (modelAlreadyHoldsHostEdit(editor, request.text)) return;
-  programmaticChangeRef.current = { text: request.text, origin: request.origin };
   editor.pushUndoStop?.();
-  const applied = editor.executeEdits("keiko.host-edit", [{ range, text: request.text }]);
+  const applied = writeModelTextWithLineEnding(
+    editor.getModel?.(),
+    request.text,
+    (value, final) => {
+      programmaticChangeRef.current = final
+        ? { text: value, origin: request.origin }
+        : { text: value, suppress: true };
+    },
+    () => editor.executeEdits?.("keiko.host-edit", [{ range, text: request.text }]) ?? false,
+    (lineEnding) => onLineEndingAdopted?.(lineEnding, "host-edit"),
+  );
   editor.pushUndoStop?.();
   if (!applied) {
     programmaticChangeRef.current = null;
@@ -377,7 +388,12 @@ function useHostEditRequest(
       if (refs.editorRef.current === null) return false;
       if (handledRequestIdRef.current === request.id) return true;
       handledRequestIdRef.current = request.id;
-      applyHostEditRequest(request, refs, props.onContentChange, programmaticChangeRef);
+      applyHostEditRequest(
+        request,
+        refs,
+        { onContentChange: props.onContentChange, onLineEndingAdopted: props.onLineEndingAdopted },
+        programmaticChangeRef,
+      );
       return true;
     };
     const pollUntilMounted = (): void => {
@@ -393,6 +409,7 @@ function useHostEditRequest(
     programmaticChangeRef,
     props.hostEditRequest,
     props.onContentChange,
+    props.onLineEndingAdopted,
     props.onRuntimeError,
     readOnly,
     refs,
@@ -438,13 +455,21 @@ function useControlledModelValueSync(
       // back now would put a new → old → new pair on the undo stack, so the second keyboard
       // undo would return to the host-edit text instead of moving further back (#3071 review).
       if (ownedText !== undefined && model.getValue() === ownedText) return true;
-      programmaticChangeRef.current = syncChange;
       // Same-document programmatic updates (an agent-applied edit, a format result, a restore)
       // must stay on the browser undo stack (#1394 pin); document switches never pass through
       // here — they rebuild the model via the file identity key.
-      writeRetainedEditorModelValue(model, expected);
+      let announced: ProgrammaticEditorChange | null = null;
+      writeRetainedEditorModelValue(
+        model,
+        expected,
+        (value) => {
+          announced = { ...syncChange, text: value };
+          programmaticChangeRef.current = announced;
+        },
+        (lineEnding) => props.onLineEndingAdopted?.(lineEnding, "buffer-sync"),
+      );
       queueMicrotask(() => {
-        if (programmaticChangeRef.current === syncChange) programmaticChangeRef.current = null;
+        if (programmaticChangeRef.current === announced) programmaticChangeRef.current = null;
       });
       return true;
     };
@@ -464,6 +489,7 @@ function useControlledModelValueSync(
     props.fileModel.lastChangeOrigin,
     props.hostEditRequest?.id,
     props.hostEditRequest?.text,
+    props.onLineEndingAdopted,
     refs,
   ]);
 }

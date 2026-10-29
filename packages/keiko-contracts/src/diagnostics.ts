@@ -586,6 +586,28 @@ function coherentUpdateNotice(notice: Record<string, unknown>): boolean {
   );
 }
 
+// #4123: the Editor's Monaco model adopted the line ending of text the host wrote into it (a
+// buffer sync such as a reload from disk, or a host edit). The adopted sequence and its source only.
+export const CLIENT_EDITOR_LINE_ENDINGS = ["lf", "crlf"] as const;
+export const CLIENT_EDITOR_LINE_ENDING_SOURCES = ["buffer-sync", "host-edit"] as const;
+export interface ClientEditorLineEnding {
+  readonly lineEnding: (typeof CLIENT_EDITOR_LINE_ENDINGS)[number];
+  readonly source: (typeof CLIENT_EDITOR_LINE_ENDING_SOURCES)[number];
+}
+const EDITOR_LINE_ENDINGS: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDINGS);
+const EDITOR_LINE_ENDING_SOURCES: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDING_SOURCES);
+
+function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolean {
+  const report = value.editorLineEnding;
+  if (report === undefined) return true;
+  if (!isRecord(report) || !isActivityLogCorrelationId(value.correlationId)) return false;
+  return (
+    Object.keys(report).length === 2 &&
+    EDITOR_LINE_ENDINGS.has(report.lineEnding) &&
+    EDITOR_LINE_ENDING_SOURCES.has(report.source)
+  );
+}
+
 function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
   const notice = value.updateNotice;
   if (notice === undefined) return true;
@@ -632,6 +654,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly updateNotice?: ClientUpdateNotice | undefined;
+  readonly editorLineEnding?: ClientEditorLineEnding | undefined;
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
   readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
@@ -836,6 +859,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "supportReportPreparation",
   "filesScopeDecision",
   "updateNotice",
+  "editorLineEnding",
   "codingRunRestore",
   "codingWorkbenchInteraction",
 ] as const;
@@ -919,7 +943,8 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
     hasValidVoiceCaptureContext(value) &&
     hasValidGitContext(value) &&
     hasValidHealthDiagnostic(value) &&
-    hasValidUpdateNoticeContext(value)
+    hasValidUpdateNoticeContext(value) &&
+    hasValidEditorLineEndingContext(value)
   );
 }
 
@@ -1389,6 +1414,8 @@ export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPE
 // loss on a partial line, never silently cut (#3557 review).
 export const CLIENT_BINDING_RELATED_CORRELATIONS_MAX = 63;
 export const CLIENT_BINDING_DECIDING_LOADS_MAX = 10_000;
+// The most project-open attempts one binding report may name.
+export const CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX = 16;
 // The window's own persisted id, which workspace persistence bounds to this safe shape (a
 // restored window with any other id is dropped). The server logs only its digest, and no
 // truncation ever happens, so two windows can never share one (#3557 review). `~` stays out: it
@@ -1414,6 +1441,9 @@ export interface ClientBindingIngestRequest {
   readonly relatedCorrelationIds?: readonly string[] | undefined;
   // How many list loads decided the outcome in total; any the report does not name is loss.
   readonly decidingLoadCount?: number | undefined;
+  // How many times the window opened the chat's project before it held, when more than once: an
+  // attempt another update overtook is repeated, a bounded number of times (#4123).
+  readonly projectOpenAttemptCount?: number | undefined;
   // `candidates-offered` only, and always there: how many chats the window offered, zero included.
   readonly candidateCount?: number | undefined;
   // `candidates-offered` only, and always there: how many of those offers read alike and show a
@@ -1434,6 +1464,7 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "correlationId",
   "relatedCorrelationIds",
   "decidingLoadCount",
+  "projectOpenAttemptCount",
   "candidateCount",
   "disambiguatedCount",
   "targetFingerprint",
@@ -1518,9 +1549,14 @@ function isDecidingLoadCount(value: unknown): boolean {
   return isBoundedPositiveInteger(value, CLIENT_BINDING_DECIDING_LOADS_MAX);
 }
 
+function isProjectOpenAttemptCount(value: unknown): boolean {
+  return isBoundedPositiveInteger(value, CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX);
+}
+
 function hasBindingCorrelations(value: Record<string, unknown>): boolean {
   if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.decidingLoadCount, isDecidingLoadCount)) return false;
+  if (!isOptional(value.projectOpenAttemptCount, isProjectOpenAttemptCount)) return false;
   const related = value.relatedCorrelationIds;
   if (related === undefined) return true;
   return (

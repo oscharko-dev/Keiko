@@ -2962,6 +2962,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      projectOpenAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       relatedCorrelationIds: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -3033,6 +3038,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      projectOpenAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       relatedCorrelationIds: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -3096,6 +3106,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 64,
       },
       decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      projectOpenAttemptCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -3167,6 +3182,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      projectOpenAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       relatedCorrelationIds: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -3230,6 +3250,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 64,
       },
       decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      projectOpenAttemptCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -3987,6 +4012,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["client-diagnostic-rejection"],
     proofIds: ["client.diagnostic.rejected.line", "client.diagnostic.rejected.shutdown-flush"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.editor.line-ending.adopted",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientEditorLineEnding",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      lineEnding: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["lf", "crlf"],
+      },
+      source: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["buffer-sync", "host-edit"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-editor-line-ending"],
+    proofIds: ["client.editor.line-ending.adopted.line"],
+    releaseImpact: "patch",
   },
   {
     contractKind: "activity-log-operation",

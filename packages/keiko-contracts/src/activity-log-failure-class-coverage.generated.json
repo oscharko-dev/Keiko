@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 375,
-  "completeClassCount": 375,
+  "supportedClassCount": 376,
+  "completeClassCount": 376,
   "completeness": "complete",
   "classes": [
     {
@@ -3434,6 +3434,12 @@
               "required": true
             },
             {
+              "name": "projectOpenAttemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "referenceShape",
               "type": "string",
               "dataClass": "closed-enum",
@@ -3493,6 +3499,12 @@
               "type": "boolean",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "projectOpenAttemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "referenceShape",
@@ -3562,6 +3574,12 @@
               "required": true
             },
             {
+              "name": "projectOpenAttemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "referenceShape",
               "type": "string",
               "dataClass": "closed-enum",
@@ -3629,6 +3647,12 @@
               "required": true
             },
             {
+              "name": "projectOpenAttemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "referenceShape",
               "type": "string",
               "dataClass": "closed-enum",
@@ -3694,6 +3718,12 @@
               "type": "boolean",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "projectOpenAttemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "referenceShape",
@@ -4691,6 +4721,62 @@
             "client.diagnostic.rejected.line",
             "client.diagnostic.rejected.shutdown-flush"
           ],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "client-editor-line-ending",
+      "requirementContract": "client-editor-line-ending",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["client.editor.line-ending.adopted"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "client.editor.line-ending.adopted",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["client.editor.line-ending.adopted"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "client.editor.line-ending.adopted",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "lineEnding",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "source",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["client.editor.line-ending.adopted.line"],
           "replayReferences": [],
           "missingObligations": []
         }

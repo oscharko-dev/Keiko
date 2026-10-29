@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4273b8cfd0da361d749c2a2cb2574489978d44aebffdaf740a74f048ab6e2b79"
+    "catalogDigest": "59a7adf94555849277ac975fdb478d6f30fb2d83151d7bdbc82cfb317d8ea9cd"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 596,
-    "proofCount": 609,
-    "resolvedProofCount": 609,
-    "failureClassCount": 375,
+    "operationCount": 597,
+    "proofCount": 610,
+    "resolvedProofCount": 610,
+    "failureClassCount": 376,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -155,6 +155,7 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.editor.line-ending.adopted",
         "client.evidence.inspected",
         "client.files-scope.decision",
         "client.git-operation.attempted",
@@ -805,6 +806,7 @@
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
     "client-update-notice": ["client-diagnostics.dependency-failure"],
+    "client-editor-line-ending": ["client-diagnostics.dependency-failure"],
     "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
@@ -1318,6 +1320,9 @@
     ],
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.editor.line-ending.adopted.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.evidence.inspected.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
