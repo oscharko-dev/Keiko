@@ -336,23 +336,6 @@ describe("emitConsolidationLogEvent loss accounting", () => {
 });
 
 describe("#3918 synchronous port delivery observations", () => {
-  it("counts an unwired event without observing its operation", () => {
-    resetActivityLogLossCountersForTests();
-    try {
-      const event: ConsolidationLogEvent = {
-        category: "consolidation",
-        get op(): never {
-          throw new TypeError("unwired event must remain unread");
-        },
-      };
-      emitConsolidationLogEvent(undefined, event);
-      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
-      expect(activityLogLossCounters()["port-sink-failed"]).toBe(0);
-    } finally {
-      resetActivityLogLossCountersForTests();
-    }
-  });
-
   defineSynchronousLogDeliveryContract<
     ConsolidationLogEvent,
     ConsolidationLogSink,
@@ -378,11 +361,6 @@ describe("#3918 synchronous port delivery observations", () => {
     }),
     droppedOp: "consolidation.summary.fallback",
     noticeOp: "consolidation.log.sink-failed",
-    healthyInspectionFailure: (): TypeError =>
-      new TypeError("healthy delivery must not inspect the event"),
-    primaryFailure: (): Error => new Error("opaque primary transport failure"),
-    operationFailure: (): TypeError => new TypeError("opaque failed-event operation"),
-    writeGetterFailure: (): TypeError => new TypeError("primary write getter failed"),
   });
 });
 

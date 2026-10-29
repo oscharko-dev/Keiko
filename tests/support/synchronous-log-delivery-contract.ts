@@ -21,10 +21,27 @@ interface SynchronousLogDeliveryBinding<
   readonly countedOperationEvent: (readOp: () => Op) => Event;
   readonly droppedOp: Op;
   readonly noticeOp: Event["op"];
-  readonly healthyInspectionFailure: () => TypeError;
-  readonly primaryFailure: () => Error;
-  readonly operationFailure: () => TypeError;
-  readonly writeGetterFailure: () => TypeError;
+}
+
+function defineUnwiredDelivery<
+  Event extends { readonly op: string },
+  Sink extends LogPortSink<Event>,
+  Op extends Event["op"],
+>(binding: SynchronousLogDeliveryBinding<Event, Sink, Op>): void {
+  it("counts an unwired event without observing its operation", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      const event = binding.unreadOperationEvent((): never => {
+        throw new TypeError("unwired event must remain unread");
+      });
+      const emit = binding.emit;
+      emit(undefined, event);
+      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(0);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
 }
 
 function defineHealthyDelivery<
@@ -38,7 +55,7 @@ function defineHealthyDelivery<
       let getterReads = 0;
       let writes = 0;
       const event = binding.unreadOperationEvent((): never => {
-        throw binding.healthyInspectionFailure();
+        throw new TypeError("healthy delivery must not inspect the event");
       });
       const sink = binding.makeSink((receiver): PortWrite<Event, Sink> => {
         getterReads += 1;
@@ -70,7 +87,7 @@ function defineGetterFailure<
     resetActivityLogLossCountersForTests();
     try {
       const trace: string[] = [];
-      const failure = binding.primaryFailure();
+      const failure = new Error("opaque primary transport failure");
       Object.defineProperty(failure, "code", {
         get(this: Error): string {
           expect(this).toBe(failure);
@@ -112,7 +129,7 @@ function defineOperationFailure<
   it("preserves an operation-getter failure escaping the owning continuation", () => {
     resetActivityLogLossCountersForTests();
     try {
-      const failure = binding.operationFailure();
+      const failure = new TypeError("opaque failed-event operation");
       const event = binding.unreadOperationEvent((): never => {
         expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
         throw failure;
@@ -120,7 +137,7 @@ function defineOperationFailure<
       let getterReads = 0;
       const sink = binding.makeSink((): PortWrite<Event, Sink> => {
         getterReads += 1;
-        throw binding.writeGetterFailure();
+        throw new TypeError("primary write getter failed");
       });
       let observed: unknown;
       const emit = binding.emit;
@@ -143,6 +160,7 @@ export function defineSynchronousLogDeliveryContract<
   Sink extends LogPortSink<Event>,
   Op extends Event["op"],
 >(binding: SynchronousLogDeliveryBinding<Event, Sink, Op>): void {
+  defineUnwiredDelivery(binding);
   defineHealthyDelivery(binding);
   defineGetterFailure(binding);
   defineOperationFailure(binding);

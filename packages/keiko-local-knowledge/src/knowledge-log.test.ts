@@ -364,23 +364,6 @@ describe("emitKnowledgeLogEvent loss accounting", () => {
 });
 
 describe("#3918 synchronous port delivery observations", () => {
-  it("counts an unwired event without observing its operation", () => {
-    resetActivityLogLossCountersForTests();
-    try {
-      const event: KnowledgeLogEvent = {
-        category: "indexing",
-        get op(): never {
-          throw new TypeError("unwired event must remain unread");
-        },
-      };
-      emitKnowledgeLogEvent(undefined, event);
-      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
-      expect(activityLogLossCounters()["port-sink-failed"]).toBe(0);
-    } finally {
-      resetActivityLogLossCountersForTests();
-    }
-  });
-
   defineSynchronousLogDeliveryContract<
     KnowledgeLogEvent,
     KnowledgeLogSink,
@@ -406,11 +389,6 @@ describe("#3918 synchronous port delivery observations", () => {
     }),
     droppedOp: "knowledge.index.started",
     noticeOp: "knowledge.log.sink-failed",
-    healthyInspectionFailure: (): TypeError =>
-      new TypeError("healthy delivery must not inspect the event"),
-    primaryFailure: (): Error => new Error("opaque primary transport failure"),
-    operationFailure: (): TypeError => new TypeError("opaque failed-event operation"),
-    writeGetterFailure: (): TypeError => new TypeError("primary write getter failed"),
   });
 });
 
