@@ -358,10 +358,13 @@ workflow patch scope). No second literal of the number exists. Only that byte bo
 changed lines, file counts, context bytes, wall time and the per-run patch budget keep their own
 limits, and a caller-supplied limit still wins over a default. The request body of the editor patch
 apply route follows the cap (a cap-sized diff after JSON escaping plus 1 MiB of envelope) so the
-transport never refuses what validation admits. The generic catalog ceilings of the legacy
-`propose_patch` and `apply_patch` tool calls (256 KiB per call, 64 KiB per string, ADR-0175 D4)
-are not changed here: those tools take the diff as a model tool argument, a separate wire
-safeguard, while the workflows and the harness read the patch from the model's answer.
+transport never refuses what validation admits. The legacy `propose_patch` and `apply_patch` tools
+take the diff as a model tool argument, so they follow the shared patch ceiling too: their
+`toolArgumentLimits` entry is the changeset ceiling and their descriptors declare the matching
+`maxArgumentBytes` (ADR-0175 D4); the generic catalog ceilings (256 KiB per call, 64 KiB per string)
+stay what every other tool is held to. The result of `propose_patch` stays inside the legacy
+catalog's 64 KiB result string by carrying the verdict, the counts and at most 50 listed files,
+rejections and conflicts, not the hunks or the normalized diff the model sent.
 
 A refused patch leaves its closed reason in the Activity Log. A harness run over the bound ends as
 `harness.run.failed` with the code `HARNESS_LIMIT_PATCH_SIZE`; a refused unit-test or

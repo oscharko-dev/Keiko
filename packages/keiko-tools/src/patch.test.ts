@@ -27,7 +27,7 @@ import {
   PatchApplyError,
   PatchValidationError,
 } from "./errors.js";
-import { makeWorkspace, recordingWriter } from "./_support.js";
+import { createDiffOfBytes, makeWorkspace, recordingWriter } from "./_support.js";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
@@ -85,23 +85,6 @@ function modifyFirstLineDiff(path: string, before = "old", after = "new"): strin
 function sourceWithByteLength(bytes: number): string {
   const prefix = "old\n";
   return `${prefix}${"x".repeat(bytes - Buffer.byteLength(prefix, "utf8"))}`;
-}
-
-// A create diff of exactly `bytes` UTF-8 bytes in 1,000 added lines (the default changed-line bound
-// stays far away), so a byte boundary can be probed without touching any other limit.
-function createDiffOfBytes(path: string, bytes: number): string {
-  const lineCount = 1_000;
-  const header = `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${String(lineCount)} @@\n`;
-  const payload = bytes - Buffer.byteLength(header, "utf8") - lineCount * 2;
-  const base = Math.floor(payload / lineCount);
-  const extra = payload - base * lineCount;
-  const lines = Array.from(
-    { length: lineCount },
-    (_, index) => `+${"x".repeat(base + (index === lineCount - 1 ? extra : 0))}\n`,
-  );
-  const diff = `${header}${lines.join("")}`;
-  if (Buffer.byteLength(diff, "utf8") !== bytes) throw new Error("fixture size drifted");
-  return diff;
 }
 
 function withFs(overrides: Partial<WorkspaceFs>): WorkspaceFs {
