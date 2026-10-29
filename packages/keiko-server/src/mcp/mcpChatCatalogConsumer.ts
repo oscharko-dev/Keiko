@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { EditorAgentGovernedAuthorityReference } from "@oscharko-dev/keiko-contracts";
 import type {
   CatalogJsonObject,
@@ -48,7 +49,7 @@ function captureAction(value: CatalogJsonValue): McpChatCatalogAction | undefine
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const action = value as CatalogJsonObject;
   if (
-    Object.keys(action).sort().join() !==
+    Object.keys(action).sort(compareStrings).join() !==
       "actionId,argumentsDigest,idempotencyKey,name,risk,serverName,toolName" ||
     ![
       action.actionId,

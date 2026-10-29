@@ -38,11 +38,11 @@ function CardHeader({
   readonly verifying: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const health = verifying
-    ? t("atlassianConnectors.verify.verifying")
-    : verifyStatus === undefined
+  const settledHealth =
+    verifyStatus === undefined
       ? t("atlassianConnectors.list.healthUnknown")
       : t(verifyStatusLabelKey(verifyStatus));
+  const health = verifying ? t("atlassianConnectors.verify.verifying") : settledHealth;
   // F3 — createdAt comes straight off the BFF response with no runtime shape validation
   // (AtlassianConnectorMetadata.createdAt is a compile-time-only `number`); `.toISOString()`
   // throws RangeError on an Invalid Date and this route has no error boundary above it. Fail

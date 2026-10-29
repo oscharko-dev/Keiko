@@ -1,5 +1,15 @@
 import { catalogScopeDigest, captureCatalogConsumerContext } from "./catalogToolRequest.js";
-import type { CatalogConsumer, CodingCatalogConsumer } from "./catalogToolPorts.js";
+import type {
+  CatalogConsumer,
+  CodingCatalogConsumer,
+  BoundToolSet,
+  CatalogBoundHandler,
+  CatalogConsumerPort,
+  CatalogToolBinderInput,
+  CatalogToolBinderOptions,
+  CatalogToolExecutionOverride,
+  OfferedToolSet,
+} from "./catalogToolPorts.js";
 import {
   assertCompatibilityTime,
   captureCatalogJson,
@@ -30,15 +40,6 @@ import {
   isValidCorrelationId,
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
-import type {
-  BoundToolSet,
-  CatalogBoundHandler,
-  CatalogConsumerPort,
-  CatalogToolBinderInput,
-  CatalogToolBinderOptions,
-  CatalogToolExecutionOverride,
-  OfferedToolSet,
-} from "./catalogToolPorts.js";
 
 export type { CatalogBoundHandler } from "./catalogToolPorts.js";
 /** Server-private state. The public binder exposes only safe binding, offer and result projections. */

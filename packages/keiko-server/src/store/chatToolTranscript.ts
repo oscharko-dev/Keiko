@@ -178,7 +178,7 @@ function validMutationProjection(
     object(result.toolRef) &&
     (MUTATION_ALIASES.get(call.name) === result.toolRef.canonicalId ||
       isMcpMutationProjection(value, call, result.toolRef.canonicalId)) &&
-    JIRA_MUTATION_OUTCOMES.some((outcome) => outcome === value.mutationOutcome)
+    (JIRA_MUTATION_OUTCOMES as readonly unknown[]).includes(value.mutationOutcome)
   );
 }
 function validEffectProjections(
@@ -278,7 +278,8 @@ function decodeStoredTranscript(
 ): StoredTranscript | undefined {
   if (json === null) return undefined;
   try {
-    if (Buffer.byteLength(json) > MAX_TRANSCRIPT_BYTES) throw new TypeError();
+    if (Buffer.byteLength(json) > MAX_TRANSCRIPT_BYTES)
+      throw new TypeError("Chat tool transcript exceeds its byte limit");
     const parsed: unknown = JSON.parse(json);
     if (validTranscript(parsed, identity)) return parsed;
   } catch {

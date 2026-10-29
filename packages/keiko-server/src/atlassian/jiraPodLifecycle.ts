@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { UiStore } from "../store/index.js";
+import type { UiStore, Chat } from "../store/index.js";
 import { interruptChangedChatGenerations } from "../chat-turn-serializer.js";
-import type { Chat } from "../store/index.js";
 import type { UiHandlerDeps } from "../deps.js";
 export type JiraChatAccessOwners = Pick<
   UiHandlerDeps,

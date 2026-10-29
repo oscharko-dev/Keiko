@@ -16,6 +16,14 @@ import {
 import { useSettingsTranslate as useTranslate } from "./settings-i18n";
 import styles from "./McpSettingsPanel.module.css";
 
+const {
+  server: ServerIcon,
+  edit: EditIcon,
+  trash: TrashIcon,
+  plus: PlusIcon,
+  plugins: PluginsIcon,
+} = Icons;
+
 const PATH = "/api/mcp/servers";
 const EMPTY = {
   name: "",
@@ -362,30 +370,27 @@ function connectionStatus(
 }
 function McpServerCard({ model, t, server }: ServerViewProps): ReactNode {
   const connection = model.state.snapshot?.connections?.find((entry) => entry.name === server.name);
-  const state = model.state.statusStale
-    ? "unavailable"
-    : server.enabled
-      ? (connection?.state ?? "idle")
-      : "disabled";
+  const enabledState = server.enabled ? (connection?.state ?? "idle") : "disabled";
+  const state = model.state.statusStale ? "unavailable" : enabledState;
   const status = connectionStatus(state, connection?.toolCount, t);
   const target =
     server.transport.kind === "remote"
-      ? server.transport.url.replace(/[?#].*$/u, "")
+      ? server.transport.url.split(/[?#]/u, 1)[0]
       : server.transport.command[0].split(/[\\/]/u).at(-1);
   return (
     <li className={styles.cmpCard}>
       <div className={styles.cmpCardHeader}>
         <span className={styles.cmpServerIcon} aria-hidden="true">
-          <Icons.server />
+          <ServerIcon />
         </span>
         <div className={styles.cmpServerIdentity}>
           <h3>{server.name}</h3>
           <p className={styles.cmpTarget}>{target}</p>
         </div>
-        <span className={styles.cmpBadge} data-state={state} role="status">
+        <output className={styles.cmpBadge} data-state={state}>
           <span className={styles.cmpStatusDot} aria-hidden="true" />
           {status}
-        </span>
+        </output>
       </div>
       <div className={styles.cmpCardFooter}>
         <span className={styles.cmpTransport}>
@@ -419,7 +424,7 @@ function McpServerActions({ model, t, server }: ServerViewProps): ReactNode {
           edit(model, server);
         }}
       >
-        <Icons.edit />
+        <EditIcon />
         {t("settings.mcp.edit")}
       </button>
       <button
@@ -451,14 +456,14 @@ function McpRemoveAction({ model, t, server }: ServerViewProps): ReactNode {
         disabled={model.state.busy}
         onClick={() => setConfirm(true)}
       >
-        <Icons.trash />
+        <TrashIcon />
         {t("settings.mcp.remove")}
       </button>
     );
   return (
-    <div
+    <fieldset
       className={styles.cmpRemoveConfirm}
-      role="group"
+      style={{ margin: 0, minInlineSize: 0 }}
       aria-label={t("settings.mcp.removeTitle", { name: server.name })}
     >
       <p>{t("settings.mcp.removeHelp", { name: server.name })}</p>
@@ -481,7 +486,7 @@ function McpRemoveAction({ model, t, server }: ServerViewProps): ReactNode {
       >
         {t("settings.mcp.cancel")}
       </button>
-    </div>
+    </fieldset>
   );
 }
 function TextField({
@@ -506,7 +511,7 @@ function TextField({
         required={required}
         readOnly={field === "name" && model.state.editing !== undefined}
         autoComplete={field === "token" ? "new-password" : "off"}
-        pattern={field === "name" ? "[a-z][a-z0-9_\\-]{0,63}" : undefined}
+        pattern={field === "name" ? String.raw`[a-z][a-z0-9_\-]{0,63}` : undefined}
         value={model.state.form[field]}
         onChange={(event) => change(model, field, event.target.value)}
       />
@@ -625,14 +630,14 @@ function McpOverview({ model, t }: ViewProps): ReactNode {
   const { snapshot, error } = model.state;
   if (snapshot === undefined)
     return error ? null : (
-      <p className={styles.cmpEmpty} role="status">
+      <output className={styles.cmpEmpty} style={{ margin: 0 }}>
         {t("settings.mcp.loading")}
-      </p>
+      </output>
     );
   if (snapshot.servers.length === 0)
     return (
       <div className={styles.cmpEmpty}>
-        <Icons.server />
+        <ServerIcon />
         <h3>{t("settings.mcp.emptyTitle")}</h3>
         <p>{t("settings.mcp.emptyHelp")}</p>
       </div>
@@ -654,16 +659,15 @@ function McpOverview({ model, t }: ViewProps): ReactNode {
 function McpSettingsError({ model, t }: ViewProps): ReactNode {
   const { error, busy, needsPairing, credentialsRequired } = model.state;
   if (!error) return null;
-  const help = needsPairing
-    ? "settings.mcp.sessionHelp"
-    : credentialsRequired
-      ? "settings.mcp.credentialsRequired"
-      : "settings.mcp.error";
-  const title = needsPairing
-    ? "settings.mcp.sessionTitle"
-    : credentialsRequired
-      ? "settings.mcp.credentialsTitle"
-      : "settings.mcp.errorTitle";
+  const general = credentialsRequired
+    ? ({
+        help: "settings.mcp.credentialsRequired",
+        title: "settings.mcp.credentialsTitle",
+      } as const)
+    : ({ help: "settings.mcp.error", title: "settings.mcp.errorTitle" } as const);
+  const { help, title } = needsPairing
+    ? ({ help: "settings.mcp.sessionHelp", title: "settings.mcp.sessionTitle" } as const)
+    : general;
   return (
     <div className={styles.cmpAlert} role="alert">
       <div>
@@ -698,12 +702,12 @@ export function McpSettingsPanel(): ReactNode {
             model.patch({ formOpen: true, editing: undefined, form: EMPTY });
           }}
         >
-          <Icons.plus />
+          <PlusIcon />
           {t("settings.mcp.add")}
         </button>
       </header>
       <div className={styles.cmpAvailability}>
-        <Icons.plugins />
+        <PluginsIcon />
         <span>{t("settings.mcp.availability")}</span>
       </div>
       <McpSettingsError model={model} t={t} />

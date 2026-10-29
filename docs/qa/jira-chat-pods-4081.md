@@ -1,7 +1,7 @@
 # Epic #4081: Jira access Pods in Chat
 
-Current individual acceptance: **10/55** (#4082 AC4, #4083 AC2, #4089 AC1/AC2/AC3/AC4/AC5/AC7 and #4085 AC5/AC7).
-The remaining 45 criteria and final integrated qualification are open.
+Current individual acceptance: **13/55** (#4082 AC4, #4083 AC2, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC6 and #4085 AC5/AC7).
+The remaining 42 criteria and final integrated qualification are open.
 
 ## Delivery contract
 
@@ -182,13 +182,13 @@ Status: **Partial — not accepted**. The ordinary-Chat consumer reached license
 
 ### #4091 — Run a governed tool loop in ordinary Chat through the shared MCP host
 
-- [ ] **AC1:** Before this child closes, an authenticated normal Chat API performs a read and a governed write through the real gateway → production catalog binder → shared MCP host → local Jira 10.3.26, using a verified tool-capable real model and checking remote state. Exercise both buffered and streaming turns; the unfinished UI is not a substitute runtime or a reason to defer this proof to #4087. A normal Chat with a valid connected Jira Pod discovers and invokes the real provider through the shared host; a Chat without that binding is offered no Jira tool. A registry entry, guessed ID, client-side edge or another Chat's binding grants no access.
+- [x] **AC1:** Before this child closes, an authenticated normal Chat API performs a read and a governed write through the real gateway → production catalog binder → shared MCP host → local Jira 10.3.26, using a verified tool-capable real model and checking remote state. Exercise both buffered and streaming turns; the unfinished UI is not a substitute runtime or a reason to defer this proof to #4087. A normal Chat with a valid connected Jira Pod discovers and invokes the real provider through the shared host; a Chat without that binding is offered no Jira tool. A registry entry, guessed ID, client-side edge or another Chat's binding grants no access.
 
-Status: **Partial — not accepted**. Authenticated normal buffered/SSE Chat completed all 14 operations through the verified Qwen gateway, production binder/shared host and licensed Jira, with independent remote readbacks. The latest LiteLLM/Gemma lifecycle group adds real buffered/streamed reads and an approved streamed write with exactly one independently verified effect. Binding/capability denial tests remain retained. Full catalog repetition and final delivered-head acceptance remain open.
+Status: **Accepted.** The clean frozen `44d18c688` runtime completes all fourteen operations in both buffered and streaming Chat through verified LiteLLM/Gemma, the production binder, shared SDK host and licensed Jira. Normal and restricted catalog groups each pass 14/14 with independent remote state. The current 49-case ordinary-Chat suite rejects absent/foreign bindings and missing, stale or mismatched tool proof before dispatch. The full-catalog repetition gap is closed; final integrated delivery remains separately open.
 
-- [ ] **AC2:** In-flight cancellation never reports a false rollback or false success. An already applied Jira effect is shown as completed; uncertain outcomes are reconciled or clearly shown as unknown, without automatic duplication.
+- [x] **AC2:** In-flight cancellation never reports a false rollback or false success. An already applied Jira effect is shown as completed; uncertain outcomes are reconciled or clearly shown as unknown, without automatic duplication.
 
-Status: **Partial — not accepted**. Catalog settlement and durable remote outcome remain separate in history, compaction and UI. Late acknowledged effects survive cancellation and fresh SQLite reads without dispatch; cancellation before consent/approval makes zero Jira calls and closes the canonical turn. The later stable-artifact ten-case fault group passes with independent remote counts; the earlier mid-build run remains diagnostic only. Physical browser interruption and final-artifact qualification remain open.
+Status: **Accepted.** Current ordinary-Chat tests prove zero Jira requests when cancellation precedes consent and retain late-acknowledged effects after cancellation. The immutable `6c63f33a0f7a` ten-case fault group covers every mutation with lost observation or committed-then-503, same/fresh-process duplicate delivery and real-model Regenerate. Independent counts remain exactly ten original Chat effects and no replay. History distinguishes acknowledged and unknown outcomes, without promising rollback. Physical browser reconnect/reload coverage remains a separate AC5 obligation.
 
 - [ ] **AC3:** Data-Pod-only grounding is byte-for-byte unchanged in behaviour, the mixed-scope schedule is tested through actual gateway admission, existing Workbench MCP works unchanged, Jira works with no embedding/index setup, and a model without verified tool calling yields the truthful unavailable state instead of silently answering without tools.
 
@@ -202,9 +202,9 @@ Status: **Partial — not accepted**. Existing registered owners cover offers, c
 
 Status: **Partial — not accepted**. Canonical duplicates, response loss, late/unknown recovery, journal restart, paired history and compaction have scoped proofs. The 27-case public/Gateway suite now also proves one POST after a committed write followed by context overflow: retries preserve tool/result IDs, canonical replay adds no calls, and the original two-synthesis ceiling blocks a fourth repair request. Pre-admission SSE-to-buffered fallback remains green. Complete reconnect, browser response-loss/Regenerate and final live remote-effect-count qualification remain open.
 
-- [ ] **AC6:** Mixed Jira/Data-Pod turns retain separate source attribution and the existing physical grounded-synthesis ceiling across orchestration, retries and repair. Production-path tests exhaust each cumulative budget without resetting it. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects.
+- [x] **AC6:** Mixed Jira/Data-Pod turns retain separate source attribution and the existing physical grounded-synthesis ceiling across orchestration, retries and repair. Production-path tests exhaust each cumulative budget without resetting it. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects.
 
-Status: **Partial — not accepted**. Data packs precede tools; one cumulative meter and the physical synthesis/repair ceiling span orchestration and retries, with Jira results outside Data citations. Retained production-Gateway tests cover post-write overflow and the original synthesis ceiling; the later 90-case normal/mixed suites add input/output, 30-call, retrieval/excerpt, deadline and ten-round exhaustion. Empty-pack safety and independent Memory admission remain covered. Live retained consent restores no authority or budgets. Final budget regression, mixed-source live execution and complete browser lifecycle qualification remain open.
+Status: **Accepted.** The current production-Gateway ordinary/mixed suites pass 90/90 after the analyzer repairs: cumulative input/output, 30 tool calls, retrieval/excerpts, deadline and ten-round exhaustion preserve the original physical synthesis/repair ceiling. The frozen `44d18c688` mixed-source live group passes 2/2 with separate Jira/Data attribution. Current authority tests reject stale/replayed grants and queued effects after mode/binding changes and exhausted budgets; persistent grant/restart cases remain covered. No budget or authority was widened.
 
 ### #4085 — Create and manage Jira access Pods in the existing Knowledge Pods hub
 
@@ -3380,3 +3380,32 @@ The merge of `dev` release `9b30f3d05` preserves the complete MCP/Jira changes. 
 The Editor release evidence passes against the actual rebuilt static export on the pinned Linux Node 24.18.0 runtime. The host Node 24.22.0 embeds zlib 1.2.12, while that Linux runtime embeds 1.3.1-e00f703; identical raw chunk sizes produce different gzip sizes. Its host freshness comparison therefore fails. The Linux evidence is preserved unchanged; no budget is raised or macOS value substituted. Updater evidence remains fresh.
 
 The complete package coverage run is still in progress and has reported a failure in the unrelated-zombie process-end case; its exact failure still needs targeted reproduction. The full local Sonar analysis initially exhausted its 4.5-GiB heap, then completed with the documented 12-GiB setting and reported 104 findings. Those findings are open repair work. No final quality or merge-ready verdict is claimed.
+
+### Analyzer repairs and individual Chat acceptance — 2026-10-29
+
+The local SonarJS analyzer initially reported104 findings. Behavior-preserving repairs simplify
+control flow, duplicate imports, React state naming, native semantic elements and stable code-unit
+comparisons across the existing owners. Two deprecated-SDK reports are explicitly refuted at
+the opt-in legacy SSE import/constructor: ADR-0181 requires this compatibility transport, and
+the pinned official SDK documents that clients may still need both transports during migration.
+Streamable HTTP remains the default. The narrow suppressions cover only those required legacy
+API references, not general deprecation or any authority/security check.
+
+The first repeat leaves one string-membership finding, subsequently repaired without narrowing
+untrusted input. The final analyzer repeat passes with zero unresolved findings. Targeted suites pass1197 server cases,
+358 UI cases,673 connector/MCP cases,285 contracts cases,19 catalog cases and59 script cases;
+separate current ordinary/mixed Chat budget suites pass90/90. Root strict typecheck passes.
+Registry/failure-inventory source locations are regenerated.
+
+Two failures in the diagnostic aggregate are reproduced individually: the debug-launch test
+correctly rejects the host's non-exact Node24.22.0/npm11.19.1 pair. Both complete files pass82/82
+on the already-installed approved24.18.0/11.16.0 pair. The native zombie fixture also passes five
+additional runs; host process-table churn can conservatively produce `reaped` instead of `clean`.
+Both the fixture and implementation match dev; neither assertions nor governance were weakened.
+The aggregate is not relabelled green and final qualification remains pending.
+
+The complete UI coverage lane passes613 suites and11953 tests (one existing skip), with
+91.79% statements,85.28% branches,93.23% functions and94.38% lines. Linux UI producers complete
+427 component comparisons,160 editor probes,seven accessibility modes and108 browser captures
+without runtime/unknown-route failures. These are scoped evidence runs; full final-head CI
+and the remaining42 acceptance criteria are still open.

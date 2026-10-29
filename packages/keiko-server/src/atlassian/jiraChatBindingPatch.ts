@@ -4,10 +4,14 @@ import {
   type CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { UiHandlerDeps } from "../deps.js";
-import { invalidRequest, type UpdateChatOptions, type UpdateChatPatch } from "../store/index.js";
+import {
+  invalidRequest,
+  type UpdateChatOptions,
+  type UpdateChatPatch,
+  type Chat,
+} from "../store/index.js";
 import { findOwnedJiraPod, isReadyJiraPod } from "./jiraPodAccess.js";
 import { logChatScopeUpdate } from "../chat-scope-update-log.js";
-import type { Chat } from "../store/index.js";
 
 function requestedPod(value: unknown): string | null | undefined {
   if (value === undefined || value === null) return value;

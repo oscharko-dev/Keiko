@@ -10,7 +10,10 @@ import {
   withChatContentPolicy,
 } from "./content-redactor.js";
 import { raceAbort } from "./abort-race.js";
-import { mappedConversationReadinessError } from "./conversation-readiness-admission.js";
+import {
+  mappedConversationReadinessError,
+  conversationModelNotReadyResult,
+} from "./conversation-readiness-admission.js";
 import { logChatCreationIntent } from "./store/chatCreationIntents.js";
 import { resolveRegisteredWorkspaceProjectPath } from "./workspace-root-identity.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
@@ -137,7 +140,15 @@ import {
 } from "./store/chat-grounding-scope-identity.js";
 export { parseExpectedGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { redact } from "@oscharko-dev/keiko-security";
-import type { UiHandlerDeps } from "./deps.js";
+import {
+  type UiHandlerDeps,
+  currentAuditRedactString,
+  currentConversationReady,
+  currentConversationReadinessObservation,
+  currentContextProfileForModel,
+  currentGatewayConfig,
+  currentRedactionSecrets,
+} from "./deps.js";
 // Issue #3400 (epic #3384, contract correction 4): the server-minted description authority
 // (#3399) that admits model egress of git-change snapshot content outside a running Code task.
 // Read-only consumption of the existing owning module — never redefined here.
@@ -170,17 +181,7 @@ import {
 } from "./coding-context/githubIssueReaderAuthorization.js";
 import { hasOnlyAllowedKeys } from "./gitDelivery/requestGuards.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import {
-  currentAuditRedactString,
-  currentConversationReady,
-  currentConversationReadinessObservation,
-  currentContextProfileForModel,
-  currentGatewayConfig,
-  currentRedactionSecrets,
-} from "./deps.js";
-import type { RouteContext, RouteResult } from "./routes.js";
-import { errorBody } from "./routes.js";
-import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
+import { type RouteContext, type RouteResult, errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
@@ -263,8 +264,8 @@ import {
   MAX_CONTEXT_MESSAGES,
   usableGatewayMessages,
   withGatewayConversationImages,
+  type GatewayConversationMessage,
 } from "./conversation-gateway.js";
-import type { GatewayConversationMessage } from "./conversation-gateway.js";
 import {
   beginAppSessionOperation,
   resolveAppSessionReadAuthority,

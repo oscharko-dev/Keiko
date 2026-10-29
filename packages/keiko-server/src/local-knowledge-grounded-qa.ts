@@ -1,4 +1,17 @@
-import type { GatewayCallRequest } from "@oscharko-dev/keiko-model-gateway";
+import {
+  type GatewayCallRequest,
+  CancelledError,
+  GatewayError,
+  findCapability,
+  findConfiguredCapability,
+  requestOpenAIEmbedding,
+  type GatewayConfig,
+  type NormalizedResponse,
+  type OpenAIEmbeddingAdapter,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingRequest,
+  type RerankResult,
+} from "@oscharko-dev/keiko-model-gateway";
 import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
 import { callPluralGroundedSynthesis } from "./grounded-plural-synthesis.js";
 import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
@@ -79,22 +92,9 @@ import {
   shouldUseGermanForSystemAnswer,
 } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
-import {
-  CancelledError,
-  GatewayError,
-  findCapability,
-  findConfiguredCapability,
-  requestOpenAIEmbedding,
-  type GatewayConfig,
-  type NormalizedResponse,
-  type OpenAIEmbeddingAdapter,
-  type OpenAIEmbeddingOutcome,
-  type OpenAIEmbeddingRequest,
-  type RerankResult,
-} from "@oscharko-dev/keiko-model-gateway";
 import { redact } from "@oscharko-dev/keiko-security";
-import type { UiHandlerDeps } from "./deps.js";
 import {
+  type UiHandlerDeps,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentGroundingLimits,
@@ -109,8 +109,7 @@ import {
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
-import type { RouteResult } from "./routes.js";
-import { errorBody } from "./routes.js";
+import { type RouteResult, errorBody } from "./routes.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import {

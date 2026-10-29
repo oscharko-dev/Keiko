@@ -1,4 +1,9 @@
-import type { CatalogBindingPreparation } from "./catalogToolBinder.js";
+import {
+  type CatalogBindingPreparation,
+  catalogHandlerReadiness,
+  computeHandlerSetDigest,
+  type CatalogBoundHandler,
+} from "./catalogToolBinder.js";
 import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -43,11 +48,6 @@ import {
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
-import {
-  catalogHandlerReadiness,
-  computeHandlerSetDigest,
-  type CatalogBoundHandler,
-} from "./catalogToolBinder.js";
 import {
   createCatalogToolBinderFromPreparation,
   deriveCatalogBindingPreparation,

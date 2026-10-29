@@ -4,6 +4,9 @@ import type {
   ChatToolReadGrant,
   ChatToolWriteApprovalView,
   EditorAgentGovernedAuthorityReference,
+  AtlassianConnectorPendingApproval,
+  JiraLiveSearchRequest,
+  KnowledgeCapsuleId,
 } from "@oscharko-dev/keiko-contracts";
 import {
   invalidReadGrant,
@@ -59,11 +62,6 @@ export type {
 // Shutdown cancels pending decisions while retaining accepted consent through its original TTL.
 // Every later invocation still requires fresh authority, custody, generations and budget admission.
 
-import type {
-  AtlassianConnectorPendingApproval,
-  JiraLiveSearchRequest,
-  KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   isAtlassianContentPreviewUnpresentable,
@@ -71,7 +69,6 @@ import {
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import type { UiHandlerDeps } from "../deps.js";
 import type { AtlassianActionAuthorityContext } from "./actionPolicy.js";
-
 import {
   ATLASSIAN_ACTION_APPROVAL_TTL_MS,
   ATLASSIAN_ACTION_APPROVAL_MAX_PENDING,

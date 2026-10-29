@@ -232,9 +232,8 @@ async function streamConversation(
       await whenSseWritable(ctx.res);
       if (requestIsAborted(controller.signal)) return undefined;
       const next = await iterator.next();
-      if (next.done === true) return undefined;
+      if (next.done === true || controller.signal.aborted) return undefined;
       const chunk = next.value;
-      if (controller.signal.aborted) return undefined;
       // #3878: the gateway hands reasoning only to the Coding Workbench; a conversation answer
       // never shows it, so a reasoning chunk (none reaches this surface today) is passed over.
       if (chunk.type === "reasoning") continue;
@@ -763,12 +762,11 @@ function registerReadConsentStream(
   turn.toolTurn?.onTranscript((message): void => {
     if (controller.signal.aborted) return;
     for (const event of toolTranscriptEvents(message)) {
-      const identity =
-        event.event === "tool-read-consent"
-          ? `read:${event.data.grant.grantId}:${event.data.grant.state}`
-          : event.event === "tool-write-approval"
-            ? `write:${event.data.approval.approvalId}:${event.data.approval.state}`
-            : undefined;
+      let identity: string | undefined;
+      if (event.event === "tool-read-consent")
+        identity = `read:${event.data.grant.grantId}:${event.data.grant.state}`;
+      else if (event.event === "tool-write-approval")
+        identity = `write:${event.data.approval.approvalId}:${event.data.approval.state}`;
       if (identity === undefined || sent.has(identity)) continue;
       sent.add(identity);
       writeSseFrame(ctx.res, sseMessage(event), controller, undefined, ctx.correlationId);

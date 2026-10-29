@@ -1,10 +1,10 @@
-import type { AtlassianConnectorActionType } from "@oscharko-dev/keiko-contracts";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
+  AtlassianConnectorActionType,
   ChatToolAuthoritySubject,
   ChatToolReadGrantState,
   ChatToolWriteApprovalState,
 } from "@oscharko-dev/keiko-contracts";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { validateChatToolAuthoritySubject } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import {
   activityLogEvent,

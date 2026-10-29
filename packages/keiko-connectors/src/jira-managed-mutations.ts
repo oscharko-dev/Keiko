@@ -68,7 +68,7 @@ function requestFor(
     AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
   ]);
   const endpoints = atlassianApiEndpointsFor(baseUrl, "/rest/api/2/");
-  return (path, method = "GET", body, expect = "json") =>
+  return (path, method, body, expect = "json") =>
     executeAtlassianWriteRequest(
       {
         signal,
@@ -78,7 +78,7 @@ function requestFor(
             : http(request),
       },
       {
-        method,
+        method: method ?? "GET",
         url: atlassianApiUrl(endpoints, path),
         expect,
         ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),

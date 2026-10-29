@@ -420,8 +420,8 @@ function BoundJiraConnectorNode({
 }): ReactNode {
   const t = useOptionalWidgetTranslate();
   const [connector, setConnector] = useState<AtlassianConnectorMetadata>();
-  const [revision, refresh] = useState(0);
-  useConnectorRefresh(() => refresh((value) => value + 1));
+  const [revision, setRevision] = useState(0);
+  useConnectorRefresh(() => setRevision((value) => value + 1));
   useEffect(() => {
     let active = true;
     setConnector(undefined);

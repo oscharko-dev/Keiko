@@ -1,7 +1,5 @@
 "use client";
 
-import type { ConnectArgs } from "./workspaceActions";
-
 import {
   useCallback,
   useEffect,
@@ -60,6 +58,7 @@ import {
   replaceWorkspaceSelection,
   toggleWorkspaceSelection,
   type GitChangeBindSelection,
+  type ConnectArgs,
 } from "./workspaceActions";
 import type { ChatConnectedScope, ChatGitChangeScope, ChatConnectorSelection } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";

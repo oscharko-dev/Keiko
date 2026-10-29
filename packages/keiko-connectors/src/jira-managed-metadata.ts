@@ -144,7 +144,7 @@ export function projectJiraCollection(
 ): readonly CatalogJsonObject[] | undefined {
   if (values.length > max) return undefined;
   const projected = values.map(project);
-  if (projected.some((value) => value === undefined)) return undefined;
+  if (projected.includes(undefined)) return undefined;
   const valid = projected.filter((value) => value !== undefined);
   return new Set(valid.map((value) => value[identity])).size === valid.length ? valid : undefined;
 }

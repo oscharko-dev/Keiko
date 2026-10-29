@@ -50,11 +50,8 @@ const owner = createChatWriteApprovalOwner<
     entry.approval.kind === "mcp-chat-write" && entry.subject.kind === "configured-mcp",
   policy: (_entry, envelope) => {
     const effect = codingWorkbenchPolicyEffectFor(envelope.effectiveMode, "internet", "medium");
-    return effect === "allowed"
-      ? "allowed"
-      : effect === "approval-required"
-        ? "review-required"
-        : "denied";
+    if (effect === "allowed") return "allowed";
+    return effect === "approval-required" ? "review-required" : "denied";
   },
   pending: pending,
 });

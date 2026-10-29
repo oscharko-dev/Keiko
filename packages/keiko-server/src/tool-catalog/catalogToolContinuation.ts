@@ -1,5 +1,11 @@
 import type { CatalogDigest } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { CatalogConsumer, CodingCatalogConsumer } from "./catalogToolPorts.js";
+import type {
+  CatalogConsumer,
+  CodingCatalogConsumer,
+  BoundToolInvocation,
+  CatalogActionIdentity,
+  CatalogToolBudgetReservation,
+} from "./catalogToolPorts.js";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import {
   consumeCatalogCursorMatching,
@@ -10,11 +16,6 @@ import {
 import { catalogRequestDigest } from "./catalogToolRequest.js";
 import { requireDispatch, sameRef } from "./catalogToolRuntimeAuthority.js";
 import type { CatalogBindingState } from "./catalogToolBinder.js";
-import type {
-  BoundToolInvocation,
-  CatalogActionIdentity,
-  CatalogToolBudgetReservation,
-} from "./catalogToolPorts.js";
 
 /** One invocation may publish one continuation; all stored bindings remain in the existing registry. */
 export class CatalogContinuation<Consumer extends CatalogConsumer = CodingCatalogConsumer> {

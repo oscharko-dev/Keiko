@@ -13,14 +13,12 @@ import type {
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { randomUUID } from "node:crypto";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
-
 import {
   MCP_RELAY_PATH_PREFIX,
   recordMcpRelay,
   resolveMcpSecretHeaders,
   type McpCredentialRelay,
 } from "../mcp/mcpCredentialRelay.js";
-
 import {
   mcpServersNeedingRelay,
   type OpenCodeNativeMcpRelayEndpoint,
@@ -181,10 +179,10 @@ export function bindNativeMcpRelays(input: {
   const refusals: BindRefusal[] = [];
   const onUncertainMutation = recoverOnce(input);
   for (const server of servers) {
-    const bound =
-      input.relay === undefined
-        ? "relay-unavailable"
-        : input.relay.managed === undefined
+    let bound: OpenCodeNativeMcpRelayEndpoint | BindRefusal = "relay-unavailable";
+    if (input.relay !== undefined)
+      bound =
+        input.relay.managed === undefined
           ? bindOne(input.relay, input.runId, server)
           : bindManaged(input.relay, input.runId, server, input.activityLog, onUncertainMutation, {
               journal: input.mutations,

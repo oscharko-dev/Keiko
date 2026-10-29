@@ -89,25 +89,33 @@ async function discover(
     return undefined;
   }
 }
+function providerTool(
+  options: McpChatCatalogOptions,
+  discovered: Discovered,
+  tool: McpChatDeclaration,
+): ManagedMcpTool<Context> & McpChatDeclaration {
+  const { connection, signal } = discovered;
+  return {
+    ...tool,
+    execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> => {
+      requireDispatch(!signal.aborted && context.beforeEffect(), "denied", "effect-denied");
+      const execute = (): Promise<CatalogJsonObject> =>
+        connection.call(tool.toolName, args, {
+          ...context,
+          signal: AbortSignal.any([signal, context.signal]),
+        });
+      if (tool.risk === "write") return options.executeMutation(tool, args, context, execute);
+      const data = await execute();
+      return { data, ...(data.isError === true ? { isError: true } : {}) };
+    },
+  };
+}
 function providerTools(
   options: McpChatCatalogOptions,
   discovered: readonly Discovered[],
 ): readonly (ManagedMcpTool<Context> & McpChatDeclaration)[] {
-  return discovered.flatMap(({ connection, tools, signal }) =>
-    tools.map((tool) => ({
-      ...tool,
-      execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> => {
-        requireDispatch(!signal.aborted && context.beforeEffect(), "denied", "effect-denied");
-        const execute = (): Promise<CatalogJsonObject> =>
-          connection.call(tool.toolName, args, {
-            ...context,
-            signal: AbortSignal.any([signal, context.signal]),
-          });
-        if (tool.risk === "write") return options.executeMutation(tool, args, context, execute);
-        const data = await execute();
-        return { data, ...(data.isError === true ? { isError: true } : {}) };
-      },
-    })),
+  return discovered.flatMap((entry) =>
+    entry.tools.map((tool) => providerTool(options, entry, tool)),
   );
 }
 async function initialize(

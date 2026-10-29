@@ -55,12 +55,9 @@ export function chatConsentFailure(
       : { approvalId: ctx.params.approvalId },
     ctx.correlationId,
   );
-  const code =
-    status === 400
-      ? "VALIDATION_FAILED"
-      : status === 413
-        ? "PAYLOAD_TOO_LARGE"
-        : FAILURES[phase].code;
+  let code: string = FAILURES[phase].code;
+  if (status === 400) code = "VALIDATION_FAILED";
+  else if (status === 413) code = "PAYLOAD_TOO_LARGE";
   return { status, body: errorBody(code, FAILURES[phase].message, ctx.correlationId) };
 }
 

@@ -12,11 +12,15 @@ import {
 import type {
   ChatToolReadGrantView,
   ChatToolWriteApprovalView,
+  ChatMessage as GatewayMessage,
+  RunCounters,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CatalogConsumerPort,
   CatalogToolBinderInput,
   CatalogToolBudgetPort,
+  CatalogConsumer,
+  CatalogToolBinder,
 } from "./tool-catalog/catalogToolPorts.js";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -33,13 +37,11 @@ import {
   type GatewayStreamChunk,
 } from "@oscharko-dev/keiko-model-gateway";
 import { isToolCallingVerificationFresh } from "@oscharko-dev/keiko-contracts/runtime/gateway";
-import type { ChatMessage as GatewayMessage, RunCounters } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ChatMessage } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
-import type { CatalogConsumer, CatalogToolBinder } from "./tool-catalog/catalogToolPorts.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 

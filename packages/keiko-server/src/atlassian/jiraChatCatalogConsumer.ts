@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
@@ -77,7 +78,8 @@ function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefin
   const action = value as CatalogJsonObject;
   const tool = JIRA_CHAT_TOOLS.find((name) => name === action.tool);
   if (
-    Object.keys(action).sort().join() !== "actionId,argumentsDigest,idempotencyKey,tool" ||
+    Object.keys(action).sort(compareStrings).join() !==
+      "actionId,argumentsDigest,idempotencyKey,tool" ||
     tool === undefined ||
     typeof action.actionId !== "string" ||
     typeof action.idempotencyKey !== "string" ||

@@ -4,7 +4,7 @@ import {
   Client,
   fromJsonSchema,
   StreamableHTTPClientTransport,
-  SSEClientTransport,
+  SSEClientTransport, // NOSONAR typescript:S1874 -- ADR-0181 explicitly supports opt-in legacy SSE; the SDK documents coexistence during migration.
   SseError,
   type Transport,
   type Tool,
@@ -77,7 +77,7 @@ function transportFor(
       options.fetch(request, init, contexts.getStore());
     if (options.transport === "sse") {
       // eslint-disable-next-line @typescript-eslint/no-deprecated -- Explicit compatibility with existing HTTP+SSE MCP servers; new connections default to Streamable HTTP.
-      return new SSEClientTransport(url, { fetch });
+      return new SSEClientTransport(url, { fetch }); // NOSONAR typescript:S1874 -- only the explicitly selected legacy transport; Streamable HTTP remains the default.
     }
     return new StreamableHTTPClientTransport(url, {
       fetch,

@@ -262,11 +262,11 @@ function ConnectionMode({
         onChange={(mode) => setDraft({ ...draft, mode })}
       />
       <p>{t("chat.tools.modeHelp")}</p>
-      <p role="status">
+      <output style={{ margin: 0 }}>
         {t("chat.jira.effectiveMode", {
           mode: t(`codingWorkbench.mode.${chat.effectiveToolMode ?? "governed-assist"}.label`),
         })}
-      </p>
+      </output>
     </>
   );
 }
@@ -319,7 +319,7 @@ function useDisclosureEscape(ref: RefObject<HTMLDetailsElement | null>, open: bo
     if (!open) return;
     const close = (event: KeyboardEvent): void => {
       const node = ref.current;
-      if (event.key !== "Escape" || node === null || !node.contains(document.activeElement)) return;
+      if (event.key !== "Escape" || !node?.contains(document.activeElement)) return;
       if (node.querySelector('[role="combobox"][aria-expanded="true"]') !== null) return;
       event.stopPropagation();
       event.preventDefault();
@@ -359,9 +359,8 @@ function useJiraWorkspaceRequest(
     const receive = (event: Event): void => {
       const request = connectionRequest(event);
       if (
-        request === undefined ||
-        request.chatId !== chat.id ||
-        detailsRef.current?.closest("[data-window-id]")?.getAttribute("data-window-id") !==
+        request?.chatId !== chat.id ||
+        detailsRef.current?.closest<HTMLElement>("[data-window-id]")?.dataset.windowId !==
           request.chatWindowId ||
         !request.accept()
       )
@@ -443,14 +442,14 @@ function useConnectionState({
   list = listAtlassianConnectors,
   persist = updateGroundingScopes,
 }: ConnectionProps): ConnectionState {
-  const [storedDraft, setDraft] = useState(() => initialDraft(chat));
+  const [storedDraft, setStoredDraft] = useState(() => initialDraft(chat));
   const [open, setOpen] = useState(false);
   const detailsRef = useRef<HTMLDetailsElement>(null);
   useDisclosureEscape(detailsRef, open);
   const draft = storedDraft.revision === revision(chat) ? storedDraft : initialDraft(chat);
   const catalog = usePodChoices(list, chat.jiraPodBinding !== undefined);
   const request = useJiraWorkspaceRequest(chat, detailsRef, (pending) => {
-    setDraft({ ...initialDraft(chat), podId: pending.podId });
+    setStoredDraft({ ...initialDraft(chat), podId: pending.podId });
     if (detailsRef.current !== null) detailsRef.current.open = true;
     setOpen(true);
     catalog.reload();
@@ -477,7 +476,7 @@ function useConnectionState({
     toggle,
     detailsRef,
     draft,
-    setDraft,
+    setDraft: setStoredDraft,
     catalog,
     mutation,
     refreshFailed,

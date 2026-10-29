@@ -1,4 +1,15 @@
-import type { ParsedDesktopChatSend } from "./chat-handlers.js";
+import {
+  type ParsedDesktopChatSend,
+  buildCanonicalTurnMemoryResult,
+  buildMemoryResult,
+  chatClosedResult,
+  parseClientTurnId,
+  parseMemoryRequest,
+  logChatRejection,
+  runPostCommitCanonicalTurnMemorySideEffects,
+  type CanonicalTurnMemoryRequest,
+  type ParsedConversationMemoryRequest,
+} from "./chat-handlers.js";
 import { createChatToolTurn, scopeChatToolTurn } from "./chat-tool-runtime.js";
 import {
   callGroundedSynthesisModel,
@@ -46,7 +57,6 @@ import {
   WorkspaceError,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-
 import {
   assistantReferenceExcerptIds,
   type AssistantRetrievalReference,
@@ -64,7 +74,6 @@ import {
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
-
 import {
   groundedConversationContinuity,
   type GroundedConversationContinuity,
@@ -106,9 +115,7 @@ import {
   type ConnectedContextEvidenceInput,
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
-
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-
 import {
   type ContinuityReferentSource,
   connectedContextOmittedCount,
@@ -135,7 +142,6 @@ import {
   type GroundedUncertainty,
   type GroundedAnswerEvidenceDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-
 import type { ContentRedactionPolicy, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
@@ -143,9 +149,7 @@ import {
   maxUtf8BytesForTokenBudget,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
-
 import { type RouteContext, type RouteResult, errorBody } from "./routes.js";
-
 import {
   type Redactor,
   type UiHandlerDeps,
@@ -223,17 +227,6 @@ import {
   type GroundedTurnRecord,
 } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
-import {
-  buildCanonicalTurnMemoryResult,
-  buildMemoryResult,
-  chatClosedResult,
-  parseClientTurnId,
-  parseMemoryRequest,
-  logChatRejection,
-  runPostCommitCanonicalTurnMemorySideEffects,
-  type CanonicalTurnMemoryRequest,
-  type ParsedConversationMemoryRequest,
-} from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
   canonicalChatTurnIdentityContent,

@@ -5,26 +5,27 @@ import type {
 import type {
   CodingWorkbenchRuntimeDelegationUsage,
   EditorAgentGovernedAuthorityReference,
+  ChatToolAuthorityEnvelope,
+  ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
 import { randomUUID } from "node:crypto";
-import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
 import { validateChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./atlassian/actionApprovals.js";
-import type { ChatReadGrantEntry } from "./atlassian/chatReadGrantState.js";
+import {
+  type ChatReadGrantEntry,
+  projectChatReadGrant,
+  sameReadGrantSubject,
+} from "./atlassian/chatReadGrantState.js";
 import {
   sameWriteAction,
   type ChatToolWriteActionIdentity,
   type ChatWriteApprovalEntry,
 } from "./atlassian/chatWriteApprovalState.js";
 import { recordChatAuthorityResult } from "./editor/chatAuthorityActivity.js";
-import type {
-  ChatToolReadGrantView,
-  ChatToolWriteApprovalView,
-} from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
-import { projectChatReadGrant, sameReadGrantSubject } from "./atlassian/chatReadGrantState.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 
 export interface ChatToolApprovalContext {

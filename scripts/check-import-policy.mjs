@@ -356,7 +356,7 @@ const IMPORT_POLICY_RULES = [
       mode === "fixtures"
         ? path.startsWith(`${FIXTURE_ROOT}/mcp-sdk-isolation/`)
         : /^(packages\/keiko-|src\/)/.test(path) && !path.startsWith("packages/keiko-mcp/src/"),
-    matchesSpecifier: (specifier) => /^@modelcontextprotocol\//.test(specifier),
+    matchesSpecifier: (specifier) => specifier.startsWith("@modelcontextprotocol/"),
   },
   {
     name: "adr-0019-trust-4-no-direct-fs-outside-workspace",

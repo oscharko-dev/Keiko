@@ -237,7 +237,8 @@ function reference(
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
   const raw = asRecord(value);
-  const key = user ? (deployment === "cloud" ? "accountId" : "name") : "id";
+  const userKey = deployment === "cloud" ? "accountId" : "name";
+  const key = user ? userKey : "id";
   if (raw === undefined || Object.keys(raw).length !== 1 || !boundedText(raw[key], 256))
     return INVALID;
   const ref = raw[key];
@@ -434,7 +435,9 @@ function validateUpdates(
       !field.operations.includes(change.operation)
     )
       return { ok: false, reason: "invalid-operation", fieldId: change.fieldId };
-    (update[field.id] ??= []).push({ [change.operation]: change.value });
+    const operations = update[field.id] ?? [];
+    update[field.id] = operations;
+    operations.push({ [change.operation]: change.value });
   }
   return { ok: true, update };
 }

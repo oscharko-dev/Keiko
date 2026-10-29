@@ -332,12 +332,7 @@ function VerifyPhase({
   return (
     <div className="acx-form" data-testid="acx-add-verify">
       <div className="acx-actions">
-        <button
-          type="button"
-          className="lk-btn lk-btn-primary"
-          onClick={() => void runVerify()}
-          disabled={busy}
-        >
+        <button type="button" className="lk-btn lk-btn-primary" onClick={runVerify} disabled={busy}>
           {busy
             ? t("atlassianConnectors.verify.verifying")
             : t("atlassianConnectors.verify.button")}

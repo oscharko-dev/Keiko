@@ -1,5 +1,5 @@
 export const JIRA_FIELD_READ_MAX = 20;
-export const JIRA_FIELD_ID_PATTERN = "^(?:[a-zA-Z][a-zA-Z0-9]*|customfield_\\d{1,16})$";
+export const JIRA_FIELD_ID_PATTERN = String.raw`^(?:[a-zA-Z][a-zA-Z0-9]*|customfield_\d{1,16})$`;
 /** Bounded capability projection from current Jira create/edit/transition metadata (#4083). */
 export const JIRA_FIELD_KINDS = [
   "text",

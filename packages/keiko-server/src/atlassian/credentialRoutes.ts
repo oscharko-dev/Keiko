@@ -437,15 +437,14 @@ export function handleUpdateAtlassianConnectorCredential(
     if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
       throw new AtlassianCredentialCustodyError("credential-not-found");
     const updated = guard.custody.updateLivePod(metadata.authRef, body, ctx.correlationId);
+    let updateKind: "rename" | "replace-token" | "rename-and-replace-token" = "rename";
+    if (body.apiToken !== undefined)
+      updateKind = body.displayName === undefined ? "replace-token" : "rename-and-replace-token";
     recordCredentialUpdated(
       guard,
       ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
       updated.generation ?? 1,
-      body.apiToken === undefined
-        ? "rename"
-        : body.displayName === undefined
-          ? "replace-token"
-          : "rename-and-replace-token",
+      updateKind,
     );
     return { status: 200, body: publicAtlassianCredential(updated) };
   });

@@ -1,5 +1,12 @@
 import { catalogScopeDigest } from "./catalogToolRequest.js";
-import type { CatalogConsumer, CodingCatalogConsumer } from "./catalogToolPorts.js";
+import type {
+  CatalogConsumer,
+  CodingCatalogConsumer,
+  CatalogActionIdentity,
+  CatalogHandlerResult,
+  CatalogToolBudgetReservation,
+  CatalogToolDispatchOutcome,
+} from "./catalogToolPorts.js";
 import {
   catalogJsonBytes,
   captureCatalogJson,
@@ -33,12 +40,6 @@ import {
   catalogBudgetOperation,
   requireDispatch,
 } from "./catalogToolRuntimeAuthority.js";
-import type {
-  CatalogActionIdentity,
-  CatalogHandlerResult,
-  CatalogToolBudgetReservation,
-  CatalogToolDispatchOutcome,
-} from "./catalogToolPorts.js";
 
 type Settlement = Extract<CatalogToolDispatchOutcome, { kind: "settled" }>;
 export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogConsumer> {
@@ -240,18 +241,18 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
               this.handler?.descriptor.bounds.maxResultBytes,
             );
       candidate = this.envelope(error.status, error.reason, data);
-    } catch (invalidResult) {
+    } catch (error_) {
       emitServerDiagnostic(
         this.state.input.logPort.diagnostics,
         serverDiagnosticFromError({
           correlationId: correlationIdOrUnknown(this.context.correlationId),
           operation: "tool-catalog.provider-result-invalid",
           source: "tool-catalog-settlement",
-          error: invalidResult,
+          error: error_,
           redact: () => "server-operation-failed",
         }),
       );
-      this.finish("failed", "result-contract-failed", undefined, invalidResult);
+      this.finish("failed", "result-contract-failed", undefined, error_);
       return;
     }
     this.finish(error.status, error.reason, candidate, error);

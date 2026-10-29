@@ -5,6 +5,7 @@ import {
   type JiraMutationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { projectJiraFieldReadValue } from "./jira-managed-field-reads.js";
 import {
@@ -39,7 +40,9 @@ export async function readJiraMutationIssue(
   issueKey: string,
   fields: readonly string[],
 ): Promise<JiraIssueReadback> {
-  const query = new URLSearchParams({ fields: [...new Set(fields)].sort().join(",") });
+  const query = new URLSearchParams({
+    fields: [...new Set(fields)].sort(compareStrings).join(","),
+  });
   const response = await request(`issue/${encodeURIComponent(issueKey)}?${query.toString()}`);
   if (!response.ok) return response;
   const body = response.body;
@@ -76,7 +79,7 @@ function comparable(field: JiraFieldMetadata, value: unknown): string | undefine
     projected,
     field.kind === "user" || field.kind === "users" ? "name" : "id",
   );
-  return items === undefined ? undefined : JSON.stringify([...new Set(items)].sort());
+  return items === undefined ? undefined : JSON.stringify([...new Set(items)].sort(compareStrings));
 }
 function comparableItems(projected: CatalogJsonObject, key: string): readonly string[] | undefined {
   const strings = asArray(projected.strings);

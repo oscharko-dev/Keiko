@@ -1,4 +1,15 @@
-import type { CatalogConsumer, CodingCatalogConsumer } from "./catalogToolPorts.js";
+import type {
+  CatalogConsumer,
+  CodingCatalogConsumer,
+  BoundToolInvocation,
+  CatalogActionIdentity,
+  CatalogHandlerContext,
+  CatalogToolBinder,
+  CatalogToolBinderInput,
+  CatalogToolBinderOptions,
+  CatalogToolDispatchOutcome,
+  CatalogToolExecutionOverride,
+} from "./catalogToolPorts.js";
 /** Canonical offer, dispatch, replay, cursor, deadline, and settlement owner. Production coding
  * tool calls adapt their parsed request at `catalogToolFacadeBridge.ts` and enter this path. */
 import { Buffer } from "node:buffer";
@@ -31,16 +42,6 @@ import { CATALOG_CURSOR_ID_PREFIX } from "./catalogToolCursor.js";
 import { CatalogContinuation } from "./catalogToolContinuation.js";
 import { catalogRequestDigest } from "./catalogToolRequest.js";
 import { CatalogInvocation } from "./catalogToolSettlement.js";
-import type {
-  BoundToolInvocation,
-  CatalogActionIdentity,
-  CatalogHandlerContext,
-  CatalogToolBinder,
-  CatalogToolBinderInput,
-  CatalogToolBinderOptions,
-  CatalogToolDispatchOutcome,
-  CatalogToolExecutionOverride,
-} from "./catalogToolPorts.js";
 
 function claimInvocation<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
   invocation: CatalogInvocation<Consumer>,

@@ -30,7 +30,6 @@ import {
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-
 import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
@@ -44,7 +43,6 @@ import {
   encodeSecureWorkspaceNativeDirectory,
 } from "./secureWorkspaceTextReadProtocol.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
-
 import {
   contentFreeErrorClass,
   describeError,
@@ -1000,7 +998,9 @@ function recoverJournaledMcpRun(
     }
   };
   const run = runs.get(runId);
-  return run === undefined ? recover() : (run.mcpRecovery ??= Promise.resolve().then(recover));
+  if (run === undefined) return recover();
+  run.mcpRecovery ??= Promise.resolve().then(recover);
+  return run.mcpRecovery;
 }
 
 function nativeMutationRuntimeEvents(
@@ -1288,16 +1288,7 @@ function createSubmitTask(
     // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
     // continuation of the human's request keeps that request's images: its undo reaches back to it.
     if (origin === undefined) beginOpenCodeTurnImages(run);
-    return postTurnPrompt(
-      run,
-      text,
-      initialContext,
-      inputs,
-      diagnostics,
-      activityLog,
-      origin,
-      sinks.mcpMutations,
-    );
+    return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
   };
 }
 
@@ -1391,11 +1382,14 @@ async function postTurnPrompt(
   text: string,
   initialContext: string | undefined,
   inputs: AdmittedPromptInputs | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
-  activityLog: ServerLogSink | undefined,
+  sinks: {
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+    readonly activityLog: ServerLogSink | undefined;
+    readonly mcpMutations?: NativeMcpMutationJournal | undefined;
+  },
   origin?: CodingRuntimeTurnOrigin,
-  mcpMutations?: NativeMcpMutationJournal,
 ): Promise<boolean> {
+  const { diagnostics, activityLog, mcpMutations } = sinks;
   // A turn that is not a command must never take a command's presentation.
   run.commandPresentation.disarm();
   if (inputs?.command !== undefined) {

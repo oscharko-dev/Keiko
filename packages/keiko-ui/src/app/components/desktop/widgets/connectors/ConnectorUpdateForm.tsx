@@ -77,16 +77,12 @@ function UpdateButtons({
   unconfirmed,
 }: Pick<Props, "mode" | "busy" | "close" | "refresh" | "unconfirmed">): ReactNode {
   const t = useTranslate();
+  const saveLabel =
+    mode === "rename" ? "atlassianConnectors.live.saveName" : "atlassianConnectors.live.saveToken";
   return (
     <div className="acx-actions">
       <button type="submit" className="lk-btn lk-btn-primary" disabled={busy || unconfirmed}>
-        {t(
-          busy
-            ? "atlassianConnectors.live.saving"
-            : mode === "rename"
-              ? "atlassianConnectors.live.saveName"
-              : "atlassianConnectors.live.saveToken",
-        )}
+        {t(busy ? "atlassianConnectors.live.saving" : saveLabel)}
       </button>
       {unconfirmed ? (
         <button type="button" className="lk-btn" disabled={busy} onClick={refresh}>

@@ -1,4 +1,11 @@
-import type { CatalogConsumer, CodingCatalogConsumer } from "./catalogToolPorts.js";
+import type {
+  CatalogConsumer,
+  CodingCatalogConsumer,
+  BoundToolInvocation,
+  CatalogActionIdentity,
+  CatalogConsumerPort,
+  CatalogToolExecutionOverride,
+} from "./catalogToolPorts.js";
 import { CatalogDispatchFault, requireDispatch } from "./catalogToolErrors.js";
 import {
   catalogScopeDigest,
@@ -30,12 +37,6 @@ import {
   type CatalogBindingState,
   type CatalogBoundHandler,
 } from "./catalogToolBinder.js";
-import type {
-  BoundToolInvocation,
-  CatalogActionIdentity,
-  CatalogConsumerPort,
-  CatalogToolExecutionOverride,
-} from "./catalogToolPorts.js";
 
 export function catalogBudgetOperation<T>(operation: () => T): T {
   try {

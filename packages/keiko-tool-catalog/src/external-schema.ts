@@ -32,12 +32,11 @@ const OPTIONS = {
   code: { optimize: 0 },
 };
 function compiler(dialect: CatalogJsonValue | undefined): Ajv {
-  const validator =
-    dialect === EXTERNAL_JSON_SCHEMA_DEFAULT
-      ? new Ajv2020(OPTIONS)
-      : dialect === "https://json-schema.org/draft/2019-09/schema"
-        ? new Ajv2019(OPTIONS)
-        : new Ajv(OPTIONS);
+  let validator: Ajv;
+  if (dialect === EXTERNAL_JSON_SCHEMA_DEFAULT) validator = new Ajv2020(OPTIONS);
+  else if (dialect === "https://json-schema.org/draft/2019-09/schema")
+    validator = new Ajv2019(OPTIONS);
+  else validator = new Ajv(OPTIONS);
   addFormats.default(validator, {
     mode: "full",
     formats: [
@@ -111,7 +110,8 @@ export function externalCatalogSchemaMismatch(
 function missingRequired(error: ErrorObject | undefined, path: string): string | undefined {
   if (error?.keyword !== "required" || typeof error.params.missingProperty !== "string")
     return undefined;
-  return `${path === "$" ? "" : `${path}.`}${error.params.missingProperty}`;
+  const property = error.params.missingProperty;
+  return path === "$" ? property : `${path}.${property}`;
 }
 function mismatchDetail(error: ErrorObject | undefined): CatalogSchemaMismatch {
   const path = error === undefined ? "$" : declaredPath(error);

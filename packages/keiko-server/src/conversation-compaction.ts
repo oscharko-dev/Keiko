@@ -63,6 +63,8 @@ export interface ConversationCompactionOutcome {
   readonly omittedSummaryCategories?: readonly string[] | undefined;
 }
 
+type RetainedGatewayTurn = Pick<GatewayConversationTurn, "role" | "content" | "verbatim">;
+
 interface DroppedTurn extends GatewayConversationTurn {
   readonly gatewayTokens: number;
 }
@@ -161,7 +163,7 @@ function selectCompactionOutcome(
 
 function buildInitialMessages(
   systemMessage: GatewayConversationMessage | undefined,
-  filtered: readonly Pick<GatewayConversationTurn, "role" | "content" | "verbatim">[],
+  filtered: readonly RetainedGatewayTurn[],
   earlier: ContextCompactionRecord | undefined,
 ): GatewayConversationMessage[] {
   if (earlier === undefined) return buildVerbatimMessages(systemMessage, filtered);
@@ -175,7 +177,7 @@ function buildInitialMessages(
 
 function buildVerbatimMessages(
   systemMessage: GatewayConversationMessage | undefined,
-  filtered: readonly Pick<GatewayConversationTurn, "role" | "content" | "verbatim">[],
+  filtered: readonly RetainedGatewayTurn[],
 ): GatewayConversationMessage[] {
   const retained = filtered.flatMap(gatewayMessagesForTurn);
   return systemMessage === undefined ? retained : [systemMessage, ...retained];

@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   createToolCatalog,
   createToolDescriptor,
@@ -46,7 +47,7 @@ function captureAction(value: CatalogJsonValue): ConversationAction | undefined 
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const data = value as CatalogJsonObject;
   if (
-    Object.keys(data).sort().join() !== "action,actionId,idempotencyKey,query" ||
+    Object.keys(data).sort(compareStrings).join() !== "action,actionId,idempotencyKey,query" ||
     (data.action !== "lookup" && data.action !== "mutation") ||
     typeof data.actionId !== "string" ||
     typeof data.idempotencyKey !== "string" ||

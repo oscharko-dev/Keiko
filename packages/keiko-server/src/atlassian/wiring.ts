@@ -1,10 +1,21 @@
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { recordConnectionCheck } from "./credentialActivity.js";
-import type { AtlassianCredentialHttpOptions } from "./credentialRoutes.js";
-import type { CreateAtlassianHttpPortOptions } from "./httpPort.js";
 import type {
-  AtlassianCredentialMetadata,
-  AtlassianCredentialCustody,
+  AtlassianCredentialHttpOptions,
+  AtlassianConnectorCredentialDeps,
+} from "./credentialRoutes.js";
+import {
+  type CreateAtlassianHttpPortOptions,
+  createGatewayAtlassianHttpBodyPort,
+  createGatewayAtlassianHttpPort,
+} from "./httpPort.js";
+import {
+  type AtlassianCredentialMetadata,
+  type AtlassianCredentialCustody,
+  createAtlassianCredentialCustody,
+  type AtlassianCredentialVaultPort,
+  type AtlassianCredentialCustodyDeps,
+  type AtlassianCredentialExecutionResolver,
 } from "@oscharko-dev/keiko-connectors";
 // Composition-root wiring for Atlassian connector credential custody (Issue #2241, ADR-0128 D1).
 //
@@ -15,12 +26,6 @@ import type {
 // createAtlassianCredentialCustody is captured ONLY inside the httpPortFactory closure — it is
 // not a field on the returned deps, so no route or serialized surface can reach the secret.
 
-import {
-  createAtlassianCredentialCustody,
-  type AtlassianCredentialVaultPort,
-  type AtlassianCredentialCustodyDeps,
-  type AtlassianCredentialExecutionResolver,
-} from "@oscharko-dev/keiko-connectors";
 import type {
   LocalSecretVault,
   LocalVaultKeychainAccess,
@@ -32,8 +37,6 @@ import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { openAtlassianCredentialVault } from "./credentialVault.js";
 import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
-import { createGatewayAtlassianHttpBodyPort, createGatewayAtlassianHttpPort } from "./httpPort.js";
-import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 
 export interface BuildAtlassianConnectorCredentialDepsOptions {
   readonly onLivePodInvalidated?: AtlassianCredentialCustodyDeps["onLivePodInvalidated"];

@@ -95,7 +95,7 @@ function projectPage(
 ): ManagedMcpToolResult {
   if (values.length > 1000) return failure("bounds-exceeded");
   const projects = values.map(project);
-  if (projects.some((item) => item === undefined)) return failure("malformed-payload");
+  if (projects.includes(undefined)) return failure("malformed-payload");
   const valid = projects.filter((item) => item !== undefined);
   if (new Set(valid.map((item) => item.id)).size !== valid.length)
     return failure("malformed-payload");

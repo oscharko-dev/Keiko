@@ -3075,6 +3075,35 @@ function synchronizeRenderedIdentity(
   renderedRef.current = next;
 }
 
+function applyStreamWriteApproval(
+  previous: SessionState,
+  event: Parameters<typeof applyChatWriteApproval>[1],
+  optimisticId: string,
+): SessionState {
+  return {
+    ...previous,
+    messages: previous.messages.map((message) =>
+      message.id === optimisticId || message.id === event.messageId
+        ? applyChatWriteApproval(message, event)
+        : message,
+    ),
+  };
+}
+function applyStreamReadConsent(
+  previous: SessionState,
+  event: Parameters<typeof applyChatReadConsent>[1],
+  optimisticId: string,
+): SessionState {
+  return {
+    ...previous,
+    messages: previous.messages.map((message) =>
+      message.id === optimisticId || message.id === event.messageId
+        ? applyChatReadConsent(message, event)
+        : message,
+    ),
+  };
+}
+
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
   // 0.3.0 release audit — the pre-send attachment notices are user-facing text and were hardcoded
   // English. `documentContext` is not a component and cannot call a hook, so the session hook
@@ -4119,25 +4148,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         },
         onWriteApproval: (event): void => {
           if (isSupersededOrAborted(chatId, signal) || event.approval.chatId !== chatId) return;
-          setState((previous) => ({
-            ...previous,
-            messages: previous.messages.map((message) =>
-              message.id === optimisticId || message.id === event.messageId
-                ? applyChatWriteApproval(message, event)
-                : message,
-            ),
-          }));
+          setState((previous) => applyStreamWriteApproval(previous, event, optimisticId));
         },
         onReadConsent: ({ messageId, grant }): void => {
           if (isSupersededOrAborted(chatId, signal) || grant.chatId !== chatId) return;
-          setState((previous) => ({
-            ...previous,
-            messages: previous.messages.map((message) =>
-              message.id === optimisticId || message.id === messageId
-                ? applyChatReadConsent(message, { messageId, grant })
-                : message,
-            ),
-          }));
+          setState((previous) =>
+            applyStreamReadConsent(previous, { messageId, grant }, optimisticId),
+          );
         },
         onToken: (text: string): void => {
           if (isSupersededOrAborted(chatId, signal)) return;

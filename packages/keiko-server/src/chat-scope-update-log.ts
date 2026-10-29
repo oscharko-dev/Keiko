@@ -59,12 +59,15 @@ export function logChatScopeUpdate(
   cancelledGenerationCount?: number,
 ): void {
   const expected = patch.expectedGroundingScopeIdentity;
+  let status = 200;
+  if (outcome === "conflict") status = 409;
+  else if (outcome === "denied") status = 400;
   processServerLogSink().write(
     activityLogEvent(
       CHAT_SCOPE_UPDATE,
       {
         correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-        status: outcome === "conflict" ? 409 : outcome === "denied" ? 400 : 200,
+        status,
       },
       {
         outcome,

@@ -264,7 +264,8 @@ class MutationStore implements ChatToolMutationStore {
       }
       const blocked = blockedTurn(this.db, intent);
       if (blocked !== undefined) return blocked;
-      if (this.find(intent.invocationId) !== undefined) throw journalConflict();
+      const existingInvocation = this.find(intent.invocationId);
+      if (existingInvocation !== undefined) throw journalConflict();
       const createdAt = timestamp(this.now);
       this.insertPrepared(intent, createdAt);
       return { kind: "prepared", record: this.requireRecord(intent.invocationId) };

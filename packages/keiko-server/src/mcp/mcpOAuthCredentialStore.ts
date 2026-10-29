@@ -8,8 +8,10 @@ import {
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
-import type { McpRemoteOAuth } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
-import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import type {
+  McpRemoteOAuth,
+  McpServerDefinition,
+} from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 
 /**
  * Where an MCP server's OAuth credential lives between runs (#3903 AC3): sealed with AES-256-GCM in

@@ -1,4 +1,4 @@
-import type { NormalizedToolCall } from "./gateway.js";
+import type { ModelCapability, NormalizedToolCall } from "./gateway.js";
 import type { ToolResultEnvelope } from "./governed-tool-catalog.js";
 import { exactKeys } from "./contract-validation-primitives.js";
 import { parseSafely } from "./managed-lsp-parse-safely.js";
@@ -25,7 +25,6 @@ import type { EditorDocumentSession, EditorDocumentVersion } from "./editor-sess
 // ModelCapability is the credential-free capability registry shape; SafeGatewayConfig surfaces
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
-import type { ModelCapability } from "./gateway.js";
 // GroundedAnswerContextPackSummary projects the connected-context pack into a counts-only,
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
@@ -1232,7 +1231,7 @@ export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGr
     [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
     Number(value.expiresAt) > Number(value.requestedAt) &&
     typeof value.state === "string" &&
-    CHAT_TOOL_READ_GRANT_STATES.some((state) => state === value.state)
+    (CHAT_TOOL_READ_GRANT_STATES as readonly string[]).includes(value.state)
   );
 }
 
@@ -1405,8 +1404,8 @@ export function classifyAttachmentMime(mimeType: string): "image" | "document" |
   // SVG is denied (script-carrying vector) even though it is image/*. The structured-suffix form
   // is already refused by the intentionally narrower normalizer above.
   if (normalized === "image/svg") return "unsupported";
-  if (ALLOWED_IMAGE_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return "image";
-  if (ALLOWED_DOCUMENT_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+  if (normalized.startsWith(ALLOWED_IMAGE_MIME_PREFIXES[0])) return "image";
+  if (normalized.startsWith(ALLOWED_DOCUMENT_MIME_PREFIXES[0])) {
     return "document";
   }
   if (ALLOWED_DOCUMENT_MIME_LITERALS.has(normalized)) return "document";

@@ -235,11 +235,18 @@ export function projectProductionSbom(sbom, runtimeTree) {
   if ([...graph.keys()].some((ref) => !available.has(ref))) {
     throw new Error("SBOM is missing a productive dependency component.");
   }
-  const dependencies = [...graph.keys()].sort().map((ref) => ({
+  const dependencies = [...graph.keys()].sort(compareCodeUnits).map((ref) => ({
     ref,
-    dependsOn: [...graph.get(ref)].sort(),
+    dependsOn: [...graph.get(ref)].sort(compareCodeUnits),
   }));
   return { ...sbom, components, dependencies };
+}
+
+// Match Array#sort's default UTF-16 code-unit ordering without locale-dependent collation.
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function npmJson(arguments_, purpose) {

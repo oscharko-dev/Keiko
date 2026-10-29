@@ -75,9 +75,8 @@ export const chatSourcesConsumerPort: CatalogConsumerPort<ChatSourcesConsumer> =
   captureAction: (handler, value) => {
     const action = captureSourceAction(value);
     if (action === undefined) return undefined;
-    return handler.binding?.catalogAction === ("tool" in action ? action.tool : action.name)
-      ? action
-      : undefined;
+    const name = "tool" in action ? action.tool : action.name;
+    return handler.binding?.catalogAction === name ? action : undefined;
   },
   captureApprovedAction: captureSourceAction,
 };

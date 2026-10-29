@@ -102,6 +102,10 @@ function headerAdmitted(node: JsonObject, position: SchemaPosition, names: Set<s
   names.add(name);
   return true;
 }
+function schemaValues(key: string, child: unknown): readonly unknown[] {
+  if (Array.isArray(child)) return child;
+  return SCHEMA_MAPS.has(key) && object(child) ? Object.values(child) : [child];
+}
 function schemaChildren(node: JsonObject, position: SchemaPosition): SchemaPosition[] {
   const result: SchemaPosition[] = [];
   if (object(node.properties))
@@ -110,11 +114,7 @@ function schemaChildren(node: JsonObject, position: SchemaPosition): SchemaPosit
   for (const key of OTHER_SCHEMAS) {
     const child = node[key];
     if (child === undefined) continue;
-    const children = Array.isArray(child)
-      ? child
-      : SCHEMA_MAPS.has(key) && object(child)
-        ? Object.values(child)
-        : [child];
+    const children = schemaValues(key, child);
     for (const value of children) result.push({ value, reachable: false, root: false });
   }
   return result;
