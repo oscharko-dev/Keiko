@@ -8,7 +8,6 @@ import { TerminalToolError } from "./terminal-errors.js";
 import {
   buildTerminalPolicySummary,
   listDirectories,
-  type TerminalEventEnvelope,
   type TerminalExecutionInput,
   type TerminalExecutionManager,
 } from "./terminal.js";
@@ -311,24 +310,13 @@ export function openTerminalSseStream(
     () =>
       manager.subscribe((event) => {
         seq += 1;
-        writeTerminalEvent(res, event, seq, redactor, controller, onBackpressure);
+        // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
+        // the per-connection `id:` cursor differs between them.
+        writeNamespacedSseEvent(res, event, seq, "terminal", redactor, controller, onBackpressure);
       }),
     onBackpressure,
     correlationId,
   );
-}
-
-function writeTerminalEvent(
-  res: ServerResponse,
-  event: TerminalEventEnvelope,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
-  // the per-connection `id:` cursor differs between them.
-  writeNamespacedSseEvent(res, event, seq, "terminal", redactor, controller, onBackpressure);
 }
 
 // Re-export for the unused-import lint: callers can map a terminal error code → HTTP status if
