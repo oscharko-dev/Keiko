@@ -171,8 +171,7 @@ export function pushNestedErrors(
 const MEMORY_ID_MAX_LENGTH = 256;
 const MEMORY_ID_FORBIDDEN_FRAGMENTS: readonly string[] = ["..", "/", "\\"];
 
-function memoryIdReason(value: unknown): string | null {
-  if (typeof value !== "string") return "must be a non-empty string";
+function memoryIdReason(value: string): string | null {
   if (value.length === 0 || value.trim().length === 0) return "must be a non-empty string";
   if (value !== value.trim()) return "must not have leading or trailing whitespace";
   if (value.length > MEMORY_ID_MAX_LENGTH) {
@@ -196,7 +195,7 @@ export function validateMemoryIdString(
   value: unknown,
   errors: string[],
 ): value is string {
-  const reason = memoryIdReason(value);
+  const reason = typeof value === "string" ? memoryIdReason(value) : "must be a non-empty string";
   if (reason !== null) {
     errors.push(`${field} ${reason}`);
     return false;
