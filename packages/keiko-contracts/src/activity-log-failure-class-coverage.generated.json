@@ -3356,7 +3356,7 @@
           "client.files-scope.decision"
         ],
         "end": ["client.binding.resolved"],
-        "failure": ["client.binding.target-missing"],
+        "failure": ["client.binding.project-open-exhausted", "client.binding.target-missing"],
         "loss": []
       },
       "causalEdges": [
@@ -3370,6 +3370,10 @@
         },
         {
           "op": "client.binding.choice-withdrawn",
+          "mode": "correlation"
+        },
+        {
+          "op": "client.binding.project-open-exhausted",
           "mode": "correlation"
         },
         {
@@ -3617,6 +3621,73 @@
             "causeChain": false
           },
           "proofIds": ["client.binding.choice-withdrawn.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "client.binding.project-open-exhausted",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "bindingDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "decidingLoadCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "heuristicFlagged",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "projectOpenAttemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "referenceShape",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "relatedCorrelationIds",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["client.binding.project-open-exhausted.line"],
           "replayReferences": [],
           "missingObligations": []
         },

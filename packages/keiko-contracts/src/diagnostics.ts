@@ -1378,13 +1378,16 @@ export type ClientBindingSurface = (typeof CLIENT_BINDING_SURFACES)[number];
 // `candidates-offered`: a window whose chat id persistence redacted without a fingerprint listed the
 // chats it may have shown, for the person to choose from (#3557 review). `choice-kept` and
 // `choice-withdrawn`: the person kept the chat they chose for such a window, or withdrew it and
-// returned the window to the chats it may have shown.
+// returned the window to the chats it may have shown. `project-open-exhausted`: every bounded
+// attempt to open the chat's project was overtaken by another update, so the window stopped waiting
+// for it (#4123, #4126 review).
 export const CLIENT_BINDING_OUTCOMES = [
   "resolved",
   "target-missing",
   "candidates-offered",
   "choice-kept",
   "choice-withdrawn",
+  "project-open-exhausted",
 ] as const;
 export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 // The binding outcomes that report a failure; every other one is routine evidence. The browser and
@@ -1392,6 +1395,7 @@ export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 // the capacity a failure report needs (#3557 review).
 export const CLIENT_BINDING_FAILURE_OUTCOMES: ReadonlySet<ClientBindingOutcome> = new Set([
   "target-missing",
+  "project-open-exhausted",
 ]);
 
 // `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
@@ -1442,7 +1446,8 @@ export interface ClientBindingIngestRequest {
   // How many list loads decided the outcome in total; any the report does not name is loss.
   readonly decidingLoadCount?: number | undefined;
   // How many times the window opened the chat's project before it held, when more than once: an
-  // attempt another update overtook is repeated, a bounded number of times (#4123).
+  // attempt another update overtook is repeated, a bounded number of times (#4123). Always there on
+  // `project-open-exhausted`, which names the attempts it gave up after.
   readonly projectOpenAttemptCount?: number | undefined;
   // `candidates-offered` only, and always there: how many chats the window offered, zero included.
   readonly candidateCount?: number | undefined;
@@ -1553,10 +1558,18 @@ function isProjectOpenAttemptCount(value: unknown): boolean {
   return isBoundedPositiveInteger(value, CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX);
 }
 
+// An exhausted project open always names the attempts it gave up after.
+function hasConsistentProjectOpenAttempts(value: Record<string, unknown>): boolean {
+  if (value.outcome === "project-open-exhausted") {
+    return isProjectOpenAttemptCount(value.projectOpenAttemptCount);
+  }
+  return isOptional(value.projectOpenAttemptCount, isProjectOpenAttemptCount);
+}
+
 function hasBindingCorrelations(value: Record<string, unknown>): boolean {
   if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.decidingLoadCount, isDecidingLoadCount)) return false;
-  if (!isOptional(value.projectOpenAttemptCount, isProjectOpenAttemptCount)) return false;
+  if (!hasConsistentProjectOpenAttempts(value)) return false;
   const related = value.relatedCorrelationIds;
   if (related === undefined) return true;
   return (

@@ -850,6 +850,27 @@ const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #4126 review: every bounded attempt to open the chat's project was overtaken by another update, so
+// the window stopped waiting and shows that the chat could not be opened. The line names the attempts.
+const CLIENT_BINDING_PROJECT_OPEN_EXHAUSTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.project-open-exhausted",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingProjectOpenExhausted",
+  fields: {
+    ...CLIENT_BINDING_FIELDS,
+    projectOpenAttemptCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.project-open-exhausted.line"],
+  releaseImpact: "patch",
+});
+
 // #3557 review: a window whose chat id persistence redacted without a fingerprint listed the chats
 // it may have shown, for the person to choose from. The line names the list loads that answered, how
 // many chats were offered and how many of those read alike and show a fingerprint reference, zero
@@ -1397,15 +1418,15 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
       required: false,
       values: CLIENT_CODING_WORKBENCH_AGENT_KINDS,
     },
-    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
-    workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
-    fileCount: { type: "integer", dataClass: "count", required: false },
     refusal: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
       values: CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
     },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    fileCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -2864,6 +2885,32 @@ function logClientBindingChoiceDecision(
   logClientBindingChoiceWithdrawn(request, correlationId);
 }
 
+type ClientBindingProjectOpenExhausted = ClientBindingIngestRequest & {
+  readonly outcome: "project-open-exhausted";
+  readonly projectOpenAttemptCount: number;
+};
+
+function isClientBindingProjectOpenExhausted(
+  request: ClientBindingIngestRequest,
+): request is ClientBindingProjectOpenExhausted {
+  return (
+    request.outcome === "project-open-exhausted" && request.projectOpenAttemptCount !== undefined
+  );
+}
+
+function logClientBindingProjectOpenExhausted(
+  request: ClientBindingProjectOpenExhausted,
+  correlationId: string,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_BINDING_PROJECT_OPEN_EXHAUSTED_OPERATION,
+      { correlationId, errorKind: "conflict" },
+      { ...clientBindingFields(request), projectOpenAttemptCount: request.projectOpenAttemptCount },
+    ),
+  );
+}
+
 function logClientBindingTargetMissing(
   request: ClientBindingIngestRequest,
   correlationId: string,
@@ -2895,6 +2942,10 @@ function logClientBinding(
   }
   if (isClientBindingChoiceDecision(request)) {
     logClientBindingChoiceDecision(request, correlationId);
+    return;
+  }
+  if (isClientBindingProjectOpenExhausted(request)) {
+    logClientBindingProjectOpenExhausted(request, correlationId);
     return;
   }
   logClientBindingTargetMissing(request, correlationId);

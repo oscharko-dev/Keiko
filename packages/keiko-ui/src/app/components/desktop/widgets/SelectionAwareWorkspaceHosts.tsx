@@ -156,6 +156,7 @@ const CHAT_TITLE_UPDATE_DIAGNOSTIC = "Chat title update failed.";
 const CHAT_PROJECT_LOOKUP_DIAGNOSTIC = "Chat project lookup failed.";
 const CHAT_TARGET_MISSING_DIAGNOSTIC = "[keiko] chat window restore target not found";
 const CHAT_BINDING_RESOLVED_DIAGNOSTIC = "[keiko] chat window binding resolved";
+const CHAT_PROJECT_OPEN_EXHAUSTED_DIAGNOSTIC = "[keiko] chat window project open exhausted";
 
 class ChatCreationRequestFailure extends Error {
   public constructor(readonly correlationId: string) {
@@ -570,6 +571,8 @@ interface BoundChatRouting {
   // How many times the window opened the chat's project; more than one when an attempt was
   // overtaken and repeated (#4123).
   readonly projectOpenAttemptCount: number;
+  // Every bounded attempt was overtaken: the window stopped waiting for its project (#4126 review).
+  readonly projectOpenExhausted: boolean;
 }
 
 // A missing verdict keeps the correlation id of every list the scan read: each of those answers
@@ -819,6 +822,7 @@ const PROJECT_OPEN_ATTEMPTS_MAX = 3;
 interface ProjectRouting {
   readonly switching: boolean;
   readonly attemptCount: number;
+  readonly exhausted: boolean;
 }
 
 interface ProjectOpenAttempts {
@@ -835,8 +839,8 @@ function countProjectOpenAttempt(attempts: ProjectOpenAttempts, path: string): n
   return attempts.count;
 }
 
-// Repeats an open that settled while the window's project is still not the active one; returns the
-// epoch the open effect keys on.
+// Repeats an open that settled while the window's project is still not the active one, and gives
+// up once the bounded attempts are spent; returns the epoch the open effect keys on.
 function useOvertakenOpenRetry(args: {
   readonly settledPath: string | undefined;
   readonly clearSettled: () => void;
@@ -845,41 +849,67 @@ function useOvertakenOpenRetry(args: {
   readonly failed: boolean;
   readonly attempts: { readonly current: ProjectOpenAttempts };
   readonly attemptedPath: { current: string | undefined };
+  readonly exhaust: (path: string) => void;
 }): number {
   const [retryEpoch, setRetryEpoch] = useState(0);
-  const { settledPath, clearSettled, pendingPath, targetPath, failed, attempts, attemptedPath } =
-    args;
+  const { settledPath, clearSettled, pendingPath, targetPath, failed, attempts } = args;
+  const { attemptedPath, exhaust } = args;
   useEffect((): void => {
     if (settledPath === undefined || pendingPath !== undefined) return;
     clearSettled();
-    const overtaken = targetPath === settledPath && !failed;
-    if (!overtaken || attempts.current.count >= PROJECT_OPEN_ATTEMPTS_MAX) return;
+    if (targetPath !== settledPath || failed) return;
+    if (attempts.current.count >= PROJECT_OPEN_ATTEMPTS_MAX) {
+      exhaust(settledPath);
+      return;
+    }
     attemptedPath.current = undefined;
     setRetryEpoch((epoch) => epoch + 1);
-  }, [attemptedPath, attempts, clearSettled, failed, pendingPath, settledPath, targetPath]);
+  }, [
+    attemptedPath,
+    attempts,
+    clearSettled,
+    exhaust,
+    failed,
+    pendingPath,
+    settledPath,
+    targetPath,
+  ]);
   return retryEpoch;
 }
 
-function useProjectRouting(
-  targetProject: ProjectWithAvailability | undefined,
-  session: ChatSessionApi,
-): ProjectRouting {
-  const attemptedPath = useRef<string | undefined>(undefined);
-  const attempts = useRef<ProjectOpenAttempts>({ path: undefined, count: 0 });
+// The routing episode ends when the window no longer needs a project or its open failed: the next
+// one starts with a fresh attempt budget, while retries of a live episode keep counting (#4126
+// review).
+function useRoutingEpisodeEnd(args: {
+  readonly ended: boolean;
+  readonly attempts: { current: ProjectOpenAttempts };
+  readonly attemptedPath: { current: string | undefined };
+  readonly clearExhausted: (path: undefined) => void;
+}): void {
+  const { ended, attempts, attemptedPath, clearExhausted } = args;
+  useEffect((): void => {
+    if (!ended) return;
+    attemptedPath.current = undefined;
+    attempts.current = { path: undefined, count: 0 };
+    clearExhausted(undefined);
+  }, [attemptedPath, attempts, clearExhausted, ended]);
+}
+
+// Opens the window's project once per attempt; a settle that a newer attempt or an unmount
+// superseded changes nothing.
+function useProjectOpen(args: {
+  readonly targetProject: ProjectWithAvailability | undefined;
+  readonly session: ChatSessionApi;
+  readonly retryEpoch: number;
+  readonly attempts: { readonly current: ProjectOpenAttempts };
+  readonly attemptedPath: { current: string | undefined };
+  readonly setAttemptCount: (count: number) => void;
+  readonly setPendingPath: (path: string | undefined) => void;
+  readonly setSettledPath: (path: string | undefined) => void;
+}): void {
+  const { targetProject, session, retryEpoch, attempts, attemptedPath } = args;
+  const { setAttemptCount, setPendingPath, setSettledPath } = args;
   const attemptGeneration = useRef(0);
-  const [pendingPath, setPendingPath] = useState<string | undefined>();
-  const [settledPath, setSettledPath] = useState<string | undefined>();
-  const [attemptCount, setAttemptCount] = useState(0);
-  const clearSettled = useCallback((): void => setSettledPath(undefined), []);
-  const retryEpoch = useOvertakenOpenRetry({
-    settledPath,
-    clearSettled,
-    pendingPath,
-    targetPath: targetProject?.path,
-    failed: session.error !== undefined,
-    attempts,
-    attemptedPath,
-  });
   useEffect(
     () => (): void => {
       attemptGeneration.current += 1;
@@ -900,23 +930,88 @@ function useProjectRouting(
       setSettledPath(path);
     };
     void session.openProject(targetProject).then(settle, settle);
-  }, [session, targetProject, retryEpoch]);
-  useEffect((): void => {
-    if (pendingPath === undefined && (targetProject === undefined || session.error !== undefined)) {
-      attemptedPath.current = undefined;
-    }
-  }, [pendingPath, session.error, targetProject]);
+  }, [
+    attemptedPath,
+    attempts,
+    retryEpoch,
+    session,
+    setAttemptCount,
+    setPendingPath,
+    setSettledPath,
+    targetProject,
+  ]);
+}
+
+function useProjectRouting(
+  targetProject: ProjectWithAvailability | undefined,
+  session: ChatSessionApi,
+): ProjectRouting {
+  const attemptedPath = useRef<string | undefined>(undefined);
+  const attempts = useRef<ProjectOpenAttempts>({ path: undefined, count: 0 });
+  const [pendingPath, setPendingPath] = useState<string | undefined>();
+  const [settledPath, setSettledPath] = useState<string | undefined>();
+  const [attemptCount, setAttemptCount] = useState(0);
+  const [exhaustedPath, setExhaustedPath] = useState<string | undefined>();
+  const clearSettled = useCallback((): void => setSettledPath(undefined), []);
+  const retryEpoch = useOvertakenOpenRetry({
+    settledPath,
+    clearSettled,
+    pendingPath,
+    targetPath: targetProject?.path,
+    failed: session.error !== undefined,
+    attempts,
+    attemptedPath,
+    exhaust: setExhaustedPath,
+  });
+  useProjectOpen({
+    targetProject,
+    session,
+    retryEpoch,
+    attempts,
+    attemptedPath,
+    setAttemptCount,
+    setPendingPath,
+    setSettledPath,
+  });
+  useRoutingEpisodeEnd({
+    ended:
+      pendingPath === undefined && (targetProject === undefined || session.error !== undefined),
+    attempts,
+    attemptedPath,
+    clearExhausted: setExhaustedPath,
+  });
+  return projectRoutingState({
+    targetPath: targetProject?.path,
+    failed: session.error !== undefined,
+    pendingPath,
+    exhaustedPath,
+    attemptCount,
+  });
+}
+
+// An exhausted window no longer switches: it waits for nothing and reports the closed outcome.
+function projectRoutingState(args: {
+  readonly targetPath: string | undefined;
+  readonly failed: boolean;
+  readonly pendingPath: string | undefined;
+  readonly exhaustedPath: string | undefined;
+  readonly attemptCount: number;
+}): ProjectRouting {
+  const { targetPath, failed, pendingPath, exhaustedPath, attemptCount } = args;
+  const exhausted =
+    pendingPath === undefined && exhaustedPath !== undefined && exhaustedPath === targetPath;
   const switching =
-    (targetProject !== undefined && session.error === undefined) || pendingPath !== undefined;
-  return { switching, attemptCount };
+    !exhausted && ((targetPath !== undefined && !failed) || pendingPath !== undefined);
+  return { switching, attemptCount, exhausted };
 }
 
 function projectRestoreFailed(
   session: ChatSessionApi,
-  switchingProject: boolean,
+  projectRouting: ProjectRouting,
   liveTargetPresent: boolean,
 ): boolean {
-  return !switchingProject && session.error !== undefined && !liveTargetPresent;
+  const failed = session.error !== undefined || projectRouting.exhausted;
+  return !projectRouting.switching && failed && !liveTargetPresent;
 }
 
 function routingResult(
@@ -934,6 +1029,7 @@ function routingResult(
     targetMissing,
     legacyScanCorrelationIds: legacyProject.scanCorrelationIds,
     projectOpenAttemptCount: projectRouting.attemptCount,
+    projectOpenExhausted: projectRouting.exhausted && lookupFailed,
   };
 }
 
@@ -963,7 +1059,7 @@ function useBoundChatRouting(args: {
     (chat): boolean => chat.id === chatId && chat.status !== "closed",
   );
   const lookupFailed =
-    legacyProject.failed || projectRestoreFailed(session, switchingProject, liveTargetPresent);
+    legacyProject.failed || projectRestoreFailed(session, projectRouting, liveTargetPresent);
   const { chats, loading, openChat } = session;
   useEffect((): void => {
     if (loading || chatId === undefined) return;
@@ -1060,7 +1156,7 @@ function useBoundChatTitle(args: {
   }, [args]);
 }
 
-type ChatBindingOutcome = "resolved" | "target-missing";
+type ChatBindingOutcome = "resolved" | "target-missing" | "project-open-exhausted";
 
 function chatBindingOutcome(
   routing: BoundChatRouting,
@@ -1068,6 +1164,7 @@ function chatBindingOutcome(
 ): ChatBindingOutcome | undefined {
   if (chatId === undefined) return undefined;
   if (routing.targetMissing) return "target-missing";
+  if (routing.projectOpenExhausted) return "project-open-exhausted";
   return routing.activeTarget?.id === chatId ? "resolved" : undefined;
 }
 
@@ -1101,12 +1198,17 @@ function chatBindingReferenceEvidence(
   };
 }
 
+const CHAT_BINDING_DIAGNOSTICS: Readonly<Record<ChatBindingOutcome, string>> = {
+  resolved: CHAT_BINDING_RESOLVED_DIAGNOSTIC,
+  "target-missing": CHAT_TARGET_MISSING_DIAGNOSTIC,
+  "project-open-exhausted": CHAT_PROJECT_OPEN_EXHAUSTED_DIAGNOSTIC,
+};
+
 function chatBindingMessage(
   outcome: ChatBindingOutcome,
   evidence: ChatBindingReferenceEvidence,
 ): string {
-  const head =
-    outcome === "resolved" ? CHAT_BINDING_RESOLVED_DIAGNOSTIC : CHAT_TARGET_MISSING_DIAGNOSTIC;
+  const head = CHAT_BINDING_DIAGNOSTICS[outcome];
   const flagged = evidence.heuristicFlagged ? ", heuristic-flagged" : "";
   return `${head} (reference=${evidence.referenceShape}${flagged})`;
 }
@@ -1155,6 +1257,8 @@ function chatBindingDecidingLoads(
   session: ChatSessionApi,
   { restoration, missing }: ChatRebindEvidence,
 ): ChatBindingDecidingLoads {
+  // No list load decided an exhausted project open: the attempts did.
+  if (outcome === "project-open-exhausted") return { correlationIds: [], count: 0 };
   if (outcome === "resolved" && restoration !== undefined) {
     return { correlationIds: [restoration.correlationId], count: 1 };
   }

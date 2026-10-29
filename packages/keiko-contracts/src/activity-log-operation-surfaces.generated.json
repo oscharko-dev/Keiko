@@ -50,6 +50,7 @@
   "client.binding.candidates-offered": "client-diagnostics",
   "client.binding.choice-kept": "client-diagnostics",
   "client.binding.choice-withdrawn": "client-diagnostics",
+  "client.binding.project-open-exhausted": "client-diagnostics",
   "client.binding.resolved": "client-diagnostics",
   "client.binding.target-missing": "client-diagnostics",
   "client.citation.activated": "client-diagnostics",

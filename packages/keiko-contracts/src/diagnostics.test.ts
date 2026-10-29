@@ -10,6 +10,7 @@ import {
   ACTIVITY_LOG_WRITER_KINDS,
   CLIENT_BINDING_CANDIDATES_MAX,
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX,
   CLIENT_BINDING_OUTCOMES,
   CLIENT_BINDING_REFERENCE_SHAPES,
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
@@ -947,7 +948,7 @@ describe("isClientBindingIngestRequest", () => {
   function possibleBinding(outcome: string, referenceShape: string): boolean {
     if (outcome === "resolved") return referenceShape !== "redacted";
     if (outcome === "candidates-offered") return referenceShape === "redacted";
-    if (outcome === "target-missing") return true;
+    if (outcome === "target-missing" || outcome === "project-open-exhausted") return true;
     return referenceShape === "fingerprint" || referenceShape === "user-selected";
   }
 
@@ -955,8 +956,27 @@ describe("isClientBindingIngestRequest", () => {
   function outcomeFields(outcome: string): Record<string, unknown> {
     if (outcome === "candidates-offered") return { candidateCount: 1, disambiguatedCount: 0 };
     if (outcome.startsWith("choice-")) return { targetFingerprint: "c".repeat(64) };
+    if (outcome === "project-open-exhausted") return { projectOpenAttemptCount: 3 };
     return {};
   }
+
+  // #4126 review: an exhausted project open always names the attempts it gave up after, within the
+  // report's bound.
+  it("refuses an exhausted project open without a bounded attempt count", () => {
+    for (const projectOpenAttemptCount of [
+      undefined,
+      0,
+      CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX + 1,
+    ]) {
+      expect(
+        isClientBindingIngestRequest({
+          ...bindingRequest(),
+          outcome: "project-open-exhausted",
+          ...(projectOpenAttemptCount === undefined ? {} : { projectOpenAttemptCount }),
+        }),
+      ).toBe(false);
+    }
+  });
 
   it("accepts every possible outcome and reference shape, with and without correlation ids", () => {
     for (const outcome of CLIENT_BINDING_OUTCOMES) {
@@ -1204,13 +1224,13 @@ describe("isClientBindingIngestRequest", () => {
 });
 
 // #3557 review: the browser and the server budget their reports by one rule. Only a missing target
-// is a binding failure (an offer and a person's decisions are routine), and only a recovery is a
-// routine session repair.
+// or an exhausted project open (#4126 review) is a binding failure (an offer and a person's
+// decisions are routine), and only a recovery is a routine session repair.
 describe("client report budgets", () => {
-  it("classifies exactly the missing target as a binding failure", () => {
+  it("classifies exactly the missing target and the exhausted project open as binding failures", () => {
     expect(
       CLIENT_BINDING_OUTCOMES.filter((outcome) => CLIENT_BINDING_FAILURE_OUTCOMES.has(outcome)),
-    ).toEqual(["target-missing"]);
+    ).toEqual(["target-missing", "project-open-exhausted"]);
   });
 
   it("classifies exactly the recoveries as routine session repairs", () => {

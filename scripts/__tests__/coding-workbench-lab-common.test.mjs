@@ -263,6 +263,21 @@ describe("driver error output (#4120)", () => {
     expect(line).toContain("cookie: [redacted]");
   });
 
+  // #4126 review: a header serialized as JSON quotes its name, so the separator follows a quote.
+  it("redacts quoted header names and keeps the rest of the JSON", () => {
+    const text = `{"cookie":"session=secret","accept":"*/*",'Authorization': 'Bearer abc.def'}`;
+    const redacted = redactSecretHeaders(text);
+    expect(redacted).toBe(`{"cookie":"[redacted]","accept":"*/*",'Authorization': '[redacted]'}`);
+    expect(redacted).not.toContain("secret");
+    expect(redacted).not.toContain("abc.def");
+    expect(redactSecretHeaders(`{"set-cookie": "a=\\"b\\"; Path=/"}`)).toBe(
+      `{"set-cookie": "[redacted]"}`,
+    );
+    expect(redactSecretHeaders(`{"cookie":session=secret,"accept":"*/*"}`)).toBe(
+      `{"cookie":[redacted],"accept":"*/*"}`,
+    );
+  });
+
   it("redacts the header values in arbitrary text and leaves other lines alone", () => {
     expect(redactSecretHeaders(`a\nCookie=${COOKIE}\nproxy-authorization: Basic eA==\nb`)).toBe(
       "a\nCookie=[redacted]\nproxy-authorization: [redacted]\nb",

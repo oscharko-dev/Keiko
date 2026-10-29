@@ -1087,8 +1087,12 @@ Monaco gives a model created without a line break the platform default, so a Win
 otherwise normalize a reloaded LF file to CRLF and report the unchanged buffer as an unsaved human
 edit. The adoption shares the write's undo step. `client.binding.resolved` carries the optional
 `projectOpenAttemptCount` when a Chat's project open had to be repeated because a competing
-workspace update overtook it; the repeat is bounded. Closed values and counts only, never text or
-paths.
+workspace update overtook it; the repeat is bounded to three attempts per routing episode, and an
+episode that ends (the project held, the window no longer needs one, or the open failed) frees the
+budget for the next one. When every attempt was overtaken, the window stops waiting, shows that the
+Chat could not be opened and records `client.binding.project-open-exhausted` at warn (`conflict`,
+failure budget) with the required `projectOpenAttemptCount`. Closed values and counts only, never
+text or paths.
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
