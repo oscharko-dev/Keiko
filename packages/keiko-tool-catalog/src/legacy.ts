@@ -1,6 +1,4 @@
 import {
-  GOVERNED_PATCH_APPLY_TOOL_ID,
-  GOVERNED_PATCH_PROPOSE_TOOL_ID,
   TOOL_CATALOG_LIMITS,
   toolArgumentLimits,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -121,14 +119,15 @@ function patches(): readonly LegacyRegistration[] {
     ["diff"],
   );
   return [
+    // Literal ids: the support code inventory reads a registration's id only as a literal.
     registration(
-      GOVERNED_PATCH_PROPOSE_TOOL_ID,
+      "keiko.patch.propose",
       "propose_patch",
       "Validate a unified diff and return a dry-run preview. Never writes to disk.",
       schema,
     ),
     registration(
-      GOVERNED_PATCH_APPLY_TOOL_ID,
+      "keiko.patch.apply",
       "apply_patch",
       "Apply a validated unified diff atomically. Fail-closed: refuses unless apply is enabled.",
       schema,
