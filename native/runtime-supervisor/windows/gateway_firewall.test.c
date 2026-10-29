@@ -8,6 +8,7 @@
 #include <rpc.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct gateway_firewall_fixture {
   INetFwPolicy2 *policy;
@@ -15,7 +16,193 @@ struct gateway_firewall_fixture {
   BSTR name;
   int initialized;
   int installed;
+  HANDLE engine;
+  GUID filter_key;
 };
+
+/* NetSecurity rejects the IPv6 loopback address even for an exact /128 host.
+ * The IPv6 fixture expresses the same scope directly in a private dynamic WFP session.
+ * This soft permit cannot override a BLOCK in an independent sublayer. Same-sublayer
+ * administrator-policy coexistence remains outside this disposable experiment. */
+static UINT64 firewall_weight = ~(UINT64)0;
+static FWP_BYTE_ARRAY16 firewall_loopback6 = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}};
+
+static void firewall6_spec(PSID sid, FWP_BYTE_BLOB *app, FWP_BYTE_BLOB *user, UINT16 port,
+                          const GUID *key, FWPM_FILTER0 *filter, FWPM_FILTER_CONDITION0 c[8]) {
+  memset(filter, 0, sizeof(*filter));
+  memset(c, 0, 8 * sizeof(*c));
+  filter->filterKey = *key;
+  filter->displayData.name = L"Keiko exact IPv6 inbound firewall fixture";
+  filter->layerKey = FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6;
+  filter->subLayerKey = FWPM_SUBLAYER_MPSSVC_WF;
+  filter->action.type = FWP_ACTION_PERMIT;
+  filter->weight.type = FWP_UINT64;
+  filter->weight.uint64 = &firewall_weight;
+  filter->numFilterConditions = 8;
+  filter->filterCondition = c;
+  for (unsigned i = 0; i < 8; i++) c[i].matchType = FWP_MATCH_EQUAL;
+  c[0].fieldKey = FWPM_CONDITION_ALE_PACKAGE_ID;
+  c[0].conditionValue.type = FWP_SID;
+  c[0].conditionValue.sid = sid;
+  c[1].fieldKey = FWPM_CONDITION_ALE_APP_ID;
+  c[1].conditionValue.type = FWP_BYTE_BLOB_TYPE;
+  c[1].conditionValue.byteBlob = app;
+  c[2].fieldKey = FWPM_CONDITION_ALE_USER_ID;
+  c[2].conditionValue.type = FWP_SECURITY_DESCRIPTOR_TYPE;
+  c[2].conditionValue.sd = user;
+  c[3].fieldKey = FWPM_CONDITION_IP_PROTOCOL;
+  c[3].conditionValue.type = FWP_UINT8;
+  c[3].conditionValue.uint8 = IPPROTO_TCP;
+  c[4].fieldKey = FWPM_CONDITION_IP_LOCAL_PORT;
+  c[4].conditionValue.type = FWP_UINT16;
+  c[4].conditionValue.uint16 = port;
+  c[5].fieldKey = FWPM_CONDITION_IP_LOCAL_ADDRESS;
+  c[6].fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
+  for (unsigned i = 5; i < 7; i++) {
+    c[i].conditionValue.type = FWP_BYTE_ARRAY16_TYPE;
+    c[i].conditionValue.byteArray16 = &firewall_loopback6;
+  }
+  c[7].fieldKey = FWPM_CONDITION_FLAGS;
+  c[7].matchType = FWP_MATCH_FLAGS_ALL_SET;
+  c[7].conditionValue.type = FWP_UINT32;
+  c[7].conditionValue.uint32 = FWP_CONDITION_FLAG_IS_LOOPBACK;
+}
+
+static int firewall_blob_equal(const FWP_BYTE_BLOB *a, const FWP_BYTE_BLOB *b) {
+  return a != NULL && b != NULL && a->size != 0 && a->size == b->size &&
+    a->data != NULL && b->data != NULL && memcmp(a->data, b->data, a->size) == 0;
+}
+
+static int firewall6_matches(const FWPM_FILTER0 *actual, const FWPM_FILTER0 *expected) {
+  unsigned seen = 0;
+  if (actual == NULL || !IsEqualGUID(&actual->filterKey, &expected->filterKey) ||
+      !IsEqualGUID(&actual->layerKey, &expected->layerKey) ||
+      !IsEqualGUID(&actual->subLayerKey, &expected->subLayerKey) ||
+      actual->action.type != FWP_ACTION_PERMIT || actual->providerKey != NULL ||
+      (actual->flags & ~FWPM_FILTER_FLAG_INDEXED) != 0 ||
+      actual->weight.type != FWP_UINT64 || actual->weight.uint64 == NULL ||
+      *actual->weight.uint64 != firewall_weight || actual->numFilterConditions != 8 ||
+      actual->filterCondition == NULL) return 0;
+  for (unsigned i = 0; i < 8; i++) {
+    const FWPM_FILTER_CONDITION0 *a = &actual->filterCondition[i];
+    unsigned j;
+    int match = 0;
+    for (j = 0; j < 8; j++) if (IsEqualGUID(&a->fieldKey, &expected->filterCondition[j].fieldKey)) break;
+    if (j == 8 || (seen & (1u << j)) != 0) return 0;
+    const FWPM_FILTER_CONDITION0 *e = &expected->filterCondition[j];
+    if (a->matchType != e->matchType || a->conditionValue.type != e->conditionValue.type) return 0;
+    switch (a->conditionValue.type) {
+      case FWP_SID: match = a->conditionValue.sid != NULL && IsValidSid(a->conditionValue.sid) &&
+        EqualSid(a->conditionValue.sid, e->conditionValue.sid); break;
+      case FWP_BYTE_BLOB_TYPE: match = firewall_blob_equal(a->conditionValue.byteBlob, e->conditionValue.byteBlob); break;
+      case FWP_SECURITY_DESCRIPTOR_TYPE: match = firewall_blob_equal(a->conditionValue.sd, e->conditionValue.sd); break;
+      case FWP_UINT8: match = a->conditionValue.uint8 == e->conditionValue.uint8; break;
+      case FWP_UINT16: match = a->conditionValue.uint16 == e->conditionValue.uint16; break;
+      case FWP_UINT32: match = a->conditionValue.uint32 == e->conditionValue.uint32; break;
+      case FWP_BYTE_ARRAY16_TYPE: match = a->conditionValue.byteArray16 != NULL &&
+        memcmp(a->conditionValue.byteArray16, e->conditionValue.byteArray16, sizeof(FWP_BYTE_ARRAY16)) == 0; break;
+      default: break;
+    }
+    if (!match) return 0;
+    seen |= 1u << j;
+  }
+  return seen == 255;
+}
+
+/* Pure readback regression: no engine session and no host firewall mutation. */
+int gateway_firewall_spec_tests(void) {
+  PSID sid = NULL;
+  GUID key = {1, 0, 0, {0}};
+  UINT8 app_data[] = {1, 2}, user_data[] = {3, 4};
+  FWP_BYTE_BLOB app = {sizeof(app_data), app_data}, user = {sizeof(user_data), user_data};
+  FWPM_FILTER0 expected, actual;
+  FWPM_FILTER_CONDITION0 e[8], a[8];
+  int ok = 1;
+  if (!ConvertStringSidToSidW(L"S-1-15-2-1-2-3-4-5-6-7", &sid)) return 1;
+  firewall6_spec(sid, &app, &user, 45678, &key, &expected, e);
+  for (unsigned mutation = 0; mutation < 22; mutation++) {
+    actual = expected; memcpy(a, e, sizeof(a)); actual.filterCondition = a;
+    if (mutation >= 1 && mutation <= 8) a[mutation - 1].conditionValue.type = FWP_EMPTY;
+    if (mutation == 9) actual.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT;
+    if (mutation == 10) actual.numFilterConditions--;
+    if (mutation == 11) a[6] = a[5];
+    if (mutation == 12) actual.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+    if (mutation == 13) actual.layerKey = FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4;
+    if (mutation == 14) actual.providerKey = &key;
+    if (mutation == 15) actual.filterKey.Data1++;
+    if (mutation == 16) a[4].conditionValue.uint16++;
+    if (mutation == 17) a[1].conditionValue.byteBlob = &user;
+    if (mutation == 18) a[2].conditionValue.sd = &app;
+    if (mutation == 19) a[7].matchType = FWP_MATCH_FLAGS_ANY_SET;
+    if (mutation == 20) actual.weight.uint64 = NULL;
+    if (mutation == 21) actual.flags = FWPM_FILTER_FLAG_INDEXED;
+    if (firewall6_matches(&actual, &expected) != (mutation == 0 || mutation == 21)) ok = 0;
+  }
+  LocalFree(sid);
+  puts(ok ? "gateway-firewall-exact-readback: passed" : "gateway-firewall-exact-readback: failed");
+  return ok ? 0 : 1;
+}
+
+static DWORD firewall6_open(PSID sid, const wchar_t *executable, UINT16 port,
+                           struct gateway_firewall_fixture *owner) {
+  HANDLE token = NULL;
+  TOKEN_USER *user = NULL;
+  DWORD bytes = 0, result = ERROR_SUCCESS;
+  LPWSTR user_sid = NULL;
+  wchar_t sddl[256];
+  PSECURITY_DESCRIPTOR sd = NULL;
+  FWP_BYTE_BLOB user_blob = {0}, *app = NULL;
+  FWPM_SESSION0 session = {0};
+  FWPM_FILTER0 filter, *installed = NULL;
+  FWPM_FILTER_CONDITION0 conditions[8];
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return GetLastError();
+  (void)GetTokenInformation(token, TokenUser, NULL, 0, &bytes);
+  if (bytes == 0) { result = ERROR_INVALID_DATA; goto done; }
+  user = malloc(bytes);
+  if (user == NULL) { result = ERROR_OUTOFMEMORY; goto done; }
+  if (!GetTokenInformation(token, TokenUser, user, bytes, &bytes) ||
+      !ConvertSidToStringSidW(user->User.Sid, &user_sid)) { result = GetLastError(); goto done; }
+  if (_snwprintf_s(sddl, 256, _TRUNCATE, L"D:(A;;CC;;;%ls)", user_sid) < 0) {
+    result = ERROR_BUFFER_OVERFLOW; goto done;
+  }
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &sd, NULL)) {
+    result = GetLastError(); goto done;
+  }
+  user_blob.size = GetSecurityDescriptorLength(sd); user_blob.data = (UINT8 *)sd;
+  result = FwpmGetAppIdFromFileName0(executable, &app);
+  if (result != ERROR_SUCCESS) goto done;
+  result = UuidCreate(&owner->filter_key);
+  if (result == RPC_S_UUID_LOCAL_ONLY) result = ERROR_SUCCESS;
+  session.flags = FWPM_SESSION_FLAG_DYNAMIC; session.txnWaitTimeoutInMSec = 5000;
+  if (result == ERROR_SUCCESS) result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, &session, &owner->engine);
+  firewall6_spec(sid, app, &user_blob, port, &owner->filter_key, &filter, conditions);
+  if (result == ERROR_SUCCESS) result = FwpmFilterAdd0(owner->engine, &filter, NULL, NULL);
+  if (result == ERROR_SUCCESS) result = FwpmFilterGetByKey0(owner->engine, &owner->filter_key, &installed);
+  if (result == ERROR_SUCCESS && !firewall6_matches(installed, &filter)) result = ERROR_INVALID_DATA;
+done:
+  if (installed != NULL) FwpmFreeMemory0((void **)&installed);
+  if (app != NULL) FwpmFreeMemory0((void **)&app);
+  if (sd != NULL) LocalFree(sd);
+  if (user_sid != NULL) LocalFree(user_sid);
+  free(user);
+  CloseHandle(token);
+  return result;
+}
+
+static DWORD firewall6_close(struct gateway_firewall_fixture *owner) {
+  HANDLE observer = NULL;
+  FWPM_FILTER0 *remaining = NULL;
+  DWORD result = FwpmEngineClose0(owner->engine), found;
+  if (result != ERROR_SUCCESS) return result;
+  result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &observer);
+  if (result != ERROR_SUCCESS) return result;
+  found = FwpmFilterGetByKey0(observer, &owner->filter_key, &remaining);
+  result = found == FWP_E_FILTER_NOT_FOUND ? ERROR_SUCCESS :
+    found == ERROR_SUCCESS ? ERROR_INVALID_DATA : found;
+  if (remaining != NULL) FwpmFreeMemory0((void **)&remaining);
+  found = FwpmEngineClose0(observer);
+  return found == ERROR_SUCCESS ? result : found;
+}
 
 static DWORD install_package_rule(const wchar_t *name, const wchar_t *package,
                                    const wchar_t *application, UINT16 family, UINT16 port) {
@@ -97,6 +284,7 @@ done:
 DWORD gateway_firewall_close(struct gateway_firewall_fixture *owner) {
   HRESULT result = S_OK;
   if (owner == NULL) return ERROR_SUCCESS;
+  if (owner->engine != NULL) result = (HRESULT)firewall6_close(owner);
   if (owner->installed) {
     INetFwRule *remaining = NULL;
     result = INetFwRules_Remove(owner->rules, owner->name);
@@ -133,6 +321,10 @@ DWORD gateway_firewall_open(PSID sid, const wchar_t *executable, UINT16 family, 
     return ERROR_INVALID_PARAMETER;
   owner = calloc(1, sizeof(*owner));
   if (owner == NULL) return ERROR_OUTOFMEMORY;
+  if (family == AF_INET6) {
+    result = HRESULT_FROM_WIN32(firewall6_open(sid, executable, port, owner));
+    goto done;
+  }
   result = CoInitializeEx(NULL, COINIT_MULTITHREADED);
   if (FAILED(result)) goto done;
   owner->initialized = 1;
@@ -174,7 +366,10 @@ done:
   if (package_text != NULL) LocalFree(package_text);
   free(expanded);
   if (SUCCEEDED(result)) *owned = owner;
-  else (void)gateway_firewall_close(owner);
+  else {
+    DWORD closed = gateway_firewall_close(owner);
+    if (closed != ERROR_SUCCESS) result = HRESULT_FROM_WIN32(closed);
+  }
   printf("socket-inbound-firewall: code=%lu\n", (DWORD)result);
   return (DWORD)result;
 }

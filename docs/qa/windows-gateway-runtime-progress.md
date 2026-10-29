@@ -461,6 +461,25 @@ host policy: three canonical-address cases failed before the repair, and all 14 
 afterwards. Hosted IPv6 rule creation and the original socket proof still require verification;
 this syntax change is not yet evidence that the Windows provider accepts the rule.
 
+### IPv6 firewall provider limitation and exact WFP fixture, 2026-10-29
+
+The `/128` spelling did not repair Windows rule creation: [run 40955521894](https://github.com/oscharko-dev/Keiko/actions/runs/40955521894)
+failed the original IPv6 socket proof while the independent IPv4-control proof still passed.
+An in-memory `HNetCfg.FWRule` object reproduced `E_INVALIDARG` when setting IPv6 loopback
+as a bare address, `/128` host, expanded address or single-address range. No rule was added
+on the developer machine. Microsoft's firewall status definitions explicitly include rejection
+of IPv6 loopback addresses (`FW_RULE_STATUS_SEMANTIC_ERROR_ADDR_V6`).
+
+The IPv6 fixture now expresses the same narrow receive policy directly in a private dynamic
+WFP session in `FWPM_SUBLAYER_MPSSVC_WF`: package SID, executable app ID, current-user
+security descriptor, TCP, ephemeral local port, exact local and remote `::1`, and loopback flag.
+It uses a soft permit and independently verifies every installed condition and removal through
+a fresh observer session. The existing application-isolation fixture remains separate. IPv4
+continues using NetSecurity. No connection assertion, concurrency control, deny test, or egress
+probe is removed. The default native suite tests mutated readback without installing filters;
+actual admission and independent-deny precedence still require the disposable Windows runner.
+Same-sublayer administrator-policy coexistence and production integration remain unqualified.
+
 ## Platform references
 
 - [WFP engine sessions and dynamic object lifetime](https://learn.microsoft.com/en-us/windows/win32/api/fwpmu/nf-fwpmu-fwpmengineopen0)
