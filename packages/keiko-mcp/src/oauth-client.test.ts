@@ -7,6 +7,7 @@ function fixture(
   scope: string | null = "tools.read",
   rotate = false,
   denyRefresh = false,
+  rejectedRefresh?: () => void,
 ): {
   client: ReturnType<typeof createMcpOAuthClient>;
   saved: () => Readonly<Record<string, unknown>> | undefined;
@@ -46,8 +47,10 @@ function fixture(
           token_endpoint_auth_methods_supported: ["none"],
           authorization_response_iss_parameter_supported: true,
         });
-      if (denyRefresh && requests.at(-1)?.body.includes("grant_type=refresh_token"))
+      if (denyRefresh && requests.at(-1)?.body.includes("grant_type=refresh_token")) {
+        rejectedRefresh?.();
         return Response.json({ error: "invalid_grant" }, { status: 400 });
+      }
       return Response.json({
         access_token:
           rotate && requests.at(-1)?.body.includes("grant_type=refresh_token")
@@ -66,10 +69,26 @@ function fixture(
     requests,
     revoke: (): void => {
       current = false;
+      saved = undefined;
     },
   };
 }
 describe("central MCP OAuth SDK adapter", () => {
+  it("does not recreate deleted custody when a refresh rejection arrives after revocation", async () => {
+    const f = fixture("tools.read", false, true, () => {
+      f.revoke();
+    });
+    await f.client.start("http://127.0.0.1:1999/callback", "synthetic-state");
+    await f.client.complete("synthetic-code", issuer);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3700000);
+    try {
+      await expect(f.client.token()).rejects.toThrow();
+      expect(f.saved()).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("requires sign-in after an authoritative refresh rejection and never repeats it", async () => {
     const f = fixture("tools.read", false, true);
     await f.client.start("http://127.0.0.1:1999/callback", "synthetic-state");

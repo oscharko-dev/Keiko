@@ -154,6 +154,15 @@ function literal(value: string): boolean {
   return noControl(value) && !value.includes("{env:") && !value.includes("{file:");
 }
 
+/** Portable local paths; UNC shares and Windows device namespaces remain denied. */
+export function isMcpLocalAbsolutePath(value: unknown): value is string {
+  return (
+    boundedText(value) &&
+    literal(value) &&
+    ((value.startsWith("/") && !value.startsWith("//")) || /^[A-Za-z]:[\\/]/u.test(value))
+  );
+}
+
 function localTransport(value: Json): McpLocalTransport | undefined {
   if (!hasOnlyKeys(value, ["kind", "command", "environment", "secretEnvironment"]))
     return undefined;
@@ -176,7 +185,7 @@ function localCommand(command: unknown): readonly [string, ...string[]] | undefi
     return undefined;
   if (!command.every((part) => boundedText(part) && literal(part))) return undefined;
   const [executable, ...args] = command as string[];
-  return executable?.startsWith("/") ? [executable, ...args] : undefined;
+  return isMcpLocalAbsolutePath(executable) ? [executable, ...args] : undefined;
 }
 
 function secretEnvironmentOf(

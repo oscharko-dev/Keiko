@@ -1264,8 +1264,8 @@
     "de": "Deaktiviert"
   },
   "settings.mcp.connected": {
-    "en": "Connected · {count} tools",
-    "de": "Verbunden · {count} Tools"
+    "en": "Connected · Tools: {count}",
+    "de": "Verbunden · Tools: {count}"
   },
   "settings.mcp.connect": {
     "en": "Check connection",

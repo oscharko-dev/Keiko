@@ -197,6 +197,7 @@ class OAuthSession implements OAuthClientProvider {
     this.persist();
   }
   private persist(): void {
+    this.requireCurrent();
     this.options.persistence.write({
       tokens: this.#tokens,
       client: this.#client,

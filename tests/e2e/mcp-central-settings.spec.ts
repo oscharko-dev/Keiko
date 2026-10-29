@@ -41,13 +41,13 @@ test("central MCP settings preserve tool policy and lifecycle through real stdio
     .getByRole("textbox", { name: "Arguments (one per line, without shell quoting)", exact: true })
     .fill(`${fixture}\n${counter}`);
   await panel.getByRole("button", { name: "Save and connect", exact: true }).click();
-  await expect(panel.getByText("Connected · 2 tools", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Connected · Tools: 2", { exact: true })).toBeVisible();
   expect(existsSync(counter) ? readFileSync(counter, "utf8") : "").toBe("");
   await panel.getByRole("button", { name: "Edit", exact: true }).click();
   await panel.getByText("Tool permissions", { exact: true }).click();
   await panel.getByRole("combobox", { name: "read_probe", exact: true }).selectOption("read");
   await panel.getByRole("button", { name: "Save and connect", exact: true }).click();
-  await expect(panel.getByText("Connected · 2 tools", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Connected · Tools: 2", { exact: true })).toBeVisible();
   await panel.getByRole("button", { name: "Edit", exact: true }).click();
   await panel.getByText("Tool permissions", { exact: true }).click();
   await expect(panel.getByRole("combobox", { name: "read_probe", exact: true })).toHaveValue(
@@ -58,7 +58,7 @@ test("central MCP settings preserve tool policy and lifecycle through real stdio
   await expect(panel.getByRole("button", { name: "Enable", exact: true })).toBeVisible();
   await panel.getByRole("button", { name: "Enable", exact: true }).click();
   await panel.getByRole("button", { name: "Check connection", exact: true }).click();
-  await expect(panel.getByText("Connected · 2 tools", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Connected · Tools: 2", { exact: true })).toBeVisible();
   await panel.getByRole("button", { name: "Remove", exact: true }).click();
   await panel.getByRole("button", { name: "Remove server", exact: true }).click();
   await expect(panel.getByRole("heading", { name: "No servers yet", exact: true })).toBeVisible();

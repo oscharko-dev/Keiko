@@ -73,10 +73,9 @@ analysis (72 actual versus 82 expected lines); neither failed attempt is counted
 
 The app-browser setup connected the existing local model gateway through the real UI using
 isolated configuration and credential state. Gemma was admitted for conversation. Its first tool-calling
-probe was unavailable; a later real gateway probe verified tool calling. Interactive real-model MCP
-and OpenCode execution are still pending.
+probe was unavailable; a later real gateway probe verified tool calling. Interactive real-model OAuth reads subsequently passed in both Chat and OpenCode, as recorded below.
 The browser created a synthetic stdio server through central settings and observed the real
-`Connected · 2 tools` state. No synthetic write was dispatched during this discovery check.
+`Connected · Tools: 2` state. No synthetic write was dispatched during this discovery check.
 
 The dedicated real-stdio settings journey passed in Chromium (including a repeat after cleanup
 changes) and WebKit. Its `@smoke` tag is reachable from the existing lanes; the E2E wiring gate
@@ -101,3 +100,35 @@ Still outstanding: final complete core and coverage gates, final generated evide
 package-surface qualification and the full interactive acceptance
 matrix with a real model and OpenCode. The in-app browser is available; tests use isolated state and
 synthetic writes. Production connections remain read-only. No integration or auto-merge is authorized.
+
+## Additional confirmed repairs and interactive acceptance
+
+A refresh rejection arriving after local revocation could recreate an already deleted vault
+record. The regression failed first; custody now checks the current generation immediately before
+all writes. Another regression reproduced rejection of valid fully qualified Windows executables.
+Portable path admission now accepts drive paths while refusing drive-relative paths, UNC shares
+and device namespaces. A real sibling-runtime launcher failed with the former fixed POSIX PATH;
+it now connects using its own directory plus minimal system directories. No ambient PATH or
+profile credentials are inherited. Windows keeps validated system lookup and private profiles,
+normalizes explicit environment keys and refuses case collisions. Windows execution itself still
+requires native qualification; the local process reproduction ran on macOS.
+
+The built application was exercised interactively with the existing local Gemma model and the
+real OpenCode runtime. One central OAuth login served both consumers: Workbench and Chat each
+returned the real OAuth read marker, and the independent HTTPS provider counter advanced once
+for each consumer. TLS verification remained enabled. A Full access stdio write returned the real
+write marker and advanced its independent counter exactly once without approval or workspace
+changes. A supervised MCP write was explicitly denied and an approval-mode write was stopped
+while awaiting its native MCP decision; neither nonce occurred in the independent counter.
+
+A further Full access write deliberately disconnected after its synthetic effect. The counter
+advanced exactly once. The application displayed `Reconcile before retrying`, prevented automatic
+repetition and preserved that requirement across a normal reload. These interactive results refer
+to built head e0a6cc4cd; the final source still needs its own repeat qualification. Screenshots and
+a body-free case manifest are held in the task's local acceptance artifacts. English and German
+connection counters now use `Tools: {count}`, including the one-tool case.
+
+The complete UI coverage run passed 614 suites (11,977 passed, one existing skip); the complete
+scripts coverage run passed 323 suites (8,117 passed, 28 skips). The in-progress complete package
+run has failures and is not counted as green. Final complete gates and assembled package surface
+remain outstanding.

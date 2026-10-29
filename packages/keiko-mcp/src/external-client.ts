@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isAbsolute } from "node:path";
+import { isAbsolute, posix, win32 } from "node:path";
 import {
   Client,
   fromJsonSchema,
@@ -22,6 +22,7 @@ import type {
   ManagedMcpFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { isMcpLocalAbsolutePath } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { ManagedMcpError } from "./definitions.js";
@@ -64,6 +65,10 @@ function captured<T>(value: T): T {
   return deepFreeze(JSON.parse(text) as T);
 }
 
+function admittedLocalPath(value: string): boolean {
+  return isAbsolute(value) && isMcpLocalAbsolutePath(value);
+}
+
 function transportFor(
   options: ExternalMcpTransportOptions,
   contexts: AsyncLocalStorage<ManagedMcpInvocationContext>,
@@ -89,18 +94,56 @@ function transportFor(
       },
     });
   }
-  if (!isAbsolute(options.command[0]) || !isAbsolute(options.cwd))
+  if (!admittedLocalPath(options.command[0]) || !admittedLocalPath(options.cwd))
     throw new ManagedMcpError("not-admitted");
-  // The SDK merges ambient defaults even with explicit env. Override every inherited key.
-  const cleared = Object.fromEntries(DEFAULT_INHERITED_ENV_VARS.map((key) => [key, ""]));
   return new StdioClientTransport({
     command: options.command[0],
     args: options.command.slice(1),
     cwd: options.cwd,
-    env: { ...cleared, HOME: options.cwd, PATH: "/usr/bin:/bin", ...options.environment },
+    env: mcpStdioEnvironment(options),
     stderr: "ignore",
     maxBufferSize: MAX_BYTES,
   });
+}
+
+/** Explicit local defaults keep sibling launchers usable without inheriting ambient credentials. */
+export function mcpStdioEnvironment(
+  options: Extract<ExternalMcpTransportOptions, { readonly kind: "local" }>,
+  platform: NodeJS.Platform = process.platform,
+  systemRoot: string | undefined = process.env.SYSTEMROOT ?? process.env.SystemRoot,
+): Record<string, string> {
+  // The SDK merges ambient defaults even with explicit env. Override every inherited key.
+  const cleared = Object.fromEntries(DEFAULT_INHERITED_ENV_VARS.map((key) => [key, ""]));
+  const home = options.cwd;
+  if (platform !== "win32")
+    return {
+      ...cleared,
+      HOME: home,
+      TMPDIR: home,
+      PATH: [posix.dirname(options.command[0]), "/usr/bin", "/bin"].join(":"),
+      ...options.environment,
+    };
+  if (!isMcpLocalAbsolutePath(systemRoot) || !/^[A-Za-z]:/u.test(systemRoot))
+    throw new ManagedMcpError("not-admitted");
+  const entries = Object.entries(options.environment);
+  const explicit = Object.fromEntries(entries.map(([key, value]) => [key.toUpperCase(), value]));
+  if (Object.keys(explicit).length !== entries.length) throw new ManagedMcpError("not-admitted");
+  const system32 = win32.join(systemRoot, "System32");
+  return {
+    ...cleared,
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: home,
+    LOCALAPPDATA: home,
+    TEMP: home,
+    TMP: home,
+    SYSTEMROOT: systemRoot,
+    WINDIR: systemRoot,
+    COMSPEC: win32.join(system32, "cmd.exe"),
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    PATH: [win32.dirname(options.command[0]), system32, systemRoot].join(";"),
+    ...explicit,
+  };
 }
 
 class ExternalClient implements ExternalMcpConnection {

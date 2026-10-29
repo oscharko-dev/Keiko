@@ -43,6 +43,33 @@ function registry(...servers: unknown[]): unknown {
 }
 
 describe("the MCP server registry (#3903)", () => {
+  it.each([
+    String.raw`C:relative.exe`,
+    String.raw`\\host\share\tool.exe`,
+    "//host/share/tool",
+    String.raw`\\?\C:\tool.exe`,
+  ])("refuses ambiguous or remote executable paths: %s", (executable) => {
+    expect(
+      parseMcpServerRegistry(
+        registry({ ...LOCAL, transport: { ...LOCAL.transport, command: [executable] } }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it.each([String.raw`C:\Program Files\nodejs\node.exe`, "D:/tools/docs-mcp.exe"])(
+    "admits a fully qualified local Windows executable: %s",
+    (executable) => {
+      expect(
+        parseMcpServerRegistry(
+          registry({
+            ...LOCAL,
+            transport: { ...LOCAL.transport, command: [executable, "--stdio"] },
+          }),
+        ).ok,
+      ).toBe(true);
+    },
+  );
+
   it("admits 128-character MCP tool names through the native action boundary", () => {
     const name = "t".repeat(128);
     const parsed = parseMcpServerRegistry(registry({ ...REMOTE, tools: { [name]: "read" } }));

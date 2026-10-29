@@ -209,6 +209,12 @@ egress are admitted by server composition. The adapter bounds discovery/payloads
 arguments, keeps invocation context out of MCP arguments, rechecks authority at dispatch and
 never replays a tool call after a transport failure. Local stdio explicitly overrides the
 SDK's inherited environment defaults; credentials remain in memory at the launch boundary.
+The default executable search path includes the configured program's own directory and the
+platform's minimal system directories, never the parent process's PATH. Windows keeps the
+validated system directory for DLL lookup and uses the private connection directory for
+profiles and temporary files. Explicit Windows environment keys are case-folded; collisions
+fail closed. Registry paths accept fully qualified drive paths as well as POSIX absolute
+paths; UNC shares, device namespaces and drive-relative paths remain denied.
 
 The configured connection owner shares one client per current server definition. Registry
 commits synchronously abort the old generation when its server changes, is disabled or is
