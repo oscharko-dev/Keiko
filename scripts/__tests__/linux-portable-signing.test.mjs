@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import minipassFetch from "minipass-fetch";
 
 import {
   finalizeLinuxQualifiedPayload,
@@ -37,6 +38,8 @@ import {
 } from "../sign-linux-runtime-qualification.mjs";
 import { MAX_PORTABLE_MANIFEST_BYTES } from "../../packages/keiko-server/src/update-portable-staging-shared.ts";
 import { parseStableVersion } from "../lib/stable-version.mjs";
+
+const { FetchError } = minipassFetch;
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TARGET = "linux-x64";
@@ -468,6 +471,16 @@ describe("Linux portable qualification sealing", () => {
       return Object.assign(new TypeError("fetch failed"), { cause });
     }
 
+    // The exact error make-fetch-happen raises on its deadline, wrapped the way sigstore wraps it.
+    function timeoutFailure(type) {
+      const cause = new FetchError("network timeout at: https://rekor.example/api", type);
+      return Object.assign(new Error("error creating tlog entry"), {
+        name: "InternalError",
+        code: "TLOG_CREATE_ENTRY_ERROR",
+        cause,
+      });
+    }
+
     function run(signReceipt) {
       const stderr = { write: vi.fn() };
       const deps = {
@@ -502,6 +515,8 @@ describe("Linux portable qualification sealing", () => {
         Object.assign(new Error("aborted"), { name: "AbortError" }),
         "timeout",
       ],
+      ["a sigstore request deadline", timeoutFailure("request-timeout"), "timeout"],
+      ["a sigstore response-body deadline", timeoutFailure("body-timeout"), "timeout"],
     ])("starts a fresh signing attempt after %s", async (_label, error, failureClass) => {
       const signReceipt = vi
         .fn()
@@ -511,7 +526,12 @@ describe("Linux portable qualification sealing", () => {
 
       expect(await status).toBe(0);
       expect(signReceipt).toHaveBeenCalledTimes(2);
-      expect(signReceipt).toHaveBeenNthCalledWith(1, Buffer.from("receipt"), SIGNING_OPTIONS);
+      for (const call of [1, 2]) {
+        expect(signReceipt).toHaveBeenNthCalledWith(call, Buffer.from("receipt"), {
+          tlogUpload: true,
+          timeout: expect.any(Number),
+        });
+      }
       expect(SIGNING_OPTIONS.timeout).toBeGreaterThanOrEqual(30_000);
       expect(deps.sleep).toHaveBeenCalledWith(SIGNING_BACKOFF_MS[0]);
       expect(output()).toContain(`attempt=1/${String(SIGNING_ATTEMPTS)} class=${failureClass}`);

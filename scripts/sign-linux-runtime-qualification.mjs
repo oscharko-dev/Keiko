@@ -52,9 +52,16 @@ function hasNetworkCode(error) {
   );
 }
 
+// make-fetch-happen reports its own deadline as a FetchError typed `request-timeout` or
+// `body-timeout`, which sigstore wraps as the InternalError's cause.
+const TIMEOUT_FETCH_TYPES = new Set(["request-timeout", "body-timeout"]);
+
 function isTimeout(error) {
   return [error, error?.cause].some(
-    (value) => value?.name === "AbortError" || value?.name === "TimeoutError",
+    (value) =>
+      value?.name === "AbortError" ||
+      value?.name === "TimeoutError" ||
+      TIMEOUT_FETCH_TYPES.has(value?.type),
   );
 }
 
