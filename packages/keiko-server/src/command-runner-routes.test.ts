@@ -6,9 +6,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
-import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
-import { createServerLogger, setServerLogger } from "./observability/index.js";
+import {
+  defineSseSubscriptionObservationContract,
+  type NativeSseSubscription,
+} from "../../../tests/support/sse-subscription-observations.js";
 import type { AddressInfo } from "node:net";
 import type { Server, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -657,108 +658,40 @@ describe("openCommandSseStream backpressure", () => {
 });
 
 describe("openCommandSseStream subscription lifecycle", () => {
-  it("preserves manager receiver, subscription order and independent cursors", () => {
-    const first = makeFakeSseRes();
-    const second = makeFakeSseRes();
-    const manager = new FakeCommandRunnerManager();
-    const subscribe = manager.subscribe;
-    const subscriptionWriteCounts: number[] = [];
-    let unsubscribeCount = 0;
-    vi.spyOn(manager, "subscribe").mockImplementation(function (
-      this: CommandRunnerManager,
-      listener: CommandRunnerEventEmitter,
-    ): () => void {
-      expect(this).toBe(manager);
-      subscriptionWriteCounts.push(first.writes.length + second.writes.length);
-      const release = subscribe(listener);
-      return (): void => {
-        unsubscribeCount += 1;
-        release();
-      };
-    });
-    const redact = vi.fn((value: unknown): unknown => value);
-    const sink = createBufferedServerLogSink();
-    setServerLogger(createServerLogger({ sink, level: "info" }));
-    try {
-      openCommandSseStream(first.res, manager, redact, undefined, "command-subscription-first");
-      openCommandSseStream(second.res, manager, redact, undefined, "command-subscription-second");
-      expect(subscriptionWriteCounts).toEqual([0, 1]);
-      expect(first.writes).toEqual(["event: ready\ndata: {}\n\n"]);
-      expect(second.writes).toEqual(["event: ready\ndata: {}\n\n"]);
-      manager.emitExternal({ kind: "run-completed", runId: "lifecycle-first", payload: {} });
-      expect(first.writes[1]).toContain("id: 1\nevent: command:");
-      expect(second.writes[1]).toBe(first.writes[1]);
-      expect(redact).toHaveBeenCalledTimes(1);
-      first.emitClose();
-      first.emitClose();
-      expect(unsubscribeCount).toBe(1);
-      manager.emitExternal({ kind: "run-completed", runId: "lifecycle-next", payload: {} });
-      expect(first.writes).toHaveLength(2);
-      expect(second.writes[2]).toContain("id: 2\nevent: command:");
-      second.emitClose();
-      second.emitClose();
-      expect(unsubscribeCount).toBe(2);
-      expect(sink.events).toHaveLength(2);
-      expect(sink.events[0]).toMatchObject({
-        op: "sse.stream.closed",
-        correlationId: "command-subscription-first",
-        extra: { frameCount: 2, reason: "client-disconnected" },
-      });
-      expect(sink.events[1]).toMatchObject({
-        op: "sse.stream.closed",
-        correlationId: "command-subscription-second",
-        extra: { frameCount: 3, reason: "client-disconnected" },
-      });
-    } finally {
-      first.emitClose();
-      second.emitClose();
-      vi.restoreAllMocks();
-      resetServerLogger();
-    }
-  });
-
-  it("unsubscribes once before ready-stall destruction and retains close idempotency", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeCommandRunnerManager();
-    const subscribe = manager.subscribe;
-    const trace: string[] = [];
-    vi.spyOn(manager, "subscribe").mockImplementation((listener) => {
-      const release = subscribe(listener);
-      return (): void => {
-        expect(fake.destroyCount).toBe(0);
-        trace.push("unsubscribe");
-        release();
-      };
-    });
-    fake.writeReturns = false;
-    try {
-      openCommandSseStream(
-        fake.res,
+  defineSseSubscriptionObservationContract<FakeCommandRunnerManager, FakeSseRes>({
+    response: makeFakeSseRes,
+    subscription: (): NativeSseSubscription<FakeCommandRunnerManager> => {
+      const manager = new FakeCommandRunnerManager();
+      const subscribe = manager.subscribe;
+      return {
         manager,
-        (value) => value,
-        (signal) => {
-          expect(fake.destroyCount).toBe(0);
-          expect(signal).toEqual({ accepted: false, frameBytes: 23 });
-          trace.push("observer");
+        observe: (beforeAcquire, beforeRelease): void => {
+          vi.spyOn(manager, "subscribe").mockImplementation(function (
+            this: CommandRunnerManager,
+            listener: CommandRunnerEventEmitter,
+          ): () => void {
+            beforeAcquire(this);
+            const release = subscribe(listener);
+            return (): void => {
+              beforeRelease();
+              release();
+            };
+          });
         },
-      );
-      expect(trace).toEqual([]);
-      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-      expect(trace).toEqual([]);
-      vi.advanceTimersByTime(1);
-      expect(trace).toEqual(["observer", "unsubscribe"]);
-      expect(fake.destroyCount).toBe(1);
-      fake.res.emit("close");
-      expect(trace).toEqual(["observer", "unsubscribe"]);
+      };
+    },
+    open: openCommandSseStream,
+    emitFirst: (manager): void => {
+      manager.emitExternal({ kind: "run-completed", runId: "lifecycle-first", payload: {} });
+    },
+    emitNext: (manager): void => {
       manager.emitExternal({ kind: "run-completed", runId: "lifecycle-next", payload: {} });
-      expect(fake.writes.filter((frame) => !frame.startsWith(":"))).toEqual([
-        "event: ready\ndata: {}\n\n",
-      ]);
-    } finally {
-      fake.res.emit("close");
-      vi.restoreAllMocks();
-      vi.useRealTimers();
-    }
+    },
+    closePairResponse: (response): void => {
+      response.emitClose();
+    },
+    inputCorrelationIds: ["command-subscription-first", "command-subscription-second"],
+    expectedCorrelationIds: ["command-subscription-first", "command-subscription-second"],
+    expectedCursorFrames: ["id: 1\nevent: command:", "id: 2\nevent: command:"],
   });
 });
