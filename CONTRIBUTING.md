@@ -148,7 +148,10 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. A verified model nobody asked for in 15 minutes is neither renewed nor recovered in
+the background; `gateway.readiness.renewal.paused` records that pause (`paused`: `renewal`,
+`recovery`; optional `idleMs`), and the model's next conversation request verifies it on demand
+(#4103). See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and

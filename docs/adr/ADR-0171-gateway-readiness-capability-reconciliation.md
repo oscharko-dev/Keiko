@@ -65,7 +65,13 @@ in the background, independently of held catalog discovery; selected requests jo
 An expired success can share one selected-request renewal. Failed initialization remains
 visible. Inconclusive transport or provider failures recover through configuration-owned background
 probes with exponential backoff capped at five minutes; retries continue at that capped rate until the
-provider recovers or the configuration changes. A conclusive rejection (for example a 4xx the gateway
+provider recovers or the configuration changes. Background renewal and recovery run only while a model is in
+use (#4103, owner decision 2026-10-29): once a model of the current generation has been verified,
+no conversation request for it for 15 minutes (`CONVERSATION_RENEWAL_IDLE_MS`) stops both, and
+`gateway.readiness.renewal.paused` records the pause (`renewal` or `recovery`, with the idle time).
+Its success then expires at the five-minute boundary, and its next request starts the single
+on-demand probe and resumes the schedule. A model never verified in this generation keeps recovering,
+so a gateway that is still starting is reached without anyone asking. A conclusive rejection (for example a 4xx the gateway
 gives while it is still starting) is retried in the background every five minutes. The first
 conversation request that needs the model after the 30-second not-ready cooldown starts one fresh
 probe, dated by the probe that last settled rather than by a preserved feature-observation

@@ -1117,7 +1117,10 @@ recording model names, requests or answers. An uninvoked model port consumes no 
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
 accounting. A chat probe that only times out or meets a transient overload status keeps and renews
 a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
-diagnostic), so a busy single-slot model stays selectable (#4115). See
+diagnostic), so a busy single-slot model stays selectable (#4115). A verified model nobody asked for in
+15 minutes is neither renewed nor recovered in the background; `gateway.readiness.renewal.paused`
+records that pause (`paused`: `renewal`, `recovery`; optional `idleMs`), and the model's next
+conversation request verifies it on demand (#4103). See
 [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the

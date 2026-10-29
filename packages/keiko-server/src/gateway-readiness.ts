@@ -222,6 +222,36 @@ const GATEWAY_READINESS_BUSY_RETAINED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #4103 (owner decision 2026-10-29): background readiness probes run only while a model is in use.
+// A verified model without a conversation request for `CONVERSATION_RENEWAL_IDLE_MS` is no longer
+// renewed (ready) or recovered (failed); this line records the pause, so a timeline shows why
+// the model's next request verifies it on demand. `idleMs` is absent when the model was never used
+// since its configuration was applied.
+const GATEWAY_READINESS_RENEWAL_PAUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.renewal.paused",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logConversationRenewalPaused",
+  fields: {
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    paused: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["renewal", "recovery"],
+    },
+    idleMs: { type: "integer", dataClass: "duration", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.renewal.paused.line"],
+  releaseImpact: "patch",
+});
+
 // Every readiness check a person starts in the settings dialog. The Coding Workbench's automatic
 // run and the on-demand probe a conversation entry point runs keep the automatic operations
 // (`gateway.readiness.automatic.*`). Only the automatic run used to leave a line, so a check run
@@ -2605,6 +2635,11 @@ interface ConversationInitializationQueue {
   // older feature-observation timestamp (`preserveUnexecutedCapabilityObservation`), so the
   // cooldown a conversation request honours is dated by the probe, never by that timestamp.
   readonly probeSettledAt: Map<string, number>;
+  // #4103: when a conversation request last used each model, and which models this
+  // generation has verified once. Only a verified model pauses its background probes when idle, so
+  // a gateway that is still starting is recovered without anyone asking (the 1.1.13 incident).
+  readonly lastUsedAt: Map<string, number>;
+  readonly verified: Set<string>;
 }
 const conversationQueues = new WeakMap<
   NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -2625,6 +2660,8 @@ function conversationQueue(
       retries: new Map(),
       retryable: new Map(),
       probeSettledAt: new Map(),
+      lastUsedAt: new Map(),
+      verified: new Set(),
     };
     conversationQueues.set(holder, queue);
   }
@@ -2810,7 +2847,20 @@ function scheduleConversationRecovery(
   )
     return;
   clearTimeout(queue.retries.get(modelId));
-  const nextAttempt = currentConversationReady(deps, modelId) ? 1 : attempt + 1;
+  queue.retries.delete(modelId);
+  const ready = currentConversationReady(deps, modelId);
+  if (ready) queue.verified.add(modelId);
+  if (conversationModelIdle(queue, modelId)) {
+    logConversationRenewalPaused(
+      deps,
+      queue,
+      modelId,
+      ready,
+      parentCorrelationId ?? holder.initializationCorrelationId,
+    );
+    return;
+  }
+  const nextAttempt = ready ? 1 : attempt + 1;
   const retry = setTimeout(
     () => {
       queue.retries.delete(modelId);
@@ -2828,6 +2878,91 @@ function scheduleConversationRecovery(
   queue.retries.set(modelId, retry);
 }
 
+// #4103: a configured model nobody uses is not probed. Background renewal and recovery continue for
+// this long after the model's last conversation request; after it, the model's success
+// expires at the five-minute boundary and its next request starts the single on-demand probe.
+export const CONVERSATION_RENEWAL_IDLE_MS = 15 * 60_000;
+
+function conversationModelIdle(queue: ConversationInitializationQueue, modelId: string): boolean {
+  if (!queue.verified.has(modelId)) return false;
+  const usedAt = queue.lastUsedAt.get(modelId);
+  if (usedAt === undefined) return true;
+  // A clock that went backwards cannot date the use; pausing is the safe answer, because the next
+  // request verifies the model on demand.
+  const elapsedMs = Date.now() - usedAt;
+  return !(elapsedMs >= 0 && elapsedMs < CONVERSATION_RENEWAL_IDLE_MS);
+}
+
+function logConversationRenewalPaused(
+  deps: UiHandlerDeps,
+  queue: ConversationInitializationQueue,
+  modelId: string,
+  ready: boolean,
+  parentCorrelationId: string | undefined,
+): void {
+  const usedAt = queue.lastUsedAt.get(modelId);
+  const idleMs = usedAt === undefined ? undefined : Date.now() - usedAt;
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_RENEWAL_PAUSED_OPERATION,
+      {
+        correlationId: newCorrelationId(),
+        ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+      },
+      {
+        ...modelIdEvidence(modelId),
+        paused: ready ? "renewal" : "recovery",
+        ...(idleMs === undefined || idleMs < 0 ? {} : { idleMs }),
+      },
+    ),
+  );
+}
+
+function configuredConversationModel(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): boolean {
+  return holder.current()?.providers.some((provider) => provider.modelId === modelId) === true;
+}
+
+// A request that needs the model marks it in use; only configured models are recorded, so a request
+// cannot grow the map with names the gateway does not serve.
+function noteConversationUse(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): void {
+  const queue = conversationQueue(holder);
+  if (queue.disposed || !configuredConversationModel(holder, modelId)) return;
+  resetConversationGeneration(queue, holder.generation());
+  queue.lastUsedAt.set(modelId, Date.now());
+}
+
+// After a request, a model whose background probes paused while it was idle renews (or recovers)
+// again on the existing schedule: a timer, never a probe of its own, so a request still adds no
+// readiness request for a model it cannot date. An armed timer or a probe in flight owns it.
+function resumeConversationRenewal(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId: string | undefined,
+): void {
+  const queue = conversationQueue(holder);
+  const generation = holder.generation();
+  if (
+    queue.disposed ||
+    queue.retries.has(modelId) ||
+    readinessProbesFor(holder).has(`${String(generation)}:${modelId}`)
+  )
+    return;
+  scheduleConversationRecovery(
+    deps,
+    modelId,
+    generation,
+    correlationId ?? holder.initializationCorrelationId,
+    1,
+  );
+}
+
 function resetConversationGeneration(
   queue: ConversationInitializationQueue,
   generation: number,
@@ -2837,6 +2972,8 @@ function resetConversationGeneration(
   queue.retries.clear();
   queue.retryable.clear();
   queue.probeSettledAt.clear();
+  queue.lastUsedAt.clear();
+  queue.verified.clear();
   queue.initializedGeneration = generation;
 }
 
@@ -2892,7 +3029,22 @@ export async function awaitInitializedConversationReadiness(
   correlationId?: string,
 ): Promise<void> {
   const holder = deps.gatewayConfig;
-  if (holder === undefined || currentConversationReady(deps, modelId)) return;
+  if (holder === undefined) return;
+  noteConversationUse(holder, modelId);
+  try {
+    await awaitConversationRequestReadiness(deps, holder, modelId, correlationId);
+  } finally {
+    resumeConversationRenewal(deps, holder, modelId, correlationId);
+  }
+}
+
+async function awaitConversationRequestReadiness(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId: string | undefined,
+): Promise<void> {
+  if (currentConversationReady(deps, modelId)) return;
   const probe = readinessProbesFor(holder).get(`${String(holder.generation())}:${modelId}`);
   if (probe === undefined) {
     await reprobeExpiredNotReadyModel(deps, holder, modelId, correlationId);
