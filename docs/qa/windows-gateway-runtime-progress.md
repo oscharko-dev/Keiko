@@ -313,7 +313,25 @@ Do not patch the system utility, delete its provider, ignore a failed second sta
 trees to claim concurrency, or share one package identity between trees. The installed control
 plane still needs independently owned inbound policy and real two-tree socket/lifetime evidence.
 No WFP filter, exemption or firewall rule was changed on the developer host during this work.
-No new hosted-runner receipt is claimed for the local patch.
+[Run 40921240459](https://github.com/oscharko-dev/Keiko/actions/runs/40921240459) at
+`14d436b06adf9919cdf4d41c060ccc167e1ff205` confirms the second utility still exits with
+`FWP_E_ALREADY_EXISTS` in both gateway-family cases. Compilation, dynamic-filter cleanup and
+guarded cleanup pass; the original socket proof and concurrent inbound experiment fail.
+
+The next test-only experiment replaces the utility owner with a separate dynamic WFP session for
+each package. It registers no shared provider and uses a fresh filter key. Its IPv4 receive filter
+matches the exact package, loopback flag, TCP and `127.0.0.1`; the existing NetSecurity fixture
+continues to bind the executable, user, package and ephemeral port. The filter uses the application
+isolation sublayer and a soft permit, with no clear-action-right flag. Exact readback rejects wider
+or unexpected policy; an independent session checks filter removal after owner closure. Pure
+readback tests reject foreign identities, hard permits, missing/duplicate conditions, UDP,
+non-loopback addresses and wrong layer/key/provider without opening WFP locally.
+
+This remains an experiment, not an installed broker policy. It does not establish compatibility
+with arbitrary rules in the same system sublayer, crash recovery, simultaneous listeners or IPv6
+inbound access. Both gateway-family cases deliberately use IPv4 inbound control. The existing
+foreign-principal, concurrent-owner, independent-deny, egress and revoked-owner socket assertions
+remain mandatory. No successful runner receipt is yet claimed for this replacement.
 
 ## Outstanding production work and qualification
 

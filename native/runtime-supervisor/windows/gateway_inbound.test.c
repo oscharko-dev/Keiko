@@ -1,159 +1,167 @@
 /* Disposable-runner experiment only. Never linked into a shipping service or local default test.
- * Qualifies Microsoft's separate inbound-loopback mechanism and coexistence with another deny. */
+ * Each owner has its own dynamic session. No shared CheckNetIsolation provider is registered.
+ * The separate firewall fixture still binds package, executable, user and ephemeral TCP port. */
 #include "gateway_wfp.h"
 #include <sddl.h>
 #include <rpc.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-struct gateway_inbound_fixture {
-  HANDLE job;
-  PROCESS_INFORMATION process;
-};
+struct gateway_inbound_fixture { HANDLE engine; GUID key; };
 
-static DWORD inbound_readback(PSID sid) {
-  HANDLE engine = NULL, enumeration = NULL;
-  DWORD result, closed;
-  UINT32 seen = 0, matched = 0;
-  result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &engine);
-  if (result == ERROR_SUCCESS) result = FwpmFilterCreateEnumHandle0(engine, NULL, &enumeration);
-  for (unsigned page = 0; result == ERROR_SUCCESS && page < 32; page++) {
-    FWPM_FILTER0 **filters = NULL;
-    UINT32 count = 0;
-    result = FwpmFilterEnum0(engine, enumeration, 64, &filters, &count);
-    if (result == ERROR_SUCCESS) {
-      seen += count;
-      for (UINT32 index = 0; index < count; index++) {
-        const FWPM_FILTER0 *filter = filters[index];
-        int package = 0, loopback = 0;
-        /* These fixed names come from the trusted system utility, never from output interpolation.
-         * A localization mismatch is reported as zero matches, never treated as enforcement. */
-        if (filter->displayData.name == NULL ||
-            (wcscmp(filter->displayData.name, L"Allow AC loopback Inbound") != 0 &&
-             wcscmp(filter->displayData.name, L"Allow inbound AppContainer loopback") != 0)) continue;
-        matched++;
-        for (UINT32 item = 0; item < filter->numFilterConditions; item++) {
-          const FWPM_FILTER_CONDITION0 *condition = &filter->filterCondition[item];
-          if (IsEqualGUID(&condition->fieldKey, &FWPM_CONDITION_ALE_PACKAGE_ID) &&
-              condition->matchType == FWP_MATCH_EQUAL && condition->conditionValue.type == FWP_SID &&
-              condition->conditionValue.sid != NULL && EqualSid(condition->conditionValue.sid, sid)) package = 1;
-          if (IsEqualGUID(&condition->fieldKey, &FWPM_CONDITION_FLAGS) &&
-              condition->conditionValue.type == FWP_UINT32 &&
-              (condition->conditionValue.uint32 & FWP_CONDITION_FLAG_IS_LOOPBACK) != 0) loopback = 1;
-        }
-        printf("socket-inbound-filter: package=%d loopback=%d action=%lu flags=%lu conditions=%lu\n",
-               package, loopback, (unsigned long)filter->action.type, (unsigned long)filter->flags,
-               (unsigned long)filter->numFilterConditions);
-        printf("socket-inbound-filter-layer: connect4=%d connect6=%d receive4=%d receive6=%d app-isolation=%d\n",
-               IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_CONNECT_V4),
-               IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_CONNECT_V6),
-               IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4),
-               IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6),
-               IsEqualGUID(&filter->subLayerKey, &FWPM_SUBLAYER_MPSSVC_APP_ISOLATION));
-      }
-    }
-    if (filters != NULL) FwpmFreeMemory0((void **)&filters);
-    if (count < 64) break;
+static int inbound_package(PSID sid) {
+  const SID_IDENTIFIER_AUTHORITY authority = SECURITY_APP_PACKAGE_AUTHORITY;
+  return sid != NULL && IsValidSid(sid) &&
+    memcmp(GetSidIdentifierAuthority(sid), &authority, sizeof(authority)) == 0 &&
+    *GetSidSubAuthorityCount(sid) == SECURITY_APP_PACKAGE_RID_COUNT &&
+    *GetSidSubAuthority(sid, 0) == SECURITY_APP_PACKAGE_BASE_RID;
+}
+
+static void inbound_spec(PSID sid, const GUID *key, FWPM_FILTER0 *filter,
+                         FWPM_FILTER_CONDITION0 conditions[4]) {
+  memset(filter, 0, sizeof(*filter));
+  memset(conditions, 0, 4 * sizeof(*conditions));
+  filter->filterKey = *key;
+  filter->displayData.name = L"Keiko owned inbound loopback experiment";
+  filter->layerKey = FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4;
+  filter->subLayerKey = FWPM_SUBLAYER_MPSSVC_APP_ISOLATION;
+  /* A soft permit: independent sublayer BLOCK decisions must still win. This fixture does
+   * not establish compatibility with arbitrary policies in the same system sublayer. */
+  filter->action.type = FWP_ACTION_PERMIT;
+  filter->weight.type = FWP_UINT8;
+  filter->weight.uint8 = 15;
+  filter->numFilterConditions = 4;
+  filter->filterCondition = conditions;
+  conditions[0].fieldKey = FWPM_CONDITION_ALE_PACKAGE_ID;
+  conditions[0].matchType = FWP_MATCH_EQUAL;
+  conditions[0].conditionValue.type = FWP_SID;
+  conditions[0].conditionValue.sid = sid;
+  conditions[1].fieldKey = FWPM_CONDITION_FLAGS;
+  conditions[1].matchType = FWP_MATCH_FLAGS_ALL_SET;
+  conditions[1].conditionValue.type = FWP_UINT32;
+  conditions[1].conditionValue.uint32 = FWP_CONDITION_FLAG_IS_LOOPBACK;
+  conditions[2].fieldKey = FWPM_CONDITION_IP_PROTOCOL;
+  conditions[2].matchType = FWP_MATCH_EQUAL;
+  conditions[2].conditionValue.type = FWP_UINT8;
+  conditions[2].conditionValue.uint8 = IPPROTO_TCP;
+  conditions[3].fieldKey = FWPM_CONDITION_IP_LOCAL_ADDRESS;
+  conditions[3].matchType = FWP_MATCH_EQUAL;
+  conditions[3].conditionValue.type = FWP_UINT32;
+  conditions[3].conditionValue.uint32 = INADDR_LOOPBACK;
+}
+
+static int inbound_matches(const FWPM_FILTER0 *filter, PSID sid, const GUID *key) {
+  unsigned seen = 0;
+  if (filter == NULL || !IsEqualGUID(&filter->filterKey, key) ||
+      !IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4) ||
+      !IsEqualGUID(&filter->subLayerKey, &FWPM_SUBLAYER_MPSSVC_APP_ISOLATION) ||
+      filter->action.type != FWP_ACTION_PERMIT ||
+      (filter->flags & ~FWPM_FILTER_FLAG_INDEXED) != 0 || filter->providerKey != NULL ||
+      filter->weight.type != FWP_UINT8 || filter->weight.uint8 != 15 ||
+      filter->numFilterConditions != 4 || filter->filterCondition == NULL) return 0;
+  for (UINT32 i = 0; i < 4; i++) {
+    const FWPM_FILTER_CONDITION0 *c = &filter->filterCondition[i];
+    unsigned bit = 0;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_ALE_PACKAGE_ID) &&
+        c->matchType == FWP_MATCH_EQUAL && c->conditionValue.type == FWP_SID &&
+        inbound_package(c->conditionValue.sid) && EqualSid(c->conditionValue.sid, sid)) bit = 1;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_FLAGS) &&
+        c->matchType == FWP_MATCH_FLAGS_ALL_SET && c->conditionValue.type == FWP_UINT32 &&
+        c->conditionValue.uint32 == FWP_CONDITION_FLAG_IS_LOOPBACK) bit = 2;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_IP_PROTOCOL) &&
+        c->matchType == FWP_MATCH_EQUAL && c->conditionValue.type == FWP_UINT8 &&
+        c->conditionValue.uint8 == IPPROTO_TCP) bit = 4;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_IP_LOCAL_ADDRESS) &&
+        c->matchType == FWP_MATCH_EQUAL && c->conditionValue.type == FWP_UINT32 &&
+        c->conditionValue.uint32 == INADDR_LOOPBACK) bit = 8;
+    if (bit == 0 || (seen & bit) != 0) return 0;
+    seen |= bit;
   }
-  if (enumeration != NULL) {
-    closed = FwpmFilterDestroyEnumHandle0(engine, enumeration);
-    if (closed != ERROR_SUCCESS) result = closed;
-  }
-  if (engine != NULL) {
-    closed = FwpmEngineClose0(engine);
-    if (closed != ERROR_SUCCESS) result = closed;
-  }
-  printf("socket-inbound-readback: code=%lu matched=%lu bounded=%d\n",
-         result, (unsigned long)matched, seen == 2048);
-  return result;
+  return seen == 15;
 }
 
 DWORD gateway_inbound_stop(struct gateway_inbound_fixture *fixture) {
-  DWORD result = ERROR_SUCCESS;
-  if (fixture == NULL) return result;
-  if (fixture->job != NULL && !TerminateJobObject(fixture->job, 0)) result = GetLastError();
-  if (fixture->process.hProcess != NULL) {
-    if (WaitForSingleObject(fixture->process.hProcess, 5000) != WAIT_OBJECT_0) result = ERROR_TIMEOUT;
-    CloseHandle(fixture->process.hProcess);
+  HANDLE observer = NULL;
+  FWPM_FILTER0 *remaining = NULL;
+  DWORD result, observed;
+  if (fixture == NULL) return ERROR_SUCCESS;
+  result = FwpmEngineClose0(fixture->engine);
+  if (result == ERROR_SUCCESS) {
+    result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &observer);
+    if (result == ERROR_SUCCESS) {
+      observed = FwpmFilterGetByKey0(observer, &fixture->key, &remaining);
+      result = observed == FWP_E_FILTER_NOT_FOUND ? ERROR_SUCCESS :
+        observed == ERROR_SUCCESS ? ERROR_INVALID_DATA : observed;
+      if (remaining != NULL) FwpmFreeMemory0((void **)&remaining);
+      observed = FwpmEngineClose0(observer);
+      if (observed != ERROR_SUCCESS) result = observed;
+    }
   }
-  if (fixture->process.hThread != NULL) CloseHandle(fixture->process.hThread);
-  if (fixture->job != NULL) CloseHandle(fixture->job);
   free(fixture);
+  printf("socket-inbound-owned-cleanup: code=%lu\n", result);
   return result;
 }
 
 DWORD gateway_inbound_start(PSID sid, struct gateway_inbound_fixture **owned) {
-  struct gateway_inbound_fixture *fixture = calloc(1, sizeof(*fixture));
-  STARTUPINFOEXW startup = {0};
-  SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
-  HANDLE null_io = INVALID_HANDLE_VALUE;
-  LPWSTR text = NULL;
-  wchar_t executable[MAX_PATH], command[MAX_PATH + 256];
-  DWORD result = ERROR_SUCCESS, length;
-  SIZE_T bytes = 0;
-  int attributes_ready = 0;
+  struct gateway_inbound_fixture *fixture;
+  FWPM_SESSION0 session = {0};
+  FWPM_FILTER0 filter, *installed = NULL;
+  FWPM_FILTER_CONDITION0 conditions[4];
+  DWORD result, closed;
+  if (owned == NULL || *owned != NULL || !inbound_package(sid)) return ERROR_INVALID_PARAMETER;
+  fixture = calloc(1, sizeof(*fixture));
   if (fixture == NULL) return ERROR_OUTOFMEMORY;
-  if (owned == NULL || *owned != NULL || !ConvertSidToStringSidW(sid, &text)) {
-    result = ERROR_INVALID_PARAMETER; goto done;
-  }
-  length = GetSystemDirectoryW(executable, MAX_PATH);
-  if (length == 0 || length >= MAX_PATH ||
-      wcscat_s(executable, MAX_PATH, L"\\CheckNetIsolation.exe") != 0 ||
-      _snwprintf_s(command, MAX_PATH + 256, _TRUNCATE,
-                    L"\"%ls\" LoopbackExempt -is -p=%ls", executable, text) < 0) {
-    result = ERROR_BUFFER_OVERFLOW; goto done;
-  }
-  /* Do not capture the OS utility's localized output: it may contain the private package SID. */
-  null_io = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                         &inheritable, OPEN_EXISTING, 0, NULL);
-  (void)InitializeProcThreadAttributeList(NULL, 1, 0, &bytes);
-  startup.lpAttributeList = calloc(1, bytes);
-  if (startup.lpAttributeList == NULL) { result = ERROR_OUTOFMEMORY; goto done; }
-  if (null_io == INVALID_HANDLE_VALUE ||
-      !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &bytes)) {
-    result = GetLastError(); goto done;
-  }
-  attributes_ready = 1;
-  startup.StartupInfo.cb = sizeof(startup);
-  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-  startup.StartupInfo.hStdInput = null_io;
-  startup.StartupInfo.hStdOutput = null_io;
-  startup.StartupInfo.hStdError = null_io;
-  fixture->job = CreateJobObjectW(NULL, NULL);
-  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-  if (fixture->job == NULL ||
-      !SetInformationJobObject(fixture->job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
-      !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                                  &null_io, sizeof(null_io), NULL, NULL) ||
-      !CreateProcessW(executable, command, NULL, NULL, TRUE,
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL,
-        &startup.StartupInfo, &fixture->process) ||
-      !AssignProcessToJobObject(fixture->job, fixture->process.hProcess) ||
-      ResumeThread(fixture->process.hThread) == (DWORD)-1) { result = GetLastError(); goto done; }
-  /* Bounded diagnostic readiness window; socket behavior, not process existence, is the oracle. */
-  if (WaitForSingleObject(fixture->process.hProcess, 1000) != WAIT_TIMEOUT) {
-    DWORD code = 0;
-    BOOL observed = GetExitCodeProcess(fixture->process.hProcess, &code);
-    printf("socket-inbound-early-exit: observed=%d code=%lu\n", observed != FALSE, code);
-    /* Read back even this refusal for diagnosis; a leftover/foreign filter never converts an
-     * exited owner into a qualified lifetime. Do not print localized utility output or SIDs. */
-    (void)inbound_readback(sid);
-    result = ERROR_NOT_READY;
-  }
-  if (result == ERROR_SUCCESS) result = inbound_readback(sid);
-done:
-  if (attributes_ready) DeleteProcThreadAttributeList(startup.lpAttributeList);
-  free(startup.lpAttributeList);
-  if (null_io != INVALID_HANDLE_VALUE) CloseHandle(null_io);
-  if (text != NULL) LocalFree(text);
+  session.flags = FWPM_SESSION_FLAG_DYNAMIC;
+  session.txnWaitTimeoutInMSec = 5000;
+  result = UuidCreate(&fixture->key);
+  if (result == RPC_S_UUID_LOCAL_ONLY) result = ERROR_SUCCESS;
+  if (result == ERROR_SUCCESS)
+    result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, &session, &fixture->engine);
+  inbound_spec(sid, &fixture->key, &filter, conditions);
+  if (result == ERROR_SUCCESS) result = FwpmFilterAdd0(fixture->engine, &filter, NULL, NULL);
+  if (result == ERROR_SUCCESS) result = FwpmFilterGetByKey0(fixture->engine, &fixture->key, &installed);
+  if (result == ERROR_SUCCESS && !inbound_matches(installed, sid, &fixture->key)) result = ERROR_INVALID_DATA;
+  if (installed != NULL) FwpmFreeMemory0((void **)&installed);
   if (result == ERROR_SUCCESS) *owned = fixture;
-  else {
-    if (fixture->process.hProcess != NULL) (void)TerminateProcess(fixture->process.hProcess, 1);
-    (void)gateway_inbound_stop(fixture);
-  }
-  printf("socket-inbound-provision: code=%lu\n", result);
+  else if (fixture->engine != NULL) {
+    closed = gateway_inbound_stop(fixture);
+    if (closed != ERROR_SUCCESS) result = closed;
+  } else free(fixture);
+  printf("socket-inbound-owned-provision: code=%lu\n", result);
   return result;
+}
+
+/* Pure readback rejection tests: never open WFP or change host policy. */
+int gateway_inbound_spec_tests(void) {
+  PSID sid = NULL, peer = NULL;
+  GUID key = {1, 0, 0, {0}};
+  FWPM_FILTER0 filter;
+  FWPM_FILTER_CONDITION0 conditions[4];
+  int ok = 1;
+  if (!ConvertStringSidToSidW(L"S-1-15-2-1-2-3-4-5-6-7", &sid)) return 1;
+  if (!ConvertStringSidToSidW(L"S-1-15-2-8-2-3-4-5-6-7", &peer)) { LocalFree(sid); return 1; }
+  for (unsigned mutation = 0; mutation < 12; mutation++) {
+    inbound_spec(sid, &key, &filter, conditions);
+    switch (mutation) {
+      case 1: filter.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT; break;
+      case 2: conditions[0].conditionValue.sid = peer; break;
+      case 3: conditions[1].matchType = FWP_MATCH_FLAGS_ANY_SET; break;
+      case 4: conditions[2].conditionValue.uint8 = IPPROTO_UDP; break;
+      case 5: conditions[3].conditionValue.uint32 = INADDR_ANY; break;
+      case 6: filter.numFilterConditions = 3; break;
+      case 7: conditions[3] = conditions[2]; break;
+      case 8: filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4; break;
+      case 9: filter.providerKey = &key; break;
+      case 10: filter.filterKey.Data1++; break;
+      case 11: filter.flags = FWPM_FILTER_FLAG_INDEXED; break;
+      default: break;
+    }
+    if (inbound_matches(&filter, sid, &key) != (mutation == 0 || mutation == 11)) ok = 0;
+  }
+  LocalFree(peer); LocalFree(sid);
+  puts(ok ? "gateway-inbound-owned-readback: passed" : "gateway-inbound-owned-readback: failed");
+  return ok ? 0 : 1;
 }
 
 DWORD gateway_inbound_block(PSID sid, UINT16 family, HANDLE *owned) {
