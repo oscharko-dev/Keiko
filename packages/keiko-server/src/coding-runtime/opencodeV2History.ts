@@ -193,6 +193,15 @@ interface KnownCandidate {
   readonly textLength?: number;
 }
 
+/** How a settled sync read its window: an anchored tail, a lost anchor, or the planned full read. */
+function settledReadMode(
+  base: TailState | undefined,
+  planned: OpenCodeV2ReadMode | undefined,
+): OpenCodeV2ReadMode {
+  if (base !== undefined) return "tail";
+  if (planned === "tail") return "anchor-lost";
+  return planned ?? "full";
+}
 export class OpenCodeV2HistoryError extends Error {
   constructor(readonly safeCode: string) {
     super("opencode-v2-history-invalid");
@@ -1604,10 +1613,8 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
     const planned = this.plannedMode;
     this.plannedMode = undefined;
     this.tailPasses = base === undefined ? 0 : this.tailPasses + 1;
-    const readMode: OpenCodeV2ReadMode =
-      base !== undefined ? "tail" : planned === "tail" ? "anchor-lost" : (planned ?? "full");
     this.syncOfLastProject = {
-      readMode,
+      readMode: settledReadMode(base, planned),
       readMessageCount: windowLength,
       retainedMessageCount: base?.precedingCount ?? 0,
     };

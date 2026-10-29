@@ -32,17 +32,15 @@ export interface DiffPage {
 
 const metricsByFile = new WeakMap<GitEditorDiffFile, DiffFileMetrics>();
 
+function utf8Width(codePoint: number): number {
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  return codePoint < 0x10000 ? 3 : 4;
+}
+
 function utf8Length(text: string): number {
   let bytes = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const unit = text.charCodeAt(index);
-    if (unit < 0x80) bytes += 1;
-    else if (unit < 0x800) bytes += 2;
-    else if (unit >= 0xd800 && unit <= 0xdbff) {
-      bytes += 4;
-      index += 1;
-    } else bytes += 3;
-  }
+  for (const character of text) bytes += utf8Width(character.codePointAt(0) ?? 0);
   return bytes;
 }
 
