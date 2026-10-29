@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import {
+  createObservedSseSubscription,
   defineSseSubscriptionObservationContract,
   type NativeSseSubscription,
 } from "../../../tests/support/sse-subscription-observations.js";
@@ -663,22 +664,9 @@ describe("openCommandSseStream subscription lifecycle", () => {
     subscription: (): NativeSseSubscription<FakeCommandRunnerManager> => {
       const manager = new FakeCommandRunnerManager();
       const subscribe = manager.subscribe;
-      return {
-        manager,
-        observe: (beforeAcquire, beforeRelease): void => {
-          vi.spyOn(manager, "subscribe").mockImplementation(function (
-            this: CommandRunnerManager,
-            listener: CommandRunnerEventEmitter,
-          ): () => void {
-            beforeAcquire(this);
-            const release = subscribe(listener);
-            return (): void => {
-              beforeRelease();
-              release();
-            };
-          });
-        },
-      };
+      return createObservedSseSubscription(manager, subscribe, (acquire): void => {
+        vi.spyOn(manager, "subscribe").mockImplementation(acquire);
+      });
     },
     open: openCommandSseStream,
     emitFirst: (manager): void => {

@@ -23,6 +23,26 @@ export interface NativeSseSubscription<Manager> {
   readonly observe: (beforeAcquire: (receiver: unknown) => void, beforeRelease: () => void) => void;
 }
 
+export function createObservedSseSubscription<Manager, Listener>(
+  manager: Manager,
+  subscribe: (listener: Listener) => () => void,
+  installNativeSpy: (acquire: (this: Manager, listener: Listener) => () => void) => void,
+): NativeSseSubscription<Manager> {
+  return {
+    manager,
+    observe: (beforeAcquire, beforeRelease): void => {
+      installNativeSpy(function (this: Manager, listener: Listener): () => void {
+        beforeAcquire(this);
+        const release = subscribe(listener);
+        return (): void => {
+          beforeRelease();
+          release();
+        };
+      });
+    },
+  };
+}
+
 interface SubscriptionObservationBinding<Manager, Response extends SubscriptionResponse> {
   readonly response: () => Response;
   readonly subscription: () => NativeSseSubscription<Manager>;
