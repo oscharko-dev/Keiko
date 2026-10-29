@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e45e52bd94eca7cb3755b3cfc2ddd4355015c8b6be64b2d3b602437320691b77",
+    "catalogDigest": "991d7ab601c6975bd85fdc364decac794ddb91f9cb0f16bd459b7a7f3d84bc12",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -7959,9 +7959,9 @@
         "failureClasses": ["coding-runtime-context-usage"],
         "proofIds": ["coding-runtime.context-usage.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:136",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:139",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1541"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1553"
         ]
       },
       {
@@ -11824,6 +11824,16 @@
             "dataClass": "count",
             "required": false
           },
+          "limitByteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "omittedByteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "reason": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -11905,10 +11915,10 @@
         "failureClasses": ["coding-runtime-repository-instructions"],
         "proofIds": ["coding-runtime.repository-instructions.context.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:149",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:162",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:858",
-          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:888"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:948",
+          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:978"
         ]
       },
       {
@@ -66259,10 +66269,22 @@
                   "required": false
                 },
                 {
+                  "name": "limitByteCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "lineCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "omittedByteCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "omittedSourceCount",
@@ -104870,7 +104892,7 @@
     {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:139",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:142",
       "package": "keiko-server"
     },
     {
@@ -105276,7 +105298,7 @@
     {
       "op": "coding-runtime.repository-instructions.context",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:152",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:165",
       "package": "keiko-server"
     },
     {

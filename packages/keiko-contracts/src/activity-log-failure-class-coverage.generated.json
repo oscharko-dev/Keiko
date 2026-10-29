@@ -12172,10 +12172,22 @@
               "required": false
             },
             {
+              "name": "limitByteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "lineCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "omittedByteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "omittedSourceCount",

@@ -11328,6 +11328,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      limitByteCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      omittedByteCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       reason: {
         type: "string",
         dataClass: "closed-enum",

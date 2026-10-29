@@ -86,11 +86,12 @@ recorded digest stays the file's own (PR #4064 review r4369385467). That helper 
 the global active pointer, so the read is bracketed by the run's own exact-workspace check before
 and after it (`exactWorkspaceRead`, shared with the auxiliary ports): a workspace switch while the
 run starts is recorded as `refused` with `workspace-unavailable` and never attaches another
-repository's file (#3873 review). The model receives the window that read would answer for the
-file's first 800 lines, cut at a line boundary to 16,384 bytes and to the bytes the turn still has
-under the sidecar prompt ceiling; a cut file ends with one explicit line naming the total line
-count. The block rides in the first message and is re-sent with every turn, so the context line
-records its estimated tokens, its per-turn cost against the run's prompt allowance. It is framed as
+repository's file (#3873 review). On the mapped profiles the model receives the window that read
+would answer for the file's first 800 lines, cut at a line boundary to 16,384 bytes and to the
+bytes the turn still has under the sidecar prompt ceiling; a cut file ends with one explicit line
+naming the total line count. That block rides in the first message and is re-sent with every turn,
+so the context line records its estimated tokens, its per-turn cost against the run's prompt
+allowance. It is framed as
 repository-authored, untrusted instructions — conventions and style, and verification guidance that
 only selects among the vetted verifiers — that grant no authority: they cannot change the governed
 tool rules, the Authority Envelope or the autonomy mode, and when the human intent and the other
@@ -103,7 +104,8 @@ loader is on by default; `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` di
 other explicit value fails composition closed. The body-free
 `coding-runtime.repository-instructions.context` event records the outcome under the run's
 correlation id (`attached`, `truncated`, `absent`, `disabled`, `refused`) with the attached byte and
-line counts, the file's total counts when cut, and the whole-file SHA-256 the read tool reports for
+line counts, the byte bound the read was cut against (`limitByteCount`), the file's total counts and
+the bytes left out (`omittedByteCount`) when cut, and the whole-file SHA-256 the read tool reports for
 the same file; only a genuine read failure is `refused`, recorded at `warn` with its closed reason,
 and it never fails the run. The helper reports a missing root file and a denied one alike, so both
 are `absent` with the helper's own reason retained. The helper delivers whole files up to its
@@ -111,13 +113,13 @@ content ceiling of 1 MiB, pinned in its wire protocol and its digest-pinned nati
 bounded whole-file read admits ordinary large repository instructions and retains the whole-file
 digest for edit preconditions. The native helper allocates only the observed file size plus one
 growth-detection byte; it still checks final file and directory identity and rejects concurrent
-changes. Model-facing read windows remain capped at 64 KiB, and initial repository instructions
-remain capped at 16 KiB and 800 lines. An oversized requested model window returns the existing
+changes. Model-facing read windows remain capped at 64 KiB, and the initial-turn block of the mapped
+profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). An oversized requested model window returns the existing
 `workspace-read-too-large` refusal and a body-free failed-read event so the model can request a
 smaller line window. Files above 1 MiB remain refused; neither a tool argument nor this loader can
 override the pinned helper ceiling.
 
-On the native profile the same bounded read reaches the model through the producer's own
+On the native profile the same read reaches the model through the producer's own
 instruction plugin instead of the first message (#3900 AC3, 2026-10-25). Keiko writes it, under a
 header that labels it repository-authored and untrusted and grants no authority, to `AGENTS.md` in
 the run's private configuration directory: the pinned 2.1.4 runtime's global instruction file,
@@ -128,7 +130,14 @@ same exact-workspace read, renaming a complete file into place or removing it wh
 admitted. After a change the turn waits out the producer's watcher before its prompt, so an edit, a
 file the guided `init` command creates and a removal reach the next model call as the producer's
 own instruction update. The initial turn then attaches no block, so the text reaches the model
-once; the mapped profiles keep the first-message block. The `instructions` setting is server-owned
+once; the mapped profiles keep the first-message block. The copy carries the whole
+credential-masked file, as a standalone run loads its AGENTS.md (2026-10-29): the 16 KiB/800-line cut
+belongs to the first-message block alone. It is bounded by the helper's 1 MiB ceiling and by the
+run's prompt budget, half the model's input window at three bytes per token
+(`repositoryInstructionsCopyBudget`, from the geometry the run launches with; about 168 KiB on a
+131,072-token window). A file beyond that budget arrives cut at a line boundary with the explicit
+truncation line instead of failing every turn on a window it cannot fit, and the context line then
+records the bound and the bytes left out. The `instructions` setting is server-owned
 and empty, so no layer can name a source the run would read itself. Each refresh records the same
 `coding-runtime.repository-instructions.context` line, and a copy that cannot be written is a
 `refused` line with the `exception` reason, its frames and cause chain, never a failed turn.
@@ -147,8 +156,8 @@ through the secure native listing (bounded; `[...]` and `{...}` are refused, nev
 A project entry never names a file outside the workspace; a global entry may name the user's own
 file. A remote (`https://`) entry is pulled once per run, only for a run launched in Full access,
 through Keiko's egress with no redirect and no loopback or private target; below Full access it is
-refused. Every source passes the same credential projection and the 16 KiB/800-line bound under a
-line naming it; together the additional sources stay within 48 KiB, and what does not fit is
+refused. Every additional source passes the same credential projection and the 16 KiB/800-line bound
+under a line naming it (only the workspace root's file travels whole); together the additional sources stay within 48 KiB, and what does not fit is
 omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
 `ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
 counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
