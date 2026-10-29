@@ -2298,6 +2298,17 @@ function logClientEditorLineEnding(
   return true;
 }
 
+// The closed presentation reports: an update notice, or an Editor line-ending adoption.
+function logPresentationClientReport(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  return (
+    logClientUpdateNotice(request, correlationId) ||
+    logClientEditorLineEnding(request, correlationId)
+  );
+}
+
 function logClientUpdateNotice(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -2462,8 +2473,7 @@ function logClosedClientReport(
     logClientSupportReportDownload(request, correlationId) ||
     logClientSupportReportPrepared(request, correlationId) ||
     logClientFilesScopeDecision(request, correlationId) ||
-    logClientUpdateNotice(request, correlationId) ||
-    logClientEditorLineEnding(request, correlationId) ||
+    logPresentationClientReport(request, correlationId) ||
     logRetrievalClientReport(request, correlationId) ||
     logCodingClientReport(request, correlationId)
   );

@@ -126,10 +126,12 @@ function registerFakeNavigationProvider(
 // `import`s) can close over the same mutable box the tests set.
 // `modelEol` is the line ending Monaco gives a model it creates: the platform default when the
 // initial text has no line break (CRLF for a Windows user agent, #4123).
-const hostMountControl = vi.hoisted(() => ({
-  extraMountMicrotasks: 0,
-  modelEol: "\n" as "\n" | "\r\n",
-}));
+const hostMountControl = vi.hoisted(
+  (): { extraMountMicrotasks: number; modelEol: "\n" | "\r\n" } => ({
+    extraMountMicrotasks: 0,
+    modelEol: "\n",
+  }),
+);
 
 vi.mock("@monaco-editor/react", () => {
   interface FakeSelection {

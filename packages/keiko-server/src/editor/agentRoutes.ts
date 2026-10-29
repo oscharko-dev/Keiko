@@ -1243,24 +1243,38 @@ function refusedBridgeRoot(
   return rootBoundaryError(reason);
 }
 
-function registerBridgeSnapshot(
+// The snapshot bound to its server-resolved root, or the logged refusal of a root that does not
+// own it (#4117).
+function admitBridgeSnapshot(
   request: EditorAgentBridgeSnapshotRequest,
-  deps?: EditorAgentRouteDeps,
-  correlationId?: string,
-): RouteResult {
+  deps: EditorAgentRouteDeps | undefined,
+  correlationId: string | undefined,
+): { readonly snapshot: EditorAgentSessionSnapshot } | { readonly refused: RouteResult } {
   const root = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
-  if (!root.ok) return refusedBridgeRoot(root.reason, correlationId);
+  if (!root.ok) return { refused: refusedBridgeRoot(root.reason, correlationId) };
   const pathReason = editorAgentRootContainmentReason(
     root.root,
     snapshotRootPaths(request.snapshot),
     deps,
     shapedCorrelationId(request.snapshot.sessionId),
   );
-  if (pathReason !== null) return refusedBridgeRoot(pathReason, correlationId);
-  const snapshot =
-    root.root.workspaceRoot === request.snapshot.workspaceRoot
-      ? request.snapshot
-      : { ...request.snapshot, workspaceRoot: root.root.workspaceRoot };
+  if (pathReason !== null) return { refused: refusedBridgeRoot(pathReason, correlationId) };
+  return {
+    snapshot:
+      root.root.workspaceRoot === request.snapshot.workspaceRoot
+        ? request.snapshot
+        : { ...request.snapshot, workspaceRoot: root.root.workspaceRoot },
+  };
+}
+
+function registerBridgeSnapshot(
+  request: EditorAgentBridgeSnapshotRequest,
+  deps?: EditorAgentRouteDeps,
+  correlationId?: string,
+): RouteResult {
+  const admitted = admitBridgeSnapshot(request, deps, correlationId);
+  if ("refused" in admitted) return admitted.refused;
+  const { snapshot } = admitted;
   const existing = editorAgentRegistry.snapshotFor(snapshot.sessionId);
   const supplied = request.bridgeDecisionCapability;
   if (

@@ -63,6 +63,25 @@ function textLineEnding(text: string): "\n" | "\r\n" | null {
   return text.includes("\n") ? "\n" : null;
 }
 
+interface LineEndingTransition {
+  readonly from: string;
+  readonly to: "\n" | "\r\n";
+  readonly pushEOL: (eol: 0 | 1) => void;
+}
+
+// The model's line ending and the one the text carries, when they differ and the model can switch.
+function lineEndingTransition(
+  model: LineEndingAwareModel | null | undefined,
+  text: string,
+): LineEndingTransition | null {
+  const to = textLineEnding(text);
+  const from = model?.getEOL?.();
+  if (to === null || from === undefined || from === to || model?.pushEOL === undefined) {
+    return null;
+  }
+  return { from, to, pushEOL: (eol) => model.pushEOL?.(eol) };
+}
+
 /**
  * Monaco normalizes every inserted line break to the model's own line ending, and a model created
  * from text without one takes the platform default (CRLF for a Windows user agent). Writing text
@@ -79,17 +98,17 @@ export function writeModelTextWithLineEnding(
   write: () => boolean,
   adopted?: (lineEnding: "lf" | "crlf") => void,
 ): boolean {
-  const target = textLineEnding(text);
-  const current = model?.getEOL?.();
-  if (target === null || current === undefined || current === target || !model?.pushEOL) {
+  const transition = lineEndingTransition(model, text);
+  if (transition === null) {
     announce(text, true);
     return write();
   }
-  announce(text.replace(LINE_BREAK, current), false);
+  announce(text.replace(LINE_BREAK, transition.from), false);
   if (!write()) return false;
   announce(text, true);
-  model.pushEOL(target === "\n" ? 0 : 1);
-  adopted?.(target === "\n" ? "lf" : "crlf");
+  const lf = transition.to === "\n";
+  transition.pushEOL(lf ? 0 : 1);
+  adopted?.(lf ? "lf" : "crlf");
   return true;
 }
 

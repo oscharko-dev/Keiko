@@ -431,6 +431,31 @@ function owningHostEditText(
   return reconciledIdRef.current === hostEdit.id ? undefined : hostEdit.text;
 }
 
+// Same-document programmatic updates (an agent-applied edit, a format result, a restore) must stay
+// on the browser undo stack (#1394 pin); document switches never pass through here — they rebuild
+// the model via the file identity key. Every model value the write produces is announced as this
+// sync's own change, so a line-ending adoption is never read as a human edit (#4123).
+function writeControlledModelValue(
+  model: NonNullable<ReturnType<NonNullable<MountEditor["getModel"]>>>,
+  syncChange: ProgrammaticEditorChange,
+  programmaticChangeRef: ProgrammaticEditorChangeRef,
+  onLineEndingAdopted: KeikoCodeEditorProps["onLineEndingAdopted"],
+): void {
+  let announced: ProgrammaticEditorChange | null = null;
+  writeRetainedEditorModelValue(
+    model,
+    syncChange.text,
+    (value) => {
+      announced = { ...syncChange, text: value };
+      programmaticChangeRef.current = announced;
+    },
+    (lineEnding) => onLineEndingAdopted?.(lineEnding, "buffer-sync"),
+  );
+  queueMicrotask(() => {
+    if (programmaticChangeRef.current === announced) programmaticChangeRef.current = null;
+  });
+}
+
 function useControlledModelValueSync(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
@@ -455,22 +480,12 @@ function useControlledModelValueSync(
       // back now would put a new → old → new pair on the undo stack, so the second keyboard
       // undo would return to the host-edit text instead of moving further back (#3071 review).
       if (ownedText !== undefined && model.getValue() === ownedText) return true;
-      // Same-document programmatic updates (an agent-applied edit, a format result, a restore)
-      // must stay on the browser undo stack (#1394 pin); document switches never pass through
-      // here — they rebuild the model via the file identity key.
-      let announced: ProgrammaticEditorChange | null = null;
-      writeRetainedEditorModelValue(
+      writeControlledModelValue(
         model,
-        expected,
-        (value) => {
-          announced = { ...syncChange, text: value };
-          programmaticChangeRef.current = announced;
-        },
-        (lineEnding) => props.onLineEndingAdopted?.(lineEnding, "buffer-sync"),
+        syncChange,
+        programmaticChangeRef,
+        props.onLineEndingAdopted,
       );
-      queueMicrotask(() => {
-        if (programmaticChangeRef.current === announced) programmaticChangeRef.current = null;
-      });
       return true;
     };
     const syncWhenMounted = (): void => {
