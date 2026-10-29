@@ -63,6 +63,7 @@ DWORD keiko_gateway_challenge_issue(struct keiko_gateway_challenge *challenge) {
     SecureZeroMemory(challenge->nonce, sizeof(challenge->nonce));
     return ERROR_GEN_FAILURE;
   }
+  challenge->issued_at_ms = GetTickCount64();
   challenge->issued = 1;
   return ERROR_SUCCESS;
 }
@@ -73,8 +74,15 @@ DWORD keiko_gateway_request_admit(struct keiko_gateway_challenge *challenge,
   struct keiko_gateway_request decoded = {0};
   UINT16 run_size;
   int nonce_matches;
+  ULONGLONG now;
   if (challenge == NULL || !challenge->issued || challenge->consumed) return ERROR_INVALID_STATE;
   challenge->consumed = 1;
+  now = GetTickCount64();
+  if (now < challenge->issued_at_ms ||
+      now - challenge->issued_at_ms >= KEIKO_GATEWAY_CHALLENGE_LIFETIME_MS) {
+    SecureZeroMemory(challenge->nonce, sizeof(challenge->nonce));
+    return ERROR_TIMEOUT;
+  }
   nonce_matches = bytes != NULL && size == KEIKO_GATEWAY_OPEN_BYTES &&
                   memcmp(bytes + 12, challenge->nonce, sizeof(challenge->nonce)) == 0;
   SecureZeroMemory(challenge->nonce, sizeof(challenge->nonce));

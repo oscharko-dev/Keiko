@@ -8,9 +8,11 @@
 
 #define KEIKO_GATEWAY_OPEN_BYTES 540u
 #define KEIKO_GATEWAY_CHALLENGE_BYTES 32u
+#define KEIKO_GATEWAY_CHALLENGE_LIFETIME_MS 30000u
 
 struct keiko_gateway_challenge {
   BYTE nonce[KEIKO_GATEWAY_CHALLENGE_BYTES];
+  ULONGLONG issued_at_ms;
   int issued;
   int consumed;
 };
@@ -28,7 +30,9 @@ struct keiko_gateway_request {
   char policy_digest[65];
 };
 
-/* One challenge per authenticated pipe connection. Reinitializing an active challenge fails. */
+/* One challenge per authenticated pipe connection, valid for less than 30 seconds of monotonic
+ * uptime. The issue time is server-owned, never supplied by a client or persisted across reboot.
+ * Reinitializing an active challenge fails. */
 DWORD keiko_gateway_challenge_issue(struct keiko_gateway_challenge *challenge);
 /* Consumes the challenge even for an invalid request. No retry/replay on the same connection.
  * The caller must first bound the pipe message and authenticate its kernel-derived peer.

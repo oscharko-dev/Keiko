@@ -6,6 +6,7 @@
 static DWORD admit_fixture(const BYTE *bytes, DWORD size, struct keiko_gateway_request *request) {
   struct keiko_gateway_challenge challenge = {0};
   memset(challenge.nonce, 0x11, sizeof(challenge.nonce));
+  challenge.issued_at_ms = GetTickCount64();
   challenge.issued = 1;
   return keiko_gateway_request_admit(&challenge, bytes, size, request);
 }
@@ -16,6 +17,23 @@ static int rejects(const BYTE *bytes, DWORD size) {
   before = request;
   return admit_fixture(bytes, size, &request) != ERROR_SUCCESS &&
          memcmp(&request, &before, sizeof(request)) == 0;
+}
+
+static int expired_challenge_test(const BYTE *bytes, ULONGLONG issued_at_ms) {
+  struct keiko_gateway_challenge challenge = {0};
+  struct keiko_gateway_request request, before;
+  BYTE zero[KEIKO_GATEWAY_CHALLENGE_BYTES] = {0};
+  challenge.issued_at_ms = issued_at_ms;
+  challenge.issued = 1;
+  memset(challenge.nonce, 0x11, sizeof(challenge.nonce));
+  memset(&request, 0x5a, sizeof(request));
+  before = request;
+  return keiko_gateway_request_admit(&challenge, bytes, KEIKO_GATEWAY_OPEN_BYTES, &request) ==
+           ERROR_TIMEOUT && challenge.consumed &&
+         memcmp(challenge.nonce, zero, sizeof(zero)) == 0 &&
+         memcmp(&request, &before, sizeof(request)) == 0 &&
+         keiko_gateway_request_admit(&challenge, bytes, KEIKO_GATEWAY_OPEN_BYTES, &request) ==
+           ERROR_INVALID_STATE;
 }
 
 int gateway_request_tests(const char *filename) {
@@ -32,6 +50,9 @@ int gateway_request_tests(const char *filename) {
   read_failed = ferror(input);
   if (fclose(input) != 0 || read_failed || count != KEIKO_GATEWAY_OPEN_BYTES) return 1;
   bytes[KEIKO_GATEWAY_OPEN_BYTES] = 0;
+  /* No sleep or wall-clock adjustment: stale and impossible future server-owned timestamps. */
+  if (!expired_challenge_test(bytes, GetTickCount64() - KEIKO_GATEWAY_CHALLENGE_LIFETIME_MS) ||
+      !expired_challenge_test(bytes, ~(ULONGLONG)0)) goto done;
   if (admit_fixture(bytes, KEIKO_GATEWAY_OPEN_BYTES, &request) != ERROR_SUCCESS ||
       request.port == 0 || request.run_id[0] == '\0' || request.job_handle != 4) goto done;
   for (index = 0; index < KEIKO_GATEWAY_OPEN_BYTES; index++)
