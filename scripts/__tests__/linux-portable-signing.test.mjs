@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import minipassFetch from "minipass-fetch";
 
 import {
   finalizeLinuxQualifiedPayload,
@@ -38,8 +37,6 @@ import {
 } from "../sign-linux-runtime-qualification.mjs";
 import { MAX_PORTABLE_MANIFEST_BYTES } from "../../packages/keiko-server/src/update-portable-staging-shared.ts";
 import { parseStableVersion } from "../lib/stable-version.mjs";
-
-const { FetchError } = minipassFetch;
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TARGET = "linux-x64";
@@ -471,9 +468,20 @@ describe("Linux portable qualification sealing", () => {
       return Object.assign(new TypeError("fetch failed"), { cause });
     }
 
-    // The exact error make-fetch-happen raises on its deadline, wrapped the way sigstore wraps it.
+    // The shape of minipass-fetch's FetchError, which make-fetch-happen raises on its deadline: a
+    // read-only name `FetchError`, `code: "FETCH_ERROR"` and the deadline in `type`. It is wrapped
+    // the way sigstore wraps it.
+    function fetchError(message, type) {
+      const error = Object.assign(new Error(message), {
+        code: "FETCH_ERROR",
+        errno: "FETCH_ERROR",
+        type,
+      });
+      return Object.defineProperty(error, "name", { get: () => "FetchError" });
+    }
+
     function timeoutFailure(type) {
-      const cause = new FetchError("network timeout at: https://rekor.example/api", type);
+      const cause = fetchError("network timeout at: https://rekor.example/api", type);
       return Object.assign(new Error("error creating tlog entry"), {
         name: "InternalError",
         code: "TLOG_CREATE_ENTRY_ERROR",
