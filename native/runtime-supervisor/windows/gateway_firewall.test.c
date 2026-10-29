@@ -18,6 +18,7 @@ struct gateway_firewall_fixture {
   int installed;
   HANDLE engine;
   GUID filter_key;
+  FILETIME started;
 };
 
 /* NetSecurity rejects the IPv6 loopback address even for an exact /128 host.
@@ -205,6 +206,7 @@ static DWORD firewall6_open(PSID sid, const wchar_t *executable, UINT16 port,
   if (result != ERROR_SUCCESS) goto done;
   result = UuidCreate(&owner->filter_key);
   if (result == RPC_S_UUID_LOCAL_ONLY) result = ERROR_SUCCESS;
+  GetSystemTimeAsFileTime(&owner->started);
   session.flags = FWPM_SESSION_FLAG_DYNAMIC; session.txnWaitTimeoutInMSec = 5000;
   if (result == ERROR_SUCCESS) result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, &session, &owner->engine);
   firewall6_spec(sid, app, &user_blob, port, &owner->filter_key, &filter, conditions);
@@ -219,6 +221,85 @@ done:
   free(user);
   CloseHandle(token);
   return result;
+}
+
+static void firewall6_event_matches(const FWPM_FILTER0 *filter, const FWPM_NET_EVENT2 *event) {
+  unsigned matched = 0;
+  const FWPM_NET_EVENT_HEADER2 *h = &event->header;
+  if (event->type != FWPM_NET_EVENT_TYPE_CLASSIFY_DROP || event->classifyDrop == NULL ||
+      h->ipVersion != FWP_IP_VERSION_V6) return;
+  for (UINT32 i = 0; i < filter->numFilterConditions; i++) {
+    const FWPM_FILTER_CONDITION0 *c = &filter->filterCondition[i];
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_ALE_PACKAGE_ID) &&
+        h->packageSid != NULL && EqualSid(h->packageSid, c->conditionValue.sid)) matched |= 1;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_ALE_APP_ID) &&
+        firewall_blob_equal(&h->appId, c->conditionValue.byteBlob)) matched |= 2;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_ALE_USER_ID)) {
+      PACL dacl = NULL; BOOL present = FALSE, defaulted = FALSE; void *ace = NULL;
+      if (GetSecurityDescriptorDacl(c->conditionValue.sd->data, &present, &dacl, &defaulted) &&
+          present && dacl != NULL && dacl->AceCount == 1 && GetAce(dacl, 0, &ace) &&
+          h->userId != NULL && EqualSid(h->userId, &((ACCESS_ALLOWED_ACE *)ace)->SidStart)) matched |= 4;
+    }
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_IP_PROTOCOL) &&
+        h->ipProtocol == c->conditionValue.uint8) matched |= 8;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_IP_LOCAL_PORT) &&
+        h->localPort == c->conditionValue.uint16) matched |= 16;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_IP_LOCAL_ADDRESS) &&
+        memcmp(&h->localAddrV6, c->conditionValue.byteArray16, sizeof(FWP_BYTE_ARRAY16)) == 0) matched |= 32;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_IP_REMOTE_ADDRESS) &&
+        memcmp(&h->remoteAddrV6, c->conditionValue.byteArray16, sizeof(FWP_BYTE_ARRAY16)) == 0) matched |= 64;
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_FLAGS) && event->classifyDrop->isLoopback) matched |= 128;
+  }
+  printf("socket-firewall-event-match: mask=%u header-flags=%lu layer=%u\n", matched,
+    h->flags, (unsigned)event->classifyDrop->layerId);
+}
+
+/* Bounded, body-free diagnostics for an exact installed fixture rule. */
+void gateway_firewall_diagnose(struct gateway_firewall_fixture *owner, HANDLE child) {
+  FWPM_FILTER0 *filter = NULL;
+  HANDLE token = NULL, impersonation = NULL;
+  DWORD result, access = 0, privilege_bytes = 1024;
+  BYTE privileges[1024];
+  BOOL allowed = FALSE;
+  GENERIC_MAPPING mapping = {FWP_ACTRL_MATCH_FILTER, FWP_ACTRL_MATCH_FILTER,
+    FWP_ACTRL_MATCH_FILTER, FWP_ACTRL_MATCH_FILTER};
+  if (owner == NULL || owner->engine == NULL) return;
+  result = FwpmFilterGetByKey0(owner->engine, &owner->filter_key, &filter);
+  if (result != ERROR_SUCCESS) return;
+  for (UINT32 i = 0; i < filter->numFilterConditions; i++) {
+    FWPM_FILTER_CONDITION0 *c = &filter->filterCondition[i];
+    if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_ALE_USER_ID)) {
+      if (!OpenProcessToken(child, TOKEN_QUERY | TOKEN_DUPLICATE, &token) ||
+          !DuplicateToken(token, SecurityImpersonation, &impersonation) ||
+          !AccessCheck(c->conditionValue.sd->data, impersonation, FWP_ACTRL_MATCH_FILTER,
+            &mapping, (PPRIVILEGE_SET)privileges, &privilege_bytes, &access, &allowed)) result = GetLastError();
+      printf("socket-firewall-user-access: code=%lu allowed=%d\n", result, allowed != FALSE);
+    }
+  }
+  {
+    FWPM_NET_EVENT_ENUM_TEMPLATE0 query = {0};
+    FWPM_FILTER_CONDITION0 app_condition = {0};
+    HANDLE enumeration = NULL;
+    FWPM_NET_EVENT2 **events = NULL;
+    UINT32 count = 0;
+    query.startTime = owner->started; GetSystemTimeAsFileTime(&query.endTime);
+    for (UINT32 i = 0; i < filter->numFilterConditions; i++)
+      if (IsEqualGUID(&filter->filterCondition[i].fieldKey, &FWPM_CONDITION_ALE_APP_ID))
+        app_condition = filter->filterCondition[i];
+    query.numFilterConditions = 1; query.filterCondition = &app_condition;
+    result = FwpmNetEventCreateEnumHandle0(owner->engine, &query, &enumeration);
+    if (result == ERROR_SUCCESS) {
+      result = FwpmNetEventEnum2(owner->engine, enumeration, 32, &events, &count);
+      if (result == ERROR_SUCCESS)
+        for (UINT32 i = 0; i < count; i++) firewall6_event_matches(filter, events[i]);
+      if (events != NULL) FwpmFreeMemory0((void **)&events);
+      (void)FwpmNetEventDestroyEnumHandle0(owner->engine, enumeration);
+    }
+    printf("socket-firewall-event-read: code=%lu count=%u\n", result, (unsigned)count);
+  }
+  if (impersonation != NULL) CloseHandle(impersonation);
+  if (token != NULL) CloseHandle(token);
+  FwpmFreeMemory0((void **)&filter);
 }
 
 static DWORD firewall6_close(struct gateway_firewall_fixture *owner) {

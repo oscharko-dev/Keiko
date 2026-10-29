@@ -21,6 +21,7 @@ DWORD gateway_diagnostics_start(const wchar_t *executable, struct gateway_diagno
 DWORD gateway_diagnostics_read(struct gateway_diagnostics *owner, PSID sid);
 DWORD gateway_diagnostics_stop(struct gateway_diagnostics *owner);
 struct gateway_firewall_fixture;
+void gateway_firewall_diagnose(struct gateway_firewall_fixture *owner, HANDLE child);
 DWORD gateway_firewall_open(PSID sid, const wchar_t *executable, UINT16 family, UINT16 port,
                              struct gateway_firewall_fixture **owned);
 DWORD gateway_firewall_close(struct gateway_firewall_fixture *owner);
@@ -298,7 +299,10 @@ static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family
   result = read_server_port(output, family, &port);
   if (result == ERROR_SUCCESS && firewall_sid != NULL)
     result = gateway_firewall_open(firewall_sid, executable, (UINT16)family, port, &firewall);
-  if (result == ERROR_SUCCESS && !connect_target(family, port, &socket_error)) result = ERROR_CONNECTION_REFUSED;
+  if (result == ERROR_SUCCESS && !connect_target(family, port, &socket_error)) {
+    gateway_firewall_diagnose(firewall, child.hProcess);
+    result = ERROR_CONNECTION_REFUSED;
+  }
   if (result == ERROR_SUCCESS && (WaitForSingleObject(child.hProcess, 5000) != WAIT_OBJECT_0 ||
       !GetExitCodeProcess(child.hProcess, &code) || code != 0)) result = ERROR_INVALID_DATA;
 done:
