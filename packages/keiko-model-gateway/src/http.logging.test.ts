@@ -5,6 +5,11 @@
 // negotiation happens.
 
 import { describe, expect, it } from "vitest";
+import {
+  createRecordingSink,
+  recordingOps as ops,
+  recordingEventFor as eventFor,
+} from "../../../tests/support/recording-log-sink.js";
 import { gatewayFetch, OutboundHttpEgressError } from "./http.js";
 import type {
   ModelGatewayLogEvent,
@@ -16,37 +21,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 
-interface Recorder {
-  readonly sink: ModelGatewayLogSink;
-  readonly events: ModelGatewayLogTransport[];
-}
-
-function recorder(): Recorder {
-  const events: ModelGatewayLogTransport[] = [];
-  return {
-    events,
-    sink: {
-      write(event: ModelGatewayLogTransport): void {
-        events.push(event);
-      },
-    },
-  };
-}
-
-function ops(events: readonly ModelGatewayLogTransport[]): readonly string[] {
-  return events.map((event) => event.op);
-}
-
-function eventFor(
-  events: readonly ModelGatewayLogTransport[],
-  op: string,
-): ModelGatewayLogTransport {
-  const found = events.find((event) => event.op === op);
-  if (found === undefined) {
-    throw new Error(`expected an event with op '${op}', saw: ${ops(events).join(", ")}`);
-  }
-  return found;
-}
+const recorder = createRecordingSink<ModelGatewayLogTransport>;
 
 function respondWith(status: number): typeof fetch {
   return (): Promise<Response> => Promise.resolve(new Response("body-never-logged", { status }));

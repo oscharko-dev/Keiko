@@ -3,15 +3,16 @@
 // adapter. Every case injects an adapter and a Clock — no network, no timers, no global state.
 
 import { describe, expect, it } from "vitest";
+import {
+  createRecordingSink,
+  recordingOps as ops,
+  recordingEventFor as eventFor,
+} from "../../../tests/support/recording-log-sink.js";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { Gateway } from "./gateway.js";
-import type {
-  ModelGatewayLogEvent,
-  ModelGatewayLogTransport,
-  ModelGatewayLogSink,
-} from "./observability.js";
+import type { ModelGatewayLogEvent, ModelGatewayLogTransport } from "./observability.js";
 import { GATEWAY_BUFFERED_BUDGET_FLOOR_MS, providerRequestBudgetMs } from "./resilience.js";
 import type {
   Clock,
@@ -26,37 +27,8 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 
-interface Recorder {
-  readonly sink: ModelGatewayLogSink;
-  readonly events: ModelGatewayLogTransport[];
-}
-
-function recorder(): Recorder {
-  const events: ModelGatewayLogTransport[] = [];
-  return {
-    events,
-    sink: {
-      write(event: ModelGatewayLogTransport): void {
-        events.push(event);
-      },
-    },
-  };
-}
-
-function ops(events: readonly ModelGatewayLogTransport[]): readonly string[] {
-  return events.map((event) => event.op);
-}
-
-function eventFor(
-  events: readonly ModelGatewayLogTransport[],
-  op: string,
-): ModelGatewayLogTransport {
-  const found = events.find((event) => event.op === op);
-  if (found === undefined) {
-    throw new Error(`expected an event with op '${op}', saw: ${ops(events).join(", ")}`);
-  }
-  return found;
-}
+const recorder = createRecordingSink<ModelGatewayLogTransport>;
+type Recorder = ReturnType<typeof recorder>;
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
