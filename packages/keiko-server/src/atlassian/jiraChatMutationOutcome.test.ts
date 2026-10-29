@@ -164,3 +164,58 @@ it.each([
     ).toBeUndefined();
   },
 );
+
+// The catalog can settle while consent is pending, before the mutation handler creates a journal.
+it.each([
+  { status: "timeout", reason: "deadline-exceeded" },
+  { status: "cancelled", reason: "parent-cancelled" },
+  { status: "denied", reason: "authority-revoked" },
+] as const)(
+  "proves an unstarted $status mutation was not dispatched without a journal",
+  ({ status, reason }) => {
+    const result = validateToolResultEnvelope({ ...RESULT, effectStarted: false, status, reason });
+    expect(jiraChatMutationOutcome({ result, record: undefined, expected: EXPECTED })).toBe(
+      "not-dispatched",
+    );
+    expect(
+      jiraChatMutationOutcome({
+        result: { ...result, effectStarted: true },
+        record: undefined,
+        expected: EXPECTED,
+      }),
+    ).toBeUndefined();
+  },
+);
+
+it.each([
+  { phase: "dispatched", outcome: null, httpStatus: null, observed: "unknown" },
+  { phase: "acknowledged", outcome: null, httpStatus: 201, observed: "succeeded-unconfirmed" },
+  { phase: "settled", outcome: "succeeded", httpStatus: 201, observed: "succeeded" },
+] as const)(
+  "retains prior durable $observed when this catalog attempt never starts",
+  ({ observed, ...state }) => {
+    const result = validateToolResultEnvelope({ ...RESULT, effectStarted: false });
+    expect(jiraChatMutationOutcome({ result, record: record(state), expected: EXPECTED })).toBe(
+      observed,
+    );
+  },
+);
+
+it("does not infer non-dispatch from a mismatched tool or durable identity", () => {
+  const result = validateToolResultEnvelope({ ...RESULT, effectStarted: false });
+  for (const toolRef of [null, createToolRef("keiko.jira.edit", 3)])
+    expect(
+      jiraChatMutationOutcome({
+        result: { ...result, toolRef },
+        record: undefined,
+        expected: EXPECTED,
+      }),
+    ).toBeUndefined();
+  expect(
+    jiraChatMutationOutcome({
+      result,
+      record: record({ invocationId: "foreign-action" }),
+      expected: EXPECTED,
+    }),
+  ).toBeUndefined();
+});

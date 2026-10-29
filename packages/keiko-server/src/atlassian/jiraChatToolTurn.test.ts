@@ -685,6 +685,7 @@ function expectCancelledConsent(
   expect(consentState(f, mutation)).toBe("revoked");
   if (mutation) expect(message?.toolTranscript?.readGrant?.state).toBe("granted");
   expect(firstToolExchange(f).result?.status).toBe("cancelled");
+  if (mutation) expect(firstToolExchange(f).mutationOutcome).toBe("not-dispatched");
   expect(f.requests()).toBe(0);
   expect(f.writes()).toBe(0);
   expect(f.calls).toHaveLength(1);

@@ -179,3 +179,33 @@ it.each([
     expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
   },
 );
+
+it("shows a recorded pre-dispatch timeout as not sent without remote uncertainty", () => {
+  const original = exchange(undefined);
+  if (original.result === undefined) throw new Error("Missing test result");
+  render(
+    <JiraChatTools
+      transcript={{
+        schemaVersion: 1,
+        exchanges: [
+          {
+            ...original,
+            mutationOutcome: "not-dispatched",
+            result: {
+              ...original.result,
+              effectStarted: false,
+              status: "timeout",
+              reason: "deadline-exceeded",
+              data: null,
+              page: null,
+            },
+          },
+        ],
+      }}
+      turnState="completed"
+    />,
+  );
+  expect(screen.getByText("Not sent to Jira")).toBeVisible();
+  expect(screen.queryByText("Jira outcome unknown")).toBeNull();
+  expect(screen.queryByText(/may have been applied/)).toBeNull();
+});
