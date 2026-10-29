@@ -157,6 +157,28 @@ If either run exceeds a budget, both completed measurements are retained as `fai
 in the scratch directory for diagnosis. The command fails and leaves governed evidence untouched;
 inspect host load and the measured values before deciding whether another run is justified.
 
+**Portable pair refreshed, 2026-10-29 (PR #4013).** The canonical portable producer compared
+pinned integration baseline `246efd4638066b26cfb50ee329e6d3c099599f66` with the signed private
+integration candidate `4767a0af7233035120aca386c112906bd38f9c9f`. Both revisions were installed
+and built independently, then measured with the same candidate ruler on the 18-core, 64 GiB
+darwin arm64 reference, kernel 27.0.0, Node 24.18.0 and npm 11.16.0. Each of the three cases
+retains thirty samples after two warmups. The separate canonical judge passed, including the
+320-tool overflow refusal. All six maxima and ceilings are byte-equivalent numeric values to
+the previous budget; the new pair retains its calibration and budget digests as provenance.
+
+| Case                   | Metric          | Previous ceiling (ms) | Current ceiling (ms) | Candidate p95 (ms) |
+| ---------------------- | --------------- | --------------------- | -------------------- | ------------------ |
+| `legacy-native-6-tool` | `coldCompileMs` | 10.367                | 10.367               | 2.897              |
+| `legacy-native-6-tool` | `lookupBatchMs` | 4.115                 | 4.115                | 0.667              |
+| `managed-opencode-v2`  | `coldCompileMs` | 31.995                | 31.995               | 8.611              |
+| `managed-opencode-v2`  | `lookupBatchMs` | 2.602                 | 2.602                | 0.513              |
+| `synthetic-300-tool`   | `coldCompileMs` | 138.497               | 138.497              | 51.054             |
+| `synthetic-300-tool`   | `lookupBatchMs` | 98.169                | 98.169               | 0.566              |
+
+Values are rounded only in this table; the generated documents retain full precision. This pair
+qualifies the catalog workload under the unchanged budgets. It neither establishes a hardware-only
+speed comparison nor qualifies the separate coding runtime or supported release platforms.
+
 The V2 case is added with the explicit one-time extension mode:
 
 ```bash
