@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 374,
-  "completeClassCount": 374,
+  "supportedClassCount": 375,
+  "completeClassCount": 375,
   "completeness": "complete",
   "classes": [
     {
@@ -4004,6 +4004,12 @@
             },
             {
               "name": "progressState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "refusal",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false
@@ -18583,6 +18589,62 @@
             "causeChain": false
           },
           "proofIds": ["indexing.document.skipped.reason"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "editor-bridge-registration",
+      "requirementContract": "editor-bridge-registration",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["editor.agent.bridge-registration"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "editor.agent.bridge-registration",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["editor.agent.bridge-registration"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "editor.agent.bridge-registration",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.agent.bridge-registration.lifecycle"],
           "replayReferences": [],
           "missingObligations": []
         }

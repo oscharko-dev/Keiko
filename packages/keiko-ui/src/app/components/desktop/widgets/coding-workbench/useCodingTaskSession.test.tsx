@@ -145,6 +145,29 @@ describe("coding task selection", () => {
     expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain("/other");
   });
 
+  it("records a returned task of another workspace as a routine switch (#4118)", async () => {
+    read.mockResolvedValue({ ...detail, task: { ...detail.task, workspaceId: "ws-other" } });
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+    expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] coding workbench interaction: history-workspace-switched",
+      {
+        correlationId: read.mock.calls[0]?.[1],
+        codingWorkbenchInteraction: { interaction: "history-workspace-switched" },
+      },
+    );
+    expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain("ws-other");
+  });
+
   it.each(["/repo", "/other-repository"])(
     "keeps an explicitly opened task visible after switching from %s",
     async (initialRoot) => {
@@ -228,15 +251,19 @@ describe("coding task selection", () => {
     );
     await waitFor(() => expect(result.current.pending).toBe(false));
     expect(result.current.detail).toBeNull();
+    // The read for the new workspace returned the old workspace's task while the scope held still:
+    // the operator switched workspaces, routine evidence and no warn/unknown diagnostic (#4118).
     expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench interaction: history-workspace-switched",
+      {
+        correlationId: expect.any(String),
+        codingWorkbenchInteraction: { interaction: "history-workspace-switched" },
+      },
+    );
+    expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
       "[keiko] coding task history scope outcome",
       expect.objectContaining({
-        correlationId: expect.any(String),
-        codingHistoryScope: expect.objectContaining({
-          reason: "workspace-mismatch",
-          targetWorkspaceId: "ws-one",
-          currentWorkspaceId: "ws-two",
-        }),
+        codingHistoryScope: expect.objectContaining({ reason: "workspace-mismatch" }),
       }),
     );
   });

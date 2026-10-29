@@ -6255,3 +6255,114 @@ describe("applyChangeset size bounds (owner decision 2026-10-28)", () => {
     expect(rejected.status).toBe(413);
   });
 });
+
+describe("Coding Workbench bridge registration evidence (#4117)", () => {
+  function bridgeRequest(root: string, correlationId: string): RouteContext {
+    return {
+      ...context(
+        {
+          schemaVersion: "1",
+          kind: "snapshot",
+          snapshot: {
+            schemaVersion: "1",
+            sessionId: "coding-workbench-edit-run-4117",
+            windowId: "coding-workbench",
+            workspaceRoot: root,
+            activePaneId: null,
+            panes: [],
+            dirtyFiles: [],
+            activeFile: null,
+            cursor: null,
+            selection: null,
+            diagnosticsSummary: null,
+            textMode: "none",
+            updatedAt: 1,
+          },
+        },
+        "/api/editor/agent/snapshot",
+      ),
+      correlationId,
+    };
+  }
+
+  it("names why a project folder replaced at the same path refuses the bridge", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bridge-4117-")));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    try {
+      const admitted = await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000001"), deps);
+      expect(admitted.status).toBe(200);
+      // The lab recreates its repository at the same path: a new folder object.
+      rmSync(root, { recursive: true, force: true });
+      mkdirSync(root);
+
+      const refused = await handleEditorAgentSnapshot(bridgeRequest(root, "bridge-000002"), deps);
+
+      expect(refused).toMatchObject({
+        status: 403,
+        body: { error: { code: "EDITOR_AGENT_ROOT_BINDING_INVALID" } },
+      });
+      const records = sink.events.filter(
+        (event) => event.op === "editor.agent.bridge-registration",
+      );
+      const lines = records.map(formatActivityLogProofLine);
+      expect(lines).toHaveLength(2);
+      expectActivityLogProof("editor.agent.bridge-registration.lifecycle", lines[1] ?? "");
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        level: "info",
+        outcome: "registered",
+        correlationId: "bridge-000001",
+      });
+      expect(JSON.parse(lines[1] ?? "")).toMatchObject({
+        level: "warn",
+        errorKind: "authority-denied",
+        outcome: "refused",
+        reason: "root-binding-invalid",
+        correlationId: "bridge-000002",
+      });
+      expect(lines.join("")).not.toContain(root);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+      resetServerLogger();
+    }
+  });
+
+  it("names a lease another tab holds as capability-held", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const first = await handleEditorAgentSnapshot(bridgeRequest("/repo", "bridge-000003"));
+      const capability = (first.body as { bridgeDecisionCapability?: string })
+        .bridgeDecisionCapability;
+      if (capability === undefined) throw new Error("expected a bridge capability");
+      const stream = connectBridge("coding-workbench-edit-run-4117", capability);
+      expect(stream.outcome).toBe(STREAMING);
+
+      // A second tab registers the same run without the first tab's capability.
+      const second = await handleEditorAgentSnapshot(bridgeRequest("/repo", "bridge-000004"));
+      stream.close();
+
+      expect(second).toMatchObject({
+        status: 403,
+        body: { error: { code: "BRIDGE_CAPABILITY_INVALID" } },
+      });
+      const last = sink.events
+        .filter((event) => event.op === "editor.agent.bridge-registration")
+        .map(formatActivityLogProofLine)
+        .at(-1);
+      expect(JSON.parse(last ?? "")).toMatchObject({
+        level: "warn",
+        errorKind: "conflict",
+        outcome: "refused",
+        reason: "capability-held",
+        correlationId: "bridge-000004",
+      });
+    } finally {
+      resetServerLogger();
+    }
+  });
+});

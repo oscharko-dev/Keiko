@@ -2095,6 +2095,12 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // The first interruption of a shared event stream whose browser source was closed; the stream is
   // reopened by its own reconnect and any session repair is reported on the same streak.
   "event-stream-reconnecting",
+  // A history task of another workspace than the active one was returned and not activated: the
+  // operator works in another workspace, an ordinary transition and not a failure (#4118).
+  "history-workspace-switched",
+  // The server refused to register the run's editor bridge: the root boundary refused the run's
+  // root, or another tab holds the run's lease. Closed reason only (#4117).
+  "bridge-registration-refused",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2128,6 +2134,11 @@ export type ClientCodingWorkbenchProgressState =
 export const CLIENT_CODING_WORKBENCH_AGENT_KINDS = ["build", "plan", "custom"] as const;
 export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGENT_KINDS)[number];
 
+/** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
+export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
+export type ClientCodingWorkbenchBridgeRefusal =
+  (typeof CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 
@@ -2150,7 +2161,12 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
     }
   | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number }
   | { readonly interaction: "history-repository-switched" }
-  | { readonly interaction: "event-stream-reconnecting" };
+  | { readonly interaction: "event-stream-reconnecting" }
+  | { readonly interaction: "history-workspace-switched" }
+  | {
+      readonly interaction: "bridge-registration-refused";
+      readonly refusal: ClientCodingWorkbenchBridgeRefusal;
+    };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
@@ -2163,6 +2179,9 @@ const CODING_WORKBENCH_PROGRESS_STATE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+);
+const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2189,6 +2208,10 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "pending-decision-focused": {},
   "history-repository-switched": {},
   "event-stream-reconnecting": {},
+  "history-workspace-switched": {},
+  "bridge-registration-refused": {
+    refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
+  },
   "repository-trust-bound": {
     repositoryId: (value) => typeof value === "string" && BODY_FREE_ID_PATTERN.test(value),
     workspaceId: (value) =>

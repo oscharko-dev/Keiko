@@ -849,20 +849,55 @@ describe("useCodingWorkbenchEditorBridge — registration backoff", () => {
     });
     // One line per streak of failures, not one per attempt. PR #3625 review: it names the closed
     // kind of the refusal, the refused request's own id and the run, so a lease held by another tab
-    // reads apart from a lost connection.
-    const failures = reportDiagnosticSpy.mock.calls.filter(
-      ([message]) =>
-        message === "[keiko] coding workbench bridge registration failed; retrying with backoff",
-    );
-    expect(failures).toEqual([
+    // reads apart from a lost connection. #4117: a held lease is a closed outcome, so it is the
+    // `lease` refusal on the info interaction line, not a warn browser failure.
+    expect(reportDiagnosticSpy.mock.calls).toEqual([
       [
-        expect.any(String),
-        expect.objectContaining({
-          errorKind: "authority-denied",
+        "[keiko] coding workbench interaction: bridge-registration-refused",
+        {
+          codingWorkbenchInteraction: {
+            interaction: "bridge-registration-refused",
+            refusal: "lease",
+          },
           correlationId: "corr-lease-refused",
           parentCorrelationId: "run-1",
-          errorEvidence: expect.objectContaining({ errorClass: "ApiError" }) as unknown,
-        }),
+        },
+      ],
+    ]);
+  });
+
+  it("stops re-registering a root the server's boundary refuses (#4117)", async () => {
+    vi.useFakeTimers();
+    const refused = new ApiError(
+      "EDITOR_AGENT_ROOT_BINDING_INVALID",
+      "The editor agent request is not authorized for this workspace root.",
+      403,
+    );
+    refused.correlationId = "corr-root-refused";
+    postSnapshotSpy.mockRejectedValue(refused);
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    for (let elapsedMs = 0; elapsedMs < 110_000; elapsedMs += 50) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    }
+    // The registration on subscribe and the debounced one, then nothing until the run or its root
+    // changes: the lab showed 52 refused posts in one session before this.
+    expect(postSnapshotSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(result.current.bridgeUnavailable).toBe(true);
+    expect(reportDiagnosticSpy.mock.calls).toEqual([
+      [
+        "[keiko] coding workbench interaction: bridge-registration-refused",
+        {
+          codingWorkbenchInteraction: {
+            interaction: "bridge-registration-refused",
+            refusal: "root-boundary",
+          },
+          correlationId: "corr-root-refused",
+          parentCorrelationId: "run-1",
+        },
       ],
     ]);
   });

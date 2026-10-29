@@ -142,6 +142,7 @@ import {
   type EditorAgentAuthorityResolution,
 } from "./agentAuthorityRegistry.js";
 import { recordBufferSafetyState } from "./bufferSafetyEvidence.js";
+import { recordBridgeRegistration } from "./bridgeRegistrationEvidence.js";
 import { retainedDirtyTargets } from "./bufferSafetyTargets.js";
 import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
@@ -1234,19 +1235,28 @@ function rootBoundaryError(reason: EditorAgentRootBoundaryReason): RouteResult {
   };
 }
 
+function refusedBridgeRoot(
+  reason: EditorAgentRootBoundaryReason,
+  correlationId: string | undefined,
+): RouteResult {
+  recordBridgeRegistration("refused", correlationId, reason);
+  return rootBoundaryError(reason);
+}
+
 function registerBridgeSnapshot(
   request: EditorAgentBridgeSnapshotRequest,
   deps?: EditorAgentRouteDeps,
+  correlationId?: string,
 ): RouteResult {
   const root = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
-  if (!root.ok) return rootBoundaryError(root.reason);
+  if (!root.ok) return refusedBridgeRoot(root.reason, correlationId);
   const pathReason = editorAgentRootContainmentReason(
     root.root,
     snapshotRootPaths(request.snapshot),
     deps,
     shapedCorrelationId(request.snapshot.sessionId),
   );
-  if (pathReason !== null) return rootBoundaryError(pathReason);
+  if (pathReason !== null) return refusedBridgeRoot(pathReason, correlationId);
   const snapshot =
     root.root.workspaceRoot === request.snapshot.workspaceRoot
       ? request.snapshot
@@ -1258,6 +1268,7 @@ function registerBridgeSnapshot(
     supplied !== undefined &&
     editorAgentRegistry.refreshSnapshot(snapshot, bridgeCapabilityDigest(supplied))
   ) {
+    recordBridgeRegistration("refreshed", correlationId);
     return { status: 200, body: { snapshot } };
   }
   const capability = issueBridgeDecisionCapability();
@@ -1266,9 +1277,12 @@ function registerBridgeSnapshot(
     existing === undefined
       ? editorAgentRegistry.registerSnapshot(snapshot, digest)
       : editorAgentRegistry.rotateSnapshotCapability(snapshot, digest);
-  return registered
-    ? { status: 200, body: { snapshot, bridgeDecisionCapability: capability } }
-    : bridgeCapabilityError();
+  if (!registered) {
+    recordBridgeRegistration("refused", correlationId, "capability-held");
+    return bridgeCapabilityError();
+  }
+  recordBridgeRegistration(existing === undefined ? "registered" : "rotated", correlationId);
+  return { status: 200, body: { snapshot, bridgeDecisionCapability: capability } };
 }
 
 function bufferSafetyResponse(
@@ -1429,7 +1443,7 @@ export async function handleEditorAgentSnapshot(
       return registerBufferSafetySnapshot(parsed.value, deps, ctx.correlationId);
     if (parsed.value.kind === "buffer-release")
       return releaseBufferSafetySnapshot(parsed.value, ctx.correlationId);
-    return registerBridgeSnapshot(parsed.value, deps);
+    return registerBridgeSnapshot(parsed.value, deps, ctx.correlationId);
   }
   const selected = editorAgentRegistry.selectSnapshot(parsed.value.sessionId);
   if (selected === undefined) return { status: 200, body: { snapshot: null } };

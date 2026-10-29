@@ -72,6 +72,7 @@ import type {
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+  CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
   CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
   CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
@@ -1395,6 +1396,12 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
     repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     fileCount: { type: "integer", dataClass: "count", required: false },
+    refusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },

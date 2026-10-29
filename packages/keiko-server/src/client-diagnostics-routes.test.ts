@@ -1577,6 +1577,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "changeset-review-prepared", fileCount: 100_000 },
     { interaction: "history-repository-switched" },
     { interaction: "event-stream-reconnecting" },
+    { interaction: "history-workspace-switched" },
+    { interaction: "bridge-registration-refused", refusal: "root-boundary" },
+    { interaction: "bridge-registration-refused", refusal: "lease" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1615,6 +1618,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "pending-decision-focused", fileCount: 1 },
     { interaction: "history-repository-switched", taskId: "task-one" },
     { interaction: "event-stream-reconnecting", readyState: 2 },
+    { interaction: "history-workspace-switched", workspaceId: "ws-other" },
+    { interaction: "bridge-registration-refused" },
+    { interaction: "bridge-registration-refused", refusal: "EDITOR_AGENT_ROOT_BINDING_INVALID" },
     { interaction: "repository-trust-bound", repositoryId: "repo/../x", workspaceId: "w" },
     {
       interaction: "repository-trust-bound",

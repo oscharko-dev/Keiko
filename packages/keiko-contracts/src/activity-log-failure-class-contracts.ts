@@ -4040,6 +4040,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "editor-bridge-registration",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["editor.agent.bridge-registration"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["editor.agent.bridge-registration"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["editor.agent.bridge-registration"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["editor.agent.bridge-registration"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "editor-workspace-watch-authority",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
