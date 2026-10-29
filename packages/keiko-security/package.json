@@ -126,7 +126,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "1.3.2",
-    "typescript": "~6.0.3",
+    "typescript": "~7.0.2",
     "java-parser": "3.0.1",
     "yaml": "2.9.1"
   },
