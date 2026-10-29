@@ -16,9 +16,13 @@ import type { ContainerRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import type { ContainerRunInput, ContainerRunnerManager } from "./containerRunner.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { SSE_HEADERS, startSseHeartbeat, attachSseSubscription } from "../sse.js";
-import { writeSseFrame, type SseBackpressureSignal } from "../sse-write.js";
-import { redactedEventJson } from "../sse-frame-cache.js";
+import {
+  SSE_HEADERS,
+  startSseHeartbeat,
+  attachSseSubscription,
+  writeNamespacedSseEvent,
+} from "../sse.js";
+import type { SseBackpressureSignal } from "../sse-write.js";
 import {
   errorBody,
   STREAMING,
@@ -239,9 +243,8 @@ export function handleContainerEvents(ctx: RouteContext, deps: UiHandlerDeps): H
   return STREAMING;
 }
 
-// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
-// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
-// because the client is not draining, before the socket is destroyed.
+// Exported for unit testing stalled-reader handling. The optional observer runs once after the
+// canonical no-drain deadline, before the controller aborts and the socket is destroyed.
 export function openContainerSseStream(
   res: ServerResponse,
   manager: ContainerRunnerManager,
@@ -281,7 +284,5 @@ function writeContainerEvent(
 ): void {
   // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
   // the per-connection `id:` cursor differs between them.
-  const data = redactedEventJson(redactor, event);
-  const frame = `id: ${String(seq)}\nevent: container:${event.kind}\ndata: ${data}\n\n`;
-  writeSseFrame(res, frame, controller, onBackpressure);
+  writeNamespacedSseEvent(res, event, seq, "container", redactor, controller, onBackpressure);
 }
