@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3664742a45867b95751354b36579ddabd51ba7bf7b0a60cc76ee858e8ecbd559"
+    "catalogDigest": "991d7ab601c6975bd85fdc364decac794ddb91f9cb0f16bd459b7a7f3d84bc12"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 610,
-    "proofCount": 633,
-    "resolvedProofCount": 633,
-    "failureClassCount": 381,
+    "operationCount": 613,
+    "proofCount": 636,
+    "resolvedProofCount": 636,
+    "failureClassCount": 383,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -137,6 +137,7 @@
         "reference-id.issued",
         "request",
         "runs.apply.settled",
+        "runs.patch.refused",
         "server.diagnostic.failure",
         "skills.library.operation",
         "skills.workflow.attached",
@@ -583,6 +584,7 @@
       "operations": [
         "chat.tool-authority.operation",
         "dap.debug-runtime.selected",
+        "editor.agent.action-queue",
         "editor.agent.bridge-registration",
         "editor.agent.changeset-provenance",
         "editor.buffer-safety.state",
@@ -781,6 +783,7 @@
         "update.portable-asset.redirect-refused",
         "update.portable-fetch.failed",
         "update.portable.native-control",
+        "update.registry.checked",
         "update.release-trust.verify",
         "update.remediation.lease",
         "update.runtime.event",
@@ -942,6 +945,7 @@
     "editor-producer-turn": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-availability": ["editor-delivery.dependency-failure"],
     "editor-bridge-registration": ["editor-delivery.dependency-failure"],
+    "editor-action-queue-refusal": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-authority": ["editor-delivery.rejection"],
     "embedding-batch": ["memory-knowledge.rejection", "model-gateway.rejection"],
     "embedding-batch-grouping": ["memory-knowledge.dependency-failure"],
@@ -1130,6 +1134,7 @@
     "speech-tts-request": ["model-gateway.dependency-failure"],
     "sse-resume-decision": ["bff.dependency-failure"],
     "workflow-run-apply": ["bff.dependency-failure"],
+    "workflow-run-patch-refusal": ["bff.rejection"],
     "sse-stream": ["bff.dependency-failure"],
     "startup-recovery-failed": ["lifecycle-crash.crash"],
     "store-encryption-checkpoint": ["memory-knowledge.dependency-failure"],
@@ -1600,7 +1605,8 @@
     ],
     "coding-runtime.history-projection.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
-      "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
+      "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts",
+      "packages/keiko-server/src/coding-runtime/opencodeV2HistoryIncremental.test.ts"
     ],
     "coding-runtime.history.export.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingHistoryRoutes.test.ts",
@@ -1871,6 +1877,7 @@
     "dap.debug-runtime.selected.emitted-line": [
       "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
     ],
+    "editor.agent.action-queue.refusal": ["packages/keiko-server/src/editor/agentRoutes.test.ts"],
     "editor.agent.bridge-registration.lifecycle": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"
     ],
@@ -2604,6 +2611,7 @@
     ],
     "request.close-line": ["packages/keiko-server/src/server.activity-log-proof.test.ts"],
     "runs.apply.settled.line": ["packages/keiko-server/src/run-handlers.test.ts"],
+    "runs.patch.refused.line": ["packages/keiko-server/src/sink.test.ts"],
     "runtime.confinement.failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
     ],
@@ -2982,6 +2990,9 @@
     ],
     "update.portable.native-control.lifetime": [
       "packages/keiko-server/src/update-native-handoff-activity.test.ts"
+    ],
+    "update.registry.checked.failure": [
+      "packages/keiko-server/src/update-preflight-activity.test.ts"
     ],
     "update.release-trust.verify.status": [
       "packages/keiko-server/src/update-preflight-activity.test.ts"

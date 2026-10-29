@@ -13,6 +13,7 @@ import {
   validatePatchScope,
   validateWorkflowHandoffRequest,
 } from "./workflow-handoff.js";
+import { GOVERNED_PATCH_MAX_BYTES } from "./patch-limits.js";
 import type {
   ExpectedCheck,
   PatchScope,
@@ -103,8 +104,8 @@ describe("DEFAULT_PATCH_SCOPE_LIMITS", () => {
     );
   });
 
-  it("maxPatchBytes is 64 KiB", () => {
-    expect(DEFAULT_PATCH_SCOPE_LIMITS.maxPatchBytes).toBe(65_536);
+  it("maxPatchBytes is the shared governed patch cap (#4110)", () => {
+    expect(DEFAULT_PATCH_SCOPE_LIMITS.maxPatchBytes).toBe(GOVERNED_PATCH_MAX_BYTES);
   });
 });
 
@@ -528,6 +529,28 @@ describe("checkPatchAgainstScope", () => {
     const violation = findViolation(result.violations, "exceeds-max-file-count");
     expect(violation?.observed).toBe(3);
     expect(violation?.limit).toBe(2);
+  });
+
+  // #4110: the default scope bound is the one shared governed patch cap, and the boundary is exact.
+  it("accepts proposed bytes exactly at the default scope cap and flags one byte over (#4110)", () => {
+    const scope: PatchScope = { ...happyPatchScope(), editablePaths: ["a", "b"] };
+    const at: readonly ProposedPatchEntry[] = [
+      { path: "a", newFile: false, patchBytes: GOVERNED_PATCH_MAX_BYTES - 1 },
+      { path: "b", newFile: false, patchBytes: 1 },
+    ];
+    expect(checkPatchAgainstScope(scope, at)).toEqual({ ok: true });
+    const over: readonly ProposedPatchEntry[] = [
+      { path: "a", newFile: false, patchBytes: GOVERNED_PATCH_MAX_BYTES },
+      { path: "b", newFile: false, patchBytes: 1 },
+    ];
+    const result = checkPatchAgainstScope(scope, over);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    const violation = findViolation(result.violations, "exceeds-max-patch-bytes");
+    expect(violation?.observed).toBe(GOVERNED_PATCH_MAX_BYTES + 1);
+    expect(violation?.limit).toBe(GOVERNED_PATCH_MAX_BYTES);
   });
 
   it("flags exceeds-max-patch-bytes when the sum exceeds the limit", () => {

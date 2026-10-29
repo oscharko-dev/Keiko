@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 381,
-  "completeClassCount": 381,
+  "supportedClassCount": 383,
+  "completeClassCount": 383,
   "completeness": "complete",
   "classes": [
     {
@@ -4787,6 +4787,24 @@
               "required": false
             },
             {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "totalByteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "totalLineCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "workspaceId",
               "type": "string",
               "dataClass": "opaque-id",
@@ -9360,6 +9378,12 @@
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
             {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
               "name": "eventKind",
               "type": "string",
               "dataClass": "closed-enum",
@@ -9370,6 +9394,12 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
             },
             {
               "name": "liveRunId",
@@ -9384,10 +9414,16 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
           "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
+            "frames": true,
+            "causeChain": true
           },
           "proofIds": ["coding-runtime.event.dropped.emitted-line"],
           "replayReferences": [],
@@ -12136,10 +12172,22 @@
               "required": false
             },
             {
+              "name": "limitByteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "lineCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "omittedByteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "omittedSourceCount",
@@ -14742,7 +14790,25 @@
               "required": false
             },
             {
+              "name": "readMessageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "readMode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "reasoningSignalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "retainedMessageCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -14754,7 +14820,7 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -19413,6 +19479,86 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "editor-action-queue-refusal",
+      "requirementContract": "editor-action-queue-refusal",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["editor.agent.action-queue"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "editor.agent.action-queue",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["editor.agent.action-queue"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "editor.agent.action-queue",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "actionBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "processQueuedBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "sessionQueuedBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "sessionQueuedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.agent.action-queue.refusal"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "editor-bridge-registration",
       "requirementContract": "editor-bridge-registration",
       "productSurfaces": ["keiko-server"],
@@ -19443,10 +19589,22 @@
           "analyzerProjection": "capability",
           "safeContextFields": [
             {
+              "name": "manifestRevision",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "previousManifestRevision",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "reason",
@@ -19455,7 +19613,7 @@
               "required": false
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -44440,6 +44598,7 @@
         "state": [
           "update.install-mode.detected",
           "update.portable.native-control",
+          "update.registry.checked",
           "update.remediation.lease",
           "update.runtime.event",
           "update.runtime.state-write"
@@ -44455,6 +44614,10 @@
         },
         {
           "op": "update.portable.native-control",
+          "mode": "correlation"
+        },
+        {
+          "op": "update.registry.checked",
           "mode": "correlation"
         },
         {
@@ -44474,6 +44637,7 @@
       "resourceSignals": [
         "update.install-mode.detected",
         "update.portable.native-control",
+        "update.registry.checked",
         "update.remediation.lease",
         "update.runtime.event",
         "update.runtime.state-write"
@@ -44573,6 +44737,54 @@
             "causeChain": false
           },
           "proofIds": ["update.portable.native-control.lifetime"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "update.registry.checked",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "failure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "httpStatus",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "status",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "updateAvailable",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["update.registry.checked.failure"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -46798,6 +47010,74 @@
             "causeChain": false
           },
           "proofIds": ["runs.apply.settled.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "workflow-run-patch-refusal",
+      "requirementContract": "workflow-run-patch-refusal",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["runs.patch.refused"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "runs.patch.refused",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["runs.patch.refused"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "runs.patch.refused",
+          "owner": "keiko-server",
+          "category": "http",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "fileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "patchBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "workflow",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["runs.patch.refused.line"],
           "replayReferences": [],
           "missingObligations": []
         }

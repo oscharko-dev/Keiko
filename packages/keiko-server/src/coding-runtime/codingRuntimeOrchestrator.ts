@@ -98,7 +98,12 @@ import {
   describeError,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import {
+  causeChain,
+  errorKindOf,
+  keikoStackFrames,
+  type ServerLogSink,
+} from "@oscharko-dev/keiko-activity-log";
 import type {
   CodingRuntimeLaunchResolver,
   CodingRuntimeOrchestratorDeps,
@@ -143,6 +148,7 @@ import {
   type WorkbenchDescriptionGenerationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
@@ -554,9 +560,26 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["no-live-run", "run-mismatch", "challenge-invalid"],
+      values: ["no-live-run", "run-mismatch", "challenge-invalid", "ingest-rejected"],
     },
     liveRunId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // #4105: set only on `ingest-rejected`, an event the orchestrator accepted but whose handling
+    // threw (a stale-snapshot store write racing an operator stop). Keiko frames and error kinds,
+    // never the message.
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -1486,21 +1509,24 @@ function recordRuntimeEventDropped(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
   current: CodingRuntimeSnapshot | undefined,
-  reason?: "challenge-invalid",
+  reason?: "challenge-invalid" | "ingest-rejected",
+  error?: unknown,
 ): void {
+  const rejected = reason === "ingest-rejected";
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_EVENT_DROPPED_OPERATION,
       {
         level: "warn",
         correlationId: runtimeDiagnosticCorrelationId(event.runId),
-        errorKind: "conflict",
+        errorKind: rejected ? activityLogErrorKindOr(errorKindOf(error), "internal") : "conflict",
       },
       {
         eventKind: event.kind,
         eventRunId: event.runId,
         reason: reason ?? (current === undefined ? "no-live-run" : "run-mismatch"),
         ...(current === undefined ? {} : { liveRunId: current.runId }),
+        ...(rejected ? { frames: keikoStackFrames(error), causeChain: causeChain(error) } : {}),
       },
     ),
   );
@@ -2778,6 +2804,23 @@ export class CodingRuntimeOrchestrator {
         ),
       );
       return { ok: true, snapshot: this.publicSnapshotWithDescription(acknowledged) };
+    });
+  }
+
+  /**
+   * The runtime manager's event callback, which has no caller to receive a rejection: a handling
+   * failure (a stale-snapshot store write racing an operator stop) is logged on the run's own
+   * correlation instead of vanishing behind the serial queue's swallowing tail (#4105).
+   */
+  receiveRuntimeEvent(event: CodingWorkbenchRuntimeEvent): void {
+    this.ingest(event).catch((error: unknown) => {
+      recordRuntimeEventDropped(
+        this.deps.activityLog,
+        event,
+        this.current(),
+        "ingest-rejected",
+        error,
+      );
     });
   }
 

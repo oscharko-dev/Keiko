@@ -275,7 +275,7 @@ export function createCodingRuntimeControlPlane(
     launchResolver,
   );
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
-    void orchestrator.ingest(event);
+    orchestrator.receiveRuntimeEvent(event);
   };
   attachVerifiedHeadNotifier(input.runtimeHost, orchestrator);
   attachEditOutcomeObserver(input.runtimeHost, orchestrator);

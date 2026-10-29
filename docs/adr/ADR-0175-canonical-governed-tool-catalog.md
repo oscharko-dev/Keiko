@@ -245,8 +245,13 @@ exception is the governed changeset edit, whose arguments are file content: its 
 its strings are bounded by the changeset cap of ADR-0125 D3 (`CHANGESET_EDIT_ARGUMENT_LIMITS`,
 owner decision 2026-10-28), named by the contract (`toolArgumentLimits`) and honoured by the
 descriptor, the capture and the history gate alike; the native file-content tools `edit`, `write`
-and `patch` are captured under the same ceilings. Every other tool keeps the table verbatim, and
-the table itself is unchanged. #2952 measures
+and `patch` are captured under the same ceilings. The legacy patch tools `propose_patch` and
+`apply_patch` (`keiko.patch.propose`, `keiko.patch.apply`) follow the same shared patch ceiling
+(`GOVERNED_PATCH_MAX_BYTES`, owner decision 2026-10-29, #4110): their one `diff` argument and their
+descriptor `maxArgumentBytes` are the changeset ceilings, and their model-facing result stays inside
+the table's string ceiling by carrying the verdict, counts and at most 50 listed files, rejections
+and conflicts, never the hunks or the normalized diff. Every other tool keeps the table verbatim,
+and the table itself is unchanged. #2952 measures
 performance and #3415 calibrates narrower catalog-specific thresholds. JSON object depth is root=1;
 width is keys per object, byte bounds count UTF-8 serialization, and integer metrics are finite,
 nonnegative safe integers. Input and output limits apply before parsing/allocation where possible.
@@ -744,6 +749,7 @@ request, as its description states.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.9 | 2026-10-29 | D4: the legacy patch tools `propose_patch` and `apply_patch` follow the shared patch ceiling of ADR-0125 D3 (`GOVERNED_PATCH_MAX_BYTES`, #4110); their descriptors move (argument bound), so the `legacy-native@1` catalog revision, projection digest and the manifest were regenerated. |
 | 1.8 | 2026-10-23 | The native OpenCode profile registers Keiko's Git, CI and verification tools through a generated plugin so a native run delivers through the existing facade, approval channel and verified-commit path (ADR-0137 D10, #3897); D2 holds unchanged, since the tools are the `managed-opencode@1` entries' own source, no descriptor, alias or digest moves, and an advertisement still binds no handler, effect or authority. |
 | 1.7 | 2026-10-23 | The native OpenCode profile (ADR-0137 D10, #3897) advertises the runtime's own tools to the provider as a bounded `native` advertisement forwarded verbatim and bound by name only; D2 holds unchanged, since no runtime-supplied definition registers a handler, effect or authority, and the governed catalog keeps serving the mapped profiles and every other product surface. |
 | 1.6 | 2026-09-12 | Semantic reranking of the governed repository search runs above the handler on the evidence lane's redacted excerpts, moves neither the catalog revision nor the projection digest, and discloses a body-free provenance whose non-lexical rankings must name their index and whose unplaced orders stay lexical; whole-request cancellation is terminal (#3416, PR #3452). |

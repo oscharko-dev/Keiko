@@ -2759,7 +2759,11 @@ function readinessV2Ports(
       try {
         // A session past the read bound keeps its run alive on the newest window (audit 2026-10,
         // finding 3); the complete read stays strict for the continuation of a retained session.
-        const window = await client.recentMessages(fixedSessionId, signal);
+        // Once the projection holds the session up to a message near its end, a sync reads only the
+        // messages from there on, so its cost follows the newest messages and not the whole run
+        // (#4104); the projection plans that, and the read falls back to the whole window by itself.
+        const plan = history.readPlan(checkpoints[fixedSessionId]);
+        const window = await client.recentMessages(fixedSessionId, signal, plan.anchorId);
         messages = window.messages;
         reportTruncation(window);
         // A continued session already holds the messages of earlier runs, which Coding History has
@@ -2767,6 +2771,7 @@ function readinessV2Ports(
         const ownMessages = withoutBaseline(messages, run.continuation?.baselineIds);
         const events = history.project(fixedSessionId, ownMessages, checkpoints[fixedSessionId], {
           truncated: window.truncated,
+          anchored: window.anchored,
         });
         observeNativeStepChanges(input, run, ownMessages);
         staged.clear();

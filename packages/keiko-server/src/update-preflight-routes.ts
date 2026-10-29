@@ -10,7 +10,7 @@ import type {
 import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
-import { recordUpdateInstallMode } from "./update-preflight-activity.js";
+import { recordRegistryCheck, recordUpdateInstallMode } from "./update-preflight-activity.js";
 import { detectUpdateInstallMode, productionUpdateFacts } from "./update-install-mode.js";
 import { fetchPortableGitHubReleaseAssets } from "./update-preflight-portable-assets.js";
 import {
@@ -18,6 +18,7 @@ import {
   fallbackReleaseFromImpact,
   fetchGitHubRelease,
   fetchRegistryLatestVersion,
+  type RegistryOutcome,
 } from "./update-preflight-registry.js";
 import { readBundledCatalogFromDisk, validateBundledCatalog } from "./update-preflight-catalog.js";
 import { impactFromCatalog } from "./update-preflight-impact.js";
@@ -187,13 +188,34 @@ async function portableModePreflightReport(
   return isPortableInstallMode(mode) ? portableBlockedReport(base, mode) : undefined;
 }
 
+async function checkedRegistry(
+  deps: UiHandlerDeps,
+  currentVersion: string,
+  correlationId: string | undefined,
+): Promise<RegistryOutcome> {
+  const startedAt = performance.now();
+  const registry = await fetchRegistryLatestVersion(deps, currentVersion);
+  const updateAvailable =
+    registry.latestVersion !== undefined &&
+    compareSemver(registry.latestVersion, currentVersion) > 0;
+  recordRegistryCheck(
+    deps.activityLog,
+    registry,
+    updateAvailable,
+    Math.round(performance.now() - startedAt),
+    correlationId,
+  );
+  return registry;
+}
+
 async function packageManagerPreflightReport(
   deps: UiHandlerDeps,
   base: ReturnType<typeof reportBase>,
   currentVersion: string,
   options: UpdatePreflightRuntimeOptions,
+  correlationId: string | undefined,
 ): Promise<UpdatePreflightReport> {
-  const registry = await fetchRegistryLatestVersion(deps, currentVersion);
+  const registry = await checkedRegistry(deps, currentVersion, correlationId);
   if (registry.status !== "ok" || registry.latestVersion === undefined) {
     return degradedRegistryReport(base, registry);
   }
@@ -242,7 +264,8 @@ export async function runUpdatePreflight(
     correlationId,
   );
   const report =
-    portableReport ?? (await packageManagerPreflightReport(deps, base, currentVersion, options));
+    portableReport ??
+    (await packageManagerPreflightReport(deps, base, currentVersion, options, correlationId));
   const candidate = options.candidateAuthority?.issue(report, mode, correlationId);
   return candidate === undefined ? report : { ...report, candidate };
 }

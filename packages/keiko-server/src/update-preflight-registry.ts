@@ -6,7 +6,11 @@ export {
   compareProductVersions as compareSemver,
   isStableProductVersion as isStableVersion,
 } from "@oscharko-dev/keiko-contracts/runtime/version";
-import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  GatewayResponseBodyValidationError,
+  gatewayFetch,
+  readJsonCapped,
+} from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   UpdatePreflightImpactSummary,
   UpdatePreflightPatchNoteSection,
@@ -14,10 +18,17 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayEgressConfig } from "./deps.js";
+import {
+  portableFetchFailureReason,
+  type PortableFetchFailureReason,
+} from "./update-fetch-failure.js";
 
 export const PACKAGE_NAME = "@oscharko-dev/keiko";
-const REGISTRY_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}`;
-const NPM_INSTALL_METADATA_ACCEPT = "application/vnd.npm.install-v1+json";
+// Only `latest` is read. The dist-tags document stays a few bytes however many versions are
+// published; the abbreviated packument outgrew its cap at 1.3.2 and every check then reported an
+// unreachable registry, so no installation could see a newer release (#3904).
+const REGISTRY_DIST_TAGS_URL = `https://registry.npmjs.org/-/package/${encodeURIComponent(PACKAGE_NAME)}/dist-tags`;
+const MAX_DIST_TAGS_BYTES = 16_384;
 const RELEASE_OWNER = "oscharko-dev";
 const RELEASE_REPO = "keiko";
 const MAX_METADATA_BYTES = 256_000;
@@ -25,10 +36,20 @@ const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
 const DEFAULT_RELEASE_TITLE_PREFIX = "Keiko";
 export const BULLET_LIMIT = 12;
 
+/** Why a registry check produced no usable latest version; closed, body-free. */
+export type RegistryCheckFailure =
+  | PortableFetchFailureReason
+  | "http-status"
+  | "size-exceeded"
+  | "json-invalid"
+  | "malformed-version";
+
 export interface RegistryOutcome {
   readonly status: "ok" | "unavailable" | "malformed";
   readonly latestVersion?: string;
   readonly warning?: string;
+  readonly failure?: RegistryCheckFailure;
+  readonly httpStatus?: number;
 }
 
 export interface GitHubReleaseOutcome {
@@ -47,8 +68,8 @@ export interface ValidatedGitHubRelease {
   readonly publishedAt?: string;
 }
 
-interface NpmMetadata {
-  readonly "dist-tags"?: { readonly latest?: unknown };
+interface NpmDistTags {
+  readonly latest?: unknown;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -237,40 +258,61 @@ function liveGithubRelease(release: ValidatedGitHubRelease): GitHubReleaseOutcom
   };
 }
 
+function registryFailure(error: unknown): RegistryCheckFailure {
+  if (error instanceof GatewayResponseBodyValidationError) return error.validation;
+  return portableFetchFailureReason(error);
+}
+
+function registryLatest(latest: unknown, currentVersion: string): RegistryOutcome {
+  if (!isProductVersion(latest)) {
+    return {
+      status: "malformed",
+      failure: "malformed-version",
+      warning: "The update registry returned malformed metadata.",
+    };
+  }
+  if (!isStableVersion(latest)) {
+    return {
+      status: "ok",
+      latestVersion: currentVersion,
+      warning: "The registry latest dist-tag currently points to a prerelease and was ignored.",
+    };
+  }
+  return { status: "ok", latestVersion: latest };
+}
+
 export async function fetchRegistryLatestVersion(
   deps: UiHandlerDeps,
   currentVersion: string,
 ): Promise<RegistryOutcome> {
   try {
-    const response = await gatewayFetch(REGISTRY_URL, {
+    const response = await gatewayFetch(REGISTRY_DIST_TAGS_URL, {
       method: "GET",
-      headers: { Accept: NPM_INSTALL_METADATA_ACCEPT },
+      headers: { Accept: "application/json" },
       fetchImpl: deps.gatewayReadinessFetch,
       timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
-      maxResponseBytes: MAX_METADATA_BYTES,
+      maxResponseBytes: MAX_DIST_TAGS_BYTES,
       egress: currentGatewayEgressConfig(deps),
     });
     if (!response.ok) {
       return {
         status: "unavailable",
+        failure: "http-status",
+        httpStatus: response.status,
         warning: "The update registry did not return package metadata.",
       };
     }
-    const json = (await readJsonCapped(response, MAX_METADATA_BYTES)) as NpmMetadata;
-    const latest = json["dist-tags"]?.latest;
-    if (!isProductVersion(latest)) {
-      return { status: "malformed", warning: "The update registry returned malformed metadata." };
-    }
-    if (!isStableVersion(latest)) {
-      return {
-        status: "ok",
-        latestVersion: currentVersion,
-        warning: "The registry latest dist-tag currently points to a prerelease and was ignored.",
-      };
-    }
-    return { status: "ok", latestVersion: latest };
-  } catch {
-    return { status: "unavailable", warning: "The update registry could not be reached." };
+    const json = (await readJsonCapped(response, MAX_DIST_TAGS_BYTES)) as NpmDistTags | null;
+    return registryLatest(json?.latest, currentVersion);
+  } catch (error) {
+    const failure = registryFailure(error);
+    return failure === "json-invalid"
+      ? {
+          status: "malformed",
+          failure,
+          warning: "The update registry returned malformed metadata.",
+        }
+      : { status: "unavailable", failure, warning: "The update registry could not be reached." };
   }
 }
 

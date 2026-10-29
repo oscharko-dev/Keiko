@@ -140,7 +140,7 @@ import {
   useRepositoryBranchState,
   type RepositoryBranchState,
 } from "../../hooks/useRepositoryBranchState";
-import { DiffFileSection } from "../cards/shared/diffView";
+import { CodingWorkbenchDiffFiles } from "./CodingWorkbenchWindowedDiff";
 import {
   PanelTitle,
   TaskStartSection,
@@ -2452,7 +2452,7 @@ function ApprovalDecisionControls({
  * high risk): the headless bridge (`useCodingWorkbenchEditorBridge`) only reaches this state when
  * the run's mode requires review, so it must never auto-resolve on its own.
  */
-function ChangesetReviewPanel({
+export function ChangesetReviewPanel({
   review,
   onApprove,
   onDeny,
@@ -2489,16 +2489,12 @@ function ChangesetReviewPanel({
         {review.diff.files.length === 0 ? (
           <p className={styles.helpText}>{t("codingWorkbench.changesetReview.empty")}</p>
         ) : (
-          review.diff.files.map((file, index) => (
-            <DiffFileSection
-              key={`${file.path}:${String(index)}`}
-              file={file}
-              index={index}
-              idPrefix="coding-workbench-changeset-review-file"
-              sectionRef={() => undefined}
-              labels={labels}
-            />
-          ))
+          <CodingWorkbenchDiffFiles
+            surface="changeset-review"
+            files={review.diff.files}
+            idPrefix="coding-workbench-changeset-review-file"
+            labels={labels}
+          />
         )}
       </div>
       <div className={styles.controls}>

@@ -85,10 +85,6 @@ export interface NativeRuntimeProcessBackendOptions {
   readonly resolveGitExecutable?: (() => AttestedDarwinGitExecutable) | undefined;
 }
 
-export interface NativeRuntimeRecoveryPort {
-  reconcile(recoveryHandle: string, timeoutMs: number): Promise<boolean>;
-}
-
 interface ValidatedBackendOptions {
   readonly helperPath: string;
   readonly expectedHelperSha256?: string | undefined;
@@ -106,27 +102,6 @@ export function createNativeRuntimeProcessBackend(
   options: NativeRuntimeProcessBackendOptions,
 ): RuntimeProcessBackend {
   return new NativeRuntimeProcessBackend(validateBackendOptions(options));
-}
-
-export function createNativeRuntimeRecoveryPort(
-  options: Pick<
-    NativeRuntimeProcessBackendOptions,
-    "helperPath" | "expectedHelperSha256" | "spawnHelper"
-  >,
-): NativeRuntimeRecoveryPort {
-  const helperPath = safeRealFile(options.helperPath);
-  const expectedHelperSha256 = validExpectedHelperSha256(options.expectedHelperSha256);
-  const spawnHelper = options.spawnHelper ?? spawnNativeHelper;
-  return {
-    reconcile: (recoveryHandle, timeoutMs) =>
-      reconcileRecoveryHandle(
-        helperPath,
-        expectedHelperSha256,
-        spawnHelper,
-        recoveryHandle,
-        timeoutMs,
-      ),
-  };
 }
 
 class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
@@ -439,22 +414,6 @@ function spawnNativeHelper(
       child.once("error", listener);
     },
   };
-}
-
-async function reconcileRecoveryHandle(
-  helperPath: string,
-  expectedHelperSha256: string | undefined,
-  spawnHelper: NativeRuntimeHelperSpawn,
-  recoveryHandle: string,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (!/^[0-9a-f]{32}$/u.test(recoveryHandle)) invalidRequest();
-  const child = spawnVerifiedHelper(helperPath, expectedHelperSha256, spawnHelper, [
-    "--reconcile",
-    recoveryHandle,
-  ]);
-  const tree = new NativeRuntimeTree(recoveryHandle, child);
-  return tree.waitForProof(timeoutMs);
 }
 
 function nativeTree(tree: RuntimeProcessTree): NativeRuntimeTree {

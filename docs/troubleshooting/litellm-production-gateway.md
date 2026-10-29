@@ -96,8 +96,10 @@ may still need the explicit output-token parameter described below.
 Read `coding-runtime.dev-lane.activated` first: `secureReadHelperSha256` and `secureReadByteCap`
 identify the admitted native helper without recording its path or source contents. The current
 helper reads whole files up to 1 MiB while `keiko_workspace_read` returns at most 64 KiB per model
-window; request fewer lines if the requested window itself is too large. Initial root `AGENTS.md`
-context stays bounded to 16 KiB and 800 lines and reports `truncated` with whole-file counts/digest.
+window; request fewer lines if the requested window itself is too large. The mapped profiles bound
+the initial root `AGENTS.md` block to 16 KiB and 800 lines; a native run's copy carries the whole
+masked file within half the model's input window. Either reports `truncated` with whole-file
+counts/digest, the byte bound (`limitByteCount`) and the bytes left out (`omittedByteCount`).
 
 The approved npm runtime 1.1.3 helper retains a 64 KiB whole-file bound during an application
 upgrade. Larger files still return `workspace-read-too-large` on that legacy helper. Large-file
