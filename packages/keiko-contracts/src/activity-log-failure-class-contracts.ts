@@ -4236,6 +4236,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "editor-action-queue-refusal",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["editor.agent.action-queue"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["editor.agent.action-queue"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["editor.agent.action-queue"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["editor.agent.action-queue"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "editor-workspace-watch-authority",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

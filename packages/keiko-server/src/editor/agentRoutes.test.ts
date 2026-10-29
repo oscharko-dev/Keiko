@@ -3617,6 +3617,100 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     expect(actionFailureCode(overflow.body)).toBe("QUEUE_FULL");
   });
 
+  describe("queue refusal evidence (#4107)", () => {
+    function withCorrelation(ctx: RouteContext, correlationId: string): RouteContext {
+      return { ...ctx, correlationId };
+    }
+
+    it("logs the count bound as a body-free refusal under the request correlation", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      try {
+        await registerSnapshotOnly();
+        connectBridge("session-1");
+        for (let i = 0; i < 64; i += 1) {
+          await handleEditorAgentActions(
+            context(navAction({ actionId: `c-${String(i)}`, idempotencyKey: `ck-${String(i)}` })),
+          );
+        }
+
+        const overflow = await handleEditorAgentActions(
+          withCorrelation(
+            context(navAction({ actionId: "c-over", idempotencyKey: "ck-over" })),
+            "queue-000001",
+          ),
+        );
+
+        expect(overflow.status).toBe(429);
+        const lines = sink.events
+          .filter((event) => event.op === "editor.agent.action-queue")
+          .map(formatActivityLogProofLine);
+        expect(lines).toHaveLength(1);
+        expectActivityLogProof("editor.agent.action-queue.refusal", lines[0] ?? "");
+        expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+          level: "warn",
+          errorKind: "rate-limited",
+          outcome: "refused",
+          reason: "queue-count",
+          sessionQueuedCount: 64,
+          correlationId: "queue-000001",
+        });
+        expect(lines[0]).not.toContain("c-over");
+      } finally {
+        resetServerLogger();
+      }
+    });
+
+    it("answers a byte-bound refusal with 429 and logs the bytes, never the action", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const queue = vi.spyOn(editorAgentRegistry, "queueAction").mockImplementation((queued) => ({
+        kind: "rejected",
+        result: {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          actionId: queued.actionId,
+          sessionId: queued.sessionId,
+          status: "failed",
+          message: "held",
+          failure: { code: "QUEUE_FULL", message: "held" },
+        },
+        queueRefusal: {
+          reason: "process-bytes",
+          actionBytes: 25_165_824,
+          sessionQueuedCount: 2,
+          sessionQueuedBytes: 33_554_432,
+          processQueuedBytes: 260_046_848,
+        },
+      }));
+      try {
+        await registerSnapshotOnly();
+        connectBridge("session-1");
+
+        const refused = await handleEditorAgentActions(
+          withCorrelation(
+            context(navAction({ actionId: "b-over", idempotencyKey: "bk-over" })),
+            "queue-000002",
+          ),
+        );
+
+        expect(refused.status).toBe(429);
+        expect(actionFailureCode(refused.body)).toBe("QUEUE_FULL");
+        const [event] = sink.events.filter((entry) => entry.op === "editor.agent.action-queue");
+        expect(JSON.parse(formatActivityLogProofLine(event as never))).toMatchObject({
+          reason: "process-bytes",
+          actionBytes: 25_165_824,
+          sessionQueuedCount: 2,
+          sessionQueuedBytes: 33_554_432,
+          processQueuedBytes: 260_046_848,
+          correlationId: "queue-000002",
+        });
+      } finally {
+        queue.mockRestore();
+        resetServerLogger();
+      }
+    });
+  });
+
   it("rejects a second action reusing an in-flight actionId with 409 (distinct idempotency key)", async () => {
     await registerSnapshotOnly();
     connectBridge("session-1");

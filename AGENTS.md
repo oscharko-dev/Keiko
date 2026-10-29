@@ -1079,7 +1079,10 @@ refused request's correlation and the run as parent; #4117). These were warn/unk
 that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
 `refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
 `capability-held`). A root-boundary refusal holds until the run or its root changes; only a held
-lease is retried with backoff. `gateway.setup.target.accepted` records,
+lease is retried with backoff. The editor action queue is bounded by count, by serialized bytes per
+session (64 MiB) and by serialized bytes for the process (256 MiB); every `QUEUE_FULL` refusal is
+recorded on `editor.agent.action-queue` with the closed `reason` (`queue-count`, `session-bytes`,
+`process-bytes`) and the action, session and process counts and bytes (#4107). `gateway.setup.target.accepted` records,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
 

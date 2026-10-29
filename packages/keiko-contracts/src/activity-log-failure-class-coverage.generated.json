@@ -19449,6 +19449,86 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "editor-action-queue-refusal",
+      "requirementContract": "editor-action-queue-refusal",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["editor.agent.action-queue"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "editor.agent.action-queue",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["editor.agent.action-queue"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "editor.agent.action-queue",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "actionBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "processQueuedBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "sessionQueuedBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "sessionQueuedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.agent.action-queue.refusal"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "editor-bridge-registration",
       "requirementContract": "editor-bridge-registration",
       "productSurfaces": ["keiko-server"],

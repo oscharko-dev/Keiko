@@ -215,6 +215,7 @@
   "consolidation.log.sink-failed": "memory-knowledge",
   "consolidation.summary.fallback": "memory-knowledge",
   "dap.debug-runtime.selected": "editor-delivery",
+  "editor.agent.action-queue": "editor-delivery",
   "editor.agent.bridge-registration": "editor-delivery",
   "editor.agent.changeset-provenance": "editor-delivery",
   "editor.buffer-safety.state": "editor-delivery",

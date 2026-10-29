@@ -142,9 +142,14 @@ import {
   type EditorAgentAuthorityResolution,
 } from "./agentAuthorityRegistry.js";
 import { recordBufferSafetyState } from "./bufferSafetyEvidence.js";
+import { recordActionQueueRefusal } from "./actionQueueEvidence.js";
 import { recordBridgeRegistration } from "./bridgeRegistrationEvidence.js";
 import { retainedDirtyTargets } from "./bufferSafetyTargets.js";
-import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
+import {
+  EDITOR_AGENT_MAX_SESSIONS,
+  editorAgentRegistry,
+  type EditorAgentQueueOutcome,
+} from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentAuditForTests,
   editorAgentAuditRootAttribution,
@@ -3904,6 +3909,7 @@ async function admitEditorAction(
   requestHash: string,
   deps: EditorAgentActionRouteDeps | undefined,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
   if (snapshot !== undefined) {
@@ -3935,6 +3941,7 @@ async function admitEditorAction(
     decision,
     admitted.inspection,
     runtimeMutation,
+    correlationId,
   );
 }
 
@@ -3962,7 +3969,13 @@ export async function handleEditorAgentActions(
   const { action } = preparation.request;
   const signal = actionAbortSignal(ctx);
   const actionDeps = queryGitAbortDeps(action, fullEditorActionDeps(deps), signal);
-  return admitEditorAction(action, preparation.request.requestHash, actionDeps, signal);
+  return admitEditorAction(
+    action,
+    preparation.request.requestHash,
+    actionDeps,
+    signal,
+    ctx.correlationId,
+  );
 }
 
 function fullEditorActionDeps(
@@ -4002,6 +4015,7 @@ function queueAndEmitAction(
   decision: EditorAgentActionPolicyDecision,
   inspection: AdmissionInspection,
   runtimeMutation: RuntimeMutationClassification,
+  correlationId: string | undefined,
 ): RouteResult {
   const boundAction = snapshot === undefined ? action : bindActiveBufferTarget(action, snapshot);
   const requiresReview =
@@ -4022,12 +4036,20 @@ function queueAndEmitAction(
   const outcome = editorAgentRegistry.queueAction(boundAction, emitAction, { runtimeOwned });
   rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);
   auditAction(action, snapshot, decision, outcome.result, undefined, runtimeOwned);
-  if (outcome.kind === "rejected") {
-    // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
-    const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;
-    return { status, body: { result: outcome.result } };
-  }
+  if (outcome.kind === "rejected") return rejectedQueueResult(outcome, correlationId);
   return { status: 202, body: { result: outcome.result } };
+}
+
+function rejectedQueueResult(
+  outcome: Extract<EditorAgentQueueOutcome, { readonly kind: "rejected" }>,
+  correlationId: string | undefined,
+): RouteResult {
+  if (outcome.queueRefusal !== undefined) {
+    recordActionQueueRefusal(outcome.queueRefusal, correlationId);
+  }
+  // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
+  const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;
+  return { status, body: { result: outcome.result } };
 }
 
 interface AuthenticatedBridgeConnection {
