@@ -4,6 +4,7 @@
 
 import { EventEmitter } from "node:events";
 import {
+  createObservedSseSubscription,
   defineSseSubscriptionObservationContract,
   type NativeSseSubscription,
 } from "../../../../tests/support/sse-subscription-observations.js";
@@ -453,22 +454,9 @@ describe("openVerificationSseStream subscription lifecycle", () => {
     subscription: (): NativeSseSubscription<FakeManager> => {
       const manager = new FakeManager();
       const subscribe = manager.subscribe;
-      return {
-        manager,
-        observe: (beforeAcquire, beforeRelease): void => {
-          vi.spyOn(manager, "subscribe").mockImplementation(function (
-            this: VerificationRunnerManager,
-            listener: VerificationRunnerEventEmitter,
-          ): () => void {
-            beforeAcquire(this);
-            const release = subscribe(listener);
-            return (): void => {
-              beforeRelease();
-              release();
-            };
-          });
-        },
-      };
+      return createObservedSseSubscription(manager, subscribe, (acquire): void => {
+        vi.spyOn(manager, "subscribe").mockImplementation(acquire);
+      });
     },
     open: openVerificationSseStream,
     emitFirst: (manager): void => {
