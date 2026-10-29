@@ -300,6 +300,73 @@ function runtime(
   } as unknown as UiHandlerDeps;
 }
 
+async function expectUnpairedRuntimeRead(
+  handler: (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>,
+): Promise<void> {
+  const { channel } = pairedAppSession();
+  const spy = spyingRuntime(channel);
+  const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
+    [{ runId: "run-1" }, spy.deps],
+    [{ runId: "run-9" }, spy.deps],
+    [{}, spy.deps],
+    [{ runId: "run-1" }, runtime({ codingRuntimeOrchestrator: undefined })],
+  ];
+  for (const [params, deps] of cases) {
+    await expect(handler(context("", params), deps)).resolves.toEqual({
+      status: 200,
+      body: { session: "unpaired" },
+    });
+  }
+  expect(spy.invoked).toEqual([]);
+}
+
+async function expectUnavailablePairedRuntimeRead(
+  handler: (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>,
+  runPath: string,
+): Promise<void> {
+  const session = pairedAppSession();
+
+  await expect(
+    handler(
+      context("", { runId: "run-9" }, runPath, session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    ),
+  ).resolves.toMatchObject({ status: 404 });
+  await expect(
+    handler(
+      context("", { runId: "run-1" }, runPath, session.cookie),
+      runtime({
+        codingAppSessionChannel: session.channel,
+        codingRuntimeOrchestrator: undefined,
+      }),
+    ),
+  ).resolves.toMatchObject({ status: 503 });
+}
+
+async function expectActiveRuntimeRead(
+  handler: (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>,
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<void> {
+  await expect(handler(ctx, deps)).resolves.toEqual({
+    status: 200,
+    body: { session: "active" },
+  });
+}
+
+function registerRuntimeReadAuthorityTests(
+  handler: (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>,
+  runPath: string,
+): void {
+  it("answers an unpaired read with the constant projection whatever the run, asking the runtime nothing", async () => {
+    await expectUnpairedRuntimeRead(handler);
+  });
+
+  it("conceals an unknown run from a paired read and reports an unconfigured runtime", async () => {
+    await expectUnavailablePairedRuntimeRead(handler, runPath);
+  });
+}
+
 describe("coding runtime routes", () => {
   it("mounts the inline follow-up, question, and pause/resume operations behind the runtime group", () => {
     const patterns = API_ROUTES.map(({ pattern }) => pattern);
@@ -953,51 +1020,14 @@ describe("coding runtime routes", () => {
       (deps.codingRuntimeOrchestrator as unknown as { revertState: unknown }).revertState = () =>
         Promise.resolve(undefined);
 
-      await expect(
-        handleCodingRuntimeRevertState(
-          context("", { runId: "run-1" }, runPath, session.cookie),
-          deps,
-        ),
-      ).resolves.toEqual({ status: 200, body: { session: "active" } });
+      await expectActiveRuntimeRead(
+        handleCodingRuntimeRevertState,
+        context("", { runId: "run-1" }, runPath, session.cookie),
+        deps,
+      );
     });
 
-    it("answers an unpaired read with the constant projection whatever the run, asking the runtime nothing", async () => {
-      const { channel } = pairedAppSession();
-      const unpaired = { status: 200, body: { session: "unpaired" } };
-      const spy = spyingRuntime(channel);
-      const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
-        [{ runId: "run-1" }, spy.deps],
-        [{ runId: "run-9" }, spy.deps],
-        [{}, spy.deps],
-        [{ runId: "run-1" }, runtime({ codingRuntimeOrchestrator: undefined })],
-      ];
-      for (const [params, deps] of cases) {
-        await expect(handleCodingRuntimeRevertState(context("", params), deps)).resolves.toEqual(
-          unpaired,
-        );
-      }
-      expect(spy.invoked).toEqual([]);
-    });
-
-    it("conceals an unknown run from a paired read and reports an unconfigured runtime", async () => {
-      const session = pairedAppSession();
-
-      await expect(
-        handleCodingRuntimeRevertState(
-          context("", { runId: "run-9" }, runPath, session.cookie),
-          runtime({ codingAppSessionChannel: session.channel }),
-        ),
-      ).resolves.toMatchObject({ status: 404 });
-      await expect(
-        handleCodingRuntimeRevertState(
-          context("", { runId: "run-1" }, runPath, session.cookie),
-          runtime({
-            codingAppSessionChannel: session.channel,
-            codingRuntimeOrchestrator: undefined,
-          }),
-        ),
-      ).resolves.toMatchObject({ status: 503 });
-    });
+    registerRuntimeReadAuthorityTests(handleCodingRuntimeRevertState, runPath);
   });
 
   // C02 (ADR-0137 D10): the slash commands the run's runtime lists, for the composer's `/` menu.
@@ -1052,48 +1082,14 @@ describe("coding runtime routes", () => {
       (deps.codingRuntimeOrchestrator as unknown as { listMentions: unknown }).listMentions = () =>
         Promise.resolve(undefined);
 
-      await expect(
-        handleCodingRuntimeCommands(context("", { runId: "run-1" }, runPath, session.cookie), deps),
-      ).resolves.toEqual({ status: 200, body: { session: "active" } });
+      await expectActiveRuntimeRead(
+        handleCodingRuntimeCommands,
+        context("", { runId: "run-1" }, runPath, session.cookie),
+        deps,
+      );
     });
 
-    it("answers an unpaired read with the constant projection whatever the run, asking the runtime nothing", async () => {
-      const { channel } = pairedAppSession();
-      const spy = spyingRuntime(channel);
-      const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
-        [{ runId: "run-1" }, spy.deps],
-        [{ runId: "run-9" }, spy.deps],
-        [{}, spy.deps],
-        [{ runId: "run-1" }, runtime({ codingRuntimeOrchestrator: undefined })],
-      ];
-      for (const [params, deps] of cases) {
-        await expect(handleCodingRuntimeCommands(context("", params), deps)).resolves.toEqual({
-          status: 200,
-          body: { session: "unpaired" },
-        });
-      }
-      expect(spy.invoked).toEqual([]);
-    });
-
-    it("conceals an unknown run from a paired read and reports an unconfigured runtime", async () => {
-      const session = pairedAppSession();
-
-      await expect(
-        handleCodingRuntimeCommands(
-          context("", { runId: "run-9" }, runPath, session.cookie),
-          runtime({ codingAppSessionChannel: session.channel }),
-        ),
-      ).resolves.toMatchObject({ status: 404 });
-      await expect(
-        handleCodingRuntimeCommands(
-          context("", { runId: "run-1" }, runPath, session.cookie),
-          runtime({
-            codingAppSessionChannel: session.channel,
-            codingRuntimeOrchestrator: undefined,
-          }),
-        ),
-      ).resolves.toMatchObject({ status: 503 });
-    });
+    registerRuntimeReadAuthorityTests(handleCodingRuntimeCommands, runPath);
   });
 
   // S07 (ADR-0137 D10): the messages sent into the running turn that the runtime has not taken yet.
@@ -1246,48 +1242,14 @@ describe("coding runtime routes", () => {
       (deps.codingRuntimeOrchestrator as unknown as { listInbox: unknown }).listInbox = () =>
         Promise.resolve(undefined);
 
-      await expect(
-        handleCodingRuntimeInbox(context("", { runId: "run-1" }, runPath, session.cookie), deps),
-      ).resolves.toEqual({ status: 200, body: { session: "active" } });
+      await expectActiveRuntimeRead(
+        handleCodingRuntimeInbox,
+        context("", { runId: "run-1" }, runPath, session.cookie),
+        deps,
+      );
     });
 
-    it("answers an unpaired read with the constant projection whatever the run, asking the runtime nothing", async () => {
-      const { channel } = pairedAppSession();
-      const spy = spyingRuntime(channel);
-      const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
-        [{ runId: "run-1" }, spy.deps],
-        [{ runId: "run-9" }, spy.deps],
-        [{}, spy.deps],
-        [{ runId: "run-1" }, runtime({ codingRuntimeOrchestrator: undefined })],
-      ];
-      for (const [params, deps] of cases) {
-        await expect(handleCodingRuntimeInbox(context("", params), deps)).resolves.toEqual({
-          status: 200,
-          body: { session: "unpaired" },
-        });
-      }
-      expect(spy.invoked).toEqual([]);
-    });
-
-    it("conceals an unknown run from a paired read and reports an unconfigured runtime", async () => {
-      const session = pairedAppSession();
-
-      await expect(
-        handleCodingRuntimeInbox(
-          context("", { runId: "run-9" }, runPath, session.cookie),
-          runtime({ codingAppSessionChannel: session.channel }),
-        ),
-      ).resolves.toMatchObject({ status: 404 });
-      await expect(
-        handleCodingRuntimeInbox(
-          context("", { runId: "run-1" }, runPath, session.cookie),
-          runtime({
-            codingAppSessionChannel: session.channel,
-            codingRuntimeOrchestrator: undefined,
-          }),
-        ),
-      ).resolves.toMatchObject({ status: 503 });
-    });
+    registerRuntimeReadAuthorityTests(handleCodingRuntimeInbox, runPath);
   });
 
   it("#2802: the paired approval-review route shows the operator the files the change would write", () => {
