@@ -10,6 +10,7 @@ import { initializeConfiguredConversationReadiness } from "./gateway-readiness.j
 import { handleUpdateChat } from "./store-handlers.js";
 import { runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { createSseResponseEventMethods } from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Behavioural tests for the desktop chat SSE streaming handler (#152). The regression these guard:
@@ -231,18 +232,10 @@ function captureResWithEvents(): CapturedResWithEvents {
       result.destroyed = true;
       emitter.emit("close");
     },
-    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.on(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.once(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.off(event, listener);
-      return res as unknown as ServerResponse;
-    },
+    ...createSseResponseEventMethods(
+      emitter,
+      (): ServerResponse => res as unknown as ServerResponse,
+    ),
     listenerCount(event: string): number {
       return emitter.listenerCount(event);
     },
