@@ -2568,6 +2568,8 @@ function preparedRawModuleIndex(compiler, receipt) {
   const modules = new Map();
   const incoming = new Map();
   for (const row of receipt.rows) {
+    // Only incoming entries read these statement facts; a row without targets creates none.
+    if (!row.references.some((reference) => reference.specifiers.length > 0)) continue;
     if (policyDigest(compiler.read(row.path)) !== row.sourceSha256)
       throw new TypeError("symbol-module-facts-changed");
     const source = { fileName: join(compiler.state.subject.root, row.path) };

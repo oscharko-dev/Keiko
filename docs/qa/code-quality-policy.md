@@ -508,8 +508,8 @@ admission remain authoritative. No UI/package source filter, negative early cach
 capacity change is introduced. Whole-owner work-admission proofs compare actual resolver byte and
 Program observations with a generous control and retain private/barrel/type-only fallback refusals.
 
-The resolver builds a snapshot-bound module index once, reading the complete owned production
-membership through the existing compiler snapshot path. The mandatory inventory syntax visitors
+The resolver builds one snapshot-bound module index for the complete owned production membership.
+The mandatory inventory syntax visitors
 also observe richer detached module references and top-level binding descriptors while their
 existing AST is available. No second complete source parse/walk is needed for compatible facts.
 Additional expression traversal is checked by the same policy-leaf-owned visit primitive and
@@ -519,6 +519,13 @@ compiler seeds those visits once into its own cumulative counter; an already-exh
 profile retains an explicit refusal on the first operation. Incompatible alias profiles use the
 fully charged extraction path, and partial or stale receipts cannot certify an empty graph.
 Receipt data stays outside public inventory JSON and contains no retained AST or Program.
+For compatible prepared facts, a row without any specifier-bearing reference cannot create an
+incoming entry, so its statement descriptors are never consumed by that index. Such rows remain
+in the complete inventory and all-input currentness checks, without an unnecessary compiler
+source admission merely to build the index. A later source identity, body or export request still
+admits and charges that file normally. Every nonempty reference retains both resolution modes;
+preparation failures and the original fully charged fallback remain unchanged. This omits no
+production parser visit, rule finding, relevant incoming edge or runtime-witness output.
 Source-byte admission, currentness and both-mode module resolution still run in the compiler;
 all subsequent actual walks charge the same counter. The two-resident-Program LRU,
 alias/cardinality, emission and execution bounds remain unchanged. Relevant namespace/default imports, concrete

@@ -2873,6 +2873,67 @@ function originalModuleReferenceFacts(compiler, root, row) {
     .map(({ node, specifiers }) => ({ start: node.getStart(), specifiers }));
 }
 
+async function zeroEdgeAdmissionFixture(padding) {
+  const own = createPrivateModuleParserFixture();
+  fixtures.push(own);
+  own.zeroEdgePath = "scripts/unused-module.mjs";
+  own.put(own.zeroEdgePath, `export const unused = ${JSON.stringify(padding)};\n`);
+  own.subject = await collectPolicySubject(own.root);
+  resetExposureResolver(own);
+  const row = preparedModuleReceipt(own.subject).rows.find(
+    (entry) => entry.path === own.zeroEdgePath,
+  );
+  expect(row).toBeDefined();
+  expect(row.references).toEqual([]);
+  return own;
+}
+
+describe("prepared zero-edge module admission (#3918)", () => {
+  it("keeps unused incoming-index text unadmitted until an actual source request", async () => {
+    const small = await zeroEdgeAdmissionFixture("healthy");
+    const large = await zeroEdgeAdmissionFixture("unused é ".repeat(4096));
+    const rule = "anti-slop/no-unknown-parameters";
+    expect(large.resolver.stats().sourceBytes).toBe(small.resolver.stats().sourceBytes);
+    const expected = small.resolver.collectiveRawCheckingSlots(small.rawRoots, rule);
+    expect(expected.length).toBeGreaterThan(0);
+    expect(large.resolver.collectiveRawCheckingSlots(large.rawRoots, rule)).toEqual(expected);
+    expect(large.resolver.stats().sourceBytes).toBe(small.resolver.stats().sourceBytes);
+    const before = large.resolver.stats().sourceBytes;
+    const input = large.subject.inventory.files.find((file) => file.path === large.zeroEdgePath);
+    expect(large.resolver.sourceIdentity(large.zeroEdgePath)).toEqual({
+      path: large.zeroEdgePath,
+      sha256: input.sha256,
+    });
+    expect(large.resolver.stats().sourceBytes - before).toBe(
+      readFileSync(join(large.root, large.zeroEdgePath)).length,
+    );
+  }, 30_000);
+
+  it.each(["changed", "symlink"])(
+    "still rejects a %s zero-edge source after incoming-index construction",
+    async (kind) => {
+      const own = await zeroEdgeAdmissionFixture("healthy");
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unknown-parameters",
+      );
+      expect(slots.length).toBeGreaterThan(0);
+      const path = join(own.root, own.zeroEdgePath);
+      if (kind === "changed") writeFileSync(path, readFileSync(path, "utf8") + "\n");
+      else {
+        const target = join(own.root, "node_modules/unused-original.mjs");
+        writeFileSync(target, readFileSync(path));
+        unlinkSync(path);
+        symlinkSync(target, path);
+      }
+      expect(() => own.resolver.assertCurrent()).toThrow(
+        kind === "changed" ? "symbol-subject-changed" : "unsafe-symbol-source",
+      );
+    },
+    30_000,
+  );
+});
+
 describe("inventory-prepared private module receipt", () => {
   it("recomputes an actually exhausted preparation under a larger custom node profile", async () => {
     const own = await privateModuleSymbolFixture("receipt-node-failure", {
