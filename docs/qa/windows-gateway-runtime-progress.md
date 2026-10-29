@@ -75,7 +75,13 @@ These are tested building blocks, not an installed service or production launch 
   temporary profile. This proves no network isolation.
 - `gateway_request.c` admits one bounded, versioned request per cryptographic challenge. Every
   attempt consumes the challenge, including malformed input; replay and cross-connection reuse
-  fail. It recomputes the existing mapped `RuntimeGatewayConfinement` digest using the shared
+  fail. Challenges expire after 30 seconds of monotonic uptime; admission rejects both expired
+  and impossible future issue times, consumes the challenge and clears its nonce without changing
+  the output request. The timestamp belongs to the authenticated connection's server-side state,
+  not the wire frame, and must never be restored across a reboot. A timeout requires a newly
+  authenticated connection. Native tests cover expiry, future timestamps, unchanged output,
+  nonce clearing and retry refusal alongside the existing fresh-challenge controls.
+  It recomputes the existing mapped `RuntimeGatewayConfinement` digest using the shared
   native SHA-256 implementation. Shared IPv4/IPv6 vectors are checked against the actual
   TypeScript producer and the native consumer, including truncated/oversized frames, altered
   bindings, invalid run IDs and reserved bytes. Admission still requires authenticated IPC and
@@ -274,6 +280,40 @@ Platform contracts used by these components:
 [registry flush durability](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regflushkey),
 [named-pipe client impersonation](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient),
 [per-user AppContainer profiles](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-createappcontainerprofile).
+
+### Concurrent inbound ownership investigation, 2026-10-29
+
+The existing two-owner experiment started the second utility and immediately stopped it. Even a
+successful second start therefore did not prove that both identities could receive while both
+owners were alive, or that removing one owner preserved the other identity's access. The same
+experiment now checks both routes with both owners alive, reaps the second owner on every path,
+then requires the first route to remain available and the second route to be refused. An early
+second-owner failure still fails qualification while the later independent-deny and egress
+controls run. No failure is converted into a concurrency pass.
+
+The default native suite exercises this orchestration with an in-memory ownership model, including
+failure at each startup, connection, cleanup and revocation step. The regression failed against
+the original start/stop-only sequence and passes with the additional controls. These model checks
+prove the experiment's verdict/cleanup logic only, not Windows socket enforcement or simultaneous
+listener lifetimes. The real route checks remain disposable-runner-only.
+
+Read-only static inspection of the local Microsoft `CheckNetIsolation.exe` version
+`10.0.26100.9949` (SHA-256
+`17dd503c2354634bff727afdcb934ea18bf3bec78d9fdd02c1ca067e80f2b992`)
+found that its inbound path copies a fixed nonzero provider GUID into `FWPM_PROVIDER0`, calls
+`FwpmProviderAdd0`, and exits that path on a nonzero result before calling `FwpmFilterAdd0`.
+The same GUID is subsequently used as the filter's provider key. This supports a shared-provider
+collision explanation for the recorded second-utility `FWP_E_ALREADY_EXISTS`, rather than a
+collision in Keiko's per-tree outbound filters. It is a version-specific static inference, not a
+trace of the hosted runner's failing API call. Microsoft documents the provider key as the unique
+provider identity in [FWPM_PROVIDER0](https://learn.microsoft.com/en-us/windows/win32/api/fwpmtypes/ns-fwpmtypes-fwpm_provider0)
+and the registration operation in [FwpmProviderAdd0](https://learn.microsoft.com/en-us/windows/win32/api/fwpmu/nf-fwpmu-fwpmprovideradd0).
+
+Do not patch the system utility, delete its provider, ignore a failed second start, serialize the
+trees to claim concurrency, or share one package identity between trees. The installed control
+plane still needs independently owned inbound policy and real two-tree socket/lifetime evidence.
+No WFP filter, exemption or firewall rule was changed on the developer host during this work.
+No new hosted-runner receipt is claimed for the local patch.
 
 ## Outstanding production work and qualification
 

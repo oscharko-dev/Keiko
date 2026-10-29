@@ -357,6 +357,73 @@ static DWORD foreign_principal_probe(PSID sid, PSID peer_sid, const wchar_t *exe
   return closed == ERROR_SUCCESS ? result : closed;
 }
 
+/* Keep ownership orchestration testable without changing this host's network policy. */
+enum inbound_pair_step { PAIR_START, PAIR_PRIMARY, PAIR_PEER, PAIR_STOP, PAIR_SURVIVOR, PAIR_REVOKED };
+typedef DWORD (*inbound_pair_step_fn)(void *, enum inbound_pair_step);
+
+static DWORD inbound_pair_lifetime(void *context, inbound_pair_step_fn step) {
+  DWORD result = step(context, PAIR_START), closed;
+  if (result == ERROR_SUCCESS) result = step(context, PAIR_PRIMARY);
+  if (result == ERROR_SUCCESS) result = step(context, PAIR_PEER);
+  /* Always reap the second owner, including partial startup and failed socket controls. */
+  closed = step(context, PAIR_STOP);
+  if (closed != ERROR_SUCCESS) return closed;
+  if (result == ERROR_SUCCESS) result = step(context, PAIR_SURVIVOR);
+  if (result == ERROR_SUCCESS) result = step(context, PAIR_REVOKED);
+  return result;
+}
+
+struct inbound_pair_control {
+  PSID primary, peer;
+  const wchar_t *executable;
+  PSID_AND_ATTRIBUTES network;
+  struct gateway_inbound_fixture *owner;
+};
+
+static DWORD inbound_pair_control_step(void *context, enum inbound_pair_step step) {
+  struct inbound_pair_control *control = context;
+  DWORD result;
+  PSID sid = step == PAIR_PEER || step == PAIR_REVOKED ? control->peer : control->primary;
+  const char *phase = step == PAIR_PEER ? "concurrent-peer" :
+    step == PAIR_SURVIVOR ? "concurrent-survivor" :
+    step == PAIR_REVOKED ? "concurrent-peer-reaped" : "concurrent-primary";
+  if (step == PAIR_START) return gateway_inbound_start(control->peer, &control->owner);
+  if (step == PAIR_STOP) {
+    result = gateway_inbound_stop(control->owner);
+    control->owner = NULL;
+    return result;
+  }
+  result = control_route_probe(sid, control->executable, AF_INET, phase, control->network, sid);
+  if (step != PAIR_REVOKED) return result;
+  return result == ERROR_CONNECTION_REFUSED ? ERROR_SUCCESS :
+    result == ERROR_SUCCESS ? ERROR_INVALID_DATA : result;
+}
+
+struct inbound_pair_model { int alive; unsigned seen; enum inbound_pair_step failure; };
+static DWORD inbound_pair_model_step(void *context, enum inbound_pair_step step) {
+  struct inbound_pair_model *model = context;
+  model->seen |= 1u << step;
+  if (step == PAIR_START) model->alive = 1;
+  if (step == PAIR_STOP) model->alive = 0;
+  if (step == model->failure) return ERROR_ACCESS_DENIED;
+  if ((step == PAIR_PRIMARY || step == PAIR_PEER) && !model->alive) return ERROR_INVALID_STATE;
+  if ((step == PAIR_SURVIVOR || step == PAIR_REVOKED) && model->alive) return ERROR_INVALID_STATE;
+  return ERROR_SUCCESS;
+}
+
+int gateway_inbound_concurrency_tests(void) {
+  struct inbound_pair_model model = {0, 0, (enum inbound_pair_step)-1};
+  int ok = inbound_pair_lifetime(&model, inbound_pair_model_step) == ERROR_SUCCESS &&
+           !model.alive && model.seen == 63u;
+  for (int failure = PAIR_START; failure <= PAIR_REVOKED; failure++) {
+    model.alive = 0; model.seen = 0; model.failure = (enum inbound_pair_step)failure;
+    if (inbound_pair_lifetime(&model, inbound_pair_model_step) == ERROR_SUCCESS || model.alive ||
+        (model.seen & (1u << PAIR_STOP)) == 0) ok = 0;
+  }
+  puts(ok ? "gateway-inbound-concurrency-oracle: passed" : "gateway-inbound-concurrency-oracle: failed");
+  return ok ? 0 : 1;
+}
+
 static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *executable, int family,
                                   UINT16 gateway, UINT16 hostile, SOCKET udp, SOCKET gateway_listener,
                                   PSID_AND_ATTRIBUTES network) {
@@ -364,7 +431,7 @@ static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *execut
    * attested outbound gateway family. This experiment must exercise that actual composition. */
   const int control_family = AF_INET;
   struct gateway_inbound_fixture *owner = NULL;
-  struct gateway_inbound_fixture *peer_owner = NULL;
+  struct inbound_pair_control pair = {sid, peer_sid, executable, network, NULL};
   struct gateway_diagnostics *diagnostics = NULL;
   HANDLE deny = NULL;
   DWORD result = gateway_diagnostics_start(executable, &diagnostics), closed;
@@ -386,11 +453,9 @@ static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *execut
   if (result == ERROR_SUCCESS)
     result = control_route_probe(sid, executable, control_family, "inbound-firewall", network, sid);
   if (result == ERROR_SUCCESS) {
-    concurrent_result = gateway_inbound_start(peer_sid, &peer_owner);
+    concurrent_result = inbound_pair_lifetime(&pair, inbound_pair_control_step);
     printf("socket-inbound-concurrent-owner: code=%lu\n", concurrent_result);
   }
-  closed = gateway_inbound_stop(peer_owner);
-  if (closed != ERROR_SUCCESS) result = closed;
   if (result == ERROR_SUCCESS) {
     result = run_child(sid, executable, family, gateway, hostile, &observed, network);
     printf("socket-inbound-egress: family=%d code=%lu observations=%lu expected-tcp-mask=1\n",
