@@ -1,3 +1,4 @@
+import { createEmittingSseResponseObservation } from "../../../../tests/support/sse-subscription-observations.js";
 // Issue #1388 — /api/containers/* route integration tests. A FakeContainerRunnerManager replaces the
 // real spawn-backed manager so these tests never run a real container. The createUiServer fixture
 // mirrors command-runner-routes.test.ts so the CSRF guard, host-check, and SSE framer run live.
@@ -5,7 +6,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -432,10 +432,9 @@ describe("GET /api/containers/events", () => {
   });
 });
 
-// Backpressure path (GEN-DUP-NEAR-005): the SSE writer now flows through the shared writeSseFrame
-// helper. When res.write() returns false the per-connection AbortController is aborted (which
-// unsubscribes from the manager) and the socket is destroyed exactly once, and the optional
-// onBackpressure observer is fired exactly once before the destroy.
+// Backpressure path (GEN-DUP-NEAR-005): a false write queues the frame and waits for drain.
+// At the shared stalled-reader deadline, the optional observer fires once before controller abort,
+// subscription release and socket destruction.
 interface FakeSseRes {
   res: ServerResponse;
   readonly writes: string[];
@@ -448,65 +447,7 @@ interface FakeSseRes {
 }
 
 function makeFakeSseRes(): FakeSseRes {
-  const writes: string[] = [];
-  const emitter = new EventEmitter();
-  const state: FakeSseRes = {
-    res: undefined as unknown as ServerResponse,
-    writes,
-    destroyCount: 0,
-    destroyed: false,
-    ended: false,
-    writeReturns: true,
-    emitClose: (): void => {
-      emitter.emit("close");
-    },
-    emitDrain: (): void => {
-      emitter.emit("drain");
-    },
-  };
-  const res = {
-    get destroyed(): boolean {
-      return state.destroyed;
-    },
-    get writableEnded(): boolean {
-      return state.ended;
-    },
-    writeHead(): ServerResponse {
-      return res as unknown as ServerResponse;
-    },
-    write(chunk: string): boolean {
-      writes.push(chunk);
-      return state.writeReturns;
-    },
-    end(): ServerResponse {
-      state.ended = true;
-      return res as unknown as ServerResponse;
-    },
-    // Like a real response: destroying marks it destroyed and fires `close`, which is what the
-    // route's own close handler unsubscribes on.
-    destroy(): void {
-      state.destroyCount += 1;
-      state.destroyed = true;
-      emitter.emit("close");
-    },
-    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.on(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.once(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.off(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    emit(event: string): boolean {
-      return emitter.emit(event);
-    },
-  };
-  state.res = res as unknown as ServerResponse;
-  return state;
+  return createEmittingSseResponseObservation();
 }
 
 describe("openContainerSseStream backpressure", () => {

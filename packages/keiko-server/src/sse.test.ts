@@ -1,3 +1,7 @@
+import {
+  createEmittingSseResponseObservation,
+  createSseResponseObservation,
+} from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { readdirSync, readFileSync } from "node:fs";
@@ -594,6 +598,216 @@ describe("openPlainNamespacedSseStream", () => {
     } finally {
       res.emit("close");
       request.destroy();
+    }
+  });
+});
+
+describe("SSE response observation fixtures", (): void => {
+  it("keeps fresh mutable observations and the two exact response shapes", (): void => {
+    const plain = createSseResponseObservation();
+    const emitting = createEmittingSseResponseObservation();
+    expect(plain).not.toBe(emitting);
+    expect(plain.res).not.toBe(emitting.res);
+    expect(plain.writes).not.toBe(emitting.writes);
+    expect(plain.destroyCount).toBe(0);
+    expect(plain.destroyed).toBe(false);
+    expect(plain.ended).toBe(false);
+    expect(plain.writeReturns).toBe(true);
+    plain.destroyed = true;
+    plain.ended = true;
+    expect(plain.res.destroyed).toBe(true);
+    expect(plain.res.writableEnded).toBe(true);
+    expect(emitting.res.destroyed).toBe(false);
+    expect(emitting.res.writableEnded).toBe(false);
+    expect(Object.isFrozen(plain)).toBe(false);
+    expect(Object.isFrozen(plain.res)).toBe(false);
+  });
+
+  it("preserves the two exact plain response shapes and own-property order", (): void => {
+    const plain = createSseResponseObservation();
+    const emitting = createEmittingSseResponseObservation();
+    expect(Object.keys(plain)).toEqual([
+      "res",
+      "writes",
+      "destroyCount",
+      "destroyed",
+      "ended",
+      "writeReturns",
+      "emitClose",
+      "emitDrain",
+    ]);
+    expect(Object.keys(plain.res)).toEqual([
+      "destroyed",
+      "writableEnded",
+      "writeHead",
+      "write",
+      "end",
+      "destroy",
+      "on",
+      "once",
+      "off",
+    ]);
+    expect(Object.keys(emitting.res)).toEqual([
+      "destroyed",
+      "writableEnded",
+      "writeHead",
+      "write",
+      "end",
+      "destroy",
+      "on",
+      "once",
+      "off",
+      "emit",
+    ]);
+    expect(Object.hasOwn(plain.res, "emit")).toBe(false);
+    expect(Object.hasOwn(emitting.res, "emit")).toBe(true);
+    expect(Object.getPrototypeOf(plain.res)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(emitting.res)).toBe(Object.prototype);
+  });
+
+  it("captures every write with live acceptance and keeps end separate from close", (): void => {
+    for (const fake of [createSseResponseObservation(), createEmittingSseResponseObservation()]) {
+      const close = vi.fn();
+      const finish = vi.fn();
+      fake.res.on("close", close);
+      fake.res.on("finish", finish);
+      expect(fake.res.writeHead(200)).toBe(fake.res);
+      expect(fake.res.write("first")).toBe(true);
+      fake.writeReturns = false;
+      expect(fake.res.write("queued")).toBe(false);
+      expect(fake.res.end()).toBe(fake.res);
+      expect(fake.ended).toBe(true);
+      expect(fake.res.writableEnded).toBe(true);
+      expect(fake.destroyed).toBe(false);
+      expect(fake.destroyCount).toBe(0);
+      expect(close).not.toHaveBeenCalled();
+      expect(finish).not.toHaveBeenCalled();
+      expect(fake.res.write("after-end")).toBe(false);
+      fake.res.destroy();
+      fake.writeReturns = true;
+      expect(fake.res.write("after-destroy")).toBe(true);
+      expect(fake.writes).toEqual(["first", "queued", "after-end", "after-destroy"]);
+      expect(finish).not.toHaveBeenCalled();
+    }
+  });
+
+  it("forwards listener registration and synchronous dispatch through one private emitter", (): void => {
+    for (const fake of [createSseResponseObservation(), createEmittingSseResponseObservation()]) {
+      const trace: string[] = [];
+      const receivers: unknown[] = [];
+      const removed = vi.fn();
+      const emitDrain = vi.fn(fake.emitDrain);
+      function onDrain(this: unknown): void {
+        receivers.push(this);
+        trace.push("on");
+      }
+      function onceDrain(this: unknown): void {
+        receivers.push(this);
+        trace.push("once");
+      }
+      expect(fake.res.on("drain", onDrain)).toBe(fake.res);
+      expect(fake.res.once("drain", onceDrain)).toBe(fake.res);
+      expect(fake.res.on("drain", removed)).toBe(fake.res);
+      expect(fake.res.off("drain", removed)).toBe(fake.res);
+      trace.push("before");
+      emitDrain();
+      expect(emitDrain).toHaveLastReturnedWith(undefined);
+      trace.push("after");
+      emitDrain();
+      expect(emitDrain).toHaveLastReturnedWith(undefined);
+      expect(trace).toEqual(["before", "on", "once", "after", "on"]);
+      expect(removed).not.toHaveBeenCalled();
+      expect(receivers).toHaveLength(3);
+      expect(receivers[0]).toBeInstanceOf(EventEmitter);
+      expect(receivers[0]).not.toBe(fake.res);
+      expect(receivers[1]).toBe(receivers[0]);
+      expect(receivers[2]).toBe(receivers[0]);
+      expect(fake.res.off("drain", onDrain)).toBe(fake.res);
+      fake.emitDrain();
+      expect(trace).toEqual(["before", "on", "once", "after", "on"]);
+    }
+  });
+
+  it("counts and closes synchronously on every destroy without hiding repeated calls", (): void => {
+    for (const fake of [createSseResponseObservation(), createEmittingSseResponseObservation()]) {
+      const observations: unknown[] = [];
+      const emitClose = vi.fn(fake.emitClose);
+      fake.res.on("close", (): void => {
+        observations.push([fake.destroyCount, fake.destroyed, fake.res.destroyed, fake.ended]);
+      });
+      expect(fake.res.destroy()).toBeUndefined();
+      expect(observations).toEqual([[1, true, true, false]]);
+      expect(fake.res.destroy()).toBeUndefined();
+      expect(observations).toEqual([
+        [1, true, true, false],
+        [2, true, true, false],
+      ]);
+      expect(fake.destroyCount).toBe(2);
+      emitClose();
+      expect(emitClose).toHaveLastReturnedWith(undefined);
+      expect(observations).toEqual([
+        [1, true, true, false],
+        [2, true, true, false],
+        [2, true, true, false],
+      ]);
+      expect(fake.res.writableEnded).toBe(false);
+    }
+  });
+
+  it("retains the emitting method descriptor and forwards only its one event argument", (): void => {
+    const fake = createEmittingSseResponseObservation();
+    const descriptor = Object.getOwnPropertyDescriptor(fake.res, "emit");
+    const emit: unknown = descriptor?.value;
+    expect(typeof emit).toBe("function");
+    if (typeof emit !== "function") {
+      throw new TypeError("Missing fixture emit method");
+    }
+    expect(descriptor).toEqual({
+      value: emit,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    expect(emit.name).toBe("emit");
+    expect(emit).toHaveLength(1);
+    expect(Object.hasOwn(emit, "prototype")).toBe(false);
+    expect((): unknown => Reflect.construct(emit, [])).toThrow(TypeError);
+    expect(fake.res.emit("probe")).toBe(false);
+    const listener = vi.fn();
+    fake.res.on("probe", listener);
+    expect(fake.res.emit("probe", "not-forwarded")).toBe(true);
+    expect(listener).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("keeps live enumerable accessors and writable own response methods", (): void => {
+    const functionMatcher: unknown = expect.any(Function);
+    for (const fake of [createSseResponseObservation(), createEmittingSseResponseObservation()]) {
+      expect(Object.getOwnPropertyDescriptor(fake.res, "destroyed")).toMatchObject({
+        get: functionMatcher,
+        set: undefined,
+        enumerable: true,
+        configurable: true,
+      });
+      expect(Object.getOwnPropertyDescriptor(fake.res, "writableEnded")).toMatchObject({
+        get: functionMatcher,
+        set: undefined,
+        enumerable: true,
+        configurable: true,
+      });
+      expect(Object.getOwnPropertyDescriptor(fake.res, "write")).toMatchObject({
+        value: functionMatcher,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      fake.destroyed = true;
+      fake.ended = true;
+      expect(fake.res.destroyed).toBe(true);
+      expect(fake.res.writableEnded).toBe(true);
+      fake.destroyed = false;
+      fake.ended = false;
+      expect(fake.res.destroyed).toBe(false);
+      expect(fake.res.writableEnded).toBe(false);
     }
   });
 });
