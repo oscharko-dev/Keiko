@@ -3235,26 +3235,26 @@ function rawEdgeCandidate(state, target, index, argument) {
   return candidate ? { candidate, origin } : null;
 }
 
-function rawCallEdges(state, states, queue) {
+function rawCallEdges(state, states, queue, stateLimit = state.compiler.state.limits.aliases) {
   for (const call of stateCalls(state)) {
     const target =
       state.collective && state.privateModules
         ? collectiveRawCallable(state, call.expression)
         : localRawCallable(state.compiler, state.context, state.source, call.expression);
     if (!target || (!target.modulePrivate && exportedDeclaration(target.declaration))) continue;
-    rawCallArguments(state, target, call, states, queue);
+    rawCallArguments(state, target, call, states, queue, stateLimit);
   }
 }
 
-function rawCallArguments(state, target, call, states, queue) {
+function rawCallArguments(state, target, call, states, queue, stateLimit) {
   for (const [index, argument] of call.arguments.entries()) {
     const edge = rawEdgeCandidate(state, target, index, argument);
     if (!edge) continue;
     const { candidate, origin } = edge;
     if (state.privateModules) candidate.privateModules = true;
     if (!states.has(candidate.key)) {
-      if (state.collective && states.size >= state.compiler.state.limits.aliases)
-        throw collectiveHelperBudgetError(state.compiler.state.limits.aliases, states.size + 1);
+      if (state.collective && states.size >= stateLimit)
+        throw collectiveHelperBudgetError(stateLimit, states.size + 1);
       states.set(candidate.key, candidate);
       queue.push(candidate);
     }
@@ -3855,19 +3855,25 @@ function collectiveRawRoot(compiler, request, privateModules = false) {
     : null;
 }
 
-function collectiveRawGraph(compiler, requests, privateModules = false) {
+function collectiveRawGraph(
+  compiler,
+  requests,
+  privateModules = false,
+  stateLimit = compiler.state.limits.aliases,
+) {
   const states = new Map();
   const roots = new Map();
+  const rootLimit = Math.min(compiler.state.limits.aliases, stateLimit);
   for (const request of requests) {
     const state = collectiveRawRoot(compiler, request, privateModules);
     if (!state) continue;
-    if (!states.has(state.key) && states.size >= compiler.state.limits.aliases)
-      throw collectiveHelperBudgetError(compiler.state.limits.aliases, states.size + 1);
+    if (!states.has(state.key) && states.size >= rootLimit)
+      throw collectiveHelperBudgetError(rootLimit, states.size + 1);
     states.set(state.key, state);
     roots.set(state.key, [...(roots.get(state.key) ?? []), request.recordId]);
   }
   const queue = [...states.values()];
-  for (const state of queue) rawCallEdges(state, states, queue);
+  for (const state of queue) rawCallEdges(state, states, queue, stateLimit);
   assertRawAcyclic(states);
   return { states, roots };
 }
@@ -3911,7 +3917,10 @@ function collectiveRawFacts(compiler, requests, privateModules = false) {
   compiler.assertCurrent();
   if (requests.length > compiler.state.limits.aliases)
     throw collectiveHelperBudgetError(compiler.state.limits.aliases, requests.length);
-  const { states, roots } = collectiveRawGraph(compiler, requests, privateModules);
+  const stateLimit = privateModules
+    ? collectivePrivateStateLimit(compiler, requests)
+    : compiler.state.limits.aliases;
+  const { states, roots } = collectiveRawGraph(compiler, requests, privateModules, stateLimit);
   const first = states.get(roots.keys().next().value);
   const qualified =
     roots.size === 0 ? new Set() : qualifiedRawStates(first, states, new Set(roots.keys()));
@@ -3954,32 +3963,62 @@ function collectiveDiscoveryKeys(compiler, request) {
   ]);
 }
 
-function collectiveRawComponents(compiler, requests) {
+function collectiveRawComponentFacts(compiler, requests) {
   compiler.assertCurrent();
   const components = [];
   for (const request of [...requests].sort((a, b) => compareStrings(a.recordId, b.recordId))) {
+    const rootKey = canonicalRawStateKey(request.identity, request.index);
     let keys;
+    // A fallback key preserves grouping, but never certifies complete discovery.
+    let complete = false;
     try {
       keys = new Set(collectiveDiscoveryKeys(compiler, request));
+      complete = keys.has(rootKey);
     } catch (error) {
       if (!collectiveHelperBudgetDetails(error)) throw error;
-      keys = new Set([canonicalRawStateKey(request.identity, request.index)]);
+      keys = new Set([rootKey]);
     }
-    const joined = { keys, roots: [request] };
+    const joined = { keys, roots: [request], complete };
     for (let index = components.length - 1; index >= 0; index -= 1) {
       const component = components[index];
       if (![...keys].some((key) => component.keys.has(key))) continue;
       for (const key of component.keys) keys.add(key);
       joined.roots.push(...component.roots);
+      joined.complete &&= component.complete;
       components.splice(index, 1);
     }
     components.push(joined);
   }
   compiler.assertCurrent();
-  return components.map(({ roots }) => {
+  return components;
+}
+
+function collectiveRawComponents(compiler, requests) {
+  return collectiveRawComponentFacts(compiler, requests).map(({ roots }) => {
     roots.sort((a, b) => compareStrings(a.recordId, b.recordId));
     return roots;
   });
+}
+
+function collectivePrivateStateLimit(compiler, requests) {
+  const limit = compiler.state.limits.aliases;
+  // Equal profiles retain the original bound without needing a larger-context witness.
+  if (compiler.state.limits.collectiveStates === limit) return limit;
+  const requestedRoots = new Set(
+    requests.map(({ identity, index }) => canonicalRawStateKey(identity, index)),
+  );
+  if (requestedRoots.size <= 1) return limit;
+  const components = collectiveRawComponentFacts(compiler, requests);
+  compiler.assertCurrent();
+  if (components.length !== 1 || !components[0].complete) return limit;
+  const component = components[0];
+  const discoveredRoots = new Set(
+    component.roots.map(({ identity, index }) => canonicalRawStateKey(identity, index)),
+  );
+  return discoveredRoots.size === requestedRoots.size &&
+    [...requestedRoots].every((key) => discoveredRoots.has(key) && component.keys.has(key))
+    ? compiler.state.limits.collectiveStates
+    : limit;
 }
 
 function collectiveJsonByteMeasurement(compiler, requests) {

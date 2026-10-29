@@ -8,6 +8,7 @@ import {
 } from "./code-quality-symbol-fixture.mjs";
 
 import ts from "typescript";
+import { SYMBOL_LIMITS } from "../../lib/code-quality-policy.mjs";
 
 import { fixtureOwnedPolicy } from "./code-quality-fixture.mjs";
 
@@ -99,6 +100,162 @@ export function createPrivateModuleParserFixture(variant = "direct", rules = [])
     },
     variant === "unrelated-noexports" ? ["packages/unrelated-ui"] : [],
   );
+}
+
+// Capacity data describes concrete source declarations, not a replica of the resolver's graph walk.
+export function createPrivateModuleCapacityFixture(stateCount, variant = "connected") {
+  const own = createPrivateModuleParserFixture();
+  const shape = privateCapacityShape(stateCount, variant);
+  own.put("packages/alpha/src/owner.ts", privateCapacityOwner(shape));
+  own.put("packages/alpha/src/second.ts", "export {};\n");
+  own.put("packages/alpha/src/capacity-helpers.ts", privateCapacityHelpers(shape));
+  own.put("packages/alpha/src/capacity-shared.ts", privateCapacityShared(shape, variant));
+  const names = shape.branches.map((branch) => branch.name);
+  if (variant === "refused-root-pair") appendRefusedCapacityRoot(own, names);
+  if (variant === "unrelated-oversized") appendUnrelatedCapacityRoot(own, names);
+  if (variant === "public-terminal" || variant === "public-gate" || variant === "public-cycle")
+    appendPublicCapacityHelper(own, shape, variant);
+  own.put("packages/alpha/src/proof.test.ts", privateModuleProof(names));
+  own.records = names.map((name) => collectiveParserRecord(name, []));
+  own.policy = responsibilityPolicy(own.records);
+  for (const record of own.records) activateResponsibilityFixtureRules(own.policy, record);
+  own.put("scripts/code-quality-policy.json", own.policy);
+  own.capacity = { ...shape, names };
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+function privateCapacityShape(stateCount, variant) {
+  const single = variant === "single-root" || variant === "refused-root-pair";
+  const rootCount = single
+    ? 1
+    : Math.max(2, Math.ceil((stateCount - 1) / (SYMBOL_LIMITS.aliases - 1)));
+  const terminals = Array.from(
+    { length: variant === "disconnected" ? rootCount : 1 },
+    (_, index) => `terminal${index}`,
+  );
+  let remaining = stateCount - rootCount - terminals.length;
+  if (!Number.isSafeInteger(remaining) || remaining < rootCount)
+    throw new TypeError("capacity-fixture-state-count");
+  const branches = Array.from({ length: rootCount }, (_, index) => {
+    const name = index === 0 ? "first" : index === 1 ? "second" : `root${index}`;
+    const count = Math.floor(remaining / (rootCount - index));
+    remaining -= count;
+    return {
+      name,
+      terminal: terminals[variant === "disconnected" ? index : 0],
+      gates: Array.from({ length: count }, (_, gate) => `${name}Gate${gate}`),
+    };
+  });
+  return { stateCount, branches, terminals };
+}
+
+function privateCapacityOwner(shape) {
+  const gates = shape.branches.flatMap((branch) => branch.gates);
+  const roots = shape.branches.map(
+    (branch) => `export function ${branch.name}(input: unknown): ParseResult {
+  if (!(${branch.gates.map((name) => `${name}(input)`).join(" && ")}))
+    return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: 0 };
+}\n`,
+  );
+  return (
+    "export type ParseResult = { ok: true; value: number } | { ok: false; errors: readonly string[] };\n" +
+    `import { ${gates.join(", ")} } from "./capacity-helpers.js";\n` +
+    roots.join("")
+  );
+}
+
+function privateCapacityHelpers(shape) {
+  return (
+    `import { ${shape.terminals.join(", ")} } from "./capacity-shared.js";\n` +
+    shape.branches
+      .flatMap((branch) =>
+        branch.gates.map(
+          (name) =>
+            `export function ${name}(input: unknown): boolean { return ${branch.terminal}(input); }\n`,
+        ),
+      )
+      .join("")
+  );
+}
+
+function privateCapacityShared(shape, variant) {
+  if (variant === "private-cycle")
+    return (
+      `import { ${shape.branches[0].gates[0]} } from "./capacity-helpers.js";\n` +
+      `export function terminal0(input: unknown): boolean { return ${shape.branches[0].gates[0]}(input); }\n`
+    );
+  if (variant === "mixed-cycle" || variant === "public-cycle")
+    return (
+      'import { first } from "./owner.js";\n' +
+      "export function terminal0(input: unknown): boolean { return first(input).ok; }\n"
+    );
+  return shape.terminals
+    .map(
+      (name) =>
+        `export function ${name}(input: unknown): boolean { return typeof input === "number"; }\n`,
+    )
+    .join("");
+}
+
+function appendRefusedCapacityRoot(own, names) {
+  const path = "packages/alpha/src/owner.ts";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8") + 'export { second } from "./second.js";\n',
+  );
+  own.put(
+    "packages/alpha/src/second.ts",
+    'import { first, type ParseResult } from "./owner.js";\n' +
+      "export function second(input: unknown): ParseResult { return first(input); }\n",
+  );
+  names.push("second");
+}
+
+function appendUnrelatedCapacityRoot(own, names) {
+  const gates = Array.from(
+    { length: SYMBOL_LIMITS.aliases },
+    (_, index) => `unrelatedGate${index}`,
+  );
+  const path = "packages/alpha/src/owner.ts";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8") +
+      `import { ${gates.join(", ")} } from "./capacity-unrelated.js";\n` +
+      `export function oversized(input: unknown): ParseResult {
+  if (!(${gates.map((name) => `${name}(input)`).join(" && ")}))
+    return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: 0 };
+}\n`,
+  );
+  own.put(
+    "packages/alpha/src/capacity-unrelated.ts",
+    gates
+      .map(
+        (name) =>
+          `export function ${name}(input: unknown): boolean { return typeof input === "number"; }\n`,
+      )
+      .join(""),
+  );
+  names.push("oversized");
+}
+
+function appendPublicCapacityHelper(own, shape, variant) {
+  const path = "packages/alpha/src/owner.ts";
+  const terminal = variant === "public-terminal" || variant === "public-cycle";
+  const name = terminal ? shape.terminals[0] : shape.branches[0].gates[0];
+  const source = terminal ? "capacity-shared" : "capacity-helpers";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8") + `export { ${name} } from "./${source}.js";\n`,
+  );
+  if (variant === "public-cycle")
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8") +
+        `export { ${shape.branches[0].gates[0]} } from "./capacity-helpers.js";\n`,
+    );
 }
 
 function privateModuleRoot(name) {

@@ -8,10 +8,12 @@ import {
   adaptResponsibilityDiagnostics,
 } from "../lib/code-quality-responsibilities.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
+import { SYMBOL_LIMITS } from "../lib/code-quality-policy.mjs";
 import {
   createContextDiagnosticFixture,
   createCollectiveContextDiagnosticFixture,
   createCollectiveParserFixture,
+  createPrivateModuleCapacityFixture,
   installResponsibilityFixtureTools,
   installSemanticFixtureBuild,
   embeddedSemanticOptions,
@@ -19,6 +21,7 @@ import {
 } from "./support/code-quality-responsibility-fixture.mjs";
 
 const roots = [];
+const createOriginalSymbolResolver = createSymbolResolver;
 afterEach(() => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -34,7 +37,13 @@ async function collectiveSemanticFixture(variant) {
 }
 
 async function collectiveCapacityFixture() {
-  const own = createCollectiveParserFixture("cardinality", ["anti-slop/no-runtime-typeof"]);
+  await useHistoricalCollectiveStateProfile();
+  return capacityAssessmentFixture(
+    createCollectiveParserFixture("cardinality", ["anti-slop/no-runtime-typeof"]),
+  );
+}
+
+async function capacityAssessmentFixture(own) {
   roots.push(own.root);
   const subject = await collectPolicySubject(own.root);
   const resolver = createSymbolResolver(subject, {}, [
@@ -68,11 +77,22 @@ function expectWithheldCapacity(assessment) {
   );
 }
 
-async function interceptCollectiveAttempt(intercept, operation = "collectiveRawCheckingSlots") {
+async function useHistoricalCollectiveStateProfile() {
+  await interceptCollectiveAttempt(
+    (collect, args) => collect(...args),
+    "collectiveRawCheckingSlots",
+    { collectiveStates: 64 },
+  );
+}
+
+async function interceptCollectiveAttempt(
+  intercept,
+  operation = "collectiveRawCheckingSlots",
+  limits = {},
+) {
   const symbols = await import("../lib/code-quality-symbols.mjs");
-  const original = symbols.createSymbolResolver;
-  vi.spyOn(symbols, "createSymbolResolver").mockImplementation((...args) => {
-    const resolver = original(...args);
+  vi.spyOn(symbols, "createSymbolResolver").mockImplementation((subject, options, manifest) => {
+    const resolver = createOriginalSymbolResolver(subject, { ...options, ...limits }, manifest);
     const collect = resolver[operation];
     resolver[operation] = (...call) => intercept(collect, call);
     return resolver;
@@ -149,15 +169,19 @@ describe("collective capacity partial applicability (#3918)", () => {
 
   it("rechecks actual source currentness after an owned capacity refusal", async () => {
     const { own, subject } = await collectiveCapacityFixture();
-    await interceptCollectiveAttempt((collect, args) => {
-      try {
-        return collect(...args);
-      } catch (error) {
-        const path = join(own.root, "packages/alpha/src/owner.ts");
-        writeFileSync(path, readFileSync(path, "utf8") + "\n");
-        throw error;
-      }
-    });
+    await interceptCollectiveAttempt(
+      (collect, args) => {
+        try {
+          return collect(...args);
+        } catch (error) {
+          const path = join(own.root, "packages/alpha/src/owner.ts");
+          writeFileSync(path, readFileSync(path, "utf8") + "\n");
+          throw error;
+        }
+      },
+      "collectiveRawCheckingSlots",
+      { collectiveStates: 64 },
+    );
     expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(
       "symbol-subject-changed",
     );
@@ -178,6 +202,7 @@ describe("collective capacity partial applicability (#3918)", () => {
     async () => {
       const own = await collectiveSemanticFixture("cardinality");
       roots.push(own.root);
+      await useHistoricalCollectiveStateProfile();
       const report = await executeCodeQualityPolicy(embeddedSemanticOptions(), own.root);
       expect(report.responsibilities.counts).toMatchObject({ ready: 2, qualified: 2, pending: 0 });
       for (const assessment of report.responsibilities.assessments) {
@@ -199,6 +224,70 @@ describe("collective capacity partial applicability (#3918)", () => {
     },
     195_000,
   );
+});
+
+// Existing 64-state incident pins above use an explicit historical profile. These use the default.
+describe("default private-helper collective capacity reports (#3918)", () => {
+  it("admits every exact-boundary state without inventing semantic qualification", async () => {
+    const { own, subject } = await capacityAssessmentFixture(
+      createPrivateModuleCapacityFixture(SYMBOL_LIMITS.collectiveStates),
+    );
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.counts).toMatchObject({
+      ready: own.records.length,
+      pending: own.records.length,
+      qualified: 0,
+    });
+    expect(report.assessments.flatMap((record) => record.slots)).toHaveLength(
+      SYMBOL_LIMITS.collectiveStates,
+    );
+    for (const record of report.assessments) {
+      expect(record.reasons).toEqual([]);
+      expect(Object.hasOwn(record, "helperClosures")).toBe(false);
+      expect(record.obligations).toEqual([
+        "runtime-proof-not-evaluated",
+        "consumer-proof-not-evaluated",
+      ]);
+    }
+    expect(JSON.parse(JSON.stringify(report))).toEqual(report);
+  }, 60_000);
+
+  it("withholds the whole overflowing component and preserves exact independent legacy slots", async () => {
+    const { own, subject, legacy } = await capacityAssessmentFixture(
+      createPrivateModuleCapacityFixture(SYMBOL_LIMITS.collectiveStates + 1),
+    );
+    const report = assessPolicyResponsibilities(subject, own.policy);
+    expect(report.counts).toMatchObject({
+      ready: own.records.length,
+      pending: own.records.length,
+      qualified: 0,
+    });
+    expect(report.assessments.map((record) => record.slots)).toEqual(legacy);
+    for (const record of report.assessments) {
+      expect(record.reasons).toEqual([]);
+      expect(record.helperClosures).toEqual([
+        {
+          status: "withheld",
+          reason: "collective-helper-budget-exhausted",
+          owner: "alpha",
+          sourcePath: "packages/alpha/src/owner.ts",
+          rule: "anti-slop/no-unknown-parameters",
+          rootCount: own.records.length,
+          limit: SYMBOL_LIMITS.collectiveStates,
+          observedCount: SYMBOL_LIMITS.collectiveStates + 1,
+        },
+      ]);
+      expect(
+        record.slots.every((slot) => !Object.hasOwn(slot, "contributingResponsibilityIds")),
+      ).toBe(true);
+    }
+    own.policy.responsibilities.reverse();
+    const reversed = assessPolicyResponsibilities(subject, own.policy);
+    const byId = (records) =>
+      Object.fromEntries(records.map((record) => [record.id, record.helperClosures]));
+    expect(byId(reversed.assessments)).toEqual(byId(report.assessments));
+    expect(JSON.parse(JSON.stringify(report))).toEqual(report);
+  }, 60_000);
 });
 
 describe("closed context diagnostic responsibility capability (#3918)", () => {
@@ -241,6 +330,7 @@ describe("closed context diagnostic responsibility capability (#3918)", () => {
   it("preserves the published whole-group budget withholding for diagnostic envelopes", async () => {
     const own = createCollectiveContextDiagnosticFixture("cardinality");
     roots.push(own.root);
+    await useHistoricalCollectiveStateProfile();
     const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
     expect(report.counts).toMatchObject({ ready: 2, pending: 2, qualified: 0 });
     for (const record of report.assessments) {

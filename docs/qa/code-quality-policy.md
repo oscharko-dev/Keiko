@@ -191,7 +191,10 @@ Missing, stale, changed or escaping provenance fails. Matching names or spans al
 including a same-length producer type change with an unchanged declaration name.
 
 The interface bounds retained programs (2), verified source bytes (64 MiB), visited nodes
-(5 million), alias traversal (64) and aggregate retained declaration emission and private build-info bytes (16 MiB). Native declaration-only
+(5 million), alias traversal (64) and aggregate retained declaration emission and private build-info bytes (16 MiB).
+A distinct `collectiveStates` limit defaults to 256 for the complete connected multi-root private
+raw-helper union under the discovery requirements below. It changes no request, individual-root,
+alias, depth, numeric, captured or consumer-binding bound. Native declaration-only
 emission uses a private output directory and build-info path, a direct platform executable, a
 10-second process bound and a 1-MiB diagnostic-output bound. Private output is measured before
 retention and cleaned on success or failure; live build outputs are never emission targets. Configured declaration directories are relocated into
@@ -473,6 +476,26 @@ and parameter, not only a source offset. Shared slots retain all contributing re
 in sorted order and use deterministic attribution independent of record order. Roots are joined
 only when canonical helper states connect them, never merely because they share a package.
 
+The multi-root private union uses `SYMBOL_LIMITS.collectiveStates` (256) only after the existing
+module-owned discovery owner verifies one complete connected component containing every requested
+canonical root and more than one distinct root. Every root must have a current, successful
+individual discovery containing its own canonical key within `aliases` (64). A singleton fallback
+from a refused discovery is not a positive witness; missing, incomplete, stale or refused facts
+retain the original 64-state path even when another root reaches that fallback key. Successful
+uncached discovery is eligible, and cached facts retain the same currentness checks. Multiple
+record ids for one canonical root and disconnected request lists do not unlock the larger union.
+
+Only the discovered state union uses that selected graph-local ceiling. Request cardinality,
+individual discovery, alias traversal and cycle depth retain 64. Root admission stays within 64
+and also honors the selected union ceiling when that profile is stricter. Public and
+ineligible nodes, edges, global incoming checks, producer identities and sorted contributing
+responsibility ids remain present. Numeric, legacy captured and consumer-binding paths retain
+their existing limits. A 257th state refuses the entire default-capacity union, not only its tail;
+explicit stricter collective profiles retain the same no-partial-adaptation guarantee. Historical
+64-state union pins use an explicit `collectiveStates: 64` profile; default-boundary controls derive
+their fixture size from the production limit. Source, node, retained-Program, emission and proof
+budgets remain unchanged. This is a capacity-contract change, not rule activation or runtime proof.
+
 Module export syntax alone establishes neither public API nor privacy. Privacy uses the actual
 declared package roots/subpaths and canonical export symbols, including named, star, default and
 namespace exposure. The private exposure walk accepts the existing closed `types` plus `import`
@@ -528,7 +551,8 @@ preparation failures and the original fully charged fallback remain unchanged. T
 production parser visit, rule finding, relevant incoming edge or runtime-witness output.
 Source-byte admission, currentness and both-mode module resolution still run in the compiler;
 all subsequent actual walks charge the same counter. The two-resident-Program LRU,
-alias/cardinality, emission and execution bounds remain unchanged. Relevant namespace/default imports, concrete
+alias and request/root cardinality, emission and execution bounds remain unchanged; the connected
+private multi-root union alone uses the separate witnessed ceiling described above. Relevant namespace/default imports, concrete
 dynamic/computed module dispatch, finite loader specifier alternatives containing the helper
 module, mutations and callback/container/return escapes withhold the relevant helper. Unrelated
 unresolved loader expressions, such as `import(userPath)` without a statically established helper
@@ -541,9 +565,11 @@ boolean/predicate checker result. A string-array collector, readonly wrapper, ca
 module receives no new dictionary or known-value-widening authority from this extension.
 
 A collective cardinality refusal preserves the independently assessed legacy root slots and adds
-no slots from the entire failed collective group, including its first 64 states. Only the three
-owner-created request/root/discovered-state cardinality errors are eligible; their low-level
-`TypeError("symbol-alias-budget")` and the existing limit remain unchanged. The join rechecks source
+no slots from the entire failed collective group, including every already-discovered state. Only
+the three owner-created request/root/discovered-state cardinality errors are eligible; their
+low-level `TypeError("symbol-alias-budget")` remains unchanged. Request refusals retain 64; root
+admission uses the smaller of 64 and the selected union ceiling. Discovered-state refusals carry
+that graph-local union ceiling. The join rechecks source
 currentness before recording the omission. General alias traversal, depth, cycles, source drift and
 unexpected exceptions still propagate.
 

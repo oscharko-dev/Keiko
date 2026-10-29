@@ -5,6 +5,7 @@ export const SYMBOL_LIMITS = Object.freeze({
   sourceBytes: 64 * 1024 * 1024,
   nodes: 5_000_000,
   aliases: 64,
+  collectiveStates: 256,
   emitBytes: 16 * 1024 * 1024,
   emissionTimeout: 10_000,
   emissionOutputBytes: 1024 * 1024,

@@ -23,9 +23,12 @@ import {
 import ts from "typescript";
 import { createCompilerContext, visitCompilerNodes } from "../lib/code-quality-compiler.mjs";
 import * as productionModuleFacts from "../lib/code-quality-production.mjs";
-import { SYMBOL_LIMITS } from "../lib/code-quality-policy.mjs";
+import { SYMBOL_LIMITS, symbolLimits } from "../lib/code-quality-policy.mjs";
 import { compilerNodeAt, declarationMapPosition } from "../lib/code-quality-provenance.mjs";
-import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
+import {
+  collectiveHelperBudgetDetails,
+  createSymbolResolver,
+} from "../lib/code-quality-symbols.mjs";
 import {
   createConsumerSeamFixture,
   createObservationOptionsFixture,
@@ -46,6 +49,7 @@ import {
   createRawHelperEnforcementFixture,
   createCollectiveParserFixture,
   createPrivateModuleParserFixture,
+  createPrivateModuleCapacityFixture,
   createTypedRecheckFixture,
   createCanonicalDecoderFixture,
   createReadonlyLiteralDataFixture,
@@ -2703,6 +2707,325 @@ async function privateModuleSymbolFixture(variant = "direct", options = {}) {
   return own;
 }
 
+async function privateCapacitySymbolFixture(stateCount, variant = "connected", options = {}) {
+  const own = createPrivateModuleCapacityFixture(stateCount, variant);
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  resetExposureResolver(own, options);
+  return own;
+}
+
+function expectOwnedCapacityRefusal(operation, limit, observedCount = limit + 1) {
+  let refusal;
+  try {
+    operation();
+  } catch (error) {
+    refusal = error;
+  }
+  expect(refusal).toBeInstanceOf(TypeError);
+  expect(refusal.message).toBe("symbol-alias-budget");
+  expect(collectiveHelperBudgetDetails(refusal)).toEqual({ limit, observedCount });
+}
+
+function expectCompletePrivateCapacitySlots(own, slots, count) {
+  expect(slots).toHaveLength(count);
+  const shared = slots.filter((slot) => slot.path.endsWith("/capacity-shared.ts"));
+  expect(shared).toHaveLength(1);
+  expect(shared[0].contributingResponsibilityIds).toEqual(
+    own.records.map((record) => record.id).sort(),
+  );
+  expect(slots.every((slot) => slot.producerIdentity.owner === "alpha")).toBe(true);
+  expect(new Set(slots.map((slot) => JSON.stringify(slot)))).toEqual(
+    new Set(
+      own.resolver
+        .collectiveRawCheckingSlots([...own.rawRoots].reverse(), privateCapacityRule)
+        .map((slot) => JSON.stringify(slot)),
+    ),
+  );
+}
+
+async function expectPrivateCapacityRuntime(own) {
+  const runtime = await import(pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href);
+  expect(runtime.first(1)).toEqual({ ok: true, value: 0 });
+  expect(runtime.first("wrong")).toEqual({ ok: false, errors: ["invalid"] });
+}
+
+const privateCapacityRule = "anti-slop/no-unknown-parameters";
+
+describe("separate collective private-helper capacity contract (#3918)", () => {
+  it("admits the existing connected multi-root fixture beyond the individual discovery ceiling", async () => {
+    const own = await collectiveSymbolFixture("cardinality");
+    expect(own.resolver.collectiveRawComponents(own.rawRoots)).toEqual([own.rawRoots]);
+    const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+    expect(slots.length).toBeGreaterThan(SYMBOL_LIMITS.aliases);
+    expect(
+      slots.some((slot) => slot.contributingResponsibilityIds.length === own.rawRoots.length),
+    ).toBe(true);
+    expect(new Set(slots.map((slot) => JSON.stringify(slot)))).toEqual(
+      new Set(
+        own.resolver
+          .collectiveRawCheckingSlots([...own.rawRoots].reverse(), privateCapacityRule)
+          .map((slot) => JSON.stringify(slot)),
+      ),
+    );
+  }, 30_000);
+
+  it("keeps the named union capacity separate from every other finite resolver limit", () => {
+    expect(SYMBOL_LIMITS.collectiveStates).toBe(256);
+    const selected = symbolLimits({ collectiveStates: 2 });
+    expect(selected.collectiveStates).toBe(2);
+    for (const [name, value] of Object.entries(SYMBOL_LIMITS))
+      if (name !== "collectiveStates") expect(selected[name]).toBe(value);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects the invalid collective capacity %s through the production option validator",
+    (collectiveStates) => {
+      expect(() => symbolLimits({ collectiveStates })).toThrow("invalid-symbol-budget");
+    },
+  );
+
+  it.each(["at", "over"])(
+    "enforces the actual connected union %s the production default with individually bounded roots",
+    async (boundary) => {
+      const count = SYMBOL_LIMITS.collectiveStates + (boundary === "over" ? 1 : 0);
+      const own = await privateCapacitySymbolFixture(count);
+      for (const root of own.rawRoots)
+        expect(
+          own.resolver.collectiveRawCheckingSlots([root], privateCapacityRule).length,
+        ).toBeGreaterThan(0);
+      expect(
+        own.capacity.branches.every((branch) => branch.gates.length + 2 <= SYMBOL_LIMITS.aliases),
+      ).toBe(true);
+      expect(own.resolver.collectiveRawComponents(own.rawRoots)).toEqual([
+        [...own.rawRoots].sort((left, right) =>
+          left.recordId < right.recordId ? -1 : left.recordId > right.recordId ? 1 : 0,
+        ),
+      ]);
+      if (boundary === "over") {
+        expectOwnedCapacityRefusal(
+          () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+          SYMBOL_LIMITS.collectiveStates,
+        );
+        return;
+      }
+      const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+      expectCompletePrivateCapacitySlots(own, slots, count);
+      await expectPrivateCapacityRuntime(own);
+    },
+    60_000,
+  );
+
+  it("retains the historical whole-union refusal through an explicit 64-state profile", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates, "connected", {
+      collectiveStates: SYMBOL_LIMITS.aliases,
+    });
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 30_000);
+
+  it("does not let root insertion exceed a smaller explicitly selected union ceiling", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates, "connected", {
+      collectiveStates: 2,
+    });
+    expect(own.rawRoots.length).toBeGreaterThan(2);
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      2,
+    );
+  }, 30_000);
+
+  it("keeps request cardinality bounded before canonical root deduplication", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates);
+    const requests = Array.from({ length: SYMBOL_LIMITS.aliases + 1 }, (_, index) => ({
+      ...own.rawRoots[0],
+      recordId: `request-${index}`,
+    }));
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(requests, privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 30_000);
+
+  it("keeps one canonical root at its original discovery ceiling despite record aliases", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.aliases + 1, "single-root");
+    for (const requests of [
+      own.rawRoots,
+      [own.rawRoots[0], { ...own.rawRoots[0], recordId: "alias" }],
+    ])
+      expectOwnedCapacityRefusal(
+        () => own.resolver.collectiveRawCheckingSlots(requests, privateCapacityRule),
+        SYMBOL_LIMITS.aliases,
+      );
+  }, 30_000);
+
+  it("keeps a disconnected request list on its original union ceiling", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.aliases + 1, "disconnected");
+    expect(own.resolver.collectiveRawComponents(own.rawRoots)).toHaveLength(own.rawRoots.length);
+    for (const root of own.rawRoots)
+      expect(
+        own.resolver.collectiveRawCheckingSlots([root], privateCapacityRule).length,
+      ).toBeGreaterThan(0);
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 30_000);
+
+  it("does not treat an absent canonical parameter as a complete connected root set", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates);
+    const absent = { ...own.rawRoots[0], index: 1, recordId: "absent-parameter" };
+    expect(own.resolver.collectiveRawComponents([absent])).toEqual([[absent]]);
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots([...own.rawRoots, absent], privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 30_000);
+
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])(
+    "refuses real oversized-root fallbacks with reversed=%s and warm=%s",
+    async (reversed, warm) => {
+      const own = await privateCapacitySymbolFixture(
+        SYMBOL_LIMITS.aliases + 1,
+        "refused-root-pair",
+      );
+      const requests = reversed ? [...own.rawRoots].reverse() : own.rawRoots;
+      if (warm) {
+        for (const request of requests)
+          expectOwnedCapacityRefusal(
+            () => own.resolver.collectiveRawCheckingSlots([request], privateCapacityRule),
+            SYMBOL_LIMITS.aliases,
+          );
+      }
+      const components = own.resolver.collectiveRawComponents(requests);
+      expect(components).toHaveLength(2);
+      expect(components.every((component) => component.length === 1)).toBe(true);
+      expect(new Set(components.flat().map((request) => request.recordId))).toEqual(
+        new Set(requests.map((request) => request.recordId)),
+      );
+      expectOwnedCapacityRefusal(
+        () => own.resolver.collectiveRawCheckingSlots(requests, privateCapacityRule),
+        SYMBOL_LIMITS.aliases,
+      );
+    },
+    60_000,
+  );
+
+  it("admits exact-ceiling roots even when their successful discovery cannot enter the cache", async () => {
+    const count = 2 * (SYMBOL_LIMITS.aliases - 1) + 1;
+    const own = await privateCapacitySymbolFixture(count);
+    expect(
+      own.capacity.branches.every((branch) => branch.gates.length + 2 === SYMBOL_LIMITS.aliases),
+    ).toBe(true);
+    for (let index = 0; index < SYMBOL_LIMITS.aliases; index += 1)
+      own.resolver.collectiveRawComponents([{ ...own.rawRoots[0], recordId: `warm-${index}` }]);
+    const requests = own.rawRoots.map((root) => ({
+      ...root,
+      recordId: `uncached-${root.recordId}`,
+    }));
+    const before = own.resolver.stats().nodes;
+    expect(own.resolver.collectiveRawCheckingSlots(requests, privateCapacityRule)).toHaveLength(
+      count,
+    );
+    expect(own.resolver.stats().nodes).toBeGreaterThan(before);
+    own.resolver.close();
+    resetExposureResolver(own, { aliases: SYMBOL_LIMITS.aliases - 1 });
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots([own.rawRoots[0]], privateCapacityRule),
+      SYMBOL_LIMITS.aliases - 1,
+    );
+  }, 60_000);
+
+  it("does not leak a successful larger context into an unrelated oversized single root", async () => {
+    const own = await privateCapacitySymbolFixture(
+      SYMBOL_LIMITS.collectiveStates,
+      "unrelated-oversized",
+    );
+    const component = own.rawRoots.filter((request) => request.recordId !== "fixture-oversized");
+    const unrelated = own.rawRoots.find((request) => request.recordId === "fixture-oversized");
+    expect(own.resolver.collectiveRawCheckingSlots(component, privateCapacityRule)).toHaveLength(
+      SYMBOL_LIMITS.collectiveStates,
+    );
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots([unrelated], privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+    expectOwnedCapacityRefusal(
+      () =>
+        own.resolver.collectiveRawCheckingSlots(
+          [unrelated, { ...unrelated, recordId: "same-root-alias" }],
+          privateCapacityRule,
+        ),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 60_000);
+
+  it.each(["private-cycle", "mixed-cycle", "public-cycle"])(
+    "preserves the actual %s instead of pruning an ineligible or public state",
+    async (variant) => {
+      const own = await privateCapacitySymbolFixture(6, variant);
+      if (variant === "public-cycle") {
+        for (const [name, file] of [
+          [own.capacity.terminals[0], "capacity-shared.ts"],
+          [own.capacity.branches[0].gates[0], "capacity-helpers.ts"],
+        ]) {
+          const identity = own.resolver.resolveExport({
+            consumerPath: "src/consumer.ts",
+            specifier: "alpha/runtime",
+            exportName: name,
+          }).identities[0];
+          expect(identity.producer.path).toBe(`packages/alpha/src/${file}`);
+        }
+      }
+      expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+        "unsupported-raw-helper-cycle",
+      );
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      ).toThrow("unsupported-raw-helper-cycle");
+    },
+    30_000,
+  );
+
+  it("counts a publicly exposed terminal before refusing the entire oversized union", async () => {
+    const own = await privateCapacitySymbolFixture(
+      SYMBOL_LIMITS.collectiveStates + 1,
+      "public-terminal",
+    );
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      SYMBOL_LIMITS.collectiveStates,
+    );
+  }, 60_000);
+
+  it("preserves a public caller's downstream denial inside an admitted larger graph", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates, "public-gate");
+    const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+    const name = own.capacity.branches[0].gates[0];
+    const identity = own.resolver.resolveExport({
+      consumerPath: "src/consumer.ts",
+      specifier: "alpha/runtime",
+      exportName: name,
+    }).identities[0];
+    expect(slots).toHaveLength(SYMBOL_LIMITS.collectiveStates - 2);
+    expect(slots.some((slot) => slot.path.endsWith("/capacity-shared.ts"))).toBe(false);
+    expect(
+      slots.some(
+        (slot) =>
+          slot.producerIdentity.producer.path === identity.producer.path &&
+          slot.producerIdentity.producer.start === identity.producer.start,
+      ),
+    ).toBe(false);
+  }, 60_000);
+});
+
 function configureExposureConsumer(own) {
   const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
   own.put("packages/exposure-ui/package.json", {
@@ -4128,7 +4451,7 @@ describe("qualified value-star public declaration entries (#3918)", () => {
 
 describe("owner-tagged collective cardinality errors (#3918)", () => {
   it("preserves low-level TypeError refusal and exposes only copied factory-owned counts", async () => {
-    const own = await collectiveSymbolFixture("cardinality");
+    const own = await collectiveSymbolFixture("cardinality", { collectiveStates: 64 });
     const { collectiveHelperBudgetDetails } = await import("../lib/code-quality-symbols.mjs");
     let refusal;
     try {

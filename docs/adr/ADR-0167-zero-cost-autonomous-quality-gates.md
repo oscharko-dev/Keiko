@@ -138,8 +138,19 @@ subpaths. A closed ancestor export map does. This is known Node topology, not a 
 Colocated type-only references are not runtime callers, and direct named type-only reexports retain
 their value-visibility flags before canonical private-exposure resolution. A named import of `default` remains an
 unsupported default edge, rather than an ordinary named-helper alias.
-Existing cumulative compiler/source/node/alias budgets, currentness checks and independently valid
-root slots remain authoritative. The mandatory inventory syntax visitors provide detached private
+The connected private-helper graph has a separate, finite discovered-state ceiling of 256 only
+for a component containing multiple distinct canonical roots. Every root must first complete its
+current individual discovery within 64 states, including that root; a refused or incomplete
+discovery cannot authorize the larger union. The module-owned discovery owner verifies the complete
+connected root set. Cached and uncached successful discovery have the same requirements. Duplicate
+record aliases and disconnected request lists do not acquire the larger ceiling. Public and
+ineligible states still count; they are never pruned to make a component fit. Request/root
+cardinality, individual discovery, alias and depth bounds remain 64. Numeric, captured and
+consumer-binding analysis retain their existing bounds. An oversized union withholds its entire
+helper group, retaining independently valid legacy root slots and every unmatched native finding.
+
+The cumulative 64 MiB source, 5-million-node, two-retained-Program and existing emission/proof
+budgets, currentness checks and independently valid root slots remain authoritative. The mandatory inventory syntax visitors provide detached private
 module facts through a frozen, privately witnessed source/configuration/ownership/membership/output
 receipt. Added traversal uses the same unchanged checked visit ruler before compiler creation;
 each independent compiler seeds that actual preparation cost once and continues the same counter.
