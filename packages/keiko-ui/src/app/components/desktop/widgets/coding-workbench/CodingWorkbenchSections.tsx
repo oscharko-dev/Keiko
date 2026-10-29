@@ -1,3 +1,4 @@
+import { autonomyOptions } from "../../autonomyOptions";
 import {
   useCallback,
   useEffect,
@@ -151,32 +152,6 @@ function runtimePreferenceOptions(
   return [
     { value: "managed-gateway", label: t("codingWorkbench.source.gateway.label") },
     { value: "codex-subscription", label: t("codingWorkbench.source.codex.label") },
-  ];
-}
-
-// Each mode names what the native OpenCode profile does in it; the menu shows the one-line summary
-// and the control's tooltip carries the whole text, including what no mode ever allows.
-function autonomyOptions(t: CodingWorkbenchTranslate): readonly {
-  readonly value: CodingWorkbenchMode;
-  readonly label: string;
-  readonly description: string;
-}[] {
-  return [
-    {
-      value: "governed-assist",
-      label: t("codingWorkbench.mode.governed-assist.label"),
-      description: t("codingWorkbench.mode.governed-assist.short"),
-    },
-    {
-      value: "supervised-coding",
-      label: t("codingWorkbench.mode.supervised-coding.label"),
-      description: t("codingWorkbench.mode.supervised-coding.short"),
-    },
-    {
-      value: "autonomous-delivery",
-      label: t("codingWorkbench.mode.autonomous-delivery.label"),
-      description: t("codingWorkbench.mode.autonomous-delivery.short"),
-    },
   ];
 }
 
@@ -933,7 +908,9 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         showTriggerDescription={false}
         disabled={input.configurationLocked}
         leadingVisual={<CodingWorkbenchIcon size={14} />}
-        sections={[{ options: autonomyOptions(t) }]}
+        sections={[
+          { options: autonomyOptions(t, (mode) => t(`codingWorkbench.mode.${mode}.short`)) },
+        ]}
         onValueChange={(value): void => {
           if (isCodingWorkbenchMode(value)) input.onRequestedModeChange(value);
         }}

@@ -4,13 +4,21 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "75a42ab6a287821667abd598259998b2161c940c2f2e7e61c53134c782e70ae4"
+    "catalogDigest": "3664742a45867b95751354b36579ddabd51ba7bf7b0a60cc76ee858e8ecbd559"
   },
   "autonomyContext": {
     "role": "closed-context",
     "matrixMultiplier": false,
     "modes": ["governed-assist", "supervised-coding", "autonomous-delivery"],
     "carriers": [
+      {
+        "op": "atlassian.action.outcome",
+        "field": "deploymentCeiling"
+      },
+      {
+        "op": "chat.scope.update",
+        "field": "toolMode"
+      },
       {
         "op": "coding-context.pack",
         "field": "effectiveMode"
@@ -59,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 598,
-    "proofCount": 611,
-    "resolvedProofCount": 611,
-    "failureClassCount": 376,
+    "operationCount": 610,
+    "proofCount": 633,
+    "resolvedProofCount": 633,
+    "failureClassCount": 381,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -91,7 +99,12 @@
       "owners": ["keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
+        "atlassian.action.outcome",
+        "atlassian.connection.checked",
+        "atlassian.credential.created",
+        "atlassian.credential.listed",
         "atlassian.credential.rejected",
+        "atlassian.credential.updated",
         "chat.compaction.facts.classified",
         "chat.context.failed",
         "chat.context.management",
@@ -102,10 +115,14 @@
         "chat.creation.intent",
         "chat.creation.rejected",
         "chat.draft.operation",
+        "chat.grounded-tool-round.completed",
         "chat.regeneration.rejected",
         "chat.response.message",
         "chat.scope.update",
         "chat.send.rejected",
+        "chat.tool-mutation",
+        "chat.tool-mutation.projected",
+        "chat.tool-transcript.updated",
         "chat.turn.started",
         "git-change.chat.apply",
         "git-change.chat.description-target.denied",
@@ -294,8 +311,8 @@
     },
     {
       "surface": "tools-workflows",
-      "owners": ["keiko-server"],
-      "ports": ["ServerLogSink"],
+      "owners": ["keiko-mcp", "keiko-server"],
+      "ports": ["ManagedMcpLogPort", "ServerLogSink"],
       "operations": [
         "coding-app-session.browser-approval.state",
         "coding-app-session.channel.closed",
@@ -424,8 +441,10 @@
         "git.ci-repair.budget",
         "git.verified-commit.authority",
         "harness.context.compacted",
+        "mcp.managed.lifecycle",
         "mcp.oauth.issuer.checked",
         "mcp.registry.loaded",
+        "mcp.settings.updated",
         "portable.runtime.native-helper-bound",
         "pr-description.workbench.egress.denied",
         "runtime.confinement.failed",
@@ -562,6 +581,7 @@
       "owners": ["keiko-model-gateway", "keiko-server"],
       "ports": ["ModelGatewayLogSink", "ServerLogSink"],
       "operations": [
+        "chat.tool-authority.operation",
         "dap.debug-runtime.selected",
         "editor.agent.bridge-registration",
         "editor.agent.changeset-provenance",
@@ -776,6 +796,11 @@
     }
   ],
   "failureClassScenarios": {
+    "chat-tool-transcript": ["bff.dependency-failure"],
+    "chat-tool-authority": ["editor-delivery.dependency-failure"],
+    "chat-tool-mutation": ["bff.dependency-failure"],
+    "atlassian-action-execution": ["bff.dependency-failure"],
+    "mcp-managed": ["tools-workflows.dependency-failure"],
     "chat-creation-intent": ["bff.dependency-failure"],
     "chat-draft-persistence": ["bff.dependency-failure"],
     "markdown-skill-library": ["bff.dependency-failure"],
@@ -1198,7 +1223,30 @@
     "server-log.writer-ownership-rejected.registered-line": [
       "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts"
     ],
+    "atlassian.action.outcome.line": [
+      "packages/keiko-server/src/atlassian/actionOutcomeActivity.test.ts",
+      "packages/keiko-server/src/atlassian/syncRoutes.jira.test.ts",
+      "packages/keiko-server/src/atlassian/syncRoutes.test.ts",
+      "packages/keiko-server/src/atlassian/writeActionRoutes.liveSearch.test.ts",
+      "packages/keiko-server/src/atlassian/writeActionRoutes.test.ts"
+    ],
+    "atlassian.connection.checked.line": [
+      "packages/keiko-server/src/atlassian/credentialActivity.test.ts",
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
+    ],
+    "atlassian.connection.checked.observed-authentication": [
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
+    ],
+    "atlassian.credential.created.line": [
+      "packages/keiko-server/src/atlassian/credentialActivity.test.ts"
+    ],
+    "atlassian.credential.listed.line": [
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
+    ],
     "atlassian.credential.rejected.reason": [
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
+    ],
+    "atlassian.credential.updated.line": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
     "chat.compaction.facts.classified.line": [
@@ -1223,6 +1271,9 @@
     ],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.draft.operation.lifecycle": ["packages/keiko-server/src/chat-draft-routes.test.ts"],
+    "chat.grounded-tool-round.completed.schedule": [
+      "packages/keiko-server/src/chat-activity.test.ts"
+    ],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.request.compatibility-retry.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
@@ -1238,8 +1289,52 @@
     "chat.response.streamed.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],
-    "chat.scope.update.outcome": ["packages/keiko-server/src/store-handlers.test.ts"],
+    "chat.scope.update.outcome": [
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts",
+      "packages/keiko-server/src/store-handlers.test.ts",
+      "packages/keiko-server/src/store/chatJiraBinding.test.ts"
+    ],
     "chat.send.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
+    "chat.tool-authority.operation.action-policy": [
+      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts"
+    ],
+    "chat.tool-authority.operation.current-state": [
+      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts"
+    ],
+    "chat.tool-authority.operation.lifecycle": [
+      "packages/keiko-server/src/editor/agentAuthorityRegistry.test.ts"
+    ],
+    "chat.tool-authority.operation.read-grant": [
+      "packages/keiko-server/src/atlassian/actionApprovals.test.ts"
+    ],
+    "chat.tool-authority.operation.read-grant-admission": [
+      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts",
+      "packages/keiko-server/src/store/chatToolReadGrantProjection.test.ts"
+    ],
+    "chat.tool-authority.operation.read-grant-lifecycle": [
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
+    ],
+    "chat.tool-authority.operation.read-consent-route": [
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
+    ],
+    "chat.tool-authority.operation.catalog-read": [
+      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts"
+    ],
+    "chat.tool-authority.operation.late-read-result": [
+      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts"
+    ],
+    "chat.tool-authority.operation.write-approval": [
+      "packages/keiko-server/src/atlassian/chatWriteApprovalState.test.ts"
+    ],
+    "chat.tool-mutation.emitted-line": [
+      "packages/keiko-server/src/store/chatToolMutations.test.ts"
+    ],
+    "chat.tool-mutation.projected.line": [
+      "packages/keiko-server/src/store/chatToolTranscript.test.ts"
+    ],
+    "chat.tool-transcript.updated.line": [
+      "packages/keiko-server/src/store/chatToolTranscript.test.ts"
+    ],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.failed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
@@ -2390,10 +2485,16 @@
     "lsp.spawn.failed.emitted-line": [
       "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
     ],
+    "mcp.managed.lifecycle.line": [
+      "packages/keiko-mcp/src/external-client.test.ts",
+      "packages/keiko-mcp/src/host-protocol.test.ts",
+      "packages/keiko-mcp/src/host.test.ts"
+    ],
     "mcp.oauth.issuer.checked.emitted-line": [
       "packages/keiko-server/src/mcp/mcpOAuthIssuer.test.ts"
     ],
     "mcp.registry.loaded.emitted-line": ["packages/keiko-server/src/mcp/mcpServerRegistry.test.ts"],
+    "mcp.settings.updated.emitted-line": ["packages/keiko-server/src/mcp/mcpSettingsStore.test.ts"],
     "memory-vault.log.sink-failed.body-free": ["packages/keiko-memory-vault/src/vault-log.test.ts"],
     "memory-vault.store.encryption-checkpoint-degraded.state": [
       "packages/keiko-memory-vault/src/schema.test.ts"
@@ -2852,6 +2953,7 @@
       "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.test.ts"
     ],
     "tool-catalog.invocation-settled.emitted-line": [
+      "packages/keiko-server/src/tool-catalog/catalogNonCodingConsumer.test.ts",
       "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
     ],
     "tool-catalog.invocation-started.emitted-line": [

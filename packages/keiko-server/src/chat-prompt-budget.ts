@@ -20,6 +20,7 @@ import {
   AUTOMATIC_COMPACTION_THRESHOLD,
 } from "./chat-compaction-thresholds.js";
 import type {
+  ChatToolExchange,
   ConversationMemoryContextEntryWire,
   MarkdownSkillDocument,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -27,6 +28,8 @@ import type { ChatMessage } from "./store/index.js";
 import {
   usableGatewayMessages,
   gatewayConversationImageAccounting,
+  gatewayMessagesForToolExchange,
+  latestGatewayUserIndex,
 } from "./conversation-gateway.js";
 import {
   CONVERSATION_CONTEXT_BLOCK_HEADER,
@@ -74,6 +77,7 @@ interface PromptAssemblyInput {
     readonly content: string;
     readonly discussionMode: DiscussionMode | undefined;
     readonly imageCount?: number;
+    readonly toolExchanges?: readonly ChatToolExchange[] | undefined;
   };
   readonly profile: ContextProfile;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
@@ -401,8 +405,8 @@ function compactHistoryForBudget(
   }
 }
 
-function buildLatestUserTurn(input: PromptAssemblyInput): string {
-  return withMarkdownSkillInstructions(
+function buildLatestTurn(input: PromptAssemblyInput): GatewayPromptAssembly["messages"] {
+  const content = withMarkdownSkillInstructions(
     composeConversationPrompt(
       input.request.content,
       input.documentContext,
@@ -411,19 +415,20 @@ function buildLatestUserTurn(input: PromptAssemblyInput): string {
     ),
     input.protectedSkill,
   );
+  return [
+    { role: "user", content },
+    ...(input.request.toolExchanges ?? []).flatMap(gatewayMessagesForToolExchange),
+  ];
 }
 
 function promptScaffoldTokens(
-  latestTurn: string,
+  latestTurn: GatewayPromptAssembly["messages"],
   compactionContextText: string | undefined,
   profile: ContextProfile,
   imageCount: number | undefined,
 ): number {
   const messages = gatewayConversationImageAccounting(
-    [
-      ...systemScopedCompactionContextMessage(compactionContextText),
-      { role: "user", content: latestTurn },
-    ],
+    [...systemScopedCompactionContextMessage(compactionContextText), ...latestTurn],
     imageCount,
   );
   return countGatewayPromptTokens({ messages }, profile.tokenAccounting, {
@@ -433,7 +438,7 @@ function promptScaffoldTokens(
 
 function buildPromptMessages(
   historyOutcome: ConversationCompactionOutcome,
-  latestTurn: string,
+  latestTurn: GatewayPromptAssembly["messages"],
   compactionContextText: string | undefined,
   rehydratedContext: string | undefined,
 ): GatewayPromptAssembly["messages"] {
@@ -442,16 +447,15 @@ function buildPromptMessages(
     first?.role === "system" && rehydratedContext !== undefined
       ? [{ ...first, content: `${first.content}\n\n${rehydratedContext}` }, ...rest]
       : historyOutcome.messages;
-  return [
-    ...insertSystemScopedCompactionContext(history, compactionContextText),
-    { role: "user" as const, content: latestTurn },
-  ];
+  return [...insertSystemScopedCompactionContext(history, compactionContextText), ...latestTurn];
 }
 
 function assembleGatewayPromptCandidate(
   input: PromptAssemblyInput,
 ): GatewayPromptAssembly | undefined {
-  const latestTurn = buildLatestUserTurn(input);
+  // Durable observations belong to this protected turn, including Regenerate. Reserve and
+  // count complete call/result pairs before fitting history; they never offer executable tools.
+  const latestTurn = buildLatestTurn(input);
   const continuityContext =
     [input.continuityContextText, input.compactionContextText]
       .filter((text): text is string => text !== undefined)
@@ -495,7 +499,7 @@ function assembleGatewayPromptCandidate(
 
 function fitHistoryProjection(
   input: PromptAssemblyInput,
-  latestTurn: string,
+  latestTurn: GatewayPromptAssembly["messages"],
   scaffoldTokens: number,
 ): ConversationCompactionOutcome | undefined {
   // Reserve the current turn, images and continuity before fitting history. Recount only the
@@ -529,11 +533,7 @@ function assembleSelectedGatewayPrompt(input: {
   readonly earlierCompaction?: ContextCompactionRecord | undefined;
   readonly historyPrefix: readonly ChatMessage[];
   readonly historyTurnCount: number;
-  readonly request: {
-    readonly content: string;
-    readonly discussionMode: DiscussionMode | undefined;
-    readonly imageCount?: number;
-  };
+  readonly request: PromptAssemblyInput["request"];
   readonly profile: ContextProfile;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly compactionContextText?: string | undefined;
@@ -615,7 +615,9 @@ export function selectGatewayPromptAssembly(
   });
   if (compacted?.compaction === undefined) return candidate;
   // Proactive maintenance must not remove this turn's attachments or retrieved memories.
-  if (compacted.messages.at(-1)?.content !== candidate.messages.at(-1)?.content) return candidate;
+  const latestUserContent = candidate.messages[latestGatewayUserIndex(candidate.messages)]?.content;
+  if (compacted.messages[latestGatewayUserIndex(compacted.messages)]?.content !== latestUserContent)
+    return candidate;
   return withAdaptiveOutputAllocation(compacted, input.profile, input.request.imageCount);
 }
 
@@ -635,6 +637,7 @@ function adjustLatestPromptOutputBudget<
           input.request.discussionMode,
         ),
       },
+      ...(input.request.toolExchanges ?? []).flatMap(gatewayMessagesForToolExchange),
     ],
     input.request.imageCount,
   );

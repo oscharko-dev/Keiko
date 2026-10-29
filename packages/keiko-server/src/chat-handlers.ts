@@ -1,9 +1,19 @@
 import {
+  createChatToolTurn,
+  scopeChatToolTurn,
+  type ChatToolTurnPort,
+} from "./chat-tool-runtime.js";
+import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
+import {
   deploymentContentPolicy,
   currentContentRedactor,
   withChatContentPolicy,
 } from "./content-redactor.js";
 import { raceAbort } from "./abort-race.js";
+import {
+  mappedConversationReadinessError,
+  conversationModelNotReadyResult,
+} from "./conversation-readiness-admission.js";
 import { logChatCreationIntent } from "./store/chatCreationIntents.js";
 import { resolveRegisteredWorkspaceProjectPath } from "./workspace-root-identity.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
@@ -16,7 +26,8 @@ import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
 import { conversationSystemPrompt } from "./conversation-prompt.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { hasGroundingScope } from "./chat-grounding.js";
+import { hasGroundingScope, hasMixedJiraGroundingScope } from "./chat-grounding.js";
+import { runMixedGroundedChat } from "./grounded-qa.js";
 import {
   withAdoptedContextWindowRetry,
   type ContextWindowAttempt,
@@ -129,7 +140,15 @@ import {
 } from "./store/chat-grounding-scope-identity.js";
 export { parseExpectedGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { redact } from "@oscharko-dev/keiko-security";
-import type { UiHandlerDeps } from "./deps.js";
+import {
+  type UiHandlerDeps,
+  currentAuditRedactString,
+  currentConversationReady,
+  currentConversationReadinessObservation,
+  currentContextProfileForModel,
+  currentGatewayConfig,
+  currentRedactionSecrets,
+} from "./deps.js";
 // Issue #3400 (epic #3384, contract correction 4): the server-minted description authority
 // (#3399) that admits model egress of git-change snapshot content outside a running Code task.
 // Read-only consumption of the existing owning module — never redefined here.
@@ -162,17 +181,7 @@ import {
 } from "./coding-context/githubIssueReaderAuthorization.js";
 import { hasOnlyAllowedKeys } from "./gitDelivery/requestGuards.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import {
-  currentAuditRedactString,
-  currentConversationReady,
-  currentConversationReadinessObservation,
-  currentContextProfileForModel,
-  currentGatewayConfig,
-  currentRedactionSecrets,
-} from "./deps.js";
-import type { RouteContext, RouteResult } from "./routes.js";
-import { errorBody } from "./routes.js";
-import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
+import { type RouteContext, type RouteResult, errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
@@ -255,8 +264,8 @@ import {
   MAX_CONTEXT_MESSAGES,
   usableGatewayMessages,
   withGatewayConversationImages,
+  type GatewayConversationMessage,
 } from "./conversation-gateway.js";
-import type { GatewayConversationMessage } from "./conversation-gateway.js";
 import {
   beginAppSessionOperation,
   resolveAppSessionReadAuthority,
@@ -516,12 +525,37 @@ class ChatPromptPreparationRejection extends Error {
   }
 }
 
+const CHAT_TOOL_ERROR_RESPONSES: Readonly<
+  Record<CatalogDispatchFault["status"], readonly [number, string, string]>
+> = {
+  denied: [403, "FORBIDDEN", "Chat tool access is not authorized for this turn."],
+  invalid: [400, "INVALID_REQUEST", "Chat tool preparation was refused."],
+  busy: [409, "CONFLICT", "Chat tools are busy. Wait for the active operation to finish."],
+  cancelled: [499, "REQUEST_CANCELLED", "Request was cancelled."],
+  timeout: [504, "CHAT_TOOL_TIMEOUT", "Chat tool preparation timed out."],
+  failed: [503, "CHAT_TOOL_UNAVAILABLE", "Chat tools are currently unavailable."],
+};
+
+function catalogDispatchErrorResult(
+  error: CatalogDispatchFault,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  emitDiagnostic: boolean,
+): RouteResult {
+  if (emitDiagnostic)
+    emitGatewayErrorDiagnostic(deps, error, correlationId, "POST /api/desktop/chat", "chat.send");
+  const [status, code, message] = CHAT_TOOL_ERROR_RESPONSES[error.status];
+  return { status, body: errorBody(code, message, correlationId) };
+}
+
 export function desktopChatErrorResult(
   error: unknown,
   deps: UiHandlerDeps,
   correlationId?: string,
   emitDiagnostic = true,
 ): RouteResult {
+  const readiness = mappedConversationReadinessError(error);
+  if (readiness !== undefined) return readiness;
   if (error instanceof ChatPromptPreparationRejection) return error.result;
   if (error instanceof ConversationAttachmentStoreError) {
     return {
@@ -532,6 +566,8 @@ export function desktopChatErrorResult(
   if (error instanceof GatewayError) {
     return gatewayErrorResult(error, deps, correlationId, emitDiagnostic);
   }
+  if (error instanceof CatalogDispatchFault)
+    return catalogDispatchErrorResult(error, deps, correlationId, emitDiagnostic);
   if (error instanceof UiStoreError) {
     return {
       status: error.status,
@@ -1206,7 +1242,8 @@ export function completeDesktopChatTurn(
   assistantMessage: ChatMessage,
 ): readonly [ChatMessage, ChatMessage] {
   const { request, turnIdentityContent } = prepared;
-  if (request.clientTurnId === undefined) return [userMessage, assistantMessage];
+  if (request.clientTurnId === undefined)
+    return [deps.store.findMessageById(userMessage.id) ?? userMessage, assistantMessage];
   const completion = deps.store.completeChatTurn(
     request.chatId,
     request.clientTurnId,
@@ -1896,10 +1933,10 @@ export function buildGatewayAssembly(
   snapshot: GatewayTurnSnapshot,
   correlationId?: string,
 ): GatewayPromptAssembly {
-  const hasCurrentUser = snapshot.history.some(
+  const currentUser = snapshot.history.find(
     (message) => message.id === snapshot.currentUserMessageId,
   );
-  if (!hasCurrentUser) {
+  if (currentUser === undefined) {
     throw new UiStoreError("INTERNAL", "Admitted chat turn is missing from its history.", 500);
   }
   const historyPrefix = gatewayHistoryPrefix(snapshot);
@@ -1912,6 +1949,7 @@ export function buildGatewayAssembly(
       content: request.content,
       discussionMode: request.discussionMode,
       imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
+      toolExchanges: currentUser.toolTranscript?.exchanges,
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
@@ -2444,6 +2482,7 @@ function buildBufferedGatewayAssembly(
 // The per-attempt inputs of one buffered assembly: the turn's abort signal and correlation, and the
 // context-window attempt that decides whether a failure is retried with the adopted window.
 interface BufferedAssemblyAttempt {
+  readonly toolTurn?: ChatToolTurnPort | undefined;
   readonly signal: AbortSignal;
   readonly correlationId: string | undefined;
   readonly attempt: ContextWindowAttempt;
@@ -2497,17 +2536,18 @@ function callPreparedAssembly(
   assembly: GatewayPromptAssembly,
   signal: AbortSignal,
   correlationId: string | undefined,
+  toolTurn: ChatToolTurnPort | undefined,
 ): Promise<NormalizedResponse> {
-  return model.call(
-    {
-      modelId,
-      messages: assembly.messages,
-      ...gatewayAssemblyOutputAllocation(assembly),
-      stream: false,
-      logContext: { correlationId },
-    },
-    signal,
-  );
+  const request = {
+    modelId,
+    messages: assembly.messages,
+    ...gatewayAssemblyOutputAllocation(assembly),
+    stream: false,
+    logContext: { correlationId },
+  };
+  return toolTurn === undefined
+    ? model.call(request, signal)
+    : toolTurn.call(model, request, signal);
 }
 
 // One assembled attempt: plans the prompt from the CURRENT context profile, re-checks the provider
@@ -2555,8 +2595,30 @@ async function assembleAndCallBuffered(
     assembly,
     abortSignal,
     correlationId,
+    run.toolTurn,
   );
   return { assembly, response };
+}
+
+async function prepareBufferedToolTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admitted: AdmittedTurnHandle,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<ChatToolTurnPort | undefined> {
+  try {
+    return await createChatToolTurn(
+      deps,
+      prepared.modelId,
+      admitted.userMessage,
+      signal,
+      correlationId,
+    );
+  } catch (error) {
+    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    throw error;
+  }
 }
 
 async function executeBufferedModelTurn(
@@ -2568,41 +2630,89 @@ async function executeBufferedModelTurn(
   correlationId: string | undefined,
   onAdmitted: () => void,
 ): Promise<RouteResult> {
-  const { modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
   onAdmitted();
   const { admitted } = outcome;
-  const { userMessage } = admitted;
-  const snapshot = captureAdmittedSnapshot(deps, prepared, admitted, abortSignal, correlationId);
-  const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
+  const toolTurn = await prepareBufferedToolTurn(
+    deps,
+    prepared,
+    admitted,
+    abortSignal,
+    correlationId,
+  );
+  const turnDeps = scopeChatToolTurn(deps, toolTurn);
+  const snapshot = captureAdmittedSnapshot(
+    turnDeps,
+    prepared,
+    admitted,
+    abortSignal,
+    correlationId,
+  );
+  const memory = await resolveBufferedMemory(
+    turnDeps,
+    prepared,
+    admitted,
+    abortSignal,
+    correlationId,
+  );
   if (isRouteResult(memory)) return memory;
+  return executePreparedBufferedModelTurn(turnDeps, prepared, outcome, {
+    memory,
+    snapshot,
+    toolTurn,
+    abortSignal,
+    messageCountBeforeTurn,
+    startedAt,
+    correlationId,
+  });
+}
+
+interface PreparedBufferedRun {
+  readonly memory: ConversationMemoryResultWire;
+  readonly snapshot: GatewayTurnSnapshot;
+  readonly toolTurn: ChatToolTurnPort | undefined;
+  readonly abortSignal: AbortSignal;
+  readonly messageCountBeforeTurn: number;
+  readonly startedAt: number;
+  readonly correlationId: string | undefined;
+}
+async function executePreparedBufferedModelTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  outcome: {
+    readonly admitted: AdmittedTurnHandle;
+    readonly executionAdmission: DesktopChatExecutionAdmission;
+  },
+  run: PreparedBufferedRun,
+): Promise<RouteResult> {
   const called = await withAdoptedContextWindowRetry(
     deps,
-    { modelId, surface: "chat-buffered", correlationId },
+    { modelId: prepared.modelId, surface: "chat-buffered", correlationId: run.correlationId },
     (attempt) =>
-      assembleAndCallBuffered(deps, prepared, memory, outcome, snapshot, {
-        signal: abortSignal,
-        correlationId,
+      assembleAndCallBuffered(deps, prepared, run.memory, outcome, run.snapshot, {
+        signal: run.abortSignal,
+        correlationId: run.correlationId,
         attempt,
+        toolTurn: run.toolTurn,
       }),
   );
   if (isRouteResult(called)) return called;
   const { assembly, response } = called;
-  const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
+  const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, run.abortSignal);
   if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
     deps,
     prepared,
-    memory,
-    { userMessage, response },
-    abortSignal,
+    run.memory,
+    { userMessage: outcome.admitted.userMessage, response },
+    run.abortSignal,
     {
       assembly,
-      messageCount: messageCountBeforeTurn,
-      startedAt,
-      historyPrefix: gatewayHistoryPrefix(snapshot),
-      correlationId,
+      messageCount: run.messageCountBeforeTurn,
+      startedAt: run.startedAt,
+      historyPrefix: gatewayHistoryPrefix(run.snapshot),
+      correlationId: run.correlationId,
     },
   );
 }
@@ -3843,6 +3953,8 @@ export async function handleSendDesktopChat(
     const parsed = await parseDesktopChatSend(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(parsed)) return parsed;
+    if (hasMixedJiraGroundingScope(parsed.chat))
+      return await runMixedGroundedChat(parsed, deps, cancellation.signal, ctx.correlationId);
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
     const gitChangeDenial = admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);

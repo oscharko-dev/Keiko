@@ -82,6 +82,7 @@ async function pluginHarness(
         KEIKO_TOOL_FACADE_CAPABILITY: "capability",
         KEIKO_CODING_RUN_ID: "run-plugin",
         KEIKO_CODING_MODE: mode,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { servers: { synthetic: {} } } }),
       },
     },
     fetch,
@@ -356,4 +357,19 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     }
     expect(harness.requests).toHaveLength(0);
   });
+});
+
+it("forwards MCP input only for the server-owned configured namespace", async () => {
+  const harness = await pluginHarness();
+  const input = { text: "private synthetic text" };
+  await harness.evaluate({
+    sessionID: "ses_plugin",
+    action: "synthetic_create_note",
+    resources: [],
+    effect: "allow",
+    metadata: { input },
+  });
+  expect(harness.requests[0]).toMatchObject({ mcpInput: input });
+  await harness.evaluate({ ...event([]), metadata: { input } });
+  expect(harness.requests[1]).not.toHaveProperty("mcpInput");
 });

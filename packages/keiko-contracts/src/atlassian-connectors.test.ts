@@ -6,6 +6,8 @@ import {
   ATLASSIAN_CONNECTOR_ACTION_PROVIDER,
   ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE,
   ATLASSIAN_CONNECTOR_ACTION_TYPES,
+  JIRA_MANAGED_ACTION_TYPES,
+  JIRA_MANAGED_READ_TOOLS,
   ATLASSIAN_CONNECTOR_AUTH_SCHEMES,
   ATLASSIAN_CONNECTOR_PROVIDERS,
   ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON,
@@ -202,6 +204,126 @@ const D4_TABLE: readonly D4Row[] = [
       "autonomous-delivery": "allowed",
     },
   },
+  {
+    action: "jira.projects",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.issue-types",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.create-fields",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.edit-fields",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.search",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.issue",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.comments",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.transitions",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.assignable-users",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "assign-issue",
+    provider: "jira",
+    actionClass: "connector-write",
+    scope: "issue-tracker.write",
+    risk: "medium",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
 ];
 
 const ALL_SCOPES: readonly CodingWorkbenchConnectorScope[] = CODING_WORKBENCH_CONNECTOR_SCOPES;
@@ -239,7 +361,7 @@ describe("CodingWorkbenchConnectorScope extension (ADR-0128 D4)", () => {
 });
 
 describe("D4 effect-class mapping table (ADR-0128)", () => {
-  it("covers exactly the ten D4 action rows", () => {
+  it("covers every D4 action row including managed Jira capabilities", () => {
     expect(ATLASSIAN_CONNECTOR_ACTION_TYPES).toEqual(D4_TABLE.map((row) => row.action));
   });
 
@@ -316,7 +438,7 @@ describe("decideAtlassianConnectorAction — full D4 matrix (action × mode × s
 
   it("denies every write action with connector-write-denied when the write scope is absent, including Full access", () => {
     const writeRows = D4_TABLE.filter((row) => row.actionClass === "connector-write");
-    expect(writeRows).toHaveLength(7);
+    expect(writeRows).toHaveLength(8);
     for (const row of writeRows) {
       for (const mode of CODING_WORKBENCH_MODES) {
         const decision = decideAtlassianConnectorAction(row.action, mode, scopesWithout(row.scope));
@@ -1196,5 +1318,32 @@ describe("validateAtlassianConnectorPendingApproval — contentPreview wiring (K
       ok: false,
       errors: ["approval.contentPreview and approval.contentPreviewUnavailable are exclusive"],
     });
+  });
+});
+
+it.each([
+  "jira.projects",
+  "jira.issue-types",
+  "jira.create-fields",
+  "jira.edit-fields",
+  "jira.search",
+  "jira.issue",
+  "jira.comments",
+  "jira.transitions",
+  "jira.assignable-users",
+  "assign-issue",
+])("recognizes governed Jira capability %s in the shared policy vocabulary", (action) => {
+  expect(isAtlassianConnectorActionType(action)).toBe(true);
+});
+
+it("maps every managed Jira tool to one existing connector-policy action", () => {
+  for (const name of JIRA_MANAGED_READ_TOOLS) expect(JIRA_MANAGED_ACTION_TYPES[name]).toBe(name);
+  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(14);
+  expect(JIRA_MANAGED_ACTION_TYPES).toMatchObject({
+    "jira.create": "create-issue",
+    "jira.edit": "update-issue-fields",
+    "jira.assign": "assign-issue",
+    "jira.comment": "add-issue-comment",
+    "jira.transition": "transition-issue",
   });
 });

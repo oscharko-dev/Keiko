@@ -22,7 +22,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["applied", "conflict", "cancellation-requested"],
+      values: ["applied", "conflict", "cancellation-requested", "denied"],
     },
     expectedScopeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     actualScopeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -30,6 +30,14 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
     connectedSourceCount: { type: "integer", dataClass: "count", required: true },
     localKnowledgeSourceCount: { type: "integer", dataClass: "count", required: true },
     gitChangeSourceCount: { type: "integer", dataClass: "count", required: true },
+    jiraSourceCount: { type: "integer", dataClass: "count", required: false },
+    jiraBindingGeneration: { type: "integer", dataClass: "count", required: false },
+    toolMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
     cancelledGenerationCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -43,7 +51,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
 });
 
 export function logChatScopeUpdate(
-  outcome: "applied" | "conflict" | "cancellation-requested",
+  outcome: "applied" | "conflict" | "cancellation-requested" | "denied",
   existing: Chat,
   result: Chat,
   patch: UpdateChatPatch,
@@ -51,12 +59,15 @@ export function logChatScopeUpdate(
   cancelledGenerationCount?: number,
 ): void {
   const expected = patch.expectedGroundingScopeIdentity;
+  let status = 200;
+  if (outcome === "conflict") status = 409;
+  else if (outcome === "denied") status = 400;
   processServerLogSink().write(
     activityLogEvent(
       CHAT_SCOPE_UPDATE,
       {
         correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-        status: outcome === "conflict" ? 409 : 200,
+        status,
       },
       {
         outcome,
@@ -67,9 +78,23 @@ export function logChatScopeUpdate(
         actualScopeDigest: deriveChatGroundingScopeIdentity(existing).slice("gsi-v1:".length),
         resultScopeDigest: deriveChatGroundingScopeIdentity(result).slice("gsi-v1:".length),
         ...chatGroundingSourceCounts(result),
+        ...jiraStateEvidence(result),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
+}
+
+function jiraStateEvidence(chat: Chat): {
+  readonly jiraSourceCount?: number;
+  readonly jiraBindingGeneration?: number;
+  readonly toolMode?: NonNullable<Chat["toolMode"]>;
+} {
+  if ((chat.jiraBindingGeneration ?? 0) === 0) return {};
+  return {
+    jiraSourceCount: Number(chat.jiraPodBinding !== undefined),
+    jiraBindingGeneration: chat.jiraBindingGeneration ?? 0,
+    toolMode: chat.toolMode ?? "governed-assist",
+  };
 }

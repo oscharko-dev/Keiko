@@ -4439,6 +4439,67 @@ describe("desktop chat SSE streaming handler", () => {
     }
   });
 
+  it("pauses model iterator pulls after a false write until the response drains", async () => {
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    captured.writeReturns = false;
+    let drained = false;
+    Object.defineProperty(captured.res, "writableNeedDrain", {
+      get: () => captured.writes.length > 0 && !drained,
+    });
+    const next = vi
+      .fn<() => Promise<IteratorResult<GatewayStreamChunk>>>()
+      .mockResolvedValueOnce({
+        done: false,
+        value: { type: "delta", token: "First answer block.\n\nSecond block" },
+      })
+      .mockResolvedValueOnce({
+        done: false,
+        value: {
+          type: "done",
+          response: normalizedResponse("First answer block."),
+        },
+      });
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("buffered")),
+      callStream: () => ({ [Symbol.asyncIterator]: () => ({ next }) }),
+    };
+    const outcome = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "respect the reader pace",
+        }),
+        captured.res,
+      ),
+      deps(model),
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(parseSse(captured.writes).map((record) => record.event)).toContain("token");
+      });
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(captured.ended).toBe(false);
+      expect(captured.destroyed).toBe(false);
+
+      drained = true;
+      captured.writeReturns = true;
+      captured.emitDrain();
+      await outcome;
+
+      expect(next).toHaveBeenCalledTimes(2);
+      expect(parseSse(captured.writes).map((record) => record.event)).toContain("done");
+      expect(captured.destroyed).toBe(false);
+    } finally {
+      drained = true;
+      captured.writeReturns = true;
+      captured.emitDrain();
+      await outcome;
+    }
+  });
+
   it("keeps the stream open when a false write is followed by drain", async () => {
     vi.useFakeTimers();
     try {

@@ -325,6 +325,7 @@ export type {
   Chat,
   ChatConnectedScope,
   ChatLocalKnowledgeScope,
+  ChatConnectorSelection,
   ChatRole,
   ChatTurnState,
   ChatAssistantResponseVersion,

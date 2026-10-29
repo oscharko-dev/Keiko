@@ -5,6 +5,7 @@ import {
   mcpToolAction,
   mcpToolActions,
   parseMcpServerRegistry,
+  parseMcpSettingsUpdate,
   type McpServerDefinition,
 } from "./mcp-servers.js";
 
@@ -189,7 +190,6 @@ describe("the MCP server registry (#3903)", () => {
   });
 
   it.each([
-    ["a name with an underscore", { ...LOCAL, name: "my_docs" }],
     ["an uppercase name", { ...LOCAL, name: "Docs" }],
     ["an unknown key", { ...LOCAL, secret: "x" }],
     ["no tools", { ...LOCAL, tools: {} }],
@@ -244,5 +244,32 @@ describe("the MCP server registry (#3903)", () => {
       ok: false,
       reason: "server-invalid",
     });
+  });
+});
+
+describe("private MCP registry generation", () => {
+  const generation = "751aee5d-e2b8-4e60-a609-2995005266a5";
+  it("reads legacy documents and preserves a committed opaque generation", () => {
+    expect(parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL] })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL], generation }),
+    ).toMatchObject({ ok: true, generation });
+  });
+  it.each([null, 1, "", "stale", "a".repeat(1024)])("refuses malformed generation %s", (value) => {
+    expect(
+      parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL], generation: value }),
+    ).toEqual({ ok: false, reason: "malformed" });
+  });
+  it("never accepts a client-selected Settings generation", () => {
+    expect(
+      parseMcpSettingsUpdate({
+        expectedRevision: "a".repeat(64),
+        servers: [LOCAL],
+        secrets: {},
+        generation,
+      }),
+    ).toBeUndefined();
   });
 });

@@ -410,6 +410,20 @@ export class CodingRuntimeHistory {
     return this.store.codingHistory?.forRun(runId);
   }
 
+  public bindNativeTurn(runId: string, nativeMessageId: string, text: string): void {
+    const history = this.store.codingHistory;
+    const task = history?.forRun(runId);
+    if (history === undefined || task === undefined) throw new Error("Coding History unavailable.");
+    history.bindNativeTurn(runId, nativeMessageId, text);
+    recordHistory(this.log, "captured", {
+      correlationId: runId,
+      runId,
+      conversationId: task.id,
+      messageCount: 1,
+      captureSource: "native-history",
+    });
+  }
+
   public admits(id: string | undefined, active: ActiveWorkspaceView): boolean {
     if (id === undefined) return true;
     return this.taskIn(id, active.instance);

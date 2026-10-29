@@ -2,14 +2,15 @@
 // token flow), verifies, manages (scope + sync), and deletes with confirmation. Whole-panel axe
 // runs in light AND dark.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { AtlassianConnectorsPanel } from "./AtlassianConnectorsPanel";
-import type {
-  AtlassianConnectorMetadata,
-  AtlassianConnectorsClient,
+import {
+  ATLASSIAN_CONNECTORS_CHANGED_EVENT,
+  type AtlassianConnectorMetadata,
+  type AtlassianConnectorsClient,
 } from "@/lib/atlassian-connectors-api";
 
 const DOCS: AtlassianConnectorMetadata = {
@@ -32,6 +33,7 @@ function makeClient(overrides: Partial<AtlassianConnectorsClient> = {}): Atlassi
   return {
     listConnectors: vi.fn(async () => [DOCS]),
     createConnector: vi.fn(async () => NEWONE),
+    updateConnector: vi.fn(async () => DOCS),
     deleteConnector: vi.fn(async () => ({ ok: true as const })),
     verifyConnector: vi.fn(async () => ({ authRef: DOCS.authRef, status: "ok" as const })),
     startSync: vi.fn(async () => ({ job: { jobId: "j", status: "pending" } as never })),
@@ -72,6 +74,43 @@ describe("AtlassianConnectorsPanel", () => {
     await user.click(screen.getByRole("button", { name: "Save connector" }));
     expect(await screen.findByText("Ops")).toBeInTheDocument();
   });
+  it("retains a newly created connector when an earlier list response arrives late", async () => {
+    let finish: ((value: readonly AtlassianConnectorMetadata[]) => void) | undefined;
+    const client = makeClient({
+      listConnectors: vi.fn(
+        () =>
+          new Promise<readonly AtlassianConnectorMetadata[]>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<AtlassianConnectorsPanel client={client} />);
+    await user.click(screen.getByRole("button", { name: "Add connector" }));
+    await user.type(screen.getByLabelText("Label"), "Ops");
+    await user.type(screen.getByLabelText("Base URL"), "https://x.atlassian.net");
+    await user.type(screen.getByLabelText("Account email"), "me@example.com");
+    await user.type(screen.getByLabelText("API token"), "synthetic-pat");
+    await user.click(screen.getByRole("button", { name: "Save connector" }));
+    expect(await screen.findByText("Ops")).toBeVisible();
+    await act(async () => {
+      finish?.([]);
+    });
+    expect(screen.getByText("Ops")).toBeVisible();
+  });
+  it("observes credential changes through an authoritative GET", async () => {
+    const client = makeClient({
+      listConnectors: vi.fn().mockResolvedValueOnce([DOCS]).mockResolvedValue([]),
+    });
+    render(<AtlassianConnectorsPanel client={client} />);
+    expect(await screen.findByText("Docs")).toBeVisible();
+    act(() => {
+      window.dispatchEvent(new Event(ATLASSIAN_CONNECTORS_CHANGED_EVENT));
+    });
+    await waitFor(() => expect(screen.queryByText("Docs")).toBeNull());
+    expect(client.listConnectors).toHaveBeenCalledTimes(2);
+    expect(client.deleteConnector).not.toHaveBeenCalled();
+  });
 
   it("verifies a connector inline and reveals the sync surface on manage", async () => {
     const user = userEvent.setup();
@@ -110,4 +149,51 @@ describe("AtlassianConnectorsPanel", () => {
     }
     document.documentElement.removeAttribute("data-theme");
   });
+});
+
+it("shows only owned Live Pods in the Hub without sync or legacy approvals", async () => {
+  const user = userEvent.setup();
+  const live: AtlassianConnectorMetadata = {
+    ...DOCS,
+    provider: "jira",
+    deployment: "data-center",
+    authScheme: "bearer-pat",
+    generation: 1,
+    displayName: "Live Jira",
+    livePod: {
+      kind: "jira-live",
+      podId: "pod-one",
+      authenticationGeneration: 1,
+      verificationRevision: 1,
+      verificationStatus: "ok",
+      verificationInProgress: false,
+      capabilities: ["live-read"],
+    },
+  };
+  const client = makeClient({ listConnectors: vi.fn(async () => [DOCS, live]) });
+  const { container } = render(<AtlassianConnectorsPanel client={client} jiraLive />);
+  const card = await screen.findByTestId("acx-connector");
+  expect(card).toHaveTextContent("Live Jira");
+  expect(card).toHaveTextContent("Connection verified");
+  expect(screen.queryByText("Docs")).toBeNull();
+  expect(screen.queryByRole("button", { name: /manage/i })).toBeNull();
+  expect(client.listApprovals).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Create Jira Pod" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Verify connection" }));
+  await waitFor(() => expect(client.listConnectors).toHaveBeenCalledTimes(2));
+  expect(await axe(container)).toHaveNoViolations();
+});
+
+it("describes an empty live Jira Hub without offering a connector sync", async () => {
+  render(
+    <AtlassianConnectorsPanel
+      jiraLive
+      client={makeClient({ listConnectors: vi.fn(async () => []) })}
+      pollIntervalMs={100000}
+    />,
+  );
+  expect(
+    await screen.findByText("No Jira Pods yet. Create one to connect Jira to a Chat."),
+  ).toBeVisible();
+  expect(screen.queryByText(/sync Confluence spaces/u)).toBeNull();
 });

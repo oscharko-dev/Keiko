@@ -39,8 +39,12 @@ binds it to those owners; it adds no parallel execution, policy, search or evide
 | Adapter projection semantics | catalog compiler | consumers materialize only the compiled result |
 | Approved-skill state and effects | existing server-approved skill catalog and governed skill handler; the catalog owns only the `keiko.skill.discover` descriptor and its projection | #3417 |
 
-The new pure package depends only on contracts and security. It cannot import I/O, providers,
-handlers, credentials, readiness, log sinks or policy evaluators. Server composition alone injects
+The pure package's internal dependencies are only contracts and security. Its external-schema
+compiler alone may import exactly `ajv`, `ajv/dist/2019.js`, `ajv/dist/2020.js` and `ajv-formats`
+for bounded synchronous validation (D3), without a remote schema loader or I/O configuration.
+Every other third-party import, arbitrary validator internal subpath, and validator import outside
+that owner remains denied. It cannot import I/O, providers, handlers, credentials, readiness,
+log sinks or policy evaluators. Server composition alone injects
 live authority, root, action, correlation, idempotency, handler and budget ports. Generic types do
 not reference the server. Browser types remain JSON-safe BFF projections with no handlers,
 Authority Envelopes, approval proofs, environment, credentials, filesystem handles or server roots.
@@ -127,11 +131,31 @@ existing security producer over `canonicalise({domain, ...fields})`, then `sha25
 ASCII identity and reject duplicates before hashing; preserve semantically ordered arrays. Reject
 undefined, non-finite numbers, prototypes, accessors, functions, symbols, cycles, unsafe refs,
 unknown keys and inputs exceeding the table's depth/width/byte bounds before canonicalization.
-Schemas are a closed, bounded JSON Schema subset; unsupported dialect semantics are incompatibility,
-never silently omitted keywords. #3406 owns the explicit keyword allowlist and equivalence tests.
+Internal schemas retain their closed, bounded JSON Schema subset; unsupported dialect semantics
+are incompatibility, never silently omitted keywords. #3406 owns that keyword allowlist and its
+equivalence tests. Configured external MCP tools (#4081/#4089, PR #4093) use a separate explicit
+JSON Schema dialect through `compileExternalCatalogSchema`: 2020-12 by MCP default, or an explicit
+2019-09 or draft-07 declaration. Ajv validates the exact admitted schema, including optional fields,
+open objects, schema-valued maps, unions, composition, local references and supported standard
+formats. Defaults remain annotations; validation never inserts defaults, coerces values, removes
+properties or prunes constraints. Gateway projections retain the admitted schema. Existing managed
+OpenCode built-in projections retain their lossless closed/required-field invariant.
 
-Descriptor/projection/catalog digest inputs are trusted local source declarations and **never
-customer content**. Description, transformed input/result schemas, effects/actions/policy references,
+External schemas are untrusted metadata. Before either catalog compilation or the external MCP
+SDK's argument/result validation, the shared contracts guard bounds the schema to 64 KiB, JSON
+depth 16, 128 entries per container, 2,048 JSON nodes, 256 schema nodes and 2,048 expanded reference
+work units. References must resolve locally through JSON Pointers and form an acyclic graph of
+height at most 16; remote references, IDs/anchors, dynamic/recursive references and asynchronous
+schemas are unsupported. Regex admission uses the existing conservative safety check plus an
+explicit linear exception: one completely anchored ASCII character-class or character-escape
+atom with at most one quantifier. Groups, competing repetitions and other unsupported regex
+grammar do not acquire an exception. The `regex` data format is refused. Ajv's format support is
+explicitly limited to date/time/duration, URI/reference/template, email/hostname, IP, UUID and JSON
+Pointer formats; unknown keywords or formats fail closed. The compiler cache is bounded to 64
+entries. These are compatibility limits, not claims to implement every JSON Schema extension.
+
+Descriptor/projection/catalog digest inputs are local source declarations or admitted external
+MCP tool metadata, **never tool arguments or results**. Description, transformed input/result schemas, effects/actions/policy references,
 handler requirement, bounds, alias, profile, catalog revision and exact adapter identity all bind
 the projection. Native extensions and accepted compatibility transforms bind it too. Generated
 manifests expose IDs, versions, digests, bounds and enums; omit descriptions and schemas.
@@ -139,7 +163,13 @@ manifests expose IDs, versions, digests, bounds and enums; omit descriptions and
 The request/cursor domains serve a different, transient binder purpose. Canonical arguments can
 enter an invocation-scoped request digest only inside server memory; include a server nonce chosen once for that server-held idempotency binding, reused only for request comparisons inside the same binding. A new binding receives a fresh nonce. Same-key/same-arguments replay therefore retains the same request identity; low-entropy queries cannot be recovered from a stable public hash. Neither arguments, nonce nor
 request/cursor digest enter the generated catalog or durable evidence. Opaque cursor tokens address
-server-held entries; the catalog compiler never creates cursors or handles customer input.
+server-held entries; the catalog compiler never creates cursors or handles customer input. The request and cursor v2 domains include the captured consumer-scope digest:
+workspace identity/revision for Coding, or the server-owned scope of another consumer.
+An offer, admitted invocation and continuation must still match that scope. A newer
+offer cannot refresh the scope of an invocation already in flight. These transient
+in-memory cursors expire normally and do not migrate across server restarts. Consumer
+scope fields are never accepted from model arguments or written to lifecycle evidence.
+
 
 Compatibility entries are `{from, to, profile, adapter, transformId, ownerIssue, expiresAt,
 removalIssue}` with exact versions/digests, an explicit direction and tested non-widening transforms.
@@ -160,7 +190,7 @@ checks remain unchanged.
 
 `offer = profile intent ∩ representable ∩ bound-and-ready ∩ live-authority-eligible ∩ budgeted`.
 
-An offer minted for one model request lives exactly as long as that request can: its expiry is the
+The native OpenCode offer minted for one model request lives as long as that request can: its expiry is the
 request deadline the gateway enforces for the model (the provider's `timeoutMs`) plus the bridge's
 settlement grace, never a fixed constant. A fixed 30 s offer expired under a legitimately long
 generation (a ~6k-token changeset call took 49 s), the response's calls bound against a dead offer as
@@ -168,6 +198,11 @@ generation (a ~6k-token changeset call took 49 s), the response's calls bound ag
 (2026-09-10). A response later than the deadline has already been aborted, so the deadline-derived
 lifetime refuses nothing legitimate and admits nothing stale; the bridge logs the offer's remaining
 lifetime at projection time so an expiry is reconstructable from the activity log alone.
+For the shared server catalog binder, the existing consumer deadline and authority expiry jointly
+bound the offer: `min(consumer.deadlineAt, authorityExpiresAt)`. This adds no grace or budget to the
+consumer. Its former fixed 30-second offer also refused valid normal-Chat Jira responses when model
+generation outlasted that lease (2026-10-29). The regression admits a response at49 seconds inside
+a90-second turn and refuses arrivals at either admitted bound; no new deadline is created.
 An offer bounds admission, not the call it admitted: an invocation admitted under a live offer keeps
 it through its own settlement, bounded by its descriptor's budget, the live authority, the workspace
 revision and its handler's readiness, so an effect that starts after a long step or a human decision
@@ -301,7 +336,16 @@ truncated, recovery-required or running status may enter this envelope.
 | `effectStarted` | Boolean; false for pre-effect rejection, conservative true if an effect may have started |
 | `metrics` | `{inputBytes, outputBytes, resultCount, durationMs}` bounded integers, no content |
 | `page` | Completed only: `{truncated, reason, cursor}`; otherwise `null` |
-| `data` | Completed only: descriptor-schema-validated bounded JSON; otherwise `null` |
+| `data` | Completed: descriptor-schema-validated bounded JSON. `failed` / `provider-reported-error`: descriptor-schema-validated bounded JSON object. Otherwise `null` |
+
+Managed providers may return an explicit structured error under `failed` /
+`provider-reported-error`. It retains `page=null` and `resultCount=0`, requires the current bound
+descriptor, and accounts for the exact serialized data bytes. All other failed, cancelled,
+timed-out and rejected results keep `data=null`. Error data is consumer output, never Activity Log
+evidence. This protocol status does not classify the remote mutation effect: a provider's closed
+domain outcome may report an unknown effect or an acknowledged but unconfirmed result, and its
+consumer must preserve that distinction and the durable dispatch record. The legacy string-returning
+ToolPort adapter cannot emit this structured-error variant.
 
 A completed empty result is valid and distinct from a failed search. `page.reason` is one of
 `none`, `result-cap`, `byte-cap`, `file-cap`, `inventory-cap`, `time-cap`, `cancelled`, `oversized-file`,
@@ -404,8 +448,7 @@ a real, unambiguous production catalog descriptor: `discover`, `search`, `edit`,
 (`propose` -> `keiko.git.stage`, `execute` -> `keiko.git.execute`)/`ci` operations, and `delivery`'s
 `commit`/`push`/`pull-request` intents (`propose` -> their own proposal tool, `execute` -> the one
 shared `keiko.git.execute` redemption tool regardless of which intent is being redeemed). An action
-request this bridge does not cover -- `read` (below), `command` and `connector` (no catalog
-descriptor models either one yet), `git`'s low-level `read`/`write` operations, `delivery`'s
+request this bridge does not cover -- `read` (below), `command` (no catalog descriptor yet) and `connector` (available only after provider descriptors and handler bindings are admitted under ADR-0181), `git`'s low-level `read`/`write` operations, `delivery`'s
 `merge` intent (no proposal tool models it) and a `delivery` request with no `phase` (not
 model-facing) -- keeps its exact prior dispatch behaviour AND now records one body-free
 `tool-catalog.dispatch-unbound` line (the dispatched `action` only) instead of running with zero

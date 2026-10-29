@@ -7,10 +7,50 @@ import {
   persistedChatProjectPath,
   prepareNewWindowCfg,
   LeftRailLoading,
+  clearAppBootRecoveryReloadMarker,
 } from "./AppShell";
 import type { AppWindow } from "./windows/types";
 import { sanitizePersistedWindows } from "./hooks/workspace-persistence";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+
+describe("successful app boot recovery", () => {
+  it.each(["1", "2"])(
+    "reports the closed retry count %s through the existing writer once",
+    (count) => {
+      const writer = vi.fn();
+      const key = "keiko.app-boot-recovery-reload-count";
+      sessionStorage.setItem(key, count);
+      setClientDiagnosticWriter(writer);
+      try {
+        clearAppBootRecoveryReloadMarker();
+        clearAppBootRecoveryReloadMarker();
+        expect(writer).toHaveBeenCalledExactlyOnceWith(
+          `[keiko] App boot recovered after ${count} automatic reloads.`,
+          undefined,
+        );
+        expect(sessionStorage.getItem(key)).toBeNull();
+      } finally {
+        sessionStorage.removeItem(key);
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("discards an untrusted marker without publishing its contents", () => {
+    const writer = vi.fn();
+    const key = "keiko.app-boot-recovery-reload-count";
+    sessionStorage.setItem(key, "private-untrusted-value");
+    setClientDiagnosticWriter(writer);
+    try {
+      clearAppBootRecoveryReloadMarker();
+      expect(writer).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem(key)).toBeNull();
+    } finally {
+      sessionStorage.removeItem(key);
+      resetClientDiagnosticWriter();
+    }
+  });
+});
 
 describe("LeftRailLoading", () => {
   it("keeps the stable layout slot out of navigation and the keyboard order", async () => {

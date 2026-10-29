@@ -993,6 +993,8 @@ async function multiSourceGatewayAttempt(
   );
   const grants = multiSourceSynthesisGrants(ctx, packs);
   return callPluralGroundedSynthesis({
+    deps: ctx.deps,
+    evidenceCount: sent.sentReferenceCount,
     model: ctx.model,
     signal: ctx.signal,
     budget: ctx.synthesisBudget,
@@ -1122,6 +1124,8 @@ async function multiSourceGatewayRepair(
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await callPluralGroundedSynthesis({
+    deps: ctx.deps,
+    evidenceCount: sent.sentReferenceCount,
     model: ctx.model,
     signal,
     budget: ctx.synthesisBudget,

@@ -1,6 +1,7 @@
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { validateResultExample } from "../lib/governed-tool-examples.mjs";
 import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -22,6 +23,29 @@ function changed(change) {
   return validateGovernedToolContract(fixture);
 }
 describe("governed-tool architecture consistency", () => {
+  it("allows only bounded, unpaged provider-error data among failed examples", () => {
+    const data = { text: "synthetic-error" };
+    const example = {
+      ...original.resultExamples.failed,
+      reason: "provider-reported-error",
+      data,
+      metrics: {
+        ...original.resultExamples.failed.metrics,
+        outputBytes: Buffer.byteLength(JSON.stringify(data)),
+        resultCount: 0,
+      },
+    };
+    expect(validateResultExample(original, example)).toEqual([]);
+    for (const patch of [
+      { data: null },
+      { reason: "handler-failed" },
+      { metrics: undefined },
+      { page: original.resultExamples.completed.page },
+      { metrics: { ...example.metrics, outputBytes: 0 } },
+    ])
+      expect(validateResultExample(original, { ...example, ...patch })).not.toEqual([]);
+  });
+
   it("matches the live recursive search bounds without imposing corpus cutoffs", () => {
     expect(original.bounds).toMatchObject({
       maxQueryCharacters: CODING_REPOSITORY_LIMITS.queryChars,

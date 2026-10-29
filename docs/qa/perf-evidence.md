@@ -46,6 +46,44 @@ what every merge into `packages/keiko-editor/`, `packages/keiko-ui/`, `packages/
 undoes any repair. That finding is reported in the run's job summary instead, where it says how far
 the committed numbers have travelled from the product without pretending anyone owes work for it.
 
+### Editor release bundle evidence (B1/B2/B3)
+
+`1209-bundle-evidence.json` describes the actual packaged static export. Its freshness check is
+separate from the immutable D12 performance record above: changed assets or asset inventory may
+require a new bundle record even when the measurement toolchain and editor byte budgets are unchanged.
+
+Use Linux and the Node version pinned by the required UI job in `.github/workflows/ci.yml`. The
+existing [local-gates image](local-gates.md) supplies that environment. Keep Linux dependencies and
+build outputs isolated from a macOS checkout; when another qualification is using its `dist`, build
+an independent source snapshot that also includes the intended uncommitted changes. The snapshot
+must use the same lockfile, source files and canonical build scripts. Never copy host `node_modules`
+into the container. A local deterministic bundle check is valid evidence here; it is not a D12
+wall-clock performance measurement.
+
+From that isolated Linux source tree:
+
+```bash
+npm ci --ignore-scripts --no-audit --no-fund
+npm run build
+npm run prepare:bin
+npm run build:ui
+npm run check:editor-release-evidence
+```
+
+If the fresh export differs from the committed record, inspect the reported discrepancy and run the
+canonical producer against that same actual export, then rerun the unchanged gate:
+
+```bash
+node scripts/editor-release-evidence.mjs --json
+npm run check:editor-release-evidence
+npx vitest run scripts/__tests__/editor-release-evidence.test.mjs scripts/__tests__/editor-bundle-size.test.mjs
+```
+
+Only copy back the generated JSON after the budgets and validation pass and the measured source
+inputs still match the intended change. Review its diff; do not substitute a macOS fingerprint,
+hand-edit hashes or raise budgets to obtain a pass. No D12 baseline/candidate record is regenerated
+by this procedure.
+
 ### Workspace browser-performance evidence
 
 The workspace measurement has its own toolchain digest, defined by

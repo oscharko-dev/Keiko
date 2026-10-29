@@ -2277,7 +2277,7 @@ function approvalEvidenceBound(
   research: UseCodingWorkbenchResearchResult,
 ): boolean {
   if (!approvalReviewBound(request, approvalReview)) return false;
-  if (request.kind === "network-egress") {
+  if (request.kind === "network-egress" && !isNativeActionPermission(request)) {
     const ask = research.status === "ready" ? research.ask : null;
     if (ask?.requestId !== request.requestId) return false;
   }
@@ -2334,7 +2334,9 @@ function PermissionPrompt({
         review={approvalReview}
         t={t}
       />
-      {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
+      {request.kind === "network-egress" && !native ? (
+        <ResearchDestination state={research} t={t} />
+      ) : null}
       {native ? null : <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>}
       <ApprovalDecisionControls
         busy={state.mutation.status === "pending"}

@@ -69,9 +69,23 @@ const OVERSIZED_MESSAGE =
  * carry them.
  */
 export function createGeneratedOpenCodeNativePolicyPlugin(): string {
-  return [...pluginConstantsSource(), ...policyEvaluationSource(), ...pluginBodySource()].join(
-    "\n",
-  );
+  return [
+    ...pluginConstantsSource(),
+    ...mcpMutationSource(),
+    ...policyEvaluationSource(),
+    ...pluginBodySource(),
+  ].join("\n");
+}
+
+function mcpMutationSource(): readonly string[] {
+  return [
+    "function mcpPrefixes() {",
+    "  try { return Object.keys(JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}').mcp?.servers ?? {}).map((name) => name + '_'); } catch { return []; }",
+    "}",
+    "const MCP_PREFIXES = mcpPrefixes();",
+    "function isMcpTool(name) { return typeof name === 'string' && MCP_PREFIXES.some((prefix) => name.startsWith(prefix)); }",
+    "function mcpInput(event) { return isMcpTool(event.action) ? event.metadata?.input : undefined; }",
+  ];
 }
 
 function pluginConstantsSource(): readonly string[] {
@@ -165,7 +179,7 @@ function policyEvaluationSource(): readonly string[] {
     "  const resources = boundedResources(event.resources);",
     '  if (resources === null) return { effect: "deny", message: OVERSIZED_MESSAGE };',
     "  try {",
-    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), searchPath: searchPath(event), patchBytes: patchBytes(event), targetSessionID: event.targetSessionID ?? null, configured: event.effect });',
+    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), searchPath: searchPath(event), patchBytes: patchBytes(event), targetSessionID: event.targetSessionID ?? null, configured: event.effect, mcpInput: mcpInput(event) });',
     '    const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(WAIT_MS), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });',
     '    if (!response.ok || response.type === "opaqueredirect") return refusal;',
     "    const text = await response.text();",

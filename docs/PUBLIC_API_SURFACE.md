@@ -39,6 +39,7 @@ details of the shipped artifact:
 @oscharko-dev/keiko-memory-governance
 @oscharko-dev/keiko-memory-retrieval
 @oscharko-dev/keiko-memory-vault
+@oscharko-dev/keiko-mcp
 @oscharko-dev/keiko-model-gateway
 @oscharko-dev/keiko-quality-intelligence
 @oscharko-dev/keiko-sandbox

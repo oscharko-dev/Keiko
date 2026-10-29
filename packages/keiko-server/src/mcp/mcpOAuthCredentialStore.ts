@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
@@ -7,7 +8,10 @@ import {
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
-import type { McpRemoteOAuth } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import type {
+  McpRemoteOAuth,
+  McpServerDefinition,
+} from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 
 /**
  * Where an MCP server's OAuth credential lives between runs (#3903 AC3): sealed with AES-256-GCM in
@@ -92,6 +96,122 @@ function openVault(input: McpOAuthCredentialStoreInput): LocalSecretVault {
     storePath: join(vaultDir, VAULT_FILE),
     ...(input.securityLogSink === undefined ? {} : { sink: input.securityLogSink }),
   });
+}
+
+function vaultExists(input: McpOAuthCredentialStoreInput): boolean {
+  try {
+    lstatSync(join(input.stateDir, VAULT_DIRECTORY, VAULT_FILE));
+    return true;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+      return false;
+    throw error;
+  }
+}
+
+/** Keep legacy field order and omission while hashing only the public authorization metadata. */
+function publicAuthorizationBinding(
+  metadata: McpRemoteOAuth | undefined,
+): Readonly<Record<string, string>> | null {
+  if (metadata === undefined) return null;
+  const projected: Record<string, string> = {};
+  for (const field of Object.keys(metadata)) {
+    if (field === "issuer") projected.issuer = metadata.issuer;
+    else if (field === "clientId" && metadata.clientId !== undefined)
+      projected.clientId = metadata.clientId;
+    else if (field === "scope" && metadata.scope !== undefined) projected.scope = metadata.scope;
+  }
+  return projected;
+}
+
+function staticCredentialBinding(server: McpServerDefinition): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        server.name,
+        server.transport.kind === "remote"
+          ? ["remote", server.transport.url, publicAuthorizationBinding(server.transport.oauth)]
+          : ["local", server.transport.command, server.transport.environment],
+      ]),
+    )
+    .digest("hex");
+}
+
+function staticCredentialValue(text: string, server: McpServerDefinition): string | undefined {
+  const value: unknown = JSON.parse(text);
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("binding" in value) ||
+    !("value" in value) ||
+    value.binding !== staticCredentialBinding(server) ||
+    typeof value.value !== "string"
+  )
+    return undefined;
+  return value.value;
+}
+
+function usesEnvironmentCredential(
+  input: McpOAuthCredentialStoreInput,
+  references: readonly string[],
+): boolean {
+  const candidates = references.filter((reference) => typeof input.env[reference] === "string");
+  if (candidates.length === 0) return false;
+  if (!vaultExists(input)) return true;
+  const sealed = new Set(openVault(input).list());
+  return candidates.some((reference) => !sealed.has(`mcp-static:${reference}`));
+}
+
+/** Static credentials share the MCP vault, with immutable references bound to one exact target. */
+export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput): {
+  readonly get: (reference: string, server: McpServerDefinition) => string | undefined;
+  /** Inspect reference metadata only; do not decrypt credential values for authority discovery. */
+  readonly usesEnvironment: (references: readonly string[]) => boolean;
+  readonly retain: (references: readonly string[]) => number;
+  readonly put: (
+    entries: readonly {
+      readonly reference: string;
+      readonly server: McpServerDefinition;
+      readonly value: string;
+    }[],
+  ) => void;
+} {
+  const key = (reference: string): string => `mcp-static:${reference}`;
+  return {
+    usesEnvironment: (references): boolean => usesEnvironmentCredential(input, references),
+    retain: (references): number => {
+      if (!vaultExists(input)) return 0;
+      const vault = openVault(input);
+      const retained = new Set(references.map(key));
+      const removed = vault
+        .list()
+        .filter((reference) => reference.startsWith("mcp-static:") && !retained.has(reference));
+      vault.deleteMany(removed);
+      return removed.length;
+    },
+    get: (reference, server): string | undefined => {
+      const text = openVault(input).get(key(reference));
+      if (text === undefined) return input.env[reference];
+      return staticCredentialValue(text, server);
+    },
+    put: (entries): void => {
+      if (entries.length === 0) return;
+      const vault = openVault(input);
+      const captured = new Map<string, string>();
+      for (const entry of entries) {
+        const reference = key(entry.reference);
+        const encoded = JSON.stringify({
+          binding: staticCredentialBinding(entry.server),
+          value: entry.value,
+        });
+        const prior = vault.get(reference) ?? captured.get(reference);
+        if (prior !== undefined && prior !== encoded)
+          throw new TypeError("MCP secret references are immutable");
+        if (prior === undefined) captured.set(reference, encoded);
+      }
+      vault.setMany(captured);
+    },
+  };
 }
 
 // A sealed entry that does not read back as this shape is not a credential Keiko wrote.

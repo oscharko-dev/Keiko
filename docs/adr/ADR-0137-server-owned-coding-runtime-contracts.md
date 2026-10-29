@@ -1189,6 +1189,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `coding-runtime.native-narrowing.refused`) instead of acknowledged while a shell or a Code Mode
   `fetch` keeps Internet access; narrowing between the modes below Full access applies in place.
   Continuing the same OpenCode session under a relaunched, narrower tree is not implemented.
+- **Managed providers (#4089):** [ADR-0181](ADR-0181-shared-managed-mcp-host.md) adds a shared in-process protocol host for governed non-OpenCode consumers. Its server-declared providers do not enter the operator registry below; that registry, relay and OAuth contract remains unchanged.
 - **MCP servers come from the operator's registry, never from the repository (#3903, parity row
   C04, owner decision of 2026-10-24).** `mcp-servers.json` in Keiko's state directory, owned by the
   user Keiko runs as and writable by nobody else, is read for each native run at its launch

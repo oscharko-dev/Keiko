@@ -224,6 +224,48 @@ describe("canonical body-free offline report", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it.each([1000, 10_000])(
+    "keeps declared non-causal gateway context independent of its borrowed parent at age %s ms",
+    (parentAge) => {
+      const parent = "customer-startup-context";
+      const probe = "customer-automatic-probe";
+      const { report, query } = fixture(1, {}, undefined, (process) => [
+        fixtureLine(process, T0 - parentAge, {
+          op: "gateway.config.resolved",
+          correlationId: parent,
+          fields: { providerCount: 1, providerConfigDigest: "a".repeat(64) },
+        }),
+        fixtureLine(process, T0 - 100, {
+          op: "http.gateway.fetch.started",
+          correlationId: probe,
+          parentCorrelationId: parent,
+          fields: { method: "POST" },
+        }),
+        fixtureLine(process, T0 - 99, {
+          op: "http.gateway.fetch.completed",
+          correlationId: probe,
+          parentCorrelationId: parent,
+          status: 200,
+        }),
+      ]);
+      expect(query.diagnosticSufficiency.status).toBe("complete");
+      expect(query.events.filter((event) => event.parsed.correlationId === probe)).toHaveLength(2);
+      expect(query.events.some((event) => event.parsed.correlationId === parent)).toBe(
+        parentAge <= DEFAULT_SUPPORT_QUERY_LIMITS.contextMs,
+      );
+      const analyzed = analyzeSupportReport(serializeSupportReport(report));
+      expect(analyzed.selection).toMatchObject({ status: "complete", reasons: [] });
+    },
+  );
+
+  it("still requires a direct recorded parent for registered causal incident evidence", () => {
+    const { report, query } = fixture(1, {}, () => "missing-real-causal-parent");
+    expect(query.diagnosticSufficiency.reasons).toContain("parent-correlation-missing");
+    const { selection } = analyzeSupportReport(serializeSupportReport(report));
+    expect(selection.status).toBe("insufficient");
+    expect(selection.reasons).toContain("parent-correlation-missing");
+  });
+
   // This checks the complete 20,000-record report boundary, not a latency budget.
   // Linux V8 coverage takes 26.5 s with 0.5 CPU/4 GiB; hosted workers exceeded the global
   // 15 s watchdog. Keep every record and assertion while allowing slower workers to finish.

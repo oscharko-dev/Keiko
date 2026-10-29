@@ -1,6 +1,7 @@
 export { ToolCatalogError } from "./errors.js";
 export type { CatalogFailureReason, CatalogSchemaMismatch } from "./errors.js";
 export { describeCatalogSchemaMismatch } from "./schema.js";
+export { compileExternalCatalogSchema } from "./external-schema.js";
 export { createToolRef } from "./identity.js";
 export { createToolDescriptor, verifyToolDescriptor } from "./descriptor.js";
 export { createCatalogProfileDeclaration } from "./profile.js";
@@ -37,3 +38,5 @@ export { validateToolArguments } from "./arguments.js";
 export { copyCatalogJson as captureCatalogJson, catalogBytes as catalogJsonBytes } from "./json.js";
 export { createToolInvocationNormalizer } from "./invocation.js";
 export type { ToolInvocationNormalizer } from "./invocation.js";
+
+export { copyCatalogEnvelope as captureCatalogEnvelope } from "./json.js";

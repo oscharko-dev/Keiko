@@ -121,9 +121,14 @@ const DISPOSITION_STRICTNESS: Readonly<
 // `composeEditorAgentActionPolicyDecision` evaluates requestedMode, deploymentCeiling, and
 // effectiveMode and keeps the most restrictive effect. The strictest decision carries its own
 // single reason (the exactly-one-reason rule holds by construction).
+type AtlassianPolicyAuthority = Pick<
+  CodingWorkbenchAuthorityEnvelope,
+  "requestedMode" | "deploymentCeiling" | "effectiveMode" | "connectorScopes" | "actionClasses"
+>;
+
 function strictestModeDecision(
   actionType: AtlassianConnectorActionType,
-  envelope: CodingWorkbenchAuthorityEnvelope,
+  envelope: AtlassianPolicyAuthority,
 ): AtlassianConnectorActionDecision {
   const decide = (mode: CodingWorkbenchMode): AtlassianConnectorActionDecision =>
     decideAtlassianConnectorAction(
@@ -147,10 +152,23 @@ function strictestModeDecision(
     );
 }
 
-function outcomeOf(decision: AtlassianConnectorActionDecision): AtlassianGovernedActionOutcome {
+type AtlassianPolicyOutcome = Exclude<
+  AtlassianGovernedActionOutcome,
+  { readonly kind: "authority-denied" }
+>;
+
+function outcomeOf(decision: AtlassianConnectorActionDecision): AtlassianPolicyOutcome {
   if (decision.disposition === "denied") return { kind: "policy-denied", decision };
   if (decision.disposition === "review-required") return { kind: "review-required", decision };
   return { kind: "allowed", decision };
+}
+
+/** Shared policy facets for Coding and ordinary Chat; this does not establish authority. */
+export function decideAtlassianEnvelopeAction(
+  actionType: AtlassianConnectorActionType,
+  envelope: AtlassianPolicyAuthority,
+): AtlassianPolicyOutcome {
+  return outcomeOf(strictestModeDecision(actionType, envelope));
 }
 
 // Resolve-and-decide WITHOUT charging budget: used at request admission (and re-used at approve
@@ -173,7 +191,7 @@ export function decideGovernedAtlassianAction(
       reason: ATLASSIAN_AUTHORITY_FAILURE_REASON[resolution.reason],
     };
   }
-  return outcomeOf(strictestModeDecision(actionType, resolution.envelope));
+  return decideAtlassianEnvelopeAction(actionType, resolution.envelope);
 }
 
 // Charge exactly one toolCall against the envelope budget immediately before execution (the

@@ -74,6 +74,7 @@ export {
   type AtlassianConnectionVerificationStatus,
   type VerifyAtlassianConnectionInput,
 } from "./atlassian-connection-verification.js";
+export { verifyJiraDataCenterConnection } from "./jira-connection-verification.js";
 export {
   ADF_SUPPORTED_DOC_VERSION,
   ADF_TO_TEXT_MAX_DEPTH,
@@ -180,3 +181,11 @@ export {
   type UpdateConfluencePageInput,
   type UpdateConfluencePageResult,
 } from "./confluence-write-actions.js";
+
+export {
+  createJiraManagedProvider,
+  type JiraManagedConnection,
+  type JiraManagedProviderDeps,
+  type JiraManagedMutationExecutor,
+} from "./jira-managed-tools.js";
+export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
