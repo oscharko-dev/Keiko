@@ -280,6 +280,9 @@ describe("driver error output (#4120)", () => {
     expect(array).toBe(`{"set-cookie":[redacted],"accept":"*/*"}`);
     expect(array).not.toContain("one");
     expect(array).not.toContain("two");
+    // An unterminated array of empty strings once made the pattern backtrack exponentially
+    // (CodeQL, #4126 review); it must now finish at once and still redact the value.
+    expect(redactSecretHeaders(`{"cookie":[${'""'.repeat(40)}`)).toBe(`{"cookie":[redacted]`);
   });
 
   it("redacts the header values in arbitrary text and leaves other lines alone", () => {

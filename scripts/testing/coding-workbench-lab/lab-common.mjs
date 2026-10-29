@@ -48,9 +48,10 @@ export class UsageError extends Error {}
 const SECRET_HEADER = /\b((?:set-)?cookie|(?:proxy-)?authorization)(\s*[:=]\s*)[^\r\n]*/giu;
 // A header serialized as JSON quotes its name, so the separator follows a quote; only its value, a
 // whole array of values included, is replaced and the rest of the document stays readable (#4126
-// review).
+// review). A bare array element never starts with a quote, so every element has one parse and an
+// unterminated array cannot backtrack exponentially.
 const QUOTED_SECRET_HEADER =
-  /(["'])((?:set-)?cookie|(?:proxy-)?authorization)\1(\s*:\s*)(?:\[(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\]\r\n])*\]|(["'])(?:\\.|(?!\4)[^\\\r\n])*\4|[^,}\r\n]*)/giu;
+  /(["'])((?:set-)?cookie|(?:proxy-)?authorization)\1(\s*:\s*)(?:\[(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\]"'\r\n])*\]|(["'])(?:\\.|(?!\4)[^\\\r\n])*\4|[^,}\r\n]*)/giu;
 const UNREACHABLE = /\b(ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|ETIMEDOUT)\b/u;
 
 /** Replaces the value of every cookie and authorization header line in `text`. */
