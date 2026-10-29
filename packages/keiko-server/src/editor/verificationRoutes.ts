@@ -11,12 +11,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
-import {
-  SSE_HEADERS,
-  startSseHeartbeat,
-  attachSseSubscription,
-  writeNamespacedSseEvent,
-} from "../sse.js";
+import { openPlainNamespacedSseStream } from "../sse.js";
 import type { SseBackpressureSignal } from "../sse-write.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
@@ -278,28 +273,13 @@ export function openVerificationSseStream(
   onBackpressure?: (signal: SseBackpressureSignal) => void,
   correlationId?: string,
 ): void {
-  res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
-  const controller = new AbortController();
-  let seq = 0;
-  attachSseSubscription(
+  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only the
+  // per-connection `id:` cursor differs between them.
+  openPlainNamespacedSseStream(
     res,
-    controller,
-    () =>
-      manager.subscribe((event) => {
-        seq += 1;
-        // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only the
-        // per-connection `id:` cursor differs between them.
-        writeNamespacedSseEvent(
-          res,
-          event,
-          seq,
-          "verification",
-          redactor,
-          controller,
-          onBackpressure,
-        );
-      }),
+    "verification",
+    redactor,
+    (listener) => manager.subscribe(listener),
     onBackpressure,
     correlationId,
   );
