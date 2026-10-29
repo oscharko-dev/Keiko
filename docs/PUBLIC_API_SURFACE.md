@@ -1,4 +1,4 @@
-# Public API surface — 1.3.1
+# Public API surface — 1.3.2
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.3.2: root exports, CLI entrypoints and local server routes remain unchanged. The release fixes
+  server-sent event flow control (a large frame is queued until the reader drains instead of ending
+  the stream), raises the Coding changeset limits to 8 MiB per changeset and 64 MiB per run, returns
+  a byte-capped Git diff as a bounded truncated view, and keeps a proven chat model selectable while
+  its provider is busy. The model gateway package adds the `ProviderResponseInvalidError` export.
+  No customer database schema migration is introduced.
 - 1.3.1: root exports, CLI entrypoints and local server routes remain unchanged. The release fixes
   Coding Workbench, editor, Git-change Chat and Linux sandbox behaviour. The server reads the new
   deployment environment variable `KEIKO_CONTENT_REDACTION` once at startup: only the exact value
