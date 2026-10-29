@@ -191,3 +191,15 @@ were inspected; 11 are byte-identical to the preceding set, while Settings navig
 reconnecting-state captures changed. The unchanged updater freshness gate, 287 CSS/proof tests, 25
 producer/freshness tests and both Editor bundle gates pass. No numerical ceiling, exception or suppression
 changed. This remains updater fixture evidence; it does not prove native installation or MCP/Jira effects.
+
+
+## Current source-bound regeneration — 2026-10-29
+
+The original nine-case Chromium producer was rerun with tracked evidence enabled on the exact
+source commit `4c129452229068c2cbde5d454b5add0d02187933` in the isolated Linux arm64 environment
+(Node 24.18.0, npm 11.16.0). All nine cases passed in 1.1 minutes, including the real-BFF outage
+journey. The run regenerated all 17 declared artifacts (14 screenshots and three JSON records).
+The manifest binds all 25 declared UI sources and four harness inputs; `npm run check:update-ui-evidence`
+passes against the current worktree. I visually reviewed the dark update window, Settings entry point,
+and reconnecting-state captures. This remains updater presentation and declared BFF recovery evidence;
+it does not prove native installation, replacement or restart.

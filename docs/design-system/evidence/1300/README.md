@@ -44,7 +44,7 @@ ghost text, agent prompts) is proven by
 
 ## Environment
 
-- Headless Chromium via Playwright 1.61.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
+- Headless Chromium via Playwright 1.64.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
 - Fidelity gates use `page.setContent` / `file://` (no server — CodeQL-safe); the running-app capture serves
   `packages/keiko-ui/out` over a realpath-confined loopback server and stubs same-origin API responses with
   deterministic `keiko.workspace.v4` workspace-window state.
@@ -190,6 +190,19 @@ serious/critical violations and zero unresolved incomplete findings, and all 108
 captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
 unavailable workspace-trust states. No gate, fixture or rule was changed.
 
-## PR #4093 merge of release 1.3.2 — 2026-10-29
+## PR #4093 exact Linux producer run — 2026-10-29
 
-The four original producers were rerun on the combined release 1.3.2 and MCP/Jira tree in an isolated Linux arm64 checkout (Node 24.18.0, npm 11.16.0). Component and Editor reference fidelity, the seven-mode accessibility proof and all 108 running-app captures pass. The running captures report zero page errors, unexpected API requests, missing selectors, crashed windows and visible error notices. These are fixture-based visual regressions; the separately recorded real MCP/Jira UI journeys retain their own acceptance scope. No producer assertion, tolerance or threshold changed.
+The four original producers passed in the clean Linux checkout at exact source
+`4c129452229068c2cbde5d454b5add0d02187933` (Node 24.18.0, npm 11.16.0,
+Playwright 1.64.1). Component fidelity covered 427 probes with zero gated or
+recorded differences. Editor token fidelity covered 160 gated probes with zero
+gated differences and all 14 reference captures; ten accent differences remain
+recorded and three tokens remain reference-only. The seven-mode axe proof had zero
+violations and zero unresolved incomplete findings. All 108 running-app captures
+had zero page errors, missing selectors, visible error notices, crashed windows,
+unavailable workspace-trust states or unexpected API requests. The refreshed Linux
+release bundle record measures 388 static-export files; B1/B2/B3 and the editor
+bundle-size gate pass. No producer assertions, tolerances or budgets changed.
+
+These are synthetic visual fixtures; real MCP/Jira effects and model behavior are
+qualified separately.

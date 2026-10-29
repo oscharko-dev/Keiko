@@ -12,7 +12,7 @@
   "architecture": "arm64",
   "node": "v24.18.0",
   "browser": "156.0.8078.4",
-  "gitHead": "5aed44080128af12d0281429d851e54bb37d6be6",
+  "gitHead": "4c129452229068c2cbde5d454b5add0d02187933",
   "sourceHashes": {
     "tests/e2e/jira-chat-4081.spec.ts": "b2827c40f40f39c35d0ad8e28cf52bb9c656d85b3f68b670cadb33834dde7102",
     "tests/e2e/support/jira-chat-4081.ts": "4f50fbecac3a6ff6d3ace46f63abda7f1479f25485300cf0be142062ac45e914",
@@ -20,16 +20,16 @@
     "tests/e2e/support/jira-chat-4081-server.mjs": "a3bec7fdc19fb90ff7a8395cba541a6f09fc1f6dbda9ee6e025aaeb978a97ee3",
     "tests/e2e/support/jira-chat-4081-transport.mjs": "fd8fb501ce4119c2a37ceabdd7c97df7f61b13e21100f098019edbbcfd3e52b4",
     "tests/e2e/config/playwright.jira-chat-4081.config.ts": "5106448f5cab263992662d0dd6c6ff635c7eec2727ad42033820719e9899eeef",
-    "packages/keiko-ui/src/app/components/desktop/JiraChatTools.tsx": "1fdc6394efd47b1d677bcd92796a00970858e7ab5f14804f39ab486d19e10987",
+    "packages/keiko-ui/src/app/components/desktop/JiraChatTools.tsx": "598383d5464afbb6e18ee6cb5cd363dc68e09bc9fd4ff2edd7be0667959d4744",
     "packages/keiko-ui/src/app/components/desktop/JiraChatTools.module.css": "b822a25b12fd9a389f2db755a5c14cee4e37b9bfe9463f6d735363c4a5074b62",
     "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx": "e906cdd99e196aaea4fb498fe21b7d38c876c94cc19615db7160e810848cad12",
     "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.tsx": "2b14a7ca4b94293abeff15c0899f992b6a9181b47bea9fa44250822213387ea0",
     "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.module.css": "af91f55ab4a1d0dbc20dab5aec8ac2793d9fc4c4ffc6d5d892b2708939e7b4ae",
     "packages/keiko-ui/src/app/globals.css": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "6b684556a64ecbe7baa780ffd3693a7ecd8f5f43232ad81899e5ce1844a6c736",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "84fea645fa729d5b9a7282fb3a5224152bea388f466041ba6cc5860649d489a0"
+    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "77956fa300cda18ffacf54176875d2898a8af4cd1b5efd94da5c5a65659b9ddc",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "28443452492f32901a9659e26ba22a49ed58ff6dc81e18111c1cfedbbd8b8bfa"
   },
-  "capturedAt": "2026-10-29T07:50:12.438Z",
+  "capturedAt": "2026-10-29T10:05:23.467Z",
   "captures": [
     {
       "stage": "hub-create-context",
@@ -66,7 +66,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-context-dark.png",
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-context-dark.png",
       "screenshotSha256": "eefe72e5d035b4cb23194cbc8a89589a489d012048bd87e0589d9f10608b0bad"
     },
     {
@@ -104,7 +104,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-dark.png",
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-form-dark.png",
       "screenshotSha256": "904e6b17662dc8f3b7867b80306fde625474d2df407d0b3afa7df164d0b79d53"
     },
     {
@@ -142,7 +142,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-light.png",
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-form-light.png",
       "screenshotSha256": "f66f6d781a07787031830b5b46625929d14433d4f3f7858afc055eb3e66a1677"
     },
     {
@@ -180,8 +180,8 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-prefers-contrast.png",
-      "screenshotSha256": "4f98cae93e9e5d887ae14be93425ff592b86db5e8e4db8adef5ba7ee80ba9efd"
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-form-prefers-contrast.png",
+      "screenshotSha256": "1ba452abc9a132865726613be82713dfd9c912ef771239b79782f5473f803766"
     },
     {
       "stage": "hub-create-form",
@@ -218,7 +218,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-forced-colors.png",
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-form-forced-colors.png",
       "screenshotSha256": "16cb9866b90229f09fa8e6aa4a0da05c54b91a38f1f7888379990a218155d55d"
     },
     {
@@ -256,7 +256,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-reduced-motion.png",
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-form-reduced-motion.png",
       "screenshotSha256": "456b061ebc3e0a3c22fbef2e6406331cef506d09bb78ad156d3e717bbae5b32e"
     },
     {
@@ -287,7 +287,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-narrow-390.png",
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-form-narrow-390.png",
       "screenshotSha256": "d1451f0fb358969f951fd5b671288d2d2b92fad0a10beeb9b8726e657b9dd4af"
     },
     {
@@ -318,7 +318,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-maximized.png",
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-form-maximized.png",
       "screenshotSha256": "da865c13144fdd328685dddc6fa4a61555cdc7cc692eadf32f5cf1d952c2ef33"
     },
     {
@@ -349,11 +349,11 @@
       "screenshotScope": "viewport",
       "zoomKeyboardControlCount": 5,
       "zoomLastControlVisible": true,
-      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshot": "docs/design-system/evidence/4081/en-hub-create-form-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
       "zoomControlsScreenshotSha256": "ec9d0806b9eaff0c46eb6a1d45a6b3886299518f5371846652c57bc67b7b0a5a",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-viewport-device-scale-200-percent-emulation.png",
+      "screenshot": "docs/design-system/evidence/4081/en-hub-create-form-viewport-device-scale-200-percent-emulation.png",
       "screenshotSha256": "457dc87cb441fb7a0d8b829a603e12c8388a0543ffd22f5d774af68c74e4d3b0"
     },
     {
@@ -403,7 +403,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-dark.png",
+      "screenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-dark.png",
       "screenshotSha256": "157bb03e6cdd7e0afce918ec3c7741703c8c0f4e2c8459eed855e767975ff483"
     },
     {
@@ -453,7 +453,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-light.png",
+      "screenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-light.png",
       "screenshotSha256": "252ceaa62db3cc30c1e43e5c20227552a6866625857bdf7f00ce062e0087149a"
     },
     {
@@ -503,7 +503,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-prefers-contrast.png",
+      "screenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-prefers-contrast.png",
       "screenshotSha256": "993163b62a0133d8800ca2224f410f0ca50512397501e4fcc117402b3acf816b"
     },
     {
@@ -553,7 +553,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-forced-colors.png",
+      "screenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-forced-colors.png",
       "screenshotSha256": "7493d90d92d857ffe58afff730495e723a5cf1fc65c254f851f8af503e6b28dc"
     },
     {
@@ -603,7 +603,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-reduced-motion.png",
+      "screenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-reduced-motion.png",
       "screenshotSha256": "a8925692572e8b8a70a7cfb6ff62914b5da1c31415707cee07485566545b11d6"
     },
     {
@@ -634,7 +634,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-narrow-390.png",
+      "screenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-narrow-390.png",
       "screenshotSha256": "f86748d380cd7a65e37884a74c9b8ef46033b89d84865f413fad033c143c5b1d"
     },
     {
@@ -665,7 +665,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-maximized.png",
+      "screenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-maximized.png",
       "screenshotSha256": "fab7043650420208c50eb756d04c4b7fc420d6876916573c10a6cf47ebdcf05a"
     },
     {
@@ -696,11 +696,11 @@
       "screenshotScope": "viewport",
       "zoomKeyboardControlCount": 3,
       "zoomLastControlVisible": true,
-      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
       "zoomControlsScreenshotSha256": "e12f7c25bd0055a1b96084cb361c937262e2be2b83952ebeff419ce439448656",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-viewport-device-scale-200-percent-emulation.png",
+      "screenshot": "docs/design-system/evidence/4081/en-confirmed-chat-binding-viewport-device-scale-200-percent-emulation.png",
       "screenshotSha256": "4bc55401d2e09e09fa23101603eced3e066b7141ba07260dc19ec4aa89348125"
     },
     {
@@ -731,7 +731,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-dark.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-read-consent-dark.png",
       "screenshotSha256": "366f2b3ccc4be1838c92f7452770ebe45b30e7d57ddf48c5b03e5dd8ee5fd40a"
     },
     {
@@ -762,7 +762,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-light.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-read-consent-light.png",
       "screenshotSha256": "84d4d6df6a4d182c2d73a3e58f3250a15ce36898ef8c2c30c5f04b89ad7d3c08"
     },
     {
@@ -793,7 +793,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-prefers-contrast.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-read-consent-prefers-contrast.png",
       "screenshotSha256": "609ff2b60bcdee7a8a5bf85c5f286aa9fd9c8a234293be377dee361fed87bb09"
     },
     {
@@ -824,7 +824,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-forced-colors.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-read-consent-forced-colors.png",
       "screenshotSha256": "9cc2f38411b069ab4feb612408277d55c9c3f9457000d2d92786b12f85872eb8"
     },
     {
@@ -855,7 +855,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-reduced-motion.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-read-consent-reduced-motion.png",
       "screenshotSha256": "8a6550e13974184d0cd6f102ab88f22394de89dede10091f3833e8785bc0ffdb"
     },
     {
@@ -886,7 +886,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-narrow-390.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-read-consent-narrow-390.png",
       "screenshotSha256": "4c54a63e77ae7fbc49da8e463405c8d7492edd96d5effbccdfeb6c7af4875f19"
     },
     {
@@ -917,7 +917,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-maximized.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-read-consent-maximized.png",
       "screenshotSha256": "f6fe2e9a74a222f37c67db7c9ae902f6a63696dcc336d52bf3405ae04bc5a0e6"
     },
     {
@@ -948,11 +948,11 @@
       "screenshotScope": "viewport",
       "zoomKeyboardControlCount": 2,
       "zoomLastControlVisible": true,
-      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshot": "docs/design-system/evidence/4081/en-pending-read-consent-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
       "zoomControlsScreenshotSha256": "8f2bc66cbffbbc61859cb842d08ad37f067311876da6be11d9f89c6637f13e3d",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-viewport-device-scale-200-percent-emulation.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-read-consent-viewport-device-scale-200-percent-emulation.png",
       "screenshotSha256": "eb53ba249447421c192aefaede3c7866778e32899e30ef74b3823c902ebaa7bf"
     },
     {
@@ -996,7 +996,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-dark.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-dark.png",
       "screenshotSha256": "95b07776171556fc98126d5894d8b8e39705151b654fc509600f6a1d682959b9"
     },
     {
@@ -1040,7 +1040,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-light.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-light.png",
       "screenshotSha256": "306a756d039abc03f20e5e723e425320fd8342adbe43bb30a8f7e112ad83f379"
     },
     {
@@ -1084,7 +1084,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-prefers-contrast.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-prefers-contrast.png",
       "screenshotSha256": "0c3002e6c479ee88ec436c40920073ce1e4629b15fc5e1330108302264f6f26c"
     },
     {
@@ -1128,7 +1128,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-forced-colors.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-forced-colors.png",
       "screenshotSha256": "82ed1a1f402c55d2a97eed287474e6cd19aaf53ab707cef3ea257bb6a0251e03"
     },
     {
@@ -1172,7 +1172,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-reduced-motion.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-reduced-motion.png",
       "screenshotSha256": "95b07776171556fc98126d5894d8b8e39705151b654fc509600f6a1d682959b9"
     },
     {
@@ -1216,7 +1216,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-narrow-390.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-narrow-390.png",
       "screenshotSha256": "1e346322a658b9f1713d982723cb24e66947da86646437d2e75e903043dcd01b"
     },
     {
@@ -1260,7 +1260,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-maximized.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-maximized.png",
       "screenshotSha256": "7a2c15b99c1a0d29fabf540b78647c4284811ccd969949acb41640bbd27c5e40"
     },
     {
@@ -1304,11 +1304,11 @@
       "screenshotScope": "viewport",
       "zoomKeyboardControlCount": 3,
       "zoomLastControlVisible": true,
-      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "a017d374e9ad030e31aed818418811619e152e1d44cea417901a0b7e736ccd27",
+      "zoomControlsScreenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshotSha256": "6fad20a4157728eb83248428f803d76d3d556154ef532a8824339b290c67496f",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-viewport-device-scale-200-percent-emulation.png",
+      "screenshot": "docs/design-system/evidence/4081/en-pending-exact-write-approval-viewport-device-scale-200-percent-emulation.png",
       "screenshotSha256": "57011edf9fb1679cbe77d3229d20a5ddd9fdaa0d4a7999498dfe347c134b9ef8"
     },
     {
@@ -1352,7 +1352,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-dark.png",
+      "screenshot": "docs/design-system/evidence/4081/en-settled-jira-result-dark.png",
       "screenshotSha256": "5da3de823278c57930a1e2a10f4ea8a53589105b75939a5d1a135de95558c07a"
     },
     {
@@ -1396,7 +1396,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-light.png",
+      "screenshot": "docs/design-system/evidence/4081/en-settled-jira-result-light.png",
       "screenshotSha256": "69a3e636a9b9078239cd375e82253e7d667cab74f300ecf6655fcc8d34a41f6c"
     },
     {
@@ -1440,7 +1440,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-prefers-contrast.png",
+      "screenshot": "docs/design-system/evidence/4081/en-settled-jira-result-prefers-contrast.png",
       "screenshotSha256": "90325656f5f210fea41519452080a81dd55b3628a02f490ade269c27c9a4d618"
     },
     {
@@ -1484,7 +1484,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-forced-colors.png",
+      "screenshot": "docs/design-system/evidence/4081/en-settled-jira-result-forced-colors.png",
       "screenshotSha256": "922e270aba9d2ea84666d23368a9deaac59b19a34597f82f4510673c70bf3561"
     },
     {
@@ -1528,7 +1528,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-reduced-motion.png",
+      "screenshot": "docs/design-system/evidence/4081/en-settled-jira-result-reduced-motion.png",
       "screenshotSha256": "5da3de823278c57930a1e2a10f4ea8a53589105b75939a5d1a135de95558c07a"
     },
     {
@@ -1572,7 +1572,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-narrow-390.png",
+      "screenshot": "docs/design-system/evidence/4081/en-settled-jira-result-narrow-390.png",
       "screenshotSha256": "d62dbe6d31a72fd402f908b3c69a4faee1979367bc49176c681dd99f5418b6ea"
     },
     {
@@ -1616,7 +1616,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-maximized.png",
+      "screenshot": "docs/design-system/evidence/4081/en-settled-jira-result-maximized.png",
       "screenshotSha256": "dc96ab51c324ba1056aa19ad4c335ba953512366f8668dad98eac202079227da"
     },
     {
@@ -1660,12 +1660,12 @@
       "screenshotScope": "viewport",
       "zoomKeyboardControlCount": 1,
       "zoomLastControlVisible": true,
-      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "860d763aeb2a20597e9bd3d4f0a21af43cd374556a42b8b67eb08eef656f6bf1",
+      "zoomControlsScreenshot": "docs/design-system/evidence/4081/en-settled-jira-result-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshotSha256": "5974c7eabfc5f4ddbe01b2238dd396013b30daecbff42df98b8e380e75835da0",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-viewport-device-scale-200-percent-emulation.png",
-      "screenshotSha256": "0d11337cc7706cd7fe33c3b0096c7dad6ad0daa8e4d0470c304e65ef14572d59"
+      "screenshot": "docs/design-system/evidence/4081/en-settled-jira-result-viewport-device-scale-200-percent-emulation.png",
+      "screenshotSha256": "26c971f58cbb0876614f4f487b456b9e4fe35bf62e9938540ecc35c882dc4eb1"
     },
     {
       "stage": "bounded-keyboard-question-navigation",
@@ -1744,7 +1744,7 @@
       "screenshotScope": "surface",
       "axeScope": "document",
       "axeViolations": [],
-      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-bounded-keyboard-question-navigation-dark.png",
+      "screenshot": "docs/design-system/evidence/4081/en-bounded-keyboard-question-navigation-dark.png",
       "screenshotSha256": "d1d5ff36f9fb38dbc7430cef438c75c0142abdbcf6102330a7a268842b4389de",
       "keyboardTraversal": {
         "scrollHeight": 796,

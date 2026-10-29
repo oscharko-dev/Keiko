@@ -7,16 +7,16 @@ model/Jira fixtures. No browser route substitutes the product's consent or appro
 
 The isolated Linux arm64 run used Node 24.18.0, npm 11.16.0, Playwright 1.64.1 and
 Chromium 156.0.8078.4. Its source was signed head
-`5aed44080128af12d0281429d851e54bb37d6be6`, with the hash-bound English/German
+`4c129452229068c2cbde5d454b5add0d02187933`, with the hash-bound English/German
 helper labels aligned to the shared Tool access controls. Product behavior and all server-acknowledgement, consent, approval and remote-effect assertions are unchanged. Both unmodified producer receipts bind 14 inspected source
 and harness hashes, verified against the reviewed worktree:
 
 - [English receipt](en-accessibility.json), SHA-256
-  `64b507fa7fe7854a181079ec9ddc8568c7188124c0909538aac7d8b3db59fcb9`.
+  `99da3dec4634e4a118b12b7e7382be5963fee46a90397f716f5936e2f16f5e75`.
 - [German receipt](de-accessibility.json), SHA-256
-  `5311fae4d05851b1de2ab26adb18b9608b66377639b87b2d66e611376314453a`.
+  `d5f43ffb308c5b9cfb40a975be8af22abf7d292f70ccb57843be52955e4ce3f9`.
 
-The final canonical run passed in 1.3 minutes. Its 83 document-wide axe checks found zero
+The current canonical tracked-evidence run passed in 1.3 minutes. Its 83 document-wide axe checks found zero
 violations; no rule or surface was excluded. The checks cover the Hub form, confirmed binding,
 pending read consent, exact write approval and settled result across dark/light themes,
 increased contrast, forced colors, reduced motion, 390-pixel narrow and maximized windows,
@@ -30,14 +30,11 @@ At zoom, every surface's controls remain reachable with Tab and the final contro
 The emulation uses a 720×550 CSS viewport and device scale 2; it does not claim native browser
 zoom or assistive-technology qualification. Native screen-reader testing remains separate.
 
-The run produced 93 screenshots. Eight representative, visually inspected images are retained
-below, copied byte-for-byte from the producer. One remained byte-identical to the previous
-inspected set. Seven changed captures and both producer receipts are refreshed; representative English dark, German light and German zoomed approval captures were visually inspected again.
-The complete generated set was preserved before another Playwright producer could clear its output.
-The receipts retain the original test-output
-paths and hashes for the complete set; Playwright attaches all captures and receipts to its
-test output. Screenshot-only content redaction runs **after** axe, preserves layout and native
-scroll clipping, and remains effective under forced colors. It is removed after each capture.
+The tracked-evidence run generated 93 PNG screenshots, all retained in this directory. The eight
+representative captures linked below were visually inspected after the current run. Both producer
+receipts were regenerated and bind this source commit and the 14 declared producer inputs.
+Screenshot-only content redaction runs **after** axe, preserves layout and native scroll clipping,
+and remains effective under forced colors. It is removed after each capture.
 
 | Surface | Inspected capture |
 | --- | --- |
@@ -71,13 +68,13 @@ pass, with no ceiling change or evidence restamp.
 ## Reproduce and limits
 
 ```sh
-npm run test:e2e:jira-chat
+KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:jira-chat
 npm run check:e2e-suite-wiring
 ```
 
 The lane retains its canonical build owner and runs per PR. The extra accessibility cases use
-a bounded four-minute timeout; the original cases retain their existing timeout. The default
-producer writes to untracked test output and needs no tracked-evidence override.
+a bounded four-minute timeout; the original cases retain their existing timeout. The tracked producer
+refreshes the receipts and the complete set of synthetic fixture screenshots.
 
 This is production-composed deterministic browser evidence. It does not qualify a real model,
 real Jira, native zoom, screen readers, native updater installation or the complete final PR head.
