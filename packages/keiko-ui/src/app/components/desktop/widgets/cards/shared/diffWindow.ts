@@ -141,16 +141,3 @@ export function sliceDiffPage(file: GitEditorDiffFile, page: number): DiffPage {
     pageCount,
   };
 }
-
-const BYTE_UNITS = ["B", "KiB", "MiB", "GiB"] as const;
-
-/** A binary size such as `812 B`, `12.4 KiB` or `7.9 MiB`; `format` localizes the number. */
-export function formatDiffBytes(bytes: number, format: (value: number) => string): string {
-  let value = Math.max(0, bytes);
-  let unit = 0;
-  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${format(unit === 0 ? value : Math.round(value * 10) / 10)} ${BYTE_UNITS[unit] ?? "B"}`;
-}

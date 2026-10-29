@@ -100,7 +100,7 @@ describe("CodingWorkbenchDiffFiles (#4108)", () => {
     const items = within(list).getAllByRole("listitem");
     expect(items).toHaveLength(3);
     expect(items[0]?.textContent).toMatch(/module-000\.ts/u);
-    expect(items[0]?.textContent).toMatch(/\+2,094 −3 · [\d.]+ KiB · 2,100 lines/u);
+    expect(items[0]?.textContent).toMatch(/\+2,094 −3 · [\d.]+ KB · 2,100 lines/u);
     expect(screen.getByRole("status").textContent).toBe("File 1 of 3, lines 1 to 1,000 of 2,100");
   });
 

@@ -5,13 +5,13 @@ import type { ClientCodingWorkbenchDiffSurface } from "@oscharko-dev/keiko-contr
 import type { GitEditorDiffFile } from "@oscharko-dev/keiko-contracts";
 
 import { reportCodingWorkbenchDiffWindowed } from "@/lib/coding-workbench-interaction";
+import { formatBytes } from "@/lib/format";
 import { useLocale } from "@/lib/i18n";
 import { DiffFileSection, type DiffViewLabels } from "../cards/shared/diffView";
 import {
   DIFF_WINDOW_PAGE_ROWS,
   diffFileMetrics,
   diffTotals,
-  formatDiffBytes,
   isWindowedDiff,
   sliceDiffPage,
   type DiffPage,
@@ -238,13 +238,14 @@ function WindowNotice({
   readonly formatNumber: (value: number) => string;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const locale = useLocale();
   const totals = diffTotals(files);
   return (
     <p className={styles.changesNotice}>
       {t("codingWorkbench.diffWindow.notice", {
         rows: formatNumber(totals.rows),
         files: totals.fileCount,
-        size: formatDiffBytes(totals.bytes, formatNumber),
+        size: formatBytes(totals.bytes, locale),
         page: formatNumber(DIFF_WINDOW_PAGE_ROWS),
       })}
     </p>
@@ -264,6 +265,7 @@ function WindowFileIndex({
   readonly onSelect: (index: number) => void;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const locale = useLocale();
   return (
     <ul className={styles.changesFileList} aria-label={t("codingWorkbench.diffWindow.files")}>
       {files.map((file, index) => (
@@ -277,7 +279,9 @@ function WindowFileIndex({
             <span className={styles.changesPath} title={file.path}>
               {file.path}
             </span>
-            <span className={styles.changesFileState}>{fileMeta(file, formatNumber, t)}</span>
+            <span className={styles.changesFileState}>
+              {fileMeta(file, formatNumber, locale, t)}
+            </span>
           </button>
         </li>
       ))}
@@ -288,10 +292,11 @@ function WindowFileIndex({
 function fileMeta(
   file: GitEditorDiffFile,
   formatNumber: (value: number) => string,
+  locale: string,
   t: CodingWorkbenchTranslate,
 ): string {
   const metrics = diffFileMetrics(file);
-  const size = formatDiffBytes(metrics.bytes, formatNumber);
+  const size = formatBytes(metrics.bytes, locale);
   if (file.binary) return t("codingWorkbench.diffWindow.fileMetaBinary");
   return t("codingWorkbench.diffWindow.fileMeta", {
     added: formatNumber(file.addedLines),

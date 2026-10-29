@@ -6,7 +6,6 @@ import {
   DIFF_WINDOW_THRESHOLD_ROWS,
   diffFileMetrics,
   diffPageCount,
-  formatDiffBytes,
   isWindowedDiff,
   sliceDiffPage,
 } from "./diffWindow";
@@ -111,15 +110,5 @@ describe("diff window plan (#4108)", () => {
     expect(sliceDiffPage(source, -4).page).toBe(0);
     const empty = sliceDiffPage(file([]), 3);
     expect(empty).toMatchObject({ page: 0, fromRow: 0, toRow: 0, pageCount: 1, hunks: [] });
-  });
-
-  it("formats binary sizes with a localizable number", () => {
-    const plain = (value: number): string => String(value);
-    expect(formatDiffBytes(0, plain)).toBe("0 B");
-    expect(formatDiffBytes(812, plain)).toBe("812 B");
-    expect(formatDiffBytes(1_024, plain)).toBe("1 KiB");
-    expect(formatDiffBytes(12_700, plain)).toBe("12.4 KiB");
-    expect(formatDiffBytes(8 * 1_048_576, plain)).toBe("8 MiB");
-    expect(formatDiffBytes(3 * 1_073_741_824, (v) => v.toFixed(1))).toBe("3.0 GiB");
   });
 });
