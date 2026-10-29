@@ -110,12 +110,12 @@
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
     "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",
     "tests/e2e/support/evidence.ts": "54712c17afcf8c47de426c02c9983c5837fbd2e665f5beccc112d7ec312414fd",
-    "tests/e2e/support/update-bff-outage-3405.mjs": "bf782435d3677f7d6f896ea5e638816b074ef8ab2ef334fb9ec4d48fa6c4f9af"
+    "tests/e2e/support/update-bff-outage-3405.mjs": "097ca94239ff03ab06c2c8ec341c59ca61ee0138cf6bb9b66d9241b08e24204f"
   },
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-10-29T10:03:42.688Z",
+  "generatedAt": "2026-10-29T17:57:49.633Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {
