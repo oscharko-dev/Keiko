@@ -525,6 +525,31 @@ only the existing unsupported-reference result; it does not classify the helper 
 change its privacy cache. The complete raw graph, downstream denial and independently valid root
 slots remain intact. Irrelevant or type-only bindings cannot supply this early rejection.
 
+Reverse exposure traversal also checks complete named-value imports at an already reached barrel
+against that target module's current canonical runtime exports before admitting the consumer's
+Program. Source export names, not local aliases or spelling similarity, select the actual symbols;
+the existing canonical alias, namespace, provenance and visibility checks decide helper identity.
+Only a conclusive unrelated result for every imported value can skip that consumer walk, after
+the target retains the existing unique declaration/runtime output binding. That binding qualifies
+native declaration/map provenance and observes a regular current guarded runtime file; an
+unavailable binding keeps the full consumer walk. The existing separate runtime qualification
+executes the shipped implementation; this does not add a fresh JavaScript semantic-attestation
+contract. Matching
+or missing symbols, unavailable target metadata and uncertain grammar retain the full walk; actual
+checker errors and budget refusals propagate.
+
+Both prepared and fallback statement descriptors use their existing unknown (`bindings: null`)
+shape for an import with a default clause, including mixed default plus named imports. A semantic
+named `default` value binding also retains the full walk. Namespace, star and other incomplete
+binding forms cannot certify an unrelated import. Known type-only bindings grant no runtime
+authority. This adds no descriptor field or cache and leaves the existing complete export helper's
+short-circuit traversal unchanged.
+
+The shortcut leaves incoming edges, graph states and global-use checks intact. An unrelated
+exported wrapper that invokes the helper still triggers the existing incoming-call and downstream
+denial. Actual source/body requests, both module-resolution modes, source/node/alias limits and
+all-input currentness remain authoritative.
+
 When no such foreign incoming reference already establishes rejection, the resolver first tries the existing
 canonical public-exposure proof on the producer source's own supported runtime entries. A
 positively proven public value export withholds the helper immediately;

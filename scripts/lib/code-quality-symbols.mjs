@@ -2582,6 +2582,8 @@ function preparedRawModuleIndex(compiler, receipt) {
 function rawModuleStatements(compiler, source) {
   return source.statements.map((node) => {
     chargeSymbolVisits(compiler.state);
+    if (ts.isImportDeclaration(node) && node.importClause?.name)
+      return { start: node.getStart(), bindings: null };
     const bindings = ts.isImportDeclaration(node)
       ? node.importClause?.namedBindings
       : node.exportClause;
@@ -2841,9 +2843,33 @@ function privateValueExportDeclaration(declaration) {
     : !statement.isTypeOnly && !declaration.isTypeOnly;
 }
 
-function privateIncomingModuleExposure(state, index, entry, producerModule) {
-  if (producerModule && !privateIncomingRelevant(state, index, entry)) return false;
+function privateIncomingModuleExposure(state, index, entry, target) {
+  const relevant =
+    target === state.identity.producer.path
+      ? privateIncomingRelevant(state, index, entry)
+      : privateIncomingTargetRelevant(state, index, entry, target);
+  if (!relevant) return false;
   return privateModuleExportsHelper(state, entry.path);
+}
+
+function privateIncomingTargetRelevant(state, index, entry, target) {
+  const node = index.modules
+    .get(entry.path)
+    ?.statements.find((statement) => statement.start === entry.start);
+  if (!node?.bindings) return true;
+  const bindings = node.bindings.filter((binding) => !binding.isTypeOnly);
+  if (bindings.some((binding) => binding.name === "default")) return true;
+  if (bindings.length === 0) return false;
+  const owned = privateOwnedSource(state.compiler, target);
+  if (!owned) return true;
+  const module = owned.context.checker.getSymbolAtLocation(owned.source);
+  if (!module) return true;
+  const exports = owned.context.checker.getExportsOfModule(module);
+  const relevant = bindings.some((binding) => {
+    const symbol = exports.find((entry) => entry.name === binding.name);
+    return !symbol || privateExportExposes(state, owned.context, symbol);
+  });
+  return relevant || !privateRawOutputBinding(state.compiler, target);
 }
 
 function privateReachableModules(state, index, path) {
@@ -2852,7 +2878,7 @@ function privateReachableModules(state, index, path) {
   for (const target of queue)
     for (const entry of index.incoming.get(target) ?? []) {
       if (reachable.has(entry.path)) continue;
-      const exposed = privateIncomingModuleExposure(state, index, entry, target === path);
+      const exposed = privateIncomingModuleExposure(state, index, entry, target);
       if (exposed === null) return null;
       if (!exposed) continue;
       reachable.add(entry.path);

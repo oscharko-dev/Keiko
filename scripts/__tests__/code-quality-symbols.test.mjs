@@ -3283,6 +3283,337 @@ describe("conclusive foreign raw-helper incoming denial (#3918)", () => {
   );
 });
 
+function canonicalBarrelConsumerSource(incoming) {
+  const path = "../../alpha/dist/exposure-barrel.js";
+  const sources = {
+    unrelated: `import { unrelated as local } from "${path}";\nexport const observed = local(1);\n`,
+    confusing: `import { isRecord as local } from "${path}";\nexport const observed = local(1);\n`,
+    multiple: `import { unrelated as local, isRecord as other } from "${path}";\nexport const observed = local(1) && other(1);\n`,
+    "inline-type-only": `import { unrelated as local, type renamedRecord as Guard } from "${path}";\nexport const observed = local(1); export type ImportedGuard = typeof Guard;\n`,
+    "type-only": `import { type renamedRecord as Guard } from "${path}";\nexport const observed = true; export type ImportedGuard = typeof Guard;\n`,
+    renamed: `import { renamedRecord as local } from "${path}";\nexport const observed = local(null);\n`,
+    mixed: `import { unrelated as local, renamedRecord as actual } from "${path}";\nexport const observed = local(1) && actual(null);\n`,
+    namespace: `import * as local from "${path}";\nexport const observed = local.unrelated(1);\n`,
+    "namespace-value": `import { helpers as local } from "${path}";\nexport const observed = local.isRecord(null);\n`,
+    star: `export * from "${path}";\nexport const observed = true;\n`,
+    default: `import local from "${path}";\nexport const observed = local(null);\n`,
+    "mixed-default": `import actual, { unrelated as local } from "${path}";\nexport const observed = actual(null) && local(1);\n`,
+    "named-default": `import { default as actual, unrelated as local } from "${path}";\nexport const observed = actual(null) && local(1);\n`,
+    dynamic: `export async function observed(): Promise<boolean> { const local = await import("${path}"); return local.unrelated(1); }\n`,
+    "synthetic-import-equals":
+      'import actual = require("../../alpha/dist/synthetic.cjs");\nexport const observed = actual() && actual.unrelated === 1;\n',
+    "synthetic-default":
+      'import actual, { unrelated as local } from "../../alpha/dist/synthetic.cjs";\nexport const observed = actual() && local === 1;\n',
+    computed: `const directory = "../../alpha/dist/";\nexport async function observed(): Promise<boolean> { const local = await import(directory + "exposure-barrel.js"); return local.unrelated(1); }\n`,
+  };
+  return (
+    sources[incoming] + 'import type { Bound } from "fixture-bound";\nexport type Domain = Bound;\n'
+  );
+}
+
+function canonicalBarrelSource(shape) {
+  if (shape === "healthy") return 'export { guard as unrelated } from "./helper.js";\n';
+  if (shape === "wrapper-only" || shape === "wrapper")
+    return (
+      'import { isRecord, fields } from "./helper.js";\n' +
+      "export function unrelated(input: unknown): boolean { if (!isRecord(input)) return false; return fields(input); }\n" +
+      (shape === "wrapper" ? 'export { isRecord as renamedRecord } from "./helper.js";\n' : "")
+    );
+  return (
+    'export { isRecord as renamedRecord, isRecord as default, guard as unrelated, guard as isRecord } from "./helper.js";\n' +
+    'export * as helpers from "./helper.js";\n'
+  );
+}
+
+function configureCanonicalBarrelPadding(own, kind, count) {
+  const metadata = JSON.parse(readFileSync(join(own.root, own.dependencyPath), "utf8"));
+  metadata.fixturePadding = kind === "metadata" ? "fixture-owned metadata é ".repeat(count) : "";
+  own.put(own.dependencyPath, metadata);
+  own.declarationPath = "packages/exposure-ui/node_modules/fixture-bound/index.d.ts";
+  own.put(
+    own.declarationPath,
+    (kind === "declaration" ? `/* ${"fixture-owned declaration é ".repeat(count)} */\n` : "") +
+      "export interface Bound { readonly value: number; }\n",
+  );
+}
+
+async function canonicalBarrelExposureFixture(
+  incoming = "unrelated",
+  { aliases = 64, kind = "metadata", count = 0, shape = "barrel", publicBarrel = false } = {},
+) {
+  const own = createPrivateModuleParserFixture();
+  fixtures.push(own);
+  configureExposureConsumer(own, "unrelated");
+  own.barrelPath = "packages/alpha/src/exposure-barrel.ts";
+  own.put(own.barrelPath, canonicalBarrelSource(shape));
+  own.put("packages/exposure-ui/src/consumer.ts", canonicalBarrelConsumerSource(incoming));
+  configureCanonicalBarrelPadding(own, kind, count);
+  if (incoming.startsWith("synthetic-"))
+    own.put(
+      "packages/alpha/src/synthetic.cts",
+      "function synthetic(): boolean { return true; }\n" +
+        "namespace synthetic { export const unrelated = 1; }\nexport = synthetic;\n",
+    );
+  if (publicBarrel) {
+    const path = "packages/alpha/package.json";
+    const manifest = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+    manifest.exports["./barrel"] = {
+      types: "./dist/exposure-barrel.d.ts",
+      import: "./dist/exposure-barrel.js",
+    };
+    own.put(path, manifest);
+  }
+  emitSymbolFixture(own.root);
+  emitSymbolFixture(own.root, "packages/exposure-ui");
+  own.subject = await collectPolicySubject(own.root);
+  own.aliases = aliases;
+  resetExposureResolver(own, { aliases });
+  return own;
+}
+
+function canonicalBarrelSlots(own) {
+  return own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+}
+
+function canonicalBarrelConsumerStatement(own) {
+  return preparedModuleReceipt(own.subject).rows.find(
+    (row) => row.path === "packages/exposure-ui/src/consumer.ts",
+  ).statements[0];
+}
+
+function canonicalBarrelDependencyBytes(own) {
+  return [own.dependencyPath, own.declarationPath].reduce(
+    (total, path) => total + readFileSync(join(own.root, path)).length,
+    0,
+  );
+}
+
+function expectCanonicalBarrelRootSlots(slots) {
+  expectForeignHelperDenial(slots);
+  expect(slots.every((slot) => slot.producerIdentity.owner === "alpha")).toBe(true);
+}
+
+// The small control executes the real resolver. Only a type-only dependency outside the production
+// inventory grows, so neither prepared nor fallback indexing has already admitted its padding.
+describe("canonical named barrel incoming relevance (#3918)", () => {
+  it.each([
+    [64, "metadata"],
+    [63, "metadata"],
+    [64, "declaration"],
+    [63, "declaration"],
+  ])(
+    "avoids unrelated barrel consumer bytes under actual small-source admission (%i, %s)",
+    async (aliases, kind) => {
+      const small = await canonicalBarrelExposureFixture("unrelated", { aliases, kind });
+      const large = await canonicalBarrelExposureFixture("unrelated", {
+        aliases,
+        kind,
+        count: 8192,
+      });
+      expect(large.subject.inventory.files.some((file) => file.path === large.dependencyPath)).toBe(
+        false,
+      );
+      expect(
+        large.subject.inventory.files.some((file) => file.path === large.declarationPath),
+      ).toBe(false);
+      const expected = canonicalBarrelSlots(small);
+      expectCanonicalBarrelRootSlots(expected);
+      const control = small.resolver.stats();
+      const generous = canonicalBarrelSlots(large);
+      expect(generous).toEqual(expected);
+      expectCanonicalBarrelRootSlots(generous);
+      const generousStats = large.resolver.stats();
+      resetExposureResolver(large, { aliases, sourceBytes: control.sourceBytes });
+      const slots = canonicalBarrelSlots(large);
+      expect(slots).toEqual(expected);
+      expectCanonicalBarrelRootSlots(slots);
+      expect(large.resolver.stats().sourceBytes).toBe(control.sourceBytes);
+      expect(large.resolver.stats().created).toBe(control.created);
+      expect(generousStats.sourceBytes).toBe(control.sourceBytes);
+      expect(generousStats.created).toBe(control.created);
+    },
+    60_000,
+  );
+
+  it.each([64, 63])(
+    "charges the deferred foreign Program and its full type-only dependencies (%i)",
+    async (aliases) => {
+      const own = await canonicalBarrelExposureFixture("unrelated", {
+        aliases,
+        kind: "declaration",
+        count: 4096,
+      });
+      const expected = canonicalBarrelSlots(own);
+      expectCanonicalBarrelRootSlots(expected);
+      const before = own.resolver.stats();
+      const path = "packages/exposure-ui/src/consumer.ts";
+      const text = readFileSync(join(own.root, path), "utf8");
+      own.resolver.describeAt({ path, offset: text.indexOf("observed") });
+      const actual = own.resolver.stats();
+      expect(actual.created).toBeGreaterThan(before.created);
+      expect(actual.sourceBytes - before.sourceBytes).toBeGreaterThanOrEqual(
+        canonicalBarrelDependencyBytes(own),
+      );
+      expect(canonicalBarrelSlots(own)).toEqual(expected);
+      own.put(
+        own.declarationPath,
+        readFileSync(join(own.root, own.declarationPath), "utf8") + "\n",
+      );
+      expect(() => own.resolver.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+    60_000,
+  );
+
+  it.each(["confusing", "multiple", "inline-type-only", "type-only"])(
+    "skips only conclusively unrelated canonical named bindings for %s",
+    async (incoming) => {
+      for (const aliases of [64, 63]) {
+        const control = await canonicalBarrelExposureFixture("unrelated", { aliases });
+        const own = await canonicalBarrelExposureFixture(incoming, { aliases });
+        const expected = canonicalBarrelSlots(control);
+        expectCanonicalBarrelRootSlots(expected);
+        expect(canonicalBarrelSlots(own)).toEqual(expected);
+        expect(own.resolver.stats().created).toBe(control.resolver.stats().created);
+        const bindings = canonicalBarrelConsumerStatement(own).bindings;
+        expect(bindings).not.toBeNull();
+        if (incoming === "confusing")
+          expect(bindings).toEqual([{ name: "isRecord", isTypeOnly: false }]);
+        if (incoming === "type-only")
+          expect(bindings).toEqual([{ name: "renamedRecord", isTypeOnly: true }]);
+      }
+    },
+    60_000,
+  );
+
+  it.each([
+    "renamed",
+    "mixed",
+    "namespace-value",
+    "namespace",
+    "star",
+    "default",
+    "mixed-default",
+    "named-default",
+    "dynamic",
+    "computed",
+  ])(
+    "retains the real foreign walk for a conservative %s binding",
+    async (incoming) => {
+      for (const aliases of [64, 63]) {
+        const own = await canonicalBarrelExposureFixture(incoming, { aliases, count: 8192 });
+        const control = measuredExposureControl(own);
+        expectCanonicalBarrelRootSlots(control.slots);
+        resetExposureResolver(own, { aliases, sourceBytes: control.sourceBytes });
+        expect(() => canonicalBarrelSlots(own)).toThrow("symbol-source-budget");
+        if (incoming === "default" || incoming === "mixed-default")
+          expect(canonicalBarrelConsumerStatement(own).bindings).toBeNull();
+        if (incoming === "named-default")
+          expect(canonicalBarrelConsumerStatement(own).bindings).toEqual([
+            { name: "default", isTypeOnly: false },
+            { name: "unrelated", isTypeOnly: false },
+          ]);
+      }
+    },
+    60_000,
+  );
+
+  it.each([64, 63])(
+    "keeps public barrel denial after an unrelated import is excluded (%i)",
+    async (aliases) => {
+      const control = await canonicalBarrelExposureFixture("unrelated", { aliases });
+      const own = await canonicalBarrelExposureFixture("unrelated", {
+        aliases,
+        publicBarrel: true,
+      });
+      const expected = canonicalBarrelSlots(control);
+      expectCanonicalBarrelRootSlots(expected);
+      expect(canonicalBarrelSlots(own)).toEqual(expected);
+      expectCanonicalBarrelRootSlots(canonicalBarrelSlots(own));
+    },
+    60_000,
+  );
+
+  it.each([
+    [64, "wrapper-only"],
+    [63, "wrapper-only"],
+    [64, "wrapper"],
+    [63, "wrapper"],
+  ])(
+    "retains global helper and downstream denial for a nonalias exported wrapper (%i, %s)",
+    async (aliases, shape) => {
+      const healthy = await canonicalBarrelExposureFixture("unrelated", {
+        aliases,
+        shape: "healthy",
+      });
+      const own = await canonicalBarrelExposureFixture("unrelated", { aliases, shape });
+      const positive = canonicalBarrelSlots(healthy);
+      expect(positive.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toHaveLength(
+        1,
+      );
+      expect(positive.filter((slot) => slot.path.includes("/leaf"))).toHaveLength(2);
+      const denied = canonicalBarrelSlots(own);
+      expectCanonicalBarrelRootSlots(denied);
+      expect(denied.filter((slot) => slot.path.includes("/leaf"))).toEqual([]);
+      expect(own.resolver.stats().created).toBe(healthy.resolver.stats().created);
+      expect(new Set(denied.map((slot) => slot.path))).toEqual(
+        new Set(["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"]),
+      );
+    },
+    60_000,
+  );
+
+  it.each(["synthetic-default", "synthetic-import-equals"])(
+    "retains the complete conservative descriptor for actual %s interop",
+    async (incoming) => {
+      const own = await canonicalBarrelExposureFixture(incoming);
+      expect(canonicalBarrelConsumerStatement(own).bindings).toBeNull();
+      const path = "packages/exposure-ui/src/consumer.ts";
+      const text = readFileSync(join(own.root, path), "utf8");
+      own.resolver.describeAt({ path, offset: text.indexOf("observed") });
+      expect(own.resolver.stats().created).toBeGreaterThan(1);
+    },
+    30_000,
+  );
+
+  it.each([
+    [64, "packages/alpha/dist/exposure-barrel.js"],
+    [63, "packages/alpha/dist/exposure-barrel.js"],
+    [64, "packages/alpha/dist/exposure-barrel.d.ts"],
+    [63, "packages/alpha/dist/exposure-barrel.d.ts"],
+    [64, "packages/alpha/dist/exposure-barrel.d.ts.map"],
+    [63, "packages/alpha/dist/exposure-barrel.d.ts.map"],
+  ])(
+    "revalidates observed barrel output after a cached negative (%i, %s)",
+    async (aliases, path) => {
+      const own = await canonicalBarrelExposureFixture("unrelated", { aliases });
+      const expected = canonicalBarrelSlots(own);
+      expectCanonicalBarrelRootSlots(expected);
+      expect(canonicalBarrelSlots(own)).toEqual(expected);
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, readFileSync(absolute, "utf8") + "\n");
+      expect(() => canonicalBarrelSlots(own)).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+
+  it.each([
+    "packages/alpha/src/exposure-barrel.ts",
+    "packages/alpha/dist/exposure-barrel.js",
+    "packages/exposure-ui/src/consumer.ts",
+    "packages/exposure-ui/tsconfig.json",
+  ])(
+    "revalidates skipped-consumer evidence after %s changes",
+    async (path) => {
+      const own = await canonicalBarrelExposureFixture();
+      expectCanonicalBarrelRootSlots(canonicalBarrelSlots(own));
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, readFileSync(absolute, "utf8") + "\n");
+      expect(() => canonicalBarrelSlots(own)).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+});
+
 function evictPrivateModuleProgram(own) {
   const path = "src/cache-owner.ts";
   const text = readFileSync(join(own.root, path), "utf8");

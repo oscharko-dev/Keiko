@@ -16,6 +16,7 @@ const MODULE_FACT_KINDS = new Set([
 ]);
 
 function moduleStatementBindings(node) {
+  if (ts.isImportDeclaration(node) && node.importClause?.name) return null;
   const bindings = ts.isImportDeclaration(node)
     ? node.importClause?.namedBindings
     : node.exportClause;

@@ -133,6 +133,14 @@ public-exposure work. It caches only the unsupported-reference fact, never a pub
 classification. The complete graph, downstream denial, root slots, all-input currentness and
 subsequent explicit source charging remain unchanged. Without this conclusive rejection, the
 existing public-producer proof and complete reachability fallback remain authoritative.
+For an already reached barrel, complete named-value incoming bindings are checked against that
+module's current canonical exports before compiling its consumer. Only conclusively unrelated
+bindings with the existing qualified declaration/map and guarded current runtime-output binding
+skip that consumer walk; actual helper aliases, namespaces, missing symbols, defaults
+and uncertain forms retain conservative traversal or the existing fault. Prepared and fallback
+metadata use the existing unknown binding shape for default clauses, including mixed defaults;
+semantic named-default values remain conservative. No new metadata field or cache is added.
+Global incoming-call and downstream denial, complete graph states and all existing limits remain.
 Unrelated unresolved runtime loaders
 remain a disclosed static-analysis limitation, not certified consumers or a universal refusal.
 Topology validation is deferred to canonical helper-export reachability and relevant manifest entry
