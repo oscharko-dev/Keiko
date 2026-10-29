@@ -181,3 +181,13 @@ Source provenance version 2 stores each owned input as an explicit `{ path, sha2
 The checker rejects duplicates, extra row fields, unsupported versions and any changed source path
 or digest. Harness hashes retain their existing exact map. This identifies public checksums as
 checksums while preserving the complete input binding and all visual/accessibility thresholds.
+
+## MCP Chat final-source refresh — 2026-10-28
+
+The original nine-case producer passed in 1.7 minutes in the isolated Linux arm64 environment on Node
+24.18.0/npm 11.16.0, from `01e3858cd` plus the MCP CSS class-prefix repair. This includes the real BFF
+stop/restart journey. All 25 declared source hashes and four harness hashes are fresh. All 14 screenshots
+were inspected; 11 are byte-identical to the preceding set, while Settings navigation, progress and
+reconnecting-state captures changed. The unchanged updater freshness gate, 287 CSS/proof tests, 25
+producer/freshness tests and both Editor bundle gates pass. No numerical ceiling, exception or suppression
+changed. This remains updater fixture evidence; it does not prove native installation or MCP/Jira effects.

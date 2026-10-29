@@ -45,7 +45,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "d27c21e0e1008f7bfdebea4ca64eb68cf8f59eefa5a1f0beb210ed4305c845d8"
+      "sha256": "3cf3ccc97476901a7270ecd64c099e8e356b2495194ffae0ffe46ad4c462fe87"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "1005e080c206c5b5eda105df9c9f1027aac933065fdc671623062a58d9ea4eaf"
+      "sha256": "2ce7c9675fad201db9cadfc5b87a85f239d1841b7d2ece88d7aad9f4aca074cd"
     },
     {
       "path": "package.json",
-      "sha256": "a0d1c43489dbafe1114a46286ca36fbc6014796ab8c93108478025c099822c8e"
+      "sha256": "f4326ca5467ac5343a6ea79210241900c6a863d836e38670ebc85ea34dad6cce"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -97,7 +97,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "b4db5a8c3b03e43a4a518a26bf2ada6aef94e0b33f31a5e86a8a444b58e1aa90"
+      "sha256": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2"
     },
     {
       "path": "scripts/lib/css-rendered-evidence.mjs",
@@ -120,7 +120,7 @@
       "sha256": "def885e0621a21a7d998dbedce5c5994c5391a3c8a0c1d1fb4070502d1ff0d7f"
     }
   ],
-  "postCssSha256": "6c8f21880aea2f6ab15c371bd7541e5fd3494f2bdfe37408153d9e4691663562",
+  "postCssSha256": "ec4cf7c88ede7534c4ee76c0dfcc81be9fdbc40a5139d97d8baf9c14de4ec7f4",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
@@ -132,8 +132,8 @@
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-10-27T21:14:28.924Z",
-    "repoHeadSha": "f3c668b501a855649795c1cc66cf63525511d1c0"
+    "generatedAt": "2026-10-28T19:17:23.392Z",
+    "repoHeadSha": "01e3858cdd9339a7ca0c842f25317d8f566fdc9a"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {

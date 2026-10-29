@@ -97,13 +97,13 @@ Status: **Partial — not accepted**. Registered body-free credential, verificat
 
 Status: **Verified**. The current checkout passes all 42 production-host SDK tests, including 13 explicit wire-boundary cases. Actual discovery/list/call carry protocol 2026-07-28 in HTTP and request metadata while network/process creation is guarded. Unsupported discovery/call revisions, missing or malformed required metadata, malformed JSON/JSON-RPC/method, unknown tools and schema-invalid arguments are refused before the provider; each call refusal has successful before/after controls. Optional clientInfo remains optional. See [individual AC1 acceptance](#individual-acceptance--4089-ac1). Dependency, package and architecture gates remain obligations of AC5/6.
 
-- [ ] **AC2:** Every tool the model can see originates from a compiled `keiko-tool-catalog` projection through the bound gateway advertisement; a hand-written, unknown or post-admission-drifted tool cannot be advertised or dispatched. Existing `projection-mismatch` protection stays green.
+- [x] **AC2:** Every tool the model can see originates from a compiled `keiko-tool-catalog` projection through the bound gateway advertisement; a hand-written, unknown or post-admission-drifted tool cannot be advertised or dispatched. Existing `projection-mismatch` protection stays green.
 
-Status: **Partial — not accepted**. Canonical discovery compilation, bound gateway offers and drift/schema/projection refusals compose into ordinary buffered/SSE Chat. Both complete 14-operation real-model groups exercised this path on the preceding assembled artifact. Final catalog/gateway and Coding compatibility checks remain open.
+Status: **Verified**. Within this issue's explicit Keiko-managed/non-OpenCode scope, production Chat advertises only a compiled canonical projection and current binder offer through the real Gateway adapters. Hand-written tool arrays, unknown tools, projection mismatch and post-admission metadata/handler drift are refused. Current source review plus 498 unchanged tests in twelve suites and 58 combined-catalog tests prove this path. OpenCode remains its own MCP client under the issue Purpose/Scope/Engineering Notes and ADR-0175 D2; its bounded native advertisements are transport data, not falsely claimed canonical projections. See [individual AC2 acceptance](#individual-acceptance--4089-ac2).
 
-- [ ] **AC3:** Call context is injected server-side only; routing and authority overrides are refused. Ordinary links in supported issue content remain data. Interleaved calls from two differently bound consumers, with cancellation and reversed completion order, cannot observe or use each other's context. Unsupported SDK input fulfillment or retries cannot bypass canonical admission and invocation accounting.
+- [x] **AC3:** Call context is injected server-side only; routing and authority overrides are refused. Ordinary links in supported issue content remain data. Interleaved calls from two differently bound consumers, with cancellation and reversed completion order, cannot observe or use each other's context. Unsupported SDK input fulfillment or retries cannot bypass canonical admission and invocation accounting.
 
-Status: **Partial — not accepted**. Server-only invocation context, override rejection and interleaved/cancelled SDK calls have retained proofs. The actual-Gateway suite now proves same-Pod and different-Pod Chats with reversed completion, separate grants/call IDs and correct credential routing. Real custody/PATCH routes additionally prove selective invalidation while another Pod completes. Final integrated and gate qualification remains open.
+Status: **Verified**. Server-only AsyncLocalStorage and exact Request-context binding isolate consumers; routing/authority overrides are refused while supported issue links remain data. Current SDK/Gateway/binder tests cover separate Chats, reversed completion, cancellation and generation/custody changes. A new actual-SDK regression exposed HEADER_MISMATCH replay after a completed handler (two executions before the fix); the admitted frozen toolDefinition now prevents the second invocation. Request-state, sampling, elicitation and roots input fulfillment perform no extra invocation. The current rebuilt candidate passes 299 tests in ten suites, strict typecheck/lint and the registered body-free failure proof. See [individual AC3 acceptance](#individual-acceptance--4089-ac3). Final aggregate gates remain separate AC6 obligations.
 
 - [ ] **AC4:** The admission pipeline composes stricter-wins in all three modes; a denied call performs no handler call; approval and grant redemption re-validate binding, generation, envelope, mode and budget; cancellation and timeout settle exactly once.
 
@@ -3080,3 +3080,97 @@ pause and made zero matching writes; it is retained as a diagnostic attempt, not
 successful recovery proof. Restarting the same unchanged fixture preserved all records,
 TLS and credentials, and authenticated preflight preceded the complete fresh UI run.
 A separate positive UI control performs one new approved write: the outer Execute succeeds, SQLite records `succeeded` with SDK protocol success, and independent remote state proves exactly one matching record. Its separate get_note Execute also succeeds against the returned record ID; the final model answer is checked separately.
+
+## Individual acceptance — #4089 AC2
+
+The full issue Purpose and Scope concern Keiko-managed providers and non-OpenCode
+consumers, and explicitly preserve OpenCode as its own MCP client. This acceptance
+uses that scope, consistent with ADR-0175 D2; it does not relabel native producer tools
+as canonically bound tools. No architecture migration or policy exception was added.
+
+`managedProviderCatalog.ts` constructs exact routes from `host.catalog()` through
+`createKeikoToolCatalog` and `compileToolProjection`. Handler readiness checks admission
+drift before every offer, and execution routes exclusively through `host.call`.
+Configured MCP Chat and combined Jira/MCP reuse that owner. `chat-tool-turn.ts` sends
+only a bound catalog, compiled projection and current `binder.offer()` to the real
+Gateway model port, and dispatches its bound invocations. The Gateway adapters derive
+provider definitions through `createGatewayToolCatalogBridge`; the normalizer verifies
+the snapshot, recompiles and compares it. Raw tools, unknown tools, projection mismatch
+and both descriptor/handler drift have retained refusal controls.
+
+On `01e3858cd`, 498 unchanged tests in twelve Gateway, catalog/binder, Chat, mixed Chat,
+host, external-client, relay and Native-compatibility suites pass; another 58 unchanged
+combined Chat/catalog/invocation tests pass. The actual source chain was independently
+reviewed alongside these results. These are criterion-specific proofs, not a replacement
+for the remaining aggregate gates or the Native execution requirements.
+
+## Individual acceptance — #4089 AC3
+
+The actual managed host injects invocation context through AsyncLocalStorage and the
+exact server-owned Request binding; no tool argument supplies routing or authority.
+Provider and compiled catalog checks reject caller overrides and drift. Current
+non-Coding/Gateway/Chat tests exercise two separately bound consumers, same/different
+Pods, reversed completion, cancellation and selective generation invalidation.
+
+The stricter SDK boundary check exposed an actual automatic replay: after the provider
+completed, a synthetic HEADER_MISMATCH response caused SDK2.4.0 to execute the handler
+twice. The current-checkout regression fails with two executions before the fix and
+passes with one afterward. Passing the already admitted frozen toolDefinition through
+the SDK's existing call option prevents implicit rediscovery/re-execution. No replay
+registry or new policy path was introduced.
+
+Four real SDK response cases additionally cover request-state-only, sampling,
+elicitation and roots input fulfillment. They fail closed with one handler invocation,
+no automatic fulfillment or second call, and successful before/after controls.
+The retry regression also validates exactly one registered protocol-error failure
+line and absence of the synthetic raw error text.
+
+After the final package build, the current-checkout ten-suite command for host,
+external client, combined/Jira/MCP Chat and non-Coding/authority/context owners passes
+299/299. Full root build/typecheck, scoped lint/format, error-observability, operation
+registry and the complete unchanged 927-group duplication check pass. The fresh
+6,938-file backend snapshot is `8f71ba25b4f7848e3fc283233932d57e90da006d41c927fdc0296f58ee4d9a6a`.
+The wider preliminary coverage run was intentionally interrupted before final runtime
+fixes; it is not represented as final acceptance.
+
+## Qualification checkpoint — four individual acceptances and CI repairs
+
+The current matrix contains exactly 55 criteria, of which four are individually
+verified: #4089 AC1, AC2, AC3 and AC7. The remaining 51 retain their explicit partial
+status. This does not establish final-head qualification or close a child issue.
+
+The pinned Linux UI producers now complete all 108 browser cases with zero unknown
+fixture APIs, all nine updater scenarios, 427 component probes and seven axe modes.
+The browser fixture supplies the existing credentials metadata GET with an empty
+synthetic result; unknown routes remain refused. All 136 regenerated screenshots
+retain their historical fixture versions, independently of the actual product 1.3.1.
+The 287 focused CSS/evidence tests, updater freshness and editor release evidence
+checks pass. MCP settings classes now follow the established `cmp` convention without
+adding an exception or changing declarations, markup or interaction behavior.
+
+The package coverage producer's five stale source-file counts are corrected without
+changing a coverage floor. The shared autonomy label helper derives its keys from the
+existing typed translation catalog; the i18n guard, strict UI typecheck and 219 guard
+tests pass. The isolated assembled Linux package passes its actual pruned surface check
+over 7,210 files. Its generated root export contract records the intended additive
+`createHarnessCatalogBudget` function and `HarnessCatalogBudget` type; nine root
+contract tests pass and no existing export is removed.
+
+The ordinary tool-turn prompt now instructs the model to invoke an actually requested
+tool so Keiko can present its existing consent or approval control. Prose permission
+requests do not replace the control. Authority, mode, consent, approval and cumulative
+budgets still gate dispatch. Data-only routing and prompt owners are unchanged; this
+instruction is included in the existing physical-call token accounting.
+
+The synthetic Jira session was renewed by restarting only its existing Jira container;
+the database and TLS containers and all three container identities are retained.
+Actual license validation passes. The previous incomplete mixed group was independently
+reconciled with zero matching remote comments and zero mutation journal entries before
+archiving it; unrelated comment-count changes were retained in its private receipt.
+The new complete mixed group passes both read and approved-write turns against the
+frozen corrected backend, with separate Data grounding attribution and exactly one
+independently observed comment. Opening/closing license checks report 9,779/9,720
+seconds remaining. Its complete receipt and unchanged 6,938-file artifact inventory
+are checked; the earlier incomplete group is not counted as a passing result.
+Full coverage, portable performance, aggregate architecture/dependency qualification,
+remaining licensed/browser groups, Sonar and final-head CI/review acceptance remain open.

@@ -43,6 +43,12 @@ import type { CatalogConsumer, CatalogToolBinder } from "./tool-catalog/catalogT
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 
+const TOOL_TURN_INSTRUCTION: GatewayMessage = {
+  role: "system",
+  content:
+    "When the user requests an operation supported by an offered tool, invoke the matching tool to request Keiko's required read consent or action approval. Keiko presents the actual consent or approval control and waits for any required decision before the effect. Asking for permission in prose does not open or replace those controls. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, consent, approval and budget checks remain binding.",
+};
+
 type ModelAttempt = NonNullable<GatewayCallRequest["attemptAdmission"]>;
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly deps: Pick<UiHandlerDeps, "store" | "gatewayConfig" | "atlassianActionApprovalRegistry">;
@@ -409,7 +415,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         {
           ...request,
           stream: false,
-          messages: [...request.messages, ...this.continuation],
+          messages: [TOOL_TURN_INSTRUCTION, ...request.messages, ...this.continuation],
           toolCatalog: {
             kind: "bound",
             catalog: managed.catalog,

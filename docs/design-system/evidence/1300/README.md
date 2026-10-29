@@ -6,10 +6,10 @@ been visually accepted. The narrative, surface matrix, tolerance, retention, des
 final variance register are in [`../../visual-regression.md`](../../visual-regression.md); the governance gates
 are in [ADR-0051](../../../adr/ADR-0051-design-system-visual-regression-and-acceptance-gate.md).
 
-The commands below are historical evidence tools, not standing CI or pull-request gates. They retain their
-non-zero assertions for forensic reproduction, but later intentional changes to the product or reference can
-make an old migration comparison fail. Current release protection is provided by the applicable UI and
-Playwright regression suites.
+The commands below retain historical fixture scope. They are not direct CI entry points, but current UI
+regression tests verify their committed proofs against the declared source inputs. When those inputs change,
+regenerate the original producers before claiming those tests pass. Their non-zero assertions remain active;
+these fixture proofs do not replace applicable product journeys or qualify capabilities they do not exercise.
 
 ## How to reproduce
 
@@ -156,3 +156,25 @@ probes, zero gated differences and all 14 reference captures, the seven-mode acc
 serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
 captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
 unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## MCP and Jira Chat integration — 2026-10-28
+
+The original four producers were regenerated in the isolated Linux arm64 environment with Node 24.18.0
+and npm 11.16.0 from `01e3858cd`, plus the MCP CSS class-prefix repair and the exact empty connector-list
+fixture. The first complete browser run rejected 18 previously unstubbed `GET` requests from the new
+Jira-pod view. The fixture now answers only `/api/atlassian-connectors/credentials` with the existing
+`{ credentials: [] }` envelope; unexpected paths and methods still fail closed. All four producers were
+then rerun, so their 29 declared source fingerprints also bind the updated harness.
+
+Component fidelity passed 427 probes with zero gated differences. Editor fidelity passed 160 probes with
+zero gated differences and all 14 reference captures; the previously recorded, non-gated dark high-contrast
+bracket-color difference remains recorded. The seven-mode accessibility proof has zero violations and zero
+unresolved incomplete findings. All 108 running-app captures have zero page errors, missing selectors,
+error notices, crashed windows, unavailable trust states and unexpected API requests. All 287 unchanged
+CSS/proof tests and 25 producer/freshness tests passed. No threshold, exception or suppression changed.
+
+The regenerated browser and editor-reference captures were visually inspected. The historical canvas
+fixtures retain window positions extending beyond narrow viewports, as the prior baseline did; these images
+are not a complete mobile interaction qualification. Reference pages depicting an agent in the Editor
+remain historical design references, not evidence of an available Editor agent. MCP/Jira live effects and
+model behavior are qualified separately in the epic evidence.

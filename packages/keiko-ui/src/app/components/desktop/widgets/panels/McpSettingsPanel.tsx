@@ -373,22 +373,22 @@ function McpServerCard({ model, t, server }: ServerViewProps): ReactNode {
       ? server.transport.url.replace(/[?#].*$/u, "")
       : server.transport.command[0].split(/[\\/]/u).at(-1);
   return (
-    <li className={styles.card}>
-      <div className={styles.cardHeader}>
-        <span className={styles.serverIcon} aria-hidden="true">
+    <li className={styles.cmpCard}>
+      <div className={styles.cmpCardHeader}>
+        <span className={styles.cmpServerIcon} aria-hidden="true">
           <Icons.server />
         </span>
-        <div className={styles.serverIdentity}>
+        <div className={styles.cmpServerIdentity}>
           <h3>{server.name}</h3>
-          <p className={styles.target}>{target}</p>
+          <p className={styles.cmpTarget}>{target}</p>
         </div>
-        <span className={styles.badge} data-state={state} role="status">
-          <span className={styles.statusDot} aria-hidden="true" />
+        <span className={styles.cmpBadge} data-state={state} role="status">
+          <span className={styles.cmpStatusDot} aria-hidden="true" />
           {status}
         </span>
       </div>
-      <div className={styles.cardFooter}>
-        <span className={styles.transport}>
+      <div className={styles.cmpCardFooter}>
+        <span className={styles.cmpTransport}>
           {t(server.transport.kind === "remote" ? "settings.mcp.remote" : "settings.mcp.local")}
         </span>
         <McpServerActions model={model} t={t} server={server} />
@@ -399,7 +399,7 @@ function McpServerCard({ model, t, server }: ServerViewProps): ReactNode {
 function McpServerActions({ model, t, server }: ServerViewProps): ReactNode {
   const busy = model.state.busy;
   return (
-    <div className={styles.actions}>
+    <div className={styles.cmpActions}>
       <button
         type="button"
         disabled={busy || !server.enabled}
@@ -447,7 +447,7 @@ function McpRemoveAction({ model, t, server }: ServerViewProps): ReactNode {
       <button
         ref={opener}
         type="button"
-        className={styles.danger}
+        className={styles.cmpDanger}
         disabled={model.state.busy}
         onClick={() => setConfirm(true)}
       >
@@ -457,14 +457,14 @@ function McpRemoveAction({ model, t, server }: ServerViewProps): ReactNode {
     );
   return (
     <div
-      className={styles.removeConfirm}
+      className={styles.cmpRemoveConfirm}
       role="group"
       aria-label={t("settings.mcp.removeTitle", { name: server.name })}
     >
       <p>{t("settings.mcp.removeHelp", { name: server.name })}</p>
       <button
         type="button"
-        className={styles.danger}
+        className={styles.cmpDanger}
         disabled={model.state.busy}
         onClick={() => void perform(model, () => changeServer(model, server, true))}
       >
@@ -519,7 +519,7 @@ function RemoteFields({ model, t }: ViewProps): ReactNode {
     <>
       <TextField model={model} field="url" label={t("settings.mcp.url")} type="url" required />
       <TextField model={model} field="token" label={t("settings.mcp.token")} type="password" />
-      <label className={styles.check}>
+      <label className={styles.cmpCheck}>
         <input
           type="checkbox"
           checked={form.privateNetwork}
@@ -527,7 +527,7 @@ function RemoteFields({ model, t }: ViewProps): ReactNode {
         />
         {t("settings.mcp.private")}
       </label>
-      <label className={styles.check}>
+      <label className={styles.cmpCheck}>
         <input
           type="checkbox"
           checked={form.legacy}
@@ -581,13 +581,13 @@ function McpForm({ model, t }: ViewProps): ReactNode {
     snapshot?.servers.find((server) => server.name === editing)?.enabled === false;
   return (
     <form
-      className={styles.formCard}
+      className={styles.cmpFormCard}
       onSubmit={(event) => {
         event.preventDefault();
         void perform(model, () => submit(model));
       }}
     >
-      <fieldset disabled={busy} className={styles.form}>
+      <fieldset disabled={busy} className={styles.cmpForm}>
         <legend>{t(editing === undefined ? "settings.mcp.add" : "settings.mcp.edit")}</legend>
         <TextField model={model} field="name" label={t("settings.mcp.name")} required />
         <label>
@@ -603,11 +603,11 @@ function McpForm({ model, t }: ViewProps): ReactNode {
           <LocalFields model={model} t={t} />
         )}
         {snapshot === undefined && (
-          <p className={styles.help}>{t("settings.mcp.saveUnavailable")}</p>
+          <p className={styles.cmpHelp}>{t("settings.mcp.saveUnavailable")}</p>
         )}
-        <div className={styles.actions}>
+        <div className={styles.cmpActions}>
           <button
-            className={styles.primary}
+            className={styles.cmpPrimary}
             type="submit"
             disabled={snapshot === undefined || model.state.needsPairing}
           >
@@ -625,25 +625,25 @@ function McpOverview({ model, t }: ViewProps): ReactNode {
   const { snapshot, error } = model.state;
   if (snapshot === undefined)
     return error ? null : (
-      <p className={styles.empty} role="status">
+      <p className={styles.cmpEmpty} role="status">
         {t("settings.mcp.loading")}
       </p>
     );
   if (snapshot.servers.length === 0)
     return (
-      <div className={styles.empty}>
+      <div className={styles.cmpEmpty}>
         <Icons.server />
         <h3>{t("settings.mcp.emptyTitle")}</h3>
         <p>{t("settings.mcp.emptyHelp")}</p>
       </div>
     );
   return (
-    <div className={styles.overview}>
-      <div className={styles.listHeading}>
+    <div className={styles.cmpOverview}>
+      <div className={styles.cmpListHeading}>
         <h3>{t("settings.mcp.configured")}</h3>
         <span>{t("settings.mcp.serverCount", { count: snapshot.servers.length })}</span>
       </div>
-      <ul className={styles.servers} aria-label={t("settings.mcp.configured")}>
+      <ul className={styles.cmpServers} aria-label={t("settings.mcp.configured")}>
         {snapshot.servers.map((server) => (
           <McpServerCard key={server.name} server={server} model={model} t={t} />
         ))}
@@ -665,7 +665,7 @@ function McpSettingsError({ model, t }: ViewProps): ReactNode {
       ? "settings.mcp.credentialsTitle"
       : "settings.mcp.errorTitle";
   return (
-    <div className={styles.alert} role="alert">
+    <div className={styles.cmpAlert} role="alert">
       <div>
         <strong>{t(title)}</strong>
         <p>{t(help)}</p>
@@ -683,15 +683,15 @@ export function McpSettingsPanel(): ReactNode {
   const t = useTranslate();
   const { busy, formOpen } = model.state;
   return (
-    <section className={styles.panel} aria-label={t("settings.mcp.title")} aria-busy={busy}>
-      <header className={styles.header}>
+    <section className={styles.cmpPanel} aria-label={t("settings.mcp.title")} aria-busy={busy}>
+      <header className={styles.cmpHeader}>
         <div>
           <h2>{t("settings.mcp.title")}</h2>
           <p>{t("settings.mcp.description")}</p>
         </div>
         <button
           type="button"
-          className={styles.primary}
+          className={styles.cmpPrimary}
           disabled={busy || formOpen}
           onClick={(event) => {
             model.formOpener.current = event.currentTarget;
@@ -702,7 +702,7 @@ export function McpSettingsPanel(): ReactNode {
           {t("settings.mcp.add")}
         </button>
       </header>
-      <div className={styles.availability}>
+      <div className={styles.cmpAvailability}>
         <Icons.plugins />
         <span>{t("settings.mcp.availability")}</span>
       </div>

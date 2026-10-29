@@ -1,6 +1,7 @@
 import childProcess from "node:child_process";
 import net from "node:net";
 import { afterEach, expect, it, vi } from "vitest";
+import { fromJsonSchema, inputRequired } from "@modelcontextprotocol/server";
 import type {
   CanonicalToolId,
   CatalogDigest,
@@ -9,17 +10,24 @@ import type {
 import type {
   ManagedMcpHost,
   ManagedMcpInvocationContext,
+  ManagedMcpLogPort,
   ManagedMcpTool,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createManagedMcpHost } from "./index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 interface WireMessage {
   jsonrpc: string;
+  id: string | number;
   method: string;
   params: { name?: string; arguments?: unknown; _meta?: Record<string, unknown> };
 }
 const wire = vi.hoisted(() => ({
   method: "tools/call",
+  responseFault: undefined as ((message: WireMessage) => Response | undefined) | undefined,
   protocolHeader: undefined as string | undefined,
   rewrite: undefined as ((message: WireMessage) => string) | undefined,
   exchanges: [] as {
@@ -59,7 +67,8 @@ vi.mock("@modelcontextprotocol/client", async (original) => {
   };
 });
 
-// Observe the actual handler's response; no validator, response or result is replaced.
+// Observe the actual handler response; designated fault cases replace its completed response only.
+// The SDK, production handler, validators and provider effects always execute unchanged.
 vi.mock("@modelcontextprotocol/server", async (original) => {
   const sdk = await original<typeof import("@modelcontextprotocol/server")>();
   return {
@@ -79,7 +88,7 @@ vi.mock("@modelcontextprotocol/server", async (original) => {
             status: response.status,
             response: await response.clone().text(),
           });
-          return response;
+          return wire.responseFault?.(JSON.parse(body) as WireMessage) ?? response;
         },
       };
     },
@@ -95,6 +104,7 @@ interface Context extends ManagedMcpInvocationContext {
 const hosts: ManagedMcpHost<Context>[] = [];
 afterEach(async () => {
   wire.rewrite = undefined;
+  wire.responseFault = undefined;
   wire.method = "tools/call";
   wire.protocolHeader = undefined;
   await Promise.all(hosts.splice(0).map((host) => host.close()));
@@ -125,7 +135,7 @@ const descriptor: ToolDescriptor = {
   idempotency: "read-only",
   cancellation: "before-effect",
 };
-function fixture(): {
+function fixture(log: ManagedMcpLogPort = { write: () => undefined }): {
   host: ManagedMcpHost<Context>;
   execute: ReturnType<typeof vi.fn<ManagedMcpTool<Context>["execute"]>>;
   context: Context;
@@ -142,7 +152,7 @@ function fixture(): {
         ],
       },
     ],
-    log: { write: () => undefined },
+    log,
   });
   hosts.push(host);
   return {
@@ -347,3 +357,113 @@ it("refuses an unsupported revision during real SDK discovery and records the su
     });
   }
 });
+
+it("does not replay a managed invocation after HEADER_MISMATCH follows its completed effect", async () => {
+  const lines: string[] = [];
+  const f = fixture({ write: (event) => lines.push(formatActivityLogProofLine(event)) });
+  await f.host.admit("synthetic-managed-no-replay");
+  await expect(f.host.call("fixture.echo", { value: "control" }, f.context)).resolves.toEqual({
+    marker: "server-bound",
+    value: "control",
+  });
+  f.execute.mockClear();
+  wire.exchanges.length = 0;
+  wire.responseFault = (message): Response | undefined => {
+    if (message.method !== "tools/call") return undefined;
+    wire.responseFault = undefined;
+    return Response.json({
+      jsonrpc: "2.0",
+      id: message.id,
+      error: { code: -32020, message: "synthetic mismatch after completed effect" },
+    });
+  };
+  const outcome = await f.host.call("fixture.echo", { value: "one-call" }, f.context).then(
+    () => "resolved",
+    () => "rejected",
+  );
+  expect(f.execute).toHaveBeenCalledTimes(1);
+  expect(outcome).toBe("rejected");
+  expect(
+    wire.exchanges.filter(({ body }) => (JSON.parse(body) as WireMessage).method === "tools/call"),
+  ).toHaveLength(1);
+  const failed = lines
+    .map((line) => expectActivityLogProof("mcp.managed.lifecycle.line", line))
+    .filter((proof) => proof.phase === "failed");
+  expect(failed).toHaveLength(1);
+  expect(failed[0]?.reason).toBe("protocol-error");
+  expect(lines.join()).not.toContain("synthetic mismatch after completed effect");
+});
+
+const unsupportedInputs = [
+  [
+    "request-state-only",
+    (): ReturnType<typeof inputRequired> =>
+      inputRequired({ requestState: "synthetic-resume-state" }),
+  ],
+  [
+    "sampling",
+    (): ReturnType<typeof inputRequired> =>
+      inputRequired({
+        inputRequests: {
+          synthetic: inputRequired.createMessage({
+            messages: [{ role: "user", content: { type: "text", text: "Synthetic request" } }],
+            maxTokens: 1,
+          }),
+        },
+      }),
+  ],
+  [
+    "elicitation",
+    (): ReturnType<typeof inputRequired> =>
+      inputRequired({
+        inputRequests: {
+          synthetic: inputRequired.elicit({
+            message: "Synthetic request",
+            requestedSchema: fromJsonSchema({ type: "object", properties: {} }),
+          }),
+        },
+      }),
+  ],
+  [
+    "roots",
+    (): ReturnType<typeof inputRequired> =>
+      inputRequired({ inputRequests: { synthetic: inputRequired.listRoots() } }),
+  ],
+] as const;
+it.each(unsupportedInputs)(
+  "refuses SDK %s input fulfillment without another invocation",
+  async (_label, required) => {
+    const f = fixture();
+    await f.host.admit("synthetic-unsupported-input");
+    const discovery = wire.exchanges.find(
+      ({ body }) => (JSON.parse(body) as WireMessage).method === "server/discover",
+    );
+    expect(JSON.parse(discovery?.body ?? "null")).toMatchObject({
+      params: { _meta: { [CAPABILITIES]: {} } },
+    });
+    await expect(f.host.call("fixture.echo", { value: "before" }, f.context)).resolves.toEqual({
+      marker: "server-bound",
+      value: "before",
+    });
+    f.execute.mockClear();
+    wire.exchanges.length = 0;
+    wire.responseFault = (message): Response | undefined => {
+      if (message.method !== "tools/call") return undefined;
+      wire.responseFault = undefined;
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: required() });
+    };
+    await expect(
+      f.host.call("fixture.echo", { value: "unsupported-input" }, f.context),
+    ).rejects.toMatchObject({ reason: "protocol-error" });
+    expect(f.execute).toHaveBeenCalledTimes(1);
+    expect(wire.exchanges.map(({ body }) => (JSON.parse(body) as WireMessage).method)).toEqual([
+      "tools/list",
+      "tools/call",
+    ]);
+    await expect(f.host.call("fixture.echo", { value: "after" }, f.context)).resolves.toEqual({
+      marker: "server-bound",
+      value: "after",
+    });
+    expect(f.execute).toHaveBeenCalledTimes(2);
+  },
+);

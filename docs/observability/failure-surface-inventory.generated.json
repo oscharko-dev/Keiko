@@ -2473,6 +2473,7 @@
     ],
     "mcp.managed.lifecycle.line": [
       "packages/keiko-mcp/src/external-client.test.ts",
+      "packages/keiko-mcp/src/host-protocol.test.ts",
       "packages/keiko-mcp/src/host.test.ts"
     ],
     "mcp.oauth.issuer.checked.emitted-line": [

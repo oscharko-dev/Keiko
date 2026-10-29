@@ -346,7 +346,8 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
         if (bound.signal.aborted) throw new ManagedMcpError("aborted");
         return this.#client.callTool(
           { name, arguments: argumentsValue },
-          { signal: bound.signal, timeout },
+          // Pin the admitted definition so SDK HEADER_MISMATCH recovery cannot replay effects.
+          { toolDefinition: deepFreeze(toolDefinition(tool)), signal: bound.signal, timeout },
         );
       });
       if (result.isError)
