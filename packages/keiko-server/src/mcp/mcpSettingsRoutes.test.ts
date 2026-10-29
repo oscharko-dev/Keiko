@@ -234,6 +234,19 @@ describe("central MCP authorization route authority", () => {
       expect((await handler(context(""), deps)).status).toBe(403);
     expect(start).not.toHaveBeenCalled();
   });
+  it.each([null, [], {}])(
+    "rejects an invalid JSON status boundary before consulting its owner: %j",
+    async (body) => {
+      const f = fixture();
+      const owner = authorizationOwner();
+      const result = await handleMcpAuthorizationStatus(context(f.cookie, body), {
+        ...f.deps,
+        mcpAuthorization: owner,
+      });
+      expect(result.status).toBe(400);
+      expect(owner.status).not.toHaveBeenCalled();
+    },
+  );
   it("rejects oversized and ambiguous status requests before consulting the owner", async () => {
     const f = fixture();
     const owner = authorizationOwner();

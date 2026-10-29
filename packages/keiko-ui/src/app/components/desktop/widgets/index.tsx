@@ -511,6 +511,9 @@ function SettingsPanelSessionHost({
   return (
     <SettingsPanel
       initialTab={initialTab}
+      onInitialTabHandled={() => {
+        ctx.updateCfg({ initialTab: undefined });
+      }}
       root={ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined}
       openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })}
       openWorkspaceTrust={() => ctx.openWindow("workspaceTrust")}

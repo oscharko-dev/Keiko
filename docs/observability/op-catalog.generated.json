@@ -105984,14 +105984,14 @@
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:304",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:324",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:361",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:381",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

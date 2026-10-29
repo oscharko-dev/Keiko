@@ -209,13 +209,18 @@ class AuthorizationOwner implements McpAuthorization {
   readonly #lifetime = new AbortController();
   readonly #starting = new Set<string>();
   constructor(private readonly options: Options) {}
-  private server(name: string, correlationId: string): McpServerDefinition {
+  private configuredServer(name: string, correlationId: string): McpServerDefinition {
     const server = this.options.settings
       .read(correlationId)
-      .servers.find((entry) => entry.name === name && entry.enabled);
+      .servers.find((entry) => entry.name === name);
     if (server === undefined || this.#lifetime.signal.aborted)
       throw new ManagedMcpError("not-admitted");
     remote(server);
+    return server;
+  }
+  private server(name: string, correlationId: string): McpServerDefinition {
+    const server = this.configuredServer(name, correlationId);
+    if (!server.enabled) throw new ManagedMcpError("not-admitted");
     return server;
   }
   private client(server: McpServerDefinition, correlationId: string): McpOAuthClient {
@@ -225,22 +230,37 @@ class AuthorizationOwner implements McpAuthorization {
     if (previous?.signal === generation) return previous.client;
     const signal = AbortSignal.any([generation, this.#lifetime.signal]);
     const current = (): boolean =>
-      !signal.aborted && !this.options.settings.generation(server, correlationId).aborted;
-    const client = createMcpOAuthClient({
+      !signal.aborted &&
+      this.#clients.get(server.name)?.client === client &&
+      !this.options.settings.generation(server, correlationId).aborted;
+    const client = this.restoredClient(server, signal, current);
+    this.#clients.set(server.name, { signal: generation, client });
+    return client;
+  }
+  private restoredClient(
+    server: McpServerDefinition,
+    signal: AbortSignal,
+    current: () => boolean,
+  ): McpOAuthClient {
+    remote(server);
+    return createMcpOAuthClient({
       url: server.transport.url,
       oauth: server.transport.oauth,
       persistence: persistence(this.options, server),
       beforeEffect: current,
       fetch: oauthFetch(this.options, server, signal, current),
     });
-    this.#clients.set(server.name, { signal: generation, client });
-    return client;
+  }
+  private credentialView(server: McpServerDefinition): McpOAuthClient {
+    return server.enabled
+      ? this.client(server, "mcp-authorization")
+      : this.restoredClient(server, this.#lifetime.signal, () => false);
   }
   authorized(server: McpServerDefinition): boolean {
-    return this.client(server, "mcp-authorization").authorized();
+    return this.credentialView(server).authorized();
   }
   credentials(server: McpServerDefinition): readonly string[] {
-    return this.client(server, "mcp-authorization").credentials();
+    return this.credentialView(server).credentials();
   }
   async token(server: McpServerDefinition, correlationId: string): Promise<string> {
     const client = this.client(server, correlationId);
@@ -448,7 +468,11 @@ class AuthorizationOwner implements McpAuthorization {
     if (attempt?.server === name && attempt.session === session) this.settle(attempt, "cancelled");
   }
   revoke(name: string, correlationId: string): void {
-    const server = this.server(name, correlationId);
+    const server = this.configuredServer(name, correlationId);
+    this.#clients.delete(name);
+    for (const attempt of this.#attempts.values()) {
+      if (attempt.server === name) this.settle(attempt, "cancelled");
+    }
     persistence(this.options, server).clear();
     this.options.settings.revoke(name, correlationId);
     recordMcpAuthorization(this.options.log, correlationId, "mcp-credential-revocation", "revoked");

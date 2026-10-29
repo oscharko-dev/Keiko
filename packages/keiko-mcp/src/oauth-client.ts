@@ -13,11 +13,8 @@ import {
 } from "@modelcontextprotocol/client";
 import type { McpRemoteOAuth } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { ManagedMcpError } from "./definitions.js";
-const PERMANENT_REFRESH_ERRORS = new Set<string>([
-  OAuthErrorCode.InvalidGrant,
-  OAuthErrorCode.InvalidClient,
-  OAuthErrorCode.UnauthorizedClient,
-]);
+// Client configuration failures do not establish revocation of the authorization grant.
+const PERMANENT_REFRESH_ERRORS = new Set<string>([OAuthErrorCode.InvalidGrant]);
 
 export interface McpOAuthPersistence {
   readonly read: () => Readonly<Record<string, unknown>> | undefined;

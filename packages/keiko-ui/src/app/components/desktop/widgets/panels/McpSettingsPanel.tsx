@@ -5,7 +5,6 @@ import type {
   McpServerDefinition,
   McpSettingsSnapshot,
   McpSettingsUpdate,
-  McpServerConnectionView,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { bffFetchJson, isDeniedError } from "@/lib/http";
 import { Icons } from "../../Icons";
@@ -15,6 +14,7 @@ import {
 } from "@/lib/coding-app-session-client";
 import { useSettingsTranslate as useTranslate } from "./settings-i18n";
 import styles from "./McpSettingsPanel.module.css";
+import { mcpConnectionStatus } from "./McpServerAvailability";
 import { McpServerAuthorization } from "./McpServerAuthorization";
 
 const {
@@ -424,23 +424,11 @@ async function changeServer(
   if (remove && model.state.editing === server.name) clearForm(model);
 }
 type ServerViewProps = ViewProps & { readonly server: McpServerDefinition };
-function connectionStatus(
-  state: McpServerConnectionView["state"] | "unavailable",
-  count: number | null | undefined,
-  t: Translate,
-): string {
-  if (state === "unavailable") return t("settings.mcp.statusUnavailable");
-  if (state === "connected") return t("settings.mcp.connected", { count: count ?? 0 });
-  if (state === "disabled") return t("settings.mcp.disabled");
-  if (state === "connecting") return t("settings.mcp.connecting");
-  if (state === "failed") return t("settings.mcp.failed");
-  return t("settings.mcp.unverified");
-}
 function McpServerCard({ model, t, server }: ServerViewProps): ReactNode {
   const connection = model.state.snapshot?.connections?.find((entry) => entry.name === server.name);
   const enabledState = server.enabled ? (connection?.state ?? "idle") : "disabled";
   const state = model.state.statusStale ? "unavailable" : enabledState;
-  const status = connectionStatus(state, connection?.toolCount, t);
+  const status = mcpConnectionStatus(state, connection?.toolCount, t);
   const target =
     server.transport.kind === "remote"
       ? server.transport.url.split(/[?#]/u, 1)[0]

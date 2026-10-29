@@ -64,12 +64,15 @@ it("keeps Windows DLL lookup and private profiles available without ambient prof
   expect(env.PATH).toBe(String.raw`C:\tools;C:\Windows\System32;C:\Windows`);
   expect(env).not.toHaveProperty("API_KEY");
 });
-it.each([undefined, "relative", String.raw`\\host\Windows`, String.raw`\\?\C:\Windows`])(
-  "refuses an unqualified or remote Windows system directory: %s",
-  (systemRoot) => {
-    expect(() => mcpStdioEnvironment(windowsTransport, "win32", systemRoot)).toThrow();
-  },
-);
+it.each([
+  "/tmp/Windows",
+  String.raw`C:relative`,
+  "relative",
+  String.raw`\\host\Windows`,
+  String.raw`\\?\C:\Windows`,
+])("refuses an unqualified or remote Windows system directory: %s", (systemRoot) => {
+  expect(() => mcpStdioEnvironment(windowsTransport, "win32", systemRoot)).toThrow();
+});
 
 it("honors explicit Windows environment keys irrespective of case", () => {
   const env = mcpStdioEnvironment(

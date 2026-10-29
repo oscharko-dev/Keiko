@@ -99,7 +99,7 @@ leaf certificate. Its issuing CA is not trusted; removal of that leaf trust is p
 Still outstanding: final complete core and coverage gates, final generated evidence verification,
 package-surface qualification and the full interactive acceptance
 matrix with a real model and OpenCode. The in-app browser is available; tests use isolated state and
-synthetic writes. Production connections remain read-only. No integration or auto-merge is authorized.
+synthetic writes. Production connections remain read-only. The owner has conditionally authorized manual integration and a new release once final readiness is established. Auto-merge remains disabled.
 
 ## Additional confirmed repairs and interactive acceptance
 
@@ -132,3 +132,30 @@ The complete UI coverage run passed 614 suites (11,977 passed, one existing skip
 scripts coverage run passed 323 suites (8,117 passed, 28 skips). The in-progress complete package
 run has failures and is not counted as green. Final complete gates and assembled package surface
 remain outstanding.
+
+## Current review and lifecycle checkpoint
+
+The central status projection is now also shown read-only inside Chat's Tool access panel. It
+reuses the Settings API and translated connection labels; conversation mode and grants remain
+separate. Failed reads can be retried and closing the consumer aborts pending reads.
+
+Additional reproduced defects from review were repaired: disabled OAuth servers no longer request
+an execution generation merely to display or protect stored credentials; sign-out is available for
+disabled entries. Cached authorization is invalidated before custody mutation, including when
+registry persistence subsequently fails, and unfinished authorizations are cancelled on sign-out.
+Client-configuration refresh errors preserve custody; only `invalid_grant` clears the grant.
+Repeated Workbench management links consume their initial navigation request and select MCP again
+after a manual Settings tab change. Invalid JSON status bodies are covered explicitly. The Windows
+missing-system-root test now uses host-independent invalid values.
+
+An additional confirmed lifecycle defect remains open: a real local MCP server's ordinary child
+process survived closing its SDK connection. Both isolated reproductions reported the survivor;
+the owned synthetic processes were then terminated. Complete descendant ownership and cleanup
+must be repaired before final production acceptance.
+
+The complete initial package run finished with 2,763 passing suites and four failures. One required
+the repository's exact approved toolchain rather than the broader supported contributor range;
+the two verify-route cases and that toolchain case all passed under Node 24.18.0/npm 11.16.0.
+The fourth failure loaded an older cached contract export after source changed during the long
+run. The final complete run must use frozen sources and the approved pair. A fresh focused MCP
+coverage run passed 117 tests, 95.55% lines and 85.07% branches; this is not the full quality gate.

@@ -110,6 +110,73 @@ async function started(f: ReturnType<typeof fixture>): Promise<{ id: string; cal
   return { id: result.attemptId, callback };
 }
 describe("server-owned shared MCP OAuth", () => {
+  it("allows signing out a disabled centrally configured OAuth server", () => {
+    const f = fixture();
+    const current = f.settings.read("fixture");
+    const disabled = { ...f.server, enabled: false };
+    f.settings.update(
+      { expectedRevision: current.revision, servers: [disabled], secrets: {} },
+      "fixture",
+    );
+    expect(() => {
+      f.owner.revoke("synthetic", "fixture");
+    }).not.toThrow();
+    expect(f.owner.authorized(disabled)).toBe(false);
+    expect(f.requests).toHaveLength(0);
+  });
+  it("cancels an unfinished authorization even if sign-out cannot persist its generation", async () => {
+    const f = fixture();
+    const attempt = await started(f);
+    vi.spyOn(f.settings, "revoke").mockImplementation(() => {
+      throw new Error("synthetic registry refusal");
+    });
+    expect(() => {
+      f.owner.revoke("synthetic", "fixture");
+    }).toThrow();
+    expect(f.owner.status("synthetic", "session", attempt.id)).toBe("cancelled");
+    expect(f.requests.some((url) => url.endsWith("/token"))).toBe(false);
+  });
+
+  it.each([false, true])(
+    "reads disabled OAuth custody without starting an execution generation (signed in: %s)",
+    async (signedIn) => {
+      const f = fixture();
+      if (signedIn) {
+        const attempt = await started(f);
+        expect((await fetch(attempt.callback)).status).toBe(200);
+      }
+      const current = f.settings.read("fixture");
+      const server = current.servers[0];
+      if (server === undefined) throw new TypeError("Missing fixture server");
+      const disabled = { ...server, enabled: false };
+      f.settings.update(
+        { expectedRevision: current.revision, servers: [disabled], secrets: {} },
+        "fixture",
+      );
+      const calls = f.requests.length;
+      expect(f.owner.authorized(disabled)).toBe(signedIn);
+      expect(f.owner.credentials(disabled).length > 0).toBe(signedIn);
+      expect(f.reopen().authorized(disabled)).toBe(signedIn);
+      expect(f.requests).toHaveLength(calls);
+    },
+  );
+  it("cannot reuse cached tokens after custody was cleared and generation persistence failed", async () => {
+    const f = fixture();
+    const attempt = await started(f);
+    expect((await fetch(attempt.callback)).status).toBe(200);
+    const server = f.settings.read("fixture").servers[0];
+    if (server === undefined) throw new TypeError("Missing fixture server");
+    await f.owner.token(server, "fixture");
+    vi.spyOn(f.settings, "revoke").mockImplementation(() => {
+      throw new Error("synthetic registry refusal");
+    });
+    expect(() => {
+      f.owner.revoke("synthetic", "fixture");
+    }).toThrow();
+    await expect(f.owner.token(server, "fixture")).rejects.toThrow();
+    expect(f.reopen().authorized(server)).toBe(false);
+  });
+
   it("reports an elapsed authorization deadline as expired when status observes it first", async () => {
     const f = fixture();
     const attempt = await started(f);

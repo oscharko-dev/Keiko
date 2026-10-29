@@ -3,10 +3,19 @@ import { createMcpOAuthClient } from "./oauth-client.js";
 
 const issuer = "https://identity.example.test";
 const url = "https://tools.example.test/mcp";
+function refreshRejection(
+  kind: true | "transient" | "invalid_client" | "unauthorized_client",
+): Response {
+  if (kind === true) return Response.json({ error: "invalid_grant" }, { status: 400 });
+  if (kind === "transient")
+    return Response.json({ error: "temporarily_unavailable" }, { status: 503 });
+  return Response.json({ error: kind }, { status: 400 });
+}
+
 function fixture(
   scope: string | null = "tools.read",
   rotate = false,
-  denyRefresh = false,
+  denyRefresh: boolean | "transient" | "invalid_client" | "unauthorized_client" = false,
   rejectedRefresh?: () => void,
 ): {
   client: ReturnType<typeof createMcpOAuthClient>;
@@ -49,7 +58,7 @@ function fixture(
         });
       if (denyRefresh && requests.at(-1)?.body.includes("grant_type=refresh_token")) {
         rejectedRefresh?.();
-        return Response.json({ error: "invalid_grant" }, { status: 400 });
+        return refreshRejection(denyRefresh);
       }
       return Response.json({
         access_token:
@@ -74,6 +83,37 @@ function fixture(
   };
 }
 describe("central MCP OAuth SDK adapter", () => {
+  it.each(["invalid_client", "unauthorized_client"] as const)(
+    "retains refresh custody after a client configuration rejection: %s",
+    async (failure) => {
+      const f = fixture("tools.read", false, failure);
+      await f.client.start("http://127.0.0.1:1999/callback", "synthetic-state");
+      await f.client.complete("synthetic-code", issuer);
+      const before = f.saved();
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3700000);
+      try {
+        await expect(f.client.token()).rejects.toThrow();
+        expect(f.saved()).toEqual(before);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it("retains refresh custody when the authorization server is temporarily unavailable", async () => {
+    const f = fixture("tools.read", false, "transient");
+    await f.client.start("http://127.0.0.1:1999/callback", "synthetic-state");
+    await f.client.complete("synthetic-code", issuer);
+    const before = f.saved();
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3700000);
+    try {
+      await expect(f.client.token()).rejects.toThrow();
+      expect(f.saved()).toEqual(before);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("does not recreate deleted custody when a refresh rejection arrives after revocation", async () => {
     const f = fixture("tools.read", false, true, () => {
       f.revoke();
