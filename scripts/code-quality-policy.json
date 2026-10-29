@@ -4276,7 +4276,10 @@
         "kind": "public-api-proof",
         "owner": "@oscharko-dev/keiko-contracts"
       },
-      "proofs": ["packages/keiko-contracts/src/local-knowledge-validation.test.ts"],
+      "proofs": [
+        "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
+        "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts"
+      ],
       "proofAssertions": [
         {
           "path": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
@@ -4293,6 +4296,46 @@
         {
           "path": "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
           "testName": "public capsule consumer retains primitives and nominal separation after revalidation"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations preserves captured extent observations through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations preserves captured extent observations through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations propagates final extent getter failure through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations propagates final extent getter failure through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations stops at the first invalid text member before later index or final extent through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations stops at the first invalid text member before later index or final extent through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations reads a sparse text member directly and skips final extent after refusal through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations reads a sparse text member directly and skips final extent after refusal through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations retains inherited text members and the success-only final extent through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge capsule tag-array observations retains inherited text members and the success-only final extent through public"
         }
       ]
     },
@@ -4528,7 +4571,10 @@
         "kind": "public-api-proof",
         "owner": "@oscharko-dev/keiko-contracts"
       },
-      "proofs": ["packages/keiko-contracts/src/local-knowledge-pods.test.ts"],
+      "proofs": [
+        "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
+        "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts"
+      ],
       "proofAssertions": [
         {
           "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
@@ -4545,6 +4591,46 @@
         {
           "path": "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
           "testName": "public summary consumer retains redaction and policy declarations and references"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations preserves captured extent observations through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations preserves captured extent observations through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations propagates final extent getter failure through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations propagates final extent getter failure through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations stops at the first invalid text member before later index or final extent through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations stops at the first invalid text member before later index or final extent through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations reads a sparse text member directly and skips final extent after refusal through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations reads a sparse text member directly and skips final extent after refusal through public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations retains inherited text members and the success-only final extent through source"
+        },
+        {
+          "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          "testName": "Knowledge pod summary tag-array observations retains inherited text members and the success-only final extent through public"
         }
       ]
     },

@@ -21,7 +21,7 @@
 // must still agree with the canonical implementation on the exact rejection message).
 
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { defineKnowledgeTextArrayObservationContract } from "../../../tests/support/knowledge-text-array-observations.js";
+import { capsuleInput } from "./__tests__/support/knowledge-array-fixtures.js";
 import type {
   LibraryParserTripleExpected,
   LibraryParserTripleFacts,
@@ -161,30 +161,6 @@ describe("validateOnlyKeys is the single canonical allowlist-key validator", () 
     expect(result.errors).toEqual(["modelUsePolicy must not include unexpectedKey"]);
   });
 });
-
-function capsuleInput(): Record<string, unknown> {
-  // Existing happyCapsule data shape from local-knowledge.test.ts:75; no ID cast.
-  // Both lineage strings acquire only the parser's actual nominal separation.
-  return {
-    id: "cap-1",
-    displayName: "Risk Controls Library",
-    tags: ["compliance"],
-    sourceIds: ["src-1"],
-    retrievalEffort: "default",
-    outputMode: "answers",
-    answerGroundingPolicy: "require-citations",
-    lifecycleState: "ready",
-    embeddingModelIdentity: {
-      provider: "keiko",
-      modelId: "embed-1",
-      vectorDimensions: 1536,
-      vectorMetric: "cosine",
-    },
-    storageReference: "capsules/cap-1",
-    createdAt: 1,
-    updatedAt: 2,
-  };
-}
 
 for (const [name, validate] of [
   ["source", validateKnowledgeCapsule],
@@ -456,21 +432,6 @@ import type {
   CapsuleContextualRetrievalSettings,
 } from "./local-knowledge.js";
 import type { KnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
-
-defineKnowledgeTextArrayObservationContract({
-  source: validateKnowledgeCapsule,
-  public: publicValidateKnowledgeCapsule,
-  inputWithTags: (tags: unknown[]): object => ({ ...capsuleInput(), tags }),
-  diagnostics: {
-    changedExtent: "capsule.tags must not change length during validation",
-    invalidExtent: "capsule.tags must have a valid array length",
-    invalidMember: "capsule.tags entry must be a browser-safe non-empty trimmed string",
-  },
-  finalExtentFailure: (): TypeError => new TypeError("fixture-final-extent"),
-  laterMemberFailure: (): TypeError => new TypeError("Later text member must not be inspected"),
-  rejectedFinalExtentRefusal: "Rejected text array must not read final extent",
-  sparseFinalExtentRefusal: "Sparse text refusal must not read final extent",
-});
 
 function assertCapsulePresentUndefinedTypes(): void {
   expectTypeOf<Required<SourceKnowledgeCapsule>["description"]>().toEqualTypeOf<

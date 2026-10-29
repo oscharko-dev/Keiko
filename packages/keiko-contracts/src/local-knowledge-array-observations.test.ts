@@ -1,11 +1,19 @@
-import { expect, it } from "vitest";
-import type { LocalKnowledgeValidation } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
-import { observeIndexedMembers } from "../../packages/keiko-contracts/src/__tests__/support/observed-indexed-members.js";
+import { describe, expect, it } from "vitest";
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 import {
   knowledgeRejectedTextMembers,
   knowledgeCapturedExtentMembers,
   knowledgeFinalExtentFailureMembers,
-} from "../../packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.js";
+} from "./__tests__/support/protocol-observation-mechanics.js";
+
+import { validateKnowledgeCapsule } from "./local-knowledge-validation.js";
+import { validateKnowledgePodSummary } from "./local-knowledge-pods.js";
+import {
+  validateKnowledgeCapsule as publicValidateKnowledgeCapsule,
+  type LocalKnowledgeValidation,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
+import { validateKnowledgePodSummary as publicValidateSummary } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import { capsuleInput, happySummary } from "./__tests__/support/knowledge-array-fixtures.js";
 
 type KnowledgeTextValidator = (input: unknown) => LocalKnowledgeValidation<unknown>;
 
@@ -135,7 +143,7 @@ function registerInheritedMember(binding: KnowledgeTextArrayObservationBinding):
   );
 }
 
-export function defineKnowledgeTextArrayObservationContract(
+function defineKnowledgeTextArrayObservationContract(
   binding: KnowledgeTextArrayObservationBinding,
 ): void {
   registerCapturedExtent(binding);
@@ -144,3 +152,37 @@ export function defineKnowledgeTextArrayObservationContract(
   registerSparseMember(binding);
   registerInheritedMember(binding);
 }
+
+describe("Knowledge capsule tag-array observations", () => {
+  defineKnowledgeTextArrayObservationContract({
+    source: validateKnowledgeCapsule,
+    public: publicValidateKnowledgeCapsule,
+    inputWithTags: (tags: unknown[]): object => ({ ...capsuleInput(), tags }),
+    diagnostics: {
+      changedExtent: "capsule.tags must not change length during validation",
+      invalidExtent: "capsule.tags must have a valid array length",
+      invalidMember: "capsule.tags entry must be a browser-safe non-empty trimmed string",
+    },
+    finalExtentFailure: (): TypeError => new TypeError("fixture-final-extent"),
+    laterMemberFailure: (): TypeError => new TypeError("Later text member must not be inspected"),
+    rejectedFinalExtentRefusal: "Rejected text array must not read final extent",
+    sparseFinalExtentRefusal: "Sparse text refusal must not read final extent",
+  });
+});
+
+describe("Knowledge pod summary tag-array observations", () => {
+  defineKnowledgeTextArrayObservationContract({
+    source: validateKnowledgePodSummary,
+    public: publicValidateSummary,
+    inputWithTags: (tags: unknown[]): object => ({ ...happySummary(), tags }),
+    diagnostics: {
+      changedExtent: "summary.tags must not change length during validation",
+      invalidExtent: "summary.tags must have a valid array length",
+      invalidMember: "summary.tags entries must be evidence-safe strings",
+    },
+    finalExtentFailure: (): TypeError => new TypeError("fixture-final-extent"),
+    laterMemberFailure: (): TypeError => new TypeError("Later text member must not be inspected"),
+    rejectedFinalExtentRefusal: "Rejected text array must not read final extent",
+    sparseFinalExtentRefusal: "Sparse text refusal must not read final extent",
+  });
+});

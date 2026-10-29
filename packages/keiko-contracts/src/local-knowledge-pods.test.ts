@@ -1,82 +1,18 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { defineKnowledgeTextArrayObservationContract } from "../../../tests/support/knowledge-text-array-observations.js";
+import { happySummary } from "./__tests__/support/knowledge-array-fixtures.js";
 import type {
   LibraryParserTripleExpected,
   LibraryParserTripleFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 
 import {
-  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
-} from "./local-knowledge.js";
-import {
-  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   isKnowledgePodEvidenceSafeText,
   validateKnowledgePodSummary,
   parseLocalKnowledgeCapsulesResponse,
   parseLocalKnowledgeCapsuleSetsResponse,
   type KnowledgePodSummary,
 } from "./local-knowledge-pods.js";
-import { resolveKnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
 import { HTML_MANUAL_REFRESH_SCHEMA_VERSION } from "./html-manual-refresh.js";
-
-function happySummary(): KnowledgePodSummary {
-  return {
-    schemaVersion: KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
-    id: "cap-risk-controls" as KnowledgePodSummary["id"],
-    kind: "pod",
-    displayName: "Risk Controls Pod",
-    description: "Policy and engineering guidance",
-    tags: ["policy", "engineering"],
-    readiness: "ready",
-    lifecycleState: "ready",
-    counts: {
-      capsuleCount: 1,
-      sourceCount: 2,
-      documentCount: 12,
-      chunkCount: 48,
-      vectorCount: 48,
-    },
-    sourceKinds: ["folder", "repository"],
-    retrieval: {
-      lexicalIndex: true,
-      vectorIndex: true,
-      hybridGrounding: true,
-      crossSpaceScoreMixing: false,
-      embeddingProvider: "openai-compatible:3f65d1e8",
-      embeddingModelId: "text-embedding-3-small",
-      embeddingSpaceFingerprint: "space-v1",
-      vectorDimensions: 1536,
-      vectorMetric: "cosine",
-    },
-    privacy: {
-      localFirst: true,
-      modelOpen: true,
-      rawContentExposed: false,
-      privatePathsExposed: false,
-      evidenceMode: "counts-hashes-and-status",
-      storageLocation: "local-runtime-state",
-    },
-    governance: {
-      locationKind: "local",
-      sealingPosture: "local-store-policy",
-      policyPosture: "not-declared",
-      managedServiceDependency: false,
-    },
-    modelUsePolicy: resolveKnowledgePodModelUsePolicy(undefined),
-    compatibility: {
-      backingKind: "knowledge-capsule",
-      capsuleIds: ["cap-risk-controls" as KnowledgeCapsuleId],
-      sourceIds: ["src-risk-controls" as KnowledgeSourceId],
-      localKnowledgeSchemaVersion: LOCAL_KNOWLEDGE_SCHEMA_VERSION,
-      migrationRequired: false,
-      persistedStateRenamed: false,
-    },
-    updatedAt: 1_700_000_000_000,
-    degradationReasons: [],
-  };
-}
 
 function invalidErrors(result: ReturnType<typeof validateKnowledgePodSummary>): readonly string[] {
   expect(result.ok).toBe(false);
@@ -1097,18 +1033,3 @@ describe("Knowledge pod summary public responsibility (#3918)", () => {
 });
 
 import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
-
-defineKnowledgeTextArrayObservationContract({
-  source: validateKnowledgePodSummary,
-  public: publicValidateSummary,
-  inputWithTags: (tags: unknown[]): object => ({ ...happySummary(), tags }),
-  diagnostics: {
-    changedExtent: "summary.tags must not change length during validation",
-    invalidExtent: "summary.tags must have a valid array length",
-    invalidMember: "summary.tags entries must be evidence-safe strings",
-  },
-  finalExtentFailure: (): TypeError => new TypeError("fixture-final-extent"),
-  laterMemberFailure: (): TypeError => new TypeError("Later text member must not be inspected"),
-  rejectedFinalExtentRefusal: "Rejected text array must not read final extent",
-  sparseFinalExtentRefusal: "Sparse text refusal must not read final extent",
-});
