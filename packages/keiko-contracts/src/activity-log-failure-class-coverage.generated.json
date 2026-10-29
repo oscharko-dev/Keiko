@@ -25094,10 +25094,22 @@
               "required": false
             },
             {
+              "name": "probeBasis",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "probeCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "probeTrigger",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "rerankerProbeTimeoutMs",
@@ -25106,7 +25118,14 @@
               "required": false
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "digest", "duration", "loss-state"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "loss-state"
+          ],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

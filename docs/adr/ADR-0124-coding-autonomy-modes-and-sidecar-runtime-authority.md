@@ -216,17 +216,20 @@ is the selected model source, the profile read also lets the server verify what 
 needs and the stored configuration does not prove — an expired or missing tool-call proof, and a
 context window below the coding minimum that the gateway never declared — so the operator is not
 sent to Gateway Settings for something Keiko can determine itself (owner decision for 1.1.1,
-amending #3561; mechanics and log lines in ADR-0173). That verification is bounded: only models
-that claim tool calling, one attempt per deployment identity within a six-hour cooldown, under the
-existing probe spend ledger. A model claims tool calling when it is admitted to call tools or when
-Keiko's forced tool-call probe verified it before. The gateway config loader stores a proof that
-aged out, or that is bound to another deployment configuration, as `toolCalling: false`; such a
-model still claims tool calling and gets its proof renewed, so a restart the day after setup does
-not leave the Workbench blocked (1.1.8 lab). A model whose probe refuted tool calling
-(`unsupported`) or never concluded claims nothing and is not probed from here. Only a fresh proof
-admits a model to a run. It never runs when a subscription source is selected, when the
-deployment policy disables the gateway source, or when the gateway is not configured. The same
-gateway capability evidence gates all models.
+amending #3561; mechanics and log lines in ADR-0173). That verification is bounded: only chat
+models, one attempt per deployment identity within a six-hour cooldown, under the existing probe
+spend ledger. A model claims tool calling when it is admitted to call tools or when Keiko's forced
+tool-call probe verified it before. The gateway config loader stores a proof that aged out, or that
+is bound to another deployment configuration, as `toolCalling: false`; such a model still claims
+tool calling and gets its proof renewed, so a restart the day after setup does not leave the
+Workbench blocked (1.1.8 lab). A chat model nobody has proven tool calling for, or whose earlier
+probe never concluded, is asked for its first proof by the same verification, behind any gateway
+(#3578): the profile read of a plain OpenAI-compatible or Azure endpoint probes it exactly as the
+startup readiness of a recognised LiteLLM connection does, and the model is admitted once the probe
+proves tool calling. A model whose probe refuted tool calling (`unsupported`) and a model that is
+no chat model are not probed from here. Only a fresh proof admits a model to a run. It never runs
+when a subscription source is selected, when the deployment policy disables the gateway source, or
+when the gateway is not configured. The same gateway capability evidence gates all models.
 
 A run start admits the chosen model — the default one or one picked in the model selector — only
 when its prompt window holds the coding minimum, the rule the default model's readiness already

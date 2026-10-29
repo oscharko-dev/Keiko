@@ -145,7 +145,10 @@ Capability application clears carried observations before restoring only retaine
 original feature and conversation measurement times, so an unrelated tool-only proof cannot grant
 conversation readiness. Missing refinement support fails as retryable rather than reporting an
 applied catalog update. Existing connections and policy are retained. A bounded serial queue verifies missing or expired
-tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
+tool-call proofs without opening Settings or the Workbench. Behind a gateway that is not a
+recognised LiteLLM connection the same targets, including a chat model nobody has proven (#3578),
+are verified through that queue when the Workbench reads its profile (ADR-0124 D5; ADR-0173). A
+refuted proof and a model that is no chat model are never targets. Unknown context windows use the
 existing context proof. Inconclusive discovery and tool checks share a finite three-step
 initialization burst with exponential startup backoff capped at five minutes. The existing timer
 and ordinal belong to the captured configuration generation: a replacement resets that burst,

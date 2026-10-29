@@ -141,6 +141,23 @@ export interface ProbeTimeoutEvidence {
   rerankerProbeTimeoutMs?: number;
 }
 
+// #3578: why the Coding Workbench's own verification started an automatic run, and which policy
+// asked for it. Both are present only on a run the Workbench verification started; an on-demand
+// conversation probe carries neither. `never-proven` is a chat model nobody has concluded tool
+// calling for, `proof-renewal` a model whose forced tool-call proof lapsed or was withdrawn, and
+// `context-window` a model that needs only its window proven. `profile-read` is the Workbench
+// opening its gateway profile; `startup` is the recognised-LiteLLM readiness at process start.
+const WORKBENCH_PROBE_BASES = ["never-proven", "proof-renewal", "context-window"] as const;
+const WORKBENCH_PROBE_TRIGGERS = ["profile-read", "startup"] as const;
+type WorkbenchProbeBasis = (typeof WORKBENCH_PROBE_BASES)[number];
+type WorkbenchProbeTrigger = (typeof WORKBENCH_PROBE_TRIGGERS)[number];
+
+/** What the Workbench's verification records about the automatic run it starts. */
+interface WorkbenchRunEvidence {
+  readonly basis: WorkbenchProbeBasis;
+  readonly trigger: WorkbenchProbeTrigger;
+}
+
 const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -153,6 +170,18 @@ const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation
     ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
     backgroundAttempt: { type: "integer", dataClass: "count", required: false },
+    probeBasis: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: WORKBENCH_PROBE_BASES,
+    },
+    probeTrigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: WORKBENCH_PROBE_TRIGGERS,
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -516,7 +545,10 @@ function logAutomaticReadinessStarted(
   modelId: string,
   probeCount: number,
   timeouts: ProbeTimeoutEvidence,
-  backgroundAttempt?: number,
+  origin: {
+    readonly backgroundAttempt?: number | undefined;
+    readonly workbench?: WorkbenchRunEvidence | undefined;
+  } = {},
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -526,7 +558,12 @@ function logAutomaticReadinessStarted(
         ...modelIdEvidence(modelId),
         ...timeouts,
         probeCount,
-        ...(backgroundAttempt === undefined ? {} : { backgroundAttempt }),
+        ...(origin.backgroundAttempt === undefined
+          ? {}
+          : { backgroundAttempt: origin.backgroundAttempt }),
+        ...(origin.workbench === undefined
+          ? {}
+          : { probeBasis: origin.workbench.basis, probeTrigger: origin.workbench.trigger }),
       },
     ),
   );
@@ -700,7 +737,9 @@ function logReadinessRunStarted(
   const modelId = selection.provider.modelId;
   const timeouts = probeTimeoutEvidence(selection.config, selection.provider, names, options);
   if (run.automatic) {
-    logAutomaticReadinessStarted(deps, run.correlationId, modelId, names.length, timeouts);
+    logAutomaticReadinessStarted(deps, run.correlationId, modelId, names.length, timeouts, {
+      workbench: run.workbench,
+    });
     return;
   }
   if (run.trigger === undefined) return;
@@ -729,7 +768,7 @@ function logOnDemandProbeStarted(
           ["chat"],
           ON_DEMAND_PROBE_OPTIONS,
         ),
-    backgroundAttempt,
+    { backgroundAttempt },
   );
 }
 
@@ -750,6 +789,8 @@ interface ReadinessRunEvidence {
   readonly correlationId: string;
   readonly automatic: boolean;
   readonly trigger: GatewayReadinessTrigger | undefined;
+  // Set only for a run the Workbench's own verification started (`runWorkbenchProbe`).
+  readonly workbench: WorkbenchRunEvidence | undefined;
   readonly startedAtMs: number;
 }
 
@@ -2130,6 +2171,21 @@ function reconcileToolCallingReadiness(
   }
 }
 
+function readinessRunEvidence(
+  request: GatewayReadinessRequest,
+  correlationId: string,
+  trigger: GatewayReadinessTrigger | undefined,
+  workbench: WorkbenchRunEvidence | undefined,
+): ReadinessRunEvidence {
+  return {
+    correlationId,
+    automatic: request.options?.purpose === "coding-workbench-auto",
+    trigger,
+    workbench,
+    startedAtMs: Date.now(),
+  };
+}
+
 export async function runGatewayReadiness(
   request: GatewayReadinessRequest,
   deps: UiHandlerDeps,
@@ -2139,6 +2195,8 @@ export async function runGatewayReadiness(
   requestCorrelationId?: string,
   // Who started the run. Without one, the caller records the run's lifecycle itself.
   trigger?: GatewayReadinessTrigger,
+  // Why the Workbench's verification started this automatic run (#3578).
+  workbench?: WorkbenchRunEvidence,
 ): Promise<GatewayReadinessReport | RouteResult> {
   const selection = chooseProvider(currentGatewayConfig(deps), request.modelId, request.options);
   if ("status" in selection) return selection;
@@ -2147,12 +2205,7 @@ export async function runGatewayReadiness(
   const observedGeneration = deps.gatewayConfig?.generation();
   const correlationId = requestCorrelationId ?? newCorrelationId();
   const names = requestedProbeNames(request.options);
-  const run: ReadinessRunEvidence = {
-    correlationId,
-    automatic: request.options?.purpose === "coding-workbench-auto",
-    trigger,
-    startedAtMs: Date.now(),
-  };
+  const run = readinessRunEvidence(request, correlationId, trigger, workbench);
   logReadinessRunStarted(deps, run, selection, names, request.options);
   const probes: GatewayReadinessProbeResult[] = [];
   const chat = await runProbe("chat", deps, selection, request.options, correlationId);
@@ -2225,14 +2278,17 @@ function reconcileContextWindowReadiness(
 //   - A gateway that declares no token limits leaves the 4,096 setup placeholder in place, and
 //     the Workbench needs 32,000: the long-context probe proves the window.
 //   - The forced tool-call proof expires after 24 h: the tool-calling probe renews it.
+//   - A chat model nobody has proven tool calling for (#3578) has no proof at all: the same probe
+//     asks for the first one, whatever gateway serves it.
 // `runGatewayReadiness` persists both conclusions. This runs when the Workbench reads its profile,
 // for every chat model that claims tool calling — including one whose proof the config loader
 // demoted to `toolCalling: false` after it aged out, which is every such model after a restart the
-// day after setup (`codingWorkbenchModelEligibility`). The model the Workbench would elect is
-// awaited so the profile it reads already reflects the result; the others finish in the
-// background. It is BOUNDED: one attempt per deployment identity within the six-hour cooldown, so
-// a model that really is short-context, or a gateway that is down, is not probed on every read —
-// and a model whose probe refuted tool calling, or never concluded, is never probed from here.
+// day after setup (`codingWorkbenchModelEligibility`) — and for every chat model that was never
+// proven. The model the Workbench would elect is awaited so the profile it reads already reflects
+// the result; the others finish in the background. It is BOUNDED: one attempt per deployment
+// identity within the six-hour cooldown, so a model that really is short-context, or a gateway
+// that is down, is not probed on every read — and a model whose probe refuted tool calling, or
+// that is no chat model, is never probed from here.
 const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
 // #3591 (1.1.7): a probe the gateway never answered is not a verdict. It used to hold the six-hour
 // cooldown, so one slow answer at peak load locked the Workbench out with no operator remedy but
@@ -2270,13 +2326,39 @@ export function codingWorkbenchProbesSettledForTests(): Promise<void> {
   return workbenchProbeQueue;
 }
 
-function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
+/** What the Workbench's verification asks of one model, and why. */
+interface WorkbenchProbeNeed {
+  readonly basis: WorkbenchProbeBasis;
+  readonly probes: readonly GatewayReadinessProbeName[];
+}
+
+/**
+ * Why a chat model whose tool calling nobody refuted needs a forced tool-call proof, or undefined
+ * when it does not: it has none yet (`never-proven`, which includes a probe that never concluded),
+ * or the one it had lapsed or was withdrawn (`proof-renewal`).
+ */
+function toolCallingProofBasis(
+  capability: ModelCapability,
+): "never-proven" | "proof-renewal" | undefined {
   const eligibility = codingWorkbenchModelEligibility(capability);
-  if (eligibility === "ineligible") return [];
-  return [
-    ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
+  if (eligibility === "eligible") return undefined;
+  return eligibility === "tool-calling-unverified" ? "proof-renewal" : "never-proven";
+}
+
+// One rule for every gateway and every entry point (#3578). A model that is no chat model is never
+// probed, and a proof the probe refuted (`unsupported`) is a verdict, not a gap.
+function workbenchProbesNeeded(capability: ModelCapability): WorkbenchProbeNeed | undefined {
+  if (
+    !isCodingWorkbenchReadinessCandidate(capability) ||
+    capability.toolCallingVerification?.status === "unsupported"
+  )
+    return undefined;
+  const proof = toolCallingProofBasis(capability);
+  const probes: readonly GatewayReadinessProbeName[] = [
+    ...(proof === undefined ? [] : (["tool_calling"] as const)),
     ...workbenchContextProbes(capability),
   ];
+  return probes.length === 0 ? undefined : { basis: proof ?? "context-window", probes };
 }
 
 function workbenchContextProbes(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
@@ -2290,7 +2372,12 @@ function workbenchContextProbes(capability: ModelCapability): readonly GatewayRe
   return shortWindow ? ["long_context"] : [];
 }
 
-/** Fresh LiteLLM models need a live tool proof before they can appear in the Coding picker. */
+/**
+ * Fresh LiteLLM models need a live tool proof before they can appear in the Coding picker. This is
+ * the process-start entry of the one Workbench verification: it asks for exactly the targets a
+ * profile read would, limited to the recognised LiteLLM connections, whose local lab gateways Keiko
+ * verifies without anyone opening the Workbench.
+ */
 export async function initializeLiteLlmCodingReadiness(
   deps: UiHandlerDeps,
   correlationId: string,
@@ -2299,26 +2386,16 @@ export async function initializeLiteLlmCodingReadiness(
   if (config === undefined) return;
   const targets = liteLlmWorkbenchProbeTargets(config);
   await Promise.all(
-    targets.map((target) => enqueueWorkbenchProbe(deps, config, target, correlationId)),
+    targets.map((target) => enqueueWorkbenchProbe(deps, config, target, correlationId, "startup")),
   );
 }
 
 function liteLlmWorkbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
-  return listConfiguredCapabilities(config).flatMap((model): WorkbenchProbeTarget[] => {
-    const provider = config.providers.find((candidate) => candidate.modelId === model.id);
-    if (
-      model.kind !== "chat" ||
-      provider?.tokenCounter !== "litellm" ||
-      model.toolCallingVerification?.status === "unsupported"
-    )
-      return [];
-    const known = workbenchProbesNeeded(model);
-    const probes =
-      codingWorkbenchModelEligibility(model) === "ineligible"
-        ? ["tool_calling" as const, ...workbenchContextProbes(model)]
-        : known;
-    return probes.length === 0 ? [] : [{ modelId: model.id, probes }];
-  });
+  return workbenchProbeTargets(config).filter(
+    (target) =>
+      config.providers.find((candidate) => candidate.modelId === target.modelId)?.tokenCounter ===
+      "litellm",
+  );
 }
 
 export function isLiteLlmCodingReadinessPending(deps: UiHandlerDeps): boolean {
@@ -2332,15 +2409,15 @@ export function isLiteLlmCodingReadinessPending(deps: UiHandlerDeps): boolean {
   );
 }
 
-interface WorkbenchProbeTarget {
+interface WorkbenchProbeTarget extends WorkbenchProbeNeed {
   readonly modelId: string;
-  readonly probes: readonly GatewayReadinessProbeName[];
 }
 
 function workbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
-  return listConfiguredCapabilities(config)
-    .map((capability) => ({ modelId: capability.id, probes: workbenchProbesNeeded(capability) }))
-    .filter((target) => target.probes.length > 0);
+  return listConfiguredCapabilities(config).flatMap((capability): WorkbenchProbeTarget[] => {
+    const need = workbenchProbesNeeded(capability);
+    return need === undefined ? [] : [{ modelId: capability.id, ...need }];
+  });
 }
 
 // Keyed by the deployment's identity, not the configuration generation: every conclusion this
@@ -2422,6 +2499,7 @@ async function runWorkbenchProbe(
   deps: UiHandlerDeps,
   target: WorkbenchProbeTarget,
   correlationId: string,
+  trigger: WorkbenchProbeTrigger,
 ): Promise<WorkbenchProbeOutcome> {
   const generation = deps.gatewayConfig?.generation();
   try {
@@ -2432,14 +2510,14 @@ async function runWorkbenchProbe(
       },
       deps,
       correlationId,
+      undefined,
+      { basis: target.basis, trigger },
     );
     const outcome = workbenchProbeOutcome(report, target);
     const config = deps.gatewayConfig?.current();
     const stillNeeded =
       config !== undefined &&
-      [...workbenchProbeTargets(config), ...liteLlmWorkbenchProbeTargets(config)].some(
-        (pending) => pending.modelId === target.modelId,
-      );
+      workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
     // Proven, yet not stored: the configuration changed under the run and the conclusion was
     // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
     // the model unusable for hours.
@@ -2467,6 +2545,7 @@ function enqueueWorkbenchProbe(
   config: GatewayConfig,
   target: WorkbenchProbeTarget,
   correlationId: string,
+  trigger: WorkbenchProbeTrigger,
   prioritized = false,
 ): Promise<void> {
   const key = workbenchProbeKey(config, target.modelId);
@@ -2475,7 +2554,7 @@ function enqueueWorkbenchProbe(
     known.prioritized ||= prioritized;
     return known.promise;
   }
-  const entry = createWorkbenchProbeEntry(deps, target, correlationId, prioritized);
+  const entry = createWorkbenchProbeEntry(deps, target, correlationId, trigger, prioritized);
   workbenchProbes.set(key, entry);
   startWorkbenchProbeQueue();
   return entry.promise;
@@ -2485,6 +2564,7 @@ function createWorkbenchProbeEntry(
   deps: UiHandlerDeps,
   target: WorkbenchProbeTarget,
   correlationId: string,
+  trigger: WorkbenchProbeTrigger,
   prioritized: boolean,
 ): WorkbenchProbeEntry {
   let finish: () => void = (): void => undefined;
@@ -2507,7 +2587,7 @@ function createWorkbenchProbeEntry(
               deps,
               conversationQueue(deps.gatewayConfig).controller.signal,
             );
-      const outcome = await runWorkbenchProbe(controlled, target, correlationId);
+      const outcome = await runWorkbenchProbe(controlled, target, correlationId, trigger);
       entry.settled = true;
       entry.outcome = outcome;
       entry.at = Date.now();
@@ -2583,7 +2663,14 @@ export async function ensureCodingWorkbenchContextWindows(
   const queued = new Map(
     ordered.map((target) => [
       target.modelId,
-      enqueueWorkbenchProbe(deps, config, target, id, target.modelId === electedModelId),
+      enqueueWorkbenchProbe(
+        deps,
+        config,
+        target,
+        id,
+        "profile-read",
+        target.modelId === electedModelId,
+      ),
     ]),
   );
   // A named model waits for ITS proof only — never for another model's. Without a name (the

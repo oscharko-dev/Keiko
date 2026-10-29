@@ -20695,6 +20695,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      probeBasis: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["never-proven", "proof-renewal", "context-window"],
+      },
+      probeTrigger: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["profile-read", "startup"],
+      },
     },
     causal: "correlation",
     lifecycle: "start",

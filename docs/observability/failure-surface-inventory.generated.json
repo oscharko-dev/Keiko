@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1c3b1e7f396331196cf7275d7b2e19286181f206be4b4c7824299499242de2d2"
+    "catalogDigest": "a8ca128f8ddc617b195f94dc0638ee5999cf948e908930aa752d588b2aa419e2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2120,7 +2120,8 @@
       "packages/keiko-server/src/gateway-readiness.on-demand.test.ts"
     ],
     "gateway.readiness.automatic.started.line": [
-      "packages/keiko-server/src/gateway-readiness.test.ts"
+      "packages/keiko-server/src/gateway-readiness.test.ts",
+      "packages/keiko-server/src/gateway-readiness.workbench-never-proven.test.ts"
     ],
     "gateway.readiness.busy-retained.line": [
       "packages/keiko-server/src/gateway-readiness.busy.test.ts"
