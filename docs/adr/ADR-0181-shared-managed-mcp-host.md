@@ -142,11 +142,36 @@ and reconstruction; the host has only an injected port.
 
 ### D6 — Compatibility and scope
 
-The operator `mcp-servers.json` registry, credential relay and OAuth remain owned by
-ADR-0137. The expanded delivery scope also makes configured external MCP tools available
-to ordinary Chat and OpenCode through these existing owners. Managed Jira providers remain
-server-composed; they do not require operator registry entries. Retrieval, citations and
-conversation budgets remain owned by their existing paths.
+The operator `mcp-servers.json` registry, credential relay and encrypted MCP vault remain
+shared by ordinary Chat and OpenCode. Settings own configuration and sign-in for external
+servers. Server composition owns one OAuth lifecycle and connection owner; the official SDK
+inside `keiko-mcp` performs resource/issuer discovery, PKCE and token exchange. The configured
+issuer must match protected-resource metadata and validated authorization-server metadata.
+Both RFC 8414 and OIDC discovery remain supported. Explicit public client IDs (including
+configured metadata-document IDs) or the SDK's legacy dynamic registration path are used;
+Keiko does not publish a new public metadata service.
+
+Each sign-in attempt has a private one-use IPv4 loopback callback, separate random OAuth state,
+app-session ownership, a five-minute expiry and configuration-generation cancellation. Callback
+issuers are validated before code exchange. SDK credentials live in a separate namespace of the
+existing MCP vault, bound to server, exact resource, issuer, client and requested scope. Opaque
+legacy runtime credentials are never interpreted as SDK tokens; those installations sign in again.
+Refreshes are coalesced per current server generation and occur before dispatch. Authentication
+failures never replay an MCP tool call. Native production runs consume OAuth servers through the
+same run-bound relay as other configured servers; external tokens never enter their configuration
+or credential database. The standalone legacy runtime OAuth adapter remains compatibility code.
+
+Successful sign-in and explicit sign-out rotate a durable per-server `credentialGeneration` and
+the registry revision. Old connection/relay generations and Chat disclosures become stale while
+unrelated server connections remain usable. Removing or changing an OAuth target removes orphaned
+central ciphertext through the existing Settings reconciliation; unchanged disabled definitions
+retain credentials for explicit later re-enablement. Terminal logging loss never changes an
+observed authentication outcome. Registered `mcp.authorization.state` evidence contains only
+closed states, opaque attempt identity and completeness/loss/count fields; OAuth state, tokens,
+verifiers, endpoints and provider responses are excluded.
+
+Managed Jira providers remain server-composed and require no operator registry entry. Retrieval,
+citations and conversation budgets remain owned by their existing paths.
 
 Settings extend the same registry additively: explicit automatic discovery permits an
 initially empty tool map, and local secret environment entries use references instead of
@@ -180,7 +205,7 @@ crash between vault and registry publication cannot revive an earlier disclosure
 External servers use the same package's SDK client adapter with automatic protocol-version
 negotiation. Streamable HTTP is the modern remote transport; explicit legacy HTTP+SSE and
 local stdio preserve compatibility with existing servers. Process launch parameters and HTTP
-egress are admitted by server composition. The adapter bounds discovery/payloads, validates
+egress are admitted by server composition. The adapter bounds discovery/payloads, rechecks uncached declarations before each call, validates
 arguments, keeps invocation context out of MCP arguments, rechecks authority at dispatch and
 never replays a tool call after a transport failure. Local stdio explicitly overrides the
 SDK's inherited environment defaults; credentials remain in memory at the launch boundary.

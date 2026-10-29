@@ -121,6 +121,7 @@ class ExternalClient implements ExternalMcpConnection {
   #closed = false;
   #drifted = false;
   #closing: Promise<void> | undefined;
+  #metadataTail: Promise<void> = Promise.resolve();
   readonly #abort = (): void => {
     void this.close().catch(() => undefined);
   };
@@ -217,10 +218,15 @@ class ExternalClient implements ExternalMcpConnection {
     context: ManagedMcpInvocationContext,
   ): Promise<CatalogJsonObject> {
     const tool = this.#tools.find((candidate) => candidate.name === name);
-    const signal = AbortSignal.any([context.signal, this.options.signal, this.signal]);
+    const signal = AbortSignal.any([
+      context.signal,
+      this.options.signal,
+      this.signal,
+      AbortSignal.timeout(TIMEOUT_MS),
+    ]);
     const invocation = { ...context, signal };
     if (this.#drifted) throw new ManagedMcpError("descriptor-drift");
-    if (this.#closed || tool === undefined || signal.aborted)
+    if (this.#closed || tool === undefined || signal.aborted || !context.beforeEffect())
       throw new ManagedMcpError("not-admitted");
     const args = captured(argumentsValue);
     const inputSchema: CatalogJsonObject = tool.inputSchema;
@@ -229,6 +235,7 @@ class ExternalClient implements ExternalMcpConnection {
     if (validation.issues !== undefined) throw new ManagedMcpError("invalid-arguments");
     this.record("started", context);
     try {
+      await this.#contexts.run(invocation, () => this.verifyDeclarations(signal));
       const result = await this.#contexts.run(invocation, () =>
         this.#client.callTool(
           { name, arguments: args },
@@ -249,6 +256,33 @@ class ExternalClient implements ExternalMcpConnection {
         error instanceof ManagedMcpError ? error : new ManagedMcpError("protocol-error");
       this.record("failed", context, failure.reason);
       throw failure;
+    }
+  }
+  private async verifyDeclarations(signal: AbortSignal): Promise<void> {
+    const previous = this.#metadataTail;
+    let release: () => void = (): void => undefined;
+    this.#metadataTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await previous;
+      if (signal.aborted) throw new ManagedMcpError("aborted");
+      await this.readDeclarations(signal);
+    } finally {
+      release();
+    }
+  }
+  private async readDeclarations(signal: AbortSignal): Promise<void> {
+    const listed = await this.#client.listTools(undefined, {
+      cacheMode: "bypass",
+      signal,
+      timeout: TIMEOUT_MS,
+      maxTotalTimeout: TIMEOUT_MS,
+    });
+    if (sha256Hex(canonicalise(captured(listed.tools))) !== this.#digest) {
+      this.#drifted = true;
+      this.#lifetime.abort(new ManagedMcpError("descriptor-drift"));
+      throw new ManagedMcpError("descriptor-drift");
     }
   }
   private record(

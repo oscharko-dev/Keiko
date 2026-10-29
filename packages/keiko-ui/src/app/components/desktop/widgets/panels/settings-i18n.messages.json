@@ -1422,5 +1422,77 @@
   "settings.mcp.statusUnavailable": {
     "en": "Status unavailable",
     "de": "Status nicht verfügbar"
+  },
+  "settings.mcp.oauth": {
+    "en": "Use OAuth",
+    "de": "OAuth verwenden"
+  },
+  "settings.mcp.issuer": {
+    "en": "Expected OAuth issuer (HTTPS)",
+    "de": "Erwarteter OAuth-Issuer (HTTPS)"
+  },
+  "settings.mcp.clientId": {
+    "en": "Public client ID (optional)",
+    "de": "Öffentliche Client-ID (optional)"
+  },
+  "settings.mcp.scope": {
+    "en": "Requested permissions (scopes)",
+    "de": "Angeforderte Berechtigungen (Scopes)"
+  },
+  "settings.mcp.authorized": {
+    "en": "Signed in",
+    "de": "Angemeldet"
+  },
+  "settings.mcp.authorizationRequired": {
+    "en": "Sign-in required",
+    "de": "Anmeldung erforderlich"
+  },
+  "settings.mcp.signIn": {
+    "en": "Sign in",
+    "de": "Anmelden"
+  },
+  "settings.mcp.signOut": {
+    "en": "Sign out",
+    "de": "Abmelden"
+  },
+  "settings.mcp.openAuthorization": {
+    "en": "Open sign-in page",
+    "de": "Anmeldeseite öffnen"
+  },
+  "settings.mcp.authorizationFailed": {
+    "en": "Authorization failed. Refresh and try again.",
+    "de": "Anmeldung fehlgeschlagen. Neu laden und erneut versuchen."
+  },
+  "settings.mcp.toolPermissions": {
+    "en": "Tool permissions",
+    "de": "Tool-Berechtigungen"
+  },
+  "settings.mcp.writePermission": {
+    "en": "May change data · approval policy applies",
+    "de": "Darf Daten ändern · Freigaberegeln gelten"
+  },
+  "settings.mcp.readPermission": {
+    "en": "Read only",
+    "de": "Nur lesen"
+  },
+  "settings.mcp.advanced": {
+    "en": "Advanced options",
+    "de": "Erweiterte Optionen"
+  },
+  "settings.mcp.headerName": {
+    "en": "Credential header name",
+    "de": "Name des Zugangsdaten-Headers"
+  },
+  "settings.mcp.headerPrefix": {
+    "en": "Credential prefix (optional)",
+    "de": "Präfix der Zugangsdaten (optional)"
+  },
+  "settings.mcp.removeEntry": {
+    "en": "Remove {name}",
+    "de": "{name} entfernen"
+  },
+  "settings.mcp.environmentValues": {
+    "en": "Environment values (.env syntax)",
+    "de": "Umgebungsvariablen (.env-Syntax)"
   }
 }

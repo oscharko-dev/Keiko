@@ -885,6 +885,7 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
+  onOpenMcpSettings,
 }: {
   readonly selectedRoot?: string | undefined;
   readonly selectedBranch?: string | undefined;
@@ -892,6 +893,7 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
+  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
@@ -995,6 +997,7 @@ export function CodingWorkbenchWindow({
     <WorkbenchContent
       history={history}
       onOpenHistory={onOpenHistory}
+      onOpenMcpSettings={onOpenMcpSettings}
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
@@ -1265,6 +1268,7 @@ function useWorkbenchCatalogEvidence(
 }
 
 interface WorkbenchContentProps {
+  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly history: CodingTaskSession;
   readonly onOpenHistory: () => void;
   readonly state: CodingWorkbenchRuntimeState;
@@ -1524,6 +1528,7 @@ function LocationBindingNotices({
 }
 
 function WorkbenchColumns({
+  onOpenMcpSettings,
   history,
   state,
   actions,
@@ -1864,6 +1869,11 @@ function WorkbenchColumns({
               runId={state.run.value?.runId}
               revision={state.run.value?.revision}
             />
+            {onOpenMcpSettings !== undefined && (
+              <button type="button" onClick={onOpenMcpSettings}>
+                {t("codingWorkbench.mcp.manage")}
+              </button>
+            )}
             <Timeline
               active={runIsActive}
               generating={generatingRunState(state.run.value?.state)}

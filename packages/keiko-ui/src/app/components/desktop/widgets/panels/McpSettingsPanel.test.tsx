@@ -66,6 +66,40 @@ beforeEach(() => {
 });
 
 describe("MCP Settings", () => {
+  it("edits OAuth definitions without dropping their issuer, scopes or tool admission", async () => {
+    const previous = saved.servers[0];
+    if (previous === undefined) throw new Error("Missing fixture server");
+    const oauth: McpSettingsSnapshot = {
+      ...saved,
+      servers: [
+        {
+          ...previous,
+          transport: {
+            kind: "remote",
+            url: "https://synthetic.example.test/mcp",
+            oauth: {
+              issuer: "https://identity.example.test",
+              clientId: "synthetic-public",
+              scope: "tools.read",
+            },
+          },
+          tools: { search: "read" },
+        },
+      ],
+    };
+    api.mockResolvedValueOnce(oauth).mockResolvedValueOnce(oauth);
+    panel();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Expected OAuth issuer (HTTPS)")).toHaveValue(
+      "https://identity.example.test",
+    );
+    expect(screen.getByLabelText("Public client ID (optional)")).toHaveValue("synthetic-public");
+    fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+    const update = JSON.parse(String(api.mock.calls[1]?.[1]?.body)) as McpSettingsUpdate;
+    expect(update.servers[0]?.transport).toEqual(oauth.servers[0]?.transport);
+    expect(update.servers[0]?.tools).toEqual({ search: "read" });
+  });
   it("saves token references, connects only after saving, and clears the password field", async () => {
     api
       .mockResolvedValueOnce(empty)

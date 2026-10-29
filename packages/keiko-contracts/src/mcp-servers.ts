@@ -105,6 +105,8 @@ export interface McpRemoteTransport {
 }
 
 export interface McpServerDefinition {
+  /** Durable credential epoch; changes revoke this server without disrupting unrelated servers. */
+  readonly credentialGeneration?: string;
   readonly name: string;
   readonly description: string | undefined;
   readonly enabled: boolean;
@@ -351,8 +353,20 @@ function serverHeader(
 function serverOf(value: unknown): McpServerDefinition | undefined {
   const server = record(value);
   if (server === undefined) return undefined;
-  if (!hasOnlyKeys(server, ["name", "description", "enabled", "transport", "tools", "discovery"]))
+  if (
+    !hasOnlyKeys(server, [
+      "name",
+      "description",
+      "enabled",
+      "transport",
+      "tools",
+      "discovery",
+      "credentialGeneration",
+    ])
+  )
     return undefined;
+  const epoch = registryGeneration(server.credentialGeneration);
+  if (epoch === undefined) return undefined;
   const header = serverHeader(server);
   const transport = transportOf(server.transport);
   if (server.discovery !== undefined && server.discovery !== "automatic") return undefined;
@@ -360,10 +374,17 @@ function serverOf(value: unknown): McpServerDefinition | undefined {
   if (header === undefined || transport === undefined || tools === undefined) return undefined;
   return {
     ...header,
+    ...credentialEpochFields(epoch.generation),
     transport,
     tools,
     ...(server.discovery === "automatic" ? { discovery: "automatic" as const } : {}),
   };
+}
+
+function credentialEpochFields(
+  value: string | undefined,
+): Pick<McpServerDefinition, "credentialGeneration"> {
+  return value === undefined ? {} : { credentialGeneration: value };
 }
 
 function registryDocument(value: unknown): Json | undefined {
@@ -637,6 +658,7 @@ export function parseCodingWorkbenchMcpAuthorizationRequest(
 }
 
 export interface McpServerConnectionView {
+  readonly authentication?: "none" | "required" | "authorized";
   readonly name: string;
   readonly state: "disabled" | "idle" | "connecting" | "connected" | "failed";
   /** Discovered tools of this live generation, absent when no connection is usable. */

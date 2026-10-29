@@ -62,6 +62,7 @@ const UPDATED = defineActivityLogOperation({
 });
 
 export interface McpSettingsStore {
+  readonly revoke: (name: string, correlationId: string) => void;
   readonly read: (correlationId: string) => McpSettingsSnapshot;
   /** Revoked synchronously when the committed definition changes, is disabled, or disappears. */
   readonly generation: (server: McpServerDefinition, correlationId: string) => AbortSignal;
@@ -162,7 +163,7 @@ function reconcileSecrets(
   correlationId: string,
 ): { readonly snapshot: McpSettingsSnapshot; readonly changed: boolean } {
   try {
-    const removed = secrets.retain(state.servers.flatMap(mcpServerSecretReferences));
+    const removed = secrets.retain(state.servers.flatMap(mcpServerSecretReferences), state.servers);
     return { snapshot: state, changed: removed > 0 };
   } catch {
     // The committed registry revokes access independently of physical ciphertext cleanup.
@@ -247,6 +248,28 @@ class SettingsStore implements McpSettingsStore {
       }
     }
   }
+  readonly revoke = (name: string, correlationId: string): void => {
+    const state = this.read(correlationId);
+    if (!state.servers.some((server) => server.name === name))
+      throw new TypeError("MCP server is unavailable");
+    const generation = this.#generations.get(name);
+    this.#generations.delete(name);
+    generation?.controller.abort();
+    const servers = validUpdate({
+      expectedRevision: state.revision,
+      secrets: {},
+      servers: state.servers.map((server) =>
+        server.name === name ? { ...server, credentialGeneration: randomUUID() } : server,
+      ),
+    }).servers;
+    savePrivateJson(join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE), {
+      schemaVersion: 1,
+      generation: randomUUID(),
+      servers,
+    });
+    const next = this.read(correlationId);
+    recordMcpSettingsUpdate(this.input.activityLog, correlationId, "reconciled", next, 0);
+  };
   readonly read = (correlationId: string): McpSettingsSnapshot => {
     let current: McpSettingsSnapshot;
     try {

@@ -1829,15 +1829,20 @@ function ModelsTabContent({
 export function SettingsPanel({
   openUpdatesWindow,
   openWorkspaceTrust,
+  initialTab,
   root,
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
   readonly openWorkspaceTrust?: (() => void) | undefined;
+  readonly initialTab?: "mcp" | undefined;
   readonly root?: string | undefined;
 } = {}): ReactNode {
   const t = useTranslate();
   const workspaceT = useGlobalTranslate();
   const [tab, setTab] = useState<Tab>("models");
+  useEffect(() => {
+    if (initialTab === "mcp") setTab("mcp");
+  }, [initialTab]);
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [config, setConfig] = useState<SafeGatewayConfig | null>(null);
   const [configPresent, setConfigPresent] = useState(false);

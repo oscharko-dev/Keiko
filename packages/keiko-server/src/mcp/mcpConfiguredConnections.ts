@@ -26,6 +26,7 @@ import {
 import { savePrivateJson } from "../private-json.js";
 import { resolveMcpSecretHeaders } from "./mcpCredentialRelay.js";
 import type { McpSettingsStore } from "./mcpSettingsStore.js";
+import type { McpAuthorization } from "./mcpAuthorization.js";
 
 export interface ConfiguredMcpConnections {
   /** Current shared runtime facts only; inspection never starts a transport or executes a tool. */
@@ -40,6 +41,7 @@ export interface ConfiguredMcpConnections {
   readonly close: () => Promise<void>;
 }
 interface Options {
+  readonly authorization?: McpAuthorization;
   readonly settings: McpSettingsStore;
   readonly stateDir: string;
   readonly log: ServerLogSink;
@@ -123,8 +125,7 @@ function remoteTransport(
   correlationId: string,
   signal: AbortSignal,
 ): ExternalMcpTransportOptions {
-  if (server.transport.kind !== "remote" || server.transport.oauth !== undefined)
-    throw new ManagedMcpError("not-admitted");
+  if (server.transport.kind !== "remote") throw new ManagedMcpError("not-admitted");
   const transport = server.transport;
   return {
     kind: "remote",
@@ -139,10 +140,11 @@ function remoteTransport(
       )
         throw new ManagedMcpError("not-admitted");
       const body = await requestPayload(request);
+      const headers = await authorizedHeaders(options, server, request, correlationId, invocation);
       requireRequestCurrent(options, server, correlationId, signal, invocation);
       const response = await (options.fetch ?? gatewayFetch)(request.url, {
         method: request.method,
-        headers: remoteHeaders(options, server, transport, request),
+        headers,
         ...(body === undefined ? {} : { body }),
         redirect: "manual",
         signal: AbortSignal.any([signal, request.signal]),
@@ -165,6 +167,25 @@ function remoteTransport(
   };
 }
 
+async function authorizedHeaders(
+  options: Options,
+  server: McpServerDefinition,
+  request: Request,
+  correlationId: string,
+  invocation: ManagedMcpInvocationContext | undefined,
+): Promise<Headers> {
+  const transport = server.transport;
+  if (transport.kind !== "remote") throw new ManagedMcpError("not-admitted");
+  const headers = remoteHeaders(options, server, transport, request);
+  if (transport.oauth !== undefined) {
+    if (options.authorization === undefined) throw new ManagedMcpError("not-admitted");
+    const token = await options.authorization.token(server, correlationId);
+    invocation?.observeCredential?.(token);
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return headers;
+}
+
 function localTransport(
   options: Options,
   server: McpServerDefinition,
@@ -182,6 +203,23 @@ function localTransport(
   return { kind: "local", command: server.transport.command, cwd, environment };
 }
 
+function oauthCredentials(options: Options, server: McpServerDefinition): readonly string[] {
+  return server.transport.kind === "remote" && server.transport.oauth !== undefined
+    ? (options.authorization?.credentials(server) ?? [])
+    : [];
+}
+function projectMcpResult(
+  data: CatalogJsonObject,
+  credentials: readonly string[],
+): CatalogJsonObject {
+  const safe = deepRedactStrings(data, (text) =>
+    redactContent(text, "preserve", credentials),
+  ) as CatalogJsonObject;
+  const serialized = JSON.stringify(safe);
+  if (redactContent(serialized, "preserve", credentials) !== serialized)
+    throw new ManagedMcpError("protocol-error");
+  return safe;
+}
 function guardedConnection(
   options: Options,
   server: McpServerDefinition,
@@ -190,9 +228,8 @@ function guardedConnection(
 ): ExternalMcpConnection {
   const secrets = mcpServerSecretReferences(server)
     .map((reference) => options.settings.secret(reference, server))
-    .filter((value): value is string => value !== undefined);
-  const project = (value: unknown): unknown =>
-    deepRedactStrings(value, (text) => redactContent(text, "preserve", secrets));
+    .filter((value): value is string => value !== undefined)
+    .concat(oauthCredentials(options, server));
   // Metadata defines dispatch identities/schema: refuse credential-bearing metadata rather than rewriting it.
   const metadata = JSON.stringify(connection.tools);
   if (redactContent(metadata, "preserve", secrets) !== metadata) {
@@ -204,6 +241,7 @@ function guardedConnection(
     tools: connection.tools,
     close: () => connection.close(),
     call: async (name, args, context): Promise<CatalogJsonObject> => {
+      const credentials = new Set(secrets);
       const beforeEffect = (): boolean => {
         currentGeneration(options, server, context.correlationId);
         return !signal.aborted && context.beforeEffect();
@@ -213,13 +251,13 @@ function guardedConnection(
         ...context,
         signal: AbortSignal.any([signal, context.signal]),
         beforeEffect,
+        observeCredential: (value): void => {
+          credentials.add(value);
+          context.observeCredential?.(value);
+        },
       });
       if (!beforeEffect()) throw new ManagedMcpError("not-admitted");
-      const safe = project(data) as CatalogJsonObject;
-      const serialized = JSON.stringify(safe);
-      if (redactContent(serialized, "preserve", secrets) !== serialized)
-        throw new ManagedMcpError("protocol-error");
-      return safe;
+      return projectMcpResult(data, [...credentials, ...oauthCredentials(options, server)]);
     },
   };
 }
@@ -356,6 +394,7 @@ export function createConfiguredMcpConnections(options: Options): ConfiguredMcpC
     connect: (name, correlationId) =>
       connectCurrent(options, lifetime.signal, connections, name, correlationId),
     close: async (): Promise<void> => {
+      await options.authorization?.close();
       const pending = [...connections.values()];
       lifetime.abort();
       await Promise.allSettled(pending.map(async ({ connection }) => (await connection).close()));

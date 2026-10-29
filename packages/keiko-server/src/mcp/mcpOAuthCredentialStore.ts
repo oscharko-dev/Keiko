@@ -49,10 +49,12 @@ export function mcpOAuthCredentialReference(binding: McpOAuthCredentialBinding):
   const digest = createHash("sha256")
     .update(
       JSON.stringify([
+        "scope-bound-v2",
         binding.server,
         binding.url,
         binding.oauth.issuer,
         binding.oauth.clientId ?? null,
+        binding.oauth.scope ?? null,
       ]),
       "utf8",
     )
@@ -78,6 +80,64 @@ export function createMcpOAuthCredentialStore(
       opened().set(mcpOAuthCredentialReference(binding), JSON.stringify(credential));
     },
   };
+}
+
+/** SDK custody shares the MCP vault; opaque native-runtime credentials are never reinterpreted. */
+export function createCentralMcpOAuthPersistence(
+  input: McpOAuthCredentialStoreInput,
+  binding: McpOAuthCredentialBinding,
+): {
+  readonly read: () => Readonly<Record<string, unknown>> | undefined;
+  readonly write: (value: Readonly<Record<string, unknown>>) => void;
+  readonly clear: () => void;
+} {
+  const reference = centralMcpOAuthReference(binding);
+  let vault: LocalSecretVault | undefined;
+  const opened = (): LocalSecretVault => (vault ??= openVault(input));
+  return {
+    read: (): Readonly<Record<string, unknown>> | undefined => {
+      const value = opened().get(reference);
+      if (value === undefined) return undefined;
+      const parsed: unknown = JSON.parse(value);
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Readonly<Record<string, unknown>>)
+        : undefined;
+    },
+    write: (value): void => {
+      opened().set(reference, JSON.stringify(value));
+    },
+    clear: (): void => {
+      opened().delete(reference);
+    },
+  };
+}
+
+function centralMcpOAuthReference(binding: McpOAuthCredentialBinding): string {
+  return `mcp-central:${createHash("sha256")
+    .update(
+      JSON.stringify([
+        binding.server,
+        binding.url,
+        binding.oauth.issuer,
+        binding.oauth.clientId ?? null,
+        binding.oauth.scope ?? null,
+      ]),
+    )
+    .digest("hex")}`;
+}
+function centralMcpReferences(servers: readonly McpServerDefinition[]): readonly string[] {
+  return servers.flatMap((server) => {
+    const transport = server.transport;
+    return transport.kind !== "remote" || transport.oauth === undefined
+      ? []
+      : [
+          centralMcpOAuthReference({
+            server: server.name,
+            url: transport.url,
+            oauth: transport.oauth,
+          }),
+        ];
+  });
 }
 
 function openVault(input: McpOAuthCredentialStoreInput): LocalSecretVault {
@@ -162,12 +222,37 @@ function usesEnvironmentCredential(
   return candidates.some((reference) => !sealed.has(`mcp-static:${reference}`));
 }
 
+function retainMcpCredentials(
+  input: McpOAuthCredentialStoreInput,
+  references: readonly string[],
+  servers: readonly McpServerDefinition[],
+): number {
+  if (!vaultExists(input)) return 0;
+  const vault = openVault(input);
+  const retained = new Set([
+    ...references.map((reference) => `mcp-static:${reference}`),
+    ...centralMcpReferences(servers),
+  ]);
+  const removed = vault
+    .list()
+    .filter(
+      (reference) =>
+        (reference.startsWith("mcp-static:") || reference.startsWith("mcp-central:")) &&
+        !retained.has(reference),
+    );
+  vault.deleteMany(removed);
+  return removed.length;
+}
+
 /** Static credentials share the MCP vault, with immutable references bound to one exact target. */
 export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput): {
   readonly get: (reference: string, server: McpServerDefinition) => string | undefined;
   /** Inspect reference metadata only; do not decrypt credential values for authority discovery. */
   readonly usesEnvironment: (references: readonly string[]) => boolean;
-  readonly retain: (references: readonly string[]) => number;
+  readonly retain: (
+    references: readonly string[],
+    servers?: readonly McpServerDefinition[],
+  ) => number;
   readonly put: (
     entries: readonly {
       readonly reference: string;
@@ -179,15 +264,8 @@ export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput):
   const key = (reference: string): string => `mcp-static:${reference}`;
   return {
     usesEnvironment: (references): boolean => usesEnvironmentCredential(input, references),
-    retain: (references): number => {
-      if (!vaultExists(input)) return 0;
-      const vault = openVault(input);
-      const retained = new Set(references.map(key));
-      const removed = vault
-        .list()
-        .filter((reference) => reference.startsWith("mcp-static:") && !retained.has(reference));
-      vault.deleteMany(removed);
-      return removed.length;
+    retain: (references, servers = []): number => {
+      return retainMcpCredentials(input, references, servers);
     },
     get: (reference, server): string | undefined => {
       const text = openVault(input).get(key(reference));

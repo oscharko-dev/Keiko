@@ -319,7 +319,10 @@ The shape (ADR-0019):
   and UI never imports it (ADR-0179).
 - **`keiko-mcp`** owns the shared managed MCP protocol host (ADR-0181). Its only internal
   dependencies are contracts and security; official MCP SDK imports are confined to this package.
-  Server composition supplies provider/log ports and retains catalog/binder admission.
+  Server composition supplies provider/log ports and retains catalog/binder admission. Central
+  Settings/connection ownership includes external OAuth for Chat and Workbench. Native production
+  runs receive scoped relay capabilities, never external OAuth tokens. Keep credential epochs,
+  app-session-bound one-use callbacks, scope binding and effect-safe no-replay behavior intact.
 - **`keiko-model-gateway`** is the _only_ place provider SDKs (`openai`, `@anthropic-ai/*`,
   `*-ai-sdk`) may be imported. This isolation is a hard gate — do not import a model SDK anywhere
   else (ADR-0019 trust-1).

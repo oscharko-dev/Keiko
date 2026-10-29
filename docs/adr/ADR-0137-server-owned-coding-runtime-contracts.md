@@ -1264,40 +1264,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   request/response bytes, the count of replaced credential occurrences (`redactedCount`), duration,
   outcome `relayed`/`cancelled`/`refused`/`failed` with a closed reason and frames on failure);
   never a credential, capability, URL or server name.
-- **A remote MCP server authorizes through the runtime's own OAuth, bound to the operator's expected
-  issuer (#3903 AC3).** A remote registry entry may carry `oauth: { issuer, clientId?, scope? }`:
-  the issuer identifier the operator expects (RFC 8414 §2, https, no query or fragment, compared as
-  written) and an optional public client. No client secret or token belongs in the registry. Before
-  each native launch Keiko reads that issuer's metadata from the RFC 8414 and OpenID Connect
-  well-known locations through its own egress configuration, without redirects and with loopback
-  and private targets refused (`mcpOAuthIssuer.ts`), and admits the server only when the document
-  names exactly that issuer, its endpoints are https, PKCE S256 is offered and a client can be had
-  (the operator's id, or dynamic registration). Each location read is one
-  `mcp.oauth.issuer.checked` line. The binding then sets `oauth.auth_server_metadata_url` to the
-  validated location (with `client_id` and `scope` from the registry), so the runtime never follows
-  the MCP server's protected-resource metadata to another authorization server; a server whose
-  issuer did not validate is left out with its tools. The authorization itself is the runtime's:
-  `integration.oauth.connect` registers a client if needed, prepares PKCE and listens on its own
-  loopback callback. Keiko starts it only for an admitted server of a live native run, at the
-  human's request in the Workbench, and hands out the authorization URL only when it addresses the
-  validated authorization endpoint with the code flow, an S256 challenge, a state, the server as the
-  RFC 8707 resource, a `127.0.0.1` callback and the operator's client (`mcpOAuthAuthorizationUrl.ts`);
-  any other attempt is cancelled at once (`url-refused`). The human opens the page in a new tab; the
-  runtime's callback completes the attempt (`coding-runtime.mcp-authorization`). A completed
-  credential is kept in Keiko's AES-256-GCM vault under the state directory
-  (`mcpOAuthCredentialStore.ts`, keyed through `KEIKO_MCP_OAUTH_CREDENTIALS_KEY`, the keychain or a
-  keyfile, opened on first use), bound to the server's name, URL, issuer and client, and only when
-  the runtime recorded exactly that server URL and issuer for it. A later native run is seeded with
-  it once it is ready (`credential.create`; the runtime connects without a prompt), and when a run
-  ends its reaped runtime's credentials are kept again (a refresh may have rotated them) and removed
-  from its database before retention, so a retained session never carries a token and the
-  retention audit's `credential-present` refusal stays a hard guard (`coding-runtime.mcp-credentials`).
-  Keiko never lists or reads credentials through the runtime's API. The staged 2.1.4 executable
-  proves it under the real native Seatbelt wrapper (`opencodeNativeRepositoryItems.real.test.ts`):
-  the server lists as needing authorization, the validated page completes through the runtime's
-  callback and the server connects, the sealed credential seeds the next run without a second
-  authorization, the reaped database holds no credential afterwards, and a page for another
-  endpoint is withheld.
+- **Production MCP OAuth is centrally owned and relayed.** The shared Settings/connection
+  composition described in ADR-0181 owns discovery, sign-in, refresh and encrypted custody for
+  both Chat and Coding Workbench. Native runs receive only a run/server-bound relay capability;
+  their `mcp.servers` configuration disables native OAuth. Successful sign-in and sign-out rotate
+  a durable server credential epoch, invalidating old relays, catalogs and disclosure authority.
+  The Workbench opens the central MCP settings to manage sign-in. No external OAuth credential
+  is seeded into or harvested from a managed production run.
+  The standalone native OAuth adapter and its real-executable proofs remain for explicit legacy
+  compatibility without the shared composition. That adapter validates the operator's expected
+  issuer, PKCE, resource, public client, unique request parameters and a plain loopback callback;
+  its separate credential-seeding/scrubbing and retention guards still apply. These legacy
+  proofs do not establish acceptance of the central OAuth browser workflow.
 - **The plan tool is on (#3897, parity row T19, owner decision of 2026-10-24).** The pinned 2.1.4
   producer registers its plan tool `todowrite` only under `experimental.todo` (off by default in
   standalone), so a native run used to show no plan card. `createNativeOpenCodeV2Config` sets the

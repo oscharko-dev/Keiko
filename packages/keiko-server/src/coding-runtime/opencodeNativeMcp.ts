@@ -202,16 +202,12 @@ export function openCodeNativeMcpAdmission(input: {
   const relays = input.relays ?? new Map<string, OpenCodeNativeMcpRelayEndpoint>();
   const candidates =
     input.managed === true
-      ? input.servers.filter(
-          (server) =>
-            (server.transport.kind === "remote" && server.transport.oauth !== undefined) ||
-            relays.has(server.name),
-        )
+      ? input.servers.filter((server) => relays.has(server.name))
       : input.servers;
   const admitted = admittedServers(candidates, input.mode, validations, relays, input.managed);
   const oauth = new Map(
     admitted.flatMap((server) => {
-      const entry = oauthServer(server, validations);
+      const entry = relays.has(server.name) ? undefined : oauthServer(server, validations);
       return entry === undefined ? [] : [[server.name, entry] as const];
     }),
   );

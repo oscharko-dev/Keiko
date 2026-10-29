@@ -21,6 +21,12 @@ import {
   handlePutMcpSettings,
 } from "./mcpSettingsRoutes.js";
 
+import {
+  handleStartMcpAuthorization,
+  handleMcpAuthorizationStatus,
+  handleCancelMcpAuthorization,
+  handleRevokeMcpAuthorization,
+} from "./mcpAuthorizationRoutes.js";
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -203,3 +209,76 @@ it("GET observes the existing owner and connect confirms the committed discovery
     await manager.close();
   }
 });
+
+describe("central MCP authorization route authority", () => {
+  it("mounts every authorization action on the authenticated production router", () => {
+    for (const suffix of ["", "/status", "/cancel", "/revoke"])
+      expect(
+        API_ROUTES.some(
+          (route) =>
+            route.method === "POST" &&
+            route.pattern === `/api/mcp/servers/:serverName/authorization${suffix}`,
+        ),
+      ).toBe(true);
+  });
+  it("refuses every anonymous authorization action before reaching the owner", async () => {
+    const f = fixture();
+    const start = vi.fn();
+    const deps = { ...f.deps, mcpAuthorization: authorizationOwner(start) };
+    for (const handler of [
+      handleStartMcpAuthorization,
+      handleMcpAuthorizationStatus,
+      handleCancelMcpAuthorization,
+      handleRevokeMcpAuthorization,
+    ])
+      expect((await handler(context(""), deps)).status).toBe(403);
+    expect(start).not.toHaveBeenCalled();
+  });
+  it("rejects oversized and ambiguous status requests before consulting the owner", async () => {
+    const f = fixture();
+    const owner = authorizationOwner();
+    for (const body of [
+      { attemptId: "forged" },
+      { attemptId: "con_" + "a".repeat(48), extra: true },
+      { attemptId: "a".repeat(2048) },
+    ]) {
+      const result = await handleMcpAuthorizationStatus(context(f.cookie, body), {
+        ...f.deps,
+        mcpAuthorization: owner,
+      });
+      expect(result.status).toBeGreaterThanOrEqual(400);
+    }
+    expect(owner.status).not.toHaveBeenCalled();
+  });
+  it("rechecks the app session after an asynchronous authorization start", async () => {
+    const f = fixture();
+    const start = vi.fn<import("./mcpAuthorization.js").McpAuthorization["start"]>(
+      (_name, _session, current) => {
+        expect(current()).toBe(true);
+        f.deps.codingAppSessionChannel?.signOut(f.cookie.slice(APP_SESSION_COOKIE_NAME.length + 1));
+        expect(current()).toBe(false);
+        return Promise.resolve({ outcome: "refused", reason: "failed" });
+      },
+    );
+    const result = await handleStartMcpAuthorization(context(f.cookie), {
+      ...f.deps,
+      mcpAuthorization: authorizationOwner(start),
+    });
+    expect(result.status).toBe(403);
+    expect(start).toHaveBeenCalledOnce();
+  });
+});
+function authorizationOwner(
+  start: import("./mcpAuthorization.js").McpAuthorization["start"] = vi.fn(),
+): import("./mcpAuthorization.js").McpAuthorization {
+  return {
+    start,
+    authorized: vi.fn(() => false),
+    credentials: vi.fn(() => []),
+    token: vi.fn(() => Promise.resolve("synthetic-unused")),
+    status: vi.fn(() => "unavailable" as const),
+    cancel: vi.fn(),
+    revoke: vi.fn(),
+    close: vi.fn(() => Promise.resolve()),
+  };
+}

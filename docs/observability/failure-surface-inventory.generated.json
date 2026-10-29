@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8946efb612ea0209611f7aafe7f7f0f305fe07fd3621dc2e7e83a7fdbcd2c71f"
+    "catalogDigest": "e31987d28350cb3aa47c882545dde32ca28cd3e13c9fba9430f5fbdde3760fb8"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 607,
-    "proofCount": 630,
-    "resolvedProofCount": 630,
-    "failureClassCount": 379,
+    "operationCount": 608,
+    "proofCount": 631,
+    "resolvedProofCount": 631,
+    "failureClassCount": 380,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -439,6 +439,7 @@
         "git.ci-repair.budget",
         "git.verified-commit.authority",
         "harness.context.compacted",
+        "mcp.authorization.state",
         "mcp.managed.lifecycle",
         "mcp.oauth.issuer.checked",
         "mcp.registry.loaded",
@@ -793,6 +794,7 @@
     }
   ],
   "failureClassScenarios": {
+    "mcp-authorization": ["tools-workflows.dependency-failure"],
     "chat-tool-transcript": ["bff.dependency-failure"],
     "chat-tool-authority": ["editor-delivery.dependency-failure"],
     "chat-tool-mutation": ["bff.dependency-failure"],
@@ -2471,6 +2473,7 @@
     "lsp.spawn.failed.emitted-line": [
       "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
     ],
+    "mcp.authorization.state.line": ["packages/keiko-server/src/mcp/mcpAuthorization.test.ts"],
     "mcp.managed.lifecycle.line": [
       "packages/keiko-mcp/src/external-client.test.ts",
       "packages/keiko-mcp/src/host-protocol.test.ts",

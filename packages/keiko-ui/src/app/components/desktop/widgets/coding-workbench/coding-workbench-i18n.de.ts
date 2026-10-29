@@ -1324,6 +1324,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.skills.retry": "Erneut versuchen",
   "codingWorkbench.skills.reason.budgetExhausted": "Budget erschöpft",
   "codingWorkbench.mcp.summary": "MCP-Server ({count})",
+  "codingWorkbench.mcp.manage": "MCP-Server verwalten",
   "codingWorkbench.mcp.status.connected": "Verbunden",
   "codingWorkbench.mcp.status.needsAuthorization": "Autorisierung erforderlich",
   "codingWorkbench.mcp.status.failed": "Nicht verbunden",
