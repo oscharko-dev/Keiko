@@ -2,10 +2,14 @@
 // closed shape the server records at info as `client.coding-workbench.interaction`, on the routine
 // budget: opening a detail is never a warn/unknown browser failure.
 import type { MouseEvent } from "react";
-import type {
-  ClientCodingWorkbenchAgentKind,
-  ClientCodingWorkbenchDetailSection,
-  ClientDiagnosticCodingWorkbenchInteraction,
+import {
+  CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX,
+  CLIENT_CODING_WORKBENCH_DIFF_LINE_COUNT_MAX,
+  CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX,
+  type ClientCodingWorkbenchAgentKind,
+  type ClientCodingWorkbenchDetailSection,
+  type ClientCodingWorkbenchDiffSurface,
+  type ClientDiagnosticCodingWorkbenchInteraction,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { reportClientDiagnostic } from "./client-diagnostics";
 
@@ -43,4 +47,28 @@ export function reportCodingWorkbenchSummaryActivated(
 /** A built-in agent by name; a custom primary agent only as `custom`, never by its name. */
 export function codingWorkbenchAgentKind(agent: string): ClientCodingWorkbenchAgentKind {
   return agent === "build" || agent === "plan" ? agent : "custom";
+}
+
+/** The size of a diff that switched to the windowed view: counts only, never a path or text. */
+export interface CodingWorkbenchWindowedDiffSize {
+  readonly fileCount: number;
+  readonly totalLineCount: number;
+  readonly totalByteCount: number;
+}
+
+/**
+ * A diff above the window threshold switched to the windowed view (#4108). The counts are clamped
+ * to the wire bounds, so an outsized answer diff is reported at the bound instead of refused.
+ */
+export function reportCodingWorkbenchDiffWindowed(
+  surface: ClientCodingWorkbenchDiffSurface,
+  size: CodingWorkbenchWindowedDiffSize,
+): void {
+  reportCodingWorkbenchInteraction({
+    interaction: "diff-windowed",
+    surface,
+    fileCount: Math.min(size.fileCount, CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX),
+    totalLineCount: Math.min(size.totalLineCount, CLIENT_CODING_WORKBENCH_DIFF_LINE_COUNT_MAX),
+    totalByteCount: Math.min(size.totalByteCount, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
+  });
 }

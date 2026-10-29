@@ -26,6 +26,7 @@ import {
 } from "./git-editor.js";
 import { GIT_STATUS_CODES } from "./git-repository.js";
 import type { GitRepositoryState, GitStatusCode } from "./git-repository.js";
+import { GOVERNED_PATCH_MAX_BYTES } from "./patch-limits.js";
 import type { PatchLimits } from "./tools.js";
 import {
   isWorkspaceRootIdentityDigest,
@@ -43,14 +44,15 @@ export const EDITOR_AGENT_SCHEMA_VERSION = "1" as const;
 export const EDITOR_AGENT_CHANGESET_MAX_FILES = 50;
 /**
  * The size of one governed file change: the UTF-8 bytes of one changeset's unified diff, of one
- * `applyPatch` diff, and of the new text one prepared preview carries. 8 MiB (owner decision,
- * 2026-10-28), so normal work such as writing a 66 KB data file is never refused. It stays as the
- * runaway-model safeguard of the editor trust boundary and the single place the number is defined:
- * the validators below, the editor action route's patch inspection (`EDITOR_AGENT_CHANGESET_PATCH_LIMITS`)
- * and its request body bound (`EDITOR_AGENT_ACTION_MAX_BODY_BYTES`), the replacement materializer and
- * the review parser all read it from here.
+ * `applyPatch` diff, and of the new text one prepared preview carries. It is the shared governed
+ * patch cap (`GOVERNED_PATCH_MAX_BYTES`: 8 MiB, owner decisions 2026-10-28 and 2026-10-29), so normal
+ * work such as writing a 66 KB data file is never refused. It stays as the runaway-model safeguard of
+ * the editor trust boundary: the validators below, the editor action route's patch inspection
+ * (`EDITOR_AGENT_CHANGESET_PATCH_LIMITS`) and its request body bound
+ * (`EDITOR_AGENT_ACTION_MAX_BODY_BYTES`), the replacement materializer and the review parser all
+ * read it from here.
  */
-export const EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES = 8 * 1_048_576;
+export const EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES = GOVERNED_PATCH_MAX_BYTES;
 /**
  * Added plus removed lines one changeset may carry. A byte cap alone would let a diff of
  * single-character lines through the parser as millions of records; this keeps the line walk
@@ -60,7 +62,8 @@ export const EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES = 8 * 1_048_576;
 export const EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES = 1_000_000;
 /**
  * The patch inspection limits of the governed editor path (`inspectPatch`, `validatePatch`,
- * `applyPatch`). `DEFAULT_PATCH_LIMITS` stays sized for small assistant-generated patches of the
+ * `applyPatch`). `DEFAULT_PATCH_LIMITS` shares the per-patch byte bound with the constants above
+ * (`GOVERNED_PATCH_MAX_BYTES`) and keeps its smaller changed-line and file-count bounds for the
  * other workflows; the editor changeset path is sized by the constants above.
  */
 export const EDITOR_AGENT_CHANGESET_PATCH_LIMITS: PatchLimits = Object.freeze({

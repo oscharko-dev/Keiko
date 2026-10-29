@@ -4,9 +4,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { EditorAgentRootBoundaryReason } from "./agentRootBoundary.js";
+import type { EditorAgentRootBoundaryReason, ReplacedRootRefresh } from "./agentRootBoundary.js";
 
-export type EditorBridgeRegistrationOutcome = "registered" | "refreshed" | "rotated" | "refused";
+export type EditorBridgeRegistrationOutcome =
+  "registered" | "refreshed" | "rotated" | "refused" | "identity-refreshed";
 /** Why a registration was refused: a root-boundary reason, or the run's lease held elsewhere. */
 export type EditorBridgeRegistrationRefusal = EditorAgentRootBoundaryReason | "capability-held";
 
@@ -24,8 +25,12 @@ const EDITOR_BRIDGE_REGISTRATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["registered", "refreshed", "rotated", "refused"],
+      values: ["registered", "refreshed", "rotated", "refused", "identity-refreshed"],
     },
+    // #4117: set only on `identity-refreshed`, the manifest revisions around the adoption of a
+    // folder replaced at the same path. Counts only; the digests and the path stay out of the log.
+    previousManifestRevision: { type: "integer", dataClass: "count", required: false },
+    manifestRevision: { type: "integer", dataClass: "count", required: false },
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -53,6 +58,7 @@ export function recordBridgeRegistration(
   outcome: EditorBridgeRegistrationOutcome,
   correlationId: string | undefined,
   reason?: EditorBridgeRegistrationRefusal,
+  refresh?: ReplacedRootRefresh,
 ): void {
   const refused = outcome === "refused";
   processServerLogSink().write(
@@ -70,6 +76,12 @@ export function recordBridgeRegistration(
       {
         outcome,
         ...(reason === undefined ? {} : { reason }),
+        ...(refresh === undefined
+          ? {}
+          : {
+              previousManifestRevision: refresh.previousRevision,
+              manifestRevision: refresh.revision,
+            }),
         completeness: "complete",
         loss: "none",
       },

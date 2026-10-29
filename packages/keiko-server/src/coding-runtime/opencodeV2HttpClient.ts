@@ -49,8 +49,12 @@ const MAX_TEXT_BYTES = OPENCODE_PROMPT_TEXT_MAX_BYTES;
 // delay its local HTTP response without making the run unhealthy; keep a bounded scheduling margin.
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MESSAGE_PAGE_SIZE = 100;
+// A tail read stops at its anchor, a few dozen messages from the newest, so its pages are smaller;
+// the row bound below still limits how far it reads, whichever page size it uses.
+const TAIL_PAGE_SIZE = 50;
 const MAX_MESSAGE_PAGES = 64;
 const MAX_MESSAGES = 4096;
+const MAX_TAIL_PAGES = Math.ceil(MAX_MESSAGES / TAIL_PAGE_SIZE) + 1;
 const MAX_EVENT_FRAME_BYTES = 1024 * 1024;
 const MAX_DIFF_FILES = 4096;
 const MAX_DIFF_PATH_CHARS = 4096;
@@ -294,7 +298,16 @@ export interface OpenCodeV2HttpClient {
    * past the bound yields its newest window with `truncated` set instead of failing; the complete
    * read above stays strict for callers that need every message.
    */
-  recentMessages(sessionId: string, signal?: AbortSignal): Promise<OpenCodeV2MessageWindow>;
+  recentMessages(
+    sessionId: string,
+    signal?: AbortSignal,
+    /**
+     * The id of a message the caller already holds. The read then ends at that message instead of
+     * at the start of the session (#4104); an anchor the session no longer holds reads on to its
+     * start, so the answer is the whole window exactly as an unanchored read returns it.
+     */
+    anchorId?: string,
+  ): Promise<OpenCodeV2MessageWindow>;
   prompt(
     sessionId: string,
     text: string,
@@ -1183,6 +1196,12 @@ function nextSessionsCursor(
 export interface OpenCodeV2MessageWindow {
   readonly messages: readonly Readonly<Record<string, unknown>>[];
   readonly truncated: boolean;
+  /**
+   * The read stopped at the anchor it was given: `messages` begin with the anchor message, and the
+   * older ones were not read. Absent when no anchor was given or the anchor was no longer in the
+   * session, in which case `messages` are the whole window as an unanchored read returns it.
+   */
+  readonly anchored?: boolean;
 }
 
 /**
@@ -1196,29 +1215,42 @@ async function pagedMessages(
   sessionId: string,
   signal: AbortSignal | undefined,
   mode: "complete" | "recent",
+  anchorId?: string,
 ): Promise<OpenCodeV2MessageWindow> {
   const base = `/api/session/${safeSessionId(sessionId)}/message`;
+  const pageSize = anchorId === undefined ? MESSAGE_PAGE_SIZE : TAIL_PAGE_SIZE;
+  const maxPages = anchorId === undefined ? MAX_MESSAGE_PAGES : MAX_TAIL_PAGES;
   const rows: Readonly<Record<string, unknown>>[] = [];
   const cursors = new Set<string>();
   let cursor: string | undefined;
-  for (let page = 0; page < MAX_MESSAGE_PAGES; page += 1) {
+  for (let page = 0; page < maxPages; page += 1) {
     const query = cursor === undefined ? "order=desc" : `cursor=${encodeURIComponent(cursor)}`;
     const response = await request(
       "GET",
-      `${base}?limit=${String(MESSAGE_PAGE_SIZE)}&${query}`,
+      `${base}?limit=${String(pageSize)}&${query}`,
       undefined,
       signal,
     );
     const batch = arrayEnvelope(response);
     if (rows.length + batch.length > MAX_MESSAGES) return overBound(mode, rows.concat(batch));
+    const anchorAt = anchorId === undefined ? -1 : batch.findIndex((row) => row.id === anchorId);
     rows.push(...batch);
-    if (batch.length < MESSAGE_PAGE_SIZE) {
+    if (anchorAt >= 0) return anchoredWindow(rows, rows.length - batch.length + anchorAt);
+    if (batch.length < pageSize) {
       rows.reverse();
       return { messages: rows, truncated: false };
     }
     cursor = nextMessagesCursor(response, cursors);
   }
   return overBound(mode, rows);
+}
+
+// The messages from the anchor to the newest, oldest first. `rows` run newest first.
+function anchoredWindow(
+  rows: readonly Readonly<Record<string, unknown>>[],
+  anchorIndex: number,
+): OpenCodeV2MessageWindow {
+  return { messages: rows.slice(0, anchorIndex + 1).reverse(), truncated: false, anchored: true };
 }
 
 function overBound(
@@ -1304,7 +1336,8 @@ export function createOpenCodeV2HttpClient(
     sessions: (signal) => pagedSessions(request, signal),
     messages: async (sessionId, signal) =>
       (await pagedMessages(request, sessionId, signal, "complete")).messages,
-    recentMessages: (sessionId, signal) => pagedMessages(request, sessionId, signal, "recent"),
+    recentMessages: (sessionId, signal, anchorId) =>
+      pagedMessages(request, sessionId, signal, "recent", anchorId),
     prompt: async (sessionId, value, signal, display, inputs): Promise<void> => {
       const prepared = preparedPrompt(sessionId, value, display, inputs);
       const receipt = objectEnvelope(await request("POST", prepared.path, prepared.body, signal));

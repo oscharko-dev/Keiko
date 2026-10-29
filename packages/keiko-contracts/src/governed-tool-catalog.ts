@@ -42,6 +42,19 @@ export interface ToolArgumentLimits {
 export const GOVERNED_CHANGESET_EDIT_TOOL_ID = "keiko.changeset.edit";
 /** The name the model and the coding runtime know the governed changeset edit by. */
 export const GOVERNED_CHANGESET_EDIT_TOOL_ALIAS = "keiko_changeset_edit";
+/**
+ * The canonical ids of the legacy patch tools (`propose_patch`, `apply_patch`): their one argument
+ * is a unified diff, the same content the changeset edit carries (owner decision, 2026-10-29, #4110).
+ */
+export const GOVERNED_PATCH_PROPOSE_TOOL_ID = "keiko.patch.propose";
+export const GOVERNED_PATCH_APPLY_TOOL_ID = "keiko.patch.apply";
+
+// The tools whose arguments are file content and so follow the shared patch ceiling.
+const PATCH_CONTENT_TOOL_IDS: ReadonlySet<string> = new Set([
+  GOVERNED_CHANGESET_EDIT_TOOL_ID,
+  GOVERNED_PATCH_PROPOSE_TOOL_ID,
+  GOVERNED_PATCH_APPLY_TOOL_ID,
+]);
 
 /** The ceilings every tool call is held to unless `toolArgumentLimits` names a larger one. */
 export const GENERIC_TOOL_ARGUMENT_LIMITS: ToolArgumentLimits = Object.freeze({
@@ -50,9 +63,11 @@ export const GENERIC_TOOL_ARGUMENT_LIMITS: ToolArgumentLimits = Object.freeze({
 });
 
 /**
- * The ceilings of one `keiko_changeset_edit` call (owner decision, 2026-10-28: Keiko refuses no
- * coding data at 64 KiB). They are the changeset cap, not a second figure: one `oldString` or
- * `newString` may carry up to `EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` UTF-8 bytes, and one call
+ * The ceilings of one call whose arguments are file content: a `keiko_changeset_edit` call (owner
+ * decision, 2026-10-28: Keiko refuses no coding data at 64 KiB) and, since the owner decision of
+ * 2026-10-29 (#4110), a `propose_patch` or `apply_patch` call. They are the shared patch cap, not a
+ * second figure: one `oldString`, `newString` or `diff` may carry up to
+ * `EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` (`GOVERNED_PATCH_MAX_BYTES`) UTF-8 bytes, and one call
  * may carry what one editor action may (`EDITOR_AGENT_ACTION_MAX_BODY_BYTES`: the old and new text
  * of a changeset at the cap, JSON escaping of quotes and line breaks, and a mebibyte of envelope).
  * The materialized diff stays bounded by the cap itself, so these remain runaway safeguards of the
@@ -65,7 +80,7 @@ export const CHANGESET_EDIT_ARGUMENT_LIMITS: ToolArgumentLimits = Object.freeze(
 
 /** The argument ceilings of the tool with this canonical id. */
 export function toolArgumentLimits(canonicalId: string): ToolArgumentLimits {
-  return canonicalId === GOVERNED_CHANGESET_EDIT_TOOL_ID
+  return PATCH_CONTENT_TOOL_IDS.has(canonicalId)
     ? CHANGESET_EDIT_ARGUMENT_LIMITS
     : GENERIC_TOOL_ARGUMENT_LIMITS;
 }

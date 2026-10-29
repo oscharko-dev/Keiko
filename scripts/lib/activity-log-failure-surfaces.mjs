@@ -162,6 +162,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "process-log-sink", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "reference-id", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "run-handlers", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "run-patch-refusal-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "server", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "sse-write", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "store", surface: "bff" },

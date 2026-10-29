@@ -125,6 +125,15 @@ function collectCatalogIdentity(node, tokens, source) {
   if (id && ts.isStringLiteral(id)) addTechnicalToken(id.text, tokens);
 }
 
+// A catalog registration may name its id through a governed-tool-catalog contract constant; the
+// contract module owns those ids as `*_TOOL_ID` literals, so they are read there (#4110).
+function collectContractToolId(node, tokens, source) {
+  if (source !== "packages/keiko-contracts/src/governed-tool-catalog.ts") return;
+  if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name)) return;
+  if (!node.name.text.endsWith("_TOOL_ID") || !node.initializer) return;
+  if (ts.isStringLiteral(node.initializer)) addTechnicalToken(node.initializer.text, tokens);
+}
+
 function collectGitConfigSubcommand(node, tokens, source) {
   if (source !== "packages/keiko-git/src/runner.ts" || !ts.isStringLiteral(node)) return;
   const match = /^(?:alias|pager)\.([a-z][a-z0-9-]{0,31})=/u.exec(node.text);
@@ -168,6 +177,7 @@ function collectOwnedVocabulary(node, tokens, source) {
   collectGitCall(node, tokens);
   collectProfile(node, tokens);
   collectCatalogIdentity(node, tokens, source);
+  collectContractToolId(node, tokens, source);
   collectGitConfigSubcommand(node, tokens, source);
   collectIndexingFailureKinds(node, tokens, source);
   if (!source.includes("packages/keiko-git/src/")) return;

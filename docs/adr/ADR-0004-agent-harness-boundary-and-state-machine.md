@@ -108,7 +108,7 @@ Limits and where they are enforced:
 | `maxToolCalls` | 30 | Before `tool-call` state entry |
 | `maxCommandExecutions` | 10 | Before `tool-call` state entry, tool kind `command` |
 | `maxContextBytes` | 512_000 | Before `model-call`, after context assembly |
-| `maxPatchBytes` | 65_536 | At `patch-proposal`, before emitting event |
+| `maxPatchBytes` | 8_388_608 (`GOVERNED_PATCH_MAX_BYTES`, owner decision 2026-10-29, #4110; was 65_536) | At `patch-proposal`, before emitting event |
 | `maxWallTimeMs` | 300_000 | Top of loop, using `clock.now()` |
 | `maxFailureAttempts` | 3 | On any non-terminal failure before retry |
 
@@ -493,7 +493,7 @@ export interface HarnessLimits {
   readonly maxToolCalls: number;             // default: 30
   readonly maxCommandExecutions: number;     // default: 10
   readonly maxContextBytes: number;          // default: 512_000
-  readonly maxPatchBytes: number;            // default: 65_536
+  readonly maxPatchBytes: number;            // default: GOVERNED_PATCH_MAX_BYTES (8 MiB)
   readonly maxWallTimeMs: number;            // default: 300_000
   readonly maxFailureAttempts: number;       // default: 3
 }
@@ -504,7 +504,7 @@ export const DEFAULT_LIMITS: HarnessLimits = {
   maxToolCalls: 30,
   maxCommandExecutions: 10,
   maxContextBytes: 512_000,
-  maxPatchBytes: 65_536,
+  maxPatchBytes: GOVERNED_PATCH_MAX_BYTES,
   maxWallTimeMs: 300_000,
   maxFailureAttempts: 3,
 } as const;

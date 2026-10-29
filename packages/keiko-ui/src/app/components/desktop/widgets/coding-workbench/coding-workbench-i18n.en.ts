@@ -633,6 +633,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.retry": "Retry diff",
   "codingWorkbench.changes.diff.truncated":
     "This bounded file diff is incomplete because it reached the server limit.",
+  "codingWorkbench.diffWindow.notice":
+    "This diff is large: {rows} lines in {files} files, {size} in total. Only one file and up to {page} of its lines are shown at a time, and nothing is left out. Choose a file or a page to read the rest.",
+  "codingWorkbench.diffWindow.files": "Files in this diff",
+  "codingWorkbench.diffWindow.fileMeta": "+{added} −{removed} · {size} · {rows} lines",
+  "codingWorkbench.diffWindow.fileMetaBinary": "Binary file",
+  "codingWorkbench.diffWindow.position": "File {file} of {files}, lines {from} to {to} of {rows}",
+  "codingWorkbench.diffWindow.positionEmpty": "File {file} of {files}, no text lines",
+  "codingWorkbench.diffWindow.pages": "Pages of this file",
+  "codingWorkbench.diffWindow.previous": "Previous lines",
+  "codingWorkbench.diffWindow.next": "Next lines",
+  "codingWorkbench.diffWindow.pageOf": "Page {page} of {pages}",
   "codingWorkbench.changes.diff.addedLine": "Added line",
   "codingWorkbench.changes.diff.deletedLine": "Deleted line",
   "codingWorkbench.changes.diff.contextLine": "Context line",

@@ -203,3 +203,18 @@ The manifest binds all 25 declared UI sources and four harness inputs; `npm run 
 passes against the current worktree. I visually reviewed the dark update window, Settings entry point,
 and reconnecting-state captures. This remains updater presentation and declared BFF recovery evidence;
 it does not prove native installation, replacement or restart.
+
+## Registry dist-tags refresh — 2026-10-29 (#3904)
+
+The update preflight now reads the registry's dist-tags document instead of the packument, so the
+real-BFF harness (`tests/e2e/support/update-bff-outage-3405.mjs`) answers that document. The
+unchanged freshness gate rejected the harness digest, and the original nine-case producer was
+rerun with tracked evidence enabled on source commit `92c82e031` in an isolated Linux arm64
+container (Node 24.18.0, npm 11.16.0, Playwright 1.64.1, Chromium build 1248, `fonts-liberation`
+installed). All nine cases passed in 2.4 minutes, including the real-BFF outage journey. Thirteen
+screenshots are pixel-identical to the previous set; `11-progress-state.png` differs in 58 pixels
+along the progress bar's edge and was inspected. The three JSON records bind the same 25 UI sources
+and four harness inputs; only the outage harness digest changed. A first run in the same image
+without `fonts-liberation` rendered every capture in DejaVu Sans and was discarded: reproduce this
+set with the Liberation fonts installed. This remains updater presentation and declared BFF recovery
+evidence; it does not prove native installation, replacement or restart.

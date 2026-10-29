@@ -832,6 +832,19 @@ redaction candidate. A malformed TypeScript fragment remains unavailable when it
 escape, unsupported quoting, a sensitive-name plus literal candidate or a strict-redaction change.
 A sensitive word alone, or a public literal without a secret candidate, is not a private value.
 These are source observations, not compilation certificates.
+Plain prose is not standalone source (2026-10-29, #3900). A candidate line is judged together with
+everything that follows it, and a tolerant parse shapes English words into declarations (`function
+was fully read`, `using the request`), so a repository's own AGENTS.md and CONTRIBUTING.md were
+refused whole and a Coding run received no instructions. A declaration found by error recovery now
+counts as source only where a statement can begin (after a line break, `;`, `{`, `}` or modifier
+words such as `final`, never the middle of a sentence) and when the token after its declared name is
+one its grammar allows there (`(` or `<` for a function, `{`, `<`, `extends` or `implements` for a
+class, `=` or `<` for a type alias, and so on; the end of the text is allowed, so a truncated header
+is still source). A Markdown list marker, `-` or `+` with exactly one space and an optional task
+checkbox, is skipped before diff classification so the item's own text is judged on its own; a
+marker with no space or several keeps the unowned-diff-fragment rule, and the text after a marker
+still reaches the source parser. Malformed source that begins a statement, a real fence and an
+unparsable diff fragment fail closed exactly as before.
 Inferred YAML privacy projection keeps the complete parsed mapping, including duplicate entries,
 so a later private binding also masks earlier decoded copies. Privacy parsing is not configuration
 validation: explicitly selected YAML still rejects duplicate keys, using a linear check with the

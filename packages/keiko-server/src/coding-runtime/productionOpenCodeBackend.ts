@@ -59,7 +59,10 @@ import {
   type OperatorPluginRegistry,
   type OperatorPluginsPort,
 } from "./opencodeOperatorPlugins.js";
-import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import {
+  createCodingRuntimeRepositoryInstructionsPort,
+  repositoryInstructionsCopyBudget,
+} from "./codingRuntimeRepositoryInstructions.js";
 import { globalOpenCodeConfigDirectory } from "./codingRuntimeInstructionSources.js";
 import {
   readGlobalConfigDocuments,
@@ -432,7 +435,7 @@ function composeOpenCodeRun(
     toolProfile,
     ripgrepVerified: input.ripgrep.outcome === "verified",
     ...(input.processEnv === undefined ? {} : { processEnv: input.processEnv }),
-    ...nativeRunInputs(input, run, toolProfile),
+    ...nativeRunInputs(input, run, toolProfile, contextGeometry),
     portable: compositionPortableInput(input),
     stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
@@ -511,6 +514,7 @@ function nativeRunInputs(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
 ): Pick<
   OpenCodeRuntimeCompositionInput,
   | "repositoryItems"
@@ -536,7 +540,7 @@ function nativeRunInputs(
     ...(input.operatorPluginRegistry === undefined
       ? {}
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
-    repositoryInstructions: repositoryInstructionsFor(input, run),
+    repositoryInstructions: repositoryInstructionsFor(input, run, contextGeometry),
     mcpMutations: input.mcpMutations,
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
@@ -644,9 +648,12 @@ function forkSourceOf(
 // The run's AGENTS.md and the further sources a standalone run loads, as the native runtime's own
 // instruction source (#3900 AC3), read only while its workspace is still the active one. Remote
 // sources are pulled only for a run launched in Full access, which cannot be narrowed in place.
+// The copy carries the whole file within half the model's input window: that window is this run's
+// prompt budget, and a file it could not hold is cut with a marker rather than failing every turn.
 function repositoryInstructionsFor(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
 ): NonNullable<OpenCodeRuntimeCompositionInput["repositoryInstructions"]> {
   const home = homedir();
   const egress = input.instructionSourceEgress;
@@ -664,9 +671,14 @@ function repositoryInstructionsFor(
         : {}),
     },
   });
+  const contentByteBudget = repositoryInstructionsCopyBudget(contextGeometry.maxInputTokens);
   return {
     materializeForRun: (request) =>
-      port.materializeForRun({ ...request, isRunWorkspace: run.workspaceIsCurrent }),
+      port.materializeForRun({
+        ...request,
+        isRunWorkspace: run.workspaceIsCurrent,
+        contentByteBudget,
+      }),
   };
 }
 

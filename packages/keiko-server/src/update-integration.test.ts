@@ -355,7 +355,7 @@ function createMetadataFetch(targetVersion: string): {
     const url = requestUrl(input);
     calls.push(url);
     if (url.startsWith("https://registry.npmjs.org/")) {
-      return Promise.resolve(jsonResponse({ "dist-tags": { latest: targetVersion } }));
+      return Promise.resolve(jsonResponse({ latest: targetVersion }));
     }
     if (url === `https://api.github.com/repos/oscharko-dev/keiko/releases/tags/v${targetVersion}`) {
       return Promise.resolve(
@@ -610,7 +610,7 @@ describe("governed updater integration", () => {
         manualUpdateRequired: false,
       });
       expect(metadata.calls()).toEqual([
-        "https://registry.npmjs.org/%40oscharko-dev%2Fkeiko",
+        "https://registry.npmjs.org/-/package/%40oscharko-dev%2Fkeiko/dist-tags",
         `https://api.github.com/repos/oscharko-dev/keiko/releases/tags/v${targetVersion}`,
       ]);
 
@@ -677,7 +677,7 @@ describe("governed updater integration", () => {
       const fetchImpl: typeof fetch = (input) => {
         const url = requestUrl(input);
         if (url.startsWith("https://registry.npmjs.org/")) {
-          return Promise.resolve(jsonResponse({ "dist-tags": { latest: liveTarget } }));
+          return Promise.resolve(jsonResponse({ latest: liveTarget }));
         }
         return Promise.resolve(
           jsonResponse({
