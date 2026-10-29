@@ -152,7 +152,10 @@ Settings extend the same registry additively: explicit automatic discovery permi
 initially empty tool map, and local secret environment entries use references instead of
 literal credentials. Existing explicit tool maps retain their admission semantics. Discovery
 never grants execution authority. Server names accept lowercase letters, digits, underscores
-and hyphens; ambiguous native action identities across servers are refused.
+and hyphens; ambiguous native action identities across servers are refused. External tool
+names retain the MCP grammar through 128 characters. Native action admission allows the full
+64-character server name plus separator and 128-character normalized tool name (193 total);
+length admission never replaces the exact server/tool grant.
 
 Static credentials reuse the existing MCP encrypted vault in a separate reference namespace.
 References are immutable and sealed values are bound to the server name and exact remote

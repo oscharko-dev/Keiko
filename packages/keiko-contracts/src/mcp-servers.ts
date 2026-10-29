@@ -16,8 +16,8 @@ export const MCP_SERVER_REGISTRY_SCHEMA_VERSION = 1;
 export const MCP_SERVER_MAX = 16;
 export const MCP_SERVER_TOOL_MAX = 64;
 const MCP_SERVER_NAME = /^[a-z][a-z0-9_-]{0,63}$/u;
-const MCP_TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
-const MCP_NATIVE_TOOL_ACTION = /^[a-z][a-z0-9_-]{0,63}_[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
+const MCP_TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/u;
+const MCP_NATIVE_TOOL_ACTION = /^[a-z][a-z0-9_-]{0,63}_[A-Za-z0-9_-]{1,128}$/u;
 const MCP_ENVIRONMENT_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;
 const MCP_ARGUMENT_MAX = 32;
 const MCP_TEXT_MAX = 1024;
@@ -431,7 +431,7 @@ export function mcpToolAction(server: string, tool: string): string {
 
 /** A private native identity may contain both bounded names; admission still requires its exact grant. */
 export function isMcpToolActionName(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 129 && MCP_NATIVE_TOOL_ACTION.test(value);
+  return typeof value === "string" && value.length <= 193 && MCP_NATIVE_TOOL_ACTION.test(value);
 }
 
 /** The admitted actions of the enabled servers, each with its declared risk and transport. */
