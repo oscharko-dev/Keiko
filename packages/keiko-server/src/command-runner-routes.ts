@@ -13,9 +13,13 @@ import { CommandRunnerError } from "./command-runner-errors.js";
 import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js";
 import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import { SSE_HEADERS, startSseHeartbeat, attachSseSubscription } from "./sse.js";
-import { writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
-import { redactedEventJson } from "./sse-frame-cache.js";
+import {
+  SSE_HEADERS,
+  startSseHeartbeat,
+  attachSseSubscription,
+  writeNamespacedSseEvent,
+} from "./sse.js";
+import type { SseBackpressureSignal } from "./sse-write.js";
 import {
   errorBody,
   STREAMING,
@@ -179,9 +183,8 @@ export function handleCommandEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
   return STREAMING;
 }
 
-// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
-// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
-// because the client is not draining, before the socket is destroyed.
+// Exported for unit testing stalled-reader handling. The optional observer runs once after the
+// canonical no-drain deadline, before the controller aborts and the socket is destroyed.
 export function openCommandSseStream(
   res: ServerResponse,
   manager: CommandRunnerManager,
@@ -221,7 +224,5 @@ function writeCommandEvent(
 ): void {
   // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
   // the per-connection `id:` cursor differs between them.
-  const data = redactedEventJson(redactor, event);
-  const frame = `id: ${String(seq)}\nevent: command:${event.kind}\ndata: ${data}\n\n`;
-  writeSseFrame(res, frame, controller, onBackpressure);
+  writeNamespacedSseEvent(res, event, seq, "command", redactor, controller, onBackpressure);
 }

@@ -7,7 +7,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter, getEventListeners } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { attachSseSubscription, SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "./sse.js";
+import {
+  attachSseSubscription,
+  SSE_HEADERS,
+  startSseHeartbeat,
+  writeReadyMessage,
+  writeNamespacedSseEvent,
+} from "./sse.js";
 import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 
@@ -357,6 +363,138 @@ describe("attachSseSubscription lifecycle", () => {
       });
     } finally {
       res.emit("close");
+      request.destroy();
+    }
+  });
+});
+
+describe("writeNamespacedSseEvent", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["command", 'id: 7\nevent: command:observed\ndata: {"safe":true}\n\n'],
+    ["verification", 'id: 7\nevent: verification:observed\ndata: {"safe":true}\n\n'],
+    ["container", 'id: 7\nevent: container:observed\ndata: {"safe":true}\n\n'],
+    ["terminal", 'id: 7\nevent: terminal:observed\ndata: {"safe":true}\n\n'],
+    ["browser", 'id: 7\nevent: browser:observed\ndata: {"safe":true}\n\n'],
+  ] as const)(
+    "writes the exact %s frame through canonical stream accounting",
+    (namespace, frame): void => {
+      const request = new IncomingMessage(new Socket());
+      const res = new ServerResponse(request);
+      const controller = new AbortController();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const write = vi.spyOn(res, "write").mockReturnValue(true);
+      const event = { kind: "observed" };
+      const redactor = vi.fn((value: unknown): unknown => {
+        expect(value).toBe(event);
+        return { safe: true };
+      });
+      try {
+        writeNamespacedSseEvent(res, event, 7, namespace, redactor, controller);
+        expect(write).toHaveBeenCalledExactlyOnceWith(frame);
+        expect(redactor).toHaveBeenCalledTimes(1);
+        expect(redactor.mock.calls[0]).toHaveLength(1);
+        expect(redactor.mock.calls[0]?.[0]).toBe(event);
+        expect(controller.signal.aborted).toBe(false);
+        res.emit("close");
+        expect(sink.events).toHaveLength(1);
+        expect(sink.events[0]).toMatchObject({
+          op: "sse.stream.closed",
+          extra: { frameCount: 1, reason: "client-disconnected" },
+        });
+      } finally {
+        res.emit("close");
+        request.destroy();
+      }
+    },
+  );
+
+  it("redacts the original event before kind and reuses its cache across responses", (): void => {
+    const firstRequest = new IncomingMessage(new Socket());
+    const secondRequest = new IncomingMessage(new Socket());
+    const first = new ServerResponse(firstRequest);
+    const second = new ServerResponse(secondRequest);
+    const trace: string[] = [];
+    const event = {
+      get kind(): string {
+        trace.push("kind");
+        return "observed";
+      },
+    };
+    const redactor = vi.fn((value: unknown): unknown => {
+      expect(value).toBe(event);
+      trace.push("redact");
+      return { safe: true };
+    });
+    const firstWrite = vi.spyOn(first, "write").mockImplementation(() => {
+      trace.push("first-write");
+      return true;
+    });
+    const secondWrite = vi.spyOn(second, "write").mockImplementation(() => {
+      trace.push("second-write");
+      return true;
+    });
+    try {
+      writeNamespacedSseEvent(first, event, 7, "command", redactor, new AbortController());
+      expect(trace).toEqual(["redact", "kind", "first-write"]);
+      writeNamespacedSseEvent(second, event, 8, "command", redactor, new AbortController());
+      expect(trace).toEqual(["redact", "kind", "first-write", "kind", "second-write"]);
+      expect(firstWrite).toHaveBeenCalledExactlyOnceWith(
+        'id: 7\nevent: command:observed\ndata: {"safe":true}\n\n',
+      );
+      expect(secondWrite).toHaveBeenCalledExactlyOnceWith(
+        'id: 8\nevent: command:observed\ndata: {"safe":true}\n\n',
+      );
+      expect(redactor).toHaveBeenCalledTimes(1);
+      expect(redactor.mock.calls[0]).toHaveLength(1);
+      expect(redactor.mock.calls[0]?.[0]).toBe(event);
+    } finally {
+      first.emit("close");
+      second.emit("close");
+      firstRequest.destroy();
+      secondRequest.destroy();
+    }
+  });
+
+  it("propagates the exact kind getter failure after redaction without writing", (): void => {
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const controller = new AbortController();
+    const failure = new TypeError("namespaced event kind refused");
+    const trace: string[] = [];
+    const event = {
+      get kind(): string {
+        trace.push("kind");
+        throw failure;
+      },
+    };
+    const redactor = vi.fn((value: unknown): unknown => {
+      expect(value).toBe(event);
+      trace.push("redact");
+      return { safe: true };
+    });
+    const write = vi.spyOn(res, "write");
+    try {
+      let observed: unknown;
+      try {
+        writeNamespacedSseEvent(res, event, 7, "browser", redactor, controller);
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["redact", "kind"]);
+      expect(redactor).toHaveBeenCalledTimes(1);
+      expect(redactor.mock.calls[0]).toHaveLength(1);
+      expect(redactor.mock.calls[0]?.[0]).toBe(event);
+      expect(write).not.toHaveBeenCalled();
+      expect(res.listenerCount("close")).toBe(0);
+      expect(controller.signal.aborted).toBe(false);
+    } finally {
       request.destroy();
     }
   });

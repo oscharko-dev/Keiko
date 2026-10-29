@@ -88,6 +88,22 @@ export function frameMessageEvent(event: StreamEvent, redactor: Redactor): strin
   return `id: ${String(event.seq)}\ndata: ${data}\n\n`;
 }
 
+// Frames the five domain event streams with their own namespace while preserving the original
+// event/redactor cache keys. Redact first: reading kind before serialization changes getter order.
+export function writeNamespacedSseEvent(
+  res: ServerResponse,
+  event: { readonly kind: string },
+  seq: number,
+  namespace: "command" | "verification" | "container" | "terminal" | "browser",
+  redactor: Redactor,
+  controller: AbortController,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+): void {
+  const data = redactedEventJson(redactor, event);
+  const frame = `id: ${String(seq)}\nevent: ${namespace}:${event.kind}\ndata: ${data}\n\n`;
+  writeSseFrame(res, frame, controller, onBackpressure);
+}
+
 // The synthetic message sent once the buffered replay completes, signalling the client that it is
 // now live. Carries no data payload.
 export function readyMessage(): string {

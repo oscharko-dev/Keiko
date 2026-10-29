@@ -12,9 +12,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EditorVerificationEvent } from "@oscharko-dev/keiko-contracts";
 import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
-import { redactedEventJson } from "../sse-frame-cache.js";
-import { SSE_HEADERS, startSseHeartbeat, attachSseSubscription } from "../sse.js";
-import { writeSseFrame, type SseBackpressureSignal } from "../sse-write.js";
+import {
+  SSE_HEADERS,
+  startSseHeartbeat,
+  attachSseSubscription,
+  writeNamespacedSseEvent,
+} from "../sse.js";
+import type { SseBackpressureSignal } from "../sse-write.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
 import {
@@ -302,7 +306,5 @@ function writeVerificationEvent(
 ): void {
   // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only the
   // per-connection `id:` cursor differs between them.
-  const data = redactedEventJson(redactor, event);
-  const frame = `id: ${String(seq)}\nevent: verification:${event.kind}\ndata: ${data}\n\n`;
-  writeSseFrame(res, frame, controller, onBackpressure);
+  writeNamespacedSseEvent(res, event, seq, "verification", redactor, controller, onBackpressure);
 }
