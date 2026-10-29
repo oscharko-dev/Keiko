@@ -1,7 +1,7 @@
 # Epic #4081: Jira access Pods in Chat
 
-Current individual acceptance: **46/55** (#4082 AC1/AC2/AC3/AC4/AC5, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4083 AC1/AC2/AC3/AC4/AC5/AC6/AC7, #4084 AC1/AC2/AC3/AC4/AC6, #4091 AC1/AC2/AC3/AC5/AC6, #4085 AC1/AC2/AC3/AC4/AC5/AC7, #4086 AC1/AC2/AC3/AC4/AC5/AC7, #4087 AC1/AC2/AC3/AC6/AC8/AC9).
-The remaining 9 criteria and final integrated qualification are open.
+Source-publication acceptance checkpoint: **46/55** (#4082 AC1/AC2/AC3/AC4/AC5, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4083 AC1/AC2/AC3/AC4/AC5/AC6/AC7, #4084 AC1/AC2/AC3/AC4/AC6, #4091 AC1/AC2/AC3/AC5/AC6, #4085 AC1/AC2/AC3/AC4/AC5/AC7, #4086 AC1/AC2/AC3/AC4/AC5/AC7, #4087 AC1/AC2/AC3/AC6/AC8/AC9).
+All local qualification is complete at this publication checkpoint. The nine integrated gate criteria await the delivered-head GitHub verdict and review settlement. Their live acceptance state is maintained in the [canonical child issues](https://github.com/oscharko-dev/Keiko/issues/4081); this versioned report records the evidence available before that verdict.
 
 ## Final qualification checkpoint — complete live groups and literal acceptance audit
 
@@ -120,6 +120,57 @@ retain byte-identical full metric objects, without drops/collisions or baseline 
 Current Linux visual/evidence producers retain their own source identities; the final required PR
 checks and review settlement remain pending.
 
+## Final local performance repair and qualification
+
+The fresh-volume Linux fast suite initially passed every deterministic gate but retained a
+5,882.1ms physical-line public-handler failure against its unchanged 5,000ms ceiling.
+The first outcome and coverage remain retained. The measured window began more than 90 seconds
+after the last Sonar scan completed; the failure is not attributed to that scan. Native comparisons
+and a Linux CPU profile were diagnostic only and never substituted for the controlled gate.
+
+The profile identified redundant pre-existing symbol-atom construction in graph expansion:
+already-directly-matched immutable symbol records were rebuilt and hashed, then discarded by the
+existing stable-ID deduplication. One query-local Set now avoids those repeated constructions.
+It retains only records from the existing bounded index. Ordering, scores, limits, admission,
+redaction, emitted atoms and existing registered timing/count events are unchanged.
+
+The deterministic regression fails before the change at 3,096 geometry accesses and passes after
+at 1,500 for 500 symbols. The complete 500-atom serialized output is byte-identical on macOS and Linux,
+SHA-256 `3deaabe9197d16f202576dd9af0f20d1cb80c2833b6d924ed0ef0b710befe17a`.
+Only `packages/keiko-workspace/src/codeIntelligence.ts` and its existing test change at runtime/test scope.
+Production owner SHA-256:
+`2df6d6f546bd682f4d5c12b34f85e1b5e08cba8b6f414e51ff22532bd0259788`.
+
+After this real code correction and an independent idle preflight, the first new canonical Linux
+pair passes both unchanged 1,000ms and 5,000ms predicates. The five pattern cases and the original
+physical-line case pass; the latter's Vitest test body reports 4,644ms (the handler's passing elapsed
+value is not printed). Its unchanged fixture contains 10,000 lines / 696,669 bytes. No limit,
+timeout, test predicate, performance baseline, authority or logging field changes.
+
+```text
+COMPOSE_PROJECT_NAME=<isolated-project> docker compose -f docker/gates/docker-compose.yml run --rm gates npm run check:grounded-workspace-pattern-performance
+```
+
+Full owner validation passes 114 suites / 2,803 native tests, 55 server/reconstruction cases, root strict
+TypeScript, complete lint/format and the full seven-part Activity Log/architecture chain including
+78 negative fixtures. Real local Sonar passes on the corrected source. Fresh Linux owner coverage
+passes 2,802 tests plus one existing macOS-only skip: 92.56% statements, 87.16% branches, 97.20% functions
+and 94.45% lines. The changed file measures 94.88/89.89/99.15/96.56% respectively.
+
+The final unchanged coverage-quality checker passes 28 packages, all four metrics, both release
+targets and 73 file floors. Its derived package input replaces only the changed file with its exact
+fresh measured entry. All 2,282 reused package owners and 601 UI owners are independently byte-identical
+to their earlier measured source versions; their full metric objects are unchanged. Raw summaries,
+source hashes, prefix mapping and aggregate arithmetic are retained. This is derived evidence,
+not a claim that another full package aggregate ran. The measured baseline remains unchanged.
+
+A further independent synthetic Jira session is normally bootstrapped while CI finishes. It
+retains the public three-hour testing license without clock/license edits; all fixture classes,
+trusted/untrusted TLS/admission checks and actual production read/write preflight pass. Its
+closing license remains 10,650 seconds. The preceding owned session is stopped through its manifest
+and its volumes/receipts retained; unrelated Jira services are untouched. No new live mutation
+acceptance is inferred from this availability renewal.
+
 ## Delivery contract
 
 Owner instruction, 2026-10-26: implement the complete epic on branch
@@ -209,7 +260,7 @@ Status: **Accepted.** The independent empty-volume bootstrap completed the norma
 
 - [ ] **AC6:** Real adapter and registered Activity Log tests prove successful and failed paths without retaining tokens, endpoint strings, identity data, request bodies or raw provider errors. All applicable gates pass on the actual implementation head.
 
-Status: **Partial — not accepted**. Registered body-free credential, verification, host/admission, grant/approval and mutation evidence has writer/reader and real-adapter proofs, plus live marker/PAT absence sweeps. The source failure-path inventory is clean after the parser/store/UI repairs; the complete regenerated Activity Log, error-observability and final-head gate run remains open.
+Status: **Local proof complete; delivered-head PR verdict pending.** Actual adapter/redaction, token-free failures and registered reconstruction pass. Current root strict/lint/format, full Activity Log/architecture, relevant owner coverage, real Sonar and fresh Linux gates pass; final delivered-head required GitHub verdict remains external.
 
 ### #4089 — Establish a shared MCP host for Keiko-managed providers and governed non-OpenCode consumers
 
@@ -235,7 +286,7 @@ Status: **Verified**. On `44d18c688`, the complete current architecture gate pas
 
 - [ ] **AC6:** Registered body-free Activity Log events reconstruct provider admission and the call lifecycle with correlation and failure classes; existing Workbench MCP registry, relay and OAuth suites are unchanged and green. All applicable gates pass on the actual implementation head.
 
-Status: **Partial — not accepted**. Registered host/catalog/Chat events reconstruct the retained scoped proofs; unchanged failure-path scanning reports no unregistered production catches. Existing scoped Workbench regressions are retained. Complete registry/relay/OAuth, regenerated Activity Log and final-head gates remain open.
+Status: **Local proof complete; delivered-head PR verdict pending.** Registered provider/settlement events and unchanged Workbench registry/relay/OAuth owners pass. Current full activity/architecture, source-bound local qualification and real Sonar pass; final delivered-head required GitHub verdict remains external.
 
 - [x] **AC7:** A hermetic non-Coding consumer executes through the production catalog binder and admission pipeline without a synthetic Coding session or workspace authority. Existing Coding identity, mutation and approval guards retain their regression coverage.
 
@@ -291,7 +342,7 @@ Status: **Accepted.** The same production Data-only fixture runs on clean dev 9b
 
 - [ ] **AC5:** Production-path lifecycle logging for binding, mode, grant and approval is registered and body-free. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects. All applicable gates pass.
 
-Status: **Partial — not accepted**. Registered binding/mode/grant/approval lifecycle evidence is retained. Granted consent persists in the existing bounded SQLite owner with exact subject, generations, disclosure and original expiry; new turns independently re-admit authority and budgets. A complete live group proves reuse in a fresh process and invalidation after rotation. Pending decisions revoke on shutdown, and read-only history recovery never resumes a turn. Complete expired/mode-change/browser cases and final gates remain open.
+Status: **Local proof complete; delivered-head PR verdict pending.** Persistence/expiry/mode/revocation and fresh-process/no-resume behavior are proved. Current seven-part registered lifecycle reconstruction, owner coverage and real Sonar pass; final delivered-head required GitHub verdict remains external.
 
 - [x] **AC6:** Through the trusted non-Coding test consumer against local Jira 10.3.26, an admitted read-class call reaches the real provider only with a valid grant, and a write-class call only under the mode matrix or a redeemed approval that re-ran the complete pipeline; a denied, expired or revoked call performs no HTTP request.
 
@@ -313,7 +364,7 @@ Status: **Accepted.** The paired production Data-only fixture proves complete by
 
 - [ ] **AC4:** Production-path tool-loop lifecycle logging (offered, started, grant-required, approval-required, completed, failed, unknown) is registered and body-free; the provider receives only authorized scoped calls; tool output and prompt injection cannot extend authority, select a credential or change the binding. All applicable gates pass.
 
-Status: **Partial — not accepted**. Existing registered owners cover offers, consent, exact approvals/claims, dispatch, settlement and late observations without content. Scoped calls, schema/authority injection refusal and hostile-result controls have retained tests; failure-path scanning is clean after the observation repairs. Full normal-Chat hostile-content qualification and final logging/gates remain open.
+Status: **Local proof complete; delivered-head PR verdict pending.** Production offered/started/grant/approval/completed/failure/unknown events, scoped dispatch and hostile metadata/control refusal pass. Current full local logging/error/architecture/coverage/Sonar qualification passes; final delivered-head required GitHub verdict remains external.
 
 - [x] **AC5:** Response-loss, duplicate-delivery, streaming fallback, context-window retry, reconnect, reload and Regenerate tests assert Jira mutation counts. Completed or unresolved effects are not replayed; crash recovery presents unknown outcomes truthfully. Compaction and provider-adapter round trips preserve tool-call/result IDs, relationships and cumulative usage.
 
@@ -347,7 +398,7 @@ Status: **Verified**. The current paired in-app browser created a synthetic Jira
 
 - [ ] **AC6:** The relevant design-state matrix, keyboard/focus/screen-reader behavior, English/German text, light/dark/high-contrast and reduced-motion/zoom proofs pass with synthetic visible data. UI and wired browser gates pass.
 
-Status: **Partial — not accepted**. The fidelity matrix names the implemented Hub/Chat owners and states. The later wired five-case Jira browser lane covers EN/DE, keyboard/focus, 83 axe checks, themes/contrast, reduced motion, narrow layouts and explicit 200% viewport emulation, with inspected source-bound captures. This is Jira-specific evidence; native screen-reader/zoom execution is not claimed. Final UI/browser gates and remaining assistive-technology qualification stay open.
+Status: **Local proof complete; delivered-head PR verdict pending.** Current Linux original producers pass the full design/state/EN-DE/keyboard/axe/theme/contrast/reduced-motion/constrained-layout matrix, including the stated 200% viewport emulation. Updater 9/9, Jira 5/5, all 14 declared source hashes, complete UI coverage and both Editor release/performance evidence gates pass. Exact-head integrated PR verdict remains external.
 
 - [x] **AC7:** Live-access Pod variants cannot enter capsule-set composition, capsule export or indexing through either UI or direct server requests. They advertise no fabricated capsule, retrieval or storage state, and unsupported Cloud sync controls are absent. Existing Data and synced-Jira Pods preserve these capabilities.
 
@@ -377,7 +428,7 @@ Status: **Accepted.** The stable ten-case fault matrix, three actual in-app-brow
 
 - [ ] **AC6:** Root connector/window/tool/source/permission designs and relevant state/accessibility/theme requirements are met; existing workspace/Data Pod/Workbench journeys remain green.
 
-Status: **Partial — not accepted**. The five-case wired browser lane now covers both languages and all principal surfaces, with 83 full-document axe checks, keyboard/focus, themes, contrast, reduced motion, narrow/maximized layout and explicit 200% viewport emulation. Eight inspected redacted captures and source-bound receipts are retained. The question-map target/focus defect is repaired. Native assistive-technology execution is not claimed; final UI coverage and existing workspace/Data/Workbench regression gates remain open.
+Status: **Local proof complete; delivered-head PR verdict pending.** Current root component/window/tool/source/permission reference producers and inspected UI captures pass. All five Jira browser cases, nine updater cases, 83 axe checks and preserved workspace/Data/Workbench owner suites are green locally. Final exact-head integrated PR verdict remains external.
 
 - [x] **AC7:** The Chat mode selection persists per chat, defaults to Ask for approval, shows ceiling-clamped modes truthfully, and a model without verified tool calling presents an actionable unavailable state instead of silently answering without tools.
 
@@ -399,11 +450,11 @@ Status: **Accepted.** Complete durable fault/restart and actual browser recovery
 
 - [ ] **AC4:** The small UI flow matches the root design reference and passes keyboard, screen-reader, theme/contrast, reduced-motion and constrained-layout checks. Product readiness does not depend on embedding/indexing.
 
-Status: **Partial — not accepted**. Jira browser/Chat groups run without embedding/index setup. The later five-case Jira browser producer and inspected captures add bounded theme/contrast, reduced-motion, constrained-layout and 200% viewport evidence to EN/DE/keyboard/axe/drag/lifecycle proofs. Native screen-reader/zoom execution and final-artifact visual/gate qualification remain open.
+Status: **Local proof complete; delivered-head PR verdict pending.** Current Linux five-case UI producer and all 83 document-wide axe checks pass with bounded keyboard/focus/status semantics, themes/contrast/reduced motion/layout and the explicitly stated zoom emulation. All 93 synthetic captures and 14 current source hashes are retained. Real Jira readiness remains independent of embeddings/indexing; final integrated verdict is external.
 
 - [ ] **AC5:** Existing Data Pod grounding, Cloud connector and Workbench MCP regressions pass, and the deterministic lane runs in its wired CI class. Timeout, pagination, cancellation and response-size tests show bounded behavior; existing performance ceilings remain unchanged.
 
-Status: **Partial — not accepted**. Scoped Data/Memory, Cloud, Workbench, provider bounds and cancellation regressions are retained; post-merge content/grounding/approval suites pass. The blocking per-PR three-case browser lane previously passed through the assembled BFF/gateway/catalog/MCP with isolated HTTPS fixtures. Final lane/wiring freshness, complete compatibility and unchanged performance ceilings still require final-artifact checks.
+Status: **Local proof complete; delivered-head PR verdict pending.** Complete Data/Cloud/Workbench owner regressions, bounded timeout/pagination/cancellation/response sizes, unchanged canonical catalog ceilings and the corrected first-after-change 1000/5000ms performance pair pass locally. The deterministic Jira lane is wired and locally executes 5/5; final execution in its required current-head CI class is pending.
 
 - [x] **AC6:** The independent local lab preflight proves license validity and both read and write availability. A stopped instance, expired license or missing trusted test endpoint is reported as blocked real qualification; no silent skip, customer fallback, clock change or license modification is accepted.
 
@@ -411,7 +462,7 @@ Status: **Accepted.** Each complete repaired 56c32 live group has an independent
 
 - [ ] **AC7:** Applicable local gates including Sonar and the complete required PR checks pass on the delivered head; all review findings are settled. Only then are final evidence and AC completion recorded, with owner-authorized merge verified before issue closure.
 
-Status: **Partial — not accepted**. Scoped post-merge tests, typechecks and lint/format do not replace acceptance. Full local coverage/architecture/evidence/Sonar, final current-head required GitHub checks and review settlement remain open. The individually verified criteria are checked above; final integration and issue closure still require separate owner authorization and verified merge.
+Status: **Local proof complete; delivered-head PR verdict pending.** All applicable local qualification is complete. Required GitHub checks and settled reviews must now be verified on the delivered head. Canonical issue checkboxes and PR checks hold that live verdict; no merge or closure is authorized by this report.
 
 - [x] **AC8:** User/developer runbooks and release-impact metadata accurately describe initial API coverage, setup, privacy (ticket content reaches the configured model), mode and read-grant behavior, troubleshooting and remaining limitations. No claim of generic full-API coverage, all-source MCP migration or customer-network certification is made.
 
