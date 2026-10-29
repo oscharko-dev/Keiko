@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "943c4d2863e672da6ae59938ae20e3740df60ca583b7fdb7ae9c8db3e7e448c9"
+    "catalogDigest": "fd7114ba3ecabe77035438bcdac0dc657434ebff93c93386075da09171af1526"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 608,
-    "proofCount": 631,
-    "resolvedProofCount": 631,
+    "operationCount": 611,
+    "proofCount": 634,
+    "resolvedProofCount": 634,
     "failureClassCount": 380,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -163,6 +163,7 @@
         "client.binding.candidates-offered",
         "client.binding.choice-kept",
         "client.binding.choice-withdrawn",
+        "client.binding.project-open-exhausted",
         "client.binding.resolved",
         "client.binding.target-missing",
         "client.citation.activated",
@@ -172,6 +173,7 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.editor.line-ending.adopted",
         "client.evidence.inspected",
         "client.files-scope.decision",
         "client.git-operation.attempted",
@@ -582,6 +584,7 @@
       "operations": [
         "chat.tool-authority.operation",
         "dap.debug-runtime.selected",
+        "editor.agent.bridge-registration",
         "editor.agent.changeset-provenance",
         "editor.buffer-safety.state",
         "editor.local-history.rekey.completed",
@@ -1388,6 +1391,9 @@
     "client.binding.choice-withdrawn.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
+    "client.binding.project-open-exhausted.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
     "client.binding.resolved.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.binding.target-missing.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
@@ -1413,6 +1419,9 @@
     ],
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.editor.line-ending.adopted.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.evidence.inspected.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
@@ -1861,6 +1870,9 @@
     ],
     "dap.debug-runtime.selected.emitted-line": [
       "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
+    ],
+    "editor.agent.bridge-registration.lifecycle": [
+      "packages/keiko-server/src/editor/agentRoutes.test.ts"
     ],
     "editor.agent.changeset-provenance.emitted-line": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"

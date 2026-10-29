@@ -12,10 +12,12 @@ import { reportClientDiagnostic } from "./client-diagnostics";
 export function reportCodingWorkbenchInteraction(
   interaction: ClientDiagnosticCodingWorkbenchInteraction,
   correlationId?: string,
+  parentCorrelationId?: string,
 ): void {
   reportClientDiagnostic(`[keiko] coding workbench interaction: ${interaction.interaction}`, {
     codingWorkbenchInteraction: interaction,
     correlationId,
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
   });
 }
 

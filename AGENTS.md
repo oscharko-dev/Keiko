@@ -1073,10 +1073,32 @@ title or path ever enters the line (ADR-0137 D4).
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
 agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
-and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
-notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
+and a changeset received for review (`fileCount`). It also records a history task of another
+repository or workspace that was not activated (`history-repository-switched`,
+`history-workspace-switched`; #4118) and a refused editor bridge registration
+(`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
+refused request's correlation and the run as parent; #4117). These were warn/unknown
+`client.diagnostic` notes before and buried the rare real browser failures. The server side of
+that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
+`refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
+`capability-held`). A root-boundary refusal holds until the run or its root changes; only a held
+lease is retried with backoff. `gateway.setup.target.accepted` records,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
+
+`client.editor.line-ending.adopted` records, at info and on the routine budget, that the Editor's
+Monaco model adopted the line ending of text Keiko wrote into it (#4123): `lineEnding` (`lf`,
+`crlf`) and `source` (`buffer-sync` for a controlled sync such as a reload from disk, `host-edit`).
+Monaco gives a model created without a line break the platform default, so a Windows browser would
+otherwise normalize a reloaded LF file to CRLF and report the unchanged buffer as an unsaved human
+edit. The adoption shares the write's undo step. `client.binding.resolved` carries the optional
+`projectOpenAttemptCount` when a Chat's project open had to be repeated because a competing
+workspace update overtook it; the repeat is bounded to three attempts per routing episode, and an
+episode that ends (the project held, the window no longer needs one, or the open failed) frees the
+budget for the next one. When every attempt was overtaken, the window stops waiting, shows that the
+Chat could not be opened and records `client.binding.project-open-exhausted` at warn (`conflict`,
+failure budget) with the required `projectOpenAttemptCount`. Closed values and counts only, never
+text or paths.
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe

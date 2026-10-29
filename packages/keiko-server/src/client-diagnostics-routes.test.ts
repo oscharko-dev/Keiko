@@ -1577,6 +1577,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "changeset-review-prepared", fileCount: 100_000 },
     { interaction: "history-repository-switched" },
     { interaction: "event-stream-reconnecting" },
+    { interaction: "history-workspace-switched" },
+    { interaction: "bridge-registration-refused", refusal: "root-boundary" },
+    { interaction: "bridge-registration-refused", refusal: "lease" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1615,6 +1618,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "pending-decision-focused", fileCount: 1 },
     { interaction: "history-repository-switched", taskId: "task-one" },
     { interaction: "event-stream-reconnecting", readyState: 2 },
+    { interaction: "history-workspace-switched", workspaceId: "ws-other" },
+    { interaction: "bridge-registration-refused" },
+    { interaction: "bridge-registration-refused", refusal: "EDITOR_AGENT_ROOT_BINDING_INVALID" },
     { interaction: "repository-trust-bound", repositoryId: "repo/../x", workspaceId: "w" },
     {
       interaction: "repository-trust-bound",
@@ -1721,6 +1727,53 @@ describe("POST /api/diagnostics/client", () => {
       errorKind: "unavailable",
       extra: { outcome: "failed", errorClass: "Error", causeChain: ["Error"] },
     });
+  });
+
+  it("persists an adopted editor line ending as routine closed evidence (#4123)", async () => {
+    const sink = captureServerLog();
+    const editorLineEnding = { lineEnding: "lf", source: "buffer-sync" };
+    const body = {
+      message: "private hostile browser prose",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_line-ending-0001",
+      editorLineEnding,
+    };
+    expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.editor.line-ending.adopted",
+    );
+    if (event === undefined) throw new TypeError("Missing editor line ending evidence");
+    const line = formatActivityLogProofLine(event);
+    const record = expectActivityLogProof("client.editor.line-ending.adopted.line", line);
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_line-ending-0001",
+      ...editorLineEnding,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(line).not.toContain("private hostile");
+  });
+
+  it.each([
+    { lineEnding: "cr", source: "buffer-sync" },
+    { lineEnding: "lf", source: "paste" },
+    { lineEnding: "lf", source: "host-edit", text: "export const leaked = 1;" },
+  ])("refuses an editor line ending report outside its closed shape (#4123)", async (report) => {
+    const sink = captureServerLog();
+    const body = {
+      message: "editor line ending",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_line-ending-0002",
+      editorLineEnding: report,
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(400);
+    expect(sink.events.some((e) => e.op === "client.editor.line-ending.adopted")).toBe(false);
   });
 
   it("persists a setup-only update notice as routine closed presentation evidence", async () => {
@@ -2600,6 +2653,31 @@ describe("POST /api/diagnostics/client", () => {
       expect(events[0]?.extra?.relatedCorrelationIds).toEqual(["ui_chat-list-load-0002"]);
       expect(events[0]?.extra).toMatchObject({ completeness: "complete", loss: "none" });
       expect(events[0]?.extra).not.toHaveProperty("decidingLoadCount");
+    });
+
+    // #4123: a window whose project open was overtaken and repeated says how often it opened it.
+    it("keeps the project open attempts of a binding and refuses an unbounded count", async () => {
+      const sink = captureServerLog();
+      const report = (projectOpenAttemptCount: unknown): string =>
+        JSON.stringify({
+          kind: "binding",
+          surface: "chat-window",
+          windowRef: "chat-mfr3k2x1-1",
+          outcome: "resolved",
+          referenceShape: "uuid",
+          heuristicFlagged: false,
+          correlationId: "ui_chat-list-load-0001",
+          projectOpenAttemptCount,
+        });
+
+      expect((await handleClientDiagnosticIngest(context(report(2)))).status).toBe(204);
+      for (const invalid of [0, 17, 1.5, "2"]) {
+        expect((await handleClientDiagnosticIngest(context(report(invalid)))).status).toBe(400);
+      }
+
+      const events = bindingEvents(sink, "client.binding.resolved");
+      expect(events).toHaveLength(1);
+      expect(events[0]?.extra).toMatchObject({ projectOpenAttemptCount: 2, loss: "none" });
     });
 
     // #3557 review: a deciding load the line cannot name is classified loss, never a quiet count.

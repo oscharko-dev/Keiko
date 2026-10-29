@@ -3640,6 +3640,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      projectOpenAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       relatedCorrelationIds: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -3711,6 +3716,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      projectOpenAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       relatedCorrelationIds: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -3778,6 +3788,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      projectOpenAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       relatedCorrelationIds: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -3797,6 +3812,72 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["client-binding"],
     proofIds: ["client.binding.choice-withdrawn.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.binding.project-open-exhausted",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientBindingProjectOpenExhausted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat-window"],
+      },
+      referenceShape: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["uuid", "opaque", "redacted", "fingerprint", "user-selected"],
+      },
+      heuristicFlagged: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      bindingDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      projectOpenAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      relatedCorrelationIds: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+        maxItems: 63,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["client-binding"],
+    proofIds: ["client.binding.project-open-exhausted.line"],
     releaseImpact: "patch",
   },
   {
@@ -3841,6 +3922,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 64,
       },
       decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      projectOpenAttemptCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -3908,6 +3994,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 64,
       },
       decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      projectOpenAttemptCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -4073,6 +4164,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "changeset-review-prepared",
           "history-repository-switched",
           "event-stream-reconnecting",
+          "history-workspace-switched",
+          "bridge-registration-refused",
         ],
       },
       section: {
@@ -4106,6 +4199,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["build", "plan", "custom"],
+      },
+      refusal: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["root-boundary", "lease"],
       },
       repositoryId: {
         type: "string",
@@ -4657,6 +4756,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["client-diagnostic-rejection"],
     proofIds: ["client.diagnostic.rejected.line", "client.diagnostic.rejected.shutdown-flush"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.editor.line-ending.adopted",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientEditorLineEnding",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      lineEnding: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["lf", "crlf"],
+      },
+      source: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["buffer-sync", "host-edit"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-editor-line-ending"],
+    proofIds: ["client.editor.line-ending.adopted.line"],
+    releaseImpact: "patch",
   },
   {
     contractKind: "activity-log-operation",
@@ -15635,6 +15772,50 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["debug-runtime-selection"],
     proofIds: ["dap.debug-runtime.selected.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "editor.agent.bridge-registration",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "editor.bridgeRegistrationEvidence.recordBridgeRegistration",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["registered", "refreshed", "rotated", "refused"],
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "root-binding-required",
+          "root-binding-invalid",
+          "decompose-per-root",
+          "workspace-boundary-escape",
+          "capability-held",
+        ],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["editor-bridge-registration"],
+    proofIds: ["editor.agent.bridge-registration.lifecycle"],
     releaseImpact: "patch",
   },
   {

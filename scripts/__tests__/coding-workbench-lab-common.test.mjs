@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   LAB_GUIDE,
+  labErrorLine,
+  redactSecretHeaders,
   LAB_REPOSITORY_NAME,
   MODES,
   TERMINAL_STATES,
@@ -234,6 +236,63 @@ describe("describeRefusal", () => {
     expect(describeRefusal(400, body)).toHaveLength(200);
     const noisy = { error: { code: "X", message: "first\u001b[31m\nsecond\u0007" } };
     expect(describeRefusal(400, noisy)).toBe("HTTP 400 X: first [31m second");
+  });
+});
+
+describe("driver error output (#4120)", () => {
+  const COOKIE = "keiko_coding_app_session=s3ss10n.s1gn4tur3";
+  // The shape Playwright's apiRequestContext.get rejects with: the message embeds its call log.
+  const playwrightFailure = (cause) =>
+    new Error(
+      `apiRequestContext.get: ${cause}\nCall log:\n  - → GET http://127.0.0.1:1993/api/x\n` +
+        `    - user-agent: Playwright\n    - cookie: ${COOKIE}\n` +
+        `    - Authorization: Bearer abc.def.ghi\n    - set-cookie: other=value; Path=/`,
+    );
+
+  it("prints one closed line for an unreachable server, without the call log", () => {
+    const line = labErrorLine(playwrightFailure("connect ECONNREFUSED 127.0.0.1:1993"));
+    expect(line).toBe("lab: server unreachable (ECONNREFUSED)");
+  });
+
+  it("keeps cookie and authorization values out of any other request failure", () => {
+    const line = labErrorLine(playwrightFailure("socket hang up"));
+    expect(line).toMatch(/^lab: apiRequestContext\.get: socket hang up/u);
+    expect(line).not.toContain("s3ss10n");
+    expect(line).not.toContain("abc.def.ghi");
+    expect(line).not.toContain("other=value");
+    expect(line).toContain("cookie: [redacted]");
+  });
+
+  // #4126 review: a header serialized as JSON quotes its name, so the separator follows a quote.
+  it("redacts quoted header names and keeps the rest of the JSON", () => {
+    const text = `{"cookie":"session=secret","accept":"*/*",'Authorization': 'Bearer abc.def'}`;
+    const redacted = redactSecretHeaders(text);
+    expect(redacted).toBe(`{"cookie":"[redacted]","accept":"*/*",'Authorization': '[redacted]'}`);
+    expect(redacted).not.toContain("secret");
+    expect(redacted).not.toContain("abc.def");
+    expect(redactSecretHeaders(`{"set-cookie": "a=\\"b\\"; Path=/"}`)).toBe(
+      `{"set-cookie": "[redacted]"}`,
+    );
+    expect(redactSecretHeaders(`{"cookie":session=secret,"accept":"*/*"}`)).toBe(
+      `{"cookie":[redacted],"accept":"*/*"}`,
+    );
+    const array = redactSecretHeaders(`{"set-cookie":["a=one","b=two"],"accept":"*/*"}`);
+    expect(array).toBe(`{"set-cookie":[redacted],"accept":"*/*"}`);
+    expect(array).not.toContain("one");
+    expect(array).not.toContain("two");
+    // An unterminated array of empty strings once made the pattern backtrack exponentially
+    // (CodeQL, #4126 review); it must now finish at once and still redact the value.
+    expect(redactSecretHeaders(`{"cookie":[${'""'.repeat(40)}`)).toBe(`{"cookie":[redacted]`);
+  });
+
+  it("redacts the header values in arbitrary text and leaves other lines alone", () => {
+    expect(redactSecretHeaders(`a\nCookie=${COOKIE}\nproxy-authorization: Basic eA==\nb`)).toBe(
+      "a\nCookie=[redacted]\nproxy-authorization: [redacted]\nb",
+    );
+  });
+
+  it("prints a usage mistake as it is", () => {
+    expect(labErrorLine(new UsageError("pass the run id"))).toBe("pass the run id");
   });
 });
 
