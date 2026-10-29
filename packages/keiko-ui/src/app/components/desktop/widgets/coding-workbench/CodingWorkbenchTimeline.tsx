@@ -39,6 +39,7 @@ import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
 import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
+import { useHeldNotice } from "./codingWorkbenchPairingHold";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const VIRTUAL_THRESHOLD = 100;
@@ -176,17 +177,13 @@ export function Timeline({
   const allItems = useTimelineItems(events, activity.feed, generating, active);
   const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items, questions.questions);
-  if (
-    !active &&
-    allItems.length === 0 &&
-    questions.questions.length === 0 &&
-    !activityNeedsAttention(activity)
-  )
+  const attention = useShownActivityAttention(activity);
+  if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
     return null;
   return (
     <section className={styles.cmpConversation} aria-labelledby="timeline-title">
       <TimelineHeading titleRef={titleRef} t={t} />
-      <ActivityStatus activity={activity} t={t} />
+      <ActivityStatus activity={activity} attention={attention} t={t} />
       <RunDetailsToggle
         visible={events.length > 0}
         expanded={showEvents}
@@ -654,17 +651,26 @@ function activityNeedsAttention(activity: UseCodingWorkbenchSafeActivityResult):
   );
 }
 
+// #3880: an unpaired window cannot connect its activity; the run status sentence says why.
+function useShownActivityAttention(activity: UseCodingWorkbenchSafeActivityResult): boolean {
+  const needed = activityNeedsAttention(activity);
+  const held = useHeldNotice("activity", needed);
+  return needed && !held;
+}
+
 function ActivityStatus({
   activity,
+  attention,
   t,
 }: {
   readonly activity: UseCodingWorkbenchSafeActivityResult;
+  readonly attention: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const truncated =
     activity.feed?.truncated === true ||
     activity.feed?.turns.some((turn) => turn.truncated) === true;
-  if (!activityNeedsAttention(activity)) return null;
+  if (!attention) return null;
   return (
     <div className={styles.activityStatus} data-activity-state={activity.status}>
       {/* This sits inside the session stream's `role="log"`, which already announces additions. A
@@ -702,7 +708,10 @@ function QuestionSummary({
 }: {
   readonly questions: UseCodingWorkbenchQuestionsResult;
 }): ReactNode {
-  if (questions.questions.length > 0 || !QUESTION_SUMMARY_STATES.has(questions.status)) return null;
+  const shown = questions.questions.length === 0 && QUESTION_SUMMARY_STATES.has(questions.status);
+  // #3880: an unpaired window cannot list its questions; the run status sentence says why.
+  const held = useHeldNotice("questions", shown);
+  if (!shown || held) return null;
   return <CodingWorkbenchQuestionsSurface result={questions} variant="inline" />;
 }
 

@@ -1601,6 +1601,13 @@ describe("POST /api/diagnostics/client", () => {
       totalLineCount: 16_777_216,
       totalByteCount: 1_073_741_824,
     },
+    // #3880: an unpaired window held one of its secondary notices behind the pairing state.
+    { interaction: "notice-held", notice: "task-session" },
+    { interaction: "notice-held", notice: "skills" },
+    { interaction: "notice-held", notice: "mcp" },
+    { interaction: "notice-held", notice: "activity" },
+    { interaction: "notice-held", notice: "questions" },
+    { interaction: "notice-held", notice: "editor-bridge" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1642,6 +1649,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "history-workspace-switched", workspaceId: "ws-other" },
     { interaction: "bridge-registration-refused" },
     { interaction: "bridge-registration-refused", refusal: "EDITOR_AGENT_ROOT_BINDING_INVALID" },
+    { interaction: "notice-held" },
+    { interaction: "notice-held", notice: "Activity not connected." },
+    { interaction: "notice-held", notice: "skills", fileCount: 1 },
     { interaction: "diff-windowed" },
     { interaction: "diff-windowed", surface: "changeset-review", fileCount: 1, totalLineCount: 5 },
     {

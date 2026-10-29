@@ -4167,6 +4167,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "history-workspace-switched",
           "bridge-registration-refused",
           "diff-windowed",
+          "notice-held",
         ],
       },
       section: {
@@ -4239,6 +4240,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      notice: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["task-session", "skills", "mcp", "activity", "questions", "editor-bridge"],
       },
     },
     causal: "correlation",

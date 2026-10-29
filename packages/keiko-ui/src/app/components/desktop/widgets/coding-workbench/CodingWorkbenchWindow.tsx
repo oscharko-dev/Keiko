@@ -171,6 +171,7 @@ import {
   type CodingWorkbenchRunWorkspaceBinding,
 } from "./useCodingWorkbenchRunWorkspace";
 import { ApprovedSkillsDisclosure } from "./CodingWorkbenchApprovedSkills";
+import { CodingWorkbenchPairingHold, useHeldNotice } from "./codingWorkbenchPairingHold";
 import { CodingWorkbenchMcpServers } from "./CodingWorkbenchMcpServers";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
@@ -1390,7 +1391,9 @@ function DeploymentCeilingNotice({
  */
 function EditorBridgeUnavailableNotice({ visible }: { readonly visible: boolean }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  if (!visible) return null;
+  // #3880: an unpaired window cannot register its bridge; the run status sentence says why.
+  const held = useHeldNotice("editor-bridge", visible);
+  if (!visible || held) return null;
   return (
     <output className={styles.alert}>
       <span aria-hidden="true">!</span> {t("codingWorkbench.editorBridge.reconnecting")}
@@ -1409,12 +1412,14 @@ function WorkbenchContent({ alert, workbenchLabel, ...columns }: WorkbenchConten
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <WorkbenchHeader columns={columns} />
-      <div className={styles.body}>
-        <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
-        <WorkbenchStatusNotice state={state} />
-        <WorkbenchColumns {...columns} />
-      </div>
+      <CodingWorkbenchPairingHold unpaired={state.pairing === "unpaired"}>
+        <WorkbenchHeader columns={columns} />
+        <div className={styles.body}>
+          <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
+          <WorkbenchStatusNotice state={state} />
+          <WorkbenchColumns {...columns} />
+        </div>
+      </CodingWorkbenchPairingHold>
     </section>
   );
 }

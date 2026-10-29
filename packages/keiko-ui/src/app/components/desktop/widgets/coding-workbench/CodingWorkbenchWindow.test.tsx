@@ -6718,3 +6718,85 @@ describe("CodingWorkbenchWindow live-region and stream-status semantics", () => 
     expect(screen.getByRole("button", { name: "Deny" })).toHaveAttribute("aria-busy", "true");
   });
 });
+
+// #3880: an unpaired window showed five overlapping notices at once, each surface reporting its own
+// failure to read a channel the missing pairing had closed. The run status sentence names the
+// pairing once; the secondary notices hold until the window is paired, and each hold is recorded.
+describe("CodingWorkbenchWindow unpaired notice hold (#3880)", () => {
+  const SECONDARY_NOTICES = [
+    /The coding task could not be loaded or updated/u,
+    /The approved skills could not be read/u,
+    /Activity not connected/u,
+    /Edits are paused: reconnecting the editor bridge/u,
+    /This window is not paired for question content/u,
+  ];
+  const reports: ClientDiagnosticMeta[] = [];
+
+  beforeEach(() => {
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta?.codingWorkbenchInteraction?.interaction === "notice-held") reports.push(meta);
+    });
+    taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), error: true });
+    skillsHookMock.mockReturnValue({ status: "unavailable", skills: null, retry: vi.fn() });
+    activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "unavailable" });
+    questionsHookMock.mockReturnValue({ ...EMPTY_QUESTIONS, status: "unpaired" });
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: null,
+      approve: vi.fn(),
+      deny: vi.fn(),
+      retry: vi.fn(),
+      bridgeUnavailable: true,
+    });
+  });
+  afterEach(() => {
+    reports.length = 0;
+    resetClientDiagnosticWriter();
+  });
+
+  function renderRun(pairing: CodingWorkbenchRuntimeState["pairing"]): void {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        pairing,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+        events: [event(1)],
+      }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko-checkout", "/repos/keiko-checkout"),
+    );
+  }
+
+  it("shows the one pairing state and holds every secondary notice", (): void => {
+    renderRun("unpaired");
+
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      "Workbench is not paired. Open Keiko from the launcher.",
+    );
+    for (const notice of SECONDARY_NOTICES) expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByTestId("coding-workbench-questions")).toBeNull();
+    expect(
+      reports.map((report) =>
+        report.codingWorkbenchInteraction?.interaction === "notice-held"
+          ? report.codingWorkbenchInteraction.notice
+          : null,
+      ),
+    ).toEqual(
+      expect.arrayContaining(["task-session", "skills", "activity", "questions", "editor-bridge"]),
+    );
+    expect(JSON.stringify(reports)).not.toMatch(/keiko-checkout|run-1/u);
+  });
+
+  it("shows each notice of a paired window that cannot read its channels", (): void => {
+    renderRun("paired");
+
+    for (const notice of SECONDARY_NOTICES) {
+      expect(screen.getAllByText(notice).length).toBeGreaterThan(0);
+    }
+    expect(reports).toEqual([]);
+  });
+});

@@ -2153,6 +2153,10 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // A diff above the window threshold switched to the windowed view: one file and one page of its
   // lines at a time. Counts and the closed surface only, never a path or diff text (#4108).
   "diff-windowed",
+  // An unpaired window held one of its secondary notices: the run status sentence names the
+  // missing pairing once instead of every surface reporting its own failure. Closed notice only
+  // (#3880).
+  "notice-held",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2200,6 +2204,17 @@ export const CLIENT_CODING_WORKBENCH_DIFF_SURFACES = [
 export type ClientCodingWorkbenchDiffSurface =
   (typeof CLIENT_CODING_WORKBENCH_DIFF_SURFACES)[number];
 
+/** The secondary notice an unpaired window held behind its one pairing state (#3880). */
+export const CLIENT_CODING_WORKBENCH_HELD_NOTICES = [
+  "task-session",
+  "skills",
+  "mcp",
+  "activity",
+  "questions",
+  "editor-bridge",
+] as const;
+export type ClientCodingWorkbenchHeldNotice = (typeof CLIENT_CODING_WORKBENCH_HELD_NOTICES)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2237,7 +2252,8 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly fileCount: number;
       readonly totalLineCount: number;
       readonly totalByteCount: number;
-    };
+    }
+  | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
@@ -2256,6 +2272,9 @@ const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+);
+const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_HELD_NOTICES,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2304,6 +2323,7 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
     totalByteCount: (value) =>
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
   },
+  "notice-held": { notice: (value) => isSetMember(value, CODING_WORKBENCH_HELD_NOTICE_SET) },
 };
 
 /** True for one closed interaction with exactly its own valid fields. */

@@ -4763,6 +4763,12 @@
               "required": true
             },
             {
+              "name": "notice",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "progressState",
               "type": "string",
               "dataClass": "closed-enum",
