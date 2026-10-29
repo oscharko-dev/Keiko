@@ -3553,3 +3553,28 @@ code/database data was changed. The new instance has26 reference issues and all 
 containers healthy; the closing preflight observed10,475seconds of valid license. Its private
 receipts and synthetic PATs remain outside the repository. Actual UI creation and verification
 of a new Pod against this instance have passed; the additional expiry-display test remains open.
+
+### Slow-model catalog offer repair — 2026-10-29
+
+The actual Gemma browser run exposed a separate pre-effect failure: the registered Activity Log
+reported `gateway.tool-catalog.rejected`, `invalid-arguments`, `expired-compatibility` for a native
+Jira comment response. The shared binder capped every offer at30seconds, shorter than the existing
+90-second Chat authority/consumer deadline. The normalizer therefore refused valid delayed model
+output before a consent card could appear. This diagnostic had no Jira mutation effect.
+
+Signed56c32e3e2 changes only the expiry formula to the earlier of the existing consumer deadline and
+authority expiry. It adds no grace, budget, permission or mutation retry. Generation, binding, live
+authority and pre-effect admission remain mandatory. The existing projection/offer events already
+record expiry; ADR0175 is corrected in place. Continuation cursors retain their separate30-second
+lifetime. The real binder→Gateway regression fails before the fix at49seconds, passes within the
+admitted90-second request, and refuses arrivals at either authority/consumer deadline without
+handler execution. Complete affected owner suites pass915/915, the production Chat loop50/50, and
+final binder19/19. Strict root TypeScript, scoped lint/format, ADR index, current catalog performance
+and real local Sonar all pass. The clean isolated56c32 runtime is built for additional actual UI
+qualification; that pending proof is not replaced by the regression results.
+
+The stable isolated5aed44080 complete package coverage run now finishes with exit0:
+2,763files pass,22 are skipped;62,539tests pass,300 are skipped. Coverage is91.89% statements,
+86.44% branches,96.05% functions and94.08% lines. These are the actual reported skips and counts,
+with no new skip introduced. This complete run predates the offer/bootstrap repairs and is not
+misrepresented as a complete qualification of the later final head.
