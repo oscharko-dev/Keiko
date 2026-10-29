@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   applyPatch,
   inspectPatch,
@@ -84,6 +85,23 @@ function modifyFirstLineDiff(path: string, before = "old", after = "new"): strin
 function sourceWithByteLength(bytes: number): string {
   const prefix = "old\n";
   return `${prefix}${"x".repeat(bytes - Buffer.byteLength(prefix, "utf8"))}`;
+}
+
+// A create diff of exactly `bytes` UTF-8 bytes in 1,000 added lines (the default changed-line bound
+// stays far away), so a byte boundary can be probed without touching any other limit.
+function createDiffOfBytes(path: string, bytes: number): string {
+  const lineCount = 1_000;
+  const header = `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${String(lineCount)} @@\n`;
+  const payload = bytes - Buffer.byteLength(header, "utf8") - lineCount * 2;
+  const base = Math.floor(payload / lineCount);
+  const extra = payload - base * lineCount;
+  const lines = Array.from(
+    { length: lineCount },
+    (_, index) => `+${"x".repeat(base + (index === lineCount - 1 ? extra : 0))}\n`,
+  );
+  const diff = `${header}${lines.join("")}`;
+  if (Buffer.byteLength(diff, "utf8") !== bytes) throw new Error("fixture size drifted");
+  return diff;
 }
 
 function withFs(overrides: Partial<WorkspaceFs>): WorkspaceFs {
@@ -224,6 +242,33 @@ describe("validatePatch — rejections", () => {
     });
     expect(v.ok).toBe(false);
     expect(v.reasons.map((r) => r.code)).toContain("size-limit");
+  });
+
+  // #4110: the tool host default is the one shared governed patch cap, and the boundary is exact.
+  it("accepts a patch of exactly the governed cap under the default limits (#4110)", () => {
+    const validation = validatePatch(
+      info,
+      createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES),
+    );
+    expect(validation.reasons).toEqual([]);
+    expect(validation.ok).toBe(true);
+    expect(validation.totalBytes).toBe(GOVERNED_PATCH_MAX_BYTES);
+  });
+
+  it("refuses a patch one byte over the governed cap with a size-limit reason (#4110)", () => {
+    const validation = validatePatch(
+      info,
+      createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES + 1),
+    );
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons.map((reason) => reason.code)).toEqual(["size-limit"]);
+  });
+
+  it("applies a patch of exactly the governed cap under the default limits (#4110)", () => {
+    const diff = createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES);
+    const result = applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+    expect(result.created).toEqual(["src/big.txt"]);
+    expect(existsSync(join(root, "src/big.txt"))).toBe(true);
   });
 
   it("rejects too many changed lines", () => {

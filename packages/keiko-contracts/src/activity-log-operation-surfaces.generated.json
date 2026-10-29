@@ -483,6 +483,7 @@
   "repository.fingerprint-diff.completed": "memory-knowledge",
   "request": "bff",
   "runs.apply.settled": "bff",
+  "runs.patch.refused": "bff",
   "runtime.confinement.failed": "tools-workflows",
   "runtime.confinement.spawned": "tools-workflows",
   "runtime.confinement.unavailable": "tools-workflows",

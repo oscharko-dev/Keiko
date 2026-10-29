@@ -9171,6 +9171,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "workflow-run-patch-refusal",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["runs.patch.refused"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["runs.patch.refused"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["runs.patch.refused"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["runs.patch.refused"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "sse-stream",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

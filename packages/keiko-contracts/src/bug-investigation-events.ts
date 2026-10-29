@@ -8,6 +8,7 @@
 // the frozen DEFAULT_BUG_WORKFLOW_LIMITS table. Members carry COUNTS/FLAGS only — never prose,
 // diff, or raw paths; the one SENSITIVE field (failure message) is redacted before emit.
 
+import { GOVERNED_PATCH_MAX_BYTES } from "./patch-limits.js";
 import type { VerificationStatus } from "./verification.js";
 
 // ─── Status (D4) ───────────────────────────────────────────────────────────────────
@@ -35,7 +36,7 @@ export interface BugWorkflowLimits {
   // validatePatch/applyPatch via their `limits` override seam (#6's defaults stay untouched).
   readonly maxFilesChanged: number; // 10
   readonly maxChangedLines: number; // 300
-  readonly maxPatchBytes: number; // 65_536
+  readonly maxPatchBytes: number; // GOVERNED_PATCH_MAX_BYTES
 }
 
 // Object.freeze, not `as const` alone: the module header calls this "the frozen
@@ -48,7 +49,7 @@ export const DEFAULT_BUG_WORKFLOW_LIMITS: BugWorkflowLimits = Object.freeze({
   maxBytesPerFile: 8_192,
   maxFilesChanged: 10,
   maxChangedLines: 300,
-  maxPatchBytes: 65_536,
+  maxPatchBytes: GOVERNED_PATCH_MAX_BYTES,
 });
 
 // ─── Event envelope ────────────────────────────────────────────────────────────────

@@ -9,6 +9,11 @@ Accepted (Issue #2114, 2026-07-09).
 > changeset execution remains for its independent active consumers. This retirement does not
 > change the separate Coding Workbench or its headless bridge.
 
+> **One patch cap (owner decision, 2026-10-29, #4110).** Every patch path takes its per-patch byte
+> bound from the single contract constant `GOVERNED_PATCH_MAX_BYTES` (8 MiB), not only the editor
+> changeset: D3 below records the decision, replacing the earlier position that the other
+> workflows keep 64 KiB.
+
 > **Amended by [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md).**
 > D1's mode policy matrix and the **Approve for me** label are superseded: `supervised-coding` is
 > displayed as **Supervised workspace**, `governed-assist` workspace-contained mutations are
@@ -174,11 +179,15 @@ closed rather than applying silently.
 
 The size bounds are the runaway-model safeguard of the editor trust boundary, sized so normal work
 (a 66 KB data file, a generated fixture) is never refused (owner decision, 2026-10-28; they were
-65,536 bytes and 2,000 changed lines). They are defined once in `editor-agent.ts`:
-`EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` for the patch, `EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES`
+65,536 bytes and 2,000 changed lines). The per-patch byte bound is the shared
+`GOVERNED_PATCH_MAX_BYTES` (8 MiB) of `patch-limits.ts`, the one place the number is defined (see
+"One patch cap for every path" below). The editor constants are defined once in `editor-agent.ts`:
+`EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` for the patch (that shared cap),
+`EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES`
 (1,000,000) for added plus removed lines, `EDITOR_AGENT_CHANGESET_PATCH_LIMITS` for the patch
 inspection of `inspectPatch`, `validatePatch` and `applyPatch` on the editor path (the
-`DEFAULT_PATCH_LIMITS` of `keiko-tools` stay sized for the small patches of the other workflows),
+`DEFAULT_PATCH_LIMITS` of `keiko-tools` share the byte bound and keep their smaller changed-line and
+file-count bounds for the other workflows),
 `EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS` for the re-rendered projection (which spells every
 hunk count out and can be longer than what was sent by less than half), and
 `EDITOR_AGENT_ACTION_MAX_BODY_BYTES` (three caps and 1 MiB) for the request body of one editor action,
@@ -331,6 +340,32 @@ Results gain bounded file-attributed entries with `succeeded`, `failed`, `confli
 `not-selected` status, and conflict details may name a contained file. The file result list shares
 the 50-file cap. This supports conflict review and partial acceptance without raw patch content in
 results or evidence.
+
+#### One patch cap for every path (owner decision, 2026-10-29, #4110)
+
+The 2026-10-28 decision raised the Coding Workbench to 8 MiB per patch and left the other patch paths
+at 64 KiB because their outputs are reviewed proposals. That distinction is withdrawn: the same
+limit stopped a bug-investigation or workflow proposal for a large generated file as it stopped the
+Workbench. Every patch path now takes its per-patch byte bound from the one contract constant
+`GOVERNED_PATCH_MAX_BYTES` (`keiko-contracts` `patch-limits.ts`, a leaf module that imports nothing):
+`EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES`, `DEFAULT_PATCH_LIMITS` (the tool host, `validatePatch`,
+`applyPatch` and the unit-test workflow), `DEFAULT_LIMITS.maxPatchBytes` (the harness),
+`DEFAULT_BUG_WORKFLOW_LIMITS.maxPatchBytes` and `DEFAULT_PATCH_SCOPE_LIMITS.maxPatchBytes` (the
+workflow patch scope). No second literal of the number exists. Only that byte bound is shared:
+changed lines, file counts, context bytes, wall time and the per-run patch budget keep their own
+limits, and a caller-supplied limit still wins over a default. The request body of the editor patch
+apply route follows the cap (a cap-sized diff after JSON escaping plus 1 MiB of envelope) so the
+transport never refuses what validation admits. The generic catalog ceilings of the legacy
+`propose_patch` and `apply_patch` tool calls (256 KiB per call, 64 KiB per string, ADR-0175 D4)
+are not changed here: those tools take the diff as a model tool argument, a separate wire
+safeguard, while the workflows and the harness read the patch from the model's answer.
+
+A refused patch leaves its closed reason in the Activity Log. A harness run over the bound ends as
+`harness.run.failed` with the code `HARNESS_LIMIT_PATCH_SIZE`; a refused unit-test or
+bug-investigation validation is recorded by `runs.patch.refused` (workflow, closed reason such as
+`size-limit`, patch bytes, file count) under the run's own id; the Workbench keeps
+`coding-runtime.native-policy.decided` with `patch-too-large`. A refusal by the workflow patch
+scope reads `out-of-scope` there, as it does in the workflow's own retry feedback.
 
 ### D4 - Bounded diagnostics and live editor context
 
