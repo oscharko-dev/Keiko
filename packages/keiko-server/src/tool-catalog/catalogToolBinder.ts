@@ -439,7 +439,7 @@ function admitCatalogOffer<Consumer extends CatalogConsumer>(
   const scopeDigest = catalogScopeDigest(state.input.consumerPort.scope(context));
   assertCatalogCompatibility<Consumer>(state);
   const now = state.options.now();
-  const expiry = Math.min(Date.parse(context.authorityExpiresAt), now + 30_000);
+  const expiry = Math.min(Date.parse(context.authorityExpiresAt), Date.parse(context.deadlineAt));
   requireBinding(Number.isSafeInteger(expiry) && expiry > now);
   const offerId = state.options.mintId();
   requireBinding(/^[A-Za-z0-9_-]{1,128}$/u.test(offerId));

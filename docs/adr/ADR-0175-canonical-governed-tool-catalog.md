@@ -190,7 +190,7 @@ checks remain unchanged.
 
 `offer = profile intent ∩ representable ∩ bound-and-ready ∩ live-authority-eligible ∩ budgeted`.
 
-An offer minted for one model request lives exactly as long as that request can: its expiry is the
+The native OpenCode offer minted for one model request lives as long as that request can: its expiry is the
 request deadline the gateway enforces for the model (the provider's `timeoutMs`) plus the bridge's
 settlement grace, never a fixed constant. A fixed 30 s offer expired under a legitimately long
 generation (a ~6k-token changeset call took 49 s), the response's calls bound against a dead offer as
@@ -198,6 +198,11 @@ generation (a ~6k-token changeset call took 49 s), the response's calls bound ag
 (2026-09-10). A response later than the deadline has already been aborted, so the deadline-derived
 lifetime refuses nothing legitimate and admits nothing stale; the bridge logs the offer's remaining
 lifetime at projection time so an expiry is reconstructable from the activity log alone.
+For the shared server catalog binder, the existing consumer deadline and authority expiry jointly
+bound the offer: `min(consumer.deadlineAt, authorityExpiresAt)`. This adds no grace or budget to the
+consumer. Its former fixed 30-second offer also refused valid normal-Chat Jira responses when model
+generation outlasted that lease (2026-10-29). The regression admits a response at49 seconds inside
+a90-second turn and refuses arrivals at either admitted bound; no new deadline is created.
 An offer bounds admission, not the call it admitted: an invocation admitted under a live offer keeps
 it through its own settlement, bounded by its descriptor's budget, the live authority, the workspace
 revision and its handler's readiness, so an effect that starts after a long step or a human decision
