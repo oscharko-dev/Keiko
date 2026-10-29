@@ -178,3 +178,18 @@ fixtures retain window positions extending beyond narrow viewports, as the prior
 are not a complete mobile interaction qualification. Reference pages depicting an agent in the Editor
 remain historical design references, not evidence of an available Editor agent. MCP/Jira live effects and
 model behavior are qualified separately in the epic evidence.
+
+## Release 1.3.2 — 2026-10-28
+
+The 1.3.2 version bump changes `package.json`, `package-lock.json` and
+`packages/keiko-ui/package.json`, which these producers bind. The same four original producers were
+rerun on the release tree on Node 24.18.0 (macOS arm64), and all passed: component
+fidelity with 427 probes and zero gated or recorded differences, editor token fidelity with 160 gated
+probes, zero gated differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## PR #4093 merge of release 1.3.2 — 2026-10-29
+
+The four original producers were rerun on the combined release 1.3.2 and MCP/Jira tree in an isolated Linux arm64 checkout (Node 24.18.0, npm 11.16.0). Component and Editor reference fidelity, the seven-mode accessibility proof and all 108 running-app captures pass. The running captures report zero page errors, unexpected API requests, missing selectors, crashed windows and visible error notices. These are fixture-based visual regressions; the separately recorded real MCP/Jira UI journeys retain their own acceptance scope. No producer assertion, tolerance or threshold changed.

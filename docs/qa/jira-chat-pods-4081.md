@@ -1,7 +1,7 @@
 # Epic #4081: Jira access Pods in Chat
 
-Current individual acceptance: **7/55** (#4089 AC1/AC2/AC3/AC5/AC7 and #4085 AC5/AC7).
-The remaining 48 criteria and final integrated qualification are open.
+Current individual acceptance: **10/55** (#4082 AC4, #4083 AC2, #4089 AC1/AC2/AC3/AC4/AC5/AC7 and #4085 AC5/AC7).
+The remaining 45 criteria and final integrated qualification are open.
 
 ## Delivery contract
 
@@ -82,9 +82,9 @@ Status: **Partial — not accepted**. Vault-only custody, generation-pinned mate
 
 Status: **Partial — not accepted**. Exact operator-owned targets, context paths, direct/proxy DNS pinning and TLS/redirect refusals have retained transport tests. Real trusted HTTPS/admission-removal probes passed. Final direct/proxy boundary regression and delivered-head qualification remain open.
 
-- [ ] **AC4:** Existing saved Cloud connectors and Data Pods load without migration loss. Live Jira Pod creation and readiness do not require USearch, an embedding model, indexing or a sync job. A Data Center connector refuses sync with a closed reason and performs no sync request; Cloud sync is unchanged.
+- [x] **AC4:** Existing saved Cloud connectors and Data Pods load without migration loss. Live Jira Pod creation and readiness do not require USearch, an embedding model, indexing or a sync job. A Data Center connector refuses sync with a closed reason and performs no sync request; Cloud sync is unchanged.
 
-Status: **Partial — not accepted**. Cloud metadata remains readable, Data Center sync refuses before HTTP, and real Live-Pod Hub/Chat groups require no embedding or index setup. Direct BFF Live-to-Data refusals and a real Data control pass within 227 credential/Data-handler cases. Complete saved Data/synced-Jira and Cloud compatibility on the final artifact remains open.
+Status: **Verified**. Current rebuilt-source compatibility passes 284 tests in six server/store suites and 46 UI/client tests. The corresponding six baseline suites pass 207 cases on `246efd463` (including the unchanged synced-Jira composition proof). Saved schema-1 Cloud metadata and populated legacy Data stores retain their data; real client-to-BFF Live creation/verification requires no embedding/index dependency. Its Data Center sync refusal makes no additional HTTP request, while Cloud Jira/Confluence sync remains green. The real Hub creation/verification proof is retained under #4085 AC5. See the individual AC4 acceptance below.
 
 - [ ] **AC5:** A repeatable local-only bootstrap/preflight produces every listed fixture class, verifies license validity and both reads and writes, preserves volumes and never prints credentials. The published timebomb license is re-entered per qualification session by owner decision; there is no clock change, license modification or customer licensing.
 
@@ -108,9 +108,9 @@ Status: **Verified**. Within this issue's explicit Keiko-managed/non-OpenCode sc
 
 Status: **Verified**. Server-only AsyncLocalStorage and exact Request-context binding isolate consumers; routing/authority overrides are refused while supported issue links remain data. Current SDK/Gateway/binder tests cover separate Chats, reversed completion, cancellation and generation/custody changes. A new actual-SDK regression exposed HEADER_MISMATCH replay after a completed handler (two executions before the fix); the admitted frozen toolDefinition now prevents the second invocation. Request-state, sampling, elicitation and roots input fulfillment perform no extra invocation. The current rebuilt candidate passes 299 tests in ten suites, strict typecheck/lint and the registered body-free failure proof. See [individual AC3 acceptance](#individual-acceptance--4089-ac3). Final aggregate gates remain separate AC6 obligations.
 
-- [ ] **AC4:** The admission pipeline composes stricter-wins in all three modes; a denied call performs no handler call; approval and grant redemption re-validate binding, generation, envelope, mode and budget; cancellation and timeout settle exactly once.
+- [x] **AC4:** The admission pipeline composes stricter-wins in all three modes; a denied call performs no handler call; approval and grant redemption re-validate binding, generation, envelope, mode and budget; cancellation and timeout settle exactly once.
 
-Status: **Partial — not accepted**. Shared stricter-wins policy, cumulative reservation, read consent and exact-action approvals run through ordinary Chat. Eight regression-first buffered/SSE read/write cancellation cases and actual buffered HTTP disconnects now drain composite-signal waits, revoke unfulfilled decisions and make zero Jira calls; granted read consent remains valid within its original scope. Full expiry/race/budget/restart qualification on the final artifact remains open.
+Status: **Verified**. The current combined authority/admission/SDK/settlement regression group passes 263 cases in ten suites. Four additional race cases explicitly exhaust real authority or change mode while a read grant is pending and assert zero handler/HTTP calls, then exercise late completion after timeout both before and after effect start with exactly one terminal event and one release or commit. Existing tests cover all three modes, stricter ceilings, binding/credential/envelope drift, exact write-approval claims and cancellation settlement. See the individual AC4 acceptance below; AC6 retains the complete final-gate obligation.
 
 - [x] **AC5:** An import of `@modelcontextprotocol/*` outside the host fails `arch:check`, proven by a negative fixture in `arch:check:negative`; dependency matrix, currency, hygiene, SBOM and package-surface gates pass.
 
@@ -130,9 +130,9 @@ Status: **Verified**. The hermetic conversation consumer executes through the ac
 
 Status: **Partial — not accepted**. All nine reads and five writes have canonical descriptors and ADR-0128 D4 mappings. Complete buffered and SSE normal-Chat groups exercised every advertised operation through the actual gateway/binder/SDK. Schema/routing/credential override refusals have retained tests; current-head full host/provider qualification remains open.
 
-- [ ] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
+- [x] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
 
-Status: **Partial — not accepted**. Both complete 14-operation normal-Chat groups passed against licensed Jira 10.3.26 with the verified Qwen model and non-admin API identity: nine reads plus create/edit/assign/comment/transition, independently checked remotely. The separate restricted buffered catalog passed 14/14 with zero effects; both focused permission groups passed 8/8. These are prior-artifact receipts. The complete restricted SSE catalog and final-artifact repetition through the selected LiteLLM/Gemma Gateway remain open.
+Status: **Verified**. On the independent clean `44d18c688` compiled runtime, all 14 advertised operations pass through normal Chat, LiteLLM/Gemma, the production binder and actual MCP host against licensed Jira 10.3.26, in both buffered and streamed groups. Both complete restricted-identity catalog groups also pass, with zero remote write effects; separate focused permission groups pass 8/8 in each transport. Independent Jira state and dispatch observations distinguish allowed reads, pre-dispatch refusal, current-auth invalidation and conservative post-dispatch uncertainty. The bounded operation/endpoint matrix and exact artifact/receipt hashes are recorded below. This does not claim unrestricted Jira REST or full epic acceptance.
 
 - [ ] **AC3:** Required supported custom fields, constrained fields and workflow-specific transitions are discovered/validated from real metadata through the post-9.0 endpoints. A real transition-screen fixture requires a supported field; omitting it fails, and the approved field value and transition succeed in one request. Undeclared mutation verbs, worklogs and unsupported compound effects are refused before HTTP. Unknown plugin-specific field types are reported as unsupported with no fabricated values. Missing/invalid values and unauthorized issues/actions produce honest safe errors without escalating to an admin identity.
 
@@ -3282,3 +3282,101 @@ passes all 14 operations with real-model execution and independent remote
 readback. Its preflight passes, license opening/closing values are 10597/10389
 seconds, no pending work remains, and the artifact digest is unchanged across
 the group. Other current-artifact groups are still being qualified separately.
+
+## Individual acceptance — #4082 AC4
+
+On 2026-10-29 the rebuilt release-1.3.2 merge candidate passes the production compatibility suites
+`credentialMetadataStore`, `credentialRoutes`, `syncRoutes.jira`, `syncRoutes`,
+`local-knowledge-handlers` and Local Knowledge `store`: **284 tests**. Their baseline checkout
+at `246efd463` passes **207 tests**, including the previously added identical sync-to-Data composition
+case. The current UI integration/form/card group adds **46 passing tests**.
+
+The saved Cloud shape omits the new deployment/Live fields and still round-trips. The actual populated
+v32-to-current migration preserves capsule, source, document, parsed-unit, chunk and vector rows.
+The UI-client-to-real-BFF Data Center case creates and verifies with exactly two verification HTTP
+requests, without embedding, indexing or USearch services in its dependency graph; attempting sync
+returns `SYNC_UNSUPPORTED_DEPLOYMENT` and leaves that request count unchanged. Cloud Jira and
+Confluence still synchronize/index through the original service. The licensed in-app-browser
+creation/verification under #4085 AC5 independently covers the user flow.
+
+An initial scoped run encountered stale CommonJS output while merge-conflicted package manifests
+were being resolved. A full forced package build through `npm run typecheck` restored correct ESM
+output; the 284/46 passing results above are the subsequent runs. No source workaround or test
+relaxation was introduced for that transient build state.
+
+## Individual acceptance — #4083 AC2
+
+The immutable runtime belongs to clean source `44d18c688` with **6938 files** and artifact SHA-256
+`c0cec226ed80096912f0902f16eeb0c7117da2ce34177baf9d39411db5cf95f1`.
+The real model is `gemma-4-31b-it` behind the locally running LiteLLM Docker Gateway. Each complete
+group opens and closes with a valid Jira license and its own HTTPS/read/write preflight; independent
+Jira observations verify actual effects, not merely model text. All groups retain the same artifact.
+
+| Complete group      | Cases | Receipt SHA-256                                                    | License seconds at opening / closing |
+| ------------------- | ----: | ------------------------------------------------------------------ | ------------------------------------ |
+| Normal streamed     | 14/14 | `de06397839d41984e03a5e6082d3154cd8fc6a388b1cc516444b98827e8a8309` | 10597 / 10389                        |
+| Normal buffered     | 14/14 | `7d80fbe6eceddc01579202ebd2d301a8909aaa2e2c7b081b8f4b03a196a12aa3` | 10279 / 10089                        |
+| Restricted streamed | 14/14 | `1c57b9e21f07e5d71e7ff6709eb6e9516cd577605c501158a4c73aa489431fdc` | 9878 / 9701                          |
+| Restricted buffered | 14/14 | `eee9b9e761e31fc1e49727c49c6c6eca6e014faa711d4a2b337b1a40989b24df` | 9517 / 9345                          |
+
+Both focused permission groups additionally pass **8/8**, including the permitted editor mutation,
+forbidden cross-project access/transition, and omitted mandatory create/transition fields. Their
+license boundaries are 9261/9147 and 9006/8881 seconds. The mixed-source group passes **2/2** at
+8812/8743 seconds. These are separate proofs; they do not convert other incomplete criteria to done.
+
+All following paths are public API templates relative to the admitted Jira context path, with
+prefix `/rest/api/2/`. They contain no customer endpoint or issue identifier.
+
+| Tool                    | Endpoint family                                    | Bounded capability                                     |
+| ----------------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| `jira.projects`         | `GET project`                                      | Visible projects                                       |
+| `jira.issue-types`      | `GET issue/createmeta/{project}/issuetypes`        | Available create issue types                           |
+| `jira.create-fields`    | `GET issue/createmeta/{project}/issuetypes/{type}` | Supported create-field metadata                        |
+| `jira.edit-fields`      | `GET issue/{key}/editmeta`                         | Supported edit-field metadata                          |
+| `jira.search`           | `GET search`                                       | Bounded JQL result pages                               |
+| `jira.issue`            | `GET issue/{key}`                                  | Bounded issue and explicitly selected supported fields |
+| `jira.comments`         | `GET issue/{key}/comment`                          | Bounded comment pages                                  |
+| `jira.transitions`      | `GET issue/{key}/transitions`                      | Available transitions and their field metadata         |
+| `jira.assignable-users` | `GET user/assignable/search`                       | Bounded assignable-user lookup                         |
+| `jira.create`           | `POST issue`                                       | One metadata-validated issue creation                  |
+| `jira.edit`             | `PUT issue/{key}`                                  | Supported metadata-validated field operations          |
+| `jira.assign`           | `PUT issue/{key}/assignee`                         | One validated assignee change                          |
+| `jira.comment`          | `POST issue/{key}/comment`                         | One comment addition                                   |
+| `jira.transition`       | `POST issue/{key}/transitions`                     | Transition and required fields in one mutation         |
+
+The restricted catalog independently verifies browse-only permissions and denies all five write
+permissions. Its reads reflect Jira's actual visibility; two metadata operations fail safely, and
+Jira's observed 401 on assignable-user lookup invalidates readiness and cancels the affected work.
+Pre-dispatch write refusals are known rejections. A dispatched forbidden comment remains conservatively
+`unknown`, carries the observed refusal and is not automatically retried; independent inspection
+proves zero effects in both restricted catalog groups. No production request substitutes an admin
+credential. Administrator reads are used only by the separate synthetic test observer.
+
+Unsupported capabilities remain explicit: arbitrary REST, issue deletion, worklogs, undeclared
+compound mutations, unknown plugin fields, Cloud Live-tool execution and Confluence Live tools.
+Existing Cloud v3 sync is separate and retains its compatibility tests. This is the enumerated
+operation matrix, not full Jira REST coverage or a final-PR-head release verdict.
+
+## Individual acceptance — #4089 AC4
+
+The merge candidate passes **263 tests in ten suites**: `actionPolicy`, `jiraChatAuthority`,
+`mcpChatAuthority`, `catalogToolProduction`, `catalogToolDispatch`, `catalogToolSettlement`,
+`catalogNonCodingConsumer`, the real MCP `host`, `chatWriteApprovalState` and
+`chatWriteApprovalRoutes`. Four new cases close the specific asynchronous boundary gaps.
+
+The pending-grant cases wait at the actual production approval boundary, change the saved mode or
+consume the real authority envelope's last tool slot, accept the read grant, and resume. Every bound
+handler spy remains uncalled; HTTP and tool-effect counters remain zero. The timeout cases resolve
+a late handler after the authoritative deadline, both without and with effect start. Each records
+one discarded late completion, one terminal event, and exactly one release or commit; replay adds
+no accounting. These extend the existing all-mode, stricter-ceiling, identity/generation, exact
+write-action, cancellation and SDK timeout regressions. Scoped lint/formatting pass; no runtime
+behavior was changed to make these proofs pass. Full Activity Log and release gates remain AC6 work.
+
+## Release 1.3.2 merge and ongoing final gates — 2026-10-29
+
+The merge of `dev` release `9b30f3d05` preserves the complete MCP/Jira changes. All 29 manifests use 1.3.2; the normalized lockfile and every third-party resolution remain unchanged. Typecheck, full lint, full formatting, version/currency/hygiene, the complete seven-part Activity Log gate, 281 CSS proof tests and 19 producer tests pass. The original four UI producers were regenerated in Linux, including all 108 app captures.
+
+The Editor release evidence passes against the actual rebuilt static export on the pinned Linux Node 24.18.0 runtime. The host Node 24.22.0 embeds zlib 1.2.12, while that Linux runtime embeds 1.3.1-e00f703; identical raw chunk sizes produce different gzip sizes. Its host freshness comparison therefore fails. The Linux evidence is preserved unchanged; no budget is raised or macOS value substituted. Updater evidence remains fresh.
+
+The complete package coverage run is still in progress and has reported a failure in the unrelated-zombie process-end case; its exact failure still needs targeted reproduction. The full local Sonar analysis initially exhausted its 4.5-GiB heap, then completed with the documented 12-GiB setting and reported 104 findings. Those findings are open repair work. No final quality or merge-ready verdict is claimed.

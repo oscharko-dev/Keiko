@@ -31,7 +31,7 @@ import {
   readPersistedActivityLog,
   persistedActivityLogLines,
 } from "../../../../tests/support/activity-log-proof.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -738,7 +738,7 @@ describe("ordinary Chat catalog read admission", () => {
   let beforeConnection: () => void;
   let afterRequest: () => void;
   let responseBody: string;
-  let consent: (grant: ChatToolReadGrantView) => void;
+  let consent: (grant: ChatToolReadGrantView) => void | Promise<void>;
   const hosts: { close: () => Promise<void> }[] = [];
 
   beforeEach(() => {
@@ -787,6 +787,7 @@ describe("ordinary Chat catalog read admission", () => {
     budget: ReturnType<typeof createHarnessCatalogBudget>;
     counters: RunCounters;
     managed: Awaited<ReturnType<typeof createManagedProviderCatalog<JiraChatCatalogConsumer>>>;
+    handlers: readonly { execute: ReturnType<typeof vi.fn> }[];
   }> {
     const current = context();
     const counters: RunCounters = {
@@ -848,16 +849,19 @@ describe("ordinary Chat catalog read admission", () => {
         notifications++;
         expect(requests).toBe(0);
         expect(counters.toolCalls).toBe(0);
-        consent(view);
-        return Promise.resolve();
+        return Promise.resolve(consent(view));
       },
     });
+    const handlers = managed.handlerBindings.map((binding) => ({
+      ...binding,
+      execute: vi.fn(binding.execute),
+    }));
     const binder = createCatalogToolBinder<JiraChatCatalogConsumer>(
       {
         ...admission,
         consumerPort: jiraChatCatalogConsumerPort,
         projection: managed.projection,
-        handlerBindings: managed.handlerBindings,
+        handlerBindings: handlers,
         budgetPort: budget.port,
         logPort: log,
       },
@@ -869,7 +873,7 @@ describe("ordinary Chat catalog read admission", () => {
         invocationRegistry: createCodingToolInvocationRegistry({ now: () => now }),
       },
     );
-    return { binder, budget, counters, managed };
+    return { binder, budget, counters, managed, handlers };
   }
 
   async function dispatch(
@@ -917,6 +921,49 @@ describe("ordinary Chat catalog read admission", () => {
       expect(notifications).toBe(1);
       expect(requests).toBe(2);
       expect(f.counters.toolCalls).toBe(2);
+    },
+  );
+
+  it.each(["mode", "budget"] as const)(
+    "refuses handler entry when %s changes while read approval is pending",
+    async (change) => {
+      registerCurrentAuthority({
+        budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 100, maxPatchBytes: 0 },
+      });
+      const accept = consent;
+      let resume = (): void => undefined;
+      let entered = (_view: ChatToolReadGrantView): void => undefined;
+      const waiting = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const requested = new Promise<ChatToolReadGrantView>((resolve) => {
+        entered = resolve;
+      });
+      consent = (view): Promise<void> => {
+        entered(view);
+        return waiting;
+      };
+      const f = await catalogFixture();
+      const pending = dispatch(f, `pending-${change}`);
+      try {
+        const view = await requested;
+        expect(grants.getChatReadGrant(view.grantId)?.grant.state).toBe("pending");
+        if (change === "mode") store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
+        else expect(reserve().ok).toBe(true);
+        await accept(view);
+        expect(grants.getChatReadGrant(view.grantId)?.grant.state).toBe("granted");
+        resume();
+        expect(await pending).toMatchObject({
+          kind: "settled",
+          result: { status: "denied", effectStarted: false },
+        });
+        for (const handler of f.handlers) expect(handler.execute).not.toHaveBeenCalled();
+        expect(requests).toBe(0);
+        expect(f.counters.toolCalls).toBe(0);
+      } finally {
+        resume();
+        await pending;
+      }
     },
   );
 

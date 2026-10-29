@@ -170,6 +170,53 @@ describe("catalog invocation settlement races", () => {
     expect((await pending).kind).toBe("settled");
     expect(fixture.primary.events.at(-1)?.extra?.status).toBe("timeout");
   });
+  it.each([false, true])(
+    "settles timeout and late completion exactly once (effect started=%s)",
+    async (effectStarted) => {
+      vi.useFakeTimers();
+      const started = deferred<CatalogHandlerContext>();
+      const late = deferred<CatalogHandlerResult>();
+      const commit = vi.fn();
+      const release = vi.fn();
+      const fixture = fixtureWith((f) => ({
+        ...f.input,
+        budgetPort: { ...f.input.budgetPort, commit, release },
+        handlerBindings: [
+          {
+            ...f.handler,
+            execute: (_args, context): Promise<CatalogHandlerResult> => {
+              if (effectStarted) expect(context.beforeEffect()).toBe(true);
+              started.resolve(context);
+              return late.promise;
+            },
+          },
+        ],
+      }));
+      const pending = fixture.binder.dispatch(fixture.request, ID);
+      const context = await started.promise;
+      fixture.now.mockReturnValue(6000);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await pending).toMatchObject({
+        kind: "settled",
+        result: { status: "timeout", effectStarted },
+      });
+      expect(context.beforeEffect()).toBe(false);
+      late.resolve(RESULT);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        fixture.primary.events.filter((event) => event.op === "tool-catalog.completion-discarded"),
+      ).toHaveLength(1);
+      expect(
+        fixture.primary.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
+      ).toHaveLength(1);
+      expect(commit).toHaveBeenCalledTimes(effectStarted ? 1 : 0);
+      expect(release).toHaveBeenCalledTimes(effectStarted ? 0 : 1);
+      expect((await fixture.binder.dispatch(fixture.request, ID)).kind).toBe("replayed");
+      expect(commit).toHaveBeenCalledTimes(effectStarted ? 1 : 0);
+      expect(release).toHaveBeenCalledTimes(effectStarted ? 0 : 1);
+    },
+  );
+
   it.each(["synchronous", "asynchronous"] as const)(
     "settles %s exceptions body-free and releases the reservation once",
     async (kind) => {
