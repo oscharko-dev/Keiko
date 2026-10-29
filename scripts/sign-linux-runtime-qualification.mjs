@@ -100,16 +100,15 @@ function describeFailure(failure, attempt) {
   return `linux-runtime-qualification-signing: ${parts.join(" ")}\n`;
 }
 
-async function signWithRetry(receipt, dependencies, stderr) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await dependencies.signReceipt(receipt, SIGNING_OPTIONS);
-    } catch (error) {
-      const failure = classifySigningFailure(error);
-      stderr.write(describeFailure(failure, attempt));
-      if (!failure.transient || attempt >= SIGNING_ATTEMPTS) throw error;
-      await dependencies.sleep(SIGNING_BACKOFF_MS[attempt - 1] ?? SIGNING_BACKOFF_MS.at(-1));
-    }
+async function signWithRetry(receipt, dependencies, stderr, attempt = 1) {
+  try {
+    return await dependencies.signReceipt(receipt, SIGNING_OPTIONS);
+  } catch (error) {
+    const failure = classifySigningFailure(error);
+    stderr.write(describeFailure(failure, attempt));
+    if (!failure.transient || attempt >= SIGNING_ATTEMPTS) throw error;
+    await dependencies.sleep(SIGNING_BACKOFF_MS[attempt - 1] ?? SIGNING_BACKOFF_MS.at(-1));
+    return signWithRetry(receipt, dependencies, stderr, attempt + 1);
   }
 }
 
