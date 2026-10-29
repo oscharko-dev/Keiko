@@ -661,6 +661,18 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.retry": "Diff erneut laden",
   "codingWorkbench.changes.diff.truncated":
     "Dieses begrenzte Datei-Diff ist unvollständig, weil es das Serverlimit erreicht hat.",
+  "codingWorkbench.diffWindow.notice":
+    "Dieses Diff ist groß: {rows} Zeilen in {files} Dateien, insgesamt {size}. Es wird jeweils nur eine Datei mit bis zu {page} ihrer Zeilen angezeigt, nichts wird ausgelassen. Wähle eine Datei oder eine Seite, um den Rest zu lesen.",
+  "codingWorkbench.diffWindow.files": "Dateien in diesem Diff",
+  "codingWorkbench.diffWindow.fileMeta": "+{added} −{removed} · {size} · {rows} Zeilen",
+  "codingWorkbench.diffWindow.fileMetaBinary": "Binärdatei",
+  "codingWorkbench.diffWindow.position":
+    "Datei {file} von {files}, Zeilen {from} bis {to} von {rows}",
+  "codingWorkbench.diffWindow.positionEmpty": "Datei {file} von {files}, keine Textzeilen",
+  "codingWorkbench.diffWindow.pages": "Seiten dieser Datei",
+  "codingWorkbench.diffWindow.previous": "Vorherige Zeilen",
+  "codingWorkbench.diffWindow.next": "Nächste Zeilen",
+  "codingWorkbench.diffWindow.pageOf": "Seite {page} von {pages}",
   "codingWorkbench.changes.diff.addedLine": "Hinzugefügte Zeile",
   "codingWorkbench.changes.diff.deletedLine": "Gelöschte Zeile",
   "codingWorkbench.changes.diff.contextLine": "Kontextzeile",

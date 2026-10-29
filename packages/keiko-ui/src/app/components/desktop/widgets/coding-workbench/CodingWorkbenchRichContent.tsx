@@ -16,7 +16,8 @@ import type { GitEditorDiffFile, GitEditorDiffLine } from "@oscharko-dev/keiko-c
 import type { SafeMarkdownNode } from "@/lib/safe-markdown";
 import type { SafeMarkdownRichContent } from "../../SafeMarkdown";
 import { parseUnifiedDiff, UNKNOWN_DIFF_PATH } from "../cards/shared/diffParser";
-import { DiffFileSection, type DiffViewLabels } from "../cards/shared/diffView";
+import type { DiffViewLabels } from "../cards/shared/diffView";
+import { CodingWorkbenchDiffFiles } from "./CodingWorkbenchWindowedDiff";
 import { diffLabels } from "./CodingWorkbenchChanges";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
@@ -216,10 +217,6 @@ function diffFiles(text: string, unnamedPath: string): readonly GitEditorDiffFil
   return shown.length === 0 ? null : shown;
 }
 
-function ignoreSectionRef(): void {
-  // The shared section reports its element for scroll-to-file; an answer's diff has no file list.
-}
-
 function DiffSections({
   files,
   labels,
@@ -231,16 +228,7 @@ function DiffSections({
 }): ReactNode {
   return (
     <div className="rv-body">
-      {files.map((file, index) => (
-        <DiffFileSection
-          key={`${file.path}:${String(index)}`}
-          file={file}
-          index={index}
-          idPrefix={idPrefix}
-          sectionRef={ignoreSectionRef}
-          labels={labels}
-        />
-      ))}
+      <CodingWorkbenchDiffFiles files={files} idPrefix={idPrefix} labels={labels} />
     </div>
   );
 }

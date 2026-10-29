@@ -257,6 +257,9 @@ not grow past the governed read ceiling, projected from the match count before a
 the rendered changeset is held to the 8 MiB cap; and the run's `maxPatchBytes` is charged
 with the materialized diff, not merely with the replacement text the model sent. The rendered diff
 is also held to the editor route's changed-line limit before the budget is charged (#3873 review).
+The Coding Workbench review shows a diff of more than 2,000 lines one file and one 1,000-line page at a
+time, with a file list that carries sizes and a visible total, so an 8 MiB changeset opens without
+mounting every line; no line is dropped and Apply and Reject act on the whole changeset (#4108).
 A deletion or a rename renders its whole file and cannot be split, so a file whose rendering alone
 exceeds the byte cap or the 1,000,000 changed lines, or that the governed read cannot return as text
 (binary, or above the 1 MiB read ceiling) cannot be moved or deleted with this tool; each is

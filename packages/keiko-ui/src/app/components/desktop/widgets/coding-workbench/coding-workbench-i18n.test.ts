@@ -589,4 +589,26 @@ describe("Coding Workbench native profile copy", () => {
       );
     }
   });
+
+  // #4108: the windowed diff view names its totals, position and controls in both languages.
+  it.each([
+    "codingWorkbench.diffWindow.notice",
+    "codingWorkbench.diffWindow.files",
+    "codingWorkbench.diffWindow.fileMeta",
+    "codingWorkbench.diffWindow.fileMetaBinary",
+    "codingWorkbench.diffWindow.position",
+    "codingWorkbench.diffWindow.positionEmpty",
+    "codingWorkbench.diffWindow.pages",
+    "codingWorkbench.diffWindow.previous",
+    "codingWorkbench.diffWindow.next",
+    "codingWorkbench.diffWindow.pageOf",
+  ] as const)("localizes %s in both catalogs with the same placeholders", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+    const placeholders = (text: string): string[] =>
+      [...text.matchAll(/\{(\w+)\}/gu)].map((m) => m[1] ?? "").sort();
+    expect(placeholders(de)).toEqual(placeholders(en));
+  });
 });
