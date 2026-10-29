@@ -163,6 +163,11 @@ interface TaskStartSectionProps {
   readonly canResume: boolean;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly mutationPending: boolean;
+  /**
+   * True only while a Stop is itself pending. Any other pending mutation leaves Stop enabled: Stop
+   * ends that mutation's client wait instead of queueing behind it (#4109).
+   */
+  readonly stopPending: boolean;
   readonly startBusy: boolean;
   readonly startBlockedReason: string | null;
   /** Retained so `ProjectMemoryToggle` can be re-mounted (currently hidden per owner directive)
@@ -953,8 +958,8 @@ function StopControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): Reac
       type="button"
       data-tip={t("codingWorkbench.controls.stop")}
       aria-label={t("codingWorkbench.controls.stop")}
-      disabled={input.mutationPending || input.runState === "stopping"}
-      aria-busy={input.mutationPending}
+      disabled={input.stopPending || input.runState === "stopping"}
+      aria-busy={input.stopPending}
       onClick={input.actions.onStop}
     >
       <StopIcon size={14} />
@@ -1022,7 +1027,7 @@ function RunningControl({ input, controller, t }: ComposerViewProps): ReactNode 
         data-on="true"
         data-tip={t("codingWorkbench.controls.stop")}
         aria-label={t("codingWorkbench.controls.stop")}
-        disabled={input.mutationPending}
+        disabled={input.stopPending}
         onClick={input.actions.onStop}
       >
         <StopIcon size={16} />

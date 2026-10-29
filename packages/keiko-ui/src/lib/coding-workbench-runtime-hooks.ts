@@ -4,13 +4,14 @@ import { newClientCorrelationId } from "./bff-correlation";
 import { reportGatewayProfileRefresh, reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
 import { requestCodingAppSessionReinspection } from "./coding-app-session-client";
-import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchRuntimeInboxAction,
@@ -22,10 +23,13 @@ import {
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
 import {
+  CodingWorkbenchPreemptedError,
+  RUNTIME_REQUEST_TIMEOUT_CODE,
   codingWorkbenchFailureStatus,
   codingWorkbenchRuntimeApiError,
   getCodingWorkbenchRuntimeReadiness,
   getCodingWorkbenchRuntimeStatus,
+  isCodingWorkbenchPreempted,
 } from "./coding-workbench-runtime-api";
 import {
   createApprovalMutation,
@@ -39,6 +43,7 @@ import {
   createRunBoundMutation,
   createStartMutation,
   mutationResultMatchesCurrentTruth,
+  runBoundTarget,
   type CodingWorkbenchFollowUpInputs,
   type CodingWorkbenchMutationCommand,
 } from "./coding-workbench-runtime-mutations";
@@ -401,12 +406,16 @@ async function readRun(
   } catch (error) {
     if (runSequence.current !== sequence) return;
     const mapped = codingWorkbenchRuntimeApiError(error);
-    // i18n-exempt: body-free diagnostic message for the activity log, never rendered
-    reportClientDiagnostic("[keiko] coding workbench run status read failed", {
-      kind: "other",
-      errorKind: bffRequestErrorKind(error),
-      ...(mapped.correlationId === undefined ? {} : { correlationId: mapped.correlationId }),
-    });
+    // A read that hit its own deadline is already recorded by the API layer with its call kind and
+    // deadline (`client.coding-workbench.request-timed-out`); a generic note would only repeat it.
+    if (mapped.code !== RUNTIME_REQUEST_TIMEOUT_CODE) {
+      // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+      reportClientDiagnostic("[keiko] coding workbench run status read failed", {
+        kind: "other",
+        errorKind: bffRequestErrorKind(error),
+        ...(mapped.correlationId === undefined ? {} : { correlationId: mapped.correlationId }),
+      });
+    }
     dispatch({
       kind: "resource-failed",
       resource: "run",
@@ -441,19 +450,6 @@ export function useCodingWorkbenchRuntimeResources(
 // same not-found result as an unknown run, so the refusal cannot say whether the session was revoked.
 const RUN_NOT_FOUND_CODE = "CODING_RUNTIME_RUN_NOT_FOUND";
 
-// A control the BFF accepted but never answered failed on the client's own deadline; no server line
-// can describe it, so the client records it (body-free: only the closed error kind).
-const REQUEST_TIMEOUT_CODE = "CODING_RUNTIME_REQUEST_TIMEOUT";
-
-function reportMutationTimeout(failure: { readonly correlationId?: string }): void {
-  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
-  reportClientDiagnostic("[keiko] coding workbench run control timed out", {
-    kind: "other",
-    errorKind: "timeout",
-    ...(failure.correlationId === undefined ? {} : { correlationId: failure.correlationId }),
-  });
-}
-
 // The window's own readiness gate refuses with a conflict-coded error before any request is sent,
 // so there is no newer server state to read after it.
 const LOCAL_GATE_REFUSAL_CODE = "CODING_RUNTIME_ACTION_UNAVAILABLE";
@@ -466,44 +462,115 @@ function isServerConflict(error: unknown): boolean {
   );
 }
 
-function useRuntimeMutationQueue({
-  stateRef,
-  refreshRun,
-  dispatch,
-}: RuntimeMutationQueueInput): (
+/** One enqueued mutation. Its controller is aborted, with the preemption reason, only by Stop. */
+interface PendingMutation {
+  readonly kind: CodingWorkbenchMutationKind;
+  readonly controller: AbortController;
+}
+
+function wasPreempted(signal: AbortSignal): boolean {
+  return signal.aborted && isCodingWorkbenchPreempted(signal.reason);
+}
+
+// Stop is never queued behind another mutation (#4109): it ends the client wait of the one in
+// flight and drops the ones still waiting for their turn. The server may still apply a preempted
+// request; the run state reconciles through the Stop answer or a re-read. Another Stop is not
+// preempted, so Stops keep their order.
+function preemptForStop(pending: ReadonlySet<PendingMutation>): void {
+  for (const entry of pending) {
+    if (entry.kind !== "stop") entry.controller.abort(new CodingWorkbenchPreemptedError());
+  }
+}
+
+// Resolves when `work` settles or the mutation is preempted, whichever comes first, so a re-read
+// that never returns cannot hold Stop. A rejection of `work` before a preemption still rejects.
+function untilPreempted(work: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  const preempted = new Promise<void>((resolve) => {
+    signal.addEventListener(
+      "abort",
+      () => {
+        resolve();
+      },
+      { once: true },
+    );
+  });
+  return Promise.race([work, preempted]);
+}
+
+async function applyMutationResult(
+  { stateRef, refreshRun, dispatch }: RuntimeMutationQueueInput,
+  command: CodingWorkbenchMutationCommand,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+  signal: AbortSignal,
+): Promise<void> {
+  if (mutationResultMatchesCurrentTruth(command, stateRef.current.run.value, snapshot)) {
+    dispatch({ kind: "run-set", snapshot });
+    return;
+  }
+  await untilPreempted(refreshRun(), signal);
+}
+
+async function failMutation(
+  { refreshRun, dispatch }: RuntimeMutationQueueInput,
+  error: unknown,
+  signal: AbortSignal,
+): Promise<void> {
+  // A request Stop took the place of is neither a failure nor a timeout: no alert, no report.
+  if (wasPreempted(signal)) return;
+  const failure = codingWorkbenchRuntimeApiError(error);
+  dispatch({ kind: "mutation-failed", error: failure });
+  if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
+  if (isServerConflict(error)) await untilPreempted(refreshRun(), signal);
+}
+
+async function runMutation(
+  context: RuntimeMutationQueueInput,
+  { kind, controller: { signal } }: PendingMutation,
+  prepare: (current: CodingWorkbenchRuntimeState) => CodingWorkbenchMutationCommand,
+): Promise<void> {
+  // Stop took this mutation's place while it still waited for its turn: it is never sent.
+  if (wasPreempted(signal)) return;
+  try {
+    const command = prepare(context.stateRef.current);
+    context.dispatch({ kind: "mutation-start", mutation: kind, requestId: command.requestId });
+    const snapshot = await command.run(signal);
+    if (wasPreempted(signal)) return;
+    await applyMutationResult(context, command, snapshot, signal);
+    if (wasPreempted(signal)) return;
+    context.dispatch({ kind: "mutation-complete" });
+  } catch (error) {
+    await failMutation(context, error, signal);
+  }
+}
+
+type EnqueueMutation = (
   kind: CodingWorkbenchMutationKind,
   prepare: (current: CodingWorkbenchRuntimeState) => CodingWorkbenchMutationCommand,
-) => Promise<void> {
+  preempting?: boolean,
+) => Promise<void>;
+
+function useRuntimeMutationQueue(input: RuntimeMutationQueueInput): EnqueueMutation {
+  const { stateRef, refreshRun, dispatch } = input;
   const mutationTail = useRef<Promise<void>>(Promise.resolve());
+  const [pending] = useState(() => new Set<PendingMutation>());
   return useCallback(
-    (
-      kind: CodingWorkbenchMutationKind,
-      prepare: (current: CodingWorkbenchRuntimeState) => CodingWorkbenchMutationCommand,
-    ): Promise<void> => {
+    (kind, prepare, preempting = false): Promise<void> => {
+      const entry: PendingMutation = { kind, controller: new AbortController() };
+      if (preempting) preemptForStop(pending);
+      pending.add(entry);
       const execute = async (): Promise<void> => {
         try {
-          const command = prepare(stateRef.current);
-          dispatch({ kind: "mutation-start", mutation: kind, requestId: command.requestId });
-          const snapshot = await command.run();
-          if (mutationResultMatchesCurrentTruth(command, stateRef.current.run.value, snapshot)) {
-            dispatch({ kind: "run-set", snapshot });
-          } else {
-            await refreshRun();
-          }
-          dispatch({ kind: "mutation-complete" });
-        } catch (error) {
-          const failure = codingWorkbenchRuntimeApiError(error);
-          dispatch({ kind: "mutation-failed", error: failure });
-          if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
-          if (failure.code === REQUEST_TIMEOUT_CODE) reportMutationTimeout(failure);
-          if (isServerConflict(error)) await refreshRun();
+          await runMutation({ stateRef, refreshRun, dispatch }, entry, prepare);
+        } finally {
+          pending.delete(entry);
         }
       };
       const result = mutationTail.current.then(execute, execute);
       mutationTail.current = result;
       return result;
     },
-    [dispatch, refreshRun, stateRef],
+    [dispatch, pending, refreshRun, stateRef],
   );
 }
 
@@ -521,10 +588,16 @@ export function useCodingWorkbenchRuntimeMutations(
       enqueueMutation("approval", (current) => createApprovalMutation(decision, current)),
     [enqueueMutation],
   );
+  // Stop preempts a pending mutation, but only when it has a run to stop: a Stop the window would
+  // refuse locally must not end a mutation (a Start) it cannot replace.
   const runBoundMutation = useCallback(
     (kind: "stop" | "takeover"): Promise<void> =>
-      enqueueMutation(kind, (current) => createRunBoundMutation(kind, current)),
-    [enqueueMutation],
+      enqueueMutation(
+        kind,
+        (current) => createRunBoundMutation(kind, current),
+        kind === "stop" && runBoundTarget(input.stateRef.current) !== null,
+      ),
+    [enqueueMutation, input.stateRef],
   );
   const retry = useCallback(
     (taskIntent: string): Promise<void> =>

@@ -1369,6 +1369,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-coding-workbench-request-timeout",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: [],
+      failure: ["client.coding-workbench.request-timed-out"],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.coding-workbench.request-timed-out"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.coding-workbench.request-timed-out"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "duration", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-select",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

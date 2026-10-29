@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 383,
-  "completeClassCount": 383,
+  "supportedClassCount": 384,
+  "completeClassCount": 384,
   "completeness": "complete",
   "classes": [
     {
@@ -4829,6 +4829,62 @@
             "causeChain": false
           },
           "proofIds": ["client.coding-workbench.interaction.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "client-coding-workbench-request-timeout",
+      "requirementContract": "client-coding-workbench-request-timeout",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["client.coding-workbench.request-timed-out"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "client.coding-workbench.request-timed-out",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "client.coding-workbench.request-timed-out",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "call",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "deadlineMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "duration", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["client.coding-workbench.request-timed-out.line"],
           "replayReferences": [],
           "missingObligations": []
         }

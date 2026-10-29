@@ -66,6 +66,7 @@
   "client.citation.activated": "client-diagnostics",
   "client.coding-run.restored": "client-diagnostics",
   "client.coding-workbench.interaction": "client-diagnostics",
+  "client.coding-workbench.request-timed-out": "client-diagnostics",
   "client.composer.activity": "client-diagnostics",
   "client.diagnostic": "client-diagnostics",
   "client.diagnostic.rate-limited": "client-diagnostics",

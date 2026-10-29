@@ -370,11 +370,15 @@ describe("useCodingWorkbenchRuntime", () => {
     await waitFor(() => expect(view.result.current.state.run.value?.revision).toBe(4));
     const pending = view.result.current.actions.decideApproval("approved");
     await waitFor(() => expect(decideCodingWorkbenchRuntimeApproval).toHaveBeenCalledOnce());
-    expect(decideCodingWorkbenchRuntimeApproval).toHaveBeenCalledWith("run-1", {
-      requestId: "permission-old",
-      expectedRevision: 4,
-      decision: "approved",
-    });
+    expect(decideCodingWorkbenchRuntimeApproval).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: "permission-old",
+        expectedRevision: 4,
+        decision: "approved",
+      },
+      expect.any(AbortSignal),
+    );
 
     await act(async () => {
       await view.result.current.actions.refreshRun();
@@ -430,7 +434,7 @@ describe("useCodingWorkbenchRuntime", () => {
       await waitFor(() => expect(view.result.current.state.run.value?.state).toBe("running"));
       await act(async () => view.result.current.actions[action]());
       const api = action === "stop" ? stopCodingWorkbenchRuntime : takeOverCodingWorkbenchRuntime;
-      expect(api).toHaveBeenCalledWith("run-1", { requestId: "run-1" });
+      expect(api).toHaveBeenCalledWith("run-1", { requestId: "run-1" }, expect.any(AbortSignal));
       view.unmount();
     },
   );
@@ -594,13 +598,17 @@ describe("useCodingWorkbenchRuntime", () => {
           references: [{ path: "src/app.ts" }],
         });
       });
-      expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
-        requestId: expect.any(String) as unknown,
-        expectedRevision: expect.any(Number) as unknown,
-        taskIntent: "also look at @src/app.ts",
-        delivery: "steer",
-        references: [{ path: "src/app.ts" }],
-      });
+      expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+        "run-1",
+        {
+          requestId: expect.any(String) as unknown,
+          expectedRevision: expect.any(Number) as unknown,
+          taskIntent: "also look at @src/app.ts",
+          delivery: "steer",
+          references: [{ path: "src/app.ts" }],
+        },
+        expect.any(AbortSignal),
+      );
       await waitFor(() => expect(view.result.current.state.run.value?.revision).toBe(5));
       expect(view.result.current.state.mutation.status).toBe("idle");
       view.unmount();
@@ -636,6 +644,7 @@ describe("useCodingWorkbenchRuntime", () => {
           references: [{ path: "src/app.ts" }],
           command: { name: "review" },
         }),
+        expect.any(AbortSignal),
       );
       await waitFor(() => expect(view.result.current.state.run.value?.runId).toBe("run-2"));
       expect(view.result.current.state.mutation.status).toBe("idle");
@@ -660,12 +669,16 @@ describe("useCodingWorkbenchRuntime", () => {
         await view.result.current.actions.submitFollowUp("", { command: { name: "init" } });
       });
 
-      expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
-        requestId: expect.any(String) as unknown,
-        expectedRevision: 4,
-        taskIntent: "",
-        command: { name: "init" },
-      });
+      expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+        "run-1",
+        {
+          requestId: expect.any(String) as unknown,
+          expectedRevision: 4,
+          taskIntent: "",
+          command: { name: "init" },
+        },
+        expect.any(AbortSignal),
+      );
       await waitFor(() => expect(view.result.current.state.run.value?.revision).toBe(5));
       view.unmount();
     });
@@ -745,6 +758,7 @@ describe("useCodingWorkbenchRuntime", () => {
       });
       expect(startCodingWorkbenchRuntime).toHaveBeenCalledWith(
         expect.objectContaining({ taskIntent: "outline the change", agent: "plan" }),
+        expect.any(AbortSignal),
       );
       planning.unmount();
     });
@@ -772,6 +786,7 @@ describe("useCodingWorkbenchRuntime", () => {
       expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
         "run-1",
         expect.objectContaining({ taskIntent: "write the plan", agent: "plan" }),
+        expect.any(AbortSignal),
       );
 
       act(() => view.result.current.actions.setAgent("build"));
@@ -781,6 +796,7 @@ describe("useCodingWorkbenchRuntime", () => {
       expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
         "run-1",
         expect.objectContaining({ taskIntent: "now implement it", agent: "build" }),
+        expect.any(AbortSignal),
       );
       view.unmount();
     });

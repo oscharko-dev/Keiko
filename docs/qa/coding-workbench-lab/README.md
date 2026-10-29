@@ -446,6 +446,33 @@ Mode: Ask for approval. Baseline: `head+md`. Text: proposed.
 List the modules in src/ and summarize each in one sentence. Do not change any file.
 ```
 
+## Runtime request latency and the client deadlines (#4109)
+
+The Coding Workbench bounds every runtime request with a client-side deadline
+(`packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts`). The deadlines come from this
+measurement, recorded on issue #4109: a real `gemma-4-31b-it` through LiteLLM on a dev instance of
+the lab, repository `ledger-lab`, while the shared Ollama slot was concurrently serving another
+session (so contention is included, an idle-exclusive baseline is not). "Cold" is the first call on
+a just-started BFF; the model weights were already warm, so a cold model load is **not** covered.
+
+| call                                  |   n |     p50 |     p95 |     max | deadline | margin over p95 |
+| ------------------------------------- | --: | ------: | ------: | ------: | -------: | --------------: |
+| status (idle, no run)                 |   6 |    3 ms |    4 ms |    4 ms |     10 s |           2500x |
+| status (run mid-turn)                 |   6 |  3.5 ms |    6 ms |    6 ms |     10 s |           1700x |
+| start (`POST runs`)                   |   3 | 4029 ms | 4591 ms | 4591 ms |    180 s |             39x |
+| stop (`POST .../stop`, mid-turn)      |   3 | 1568 ms | 2558 ms | 2558 ms |     15 s |              6x |
+| approve, deny, takeover, other writes |   0 |       - |       - |       - |     60 s |      unmeasured |
+
+Reading the numbers: n is small on purpose (the lab slot is shared), so the margins are wide. A
+read that has not answered after 10 s is hung, not slow. Stop gets its own 15 s deadline and is
+never queued behind another mutation: it ends the client wait of the one in flight. Start keeps
+180 s because a cold model load and a cold OpenCode install are unmeasured and Start can wait on
+workspace preparation. Every other mutation keeps the 60 s it always had until it is measured; the
+auditor could not reach an approval ask in the bounded window. A timeout leaves one
+`client.coding-workbench.request-timed-out` line with the call kind and the deadline, so each bound
+can be re-judged from a customer's log. `POST .../stop` and `.../takeover` require
+`requestId === runId`; every other mutation takes a free-form request id.
+
 ## Baselines and the planted defects
 
 The fixture ([`README`](../../../tests/fixtures/coding-workbench-lab/README.md)) is the lab at its

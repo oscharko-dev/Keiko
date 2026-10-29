@@ -49,6 +49,7 @@ import {
   type ClientDiagnosticEvidenceInspection,
   type ClientDiagnosticCodingRunRestore,
   type ClientDiagnosticCodingWorkbenchInteraction,
+  type ClientDiagnosticCodingRequestTimeout,
   type ClientSupportReportDelivery,
   type ClientSupportReportPreparation,
   type ClientFilesScopeDecision,
@@ -210,6 +211,10 @@ export interface ClientDiagnosticMeta {
   // What the human did on the Coding Workbench page (#3897): closed values, a trust binding's two
   // body-free ids and a changeset's file count — routine evidence, never a failure.
   readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
+  // A runtime request the Workbench gave up on at its own deadline (#4109): the call kind and the
+  // deadline in milliseconds, under the failed request's correlation id — a failure report, never
+  // a preemption.
+  readonly codingRequestTimeout?: ClientDiagnosticCodingRequestTimeout | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

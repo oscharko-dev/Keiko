@@ -657,6 +657,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly editorLineEnding?: ClientEditorLineEnding | undefined;
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
   readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
+  readonly codingRequestTimeout?: ClientDiagnosticCodingRequestTimeout | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
@@ -862,6 +863,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "editorLineEnding",
   "codingRunRestore",
   "codingWorkbenchInteraction",
+  "codingRequestTimeout",
 ] as const;
 const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "message",
@@ -896,11 +898,13 @@ function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolea
   );
 }
 
-// The Coding Workbench's closed reports: a restored run's counts and the human's interactions.
+// The Coding Workbench's closed reports: a restored run's counts, the human's interactions and a
+// runtime request that hit its own deadline.
 function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
-    isOptional(value.codingWorkbenchInteraction, isClientDiagnosticCodingWorkbenchInteraction)
+    isOptional(value.codingWorkbenchInteraction, isClientDiagnosticCodingWorkbenchInteraction) &&
+    isOptional(value.codingRequestTimeout, isClientDiagnosticCodingRequestTimeout)
   );
 }
 
@@ -2336,6 +2340,64 @@ function isClientDiagnosticCodingWorkbenchInteraction(
   return (
     keys.length === Object.keys(fields).length &&
     keys.every((key) => fields[key]?.(value[key]) === true)
+  );
+}
+
+// ─── Coding Workbench request timeout (#4109) ──────────────────────────────────
+//
+// A runtime request the Workbench gave up on at its own client-side deadline: the BFF accepted it and
+// never answered in time, so no server line can describe it. The report names which call it was and
+// the deadline it ran out of — closed values and one bound, never a run id, a path or a body. The
+// failed request's correlation id rides the report envelope when the transport carried one. A
+// preempted request (Stop took its place) is not a timeout and is never reported as one.
+
+/**
+ * The runtime calls the Workbench bounds with a deadline: the two reads and every mutation. The
+ * mutation names are the ones the Workbench's queue uses for its pending state; `question-answer`
+ * and `question-reject` answer a required question outside that queue.
+ */
+export const CLIENT_CODING_RUNTIME_CALLS = [
+  "status",
+  "snapshot",
+  "start",
+  "approval",
+  "stop",
+  "takeover",
+  "retry",
+  "recovery-ack",
+  "pause",
+  "resume",
+  "follow-up",
+  "revert",
+  "inbox",
+  "research-revoke",
+  "question-answer",
+  "question-reject",
+] as const;
+export type ClientCodingRuntimeCall = (typeof CLIENT_CODING_RUNTIME_CALLS)[number];
+
+/** Bounds a reported deadline: one hour, far above any deadline the Workbench sets. */
+export const CLIENT_CODING_REQUEST_DEADLINE_MS_MAX = 3_600_000;
+
+export interface ClientDiagnosticCodingRequestTimeout {
+  readonly call: ClientCodingRuntimeCall;
+  readonly deadlineMs: number;
+}
+
+const CODING_RUNTIME_CALL_SET: ReadonlySet<string> = new Set(CLIENT_CODING_RUNTIME_CALLS);
+const CODING_REQUEST_TIMEOUT_KEYS: ReadonlySet<string> = new Set(["call", "deadlineMs"]);
+
+/** True for exactly one closed call kind and a positive, bounded deadline in milliseconds. */
+function isClientDiagnosticCodingRequestTimeout(
+  value: unknown,
+): value is ClientDiagnosticCodingRequestTimeout {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === CODING_REQUEST_TIMEOUT_KEYS.size &&
+    keys.every((key) => CODING_REQUEST_TIMEOUT_KEYS.has(key)) &&
+    isSetMember(value.call, CODING_RUNTIME_CALL_SET) &&
+    isBoundedPositiveInteger(value.deadlineMs, CLIENT_CODING_REQUEST_DEADLINE_MS_MAX)
   );
 }
 

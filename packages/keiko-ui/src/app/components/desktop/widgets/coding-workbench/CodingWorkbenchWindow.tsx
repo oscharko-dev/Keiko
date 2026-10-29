@@ -1683,6 +1683,7 @@ function WorkbenchColumns({
       runState={state.run.value?.state}
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
       mutationPending={issuePending || state.mutation.status === "pending"}
+      stopPending={state.mutation.kind === "stop" && state.mutation.status === "pending"}
       startBusy={
         issuePending || (state.mutation.kind === "start" && state.mutation.status === "pending")
       }

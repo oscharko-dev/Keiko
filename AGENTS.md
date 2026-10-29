@@ -1094,6 +1094,17 @@ recorded on `editor.agent.action-queue` with the closed `reason` (`queue-count`,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
 
+`client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
+request the Coding Workbench gave up on at its own client-side deadline (#4109): the closed `call`
+(`status`, `snapshot`, `start`, `approval`, `stop`, `takeover`, `retry`, `recovery-ack`, `pause`,
+`resume`, `follow-up`, `revert`, `inbox`, `research-revoke`, `question-answer`,
+`question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
+Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
+status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
+every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
+while another mutation is pending. Closed values and one duration only.
+
 `client.editor.line-ending.adopted` records, at info and on the routine budget, that the Editor's
 Monaco model adopted the line ending of text Keiko wrote into it (#4123): `lineEnding` (`lf`,
 `crlf`) and `source` (`buffer-sync` for a controlled sync such as a reload from disk, `host-edit`).

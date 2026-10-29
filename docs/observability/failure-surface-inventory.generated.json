@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "837ff6e327427ef99ddec6a467154f8233e29e2bebc981c2b8f2acf5e952c8fc"
+    "catalogDigest": "1c3b1e7f396331196cf7275d7b2e19286181f206be4b4c7824299499242de2d2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 614,
-    "proofCount": 637,
-    "resolvedProofCount": 637,
-    "failureClassCount": 383,
+    "operationCount": 615,
+    "proofCount": 638,
+    "resolvedProofCount": 638,
+    "failureClassCount": 384,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -170,6 +170,7 @@
         "client.citation.activated",
         "client.coding-run.restored",
         "client.coding-workbench.interaction",
+        "client.coding-workbench.request-timed-out",
         "client.composer.activity",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
@@ -848,6 +849,7 @@
     "client-citation-activation": ["client-diagnostics.dependency-failure"],
     "client-coding-run-restore": ["client-diagnostics.dependency-failure"],
     "client-coding-workbench-interaction": ["client-diagnostics.dependency-failure"],
+    "client-coding-workbench-request-timeout": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
@@ -1411,6 +1413,9 @@
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.coding-workbench.interaction.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.coding-workbench.request-timed-out.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.composer.activity.line": [
