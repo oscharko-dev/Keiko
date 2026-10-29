@@ -20,6 +20,7 @@ import type {
   CodingSafeActivityTool,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
+import type { CodingSafeActivityVerificationOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
@@ -1037,7 +1038,7 @@ function ToolRow({
       <details
         className={styles.toolCard}
         data-tool-state={shownState}
-        open={shownState === "failed" || shownState === "denied" || shownState === "exited"}
+        open={OPEN_WITH_REASON_STATES.has(shownState)}
       >
         <summary
           className={styles.cmpActivitySummary}
@@ -1070,13 +1071,45 @@ function ToolRow({
 // failed call. The timeline shows that code as OpenCode does instead of a red "Failed" (#4098
 // acceptance). The run's own state and its verification evidence still count the command as
 // failed; only the card's presentation changes.
-type ShownToolState = CodingSafeActivityTool["state"] | "exited";
+//
+// The same holds for a verification the server knows never checked anything (#3579): the operator's
+// package-script decision still open, a repository with nothing the verifier can run, and a run whose
+// steps were skipped, denied or cancelled. The model still reads a refusal; the card says what
+// happened instead of "Failed". A check that ran and went red keeps the failed badge.
+type UnrunVerificationOutcome = Extract<
+  CodingSafeActivityVerificationOutcome,
+  "waiting-for-trust" | "no-runnable-steps" | "not-run"
+>;
+type ShownToolState = CodingSafeActivityTool["state"] | "exited" | UnrunVerificationOutcome;
+
+const UNRUN_VERIFICATION_OUTCOMES: ReadonlySet<CodingSafeActivityVerificationOutcome> = new Set([
+  "waiting-for-trust",
+  "no-runnable-steps",
+  "not-run",
+]);
+
+// The cards that open to the reason they ended as they did, rather than staying a one-line row.
+const OPEN_WITH_REASON_STATES: ReadonlySet<ShownToolState> = new Set([
+  "failed",
+  "denied",
+  "exited",
+  "waiting-for-trust",
+  "no-runnable-steps",
+  "not-run",
+]);
+
+function isUnrunVerificationOutcome(
+  outcome: CodingSafeActivityVerificationOutcome | undefined,
+): outcome is UnrunVerificationOutcome {
+  return outcome !== undefined && UNRUN_VERIFICATION_OUTCOMES.has(outcome);
+}
 
 function shownToolState(tool: CodingSafeActivityTool): ShownToolState {
+  if (tool.state !== "failed") return tool.state;
   const exitCode = tool.presentation?.exitCode;
-  return tool.state === "failed" && exitCode !== undefined && exitCode !== 0
-    ? "exited"
-    : tool.state;
+  if (exitCode !== undefined && exitCode !== 0) return "exited";
+  const outcome = tool.presentation?.verificationOutcome;
+  return isUnrunVerificationOutcome(outcome) ? outcome : tool.state;
 }
 
 function ToolStateBadge({
@@ -1097,8 +1130,9 @@ function ToolStateBadge({
   );
 }
 
-// Why a call ended as it did, in words: a command's exit status, or that the tool reported an
-// error to the model. Without it a failed call opened to nothing but its tool name (#3897).
+// Why a call ended as it did, in words: a command's exit status, how a verification ended, or that
+// the tool reported an error to the model. Without it a failed call opened to nothing but its tool
+// name (#3897).
 function ToolOutcome({
   tool,
   t,
@@ -1111,6 +1145,14 @@ function ToolOutcome({
     return (
       <p className={styles.cmpToolOutcome}>
         {t("codingWorkbench.activity.exitCode", { code: exitCode })}
+      </p>
+    );
+  }
+  const verificationOutcome = tool.presentation?.verificationOutcome;
+  if (verificationOutcome !== undefined) {
+    return (
+      <p className={styles.cmpToolOutcome}>
+        {t(`codingWorkbench.activity.verification.${verificationOutcome}`)}
       </p>
     );
   }

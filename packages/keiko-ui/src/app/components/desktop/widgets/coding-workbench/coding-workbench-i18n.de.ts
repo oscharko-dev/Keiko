@@ -720,6 +720,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.succeeded": "Erfolgreich",
   "codingWorkbench.activity.toolState.failed": "Fehlgeschlagen",
   "codingWorkbench.activity.toolState.exited": "Exit-Code {code}",
+  "codingWorkbench.activity.toolState.waiting-for-trust": "Wartet auf Freigabe",
+  "codingWorkbench.activity.toolState.no-runnable-steps": "Nichts auszuführen",
+  "codingWorkbench.activity.toolState.not-run": "Nicht ausgeführt",
   "codingWorkbench.activity.toolState.denied": "Abgelehnt",
   "codingWorkbench.activity.toolState.cancelled": "Abgebrochen",
   "codingWorkbench.activity.plan.title": "Aktueller Plan",
@@ -1305,6 +1308,16 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.serviceDuration": "Tool-Verarbeitung: {duration} ms",
   "codingWorkbench.activity.exitCode": "Der Befehl wurde mit Code {code} beendet.",
   "codingWorkbench.activity.toolError": "Das Tool hat dem Modell einen Fehler gemeldet.",
+  "codingWorkbench.activity.verification.passed":
+    "Alle angeforderten Verifizierungsprüfungen sind bestanden.",
+  "codingWorkbench.activity.verification.failed-check":
+    "Eine Verifizierungsprüfung wurde ausgeführt und ist fehlgeschlagen. Das Modell hat die fehlerhaften Stellen erhalten.",
+  "codingWorkbench.activity.verification.waiting-for-trust":
+    "Die Verifizierung ist nicht gelaufen: Die Paket-Skripte dieses Workspace sind noch nicht zugelassen. Lasse im Kopfbereich der Coding Workbench die Paket-Skripte für die Verifizierung zu und verifiziere dann erneut.",
+  "codingWorkbench.activity.verification.no-runnable-steps":
+    "Die Verifizierung ist nicht gelaufen: Dieses Repository definiert kein Skript, das der Verifizierer ausführen kann, etwa test, lint oder build. Das ist keine fehlgeschlagene Prüfung.",
+  "codingWorkbench.activity.verification.not-run":
+    "Die Verifizierung ist nicht vollständig gelaufen: Ein Schritt wurde übersprungen, abgelehnt oder abgebrochen. Das ist keine fehlgeschlagene Prüfung.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

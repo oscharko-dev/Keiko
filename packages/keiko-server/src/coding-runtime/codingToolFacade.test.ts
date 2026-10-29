@@ -16,6 +16,7 @@ import {
 import {
   createCodingToolFacade,
   codingToolEditPresentation,
+  codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
 } from "./codingToolFacade.js";
@@ -1969,6 +1970,78 @@ describe("CodingToolFacade", () => {
         extra: { status: "failed", reason: "handler-failed" },
       });
     });
+  });
+});
+
+// #3579: a refused or skipped verification used to read as a failed one in the Workbench timeline,
+// because the card knew only that the tool reported an error. The presentation names, in the
+// contract's closed words, why the call the model received ended as it did.
+describe("CodingToolFacade verification presentation (#3579)", () => {
+  async function presented(delegateOutcome: unknown): Promise<unknown> {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve(delegateOutcome));
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "verification", verifierId: "test" }),
+      capability,
+    });
+    return codingToolVerificationPresentation(result);
+  }
+
+  it.each([
+    ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+    ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+    ["VERIFICATION_NOT_RUN", "not-run"],
+    ["VERIFICATION_FAILED", "failed-check"],
+  ] as const)("presents the refusal %s as %s", async (reasonCode, verificationOutcome) => {
+    await expect(presented({ outcome: "failed", reasonCode })).resolves.toEqual({
+      verificationOutcome,
+    });
+  });
+
+  it("presents a completed verification as passed, with or without commit proof", async () => {
+    const passed = { status: "passed", completed: ["test", "lint"] };
+    await expect(presented({ outcome: "completed", verification: passed })).resolves.toEqual({
+      verificationOutcome: "passed",
+    });
+    await expect(
+      presented({
+        outcome: "completed",
+        verification: {
+          ...passed,
+          commit: {
+            commitProof: "unavailable",
+            reasonCode: "candidate-drift",
+            nextAction: "verify-again",
+          },
+        },
+      }),
+    ).resolves.toEqual({ verificationOutcome: "passed" });
+  });
+
+  // A timeout, a resource ceiling, a refusal before the runner and a bare failure claim no more
+  // than the card's generic failure; an unknown code and every non-failed status present nothing.
+  it.each([
+    { outcome: "failed", reasonCode: "VERIFICATION_TIMED_OUT" },
+    { outcome: "failed", reasonCode: "VERIFICATION_RESOURCE_EXCEEDED" },
+    { outcome: "failed", reasonCode: "VERIFICATION_RUNNER_UNAVAILABLE" },
+    { outcome: "failed", reasonCode: "PROJECT_NOT_FOUND" },
+    { outcome: "failed", reasonCode: "verification-authority-revoked" },
+    { outcome: "failed", reasonCode: "RAW_PROVIDER_SENTINEL" },
+    { outcome: "failed" },
+  ])("presents no outcome for %j", async (delegateOutcome) => {
+    await expect(presented(delegateOutcome)).resolves.toEqual({});
+  });
+
+  it("presents no outcome for a completed result that carries no verification", () => {
+    expect(
+      codingToolVerificationPresentation({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+      }),
+    ).toEqual({});
+    for (const status of ["denied", "cancelled", "timeout", "busy"] as const) {
+      expect(codingToolVerificationPresentation({ status, evidence: [] })).toEqual({});
+    }
   });
 });
 

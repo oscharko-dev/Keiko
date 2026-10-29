@@ -265,6 +265,32 @@ function feedWithFailedNativeCalls(): AvailableCodingSafeActivityFeed {
   return { ...feed, turns: [{ turnId: "turn-failed", messages: [], tools, truncated: false }] };
 }
 
+// One governed verification of every closed outcome (#3579). The two "did not run" refusals and the
+// skipped run are failed tool states; only the server knows they never checked anything.
+function feedWithVerificationOutcomes(): AvailableCodingSafeActivityFeed {
+  const feed = feedWithRepeatedTools();
+  const call = (
+    callId: string,
+    state: "failed" | "succeeded",
+    verificationOutcome:
+      "passed" | "failed-check" | "waiting-for-trust" | "no-runnable-steps" | "not-run",
+  ): AvailableCodingSafeActivityFeed["turns"][number]["tools"][number] => ({
+    callId,
+    tool: "keiko_verification",
+    state,
+    occurredAt: AT,
+    presentation: { verificationOutcome, bridgeDurationMs: 9 },
+  });
+  const tools = [
+    call("verify-trust", "failed", "waiting-for-trust"),
+    call("verify-empty", "failed", "no-runnable-steps"),
+    call("verify-skipped", "failed", "not-run"),
+    call("verify-red", "failed", "failed-check"),
+    call("verify-green", "succeeded", "passed"),
+  ];
+  return { ...feed, turns: [{ turnId: "turn-verify", messages: [], tools, truncated: false }] };
+}
+
 const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
@@ -334,6 +360,136 @@ describe("CodingWorkbenchTimeline", () => {
     expect(shell).toHaveTextContent("The command exited with code 1.");
     expect(shell).not.toHaveTextContent("Failed");
     expect(shell).not.toHaveTextContent("reported an error");
+  });
+
+  // #3579: a verification waiting on the operator's package-script decision, a repository with
+  // nothing for the verifier to run and a run whose steps never executed are not failed checks. The
+  // card says so in words and in its badge; only a check that ran and went red keeps "Failed".
+  it("shows why a verification did not run instead of a red failed badge", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithVerificationOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const card = (state: string): HTMLDetailsElement => {
+      const found = container.querySelector<HTMLDetailsElement>(`[data-tool-state="${state}"]`);
+      if (found === null) throw new Error(`Expected a ${state} tool card`);
+      return found;
+    };
+
+    const trust = card("waiting-for-trust");
+    expect(trust.open).toBe(true);
+    expect(trust.querySelector('[data-state="waiting-for-trust"]')).toHaveTextContent(
+      "Waiting for approval",
+    );
+    expect(trust).toHaveTextContent("this workspace's package scripts are not allowed yet");
+    expect(trust).toHaveTextContent("Allow package scripts for verification");
+
+    const empty = card("no-runnable-steps");
+    expect(empty.open).toBe(true);
+    expect(empty.querySelector('[data-state="no-runnable-steps"]')).toHaveTextContent(
+      "Nothing to run",
+    );
+    expect(empty).toHaveTextContent("defines no script the verifier can run");
+
+    const skipped = card("not-run");
+    expect(skipped.open).toBe(true);
+    expect(skipped.querySelector('[data-state="not-run"]')).toHaveTextContent("Not run");
+    expect(skipped).toHaveTextContent("a step was skipped, denied or cancelled");
+
+    for (const unrun of [trust, empty, skipped]) {
+      expect(unrun).not.toHaveTextContent("Failed");
+      expect(unrun).not.toHaveTextContent("reported an error");
+      expect(unrun.querySelector('[data-state="failed"]')).toBeNull();
+    }
+  });
+
+  it("keeps the failed badge for a check that ran and went red, with its own line", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithVerificationOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const failed = [
+      ...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]'),
+    ];
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.open).toBe(true);
+    expect(failed[0]).toHaveTextContent("Failed");
+    expect(failed[0]).toHaveTextContent("A verification check ran and failed.");
+    expect(failed[0]).not.toHaveTextContent("reported an error");
+  });
+
+  it("says that a passing verification passed", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithVerificationOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const passed = container.querySelector<HTMLDetailsElement>('[data-tool-state="succeeded"]');
+    expect(passed).toHaveTextContent("Succeeded");
+    expect(passed).toHaveTextContent("Every requested verification check passed.");
+  });
+
+  it("does not let a verification outcome change a call that did not fail", () => {
+    const feed = feedWithVerificationOutcomes();
+    const tool = feed.turns[0]?.tools[0];
+    if (tool === undefined) throw new Error("expected tool fixture");
+    const cancelled = { ...tool, callId: "verify-cancelled", state: "cancelled" as const };
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [{ turnId: "turn-cancelled", messages: [], tools: [cancelled], truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container.querySelector('[data-tool-state="cancelled"]')).not.toBeNull();
+    expect(container.querySelector('[data-tool-state="waiting-for-trust"]')).toBeNull();
+  });
+
+  it("explains the verification outcomes in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            active={false}
+            events={[]}
+            activity={activityLike(feedWithVerificationOutcomes())}
+            questions={IDLE_QUESTIONS}
+          />
+        </I18nProvider>,
+      );
+      const text = (state: string): string =>
+        container.querySelector(`[data-tool-state="${state}"]`)?.textContent ?? "";
+      expect(text("waiting-for-trust")).toContain("Wartet auf Freigabe");
+      expect(text("waiting-for-trust")).toContain("noch nicht zugelassen");
+      expect(text("no-runnable-steps")).toContain("Nichts auszuführen");
+      expect(text("no-runnable-steps")).toContain("kein Skript");
+      expect(text("not-run")).toContain("Nicht ausgeführt");
+      expect(text("not-run")).toContain("übersprungen, abgelehnt oder abgebrochen");
+      expect(text("failed")).toContain("Fehlgeschlagen");
+      expect(text("succeeded")).toContain("bestanden");
+      for (const state of ["waiting-for-trust", "no-runnable-steps", "not-run"]) {
+        expect(text(state)).not.toContain("Fehlgeschlagen");
+      }
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
   });
 
   it("keeps each presented call visible with precise canonical facts", () => {

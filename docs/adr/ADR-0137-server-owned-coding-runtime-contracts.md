@@ -645,12 +645,22 @@ closed states/codes, and safe labels.
 The authenticated live safe-activity tool projection also carries canonical per-call facts
 (#3874): a completed read's workspace-relative path, returned-window bytes and whole-file line
 count; the actual number of discovery entries returned; a closed edit refusal and the affected
-relative path only when materialization identified it; and elapsed bridge service time. Service
-time includes governed waits and excludes model generation. These facts come from the governed
-producer, remain bounded by the existing aggregate feed limits, and survive native restatement
-and immutable replay. Raw arguments/results, unknown refusal strings and unsafe paths are rejected.
+relative path only when materialization identified it; a governed verification's closed outcome
+(`passed`, `failed-check`, `waiting-for-trust`, `no-runnable-steps`, `not-run`, #3579); and elapsed
+bridge service time. Service time includes governed waits and excludes model generation. These
+facts come from the governed producer, remain bounded by the existing aggregate feed limits, and
+survive native restatement and immutable replay. Raw arguments/results, unknown refusal strings,
+unknown outcomes and unsafe paths are rejected. The verification outcome is derived from the closed
+result code the model received (`codingToolVerificationPresentation`), so the timeline shows a
+package-script decision still waiting on the operator, a repository with nothing the verifier can
+run and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
+check; only a check that ran and went red keeps the failed badge, and a timeout, a resource ceiling
+or a refusal before the runner claim nothing beyond the generic failure.
 Paths never enter Activity Log evidence, model-facing edit refusal replies or Coding History;
-the existing tool-result operation records service duration through its standard duration field.
+the existing tool-result operation records service duration through its standard duration field,
+and the existing `coding-runtime.tool-result-rendered` operation records the closed verification
+outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
+report keeps a verification that did not pass.
 
 The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
 in the existing local UI conversation store. Native V2 history is validated and captured continuously

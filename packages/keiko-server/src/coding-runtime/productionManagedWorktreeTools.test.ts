@@ -39,6 +39,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { codingToolVerificationPresentation } from "./codingToolFacade.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import {
@@ -1708,6 +1709,84 @@ describe("production managed worktree tools", () => {
       }),
     });
     expect(verificationBlocked).not.toHaveBeenCalled();
+  });
+
+  // #3579: the Workbench card used to show every one of these as a red "Failed" with only the
+  // generic "The tool reported an error to the model". The presentation is derived from the result
+  // the REAL port produced for the model, so a trust wait, a repository with nothing runnable and a
+  // run whose steps never executed each name what happened, and a check that went red stays a failure.
+  describe("the outcome a verification presents to the Workbench card (#3579)", () => {
+    it.each([
+      ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+      ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+    ] as const)("presents the runner refusal %s as %s", async (code, verificationOutcome) => {
+      const facade = verificationFacade({
+        records: [],
+        runToReport: () => Promise.reject(new VerificationRunnerError(code, "PRIVATE_BLOCKER")),
+      });
+      const result = await executeVerification(facade, "verification-presented");
+      expect(codingToolVerificationPresentation(result)).toEqual({ verificationOutcome });
+      expect(JSON.stringify(codingToolVerificationPresentation(result))).not.toContain(
+        "PRIVATE_BLOCKER",
+      );
+    });
+
+    it.each(["skipped", "denied", "cancelled"] as const)(
+      "presents a %s report, which executed nothing, as not-run",
+      async (status) => {
+        const facade = verificationFacade({
+          records: [],
+          runToReport: () => Promise.resolve(verificationReport(status)),
+        });
+        const result = await executeVerification(facade, "verification-presented");
+        expect(codingToolVerificationPresentation(result)).toEqual({
+          verificationOutcome: "not-run",
+        });
+      },
+    );
+
+    it("presents a red run as a failed check and a green one as passed", async () => {
+      const red = verificationFacade({
+        records: [],
+        runToReport: () => Promise.resolve(failedVerificationReport()),
+      });
+      expect(
+        codingToolVerificationPresentation(await executeVerification(red, "verification-red")),
+      ).toEqual({ verificationOutcome: "failed-check" });
+      const green = verificationFacade({
+        records: [],
+        runToReport: () => Promise.resolve(verificationReport("passed")),
+      });
+      expect(
+        codingToolVerificationPresentation(await executeVerification(green, "verification-green")),
+      ).toEqual({ verificationOutcome: "passed" });
+    });
+
+    it.each(["timed-out", "resource-exceeded"] as const)(
+      "claims nothing beyond the generic failure for a %s run",
+      async (status) => {
+        const facade = verificationFacade({
+          records: [],
+          runToReport: () => Promise.resolve(verificationReport(status)),
+        });
+        const result = await executeVerification(facade, "verification-limit");
+        expect(result).toMatchObject({ status: "failed" });
+        expect(codingToolVerificationPresentation(result)).toEqual({});
+      },
+    );
+
+    it.each(["PROJECT_NOT_FOUND", "VERIFICATION_RUNNER_UNAVAILABLE", "INTERNAL"] as const)(
+      "claims nothing beyond the generic failure for the runner fault %s",
+      async (code) => {
+        const facade = verificationFacade({
+          records: [],
+          runToReport: () => Promise.reject(new VerificationRunnerError(code, "PRIVATE_FAULT")),
+        });
+        const result = await executeVerification(facade, "verification-fault");
+        expect(result).toMatchObject({ status: "failed" });
+        expect(codingToolVerificationPresentation(result)).toEqual({});
+      },
+    );
   });
 
   // A refusal by the verification runner (no project row, missing script trust, nothing runnable)

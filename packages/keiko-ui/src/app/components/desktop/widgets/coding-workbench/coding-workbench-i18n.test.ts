@@ -107,6 +107,14 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.activity.reasoning.note",
     "codingWorkbench.activity.exitCode",
     "codingWorkbench.activity.toolError",
+    "codingWorkbench.activity.toolState.waiting-for-trust",
+    "codingWorkbench.activity.toolState.no-runnable-steps",
+    "codingWorkbench.activity.toolState.not-run",
+    "codingWorkbench.activity.verification.passed",
+    "codingWorkbench.activity.verification.failed-check",
+    "codingWorkbench.activity.verification.waiting-for-trust",
+    "codingWorkbench.activity.verification.no-runnable-steps",
+    "codingWorkbench.activity.verification.not-run",
   ] as const)("localizes the reasoning label %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key);
     const de = translateCodingWorkbench("de", key);

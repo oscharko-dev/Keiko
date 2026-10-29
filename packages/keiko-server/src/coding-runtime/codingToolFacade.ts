@@ -32,6 +32,7 @@ import {
   CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
   isCodingSafeActivityPresentationPath,
   type CodingSafeActivityToolPresentation,
+  type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
@@ -345,6 +346,38 @@ export function codingToolEditPresentation(
     refusalReason,
     ...(affectedRelativePath === undefined ? {} : { affectedRelativePath }),
   });
+}
+
+// The closed refusal codes of a governed verification that were never a check failing (#3579): the
+// operator's package-script decision, a repository without a runnable step, and a run whose steps
+// were skipped, denied or cancelled. `VERIFICATION_FAILED` alone is a check that ran and went red.
+// A timeout, a resource ceiling or a refusal before the runner stay out: they claim no more than
+// the card's generic failure.
+const VERIFICATION_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityVerificationOutcome> =
+  new Map([
+    ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+    ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+    ["VERIFICATION_NOT_RUN", "not-run"],
+    ["VERIFICATION_FAILED", "failed-check"],
+  ]);
+
+/**
+ * Server-private live presentation of one answered `keiko_verification` call: why it ended as it
+ * did, in the contract's closed words, from the result the model received. The same closed code the
+ * model reads, never its prose, so the card cannot say a trust wait or an empty repository "failed".
+ */
+export function codingToolVerificationPresentation(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  if (result.status === "completed") {
+    return "verification" in result ? Object.freeze({ verificationOutcome: "passed" }) : {};
+  }
+  if (result.status !== "failed") return {};
+  const verificationOutcome =
+    result.reasonCode === undefined
+      ? undefined
+      : VERIFICATION_OUTCOME_BY_REASON.get(result.reasonCode);
+  return verificationOutcome === undefined ? {} : Object.freeze({ verificationOutcome });
 }
 
 async function executeAdmitted(

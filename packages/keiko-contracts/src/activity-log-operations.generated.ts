@@ -13957,6 +13957,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "observed",
         ],
       },
+      verificationOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["passed", "failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"],
+      },
     },
     causal: "correlation",
     lifecycle: "state",
@@ -13964,6 +13970,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["coding-runtime-tool-result"],
     proofIds: ["coding-runtime.tool-result-rendered.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "verificationOutcome",
+        values: ["failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",

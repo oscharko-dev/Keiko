@@ -691,6 +691,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.succeeded": "Succeeded",
   "codingWorkbench.activity.toolState.failed": "Failed",
   "codingWorkbench.activity.toolState.exited": "Exit code {code}",
+  "codingWorkbench.activity.toolState.waiting-for-trust": "Waiting for approval",
+  "codingWorkbench.activity.toolState.no-runnable-steps": "Nothing to run",
+  "codingWorkbench.activity.toolState.not-run": "Not run",
   "codingWorkbench.activity.toolState.denied": "Denied",
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
   "codingWorkbench.activity.plan.title": "Current plan",
@@ -1265,6 +1268,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.serviceDuration": "Tool service: {duration} ms",
   "codingWorkbench.activity.exitCode": "The command exited with code {code}.",
   "codingWorkbench.activity.toolError": "The tool reported an error to the model.",
+  "codingWorkbench.activity.verification.passed": "Every requested verification check passed.",
+  "codingWorkbench.activity.verification.failed-check":
+    "A verification check ran and failed. The model received the failing locations.",
+  "codingWorkbench.activity.verification.waiting-for-trust":
+    "Verification has not run: this workspace's package scripts are not allowed yet. Allow package scripts for verification in the Coding Workbench header, then verify again.",
+  "codingWorkbench.activity.verification.no-runnable-steps":
+    "Verification has not run: this repository defines no script the verifier can run, such as test, lint or build. That is not a failing check.",
+  "codingWorkbench.activity.verification.not-run":
+    "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",
