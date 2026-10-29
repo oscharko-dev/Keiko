@@ -1352,9 +1352,9 @@ export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependenc
    * wave's production composition (content routing is W1.5+); tests inject a deterministic payload.
    */
   readonly codingAppSessionContentSource?: CodingAppSessionContentSource | undefined;
-  // Explicit deployment ceiling for coding-runtime authority. Precedence: this option, then the
-  // KEIKO_CODING_DEPLOYMENT_CEILING environment value, then the all-mode product default. An
-  // unrecognized explicit value fails closed to governed-assist.
+  // This coding-runtime ceiling intersects KEIKO_CODING_DEPLOYMENT_CEILING; stricter wins.
+  // The all-mode product default applies only when neither is set. An unrecognized explicit
+  // value fails closed to governed-assist.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
   /**
    * Read-only public research egress (#2387). Enabled by default: this only opens the

@@ -171,6 +171,16 @@ closing license remains 10,650 seconds. The preceding owned session is stopped t
 and its volumes/receipts retained; unrelated Jira services are untouched. No new live mutation
 acceptance is inferred from this availability renewal.
 
+## Final review documentation correction
+
+A historical outside-diff review advisory identified an outdated option/environment precedence
+comment in `BuildHandlerDepsOptions`. The three-line comment now describes the implemented
+stricter-wins intersection and unchanged fail-closed default. TypeScript scanning confirms all
+12,389 executable tokens and their line positions are identical before/after. The earlier
+byte-reuse coverage proof retains its measured checkpoint; this separately bound comments-only
+delta preserves the measured statement/branch/function inventory. Scoped lint/format and the
+final real Sonar check cover the corrected documentation. No runtime or authority change is made.
+
 ## Delivery contract
 
 Owner instruction, 2026-10-26: implement the complete epic on branch
