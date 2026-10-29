@@ -943,6 +943,22 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   `mergedEventCount` on `coding-runtime.history-projection` is the number merged since the previous
   line, so a timeline that lags or skips an update is explained by how many events one read stood
   for (PR #3876 review).
+- **A read follows the newest messages, not the whole run (#4104).** Re-reading and re-projecting the
+  session on every hint cost the conversation's length per event. Once the previous pass is
+  committed and caught up, the projection plans an anchor — a message a bounded number (32) of
+  messages before the end — and the read (`recentMessages` with the anchor) stops there, handing the
+  projection only the messages from it on. The runtime completes a streamed part in place, so every
+  message from the anchor on is read and projected again, while the older messages, their candidates
+  and the conversation Coding History captured from them are carried over. The projection resumes
+  with the anchor's own scan state (the user message answered and the background children launched
+  and reported so far), so the output equals a full projection of the same session. A complete read
+  takes over, and the line says so with `readMode`, when the anchor is no longer in the session
+  (`anchor-lost`: a revert or compaction), every 256 tail reads (`verify`, which catches an edit to
+  a message older than the tail), after a pass cut at the 256-event cap or with an uncommitted page
+  (`full`), and while a message older than the tail still holds live text the history has not shown
+  complete. `readMessageCount` and `retainedMessageCount` count the messages handed over and carried
+  over. The continuation's complete read (`mode: "complete"`, 4096 messages, `history-oversized`) is
+  unchanged.
 - **Bounded, and the first content to go.** Reasoning keeps to half of a message's live byte
   budget, yields room to the answer within its message, and is the first content evicted under turn
   or feed byte pressure; the newest message keeps the reasoning that may still be streaming.

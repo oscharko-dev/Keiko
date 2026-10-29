@@ -14760,7 +14760,25 @@
               "required": false
             },
             {
+              "name": "readMessageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "readMode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "reasoningSignalCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "retainedMessageCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -14772,7 +14790,7 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

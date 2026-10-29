@@ -8692,6 +8692,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      readMode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["tail", "full", "verify", "anchor-lost"],
+      },
+      readMessageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      retainedMessageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",
