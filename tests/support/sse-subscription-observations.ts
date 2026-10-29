@@ -23,6 +23,32 @@ export interface SseResponseObservation {
   readonly emitDrain: () => void;
 }
 
+interface SseResponseEventMethods {
+  on(event: string, listener: (...args: unknown[]) => void): ServerResponse;
+  once(event: string, listener: (...args: unknown[]) => void): ServerResponse;
+  off(event: string, listener: (...args: unknown[]) => void): ServerResponse;
+}
+
+export function createSseResponseEventMethods(
+  emitter: EventEmitter,
+  response: () => ServerResponse,
+): SseResponseEventMethods {
+  return {
+    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.on(event, listener);
+      return response();
+    },
+    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.once(event, listener);
+      return response();
+    },
+    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.off(event, listener);
+      return response();
+    },
+  };
+}
+
 function createObservationResponse(
   state: SseResponseObservation,
   emitter: EventEmitter,
@@ -53,18 +79,10 @@ function createObservationResponse(
       state.destroyed = true;
       emitter.emit("close");
     },
-    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.on(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.once(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.off(event, listener);
-      return res as unknown as ServerResponse;
-    },
+    ...createSseResponseEventMethods(
+      emitter,
+      (): ServerResponse => res as unknown as ServerResponse,
+    ),
   };
   return res as unknown as ServerResponse;
 }
