@@ -276,6 +276,10 @@ describe("driver error output (#4120)", () => {
     expect(redactSecretHeaders(`{"cookie":session=secret,"accept":"*/*"}`)).toBe(
       `{"cookie":[redacted],"accept":"*/*"}`,
     );
+    const array = redactSecretHeaders(`{"set-cookie":["a=one","b=two"],"accept":"*/*"}`);
+    expect(array).toBe(`{"set-cookie":[redacted],"accept":"*/*"}`);
+    expect(array).not.toContain("one");
+    expect(array).not.toContain("two");
   });
 
   it("redacts the header values in arbitrary text and leaves other lines alone", () => {

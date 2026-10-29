@@ -965,7 +965,11 @@ describe("isClientBindingIngestRequest", () => {
   it("refuses an exhausted project open without a bounded attempt count", () => {
     for (const projectOpenAttemptCount of [
       undefined,
+      null,
       0,
+      -1,
+      1.5,
+      "3",
       CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX + 1,
     ]) {
       expect(
@@ -976,6 +980,13 @@ describe("isClientBindingIngestRequest", () => {
         }),
       ).toBe(false);
     }
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "project-open-exhausted",
+        projectOpenAttemptCount: CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX,
+      }),
+    ).toBe(true);
   });
 
   it("accepts every possible outcome and reference shape, with and without correlation ids", () => {

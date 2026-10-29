@@ -46,10 +46,11 @@ export class UsageError extends Error {}
 
 // Playwright's request errors embed their call log, request headers included (#4120).
 const SECRET_HEADER = /\b((?:set-)?cookie|(?:proxy-)?authorization)(\s*[:=]\s*)[^\r\n]*/giu;
-// A header serialized as JSON quotes its name, so the separator follows a quote; only its value is
-// replaced and the rest of the document stays readable (#4126 review).
+// A header serialized as JSON quotes its name, so the separator follows a quote; only its value, a
+// whole array of values included, is replaced and the rest of the document stays readable (#4126
+// review).
 const QUOTED_SECRET_HEADER =
-  /(["'])((?:set-)?cookie|(?:proxy-)?authorization)\1(\s*:\s*)(?:(["'])(?:\\.|(?!\4)[^\\\r\n])*\4|[^,}\r\n]*)/giu;
+  /(["'])((?:set-)?cookie|(?:proxy-)?authorization)\1(\s*:\s*)(?:\[(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\]\r\n])*\]|(["'])(?:\\.|(?!\4)[^\\\r\n])*\4|[^,}\r\n]*)/giu;
 const UNREACHABLE = /\b(ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|ETIMEDOUT)\b/u;
 
 /** Replaces the value of every cookie and authorization header line in `text`. */
