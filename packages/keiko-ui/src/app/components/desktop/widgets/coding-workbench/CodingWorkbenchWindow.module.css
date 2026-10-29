@@ -1036,7 +1036,7 @@
   margin-top: var(--space-4);
 }
 
-.diffPages {
+.cmpDiffPages {
   min-inline-size: 0;
   padding: 0;
   border: 0;

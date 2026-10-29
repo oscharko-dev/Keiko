@@ -318,7 +318,7 @@ function WindowPages({
   // aria-disabled, not disabled: activating the last page must not drop focus out of the control.
   return (
     <fieldset
-      className={`${styles.controls} ${styles.diffPages}`}
+      className={`${styles.controls} ${styles.cmpDiffPages}`}
       aria-label={t("codingWorkbench.diffWindow.pages")}
     >
       <button
