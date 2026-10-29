@@ -13,7 +13,7 @@ struct socket_target { SOCKADDR_STORAGE address; int size; SOCKET listener; UINT
 typedef DWORD (WINAPI *get_config_fn)(DWORD *, PSID_AND_ATTRIBUTES *);
 typedef DWORD (WINAPI *set_config_fn)(DWORD, PSID_AND_ATTRIBUTES);
 struct gateway_inbound_fixture;
-DWORD gateway_inbound_start(PSID sid, struct gateway_inbound_fixture **owned);
+DWORD gateway_inbound_start(PSID sid, UINT16 family, struct gateway_inbound_fixture **owned);
 DWORD gateway_inbound_stop(struct gateway_inbound_fixture *fixture);
 DWORD gateway_inbound_block(PSID sid, UINT16 family, HANDLE *owned);
 struct gateway_diagnostics;
@@ -331,7 +331,7 @@ done:
 static DWORD unfiltered_inbound_probe(PSID sid, const wchar_t *executable, int family,
                                        PSID_AND_ATTRIBUTES network) {
   struct gateway_inbound_fixture *owner = NULL;
-  DWORD result = gateway_inbound_start(sid, &owner), closed;
+  DWORD result = gateway_inbound_start(sid, (UINT16)family, &owner), closed;
   if (result == ERROR_SUCCESS)
     result = control_route_probe(sid, executable, family, "unfiltered-inbound-firewall", network, sid);
   closed = gateway_inbound_stop(owner);
@@ -345,7 +345,7 @@ static int udp_received(SOCKET listener);
 static DWORD foreign_principal_probe(PSID sid, PSID peer_sid, const wchar_t *executable,
                                        int family, PSID_AND_ATTRIBUTES network) {
   struct gateway_inbound_fixture *owner = NULL;
-  DWORD result = gateway_inbound_start(peer_sid, &owner), closed;
+  DWORD result = gateway_inbound_start(peer_sid, (UINT16)family, &owner), closed;
   /* First prove this peer can receive with its own rule; its subsequent refusal must be about
    * the wrong package rule, not an unavailable peer listener or missing isolation permit. */
   if (result == ERROR_SUCCESS)
@@ -375,6 +375,7 @@ static DWORD inbound_pair_lifetime(void *context, inbound_pair_step_fn step) {
 
 struct inbound_pair_control {
   PSID primary, peer;
+  UINT16 family;
   const wchar_t *executable;
   PSID_AND_ATTRIBUTES network;
   struct gateway_inbound_fixture *owner;
@@ -387,13 +388,13 @@ static DWORD inbound_pair_control_step(void *context, enum inbound_pair_step ste
   const char *phase = step == PAIR_PEER ? "concurrent-peer" :
     step == PAIR_SURVIVOR ? "concurrent-survivor" :
     step == PAIR_REVOKED ? "concurrent-peer-reaped" : "concurrent-primary";
-  if (step == PAIR_START) return gateway_inbound_start(control->peer, &control->owner);
+  if (step == PAIR_START) return gateway_inbound_start(control->peer, control->family, &control->owner);
   if (step == PAIR_STOP) {
     result = gateway_inbound_stop(control->owner);
     control->owner = NULL;
     return result;
   }
-  result = control_route_probe(sid, control->executable, AF_INET, phase, control->network, sid);
+  result = control_route_probe(sid, control->executable, control->family, phase, control->network, sid);
   if (step != PAIR_REVOKED) return result;
   return result == ERROR_CONNECTION_REFUSED ? ERROR_SUCCESS :
     result == ERROR_SUCCESS ? ERROR_INVALID_DATA : result;
@@ -424,14 +425,11 @@ int gateway_inbound_concurrency_tests(void) {
   return ok ? 0 : 1;
 }
 
-static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *executable, int family,
+static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *executable, int family, int control_family,
                                   UINT16 gateway, UINT16 hostile, SOCKET udp, SOCKET gateway_listener,
                                   PSID_AND_ATTRIBUTES network) {
-  /* opencodeLaunchProfile and opencodeV2HttpClient require IPv4 control, independently of the
-   * attested outbound gateway family. This experiment must exercise that actual composition. */
-  const int control_family = AF_INET;
   struct gateway_inbound_fixture *owner = NULL;
-  struct inbound_pair_control pair = {sid, peer_sid, executable, network, NULL};
+  struct inbound_pair_control pair = {sid, peer_sid, (UINT16)control_family, executable, network, NULL};
   struct gateway_diagnostics *diagnostics = NULL;
   HANDLE deny = NULL;
   DWORD result = gateway_diagnostics_start(executable, &diagnostics), closed;
@@ -449,7 +447,7 @@ static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *execut
   }
   if (result == ERROR_SUCCESS)
     result = foreign_principal_probe(sid, peer_sid, executable, control_family, network);
-  if (result == ERROR_SUCCESS) result = gateway_inbound_start(sid, &owner);
+  if (result == ERROR_SUCCESS) result = gateway_inbound_start(sid, (UINT16)control_family, &owner);
   if (result == ERROR_SUCCESS)
     result = control_route_probe(sid, executable, control_family, "inbound-firewall", network, sid);
   if (result == ERROR_SUCCESS) {
@@ -636,7 +634,7 @@ static DWORD restore_access(wchar_t *path, PSECURITY_DESCRIPTOR original) {
   return SetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, acl, NULL);
 }
 
-int gateway_socket_proof(int inbound_experiment) {
+int gateway_socket_proof(int ipv4_control) {
   HMODULE firewall = NULL;
   union { FARPROC address; get_config_fn call; } get_config = {0};
   union { FARPROC address; set_config_fn call; } set_config = {0};
@@ -655,9 +653,9 @@ int gateway_socket_proof(int inbound_experiment) {
   PSID_AND_ATTRIBUTES network_pointer = NULL;
   int exemption_changed = 0, profile_created = 0, peer_created = 0, sockets_started = 0, family;
   if (executable == NULL) return 1;
-  /* Inbound loopback also needs the documented private-network capability. Only the explicit
-   * experiment grants it. The same token is used for the hostile outbound/descendant controls. */
-  if (inbound_experiment) {
+  /* Both disposable proofs require an actual inbound route. Keep the same capability-bearing
+   * token for every baseline, confined outbound probe and descendant control. */
+  {
     if (!CreateWellKnownSid(WinCapabilityPrivateNetworkClientServerSid, NULL,
                             network_sid.bytes, &network_size)) { result = GetLastError(); goto done; }
     network.Sid = network_sid.bytes;
@@ -707,7 +705,9 @@ int gateway_socket_proof(int inbound_experiment) {
   if (WSAStartup(MAKEWORD(2, 2), &data) != 0) { result = ERROR_NOT_READY; goto done; }
   sockets_started = 1;
   for (family = AF_INET; family <= AF_INET6; family += AF_INET6 - AF_INET) {
-    const int control_family = inbound_experiment ? AF_INET : family;
+    /* The OpenCode composition uses IPv4 control for either gateway family; the original
+     * socket proof additionally qualifies same-family IPv6 inbound access. */
+    const int control_family = ipv4_control ? AF_INET : family;
     struct socket_target gateway = {0}, hostile = {0};
     struct keiko_gateway_filters filters = {0}, peer_filters = {0};
     SOCKET udp = INVALID_SOCKET, peer_udp = INVALID_SOCKET;
@@ -739,9 +739,9 @@ int gateway_socket_proof(int inbound_experiment) {
       }
       if (result == ERROR_SUCCESS) {
         DWORD route = control_route_probe(sid, executable, control_family, "unfiltered", network_pointer, NULL);
-        DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
+        DWORD expected = ERROR_CONNECTION_REFUSED;
         if (route != expected) control_result = ERROR_INVALID_DATA;
-        if (inbound_experiment) {
+        {
           route = unfiltered_inbound_probe(sid, executable, control_family, network_pointer);
           if (route != ERROR_SUCCESS) control_result = route;
         }
@@ -782,10 +782,10 @@ int gateway_socket_proof(int inbound_experiment) {
         }
         if (result == ERROR_SUCCESS) {
           DWORD route = control_route_probe(sid, executable, control_family, "filtered", network_pointer, NULL);
-          DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
+          DWORD expected = ERROR_CONNECTION_REFUSED;
           if (route != expected) control_result = ERROR_INVALID_DATA;
-          if (inbound_experiment) {
-            route = scoped_inbound_probe(sid, peer_sid, executable, family, gateway.port, hostile.port,
+          {
+            route = scoped_inbound_probe(sid, peer_sid, executable, family, control_family, gateway.port, hostile.port,
                                           udp, gateway.listener, network_pointer);
             if (route != ERROR_SUCCESS) control_result = route;
           }

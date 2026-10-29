@@ -350,6 +350,34 @@ weight readbacks are rejected. This is still a version-specific experiment, not 
 bypass administrator policy or use this system sublayer in production. No successful socket receipt
 is yet claimed for this correction.
 
+### Compose inbound setup into the original socket proof, 2026-10-29
+
+[Run 40926657608](https://github.com/oscharko-dev/Keiko/actions/runs/40926657608) at
+`669117bb2e09ed6c570aca7acadf474064229fbf` passed the complete owned-session inbound experiment:
+both identities were reachable with both sessions active, removing one revoked only its route,
+and foreign-principal refusal, independent-deny precedence, readmission, retained egress confinement
+and final revocation passed. That evidence used IPv4 inbound control with both gateway families.
+The original `--socket-proof` still failed because it demanded inbound access without installing
+inbound policy or granting the required capability.
+
+The original proof now composes the same existing inbound owner, scoped firewall fixture and
+lifetime controls for its actual address family. IPv4 uses `127.0.0.1`; IPv6 uses an exact `::1`
+receive filter and the existing IPv6 firewall path. Both proof modes give the same private-network
+capability to their baseline, outbound and descendant probes, so the original TCP/UDP confinement
+assertions must also hold with that capability. Bare inbound access must be refused before the
+positive owned-policy route is tested. Success still requires real admission before and after
+outbound confinement, both active owners, foreign-principal refusal, independent-deny precedence,
+remaining-owner access and revoked-owner refusal. A refused configured route never counts as a pass.
+
+The dedicated `--inbound-control-proof` retains its IPv4 control / IPv4-or-IPv6 gateway composition,
+matching the current OpenCode control client. The original proof adds same-family IPv6 inbound
+coverage; neither command skips either outbound family or changes production availability.
+The pure native regression fails with the old IPv4-only filter builder and passes with explicit
+family selection. Readback additionally rejects cross-family layers, wrong/null IPv6 addresses and
+unsupported address families without opening WFP locally. Hosted evidence for this composition is
+pending; the maximum-weight system-sublayer policy remains disposable-test-only, with production
+administrator-policy coexistence, simultaneous listeners and crash recovery still unqualified.
+
 ## Outstanding production work and qualification
 
 - Authenticated, narrowly scoped installed service and capability negotiation.
