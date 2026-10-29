@@ -44,8 +44,25 @@ const MIN_RUN_SUFFIX_LENGTH = 6;
 /** A mistake in how the operator invoked a script: reported as usage, exit code 2. */
 export class UsageError extends Error {}
 
+// Playwright's request errors embed their call log, request headers included (#4120).
+const SECRET_HEADER = /\b((?:set-)?cookie|(?:proxy-)?authorization)(\s*[:=]\s*)[^\r\n]*/giu;
+const UNREACHABLE = /\b(ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|ETIMEDOUT)\b/u;
+
+/** Replaces the value of every cookie and authorization header line in `text`. */
+export function redactSecretHeaders(text) {
+  return text.replace(SECRET_HEADER, "$1$2[redacted]");
+}
+
 export function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
+  return redactSecretHeaders(error instanceof Error ? error.message : String(error));
+}
+
+/** The one line a script prints for the error that ended it. */
+export function labErrorLine(error) {
+  if (error instanceof UsageError) return error.message;
+  const message = errorMessage(error);
+  const unreachable = UNREACHABLE.exec(message);
+  return unreachable === null ? `lab: ${message}` : `lab: server unreachable (${unreachable[1]})`;
 }
 
 /** Runs a script's async main(); its return value is the process exit code. */
@@ -55,7 +72,7 @@ export function runMain(main) {
       process.exitCode = code ?? 0;
     },
     (error) => {
-      console.error(error instanceof UsageError ? error.message : `lab: ${errorMessage(error)}`);
+      console.error(labErrorLine(error));
       process.exitCode = error instanceof UsageError ? 2 : 1;
     },
   );
