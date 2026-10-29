@@ -491,6 +491,22 @@ image paths without changing policy. It failed before expansion. The IPv6 backen
 `GetLongPathNameW` before deriving the WFP app ID and the same regression passes; no image
 condition is dropped or widened. Hosted socket verification remains required.
 
+### Preserve both halves of the AppContainer user check, 2026-10-29
+
+Canonicalizing the image alone was insufficient: [run 40957838329](https://github.com/oscharko-dev/Keiko/actions/runs/40957838329)
+still refused configured IPv6 connections. A local regression against the real suspended
+AppContainer token reproduced the remaining user-condition failure without network policy changes:
+the user-only DACL returned a successful access check with access denied for the intended child.
+AppContainer access checks require both the ordinary user and the package portion to be granted.
+
+The fixture now grants `FWP_ACTRL_MATCH_FILTER` to the exact current user and exact package SID
+in the security descriptor, alongside the existing independent `ALE_PACKAGE_ID` condition.
+The same real-token regression now admits only the intended user/package pair; a foreign user,
+a foreign package, and a missing package grant each remain denied. No broad application-package
+or Everyone grant is used. Strict native compilation, static analysis and the default suite pass.
+Bounded failure diagnostics compare the installed scope with events for the fixture image and
+report only a match bitmask and numeric access-check status. Hosted verification is still required.
+
 ## Platform references
 
 - [WFP engine sessions and dynamic object lifetime](https://learn.microsoft.com/en-us/windows/win32/api/fwpmu/nf-fwpmu-fwpmengineopen0)

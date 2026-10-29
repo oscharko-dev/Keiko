@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <wchar.h>
 
+int gateway_firewall_user_tests(HANDLE process, PSID package);
+
 DWORD gateway_test_grant_execute(wchar_t *path, PSID sid, PSECURITY_DESCRIPTOR *original);
 
 int gateway_identity_leaf(const char *expected) {
@@ -102,7 +104,8 @@ int gateway_identity_tests(void) {
       !CreateProcessW(executable, command, NULL, NULL, FALSE,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
         NULL, NULL, &startup.StartupInfo, &process) ||
-      !AssignProcessToJobObject(job, process.hProcess) || ResumeThread(process.hThread) == (DWORD)-1 ||
+      !AssignProcessToJobObject(job, process.hProcess) ||
+      gateway_firewall_user_tests(process.hProcess, sid) != 0 || ResumeThread(process.hThread) == (DWORD)-1 ||
       WaitForSingleObject(process.hProcess, 10000) != WAIT_OBJECT_0 ||
       !GetExitCodeProcess(process.hProcess, &code) || code != 0) goto done;
   ok = 1;

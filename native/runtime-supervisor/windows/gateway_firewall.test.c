@@ -176,13 +176,71 @@ int gateway_firewall_spec_tests(void) {
   return ok && firewall_app_id_tests() ? 0 : 1;
 }
 
+static DWORD firewall_user_descriptor(PSID user, PSID package, PSECURITY_DESCRIPTOR *sd) {
+  LPWSTR user_text = NULL, package_text = NULL;
+  wchar_t sddl[512];
+  DWORD result = ERROR_SUCCESS;
+  if (!ConvertSidToStringSidW(user, &user_text)) return GetLastError();
+  if (package != NULL && !ConvertSidToStringSidW(package, &package_text)) {
+    result = GetLastError(); goto done;
+  }
+  /* AppContainer checks the ordinary user and package portions separately. Granting
+   * only the user denies the intended child; granting only the package is insufficient.
+   * The separate ALE_PACKAGE_ID condition also excludes non-AppContainer tokens. */
+  if (_snwprintf_s(sddl, 512, _TRUNCATE, L"O:%lsG:%lsD:(A;;CC;;;%ls)%ls%ls%ls",
+      user_text, user_text, user_text, package_text == NULL ? L"" : L"(A;;CC;;;",
+      package_text == NULL ? L"" : package_text, package_text == NULL ? L"" : L")") < 0)
+    result = ERROR_BUFFER_OVERFLOW;
+  else if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, sd, NULL))
+    result = GetLastError();
+done:
+  LocalFree(user_text);
+  if (package_text != NULL) LocalFree(package_text);
+  return result;
+}
+
+/* Exercise the actual AppContainer token before it resumes. No WFP or network calls.
+ * Both halves of an AppContainer access check must match: user AND package. */
+int gateway_firewall_user_tests(HANDLE process, PSID package) {
+  HANDLE token = NULL, impersonation = NULL;
+  BYTE user_storage[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+  TOKEN_USER *user = (TOKEN_USER *)user_storage;
+  DWORD bytes = 0;
+  PSID foreign_user = NULL, foreign_package = NULL;
+  int ok = 0;
+  GENERIC_MAPPING mapping = {1, 1, 1, 1};
+  if (!OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &token) ||
+      !DuplicateToken(token, SecurityImpersonation, &impersonation) ||
+      !GetTokenInformation(token, TokenUser, user, sizeof(user_storage), &bytes) ||
+      !ConvertStringSidToSidW(L"S-1-5-21-1-2-3-12345", &foreign_user) ||
+      !ConvertStringSidToSidW(L"S-1-15-2-1-2-3-4-5-6-7", &foreign_package)) goto done;
+  ok = 1;
+  for (unsigned variant = 0; variant < 4; variant++) {
+    PSECURITY_DESCRIPTOR sd = NULL;
+    BYTE privileges[1024];
+    DWORD privilege_bytes = sizeof(privileges), granted = 0, result;
+    BOOL allowed = FALSE;
+    result = firewall_user_descriptor(variant == 1 ? foreign_user : user->User.Sid,
+      variant == 2 ? foreign_package : variant == 3 ? NULL : package, &sd);
+    if (result == ERROR_SUCCESS && !AccessCheck(sd, impersonation, FWP_ACTRL_MATCH_FILTER,
+        &mapping, (PPRIVILEGE_SET)privileges, &privilege_bytes, &granted, &allowed)) result = GetLastError();
+    if (result != ERROR_SUCCESS || (allowed != FALSE) != (variant == 0)) ok = 0;
+    printf("gateway-firewall-user-binding: variant=%u code=%lu allowed=%d\n", variant, result, allowed != FALSE);
+    if (sd != NULL) LocalFree(sd);
+  }
+done:
+  if (foreign_user != NULL) LocalFree(foreign_user);
+  if (foreign_package != NULL) LocalFree(foreign_package);
+  if (impersonation != NULL) CloseHandle(impersonation);
+  if (token != NULL) CloseHandle(token);
+  return ok ? 0 : 1;
+}
+
 static DWORD firewall6_open(PSID sid, const wchar_t *executable, UINT16 port,
                            struct gateway_firewall_fixture *owner) {
   HANDLE token = NULL;
   TOKEN_USER *user = NULL;
   DWORD bytes = 0, result = ERROR_SUCCESS;
-  LPWSTR user_sid = NULL;
-  wchar_t sddl[256];
   PSECURITY_DESCRIPTOR sd = NULL;
   FWP_BYTE_BLOB user_blob = {0}, *app = NULL;
   FWPM_SESSION0 session = {0};
@@ -193,14 +251,9 @@ static DWORD firewall6_open(PSID sid, const wchar_t *executable, UINT16 port,
   if (bytes == 0) { result = ERROR_INVALID_DATA; goto done; }
   user = malloc(bytes);
   if (user == NULL) { result = ERROR_OUTOFMEMORY; goto done; }
-  if (!GetTokenInformation(token, TokenUser, user, bytes, &bytes) ||
-      !ConvertSidToStringSidW(user->User.Sid, &user_sid)) { result = GetLastError(); goto done; }
-  if (_snwprintf_s(sddl, 256, _TRUNCATE, L"D:(A;;CC;;;%ls)", user_sid) < 0) {
-    result = ERROR_BUFFER_OVERFLOW; goto done;
-  }
-  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &sd, NULL)) {
-    result = GetLastError(); goto done;
-  }
+  if (!GetTokenInformation(token, TokenUser, user, bytes, &bytes)) { result = GetLastError(); goto done; }
+  result = firewall_user_descriptor(user->User.Sid, sid, &sd);
+  if (result != ERROR_SUCCESS) goto done;
   user_blob.size = GetSecurityDescriptorLength(sd); user_blob.data = (UINT8 *)sd;
   result = firewall_app_id(executable, &app);
   if (result != ERROR_SUCCESS) goto done;
@@ -217,7 +270,6 @@ done:
   if (installed != NULL) FwpmFreeMemory0((void **)&installed);
   if (app != NULL) FwpmFreeMemory0((void **)&app);
   if (sd != NULL) LocalFree(sd);
-  if (user_sid != NULL) LocalFree(user_sid);
   free(user);
   CloseHandle(token);
   return result;
@@ -237,7 +289,7 @@ static void firewall6_event_matches(const FWPM_FILTER0 *filter, const FWPM_NET_E
     if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_ALE_USER_ID)) {
       PACL dacl = NULL; BOOL present = FALSE, defaulted = FALSE; void *ace = NULL;
       if (GetSecurityDescriptorDacl(c->conditionValue.sd->data, &present, &dacl, &defaulted) &&
-          present && dacl != NULL && dacl->AceCount == 1 && GetAce(dacl, 0, &ace) &&
+          present && dacl != NULL && dacl->AceCount >= 1 && GetAce(dacl, 0, &ace) &&
           h->userId != NULL && EqualSid(h->userId, &((ACCESS_ALLOWED_ACE *)ace)->SidStart)) matched |= 4;
     }
     if (IsEqualGUID(&c->fieldKey, &FWPM_CONDITION_IP_PROTOCOL) &&
