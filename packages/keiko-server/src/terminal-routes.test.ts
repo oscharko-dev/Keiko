@@ -1,3 +1,4 @@
+import { createSseResponseObservation } from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // ADR-0018 D8 — /api/terminal/* route integration tests. A FakeTerminalExecutionManager replaces
@@ -18,7 +19,6 @@ import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
-import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { handleTerminalEvents, openTerminalSseStream } from "./terminal-routes.js";
 import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "./sse-write.js";
@@ -748,62 +748,7 @@ interface FakeSseRes {
 }
 
 function makeFakeSseRes(): FakeSseRes {
-  const writes: string[] = [];
-  const emitter = new EventEmitter();
-  const state: FakeSseRes = {
-    res: undefined as unknown as ServerResponse,
-    writes,
-    destroyCount: 0,
-    destroyed: false,
-    ended: false,
-    writeReturns: true,
-    emitClose: (): void => {
-      emitter.emit("close");
-    },
-    emitDrain: (): void => {
-      emitter.emit("drain");
-    },
-  };
-  const res = {
-    get destroyed(): boolean {
-      return state.destroyed;
-    },
-    get writableEnded(): boolean {
-      return state.ended;
-    },
-    writeHead(): ServerResponse {
-      return res as unknown as ServerResponse;
-    },
-    write(chunk: string): boolean {
-      writes.push(chunk);
-      return state.writeReturns;
-    },
-    end(): ServerResponse {
-      state.ended = true;
-      return res as unknown as ServerResponse;
-    },
-    // Like a real response: destroying marks it destroyed and fires `close`, which is what the
-    // route's own close handler unsubscribes on.
-    destroy(): void {
-      state.destroyCount += 1;
-      state.destroyed = true;
-      emitter.emit("close");
-    },
-    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.on(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.once(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.off(event, listener);
-      return res as unknown as ServerResponse;
-    },
-  };
-  state.res = res as unknown as ServerResponse;
-  return state;
+  return createSseResponseObservation();
 }
 
 describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {

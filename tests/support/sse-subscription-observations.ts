@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { expect, it, vi } from "vitest";
 import { resetServerLogger } from "./activity-log-test-support.js";
@@ -10,6 +11,106 @@ import {
   SSE_STALLED_READER_TIMEOUT_MS,
   type SseBackpressureSignal,
 } from "../../packages/keiko-server/src/sse-write.js";
+
+export interface SseResponseObservation {
+  res: ServerResponse;
+  readonly writes: string[];
+  destroyCount: number;
+  destroyed: boolean;
+  ended: boolean;
+  writeReturns: boolean;
+  readonly emitClose: () => void;
+  readonly emitDrain: () => void;
+}
+
+function createObservationResponse(
+  state: SseResponseObservation,
+  emitter: EventEmitter,
+  writes: string[],
+): ServerResponse {
+  const res = {
+    get destroyed(): boolean {
+      return state.destroyed;
+    },
+    get writableEnded(): boolean {
+      return state.ended;
+    },
+    writeHead(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    write(chunk: string): boolean {
+      writes.push(chunk);
+      return state.writeReturns;
+    },
+    end(): ServerResponse {
+      state.ended = true;
+      return res as unknown as ServerResponse;
+    },
+    // Like a real response: destroying marks it destroyed and fires `close`, which is what the
+    // route's own close handler unsubscribes on.
+    destroy(): void {
+      state.destroyCount += 1;
+      state.destroyed = true;
+      emitter.emit("close");
+    },
+    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.once(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.off(event, listener);
+      return res as unknown as ServerResponse;
+    },
+  };
+  return res as unknown as ServerResponse;
+}
+
+function createResponseObservationCore(): {
+  state: SseResponseObservation;
+  emitter: EventEmitter;
+} {
+  const writes: string[] = [];
+  const emitter = new EventEmitter();
+  const state: SseResponseObservation = {
+    res: undefined as unknown as ServerResponse,
+    writes,
+    destroyCount: 0,
+    destroyed: false,
+    ended: false,
+    writeReturns: true,
+    emitClose: (): void => {
+      emitter.emit("close");
+    },
+    emitDrain: (): void => {
+      emitter.emit("drain");
+    },
+  };
+  state.res = createObservationResponse(state, emitter, writes);
+  return { state, emitter };
+}
+
+export function createSseResponseObservation(): SseResponseObservation {
+  return createResponseObservationCore().state;
+}
+
+export function createEmittingSseResponseObservation(): SseResponseObservation {
+  const { state, emitter } = createResponseObservationCore();
+  const descriptor = Object.getOwnPropertyDescriptor(
+    {
+      emit(event: string): boolean {
+        return emitter.emit(event);
+      },
+    },
+    "emit",
+  );
+  if (descriptor === undefined) throw new TypeError("Missing SSE fixture emit descriptor");
+  Object.defineProperty(state.res, "emit", descriptor);
+  return state;
+}
 
 interface SubscriptionResponse {
   readonly res: ServerResponse;
