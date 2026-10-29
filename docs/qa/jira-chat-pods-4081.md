@@ -1,7 +1,7 @@
 # Epic #4081: Jira access Pods in Chat
 
-Current individual acceptance: **6/55** (#4089 AC1/AC2/AC3/AC7 and #4085 AC5/AC7).
-The remaining 49 criteria and final integrated qualification are open.
+Current individual acceptance: **7/55** (#4089 AC1/AC2/AC3/AC5/AC7 and #4085 AC5/AC7).
+The remaining 48 criteria and final integrated qualification are open.
 
 ## Delivery contract
 
@@ -112,9 +112,9 @@ Status: **Verified**. Server-only AsyncLocalStorage and exact Request-context bi
 
 Status: **Partial — not accepted**. Shared stricter-wins policy, cumulative reservation, read consent and exact-action approvals run through ordinary Chat. Eight regression-first buffered/SSE read/write cancellation cases and actual buffered HTTP disconnects now drain composite-signal waits, revoke unfulfilled decisions and make zero Jira calls; granted read consent remains valid within its original scope. Full expiry/race/budget/restart qualification on the final artifact remains open.
 
-- [ ] **AC5:** An import of `@modelcontextprotocol/*` outside the host fails `arch:check`, proven by a negative fixture in `arch:check:negative`; dependency matrix, currency, hygiene, SBOM and package-surface gates pass.
+- [x] **AC5:** An import of `@modelcontextprotocol/*` outside the host fails `arch:check`, proven by a negative fixture in `arch:check:negative`; dependency matrix, currency, hygiene, SBOM and package-surface gates pass.
 
-Status: **Partial — not accepted**. The SDK import boundary, negative fixture and package registration are implemented. Final architecture/negative, dependency currency/hygiene/matrix, SBOM and assembled-package gates remain open; no final package-surface acceptance is claimed.
+Status: **Verified**. On `44d18c688`, the complete current architecture gate passes and the pinned Linux negative gate rejects all 78 fixtures, including the forbidden SDK import. Dependency currency verifies all 63 dependency-matrix rows and 12 action rows; hygiene passes over 29 manifests/9018 tracked paths. CycloneDX generation, all 28 workspace SBOM/license checks and exact install-script approvals pass. The isolated assembled/pruned package surface passes over 7210 files, including the built UI and unchanged Editor ceiling. See [individual AC5 acceptance](#individual-acceptance--4089-ac5). No full epic or integrated release acceptance is inferred.
 
 - [ ] **AC6:** Registered body-free Activity Log events reconstruct provider admission and the call lifecycle with correlation and failure classes; existing Workbench MCP registry, relay and OAuth suites are unchanged and green. All applicable gates pass on the actual implementation head.
 
@@ -3245,3 +3245,40 @@ tests in 22 suites with 94.05% statements and 89.10% branches, above the unchang
 The Firefox trace shows outer window chunks still loading, not an executing
 Chat/MCP failure; its complete lane remains open. No coverage floor or UI timeout
 is relaxed. Final complete gates remain open.
+
+## Individual acceptance — #4089 AC5
+
+All named gates now pass on implementation `44d18c688`: complete architecture;
+78 negative fixtures including the MCP SDK import boundary; dependency currency
+(63 dependency-matrix and 12 action rows); dependency hygiene (29 manifests and
+9018 tracked paths); official CycloneDX production SBOM; 28 per-workspace
+SBOM/license checks; and exact third-party install-script approvals. The final
+assembled package check ran last in an isolated Linux checkout with Node
+24.18.0/npm 11.16.0, including root/UI builds and the canonical pruning steps.
+It passes over 7210 files. The Editor remains 78238 compressed bytes under its
+unchanged 102400-byte limit; static JS compatibility covers 273 files. This closes
+AC5 and brings individual acceptance to **7/55**; 48 remain partial.
+
+The complete affected Firefox shard also passes on that clean checkout: 64/64
+cases in 5.8 minutes. No UI timeout or product code is changed. The earlier
+trace's slow outer-chunk loading and apparent watchdog navigation are retained
+as evidence; the initiating stack/root cause remains unproven and final CI
+is still required.
+
+## Fresh assembled Jira runtime — `44d18c688`
+
+A clean source checkout is rebuilt and copied with its dependencies into an
+independent immutable runtime snapshot. Its 106 symlinks resolve inside the
+snapshot; none are foreign or broken. The 6938-file artifact digest is
+`c0cec226ed80096912f0902f16eeb0c7117da2ce34177baf9d39411db5cf95f1`.
+The source receipt records commit `44d18c688`, a clean working tree and 6000
+source/build-metadata files. Earlier artifact identities are not relabeled.
+
+The owned synthetic Jira application container was normally restarted, preserving
+its identity, database, TLS container and volumes. The published test license is
+valid again (10724 seconds observed after readiness); no clock, license text or
+licensing code is modified. The complete streamed normal-Chat catalog group
+passes all 14 operations with real-model execution and independent remote
+readback. Its preflight passes, license opening/closing values are 10597/10389
+seconds, no pending work remains, and the artifact digest is unchanged across
+the group. Other current-artifact groups are still being qualified separately.
