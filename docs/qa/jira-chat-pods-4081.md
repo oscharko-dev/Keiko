@@ -1,7 +1,7 @@
 # Epic #4081: Jira access Pods in Chat
 
-Current individual acceptance: **23/55** (#4082 AC1/AC4/AC5, #4083 AC1/AC2/AC5/AC7, #4084 AC1/AC2, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC5/AC6, #4085 AC5/AC7 and #4086 AC1/AC7).
-The remaining 32 criteria and final integrated qualification are open.
+Current individual acceptance: **25/55** (#4082 AC1/AC4/AC5, #4083 AC1/AC2/AC3/AC4/AC5/AC7, #4084 AC1/AC2, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC5/AC6, #4085 AC5/AC7 and #4086 AC1/AC7).
+The remaining 30 criteria and final integrated qualification are open.
 
 ## Delivery contract
 
@@ -134,13 +134,13 @@ Status: **Accepted.** The production SDK host protocol tests cover modern discov
 
 Status: **Verified**. On the independent clean `44d18c688` compiled runtime, all 14 advertised operations pass through normal Chat, LiteLLM/Gemma, the production binder and actual MCP host against licensed Jira 10.3.26, in both buffered and streamed groups. Both complete restricted-identity catalog groups also pass, with zero remote write effects; separate focused permission groups pass 8/8 in each transport. Independent Jira state and dispatch observations distinguish allowed reads, pre-dispatch refusal, current-auth invalidation and conservative post-dispatch uncertainty. The bounded operation/endpoint matrix and exact artifact/receipt hashes are recorded below. This does not claim unrestricted Jira REST or full epic acceptance.
 
-- [ ] **AC3:** Required supported custom fields, constrained fields and workflow-specific transitions are discovered/validated from real metadata through the post-9.0 endpoints. A real transition-screen fixture requires a supported field; omitting it fails, and the approved field value and transition succeed in one request. Undeclared mutation verbs, worklogs and unsupported compound effects are refused before HTTP. Unknown plugin-specific field types are reported as unsupported with no fabricated values. Missing/invalid values and unauthorized issues/actions produce honest safe errors without escalating to an admin identity.
+- [x] **AC3:** Required supported custom fields, constrained fields and workflow-specific transitions are discovered/validated from real metadata through the post-9.0 endpoints. A real transition-screen fixture requires a supported field; omitting it fails, and the approved field value and transition succeed in one request. Undeclared mutation verbs, worklogs and unsupported compound effects are refused before HTTP. Unknown plugin-specific field types are reported as unsupported with no fabricated values. Missing/invalid values and unauthorized issues/actions produce honest safe errors without escalating to an admin identity.
 
-Status: **Partial — not accepted**. Current Data Center pagination and endpoint-selected create context were repaired from real failures with zero writes before refusal. Both complete catalog groups created with supported required fields and transitioned with the required custom value and resolution in one action, verified remotely. Both focused restricted groups additionally refused omitted create/transition fields before mutation dispatch. Unknown plugin/verb and metadata-bound value refusals have deterministic proofs. Remaining invalid-field/unsupported-field presentation and final-artifact qualification stay open.
+Status: **Accepted.** Current metadata/mutation/read owner suites pass 194/194. They prove the supported field/verb matrix, omission and clearing, constrained values, unknown plugin projections, metadata-bound create/transition validation, undeclared verbs/worklogs and compound-effect refusal before HTTP. The actual SDK/binder reports unsupported fields without private values or fabricated data. Both complete licensed real catalog groups verify required create fields and one-request transition fields/resolution/status; both restricted groups refuse omitted fields without mutation. The former presentation/final-gates note imposed obligations beyond this literal criterion.
 
-- [ ] **AC4:** Pagination, empty results, partial results, bounds, timeout and cancellation behave deterministically. Jira content and tool metadata cannot modify the tool allowlist, credential, chat binding, read grant or approval state.
+- [x] **AC4:** Pagination, empty results, partial results, bounds, timeout and cancellation behave deterministically. Jira content and tool metadata cannot modify the tool allowlist, credential, chat binding, read grant or approval state.
 
-Status: **Partial — not accepted**. Bounded pagination/results, schema/context override refusal and cancellation have retained domain/SDK tests. The real catalog groups read the hostile-comment fixture; their single-key search is not a pagination proof. A separate complete LiteLLM/Gemma SSE group now traverses all 26 reference issues through the real provider with exact request cursors and bounded pages, then proves an empty terminal page and zero writes. Mixed empty results require an actual successful sanitized observation. Full per-operation bounds/failure, hostile-content and final-artifact qualification remain open.
+Status: **Accepted.** Production read suites cover bounds before credential resolution, malformed/failed responses, continuation, partial pages and empty termination. The immutable real Gemma streamed pagination group verifies 26 reference issues with cursors 0/10/20/26, pages 10/10/6/0, four HTTP200 reads and zero writes. A new actual Chat/binder/SDK loop regression delivers hostile field metadata, deliberately attempts an unoffered tool and forged control arguments, and proves unchanged catalog projection, credential, binding and granted consent, no write approval, exactly one GET and zero writes. Its complete 50-case owner suite passes, including timeout/cancellation. No runtime change or authority widening was needed.
 
 - [x] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
 
@@ -3509,3 +3509,27 @@ was a setup failure and could not establish a product defect. The complete diagn
 stays failed, and its original shared-checkout readiness cause is not claimed proven. A stable
 isolated final aggregate remains required. The real local Sonar analyzer now passes with the
 documented12-GiB heap:454 analyzed JS/TS sources and zero unresolved findings.
+
+### Metadata boundaries and refreshed UI qualification — 2026-10-29
+
+#4083 AC3 and AC4 are individually accepted, bringing the total to **25/55** with **30 open**.
+Current production metadata/mutation/read suites pass194/194; the complete Chat-loop file passes50/50.
+The hostile-content regression deliberately attempts escalation after receiving malicious metadata;
+it does not depend on a model choosing to ignore the injected text. Offered capabilities, selected
+credential, binding, granted read consent and write-approval state remain under their existing owners.
+Exactly one metadata GET and zero writes occur. Root strict TypeScript, scoped lint/format pass.
+The complete retained catalog/restricted/pagination receipts supply their actual live metadata and
+reference-state proofs; no three-case comment recovery receipt is claimed to cover all operations.
+
+The existing Linux Jira UI producer now passes all five cases after fixing four stale English/German
+helper labels (connection/apply). The exact formerly failing case first passes1/1; no wait, assertion,
+authority or product code was weakened. E2E wiring passes. Two regenerated source-bound receipts
+match all14 inspected source/harness hashes;83 full-document axe checks report zero violations or
+viewport overflow. The complete93-image output is retained, with eight representative images and
+the current producer metadata described in docs/design-system/evidence/4081/README.md.
+
+The isolated package aggregate was restarted because its launcher incorrectly applied private-log
+umask0077 to every test process. The permission fixture passes under0022 and reproduces its exact
+failure under0077; no product or fixture was changed. The contaminated run remains diagnostic.
+The replacement run verifies0022 and exactNode24.18.0/npm11.16.0, with the log precreated0600.
+Full aggregate, final CI/review settlement and remaining acceptance criteria stay open.

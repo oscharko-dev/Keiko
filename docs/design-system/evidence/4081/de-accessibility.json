@@ -12,24 +12,24 @@
   "architecture": "arm64",
   "node": "v24.18.0",
   "browser": "156.0.8078.4",
-  "gitHead": "71d84996cf6308e714e17c7bfe1b44031c5f7604",
+  "gitHead": "5aed44080128af12d0281429d851e54bb37d6be6",
   "sourceHashes": {
     "tests/e2e/jira-chat-4081.spec.ts": "b2827c40f40f39c35d0ad8e28cf52bb9c656d85b3f68b670cadb33834dde7102",
-    "tests/e2e/support/jira-chat-4081.ts": "9bf8f2a4cc7f4f0bfc0d3df8c0ecfdc335cc4a82232a68dd9118cfe81bf83965",
+    "tests/e2e/support/jira-chat-4081.ts": "4f50fbecac3a6ff6d3ace46f63abda7f1479f25485300cf0be142062ac45e914",
     "tests/e2e/support/jira-chat-4081-accessibility.ts": "0d31ca2d4e8d84bb10024b33953b6aa59366c485e2f33a15c6aa3aaf5ec69541",
     "tests/e2e/support/jira-chat-4081-server.mjs": "a3bec7fdc19fb90ff7a8395cba541a6f09fc1f6dbda9ee6e025aaeb978a97ee3",
     "tests/e2e/support/jira-chat-4081-transport.mjs": "fd8fb501ce4119c2a37ceabdd7c97df7f61b13e21100f098019edbbcfd3e52b4",
     "tests/e2e/config/playwright.jira-chat-4081.config.ts": "5106448f5cab263992662d0dd6c6ff635c7eec2727ad42033820719e9899eeef",
-    "packages/keiko-ui/src/app/components/desktop/JiraChatTools.tsx": "c6c85b967531d090eefa08dfc1717bb980a7d6db59073c7082bf834c58703220",
+    "packages/keiko-ui/src/app/components/desktop/JiraChatTools.tsx": "1fdc6394efd47b1d677bcd92796a00970858e7ab5f14804f39ab486d19e10987",
     "packages/keiko-ui/src/app/components/desktop/JiraChatTools.module.css": "b822a25b12fd9a389f2db755a5c14cee4e37b9bfe9463f6d735363c4a5074b62",
-    "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx": "724299f09d1a55dbc3c3eab005caacee7ede35b7035dcba9421b97ae2d031384",
-    "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.tsx": "4a3683b4598a14ce9637107f7fbd9ff0b3ec1c76447126e64f1d27d677714b7e",
+    "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx": "e906cdd99e196aaea4fb498fe21b7d38c876c94cc19615db7160e810848cad12",
+    "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.tsx": "2b14a7ca4b94293abeff15c0899f992b6a9181b47bea9fa44250822213387ea0",
     "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.module.css": "af91f55ab4a1d0dbc20dab5aec8ac2793d9fc4c4ffc6d5d892b2708939e7b4ae",
     "packages/keiko-ui/src/app/globals.css": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "b3bd40a6dc83a918886562e47fa9f229f94e6b22dedf8fb8230658a254eb698e",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "5fb29c2e05f70f12180f95c13dd2c0e9814baf603da7ad1afc51b66fe9283b7c"
+    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "6b684556a64ecbe7baa780ffd3693a7ecd8f5f43232ad81899e5ce1844a6c736",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "84fea645fa729d5b9a7282fb3a5224152bea388f466041ba6cc5860649d489a0"
   },
-  "capturedAt": "2026-10-28T00:26:31.882Z",
+  "capturedAt": "2026-10-29T07:50:30.668Z",
   "captures": [
     {
       "stage": "hub-create-context",
@@ -67,7 +67,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-context-dark.png",
-      "screenshotSha256": "6fc2f064de988dbd1d7acebd741259cbceb8dbb2f76dd0cfc789678268a7c57e"
+      "screenshotSha256": "3a60125eac714d1bce29e2fc676182bf19f5199e662f735251e2f4386b61fb0d"
     },
     {
       "stage": "hub-create-form",
@@ -105,7 +105,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-dark.png",
-      "screenshotSha256": "a2539ee86e4acf383dd26d8f7d7822c02510a0f2c2667849f88b6330f02dd155"
+      "screenshotSha256": "9756384ab052d65dffa074c22409a51883cf8d1b6ad5d4538094dd371caf6fdd"
     },
     {
       "stage": "hub-create-form",
@@ -143,7 +143,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-light.png",
-      "screenshotSha256": "0e8613ba8c166ad70d7db560ac1b5f794fd67ae1cdb12433c91a2bae5882b60e"
+      "screenshotSha256": "195c19aef9703d02119eaeb2464c290a6f21831fe27669b2ee804f3fbce058bd"
     },
     {
       "stage": "hub-create-form",
@@ -181,7 +181,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-prefers-contrast.png",
-      "screenshotSha256": "8b89a26db0d6d7b61e8ad72133c99ed9dca47b7b136671a30d056fed35b59003"
+      "screenshotSha256": "cc62e5cceaad26e4a76639b67e09673c8b199744c45bddaac894f425b5f6854f"
     },
     {
       "stage": "hub-create-form",
@@ -219,7 +219,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-forced-colors.png",
-      "screenshotSha256": "b55b5b1633318801a7c010dd85ca5cf230f4f125a33786534d3148106fd1d827"
+      "screenshotSha256": "6ca068eab3e29e6b3aa87466e7b580931aa7fff16f278da5d41a58c219b8e6e3"
     },
     {
       "stage": "hub-create-form",
@@ -257,7 +257,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-reduced-motion.png",
-      "screenshotSha256": "900569d2e520034e6d237472ab0b0e7e73d214a8911116bf869f2eefe99db907"
+      "screenshotSha256": "9756384ab052d65dffa074c22409a51883cf8d1b6ad5d4538094dd371caf6fdd"
     },
     {
       "stage": "hub-create-form",
@@ -288,7 +288,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-narrow-390.png",
-      "screenshotSha256": "5be1c69f9fe7a2572ffb979999fa0b825fd20296e7dd17c297da77e2256f13ee"
+      "screenshotSha256": "3726bbf1c931983ff50a94d6d5410787b10968f724e60d725c8edfaf0104179a"
     },
     {
       "stage": "hub-create-form",
@@ -319,7 +319,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-maximized.png",
-      "screenshotSha256": "3cfa3024530af0ff4a0819447cef03c6915d5a55035b3cf6b1eb84d9d63f1a94"
+      "screenshotSha256": "aab2edca3e26c1417d509c4a6044dda94d8c322f65eecb81318b7678f2958873"
     },
     {
       "stage": "hub-create-form",
@@ -350,11 +350,11 @@
       "zoomKeyboardControlCount": 5,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "f551d9ec7587de2c1d32fa679232278709428a18164652f128121a003ae87cc0",
+      "zoomControlsScreenshotSha256": "4dcf4f4e75c50355fee2888e0804c69e4a72dfe4467a95b6620c1313b0529117",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-viewport-device-scale-200-percent-emulation.png",
-      "screenshotSha256": "8dfb9a66f09af47c6dd6009fe04491323fcfaa0b7ade20eeb2ce81ca627b8c7d"
+      "screenshotSha256": "7f27b225e34a3d4315162ebe2dd9a1265d5ffa390abe9f8a1cbd43e6785189c3"
     },
     {
       "stage": "confirmed-chat-binding",
@@ -404,7 +404,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-dark.png",
-      "screenshotSha256": "a611267d19c9c52ac96eea4d89f459f9641ceaae8281e72ca443c7daca0a6a58"
+      "screenshotSha256": "d34b4ff611b025777b22c87ae2cba718eb3f2625f6abf42d2751f635ec1e3857"
     },
     {
       "stage": "confirmed-chat-binding",
@@ -454,7 +454,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-light.png",
-      "screenshotSha256": "cdd022b0abcc2f7f3ac880ead5b0c7e367fd105e8bd508a808b18190a9129c0f"
+      "screenshotSha256": "28d3a1dd0fa399558b0f0c37c6b98522314eb9834991c9ed12e5d37f87c8f5f8"
     },
     {
       "stage": "confirmed-chat-binding",
@@ -504,7 +504,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-prefers-contrast.png",
-      "screenshotSha256": "8968276a1b7004eac85e0d594305f3263b6d69e778efa34ec6d9f2922202a6e0"
+      "screenshotSha256": "ddb4095f7d8945fcc59a3683627e03cb976c58506e871c6431b5be10a4cf0d03"
     },
     {
       "stage": "confirmed-chat-binding",
@@ -554,7 +554,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-forced-colors.png",
-      "screenshotSha256": "eb2527e33725a03cf107833f9fac250239c24163a546b26c3c851d342ff6db33"
+      "screenshotSha256": "0fee917a7f083975be08964954c14205f917fc0c3379488d97f2f83541afcb30"
     },
     {
       "stage": "confirmed-chat-binding",
@@ -604,7 +604,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-reduced-motion.png",
-      "screenshotSha256": "129442b82a9af02349682d4b1a7201ab56db4d204c6bbfc89064177c4cf7cb35"
+      "screenshotSha256": "77fd04c94f6d5eb2ab1545a5784baf0c706ac0a6272e79395f4834f2d61f2cae"
     },
     {
       "stage": "confirmed-chat-binding",
@@ -635,7 +635,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-narrow-390.png",
-      "screenshotSha256": "e964cb409d809a1be902868ce46d94f26a85e945fa18c6d65807bba18101d29d"
+      "screenshotSha256": "30b4a57dee925551c8047c7aa1392f0814f0a156b2aa0f25afd73070080948d6"
     },
     {
       "stage": "confirmed-chat-binding",
@@ -666,7 +666,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-maximized.png",
-      "screenshotSha256": "0f24cb09671181146c8ecb5984b1413dbb1b20070309a88e4599ae8eb912d1c8"
+      "screenshotSha256": "15673878c7b23f5b5e3800ff150290aae36f75d67bd5eaeae2b16608f8fc09b5"
     },
     {
       "stage": "confirmed-chat-binding",
@@ -697,11 +697,11 @@
       "zoomKeyboardControlCount": 3,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "ad66fedaff091cd5f5a3ebe8da8870ce092e4aa6946514f6c81ddfce735fa743",
+      "zoomControlsScreenshotSha256": "15419c46555c8e735fe4b58b7e9eb0af2b2f8d621b409ef4d5071917406c096f",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-viewport-device-scale-200-percent-emulation.png",
-      "screenshotSha256": "631ca76ff713604ed804c993f2e194715ff7c8a4531e817cb3ebf9d58e4ba116"
+      "screenshotSha256": "b487d94294793beb10775c058b2a6730c4d3cc7020b2669d9ccf8701bee10aa3"
     },
     {
       "stage": "pending-read-consent",
@@ -732,7 +732,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-dark.png",
-      "screenshotSha256": "a6cec49e6bed21817c7f3a4bcb2d2b480a0e24799273440975f4aa10133134b6"
+      "screenshotSha256": "4d484e559be9dd6fb686c0f63448d3be1e59ecd6b810ad091401b1a10e68f0b3"
     },
     {
       "stage": "pending-read-consent",
@@ -763,7 +763,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-light.png",
-      "screenshotSha256": "de67d025ab4995e1ded273e5b90f36b3f57320004600ebc8a62eb4ad97a9eb10"
+      "screenshotSha256": "262728946b911ffc24a822dbd677f4fd7a9cace4df2fcbbc643aee3ff0a90426"
     },
     {
       "stage": "pending-read-consent",
@@ -794,7 +794,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-prefers-contrast.png",
-      "screenshotSha256": "3a77dbbdd4a84d7b3d451230fe73e8c953b8c5808baed65892e11f4e9d338319"
+      "screenshotSha256": "543698159841f2f6392ae27a58a5a85ea571a77b5c4f1bb8eb237ae10bbb3b4e"
     },
     {
       "stage": "pending-read-consent",
@@ -825,7 +825,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-forced-colors.png",
-      "screenshotSha256": "52b00e88b07469c33382adf247800756a080a4ab6242e615ba7dbc4806d67693"
+      "screenshotSha256": "cc31ea9d4d2697f1155c931b4eac43132418cd8f00ea9417bfb402a2501442f0"
     },
     {
       "stage": "pending-read-consent",
@@ -856,7 +856,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-reduced-motion.png",
-      "screenshotSha256": "b75d49217fa9043e999767c8279447a8b7a2843c78c3b6d15c3f2d4bd38fd261"
+      "screenshotSha256": "40bd91e6fcf5867d05e1c0a59860b73f1f811782603315173e835042d5883433"
     },
     {
       "stage": "pending-read-consent",
@@ -887,7 +887,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-narrow-390.png",
-      "screenshotSha256": "a1105f3929eb5bcba3c5545b8c001cccbb493e4769380901ac1502e80b9dbf83"
+      "screenshotSha256": "fcf9db2500808932245b22ad3569a3096a970bef1606a9fad410d857a5e6af99"
     },
     {
       "stage": "pending-read-consent",
@@ -918,7 +918,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-maximized.png",
-      "screenshotSha256": "e756f8838c6b493581b145920281481e86d14e8597cf2dfd66f33871fe087e39"
+      "screenshotSha256": "2be14f1abb99e87c8938921298c1e26335ae7ea54c60e32e635c956a30226431"
     },
     {
       "stage": "pending-read-consent",
@@ -949,11 +949,11 @@
       "zoomKeyboardControlCount": 2,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "983a20a7299ef22f91e924a7e7152c09232b75ca052b904935effba85be7dbd6",
+      "zoomControlsScreenshotSha256": "e8ce169490339b4289c4edb8dd1209552bb27fa8e0c95b37c6768eb753387f75",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-viewport-device-scale-200-percent-emulation.png",
-      "screenshotSha256": "07f66f70eb1b87793d3097c23e8fc42e06b0006033883e205b87d9c22b703de6"
+      "screenshotSha256": "0ee8023c8ec18fa045fd9e0b6dd6000591ce4ccf17916a55552db03161f78d54"
     },
     {
       "stage": "pending-exact-write-approval",
@@ -997,7 +997,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-dark.png",
-      "screenshotSha256": "7708e803483e025091e31e5a21aff2b91e1ddc640af09ca13259d61cd2a1ffc9"
+      "screenshotSha256": "426911e483a4f6a41df440b9c8bd3224dabb8efbb8ad94f20080c4bbd8b95d73"
     },
     {
       "stage": "pending-exact-write-approval",
@@ -1041,7 +1041,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-light.png",
-      "screenshotSha256": "15e5d4d2d6e0dca3dd658f1c62068eb78799632d5eb2fd11d5015c52c9ff51ae"
+      "screenshotSha256": "b274735d6513c9b8150c4e12fb7f551927a683fbbb2e91ef48602a83ecd7a1d5"
     },
     {
       "stage": "pending-exact-write-approval",
@@ -1085,7 +1085,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-prefers-contrast.png",
-      "screenshotSha256": "4084a51675b71dea369a8376990f96c7ab434b80b3453d2bb1d774a705c70604"
+      "screenshotSha256": "81ca28cc374dfe96d3e54e066fdfe33f202ddad505b07f8fae1d74ac2d354a4c"
     },
     {
       "stage": "pending-exact-write-approval",
@@ -1129,7 +1129,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-forced-colors.png",
-      "screenshotSha256": "a8a07f7006901d956981230a20e5f5276ade1f537693a1963baf3112a3bcc011"
+      "screenshotSha256": "68350359130a47ea6acaf9932cfd76507c7a34a178307b621353f6838bace72f"
     },
     {
       "stage": "pending-exact-write-approval",
@@ -1173,7 +1173,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-reduced-motion.png",
-      "screenshotSha256": "4142c99debfd52e5da087e43a91501f10f08680ba4a4d05b579599c511b3aed7"
+      "screenshotSha256": "426911e483a4f6a41df440b9c8bd3224dabb8efbb8ad94f20080c4bbd8b95d73"
     },
     {
       "stage": "pending-exact-write-approval",
@@ -1217,7 +1217,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-narrow-390.png",
-      "screenshotSha256": "14ffbb8ee2556ce3f7e2c15dbb72c8406578326cb5ca348a55c2e7a4620f5418"
+      "screenshotSha256": "07f454fad88721f2063fcde4d27c7da8f4879bf24da95fb377186004103dce8a"
     },
     {
       "stage": "pending-exact-write-approval",
@@ -1261,7 +1261,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-maximized.png",
-      "screenshotSha256": "af96c4c906b71bfdc5231261479bd0200f7cc571f7329dd2320424b193a0d7d2"
+      "screenshotSha256": "a90d02d9f0280ec6c4e798edc20fc16fc21a757aca2363f664b96a6ca8a24398"
     },
     {
       "stage": "pending-exact-write-approval",
@@ -1280,13 +1280,13 @@
           "width": 24,
           "height": 24,
           "centerX": 84,
-          "centerY": 236
+          "centerY": 198
         },
         {
           "width": 24,
           "height": 24,
           "centerX": 84,
-          "centerY": 262
+          "centerY": 224
         }
       ],
       "measurementTarget": "surface",
@@ -1305,11 +1305,11 @@
       "zoomKeyboardControlCount": 3,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "5cc400d20fa401d43cefb46b270c7713b050b543755356e41c7039cfbab0c04a",
+      "zoomControlsScreenshotSha256": "1aaacb0b7187ff87754f4d62f4038a84c413d67b4ccffe96bae504392f0fafc3",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-viewport-device-scale-200-percent-emulation.png",
-      "screenshotSha256": "9f7b3112c7d5c0fd9fcf22f22a35cee5b7c18747236362df15f890fdb1689b8e"
+      "screenshotSha256": "4170726a3c3e538f3e605b338f4eca16749a295dd262179b9a86c3c4f0d0153b"
     },
     {
       "stage": "settled-jira-result",
@@ -1353,7 +1353,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-dark.png",
-      "screenshotSha256": "0bf1689491e74a2754dd04648f9fd25ac2b1728ea0be012dcf3663d874c00fc4"
+      "screenshotSha256": "b92b615ecf0a408acbe337af0eae2d5ae953866b87cbfec798584529ea7d25a0"
     },
     {
       "stage": "settled-jira-result",
@@ -1397,7 +1397,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-light.png",
-      "screenshotSha256": "0b3e07258c59042cedb637c9a41b41db9676f80f0a93db7a50c9689e50972bfd"
+      "screenshotSha256": "8f6b51e37c742655a77e9bb7643c38116a1ac2d3ce52601e88d5200c468ac76d"
     },
     {
       "stage": "settled-jira-result",
@@ -1441,7 +1441,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-prefers-contrast.png",
-      "screenshotSha256": "74d15785784f0b6811ed975eac74bad06e863bc4783832cbc0d1f8d47e154603"
+      "screenshotSha256": "a91a0e254833b5de8ef7dd4241839862001f86f27a97234ede9557bd99224788"
     },
     {
       "stage": "settled-jira-result",
@@ -1485,7 +1485,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-forced-colors.png",
-      "screenshotSha256": "0d6057560250ffb583e8e99f5feaf0326f27a55dbfd3958b8a90124911d7f6ac"
+      "screenshotSha256": "dd92537ac4c2c00975cdee4bd58feaf902f147ba5c1e434d02671ddd2898e3c0"
     },
     {
       "stage": "settled-jira-result",
@@ -1529,7 +1529,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-reduced-motion.png",
-      "screenshotSha256": "0bf1689491e74a2754dd04648f9fd25ac2b1728ea0be012dcf3663d874c00fc4"
+      "screenshotSha256": "b92b615ecf0a408acbe337af0eae2d5ae953866b87cbfec798584529ea7d25a0"
     },
     {
       "stage": "settled-jira-result",
@@ -1573,7 +1573,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-narrow-390.png",
-      "screenshotSha256": "a16236ddaa8bd0e8eedcc91053c05324ac3501babeb3848766b73a43785aed28"
+      "screenshotSha256": "d6de8768291cc852f62c5f0d32a70c60217b1f3be8ca038e133d99ed22fb1e49"
     },
     {
       "stage": "settled-jira-result",
@@ -1617,7 +1617,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-maximized.png",
-      "screenshotSha256": "66313bb43b4ac5b2bd2a1dfd2632a157530a7277ae46108d9f332ee58598b797"
+      "screenshotSha256": "b909f4ca0e351befe279380bb643dbfe1698167314ba1fb1b2a3317fad71369e"
     },
     {
       "stage": "settled-jira-result",
@@ -1636,13 +1636,13 @@
           "width": 24,
           "height": 24,
           "centerX": 84,
-          "centerY": 236
+          "centerY": 198
         },
         {
           "width": 24,
           "height": 24,
           "centerX": 84,
-          "centerY": 262
+          "centerY": 224
         }
       ],
       "measurementTarget": "surface",
@@ -1661,11 +1661,11 @@
       "zoomKeyboardControlCount": 1,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "5666586dcfb49e961d3eec1d4ed7425d22568a7506f7a9b728235a5ee2565870",
+      "zoomControlsScreenshotSha256": "5ae1aae65f74e66cfe9e5d203eb150030ada41b764753da93dd0a374f9074ac0",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-viewport-device-scale-200-percent-emulation.png",
-      "screenshotSha256": "e77f8fd738fdd4bf485f5daabbace90e478f08e4a8925f8cc3f09d0f4e43c829"
+      "screenshotSha256": "9c6ceedb2dd2588168a672796522784d7f9c0c268635297e940dc82457068a3b"
     }
   ]
 }
