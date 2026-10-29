@@ -99,6 +99,7 @@ function backendRun(runId: string): QualifiedProductionRuntimeRun {
       modelSource: "chatgpt-codex-subscription-profile",
       executablePath: "/qualified/codex",
       managedRoot: "/qualified",
+      gatewayUrl: "http://127.0.0.1:1983",
       modelProfileId: "codex-subscription",
       args: [],
       inheritedEnvAllowlist: [],
@@ -111,6 +112,14 @@ function backendRun(runId: string): QualifiedProductionRuntimeRun {
       waitForTerminal: () => Promise.resolve("succeeded"),
     },
   };
+}
+
+function expectConnectorPolicyResult(result: unknown, mode: CodingWorkbenchMode): void {
+  expect(result).toMatchObject(
+    mode === "autonomous-delivery"
+      ? { status: "failed", reasonCode: "ci-repair-budget-blocked" }
+      : { status: "denied", evidence: [] },
+  );
 }
 
 describe("production Coding run connector ceiling (#4083 AC7)", () => {
@@ -154,7 +163,7 @@ describe("production Coding run connector ceiling (#4083 AC7)", () => {
         },
       });
       graphs.push(deps);
-      const active = deps.workspaceLifecycle?.selectLocal({
+      const active = deps.workspaceLifecycle?.selectLocal?.({
         root,
         branch: "main",
         requestedBy: "operator",
@@ -213,11 +222,7 @@ describe("production Coding run connector ceiling (#4083 AC7)", () => {
           scope: "source-control.read",
         }),
       });
-      expect(connector).toMatchObject(
-        expected === "autonomous-delivery"
-          ? { status: "failed", reasonCode: "ci-repair-budget-blocked" }
-          : { status: "denied", evidence: [] },
-      );
+      expectConnectorPolicyResult(connector, expected);
       const denials = log.events.filter(
         (event) => event.op === "coding-runtime.tool-authority.denied",
       );

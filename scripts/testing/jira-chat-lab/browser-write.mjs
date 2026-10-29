@@ -21,7 +21,7 @@ async function connectChat(page, mode, connection = "dropdown") {
   const chat = page.getByRole("region", { name: /Synthetic Jira browser Chat/ });
   let confirmEdge;
   if (connection === "dropdown") {
-    await chat.getByText("Jira connection", { exact: true }).click();
+    await chat.getByText("Tool access", { exact: true }).click();
     await chat.getByRole("combobox", { name: /^Jira Pod/ }).selectOption({ label: "Browser Jira" });
   } else {
     confirmEdge = await requestWorkspaceJiraConnection(page, chat, connection);
@@ -33,9 +33,9 @@ async function connectChat(page, mode, connection = "dropdown") {
   };
   await chat.getByRole("combobox", { name: "Chat autonomy mode", exact: true }).click();
   await page.getByRole("option", { name: labels[mode], exact: true }).click();
-  await chat.getByRole("button", { name: "Apply Jira settings", exact: true }).click();
+  await chat.getByRole("button", { name: "Apply tool settings", exact: true }).click();
   await chat.getByText("Jira Pod connected by the server", { exact: true }).waitFor();
-  await chat.getByText("Jira connection", { exact: true }).click();
+  await chat.getByText("Tool access", { exact: true }).click();
   await confirmEdge?.();
   stage("bound");
   return chat;

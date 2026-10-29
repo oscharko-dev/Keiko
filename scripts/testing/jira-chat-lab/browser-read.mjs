@@ -60,14 +60,14 @@ async function connectAndRead(page) {
   const chat = page.getByRole("region", {
     name: /Synthetic Jira browser Chat/,
   });
-  await chat.getByText("Jira connection", { exact: true }).click();
+  await chat.getByText("Tool access", { exact: true }).click();
   stage("chat-panel-open");
   await chat.getByRole("combobox", { name: /^Jira Pod/ }).selectOption({ label: "Browser Jira" });
   stage("pod-selected");
-  await chat.getByRole("button", { name: "Apply Jira settings", exact: true }).click();
+  await chat.getByRole("button", { name: "Apply tool settings", exact: true }).click();
   stage("binding-submitted");
   await chat.getByText("Jira Pod connected by the server", { exact: true }).waitFor();
-  await chat.getByText("Jira connection", { exact: true }).click();
+  await chat.getByText("Tool access", { exact: true }).click();
   stage("chat-connected");
   await chat
     .getByRole("textbox", { name: "Chat message", exact: true })

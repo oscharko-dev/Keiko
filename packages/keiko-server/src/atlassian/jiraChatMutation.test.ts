@@ -173,6 +173,51 @@ it("retains an acknowledged malformed response as succeeded-unconfirmed", async 
   });
   expect(f.effects).toHaveBeenCalledOnce();
 });
+it("retains a truncated 201 acknowledgement and replays the canonical action without another effect", async () => {
+  const f = fixture();
+  f.effects.mockImplementation(() =>
+    Promise.resolve(
+      new Response(JSON.stringify({ key: "SYN-1", id: "10001", padding: "x".repeat(2000) }), {
+        status: 201,
+      }),
+    ),
+  );
+  const observedResponses: boolean[] = [];
+  const execute: JiraChatMutationExecution["execute"] = (http) =>
+    f.input.execute(async (request) => {
+      const response = await http(request);
+      expect(response).toMatchObject({ kind: "response", status: 201, truncated: true });
+      observedResponses.push(response.kind === "response" && response.truncated);
+      return response;
+    });
+  const input = { ...f.input, execute };
+  expect(await executeJiraChatMutation(input)).toMatchObject({
+    data: { outcome: "succeeded-unconfirmed" },
+    isError: true,
+  });
+  expect(observedResponses).toEqual([true]);
+  expect(f.input.journal?.find(f.input.intent.invocationId)).toMatchObject({
+    phase: "settled",
+    outcome: "succeeded-unconfirmed",
+    httpStatus: 201,
+  });
+  expect(
+    await executeJiraChatMutation({
+      ...input,
+      intent: { ...input.intent, invocationId: "duplicate-truncated-delivery" },
+    }),
+  ).toMatchObject({
+    data: { outcome: "succeeded-unconfirmed", replayed: true },
+  });
+  expect(observedResponses).toEqual([true]);
+  expect(f.effects).toHaveBeenCalledOnce();
+  expect(f.input.journal?.find("duplicate-truncated-delivery")).toBeUndefined();
+  expect(
+    f.logs.events
+      .filter((event) => event.extra?.event === "settled" || event.extra?.event === "replayed")
+      .map((event) => event.extra?.outcome),
+  ).toEqual(["succeeded-unconfirmed", "succeeded-unconfirmed"]);
+});
 it("blocks another mutation in the turn after acknowledgement without a validated result", async () => {
   const f = fixture();
   f.effects.mockImplementation(() => Promise.resolve(new Response("not-json", { status: 201 })));

@@ -53,7 +53,7 @@ export async function requestWorkspaceJiraConnection(page, chat, method) {
   await chat.and(page.locator('[data-conn="valid"]')).waitFor();
   await to.focus();
   await to.press("Enter");
-  await chat.getByRole("button", { name: "Apply Jira settings", exact: true }).waitFor();
+  await chat.getByRole("button", { name: "Apply tool settings", exact: true }).waitFor();
   assert.equal(await page.locator(".conn-path:not(.conn-temp)").count(), 0);
   const selected = await chat.getByRole("combobox", { name: /^Jira Pod/u }).inputValue();
   assert.ok(selected.length > 0);

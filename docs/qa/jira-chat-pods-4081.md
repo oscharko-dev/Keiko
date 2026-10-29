@@ -1,7 +1,7 @@
 # Epic #4081: Jira access Pods in Chat
 
-Current individual acceptance: **19/55** (#4082 AC1/AC4/AC5, #4083 AC1/AC2/AC7, #4084 AC1/AC2, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC6 and #4085 AC5/AC7).
-The remaining 42 criteria and final integrated qualification are open.
+Current individual acceptance: **23/55** (#4082 AC1/AC4/AC5, #4083 AC1/AC2/AC5/AC7, #4084 AC1/AC2, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC5/AC6, #4085 AC5/AC7 and #4086 AC1/AC7).
+The remaining 32 criteria and final integrated qualification are open.
 
 ## Delivery contract
 
@@ -142,9 +142,9 @@ Status: **Partial — not accepted**. Current Data Center pagination and endpoin
 
 Status: **Partial — not accepted**. Bounded pagination/results, schema/context override refusal and cancellation have retained domain/SDK tests. The real catalog groups read the hostile-comment fixture; their single-key search is not a pagination proof. A separate complete LiteLLM/Gemma SSE group now traverses all 26 reference issues through the real provider with exact request cursors and bounded pages, then proves an empty terminal page and zero writes. Mixed empty results require an actual successful sanitized observation. Full per-operation bounds/failure, hostile-content and final-artifact qualification remain open.
 
-- [ ] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
+- [x] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
 
-Status: **Partial — not accepted**. Durable canonical-turn journaling, GET-only retries, operation-aware confirmation and distinct acknowledged/unknown outcomes are implemented. The complete stable-artifact real-model fault group passes all five mutations under lost observation and committed-then-503, with canonical duplicates, fresh-process restart, Regenerate and independent remote counts. Four separate foreign PUT changes remain preserved. Browser transport-loss qualification and final gates remain open; Jira concurrency limits remain explicit.
+Status: **Accepted.** Current production journal/HTTP and SDK/binder suites pass 49 cases, including explicit oversized/truncated 201 followed by canonical replay: succeeded-unconfirmed, one provider execution and one remote effect. Existing proofs cover malformed/body-stream-lost acknowledgement, cancellation, all five mutation operations, foreign field/assignee changes, stale approval identities and consistent journal/route/UI/activity outcomes. Complete immutable live groups additionally prove all five mutations under lost observation and committed-then-503, fresh-process recovery and preserved foreign PUT changes. The three-case actual-browser group now closes physical response loss/reload/Regenerate with independent counts. Empty reconciliation cannot authorize execution; ADR-0128 states the unavoidable concurrency limits.
 
 - [x] **AC7:** With no explicit ceiling configured, the connector policy evaluates Chat-consumer and Coding-run calls against the same resolved `autonomous-delivery` ceiling; `KEIKO_CODING_DEPLOYMENT_CEILING=governed-assist` clamps both, and an unrecognized value fails closed to `governed-assist`. Proven through the production policy and composition, not a hand-built deps object.
 
@@ -198,9 +198,9 @@ Status: **Partial — not accepted**. Actual-Gateway mixed tests cover Data evid
 
 Status: **Partial — not accepted**. Existing registered owners cover offers, consent, exact approvals/claims, dispatch, settlement and late observations without content. Scoped calls, schema/authority injection refusal and hostile-result controls have retained tests; failure-path scanning is clean after the observation repairs. Full normal-Chat hostile-content qualification and final logging/gates remain open.
 
-- [ ] **AC5:** Response-loss, duplicate-delivery, streaming fallback, context-window retry, reconnect, reload and Regenerate tests assert Jira mutation counts. Completed or unresolved effects are not replayed; crash recovery presents unknown outcomes truthfully. Compaction and provider-adapter round trips preserve tool-call/result IDs, relationships and cumulative usage.
+- [x] **AC5:** Response-loss, duplicate-delivery, streaming fallback, context-window retry, reconnect, reload and Regenerate tests assert Jira mutation counts. Completed or unresolved effects are not replayed; crash recovery presents unknown outcomes truthfully. Compaction and provider-adapter round trips preserve tool-call/result IDs, relationships and cumulative usage.
 
-Status: **Partial — not accepted**. Canonical duplicates, response loss, late/unknown recovery, journal restart, paired history and compaction have scoped proofs. The 27-case public/Gateway suite now also proves one POST after a committed write followed by context overflow: retries preserve tool/result IDs, canonical replay adds no calls, and the original two-synthesis ceiling blocks a fourth repair request. Pre-admission SSE-to-buffered fallback remains green. Complete reconnect, browser response-loss/Regenerate and final live remote-effect-count qualification remain open.
+Status: **Accepted.** The completed immutable real Gemma/LiteLLM/Jira browser group covers lost write observation, committed-then-503 and physically cut browser completion. Each preserves canonical identity and exactly one remote effect through duplicate delivery, visible reload and Regenerate to response version 2. Existing production Gateway/context suites cover pre-admission streaming fallback, context overflow after a committed write, cumulative usage and paired tool/result IDs; durable journal/fresh-process proofs cover crash recovery. See the recorded artifact/receipt and limits below. Whole-PR final gates remain separate and are not claimed green.
 
 - [x] **AC6:** Mixed Jira/Data-Pod turns retain separate source attribution and the existing physical grounded-synthesis ceiling across orchestration, retries and repair. Production-path tests exhaust each cumulative budget without resetting it. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects.
 
@@ -238,9 +238,9 @@ Status: **Verified**. The current 236-case server group rejects Live capsule rea
 
 ### #4086 — Connect Jira Pods to Chat using existing workspace connectors and in-Chat tool cards
 
-- [ ] **AC1:** Drag/drop and the existing keyboard alternatives (port buttons and the Chat header select) can place and connect the same saved Jira Pod. The server acknowledges the connection before the UI indicates active tool access; a failed operation leaves no phantom edge or duplicate authority.
+- [x] **AC1:** Drag/drop and the existing keyboard alternatives (port buttons and the Chat header select) can place and connect the same saved Jira Pod. The server acknowledges the connection before the UI indicates active tool access; a failed operation leaves no phantom edge or duplicate authority.
 
-Status: **Partial — not accepted**. Existing drag/drop, keyboard ports and the Chat selector activate only after server acknowledgement, with failure/supersession/wrong-target tests. Rebuilt real-browser groups passed keyboard connection with Ask approval and native drag with Full access, each with one independently verified remote comment. Final artifact and full header/edge/browser qualification remain open.
+Status: **Accepted.** Current connection/workspace UI suites pass 223 cases, including delayed/refused server acknowledgement and superseded-binding rejection with no phantom edge. Retained complete licensed browser groups cover saved-Pod placement and connection by keyboard ports and native drag; the actual header selector is additionally exercised in the completed in-app-browser recovery group. Every path activates from server acknowledgement. These complementary interaction proofs satisfy the criterion; older visual receipt hashes are not claimed fresh.
 
 - [ ] **AC2:** Connecting a second Jira Pod requires an explicit replacement interaction, and the server still enforces one. Cancel or a failed replacement preserves the old binding. Successful atomic replacement invalidates old grants and pending work without granting both Pods, and replacement/disconnect updates edge, source indicator and tool availability coherently. Data Pod connections continue to function.
 
@@ -262,9 +262,9 @@ Status: **Partial — not accepted**. Durable outcomes, exact history projection
 
 Status: **Partial — not accepted**. The five-case wired browser lane now covers both languages and all principal surfaces, with 83 full-document axe checks, keyboard/focus, themes, contrast, reduced motion, narrow/maximized layout and explicit 200% viewport emulation. Eight inspected redacted captures and source-bound receipts are retained. The question-map target/focus defect is repaired. Native assistive-technology execution is not claimed; final UI coverage and existing workspace/Data/Workbench regression gates remain open.
 
-- [ ] **AC7:** The Chat mode selection persists per chat, defaults to Ask for approval, shows ceiling-clamped modes truthfully, and a model without verified tool calling presents an actionable unavailable state instead of silently answering without tools.
+- [x] **AC7:** The Chat mode selection persists per chat, defaults to Ask for approval, shows ceiling-clamped modes truthfully, and a model without verified tool calling presents an actionable unavailable state instead of silently answering without tools.
 
-Status: **Partial — not accepted**. Per-Chat selected mode defaults to Ask and persists; the shared control displays server-derived effective/clamped modes. Real browser Ask/Full groups and all-mode comment groups are retained. Missing/stale/unsupported tool proof produces actionable EN/DE refusal before provider/Jira dispatch, including the wired browser case. Full clamp/browser state coverage and final gates remain open.
+Status: **Accepted.** Current UI tests prove Ask as the default, saved per-chat selection, server-clamped effective mode and disabled unavailable choices. Store/route tests persist and project the mode. The wired browser refusal case gives actionable guidance for a model without verified tool calling and asserts unchanged provider/Jira counters with no read grant. The current 223-case connection/workspace run is green. The criterion does not require all final release gates or a separate screenshot for every clamp state.
 
 ### #4087 — Qualify the complete Jira Pod to MCP to Chat workflow against local Jira 10.3.26
 
@@ -3453,3 +3453,59 @@ CodeQL. Its Firefox scope failure is not reproduced locally: the exact test, all
 and the same complete 64-case Firefox shard pass unchanged. The CI trace shows startup reload
 and delayed chunks; no speculative fix, increased timeout or relaxed assertion is claimed.
 Whole-PR completion, final required checks and remaining acceptance are still open.
+
+### Complete browser recovery and mutation acceptance — 2026-10-29
+
+#4083 AC5 and #4091 AC5 are individually accepted, bringing the total to **21/55**;
+**34 criteria remain open**. This is not a final-head or merge-ready verdict.
+
+A complete manual in-app-browser session used the frozen `6638399b64d8a942d21456d53acac1780e2519a3`
+artifact, actual Gemma 4-31b-it through the local Docker LiteLLM gateway, and licensed Jira10.3.26.
+All three cases create/verify/connect the synthetic Pod, grant reading and approve the exact write.
+Lost write observation and committed-then-503 retain `unknown`; a physical browser SSE socket cut
+after the canonical completed write restores `succeeded`. Each case independently verifies one
+HTTP attempt, one forwarded write and exactly one matching remote comment. An identical canonical
+API redelivery preserves identities and counts; actual UI reload and Regenerate retain the outcome
+and produce response version2 without another mutation. API redelivery is explicitly an API proof;
+UI submission, decisions, reload and regeneration were actually operated in the in-app browser.
+
+Opening/resumed/closing license checks remain valid (2,215seconds remaining at completion). The
+7,320-file artifact inventory is unchanged before/after: SHA-256
+`cf725397870a35d1a9fa92e012d9c9f5f986174c7f95bf7f327f90f8cd1bfaeb`. The private complete receipt
+SHA-256 is `b97184740186a036d23978a7b7ce05e1be8c006aedc59b33a30399a4894da03f`.
+A separate earlier browser-cut diagnostic attempt did commit one comment, but lacked its physical
+cut witness; it is retained separately and never counted as a passed case. Two expired-consent
+attempts made zero requests/effects. Their misleading pre-dispatch outcome caused the canonical
+projection repair in5b99198b4; the new repair still requires its own rebuilt-browser observation.
+No failed intent was blindly repeated. No customer data, endpoints, credentials or raw logs are
+published.
+
+The direct truncated201 regression uses the production capped HTTP response and durable journal:
+`truncated: true` preserves acknowledged success as `succeeded-unconfirmed`; canonical replay under
+a new invocation produces no second journal row, provider execution or remote effect. Settled and
+replayed activity agree. The two production journal/SDK-binder suites pass49/49. Root test-inclusive
+TypeScript, scoped lint and formatting pass. This root check also exposed two fixture typing errors
+in the earlier AC7 test; the launch fixture and optional lifecycle method access are corrected,
+and its four unchanged policy scenarios pass. No product authority was broadened.
+
+The optional browser helpers now use the actual shared labels `Tool access` and `Apply tool settings`,
+as verified in the manual browser journey. The completed package aggregate remains diagnostic, not
+green: its three regression-first failures are repaired; two Dev-runner readiness failures still
+need valid isolated reproduction. The first isolated copy lacked built packages and cannot settle
+the original failure. The first real Sonar repeat exhausted its 4.8-GiB bridge heap. The unchanged gate then passes with zero unresolved findings using the documented 12-GiB setting; no analyzer rule, gate or user container is modified.
+
+### Connection and mode acceptance — 2026-10-29
+
+#4086 AC1 and AC7 are individually accepted from their literal behavior and complementary existing
+live/interaction proofs plus a fresh223/223 connection/workspace test run. The current total is
+**23/55**, with **32 remaining**. The newer physical-cut receipt does not replace keyboard/native-drag
+proofs; each evidence source is cited only for the path it actually exercised. Older accessibility
+receipts have source digest drift and are not claimed current; AC6 and integrated UI gates stay open.
+The two browser-fault helper suites pass10/10 after correcting the shared UI labels.
+
+The Dev-runner readiness cases pass unchanged2/2 in38.90seconds in a valid isolated checkout. The
+first isolated attempt was missing built workspace outputs and workspace-local dependencies; it
+was a setup failure and could not establish a product defect. The complete diagnostic aggregate
+stays failed, and its original shared-checkout readiness cause is not claimed proven. A stable
+isolated final aggregate remains required. The real local Sonar analyzer now passes with the
+documented12-GiB heap:454 analyzed JS/TS sources and zero unresolved findings.
