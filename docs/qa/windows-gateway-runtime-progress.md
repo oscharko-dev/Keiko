@@ -331,7 +331,24 @@ This remains an experiment, not an installed broker policy. It does not establis
 with arbitrary rules in the same system sublayer, crash recovery, simultaneous listeners or IPv6
 inbound access. Both gateway-family cases deliberately use IPv4 inbound control. The existing
 foreign-principal, concurrent-owner, independent-deny, egress and revoked-owner socket assertions
-remain mandatory. No successful runner receipt is yet claimed for this replacement.
+remain mandatory.
+
+At `e21added0960be3ea536caa124f998c777969f48`,
+[run 40924632511](https://github.com/oscharko-dev/Keiko/actions/runs/40924632511) stopped during
+socket baseline preparation before entering the replacement. A fresh-runner repeat,
+[run 40925223213](https://github.com/oscharko-dev/Keiko/actions/runs/40925223213), reached it:
+owned filter installation/readback/removal passed, but the first inbound connection was refused,
+so concurrent ownership was not reached. The ordinary socket proof also remained red.
+
+Further read-only inspection of the same local system utility shows an explicit `FWP_UINT64`
+weight of `UINT64_MAX` before `FwpmFilterAdd0`. The fixture's initial `FWP_UINT8` value 15 instead
+requested an automatically assigned weight in the highest range, which does not guarantee priority
+over the application-isolation block. The fixture now requires the explicit maximum weight while
+retaining its soft permit, four scope conditions, and independent-deny requirement. Its local
+regression rejects the old automatic weight and passes with the explicit value; lower and null
+weight readbacks are rejected. This is still a version-specific experiment, not permission to
+bypass administrator policy or use this system sublayer in production. No successful socket receipt
+is yet claimed for this correction.
 
 ## Outstanding production work and qualification
 

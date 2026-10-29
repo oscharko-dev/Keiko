@@ -9,6 +9,8 @@
 #include <string.h>
 
 struct gateway_inbound_fixture { HANDLE engine; GUID key; };
+/* WFP takes a non-const pointer but only reads this fixed value. Never modify it. */
+static UINT64 inbound_weight = ~(UINT64)0;
 
 static int inbound_package(PSID sid) {
   const SID_IDENTIFIER_AUTHORITY authority = SECURITY_APP_PACKAGE_AUTHORITY;
@@ -29,8 +31,8 @@ static void inbound_spec(PSID sid, const GUID *key, FWPM_FILTER0 *filter,
   /* A soft permit: independent sublayer BLOCK decisions must still win. This fixture does
    * not establish compatibility with arbitrary policies in the same system sublayer. */
   filter->action.type = FWP_ACTION_PERMIT;
-  filter->weight.type = FWP_UINT8;
-  filter->weight.uint8 = 15;
+  filter->weight.type = FWP_UINT64;
+  filter->weight.uint64 = &inbound_weight;
   filter->numFilterConditions = 4;
   filter->filterCondition = conditions;
   conditions[0].fieldKey = FWPM_CONDITION_ALE_PACKAGE_ID;
@@ -58,7 +60,8 @@ static int inbound_matches(const FWPM_FILTER0 *filter, PSID sid, const GUID *key
       !IsEqualGUID(&filter->subLayerKey, &FWPM_SUBLAYER_MPSSVC_APP_ISOLATION) ||
       filter->action.type != FWP_ACTION_PERMIT ||
       (filter->flags & ~FWPM_FILTER_FLAG_INDEXED) != 0 || filter->providerKey != NULL ||
-      filter->weight.type != FWP_UINT8 || filter->weight.uint8 != 15 ||
+      filter->weight.type != FWP_UINT64 || filter->weight.uint64 == NULL ||
+      *filter->weight.uint64 != ~(UINT64)0 ||
       filter->numFilterConditions != 4 || filter->filterCondition == NULL) return 0;
   for (UINT32 i = 0; i < 4; i++) {
     const FWPM_FILTER_CONDITION0 *c = &filter->filterCondition[i];
@@ -138,11 +141,14 @@ int gateway_inbound_spec_tests(void) {
   GUID key = {1, 0, 0, {0}};
   FWPM_FILTER0 filter;
   FWPM_FILTER_CONDITION0 conditions[4];
+  UINT64 lower_weight = 1;
   int ok = 1;
   if (!ConvertStringSidToSidW(L"S-1-15-2-1-2-3-4-5-6-7", &sid)) return 1;
   if (!ConvertStringSidToSidW(L"S-1-15-2-8-2-3-4-5-6-7", &peer)) { LocalFree(sid); return 1; }
-  for (unsigned mutation = 0; mutation < 12; mutation++) {
+  for (unsigned mutation = 0; mutation < 15; mutation++) {
     inbound_spec(sid, &key, &filter, conditions);
+    if (filter.weight.type != FWP_UINT64 || filter.weight.uint64 == NULL ||
+        *filter.weight.uint64 != ~(UINT64)0) ok = 0;
     switch (mutation) {
       case 1: filter.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT; break;
       case 2: conditions[0].conditionValue.sid = peer; break;
@@ -155,6 +161,9 @@ int gateway_inbound_spec_tests(void) {
       case 9: filter.providerKey = &key; break;
       case 10: filter.filterKey.Data1++; break;
       case 11: filter.flags = FWPM_FILTER_FLAG_INDEXED; break;
+      case 12: filter.weight.type = FWP_UINT8; filter.weight.uint8 = 15; break;
+      case 13: filter.weight.uint64 = NULL; break;
+      case 14: filter.weight.uint64 = &lower_weight; break;
       default: break;
     }
     if (inbound_matches(&filter, sid, &key) != (mutation == 0 || mutation == 11)) ok = 0;
