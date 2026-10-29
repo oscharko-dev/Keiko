@@ -1,6 +1,7 @@
 import {
   createEmittingSseResponseObservation,
   createSseResponseObservation,
+  createSseResponseEventMethods,
 } from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -809,5 +810,138 @@ describe("SSE response observation fixtures", (): void => {
       expect(fake.res.destroyed).toBe(false);
       expect(fake.res.writableEnded).toBe(false);
     }
+  });
+});
+
+describe("SSE response event methods", (): void => {
+  const eventMethods: readonly ("on" | "once" | "off")[] = ["on", "once", "off"];
+
+  it("accesses the response lazily after native listener forwarding", (): void => {
+    const emitter = new EventEmitter();
+    const first = createSseResponseObservation();
+    const second = createSseResponseObservation();
+    const trace: string[] = [];
+    emitter.on("newListener", (event: string | symbol): void => {
+      trace.push(`new:${String(event)}`);
+    });
+    let current = first.res;
+    const response = vi.fn((): ServerResponse => {
+      trace.push(`response:${String(emitter.listenerCount("probe"))}`);
+      return current;
+    });
+    const methods = createSseResponseEventMethods(emitter, response);
+    const listener = (): void => undefined;
+    expect(response).not.toHaveBeenCalled();
+    expect(trace).toEqual([]);
+    expect(methods.on("probe", listener)).toBe(first.res);
+    current = second.res;
+    expect(methods.once("probe", listener)).toBe(second.res);
+    expect(methods.off("probe", listener)).toBe(second.res);
+    expect(trace).toEqual(["new:probe", "response:1", "new:probe", "response:2", "response:1"]);
+    expect(response).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(eventMethods)(
+    "uses the live native %s method and propagates its thrown identity before response access",
+    (method): void => {
+      const emitter = new EventEmitter();
+      const fake = createSseResponseObservation();
+      const response = vi.fn((): ServerResponse => fake.res);
+      const methods = createSseResponseEventMethods(emitter, response);
+      const failure = new TypeError("native response event call refused");
+      const listener = (): void => undefined;
+      const forwarded = vi.spyOn(emitter, method).mockImplementation(function (
+        this: EventEmitter,
+      ): never {
+        expect(this).toBe(emitter);
+        throw failure;
+      });
+      try {
+        let observed: unknown;
+        try {
+          methods[method]("probe", listener);
+        } catch (error: unknown) {
+          observed = error;
+        }
+        expect(observed).toBe(failure);
+        expect(forwarded).toHaveBeenCalledExactlyOnceWith("probe", listener);
+        expect(response).not.toHaveBeenCalled();
+      } finally {
+        forwarded.mockRestore();
+      }
+    },
+  );
+
+  it.each(eventMethods)(
+    "propagates a live %s lookup failure without accessing the response",
+    (method): void => {
+      const emitter = new EventEmitter();
+      const fake = createSseResponseObservation();
+      const response = vi.fn((): ServerResponse => fake.res);
+      const methods = createSseResponseEventMethods(emitter, response);
+      const failure = new TypeError("native response event lookup refused");
+      let lookups = 0;
+      Object.defineProperty(emitter, method, {
+        configurable: true,
+        get(): never {
+          lookups += 1;
+          throw failure;
+        },
+      });
+      let observed: unknown;
+      try {
+        methods[method]("probe", (): void => undefined);
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(lookups).toBe(1);
+      expect(response).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(eventMethods)(
+    "creates a fresh own normal %s method with its original descriptor",
+    (method): void => {
+      const emitter = new EventEmitter();
+      const fake = createSseResponseObservation();
+      const response = vi.fn((): ServerResponse => fake.res);
+      const first = createSseResponseEventMethods(emitter, response);
+      const second = createSseResponseEventMethods(emitter, response);
+      expect(first).not.toBe(second);
+      expect(Object.keys(first)).toEqual(["on", "once", "off"]);
+      expect(Object.getPrototypeOf(first)).toBe(Object.prototype);
+      const descriptor = Object.getOwnPropertyDescriptor(first, method);
+      const value: unknown = descriptor?.value;
+      const other: unknown = Object.getOwnPropertyDescriptor(second, method)?.value;
+      expect(typeof value).toBe("function");
+      if (typeof value !== "function") {
+        throw new TypeError("Missing fixture response event method");
+      }
+      expect(other).not.toBe(value);
+      expect(descriptor).toEqual({
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      expect(value.name).toBe(method);
+      expect(value).toHaveLength(2);
+      expect(Object.hasOwn(value, "prototype")).toBe(false);
+      expect((): unknown => Reflect.construct(value, [])).toThrow(TypeError);
+      expect(response).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps existing response methods bound to their original local response", (): void => {
+    const fake = createSseResponseObservation();
+    const original = fake.res;
+    const replacement = createSseResponseObservation();
+    fake.res = replacement.res;
+    const listener = (): void => undefined;
+    expect(original.on("probe", listener)).toBe(original);
+    expect(original.once("probe", listener)).toBe(original);
+    expect(original.off("probe", listener)).toBe(original);
+    expect(fake.res).toBe(replacement.res);
   });
 });
