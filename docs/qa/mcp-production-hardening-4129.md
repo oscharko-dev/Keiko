@@ -177,3 +177,21 @@ obsolete URL token and require their normal bound authorization. Ambiguous crede
 The SDK adapter independently refuses raw access_token URLs. The original reproduction failed
 before the repair; registry, restart, legacy migration, ambiguity, OAuth and no-dispatch controls
 now pass. No new credential service or execution configuration was introduced.
+
+## Qualification checkpoint after 49a2839b5
+
+The complete UI coverage rerun passed 615 suites: 11,990 passing tests and one existing skip,
+with 94.37% line and 85.28% branch coverage. Architecture, architecture negative cases,
+formatting and the complete Activity Log inventory passed. The paired-host catalog producer
+measured dev baseline 57cca43df and candidate 49a2839b5 with the approved Node/npm pair;
+all six existing performance ceilings were preserved exactly.
+
+The correctly staged App Browser build passed an OpenCode/Gemma OAuth read and a Chat/Gemma
+OAuth read using the same central authorization. Chat required its own explicit read consent.
+An independent verified-TLS counter recorded exactly one additional read for each consumer,
+zero writes and no additional authorization exchange between the two consumers. Synthetic
+screenshots and the content-free case receipt are retained outside the repository.
+
+The final package coverage run, remaining interactive failure cases, native Windows execution,
+required CI on the pushed head and release qualification remain outstanding. This checkpoint
+does not authorize a production-readiness claim.
