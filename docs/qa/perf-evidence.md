@@ -187,6 +187,13 @@ complete sampling procedure must match, and source, ruler or host changes during
 The old single-candidate writer refuses a portable calibration. A portable refresh always measures
 both revisions again; it cannot attach new samples to a previous host's measurements.
 
+A schema 2 calibration has no single-candidate rebind writer. When a reviewed producer change
+intentionally moves a case identity (catalog revision or projection digest) without changing the
+ruler, the lockfile, the case inventory or any tool count, pass the first commit that carries the
+new identity as `--baseline`. The pair then calibrates and measures the new producer on one host and
+carries all six maxima and ceilings forward exactly, which is the schema 1 rebind's semantics.
+State the reason and the unchanged ruler, lockfile and tool counts in the pull request.
+
 Review and commit all three generated documents. Their commit IDs identify the measured source
 commits before the evidence-only commit; the documents themselves are outside the subject digest.
 The retained baseline directory allows inspection. This procedure applies only to the tool-catalog
