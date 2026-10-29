@@ -444,6 +444,23 @@ Compose 5.6.1. The Windows Docker Desktop daemon remained unavailable. Strict na
 default native tests, error-observability and the assembled package surface (6,937 files) also pass.
 The full repository CI matrix and the actual DesignPatterns workbench commit remain unverified.
 
+### Original socket proof: exact IPv6 firewall address, 2026-10-29
+
+[Run 40928978072](https://github.com/oscharko-dev/Keiko/actions/runs/40928978072)
+at `9921f235ca06648eb45c41a23572f71d51d627f1` passed all IPv4 socket controls and
+both outbound families of the separate IPv4 inbound-control proof. The original IPv6
+socket proof failed at `New-NetFirewallRule` (fixture stage 101), after successful WFP
+provisioning and before the connection attempt. Cleanup passed.
+
+The fixture now requests IPv6 loopback as an explicit single-host prefix (`::1/128`).
+Readback compares the exact address semantically and accepts only absent or full-width
+prefixes; other families, wider networks and non-loopback addresses remain rejected.
+Provider failures at rule creation retain their numeric HRESULT without exception text.
+A mocked NetSecurity regression executes the actual PowerShell fixture without modifying
+host policy: three canonical-address cases failed before the repair, and all 14 cases pass
+afterwards. Hosted IPv6 rule creation and the original socket proof still require verification;
+this syntax change is not yet evidence that the Windows provider accepts the rule.
+
 ## Platform references
 
 - [WFP engine sessions and dynamic object lifetime](https://learn.microsoft.com/en-us/windows/win32/api/fwpmu/nf-fwpmu-fwpmengineopen0)
