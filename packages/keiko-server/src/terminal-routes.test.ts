@@ -22,6 +22,7 @@ import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { handleTerminalEvents, openTerminalSseStream } from "./terminal-routes.js";
 import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "./sse-write.js";
+import { SSE_HEARTBEAT_INTERVAL_MS } from "./sse.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import {
@@ -1048,5 +1049,72 @@ describe("handleTerminalEvents backpressure correlation (ADR-0173 D5 / g12)", ()
     expect(records).toHaveLength(1);
     expect(records[0]?.source).toBe("sse.terminal.backpressure");
     expect(records[0]?.correlationId).toBe("req-terminal-thread-01");
+  });
+});
+
+describe("openTerminalSseStream heartbeat subscription ownership", () => {
+  it("unsubscribes before destruction when the idle heartbeat is the stalled frame", () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const subscribe = manager.subscribe;
+    const trace: string[] = [];
+    const destroyCounts: number[] = [];
+    const signals: SseBackpressureSignal[] = [];
+    const redactor = vi.fn((value: unknown): unknown => value);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    vi.spyOn(manager, "subscribe").mockImplementation((listener) => {
+      const release = subscribe(listener);
+      return (): void => {
+        trace.push("unsubscribe");
+        destroyCounts.push(fake.destroyCount);
+        release();
+      };
+    });
+    try {
+      openTerminalSseStream(
+        fake.res,
+        manager,
+        redactor,
+        (signal) => {
+          trace.push("observer");
+          destroyCounts.push(fake.destroyCount);
+          signals.push(signal);
+        },
+        "terminal-heartbeat-subscription",
+      );
+      expect(fake.writes).toEqual(["event: ready\ndata: {}\n\n"]);
+      fake.writeReturns = false;
+      vi.advanceTimersByTime(SSE_HEARTBEAT_INTERVAL_MS);
+      expect(fake.writes).toEqual(["event: ready\ndata: {}\n\n", ": keep-alive\n\n"]);
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(trace).toEqual([]);
+      expect(fake.destroyCount).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(trace).toEqual(["observer", "unsubscribe"]);
+      expect(destroyCounts).toEqual([0, 0]);
+      expect(signals).toEqual([{ accepted: false, frameBytes: 14 }]);
+      expect(fake.destroyCount).toBe(1);
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({
+        op: "sse.stream.closed",
+        correlationId: "terminal-heartbeat-subscription",
+        extra: { drainWaitCount: 1, reason: "backpressure-killed" },
+      });
+      manager.emitExternal({
+        kind: "execution-cancelled",
+        executionId: "exec-after-heartbeat",
+        payload: {},
+      });
+      expect(redactor).not.toHaveBeenCalled();
+      fake.emitClose();
+      expect(trace).toEqual(["observer", "unsubscribe"]);
+    } finally {
+      fake.emitClose();
+      resetServerLogger();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
   });
 });

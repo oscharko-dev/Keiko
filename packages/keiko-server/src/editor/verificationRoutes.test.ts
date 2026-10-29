@@ -3,6 +3,9 @@
 // ServerResponse, mirroring command-runner-routes.test.ts's openCommandSseStream pattern.
 
 import { EventEmitter } from "node:events";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -438,6 +441,137 @@ describe("openVerificationSseStream (AC6)", () => {
       expect(eventFrames(fake)).toHaveLength(2);
       fake.res.emit("close");
     } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("openVerificationSseStream subscription lifecycle", () => {
+  it("preserves manager receiver, subscription order and independent cursors", () => {
+    const first = makeFakeSseRes();
+    const second = makeFakeSseRes();
+    const manager = new FakeManager();
+    const subscribe = manager.subscribe;
+    const subscriptionWriteCounts: number[] = [];
+    let unsubscribeCount = 0;
+    vi.spyOn(manager, "subscribe").mockImplementation(function (
+      this: VerificationRunnerManager,
+      listener: VerificationRunnerEventEmitter,
+    ): () => void {
+      expect(this).toBe(manager);
+      subscriptionWriteCounts.push(first.writes.length + second.writes.length);
+      const release = subscribe(listener);
+      return (): void => {
+        unsubscribeCount += 1;
+        release();
+      };
+    });
+    const redact = vi.fn((value: unknown): unknown => value);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      openVerificationSseStream(
+        first.res,
+        manager,
+        redact,
+        undefined,
+        "verification-subscription-first",
+      );
+      openVerificationSseStream(
+        second.res,
+        manager,
+        redact,
+        undefined,
+        "verification-subscription-second",
+      );
+      expect(subscriptionWriteCounts).toEqual([0, 1]);
+      expect(first.writes).toEqual(["event: ready\ndata: {}\n\n"]);
+      expect(second.writes).toEqual(["event: ready\ndata: {}\n\n"]);
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-cancelled",
+        runId: "lifecycle-first",
+      });
+      expect(first.writes[1]).toContain("id: 1\nevent: verification:");
+      expect(second.writes[1]).toBe(first.writes[1]);
+      expect(redact).toHaveBeenCalledTimes(1);
+      first.res.emit("close");
+      first.res.emit("close");
+      expect(unsubscribeCount).toBe(1);
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-cancelled",
+        runId: "lifecycle-next",
+      });
+      expect(first.writes).toHaveLength(2);
+      expect(second.writes[2]).toContain("id: 2\nevent: verification:");
+      second.res.emit("close");
+      second.res.emit("close");
+      expect(unsubscribeCount).toBe(2);
+      expect(sink.events).toHaveLength(2);
+      expect(sink.events[0]).toMatchObject({
+        op: "sse.stream.closed",
+        correlationId: "verification-subscription-first",
+        extra: { frameCount: 2, reason: "client-disconnected" },
+      });
+      expect(sink.events[1]).toMatchObject({
+        op: "sse.stream.closed",
+        correlationId: "verification-subscription-second",
+        extra: { frameCount: 3, reason: "client-disconnected" },
+      });
+    } finally {
+      first.res.emit("close");
+      second.res.emit("close");
+      vi.restoreAllMocks();
+      resetServerLogger();
+    }
+  });
+
+  it("unsubscribes once before ready-stall destruction and retains close idempotency", () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSseRes();
+    const manager = new FakeManager();
+    const subscribe = manager.subscribe;
+    const trace: string[] = [];
+    vi.spyOn(manager, "subscribe").mockImplementation((listener) => {
+      const release = subscribe(listener);
+      return (): void => {
+        expect(fake.destroyCount).toBe(0);
+        trace.push("unsubscribe");
+        release();
+      };
+    });
+    fake.writeReturns = false;
+    try {
+      openVerificationSseStream(
+        fake.res,
+        manager,
+        (value) => value,
+        (signal) => {
+          expect(fake.destroyCount).toBe(0);
+          expect(signal).toEqual({ accepted: false, frameBytes: 23 });
+          trace.push("observer");
+        },
+      );
+      expect(trace).toEqual([]);
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(trace).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(trace).toEqual(["observer", "unsubscribe"]);
+      expect(fake.destroyCount).toBe(1);
+      fake.res.emit("close");
+      expect(trace).toEqual(["observer", "unsubscribe"]);
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-cancelled",
+        runId: "lifecycle-next",
+      });
+      expect(fake.writes.filter((frame) => !frame.startsWith(":"))).toEqual([
+        "event: ready\ndata: {}\n\n",
+      ]);
+    } finally {
+      fake.res.emit("close");
+      vi.restoreAllMocks();
       vi.useRealTimers();
     }
   });

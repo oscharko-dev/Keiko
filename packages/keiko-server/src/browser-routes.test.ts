@@ -1010,3 +1010,115 @@ describe("handleBrowserEvents backpressure correlation (ADR-0173 D5 / g12)", () 
     expect(records[0]?.correlationId).toBe("req-browser-thread-01");
   });
 });
+
+describe("openBrowserSseStream session subscription ownership", () => {
+  it("handles session closure reentrantly from ready before end can emit another event", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    manager.opened.push("session-reentrant");
+    const subscribe = manager.subscribe;
+    const write = fake.res.write.bind(fake.res);
+    const end = fake.res.end.bind(fake.res);
+    const trace: string[] = [];
+    const redactor = vi.fn((value: unknown): unknown => value);
+    vi.spyOn(manager, "subscribe").mockImplementation(function (
+      this: BrowserSessionManager,
+      sessionId: string,
+      listener: BrowserEventEmitter,
+    ): () => void {
+      expect(this).toBe(manager);
+      expect(sessionId).toBe("session-reentrant");
+      trace.push("subscribe");
+      const release = subscribe(sessionId, listener);
+      return (): void => {
+        trace.push("unsubscribe");
+        release();
+      };
+    });
+    vi.spyOn(fake.res, "write").mockImplementation((chunk: unknown): boolean => {
+      if (typeof chunk !== "string") throw new TypeError("expected an SSE string frame");
+      const accepted = write(chunk);
+      if (chunk === "event: ready\ndata: {}\n\n") {
+        trace.push("ready");
+        manager.emit("session-reentrant", browserEvent("session-reentrant", "session-closed", 7));
+      } else {
+        trace.push("closed-frame");
+      }
+      return accepted;
+    });
+    vi.spyOn(fake.res, "end").mockImplementation(() => {
+      trace.push("end");
+      manager.emit("session-reentrant", browserEvent("session-reentrant", "navigated", 8));
+      return end();
+    });
+    try {
+      openBrowserSseStream(fake.res, manager, "session-reentrant", redactor);
+      expect(trace).toEqual(["subscribe", "ready", "closed-frame", "unsubscribe", "end"]);
+      expect(fake.writes).toHaveLength(2);
+      expect(fake.writes[0]).toBe("event: ready\ndata: {}\n\n");
+      expect(fake.writes[1]).toContain("id: 1\nevent: browser:session-closed\n");
+      expect(fake.ended).toBe(true);
+      expect(fake.destroyCount).toBe(0);
+      expect(redactor).toHaveBeenCalledTimes(1);
+      fake.emitClose();
+      fake.emitClose();
+      manager.emit("session-reentrant", browserEvent("session-reentrant", "navigated", 9));
+      expect(trace).toEqual(["subscribe", "ready", "closed-frame", "unsubscribe", "end"]);
+      expect(redactor).toHaveBeenCalledTimes(1);
+    } finally {
+      fake.emitClose();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("preserves session keys and cache sharing while each connection keeps its own cursor", () => {
+    const manager = new FakeBrowserSessionManager();
+    manager.opened.push("session-a", "session-b");
+    const first = makeFakeSseRes();
+    const second = makeFakeSseRes();
+    const other = makeFakeSseRes();
+    const subscribe = manager.subscribe;
+    const receivers: unknown[] = [];
+    const sessionIds: string[] = [];
+    vi.spyOn(manager, "subscribe").mockImplementation(function (
+      this: BrowserSessionManager,
+      sessionId: string,
+      listener: BrowserEventEmitter,
+    ): () => void {
+      receivers.push(this);
+      sessionIds.push(sessionId);
+      return subscribe(sessionId, listener);
+    });
+    const redactor = vi.fn((value: unknown): unknown => value);
+    try {
+      openBrowserSseStream(first.res, manager, "session-a", redactor);
+      openBrowserSseStream(second.res, manager, "session-a", redactor);
+      openBrowserSseStream(other.res, manager, "session-b", redactor);
+      expect(receivers).toEqual([manager, manager, manager]);
+      expect(sessionIds).toEqual(["session-a", "session-a", "session-b"]);
+      const shared = browserEvent("session-a", "navigated", 17);
+      manager.emit("session-a", shared);
+      expect(first.writes).toHaveLength(2);
+      expect(second.writes[1]).toBe(first.writes[1]);
+      expect(first.writes[1]).toContain("id: 1\nevent: browser:navigated\n");
+      expect(other.writes).toEqual(["event: ready\ndata: {}\n\n"]);
+      expect(redactor).toHaveBeenCalledTimes(1);
+      manager.emit("session-b", browserEvent("session-b", "navigated", 29));
+      expect(other.writes[1]).toContain("id: 1\nevent: browser:navigated\n");
+      expect(first.writes).toHaveLength(2);
+      expect(second.writes).toHaveLength(2);
+      expect(redactor).toHaveBeenCalledTimes(2);
+      first.emitClose();
+      manager.emit("session-a", browserEvent("session-a", "navigated", 41));
+      expect(first.writes).toHaveLength(2);
+      expect(second.writes[2]).toContain("id: 2\nevent: browser:navigated\n");
+      expect(other.writes).toHaveLength(2);
+      expect(redactor).toHaveBeenCalledTimes(3);
+    } finally {
+      first.emitClose();
+      second.emitClose();
+      other.emitClose();
+      vi.restoreAllMocks();
+    }
+  });
+});

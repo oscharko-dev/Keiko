@@ -4,8 +4,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "node:events";
-import { SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "./sse.js";
+import { EventEmitter, getEventListeners } from "node:events";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { attachSseSubscription, SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "./sse.js";
 import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 
@@ -194,5 +196,168 @@ describe("bare ready-frame write pin (#3452 audit finding sse.ts:108)", () => {
     expect(offenders, `bare res.write(readyMessage()) found in:\n${offenders.join("\n")}`).toEqual(
       [],
     );
+  });
+});
+
+describe("attachSseSubscription lifecycle", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it.each(["abort-first", "close-first"] as const)(
+    "preserves acquisition/ready/listener order and unsubscribes once for %s",
+    (order) => {
+      const request = new IncomingMessage(new Socket());
+      const res = new ServerResponse(request);
+      const controller = new AbortController();
+      const trace: string[] = [];
+      let forwardedStop: (() => void) | undefined;
+      const write = vi.spyOn(res, "write").mockImplementation(() => {
+        trace.push("ready");
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
+        expect(res.listenerCount("close")).toBe(1);
+        return true;
+      });
+      try {
+        attachSseSubscription(res, controller, function (this: undefined, stop): () => void {
+          expect(this).toBeUndefined();
+          expect(write).not.toHaveBeenCalled();
+          expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+          forwardedStop = stop;
+          trace.push("subscribe");
+          return function (this: undefined): void {
+            expect(this).toBeUndefined();
+            trace.push("unsubscribe");
+            forwardedStop?.();
+          };
+        });
+        expect(trace).toEqual(["subscribe", "ready"]);
+        expect(write).toHaveBeenCalledExactlyOnceWith("event: ready\ndata: {}\n\n");
+        expect(res.listenerCount("close")).toBe(2);
+        if (order === "abort-first") controller.abort();
+        res.emit("close");
+        controller.abort();
+        res.emit("close");
+        expect(trace).toEqual(["subscribe", "ready", "unsubscribe"]);
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      } finally {
+        res.emit("close");
+        request.destroy();
+      }
+    },
+  );
+
+  it("propagates a subscription factory failure before writing ready", () => {
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const controller = new AbortController();
+    const failure = new TypeError("subscription acquisition refused");
+    const write = vi.spyOn(res, "write");
+    try {
+      let observed: unknown;
+      try {
+        attachSseSubscription(res, controller, (): never => {
+          throw failure;
+        });
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(write).not.toHaveBeenCalled();
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(res.listenerCount("close")).toBe(0);
+    } finally {
+      request.destroy();
+    }
+  });
+
+  it("sets the stop flag before a bare unsubscribe throws and never retries it", () => {
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const failure = new TypeError("subscription release refused");
+    let forwardedStop: (() => void) | undefined;
+    let calls = 0;
+    vi.spyOn(res, "write").mockReturnValue(true);
+    try {
+      attachSseSubscription(res, new AbortController(), (stop) => {
+        forwardedStop = stop;
+        return function (this: undefined): never {
+          expect(this).toBeUndefined();
+          calls += 1;
+          throw failure;
+        };
+      });
+      expect(forwardedStop).toBeTypeOf("function");
+      let observed: unknown;
+      try {
+        forwardedStop?.();
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(() => forwardedStop?.()).not.toThrow();
+      expect(() => res.emit("close")).not.toThrow();
+      expect(calls).toBe(1);
+    } finally {
+      res.emit("close");
+      request.destroy();
+    }
+  });
+
+  it("uses canonical ready backpressure and records the correlated terminal loss evidence", () => {
+    vi.useFakeTimers();
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const controller = new AbortController();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const trace: string[] = [];
+    const write = vi.spyOn(res, "write").mockReturnValue(false);
+    const destroy = vi.spyOn(res, "destroy");
+    try {
+      attachSseSubscription(
+        res,
+        controller,
+        () => (): void => {
+          expect(res.destroyed).toBe(false);
+          trace.push("unsubscribe");
+        },
+        (signal) => {
+          expect(res.destroyed).toBe(false);
+          expect(signal).toEqual({ accepted: false, frameBytes: 23 });
+          trace.push("observer");
+        },
+        "subscription-ready-stall",
+      );
+      expect(write).toHaveBeenCalledExactlyOnceWith("event: ready\ndata: {}\n\n");
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(trace).toEqual([]);
+      expect(controller.signal.aborted).toBe(false);
+      expect(destroy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(trace).toEqual(["observer", "unsubscribe"]);
+      expect(controller.signal.aborted).toBe(true);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(res.destroyed).toBe(true);
+      res.emit("close");
+      res.emit("close");
+      expect(trace).toEqual(["observer", "unsubscribe"]);
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({
+        op: "sse.stream.closed",
+        correlationId: "subscription-ready-stall",
+        extra: {
+          frameCount: 1,
+          bytesStreamed: 23,
+          drainWaitCount: 1,
+          reason: "backpressure-killed",
+        },
+      });
+    } finally {
+      res.emit("close");
+      request.destroy();
+    }
   });
 });

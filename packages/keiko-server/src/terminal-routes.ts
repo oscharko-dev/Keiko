@@ -15,7 +15,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "./task-workspace/workspace-root-access.js";
 import { recordWorkspaceRootDenied } from "./workspace-root-denial-log.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
+import { SSE_HEADERS, attachSseSubscription, startSseHeartbeat } from "./sse.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
 import {
   errorBody,
@@ -302,24 +302,17 @@ export function openTerminalSseStream(
     ...(correlationId === undefined ? {} : { correlationId }),
   });
   let seq = 0;
-  const unsubscribe = manager.subscribe((event) => {
-    seq += 1;
-    writeTerminalEvent(res, event, seq, redactor, controller, onBackpressure);
-  });
-  let unsubscribed = false;
-  const stop = (): void => {
-    if (unsubscribed) return;
-    unsubscribed = true;
-    unsubscribe();
-  };
-  controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame goes through the same protective path: a client that is already not draining
-  // must abort and unsubscribe here too, rather than leaving the subscription live until some
-  // later event happens to trip writeSseFrame.
-  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
-  res.on("close", () => {
-    stop();
-  });
+  attachSseSubscription(
+    res,
+    controller,
+    () =>
+      manager.subscribe((event) => {
+        seq += 1;
+        writeTerminalEvent(res, event, seq, redactor, controller, onBackpressure);
+      }),
+    onBackpressure,
+    correlationId,
+  );
 }
 
 function writeTerminalEvent(
