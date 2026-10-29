@@ -1,7 +1,7 @@
 # Epic #4081: Jira access Pods in Chat
 
-Current individual acceptance: **25/55** (#4082 AC1/AC4/AC5, #4083 AC1/AC2/AC3/AC4/AC5/AC7, #4084 AC1/AC2, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC5/AC6, #4085 AC5/AC7 and #4086 AC1/AC7).
-The remaining 30 criteria and final integrated qualification are open.
+Current individual acceptance: **28/55** (#4082 AC1/AC2/AC3/AC4/AC5, #4083 AC1/AC2/AC3/AC4/AC5/AC7, #4084 AC1/AC2/AC3, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4091 AC1/AC2/AC5/AC6, #4085 AC5/AC7 and #4086 AC1/AC7).
+The remaining 27 criteria and final integrated qualification are open.
 
 ## Delivery contract
 
@@ -74,13 +74,13 @@ their 55 AC statements still match this map exactly. No checkbox is completed by
 
 Status: **Accepted.** Production verifier tests cover bounded REST-v2 serverInfo/myself responses, HTML 200/login, redirects, 401/403, unsupported versions, malformed/inactive identity, timeout, TLS and network errors. The real UI client-to-route suite proves Cloud Basic/v3 compatibility and Data Center PAT creation/verification. Current scoped provider/server runs pass 673 and 1,197 cases. Licensed non-admin verification, native PAT revocation and stopped-instance recovery have complete live receipts. The former response-class gap note was stale; no additional live simulation of every protocol failure is required by this criterion.
 
-- [ ] **AC2:** Name/base URL/deployment/credential reference persist through the current owner; cleartext PAT is absent from saved metadata, responses, browser recovery, MCP configuration, logs and evidence. Resolve the PAT only at outbound execution; Keiko-managed rotation/revocation updates the connector generation for dependent consumers. Jira-side revocation is enforced by Jira on each call; an observed auth failure invalidates local readiness and pending work.
+- [x] **AC2:** Name/base URL/deployment/credential reference persist through the current owner; cleartext PAT is absent from saved metadata, responses, browser recovery, MCP configuration, logs and evidence. Resolve the PAT only at outbound execution; Keiko-managed rotation/revocation updates the connector generation for dependent consumers. Jira-side revocation is enforced by Jira on each call; an observed auth failure invalidates local readiness and pending work.
 
-Status: **Partial — not accepted**. Vault-only custody, generation-pinned materialization and public projections are implemented. Observed current 401 invalidates readiness, authority, read grants and write approvals; 403/stale observations do not revoke a replacement. The latest native revocation and actual-Chat rotation groups prove generation invalidation and a stale verification refusal. Their retained product/log sweep finds no tested secret; no Gateway vault is duplicated. Final browser-persistence/leak and complete lifecycle qualification remain open.
+Status: **Accepted.** Current custody/route/metadata/transport/redaction suites pass 376/376. They assert public and on-disk secret absence, execution-only PAT materialization, stale-generation refusal before ciphertext access, current-401 invalidation and isolation from stale responses. Existing browser persistence/restore and token replacement tests retain no cleartext credential. Complete native PAT and actual Chat consent/rotation receipts independently verify revocation, generation advance, stale-success refusal, process restart and use of the newly authorized identity. Their artifact/log sweeps are non-vacuous; no credential owner is duplicated.
 
-- [ ] **AC3:** Root and non-root Jira context paths work. Exactly admitted enterprise/private and trusted local-lab HTTPS targets work; other hosts/ports, path escape, Keiko's own listener, metadata/link-local addresses, DNS rebinding and mixed-class answers, cross-origin redirects, untrusted certificates and expired certificates remain refused, including the proxy path. Admission cannot be enabled through environment variables or the global private-egress flag.
+- [x] **AC3:** Root and non-root Jira context paths work. Exactly admitted enterprise/private and trusted local-lab HTTPS targets work; other hosts/ports, path escape, Keiko's own listener, metadata/link-local addresses, DNS rebinding and mixed-class answers, cross-origin redirects, untrusted certificates and expired certificates remain refused, including the proxy path. Admission cannot be enabled through environment variables or the global private-egress flag.
 
-Status: **Partial — not accepted**. Exact operator-owned targets, context paths, direct/proxy DNS pinning and TLS/redirect refusals have retained transport tests. Real trusted HTTPS/admission-removal probes passed. Final direct/proxy boundary regression and delivered-head qualification remain open.
+Status: **Accepted.** The fresh 376-case run includes exact origin/port/context admission, path escape before credential lookup, own-listener/metadata/link-local refusals, direct/proxy rebinding and mixed-class DNS rejection, real pinned HTTPS CONNECT and trusted/untrusted/expired TLS behavior. Environment/global private-egress flags cannot create connector admission. The retained live HTTPS checkpoint proves trusted-CA success and trust/admission removal; other refusals are deterministic transport proofs, not falsely described as physical Jira experiments.
 
 - [x] **AC4:** Existing saved Cloud connectors and Data Pods load without migration loss. Live Jira Pod creation and readiness do not require USearch, an embedding model, indexing or a sync job. A Data Center connector refuses sync with a closed reason and performs no sync request; Cloud sync is unchanged.
 
@@ -164,9 +164,9 @@ Status: **Accepted.** Authenticated concurrent PATCH tests admit one binding and
 
 Status: **Accepted.** Production shared-policy/composition tests cover all three modes, default and narrower deployment ceilings, per-chat persistence, denied/expired authority and zero-dispatch refusal. Exact action approval is separate from the binding/generation-scoped reusable read grant. The current combined authority/composition run passes 89/89; retained actual-model buffered/SSE/browser mode groups and current UI approval/remote-effect observations support the execution behavior. Complete operations are independently qualified under #4083 AC2; this criterion does not require an additional full catalog for every mode.
 
-- [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
+- [x] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
-Status: **Partial — not accepted**. Lifecycle commits invalidate work through existing custody/store owners. Direct credential routes, shared-Pod Chats, stale verification and observed current 401 have route proofs; a rebuilt browser lifecycle group exercised rename, distinct token replacement, grant revocation, reverification and removal. New live verification and consent groups prove native PAT revocation, stale-success refusal and actual Chat rotation to a different identity with fresh disclosure. Pending-decision tests drain with zero Jira calls. The complete queued/in-flight live race matrix with independent remote counts remains open.
+Status: **Accepted.** Current lifecycle/isolation/approval/authority owner suites pass 207/207. Actual credential routes and custody rotation revoke both shared-Pod pending writes with zero requests while an unrelated Pod remains usable; disconnect, deletion, replacement, delayed verification and pre-effect generation checks cannot substitute old/new credentials. Ordinary HTTP-port tests distinguish current401 invalidation from403 and stale observations. Complete native-PAT/actual Chat rotation receipts supply the real revocation and fresh-identity proof. This criterion asks for these lifecycle tests; it does not require every permutation to be repeated as a live browser experiment.
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
@@ -3533,3 +3533,23 @@ umask0077 to every test process. The permission fixture passes under0022 and rep
 failure under0077; no product or fixture was changed. The contaminated run remains diagnostic.
 The replacement run verifies0022 and exactNode24.18.0/npm11.16.0, with the log precreated0600.
 Full aggregate, final CI/review settlement and remaining acceptance criteria stay open.
+
+### Custody, network and lifecycle acceptance — 2026-10-29
+
+#4082 AC2/AC3 and #4084 AC3 are individually accepted: **28/55**, with **27 still open**.
+Fresh current-source suites pass376 custody/metadata/route/transport/redaction cases and207
+lifecycle/isolation/approval/authority cases. Production custody tests refuse stale generations
+before ciphertext access; current401 observations invalidate readiness and pending work without
+revoking later replacements. Exact direct/proxy target admission, DNS/TLS and environment refusal
+remain enforced. Shared-Pod pending work revokes with zero HTTP while the unrelated Pod remains
+usable. These complement the complete licensed native-PAT, consent/restart/rotation and HTTPS
+receipts; no claim is made that every deterministic boundary was reproduced physically in Jira.
+
+The old session expired after its completed qualification groups. It was stopped via its own
+manifest with volumes retained. A new independent session completed the normal supported wizard,
+all fixture classes and HTTPS/read/write preflight on2026-10-29. A timed-out initial license POST
+was reconciled before continuation; no uncertain mutation was blindly replayed, no clock/license
+code/database data was changed. The new instance has26 reference issues and all three owned
+containers healthy; the closing preflight observed10,475seconds of valid license. Its private
+receipts and synthetic PATs remain outside the repository. Actual UI creation and verification
+of a new Pod against this instance have passed; the additional expiry-display test remains open.
