@@ -15,12 +15,7 @@ import { parseContainerRunRequest } from "@oscharko-dev/keiko-contracts/runtime/
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import type { ContainerRunInput, ContainerRunnerManager } from "./containerRunner.js";
 import type { UiHandlerDeps } from "../deps.js";
-import {
-  SSE_HEADERS,
-  startSseHeartbeat,
-  attachSseSubscription,
-  writeNamespacedSseEvent,
-} from "../sse.js";
+import { openPlainNamespacedSseStream } from "../sse.js";
 import type { SseBackpressureSignal } from "../sse-write.js";
 import {
   errorBody,
@@ -251,25 +246,18 @@ export function openContainerSseStream(
   onBackpressure?: (signal: SseBackpressureSignal) => void,
   correlationId?: string,
 ): void {
-  res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
   // Per-connection abort: a slow-client backpressure kill (writeSseFrame) aborts this controller,
   // which unsubscribes from the manager so no further frames are produced for a dead socket. The
   // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
   // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
   // (hence no abort) can occur before `unsubscribe` is assigned.
-  const controller = new AbortController();
-  let seq = 0;
-  attachSseSubscription(
+  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
+  // the per-connection `id:` cursor differs between them.
+  openPlainNamespacedSseStream(
     res,
-    controller,
-    () =>
-      manager.subscribe((event) => {
-        seq += 1;
-        // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
-        // the per-connection `id:` cursor differs between them.
-        writeNamespacedSseEvent(res, event, seq, "container", redactor, controller, onBackpressure);
-      }),
+    "container",
+    redactor,
+    (listener) => manager.subscribe(listener),
     onBackpressure,
     correlationId,
   );

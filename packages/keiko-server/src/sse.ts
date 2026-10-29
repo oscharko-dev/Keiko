@@ -104,6 +104,33 @@ export function writeNamespacedSseEvent(
   writeSseFrame(res, frame, controller, onBackpressure);
 }
 
+// These three streams share a plain heartbeat. Keep it before controller creation and defer the
+// native subscription factory until attachSseSubscription acquires the listener.
+export function openPlainNamespacedSseStream(
+  res: ServerResponse,
+  namespace: "command" | "verification" | "container",
+  redactor: Redactor,
+  subscribe: (listener: (event: { readonly kind: string }) => void) => () => void,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
+): void {
+  res.writeHead(200, SSE_HEADERS);
+  startSseHeartbeat(res);
+  const controller = new AbortController();
+  let seq = 0;
+  attachSseSubscription(
+    res,
+    controller,
+    () =>
+      subscribe((event) => {
+        seq += 1;
+        writeNamespacedSseEvent(res, event, seq, namespace, redactor, controller, onBackpressure);
+      }),
+    onBackpressure,
+    correlationId,
+  );
+}
+
 // The synthetic message sent once the buffered replay completes, signalling the client that it is
 // now live. Carries no data payload.
 export function readyMessage(): string {

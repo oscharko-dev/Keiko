@@ -8,6 +8,8 @@ import { EventEmitter, getEventListeners } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import {
+  openPlainNamespacedSseStream,
+  SSE_HEARTBEAT_INTERVAL_MS,
   attachSseSubscription,
   SSE_HEADERS,
   startSseHeartbeat,
@@ -495,6 +497,102 @@ describe("writeNamespacedSseEvent", () => {
       expect(res.listenerCount("close")).toBe(0);
       expect(controller.signal.aborted).toBe(false);
     } finally {
+      request.destroy();
+    }
+  });
+});
+
+describe("openPlainNamespacedSseStream", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("sets headers and a plain heartbeat before a failing acquisition", (): void => {
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const failure = new TypeError("plain stream subscription refused");
+    const writeHead = vi.spyOn(res, "writeHead");
+    const timer = vi.spyOn(globalThis, "setInterval");
+    const write = vi.spyOn(res, "write").mockReturnValue(true);
+    const subscribe = vi.fn(function (this: undefined): never {
+      expect(this).toBeUndefined();
+      expect(writeHead).toHaveBeenCalledExactlyOnceWith(200, SSE_HEADERS);
+      expect(timer).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Function),
+        SSE_HEARTBEAT_INTERVAL_MS,
+      );
+      const [headerOrder] = writeHead.mock.invocationCallOrder;
+      const [timerOrder] = timer.mock.invocationCallOrder;
+      if (headerOrder === undefined || timerOrder === undefined) {
+        throw new TypeError("plain stream setup observations missing");
+      }
+      expect(headerOrder).toBeLessThan(timerOrder);
+      expect(res.listenerCount("close")).toBe(1);
+      expect(write).not.toHaveBeenCalled();
+      throw failure;
+    });
+    try {
+      let observed: unknown;
+      try {
+        openPlainNamespacedSseStream(res, "command", (value): unknown => value, subscribe);
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(subscribe).toHaveBeenCalledOnce();
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      res.emit("close");
+      request.destroy();
+    }
+  });
+
+  it("keeps a stalled heartbeat unwired and releases only on close", (): void => {
+    vi.useFakeTimers();
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const trace: string[] = [];
+    const release = vi.fn((): void => {
+      trace.push(res.destroyed ? "release-after-destroy" : "release-before-destroy");
+    });
+    const observer = vi.fn((): void => undefined);
+    const write = vi.spyOn(res, "write").mockReturnValueOnce(true).mockReturnValue(false);
+    const destroy = vi.spyOn(res, "destroy");
+    try {
+      openPlainNamespacedSseStream(
+        res,
+        "container",
+        (value): unknown => value,
+        () => release,
+        observer,
+        "plain-heartbeat-stall",
+      );
+      expect(write).toHaveBeenCalledExactlyOnceWith("event: ready\ndata: {}\n\n");
+      vi.advanceTimersByTime(SSE_HEARTBEAT_INTERVAL_MS);
+      expect(write).toHaveBeenNthCalledWith(2, ": keep-alive\n\n");
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(destroy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(res.destroyed).toBe(true);
+      expect(observer).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      res.emit("close");
+      res.emit("close");
+      expect(trace).toEqual(["release-after-destroy"]);
+      expect(release).toHaveBeenCalledOnce();
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({
+        op: "sse.stream.closed",
+        correlationId: "plain-heartbeat-stall",
+        extra: { drainWaitCount: 1, reason: "backpressure-killed" },
+      });
+    } finally {
+      res.emit("close");
       request.destroy();
     }
   });
