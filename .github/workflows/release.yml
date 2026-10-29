@@ -170,7 +170,7 @@ jobs:
       deployments: read
       id-token: write
       statuses: read
-    timeout-minutes: 75
+    timeout-minutes: 150
     env:
       # The button releases stable versions only, and a stable version is npm's latest.
       NPM_DIST_TAG: latest
@@ -280,6 +280,6 @@ jobs:
           # success and before the version-specific registry endpoint returns HTTP 200. v1.0.3 took
           # roughly 14 minutes. Thirty reads, 30-second waits, and hard 15-second ceilings on each
           # version and dist-tag probe give a provable worst-case verification time below 30 minutes.
-          KEIKO_RELEASE_VERIFY_ATTEMPTS: "30"
-          KEIKO_RELEASE_VERIFY_DELAY_MS: "30000"
+          KEIKO_RELEASE_VERIFY_ATTEMPTS: "80"
+          KEIKO_RELEASE_VERIFY_DELAY_MS: "60000"
         run: npm run release:publish -- --tag "$NPM_DIST_TAG"

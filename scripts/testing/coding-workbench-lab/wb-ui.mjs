@@ -18,6 +18,7 @@ import {
   browserBaseUrl,
   describeSnapshot,
   exitCodeForState,
+  errorMessage,
   formatTaskList,
   gateActions,
   labBaseUrl,
@@ -282,7 +283,7 @@ export async function operateRun(page, options) {
 async function driveRun(browser, options) {
   const context = await browser.newContext({ viewport: VIEWPORT, baseURL: options.base });
   const page = await context.newPage();
-  page.on("pageerror", (error) => log("pageerror", String(error).slice(0, 200)));
+  page.on("pageerror", (error) => log("pageerror", errorMessage(error).slice(0, 200)));
   await seedWorkbenchWindow(page, options.repo);
   const { fragment } = await mintPairing();
   await page.goto(`/${fragment}`);

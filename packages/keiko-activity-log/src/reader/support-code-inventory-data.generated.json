@@ -1359,6 +1359,7 @@
     "keiko-server/editor/assuredGateRunner",
     "keiko-server/editor/assuredPreFilter",
     "keiko-server/editor/assuredPreFilterRunner",
+    "keiko-server/editor/bridgeRegistrationEvidence",
     "keiko-server/editor/bufferSafetyEvidence",
     "keiko-server/editor/bufferSafetyTargets",
     "keiko-server/editor/builtinLanguageProviders",

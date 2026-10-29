@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8946efb612ea0209611f7aafe7f7f0f305fe07fd3621dc2e7e83a7fdbcd2c71f"
+    "catalogDigest": "3664742a45867b95751354b36579ddabd51ba7bf7b0a60cc76ee858e8ecbd559"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 607,
-    "proofCount": 630,
-    "resolvedProofCount": 630,
-    "failureClassCount": 379,
+    "operationCount": 610,
+    "proofCount": 633,
+    "resolvedProofCount": 633,
+    "failureClassCount": 381,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -163,6 +163,7 @@
         "client.binding.candidates-offered",
         "client.binding.choice-kept",
         "client.binding.choice-withdrawn",
+        "client.binding.project-open-exhausted",
         "client.binding.resolved",
         "client.binding.target-missing",
         "client.citation.activated",
@@ -172,6 +173,7 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.editor.line-ending.adopted",
         "client.evidence.inspected",
         "client.files-scope.decision",
         "client.git-operation.attempted",
@@ -581,6 +583,7 @@
       "operations": [
         "chat.tool-authority.operation",
         "dap.debug-runtime.selected",
+        "editor.agent.bridge-registration",
         "editor.agent.changeset-provenance",
         "editor.buffer-safety.state",
         "editor.local-history.rekey.completed",
@@ -829,6 +832,7 @@
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
     "client-update-notice": ["client-diagnostics.dependency-failure"],
+    "client-editor-line-ending": ["client-diagnostics.dependency-failure"],
     "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
@@ -937,6 +941,7 @@
     "editor-local-history-rekey": ["editor-delivery.dependency-failure"],
     "editor-producer-turn": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-availability": ["editor-delivery.dependency-failure"],
+    "editor-bridge-registration": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-authority": ["editor-delivery.rejection"],
     "embedding-batch": ["memory-knowledge.rejection", "model-gateway.rejection"],
     "embedding-batch-grouping": ["memory-knowledge.dependency-failure"],
@@ -1386,6 +1391,9 @@
     "client.binding.choice-withdrawn.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
+    "client.binding.project-open-exhausted.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
     "client.binding.resolved.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.binding.target-missing.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
@@ -1411,6 +1419,9 @@
     ],
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.editor.line-ending.adopted.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.evidence.inspected.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
@@ -1859,6 +1870,9 @@
     ],
     "dap.debug-runtime.selected.emitted-line": [
       "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
+    ],
+    "editor.agent.bridge-registration.lifecycle": [
+      "packages/keiko-server/src/editor/agentRoutes.test.ts"
     ],
     "editor.agent.changeset-provenance.emitted-line": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"

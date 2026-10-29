@@ -314,6 +314,9 @@ async function revertState(
   try {
     return { staged: false, ...diffCounts(await turnDiff(run)) };
   } catch (error) {
+    // A read the run's teardown overtook (a server stop disposes the runtime under it) ends like a
+    // read of a run that is gone: no counts and no failure, since nothing was reverted (#4119).
+    if (ports.readyRun(runId) !== run) return undefined;
     recordRevertRefusal(ports, runId, "state", "revert-failed", undefined, error);
     return undefined;
   }

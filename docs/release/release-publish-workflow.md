@@ -606,10 +606,11 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   A fresh publish is unaffected, because `npm publish --tag <tag>` sets the dist-tag atomically as
   part of that same authenticated call; `ensurePackageDistTag` in `scripts/release-publish.mjs`
   verifies the version-specific registry endpoint and then the dist-tag with the same attempt/delay
-  settings as post-publish registry verification. The Actions workflow uses 30 total reads with one
-  minute between reads because npm Trusted Publishing can quarantine an OIDC/provenance publish
-  after the CLI reports success; v1.0.3 took roughly 14 minutes. Retryable HTTP and transport
-  failures consume that same budget. Before publishing, a separate three-probe check distinguishes
+  settings as post-publish registry verification. The Actions workflow uses 80 total reads with one
+  minute between reads (about 79 minutes of waiting) because npm Trusted Publishing can quarantine
+  an OIDC/provenance publish after the CLI reports success; v1.0.3 took roughly 14 minutes and
+  v1.3.2 took 56 minutes (#4125). The publish job's 150-minute timeout bounds that wait even when
+  every read times out. Retryable HTTP and transport failures consume that same budget. Before publishing, a separate three-probe check distinguishes
   a real 404 from transient registry uncertainty and refuses to mutate when existence is unknown.
   If the post-publish budget is exhausted, do not add a registry token to the workflow and do not
   edit deployment state by hand. Wait until
