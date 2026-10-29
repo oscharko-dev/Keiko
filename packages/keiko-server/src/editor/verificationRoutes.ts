@@ -13,7 +13,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EditorVerificationEvent } from "@oscharko-dev/keiko-contracts";
 import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { redactedEventJson } from "../sse-frame-cache.js";
-import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "../sse.js";
+import { SSE_HEADERS, startSseHeartbeat, attachSseSubscription } from "../sse.js";
 import { writeSseFrame, type SseBackpressureSignal } from "../sse-write.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
@@ -279,24 +279,17 @@ export function openVerificationSseStream(
   startSseHeartbeat(res);
   const controller = new AbortController();
   let seq = 0;
-  const unsubscribe = manager.subscribe((event) => {
-    seq += 1;
-    writeVerificationEvent(res, event, seq, redactor, controller, onBackpressure);
-  });
-  let unsubscribed = false;
-  const stop = (): void => {
-    if (unsubscribed) return;
-    unsubscribed = true;
-    unsubscribe();
-  };
-  controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame takes the same flow control as every event frame: a reader that never drains it
-  // aborts this controller at the stall bound, which unsubscribes the stream, so the socket is
-  // destroyed exactly once.
-  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
-  res.on("close", () => {
-    stop();
-  });
+  attachSseSubscription(
+    res,
+    controller,
+    () =>
+      manager.subscribe((event) => {
+        seq += 1;
+        writeVerificationEvent(res, event, seq, redactor, controller, onBackpressure);
+      }),
+    onBackpressure,
+    correlationId,
+  );
 }
 
 function writeVerificationEvent(

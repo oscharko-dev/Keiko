@@ -13,7 +13,7 @@ import { CommandRunnerError } from "./command-runner-errors.js";
 import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js";
 import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "./sse.js";
+import { SSE_HEADERS, startSseHeartbeat, attachSseSubscription } from "./sse.js";
 import { writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
 import {
@@ -198,23 +198,17 @@ export function openCommandSseStream(
   // (hence no abort) can occur before `unsubscribe` is assigned.
   const controller = new AbortController();
   let seq = 0;
-  const unsubscribe = manager.subscribe((event) => {
-    seq += 1;
-    writeCommandEvent(res, event, seq, redactor, controller, onBackpressure);
-  });
-  let unsubscribed = false;
-  const stop = (): void => {
-    if (unsubscribed) return;
-    unsubscribed = true;
-    unsubscribe();
-  };
-  controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame takes the same abort-and-destroy path as every event frame: refused, it aborts
-  // this controller at once, which unsubscribes the stream, so the socket is destroyed exactly once.
-  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
-  res.on("close", () => {
-    stop();
-  });
+  attachSseSubscription(
+    res,
+    controller,
+    () =>
+      manager.subscribe((event) => {
+        seq += 1;
+        writeCommandEvent(res, event, seq, redactor, controller, onBackpressure);
+      }),
+    onBackpressure,
+    correlationId,
+  );
 }
 
 function writeCommandEvent(

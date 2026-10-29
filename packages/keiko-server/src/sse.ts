@@ -94,6 +94,31 @@ export function readyMessage(): string {
   return `event: ready\ndata: {}\n\n`;
 }
 
+// The subscription factory must return before events fire, matching the manager ports. The
+// forwarding closure lets its event callback retain the same stop operation used by abort/close.
+export function attachSseSubscription(
+  res: ServerResponse,
+  controller: AbortController,
+  subscribe: (stop: () => void) => () => void,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
+): void {
+  const unsubscribe = subscribe(() => {
+    stop();
+  });
+  let unsubscribed = false;
+  const stop = (): void => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+    unsubscribe();
+  };
+  controller.signal.addEventListener("abort", stop, { once: true });
+  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
+  res.on("close", () => {
+    stop();
+  });
+}
+
 // #3452 audit finding sse.ts:108: several openers write the ready frame with a bare `res.write`,
 // bypassing `recordSseStreamFrame` entirely. `sseStreamState` (sse-write.ts) attaches its terminal
 // `close` listener lazily, on the FIRST recorded frame — so a stream that opens, sends only `ready`,

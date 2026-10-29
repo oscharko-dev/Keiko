@@ -11,7 +11,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
+import { SSE_HEADERS, attachSseSubscription, startSseHeartbeat } from "./sse.js";
 import {
   errorBody,
   STREAMING,
@@ -301,28 +301,21 @@ export function openBrowserSseStream(
     ...(correlationId === undefined ? {} : { correlationId }),
   });
   let seq = 0;
-  const unsubscribe = manager.subscribe(sessionId, (event) => {
-    seq += 1;
-    writeBrowserEvent(res, event, seq, redactor, controller, onBackpressure);
-    if (event.kind === "session-closed") {
-      stop();
-      res.end();
-    }
-  });
-  let unsubscribed = false;
-  const stop = (): void => {
-    if (unsubscribed) return;
-    unsubscribed = true;
-    unsubscribe();
-  };
-  controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame goes through the same protective path: a client that is already not draining
-  // must abort and unsubscribe here too, rather than leaving the subscription live until some
-  // later event happens to trip writeSseFrame.
-  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
-  res.on("close", () => {
-    stop();
-  });
+  attachSseSubscription(
+    res,
+    controller,
+    (stop) =>
+      manager.subscribe(sessionId, (event) => {
+        seq += 1;
+        writeBrowserEvent(res, event, seq, redactor, controller, onBackpressure);
+        if (event.kind === "session-closed") {
+          stop();
+          res.end();
+        }
+      }),
+    onBackpressure,
+    correlationId,
+  );
 }
 
 function writeBrowserEvent(
