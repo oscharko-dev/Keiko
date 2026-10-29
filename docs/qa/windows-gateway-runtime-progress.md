@@ -480,6 +480,17 @@ probe is removed. The default native suite tests mutated readback without instal
 actual admission and independent-deny precedence still require the disposable Windows runner.
 Same-sublayer administrator-policy coexistence and production integration remain unqualified.
 
+### Resolve the actual executable identity before IPv6 admission, 2026-10-29
+
+[Run 40956487294](https://github.com/oscharko-dev/Keiko/actions/runs/40956487294)
+at `1ce75d414` installed, read back and removed the IPv6 WFP rule successfully, but the
+configured connection still timed out. The new backend used the runner's short TEMP image
+spelling directly, whereas the working NetSecurity and diagnostic paths expand it first.
+A local native regression reproduced different WFP app IDs for the fixture's full and 8.3
+image paths without changing policy. It failed before expansion. The IPv6 backend now calls
+`GetLongPathNameW` before deriving the WFP app ID and the same regression passes; no image
+condition is dropped or widened. Hosted socket verification remains required.
+
 ## Platform references
 
 - [WFP engine sessions and dynamic object lifetime](https://learn.microsoft.com/en-us/windows/win32/api/fwpmu/nf-fwpmu-fwpmengineopen0)

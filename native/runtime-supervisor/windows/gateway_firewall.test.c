@@ -109,6 +109,38 @@ static int firewall6_matches(const FWPM_FILTER0 *actual, const FWPM_FILTER0 *exp
   return seen == 255;
 }
 
+static DWORD firewall_app_id(const wchar_t *executable, FWP_BYTE_BLOB **app) {
+  wchar_t *expanded = calloc(32768, sizeof(wchar_t));
+  DWORD result, length;
+  if (expanded == NULL) return ERROR_OUTOFMEMORY;
+  length = GetLongPathNameW(executable, expanded, 32768);
+  result = length == 0 ? GetLastError() : length >= 32768 ? ERROR_BUFFER_OVERFLOW : ERROR_SUCCESS;
+  if (result == ERROR_SUCCESS) result = FwpmGetAppIdFromFileName0(expanded, app);
+  free(expanded);
+  return result;
+}
+
+/* Resolve both spellings of the real fixture image without installing any policy. */
+static int firewall_app_id_tests(void) {
+  wchar_t *path = calloc(32768, sizeof(wchar_t)), *short_path = calloc(32768, sizeof(wchar_t));
+  FWP_BYTE_BLOB *app = NULL, *short_app = NULL;
+  DWORD length;
+  int ok = 0;
+  if (path == NULL || short_path == NULL) goto done;
+  length = GetModuleFileNameW(NULL, path, 32768);
+  if (length == 0 || length >= 32768) goto done;
+  length = GetShortPathNameW(path, short_path, 32768);
+  if (length == 0 || length >= 32768) goto done;
+  ok = firewall_app_id(path, &app) == ERROR_SUCCESS &&
+    firewall_app_id(short_path, &short_app) == ERROR_SUCCESS && firewall_blob_equal(app, short_app);
+done:
+  if (app != NULL) FwpmFreeMemory0((void **)&app);
+  if (short_app != NULL) FwpmFreeMemory0((void **)&short_app);
+  free(path); free(short_path);
+  puts(ok ? "gateway-firewall-image-alias: passed" : "gateway-firewall-image-alias: failed");
+  return ok;
+}
+
 /* Pure readback regression: no engine session and no host firewall mutation. */
 int gateway_firewall_spec_tests(void) {
   PSID sid = NULL;
@@ -140,7 +172,7 @@ int gateway_firewall_spec_tests(void) {
   }
   LocalFree(sid);
   puts(ok ? "gateway-firewall-exact-readback: passed" : "gateway-firewall-exact-readback: failed");
-  return ok ? 0 : 1;
+  return ok && firewall_app_id_tests() ? 0 : 1;
 }
 
 static DWORD firewall6_open(PSID sid, const wchar_t *executable, UINT16 port,
@@ -169,7 +201,7 @@ static DWORD firewall6_open(PSID sid, const wchar_t *executable, UINT16 port,
     result = GetLastError(); goto done;
   }
   user_blob.size = GetSecurityDescriptorLength(sd); user_blob.data = (UINT8 *)sd;
-  result = FwpmGetAppIdFromFileName0(executable, &app);
+  result = firewall_app_id(executable, &app);
   if (result != ERROR_SUCCESS) goto done;
   result = UuidCreate(&owner->filter_key);
   if (result == RPC_S_UUID_LOCAL_ONLY) result = ERROR_SUCCESS;
