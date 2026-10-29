@@ -49,6 +49,9 @@ import { createInMemoryUiStore } from "../store/index.js";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
 import {
   configuredProviderForCapsule,
+  handleCreateLocalKnowledgeCapsuleSet,
+  handleGetLocalKnowledgeCapsule,
+  handleListLocalKnowledgeCapsuleSets,
   localKnowledgeEmbeddingAdapterForProvider,
 } from "../local-knowledge-handlers.js";
 import {
@@ -451,6 +454,41 @@ async function expectJqlOpacity(
 }
 
 describe("Jira sync — initial run over the AC fixture project", () => {
+  it("keeps a sync-created Jira capsule indexed and composable through the Data routes", async () => {
+    const port = createInMemoryJiraFixture({
+      baseUrl: BASE_URL,
+      projects: [{ key: "PLAT", issues: fixtureIssues(SECRET_BODY_MARKER).slice(0, 1) }],
+    });
+    const { deps, credential } = depsFor(port);
+    const started = await startSync(deps, credential, { projectKeys: ["PLAT"] });
+    expect((await awaitTerminal(started.job.jobId)).status).toBe("succeeded");
+    const created = await handleCreateLocalKnowledgeCapsuleSet(
+      ctxFor("POST", {}, { displayName: "Synced Jira control", capsuleIds: [started.capsuleId] }),
+      deps,
+    );
+    expect(created).toMatchObject({
+      status: 201,
+      body: { capsuleSet: { capsuleIds: [started.capsuleId], capsuleCount: 1 } },
+    });
+    expect(await handleListLocalKnowledgeCapsuleSets(ctxFor("GET", {}), deps)).toMatchObject({
+      status: 200,
+      body: { capsuleSets: [{ displayName: "Synced Jira control", capsuleCount: 1 }] },
+    });
+    expect(
+      await handleGetLocalKnowledgeCapsule(ctxFor("GET", { capsuleId: started.capsuleId }), deps),
+    ).toMatchObject({ status: 200, body: { capsule: { id: started.capsuleId } } });
+    const pod = openJiraPod(deps, started.capsuleId);
+    try {
+      expect(buildKnowledgePodSummary(pod.store, pod.capsule)).toMatchObject({
+        counts: { documentCount: 1 },
+        retrieval: { lexicalIndex: true, vectorIndex: true, hybridGrounding: true },
+        compatibility: { backingKind: "knowledge-capsule", capsuleIds: [started.capsuleId] },
+      });
+    } finally {
+      pod.close();
+    }
+  });
+
   it("syncs ≥50 issues with exact counts, bounds the hostile document, and cites KEY: summary with structured metadata", async () => {
     const requests: AtlassianHttpBodyRequest[] = [];
     const port = createInMemoryJiraFixture({

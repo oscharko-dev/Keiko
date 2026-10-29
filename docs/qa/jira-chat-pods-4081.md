@@ -1,5 +1,8 @@
 # Epic #4081: Jira access Pods in Chat
 
+Current individual acceptance: **6/55** (#4089 AC1/AC2/AC3/AC7 and #4085 AC5/AC7).
+The remaining 49 criteria and final integrated qualification are open.
+
 ## Delivery contract
 
 Owner instruction, 2026-10-26: implement the complete epic on branch
@@ -229,9 +232,9 @@ Status: **Verified**. The current paired in-app browser created a synthetic Jira
 
 Status: **Partial — not accepted**. The fidelity matrix names the implemented Hub/Chat owners and states. The later wired five-case Jira browser lane covers EN/DE, keyboard/focus, 83 axe checks, themes/contrast, reduced motion, narrow layouts and explicit 200% viewport emulation, with inspected source-bound captures. This is Jira-specific evidence; native screen-reader/zoom execution is not claimed. Final UI/browser gates and remaining assistive-technology qualification stay open.
 
-- [ ] **AC7:** Live-access Pod variants cannot enter capsule-set composition, capsule export or indexing through either UI or direct server requests. They advertise no fabricated capsule, retrieval or storage state, and unsupported Cloud sync controls are absent. Existing Data and synced-Jira Pods preserve these capabilities.
+- [x] **AC7:** Live-access Pod variants cannot enter capsule-set composition, capsule export or indexing through either UI or direct server requests. They advertise no fabricated capsule, retrieval or storage state, and unsupported Cloud sync controls are absent. Existing Data and synced-Jira Pods preserve these capabilities.
 
-Status: **Partial — not accepted**. A custody-owned Live Pod receives public-BFF refusals for capsule read, index/reindex and source connection; mixed Live/Data composition creates no partial set, while a real Data control retains its capabilities. The 227-case route/Data run and 12-case card run prove no fabricated capsule/storage or sync/export controls. No capsule-export HTTP route exists in the mounted inventory. Complete synced-Jira compatibility and final gates remain open.
+Status: **Verified**. The current 236-case server group rejects Live capsule read, index/reindex, connection and export requests and mixed Live/Data composition without partial state or HTTP/embedding effects. Data controls retain their routes. A genuinely sync-created Jira capsule stays indexed, readable and composable, preserving its real retrieval projection; the identical compatibility case also passes against `246efd463`, whose complete five-case Jira sync suite passes. The 80-case UI and 44-case Pod/projection groups preserve ordinary Data controls and exclude fabricated Live capsule/storage, index, export and sync controls. There is no mounted capsule-export capability for either kind; this is an absence/refusal proof, not a claim that Data Pods support export. See [individual AC7 acceptance](#individual-acceptance--4085-ac7). Complete issue/UI and integrated gates remain open.
 
 ### #4086 — Connect Jira Pods to Chat using existing workspace connectors and in-Chat tool cards
 
@@ -3199,3 +3202,46 @@ is inferred from this setup proof. The matrix now has **5 verified criteria out 
 The previously failing Firefox scope case also passed its targeted Linux reproduction
 and all eight tests of the complete affected scope file. The prior CI failure remains
 a prior failure; no timeout or product change was introduced to manufacture a pass.
+
+## Individual acceptance — #4085 AC7
+
+The additional compatibility case uses the existing production Jira sync service and
+its HTTP fixture to create and index an actual Jira-backed knowledge capsule. The
+production Data handlers then create a capsule set containing that ID, read the
+persisted set and capsule, and preserve its real lexical/vector/hybrid projection.
+The same case passes against baseline `246efd463` in pinned Linux, along with all
+four existing baseline Jira sync cases (five passed; none skipped). It also passes
+on the current implementation. No pre-change failure is invented for preserved behavior.
+
+Current targeted results: 236 server route/sync/Data cases, 80 Hub/card cases and
+44 Pod/projection cases pass. Strict root TypeScript, scoped ESLint and formatting
+pass. The HTTP negative matrix now explicitly includes an export request; both
+the mounted route inventory and UI expose no capsule export operation. Data and
+synced-Jira retain their existing capabilities; no new export promise is introduced.
+Live identities cannot create partial sets, invoke indexing/embeddings, acquire
+fabricated capsule identities/storage or expose unsupported sync controls.
+
+This closes AC7, bringing individual acceptance to **6/55**, with 49 still partial.
+No child issue or integrated epic acceptance is claimed.
+
+## Current catalog performance qualification
+
+The preceding head's Core quality and installable-build failures both reported a
+stale catalog producer identity. The canonical portable producer now measures
+baseline `246efd463` and candidate `9006c0b4d` in isolated clean Linux checkouts
+with Node 24.18.0/npm 11.16.0. Both builds and the paired run pass. Its three
+canonical artifacts are copied without manual digest editing; all six reviewed
+time ceilings remain unchanged. The current-checkout performance gate passes
+against those artifacts. Later changes in this increment are tests/documentation
+and generated evidence, not catalog producer or lockfile changes.
+
+The full current architecture check and all 25 portable-producer regression tests
+also pass. Connector coverage initially reproduced the CI failure at 84.07%
+statements and 78.25% branches. Seventy-two new owner-level source tests cover all
+nine managed Jira reads, their real dispatch/HTTP ports, bounded projections,
+pagination and closed refusals. The complete connector package now passes 579
+tests in 22 suites with 94.05% statements and 89.10% branches, above the unchanged
+85% floors. The full cross-package/UI/scripts coverage aggregate is still pending.
+The Firefox trace shows outer window chunks still loading, not an executing
+Chat/MCP failure; its complete lane remains open. No coverage floor or UI timeout
+is relaxed. Final complete gates remain open.

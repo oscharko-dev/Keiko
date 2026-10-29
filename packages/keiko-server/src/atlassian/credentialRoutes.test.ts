@@ -2256,6 +2256,7 @@ describe("Jira Live Pod direct Data-surface isolation", () => {
     { method: "POST", suffix: "/index" },
     { method: "POST", suffix: "/reindex" },
     { method: "POST", suffix: "/connection" },
+    { method: "POST", suffix: "/export" },
   ])(
     "rejects $method capsule$suffix for an actual verified Live Pod",
     async ({ method, suffix }) => {
