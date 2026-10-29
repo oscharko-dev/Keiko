@@ -115,13 +115,15 @@ This shapes the product _and_ how you work on it:
   imports, evidence, audit, logs, support exports and tool arguments keep their default or
   unconditional redaction.
   Preserved content still loses the credential floor: configured secret literals, private keys,
-  URL credentials, `Authorization` header values, encoded-looking Bearer/Basic values and known
+  URL credentials, `Authorization` header values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known
   token shapes; memory proposals keep the default projection. Workspace
   authority, containment, deny-lists and budgets are unchanged. See ADR-0003 D7 and ADR-0022 D4.
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
   use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
-  leaf and separate native old/new images; unsupported fragments fail closed. Streaming retains unresolved credential/source context until it can
+  leaf and separate native old/new images; unsupported fragments fail closed. Only the raw Git
+  diff view of the user's own repository keeps syntax-refused hunks readable under the credential
+  floor (owner decision 2026-10-28, #4114; ADR-0022). Streaming retains unresolved credential/source context until it can
   publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
   not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
 - Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
@@ -955,6 +957,14 @@ system that exists, never beside it:
   flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
   events. Refused prompts retain measured bounds, and generated/reused drafts share a body-free key digest. Browser delivery-loss counts are recorded once after rate admission and before routine diversion. Refused loss-bearing reports return 429 so the browser retains the counts for later delivery; the server alone counts that dropped report, avoiding a second client-post-failed count. Final pagehide loss reports use an independent bounded admission budget, so ordinary report storms cannot discard the closing tab's counters. Stream resources, circuit admissions, spend reservations and completion evidence settle before the terminal done packet reaches a consumer. Neither path records customer diffs or generated text.
 
+- **SSE streams are flow-controlled, never size-limited (2026-10-28).** Every server SSE write goes
+  through `writeSseFrame` (`sse-write.ts`). A `false` from `res.write()` is Node's buffer accounting
+  (Node 24 answers it for any single write of 64 KiB or more, even to an idle reader): the frame
+  stays queued and the stream waits for `drain`. Only a reader that drains nothing within
+  `SSE_STALLED_READER_TIMEOUT_MS` (30 s) is torn down as `backpressure-killed`; producers that pull
+  from a model await `whenSseWritable` so a slow reader slows the provider instead of growing a
+  backlog. `sse.stream.closed` records the `drainWaitCount`. Never reintroduce a destroy-on-false
+  write or a frame-size limit on a stream.
 - **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the
   log line: `errorKind`, completeness, loss, compatibility, and writer capability come from their
   closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
@@ -1107,7 +1117,10 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. A chat probe that only times out or meets a transient overload status keeps and renews
+a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
+diagnostic), so a busy single-slot model stays selectable (#4115). See
+[ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -1215,9 +1228,9 @@ previous line, the deltas that grew a live part (`liveDeltaCount`), the ones tha
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
 (`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
-Changeset-edit arguments reach the governed edit tool byte for byte (#4009): the gateway removes
-only the configured provider literals from them, never a heuristic secret shape; every other
-tool's arguments keep the full redaction. When a literal was removed,
+Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
+#4009) reach the tool byte for byte: the gateway removes only the configured provider literals
+from them, never a heuristic secret shape; every other tool's arguments keep the full redaction. When a literal was removed,
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit

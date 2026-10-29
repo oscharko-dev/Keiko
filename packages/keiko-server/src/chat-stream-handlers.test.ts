@@ -52,6 +52,7 @@ import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { RuntimeGatewayConfig } from "./deps.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -158,11 +159,15 @@ function captureRes(): CapturedRes {
 interface CapturedResWithEvents {
   res: ServerResponse;
   readonly writes: string[];
+  readonly firstWrite: Promise<undefined>;
   status?: number | undefined;
   ended: boolean;
   destroyed: boolean;
+  writableNeedDrain: boolean;
   // Emits "close" on the response so abortOnDisconnect fires — simulates a client disconnect.
   emitClose: () => void;
+  // Emits "drain" on the response — simulates the peer taking what Node buffered.
+  emitDrain: () => void;
   // Controls what res.write() returns (default true; set false to simulate backpressure).
   writeReturns: boolean;
 }
@@ -173,33 +178,58 @@ interface CapturedResWithEvents {
 // `writeReturns` made by the test after construction are visible inside res.write().
 function captureResWithEvents(): CapturedResWithEvents {
   const writes: string[] = [];
+  const firstWrite = deferred<undefined>();
   const emitter = new EventEmitter();
   const result: CapturedResWithEvents = {
     res: undefined as unknown as ServerResponse,
     writes,
     status: undefined,
+    firstWrite: firstWrite.promise,
     ended: false,
     destroyed: false,
+    writableNeedDrain: false,
     writeReturns: true,
     emitClose: (): void => {
       emitter.emit("close");
     },
+    emitDrain: (): void => {
+      result.writableNeedDrain = false;
+      emitter.emit("drain");
+      if (result.ended) emitter.emit("finish");
+    },
   };
   const res = {
+    get destroyed(): boolean {
+      return result.destroyed;
+    },
+    get writableEnded(): boolean {
+      return result.ended;
+    },
+    get writableNeedDrain(): boolean {
+      return result.writableNeedDrain;
+    },
+    get writableFinished(): boolean {
+      return result.ended && !result.writableNeedDrain;
+    },
     writeHead(status: number): ServerResponse {
       result.status = status;
       return res as unknown as ServerResponse;
     },
     write(chunk: string): boolean {
       writes.push(chunk);
+      result.writableNeedDrain ||= !result.writeReturns;
+      firstWrite.resolve(undefined);
       return result.writeReturns;
     },
     end(): ServerResponse {
       result.ended = true;
+      if (!result.writableNeedDrain) emitter.emit("finish");
       return res as unknown as ServerResponse;
     },
+    // Like a real response: destroying marks it destroyed and fires `close`.
     destroy(): void {
       result.destroyed = true;
+      emitter.emit("close");
     },
     on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
       emitter.on(event, listener);
@@ -212,6 +242,9 @@ function captureResWithEvents(): CapturedResWithEvents {
     off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
       emitter.off(event, listener);
       return res as unknown as ServerResponse;
+    },
+    listenerCount(event: string): number {
+      return emitter.listenerCount(event);
     },
     emit(event: string): boolean {
       return emitter.emit(event);
@@ -253,6 +286,23 @@ function parseSse(writes: readonly string[]): SseRecord[] {
     records.push({ event, data });
   }
   return records;
+}
+
+function capturedTokenText(writes: readonly string[]): string {
+  return parseSse(writes)
+    .filter((record) => record.event === "token")
+    .map(({ data }) => {
+      if (
+        typeof data !== "object" ||
+        data === null ||
+        !("text" in data) ||
+        typeof data.text !== "string"
+      ) {
+        throw new TypeError("Expected a token text frame");
+      }
+      return data.text;
+    })
+    .join("");
 }
 
 function normalizedResponse(content: string, modelId = CHAT_MODEL): NormalizedResponse {
@@ -357,6 +407,97 @@ function streamingModel(content: string, onFirstDelta?: () => void): StreamingMo
     },
   };
   return { model, recorded, calls };
+}
+
+interface HeldStreamingModel {
+  readonly model: ModelPort;
+  // Lets the held stream finish with its terminal `done` chunk.
+  readonly release: () => void;
+  readonly signal: () => AbortSignal | undefined;
+}
+
+// A streaming ModelPort that yields one delta and then holds, like a long generation whose reader
+// has stopped reading. It resumes only when the request's signal aborts or `release()` is called.
+function heldStreamingModel(content: string): HeldStreamingModel {
+  const gate = deferred<undefined>();
+  let streamSignal: AbortSignal | undefined;
+  const model: ModelPort = {
+    call: () => Promise.resolve(normalizedResponse(content)),
+    async *callStream(
+      _request: GatewayCallRequest,
+      signal: AbortSignal,
+    ): AsyncGenerator<GatewayStreamChunk> {
+      streamSignal = signal;
+      // Two blocks: the streaming redactor publishes the first one before the stream ends.
+      yield { type: "delta", token: `${content}.\n\nnext block` };
+      signal.addEventListener("abort", () => {
+        gate.resolve(undefined);
+      });
+      await gate.promise;
+      yield { type: "done", response: normalizedResponse(content) };
+    },
+  };
+  return {
+    model,
+    release: (): void => {
+      gate.resolve(undefined);
+    },
+    signal: (): AbortSignal | undefined => streamSignal,
+  };
+}
+
+interface FlowControlledModel {
+  readonly model: ModelPort;
+  readonly pulls: { count: number };
+  readonly released: Promise<undefined>;
+  readonly signal: () => AbortSignal | undefined;
+}
+
+function flowControlledModel(): FlowControlledModel {
+  const pulls = { count: 0 };
+  const released = deferred<undefined>();
+  let streamSignal: AbortSignal | undefined;
+  const model: ModelPort = {
+    call: () => Promise.resolve(normalizedResponse("flow.\n\nnext block")),
+    async *callStream(
+      _request: GatewayCallRequest,
+      signal: AbortSignal,
+    ): AsyncGenerator<GatewayStreamChunk> {
+      streamSignal = signal;
+      await Promise.resolve();
+      try {
+        pulls.count += 1;
+        yield { type: "delta", token: "flow.\n\nnext block" };
+        pulls.count += 1;
+        yield { type: "done", response: normalizedResponse("flow.\n\nnext block") };
+      } finally {
+        released.resolve(undefined);
+      }
+    },
+  };
+  return { model, pulls, released: released.promise, signal: () => streamSignal };
+}
+
+function startBackpressuredChatStream(highWaterMark?: number): {
+  readonly captured: CapturedResWithEvents;
+  readonly req: IncomingMessage;
+  readonly chatId: string;
+  readonly streaming: FlowControlledModel;
+  readonly outcome: ReturnType<typeof handleSendDesktopChatStream>;
+} {
+  const chatId = seedChat();
+  const captured = captureResWithEvents();
+  captured.writeReturns = false;
+  if (highWaterMark !== undefined) {
+    Object.defineProperty(captured.res, "writableHighWaterMark", { value: highWaterMark });
+  }
+  const req = makeReq({ chatId, projectPath: projectDir, content: "bounded stream flow" });
+  const streaming = flowControlledModel();
+  const outcome = handleSendDesktopChatStream(
+    { ...routeContext(req, captured.res), correlationId: "chat-drain-flow-control" },
+    deps(streaming.model),
+  );
+  return { captured, req, chatId, streaming, outcome };
 }
 
 function pausedActivityModel(
@@ -4289,53 +4430,262 @@ describe("desktop chat SSE streaming handler", () => {
     }
   });
 
-  it("destroys the socket and aborts the controller when res.write() returns false (backpressure)", async () => {
-    // RED reason: before this fix the token write called ctx.res.write() directly and discarded the
-    // return value, so a slow client's backpressure signal was silently ignored.
-    // GREEN reason: writeOrDestroy checks the return value and calls controller.abort() + res.destroy().
+  it.each([
+    ["single-frame delta", undefined],
+    ["split same-delta frames", 80],
+  ] as const)(
+    "pauses %s and provider pulls until the actual response drains",
+    async (_label, ceiling) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const flow = startBackpressuredChatStream(ceiling);
+      try {
+        await flow.captured.firstWrite;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(flow.captured.writableNeedDrain).toBe(true);
+        expect(flow.captured.writes).toHaveLength(1);
+        expect(flow.streaming.pulls.count).toBe(1);
+        expect(flow.captured.ended).toBe(false);
+        expect(flow.captured.destroyed).toBe(false);
+
+        flow.captured.writeReturns = true;
+        flow.captured.emitDrain();
+        await expect(flow.outcome).resolves.toBe(STREAMING);
+        expect(flow.streaming.pulls.count).toBe(2);
+        const records = parseSse(flow.captured.writes);
+        expect(capturedTokenText(flow.captured.writes)).toBe("flow.\n\nnext block");
+        expect(records.filter((record) => record.event !== "token")).toEqual([
+          expect.objectContaining({ event: "done" }),
+        ]);
+        expect(store.listMessages(flow.chatId).map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+        ]);
+        expect(flow.captured.res.listenerCount("drain")).toBe(0);
+        expect(flow.captured.res.listenerCount("finish")).toBe(0);
+        flow.captured.emitClose();
+        expect(sink.events.find((event) => event.op === "sse.stream.closed")).toMatchObject({
+          correlationId: "chat-drain-flow-control",
+          extra: { drainWaitCount: 1, reason: "completed" },
+        });
+      } finally {
+        flow.captured.emitClose();
+        await flow.outcome;
+      }
+    },
+  );
+
+  it("stops same-delta framing when an ended response closes during drain without aborting", async () => {
     const chatId = seedChat();
     const captured = captureResWithEvents();
-    // Signal backpressure on the first write so the very first token triggers abort+destroy.
     captured.writeReturns = false;
-    const req = makeReq({
-      chatId,
-      projectPath: projectDir,
-      modelId: CHAT_MODEL,
-      content: "hello slow client",
+    let capacityReads = 0;
+    Object.defineProperty(captured.res, "writableHighWaterMark", {
+      get: (): number => {
+        capacityReads += 1;
+        return 80;
+      },
     });
-    const { model } = streamingModel("answer");
-    await handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+    const streaming = flowControlledModel();
+    const req = makeReq({ chatId, projectPath: projectDir, content: "ended drain wait" });
+    const outcome = handleSendDesktopChatStream(
+      routeContext(req, captured.res),
+      deps(streaming.model),
+    );
+    try {
+      await captured.firstWrite;
+      expect(captured.writableNeedDrain).toBe(true);
+      expect(captured.writes).toHaveLength(1);
+      expect(capacityReads).toBe(1);
+      expect(streaming.pulls.count).toBe(1);
+      expect(streaming.signal()?.aborted).toBe(false);
 
-    // The socket must have been destroyed.
-    expect(captured.destroyed).toBe(true);
-    // After backpressure the controller was aborted, so no "done" event is written.
-    const events = parseSse(captured.writes).map((record) => record.event);
-    expect(events).not.toContain("done");
+      captured.res.end();
+      captured.emitClose();
+      expect(streaming.signal()?.aborted).toBe(false);
+      await expect(outcome).resolves.toBe(STREAMING);
+      await streaming.released;
+
+      expect(capacityReads).toBe(1);
+      expect(streaming.pulls.count).toBe(1);
+      expect(captured.writes).toHaveLength(1);
+      expect(streaming.signal()?.aborted).toBe(false);
+      expect(captured.res.listenerCount("drain")).toBe(0);
+      expect(captured.res.listenerCount("finish")).toBe(0);
+      expect(store.listMessages(chatId).map((message) => message.role)).toEqual(["user"]);
+    } finally {
+      captured.emitClose();
+      await outcome;
+    }
+  });
+
+  it("settles cancellation during a drain wait without another provider pull or leaked waiters", async () => {
+    const flow = startBackpressuredChatStream(80);
+    try {
+      await flow.captured.firstWrite;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(flow.captured.writes).toHaveLength(1);
+      expect(flow.streaming.pulls.count).toBe(1);
+      flow.req.emit("aborted");
+      await expect(flow.outcome).resolves.toBe(STREAMING);
+      await flow.streaming.released;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(flow.streaming.signal()?.aborted).toBe(true);
+      expect(flow.streaming.pulls.count).toBe(1);
+      expect(flow.captured.destroyed).toBe(false);
+      expect(flow.captured.ended).toBe(true);
+      expect(parseSse(flow.captured.writes).map((record) => record.event)).toEqual([
+        "token",
+        "cancelled",
+      ]);
+      expect(store.listMessages(flow.chatId).map((message) => message.role)).toEqual(["user"]);
+      // The producer waiter is gone; one canonical stall wait still bounds the queued tail.
+      expect(flow.captured.res.listenerCount("drain")).toBe(1);
+      expect(flow.captured.res.listenerCount("finish")).toBe(1);
+      expect(flow.req.listenerCount("aborted")).toBe(0);
+      const writes = flow.captured.writes.length;
+      flow.captured.emitDrain();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(flow.captured.res.listenerCount("drain")).toBe(0);
+      expect(flow.captured.res.listenerCount("finish")).toBe(0);
+      expect(flow.captured.writes).toHaveLength(writes);
+      expect(flow.streaming.pulls.count).toBe(1);
+    } finally {
+      flow.captured.emitClose();
+      await flow.outcome;
+    }
+  });
+
+  it("destroys the socket and aborts the controller when the reader stalls after res.write() returns false (backpressure)", async () => {
+    // RED reason: before this fix the token write called ctx.res.write() directly and discarded the
+    // return value, so a slow client's backpressure signal was silently ignored.
+    // GREEN reason: writeSseFrame queues the frame, waits for drain, and once the reader has drained
+    // nothing for SSE_STALLED_READER_TIMEOUT_MS calls controller.abort() + res.destroy().
+    vi.useFakeTimers();
+    try {
+      const chatId = seedChat();
+      const captured = captureResWithEvents();
+      // Signal backpressure on the first write so the very first token starts the stall wait.
+      captured.writeReturns = false;
+      const req = makeReq({
+        chatId,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello slow client",
+      });
+      const held = heldStreamingModel("answer");
+      const outcome = handleSendDesktopChatStream(
+        routeContext(req, captured.res),
+        deps(held.model),
+      );
+      await captured.firstWrite;
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The frame is queued, not dropped, and a false write alone tears nothing down.
+      expect(parseSse(captured.writes).map((record) => record.event)).toContain("token");
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await outcome;
+
+      // The socket must have been destroyed and the producer aborted.
+      expect(captured.destroyed).toBe(true);
+      expect(held.signal()?.aborted).toBe(true);
+      // After backpressure the controller was aborted, so no "done" event is written.
+      const events = parseSse(captured.writes).map((record) => record.event);
+      expect(events).not.toContain("done");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does NOT relabel a backpressure kill as a user 'cancelled' event (GEN-PERF-CHAT-006)", async () => {
     // RED reason: pre-fix, a backpressure kill left turn === undefined and the handler unconditionally
     // wrote sseMessage('cancelled') to the already-destroyed socket, so a slow-client termination was
     // indistinguishable downstream from an intentional user cancel.
-    // GREEN reason: streamConversation flags termination.backpressure via the writeOrDestroy signal;
+    // GREEN reason: streamConversation flags termination.backpressure via the writeSseFrame signal;
     // the caller then skips the 'cancelled' terminal frame, keeping the two terminations distinct.
-    const chatId = seedChat();
-    const captured = captureResWithEvents();
-    captured.writeReturns = false; // backpressure on the first token write
-    const req = makeReq({
-      chatId,
-      projectPath: projectDir,
-      modelId: CHAT_MODEL,
-      content: "hello slow client",
-    });
-    const { model } = streamingModel("answer");
-    await handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+    vi.useFakeTimers();
+    try {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const chatId = seedChat();
+      const captured = captureResWithEvents();
+      captured.writeReturns = false; // backpressure on the first token write
+      const req = makeReq({
+        chatId,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello slow client",
+      });
+      const held = heldStreamingModel("answer");
+      const outcome = handleSendDesktopChatStream(
+        routeContext(req, captured.res),
+        deps(held.model),
+      );
+      await captured.firstWrite;
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
 
-    const events = parseSse(captured.writes).map((record) => record.event);
-    expect(captured.destroyed).toBe(true);
-    // The distinguishing assertion: a backpressure kill is NOT surfaced as a user cancel.
-    expect(events).not.toContain("cancelled");
-    expect(events).not.toContain("done");
+      await vi.advanceTimersByTimeAsync(1);
+      await outcome;
+
+      const events = parseSse(captured.writes).map((record) => record.event);
+      expect(captured.destroyed).toBe(true);
+      // The distinguishing assertion: a backpressure kill is NOT surfaced as a user cancel.
+      expect(events).not.toContain("cancelled");
+      expect(events).not.toContain("done");
+      const closed = sink.events.find((event) => event.op === "sse.stream.closed");
+      expect((closed?.extra as { reason?: unknown } | undefined)?.reason).toBe(
+        "backpressure-killed",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the stream open when a false write is followed by drain", async () => {
+    vi.useFakeTimers();
+    try {
+      const chatId = seedChat();
+      const captured = captureResWithEvents();
+      captured.writeReturns = false;
+      const req = makeReq({
+        chatId,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello draining client",
+      });
+      const held = heldStreamingModel("answer");
+      const outcome = handleSendDesktopChatStream(
+        routeContext(req, captured.res),
+        deps(held.model),
+      );
+      await captured.firstWrite;
+
+      captured.emitDrain();
+      captured.writeReturns = true;
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS * 2);
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+
+      held.release();
+      await outcome;
+
+      const events = parseSse(captured.writes).map((record) => record.event);
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+      expect(events).toContain("done");
+      expect(events).not.toContain("cancelled");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("injects retrieved memory text into the streamed prompt's latest user turn", async () => {
@@ -4844,7 +5194,7 @@ describe("concurrent chat stream bulkhead", () => {
 // Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
 // `sse.stream.closed` line on the desktop chat stream. The heartbeat's own write is deferred to
 // its interval timer, so in practice the first model token — written via streamConversation's
-// writeOrDestroy call — is the write that actually attaches it first.
+// writeSseFrame call — is the write that actually attaches it first.
 describe("desktop chat SSE stream correlationId threading (#2902 audit finding 0)", () => {
   afterEach(() => {
     resetServerLogger();

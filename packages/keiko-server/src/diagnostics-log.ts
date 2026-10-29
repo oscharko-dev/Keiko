@@ -58,7 +58,12 @@ export const PACK_VALIDATION_REASONS = [
 ] as const;
 export type PackValidationReason = (typeof PACK_VALIDATION_REASONS)[number];
 const PACK_VALIDATION_REASON_SET: ReadonlySet<string> = new Set(PACK_VALIDATION_REASONS);
-const DIAGNOSTIC_OUTCOMES = ["request-failed", "source-skipped", "request-refused"] as const;
+const DIAGNOSTIC_OUTCOMES = [
+  "request-failed",
+  "source-skipped",
+  "request-refused",
+  "provider-busy",
+] as const;
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -526,7 +531,8 @@ function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEv
     {
       level:
         record.diagnosticOutcome === "source-skipped" ||
-        record.diagnosticOutcome === "request-refused"
+        record.diagnosticOutcome === "request-refused" ||
+        record.diagnosticOutcome === "provider-busy"
           ? "warn"
           : "error",
       correlationId: record.correlationId,

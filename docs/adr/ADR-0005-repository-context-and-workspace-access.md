@@ -97,7 +97,7 @@ content lane. It preserves authorized source bytes only for a `WorkspaceInfo` th
 BFF sets that field only on the workspace returned by its Chat connected-context detector, and only
 when `KEIKO_CONTENT_REDACTION=off` was resolved at startup. In that lane the content heuristics and
 source-projection refusals give way to the credential floor (configured secret literals, private
-keys, URL credentials, credential-shaped Bearer/Basic values, known token shapes). It does not
+keys, URL credentials, credential-shaped Bearer/Basic values, JWT-shaped bearer tokens, known token shapes). It does not
 select the editor raw-read lane or change path, root, descriptor, deny-list or byte-budget checks.
 A preserving workspace partitions its workspace-index scope key, so a preserved snapshot never
 serves a default consumer and a default snapshot never serves a preserving one. Coding Workbench

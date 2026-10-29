@@ -38,7 +38,7 @@ import {
 import { errorBody } from "./route-error.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { observedGitRunner } from "./gitProcessActivity.js";
+import { isCapTerminatedTruncation, observedGitRunner } from "./gitProcessActivity.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import {
@@ -57,6 +57,7 @@ import {
 import { DENIED_MESSAGE } from "./files-deny.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
+import { redactedDiffViewBody, type DiffViewLog } from "./gitDiffView.js";
 
 // The git core moved to @oscharko-dev/keiko-git (shared with keiko-tools). Route modules and
 // their tests keep importing the process surface from here so the BFF has one seam for it.
@@ -1101,6 +1102,21 @@ function normalizeNoIndexDiff(
     : result;
 }
 
+/**
+ * The runner kills git once its output reaches the byte cap, so a large tracked diff ends with a
+ * signal. That cut is the bounded, truncated view the routes report, not a failed diff (#4113).
+ * Only a run the cap itself ended counts (`isCapTerminatedTruncation`): a timeout, an abort, a
+ * refusal, git error output or an exit status git chose on its own stays a failure.
+ */
+function byteCapCutAsBoundedDiff(result: GitProcessResult): GitProcessResult {
+  const cutAtByteCap =
+    isCapTerminatedTruncation(result) &&
+    result.refusal === undefined &&
+    result.stderr.length === 0 &&
+    result.stdout.startsWith("diff --git ");
+  return cutAtByteCap ? { ...result, exitCode: 0 } : result;
+}
+
 async function runSnapshotDiff(
   options: NormalizedGitRouteOptions,
   path: string,
@@ -1199,7 +1215,12 @@ async function runDiff(
   if (staged) args.push("--cached");
   const relativePath = gitPath(repo.selectedRootPrefix, path);
   if (relativePath !== undefined) args.push("--", literalGitPathspec(relativePath));
-  const result = await options.runner(args, gitProcessOptions(repo, options, maxBytes));
+  const result = byteCapCutAsBoundedDiff(
+    await options.runner(args, {
+      ...gitProcessOptions(repo, options, maxBytes),
+      expectedTruncation: true,
+    }),
+  );
   if (
     staged ||
     path === undefined ||
@@ -1307,6 +1328,15 @@ function prepareDiffContext<Scope>(
   return { options, scope, path, repository: resolveRepository(ctx, deps, options) };
 }
 
+function diffViewLog(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  rawOptions: GitRouteOptions | undefined,
+): DiffViewLog {
+  const sink = (rawOptions ?? deps.gitRouteOptions)?.activityLog ?? processServerLogSink();
+  return { sink, correlationId: ctx.correlationId };
+}
+
 // eslint-disable-next-line max-lines-per-function
 export async function handleGitDiff(
   ctx: RouteContext,
@@ -1402,7 +1432,10 @@ export async function handleGitDiff(
         truncated: runs.some((result) => result.truncated) || rawDiffBytes > options.maxDiffBytes,
         maxBytes: options.maxDiffBytes,
       };
-      return { status: 200, body: redacted(deps, body) };
+      return {
+        status: 200,
+        body: redactedDiffViewBody(deps, body, diffViewLog(ctx, deps, rawOptions)),
+      };
     },
     GIT_DIFF_ROUTE_TEMPLATE,
   );

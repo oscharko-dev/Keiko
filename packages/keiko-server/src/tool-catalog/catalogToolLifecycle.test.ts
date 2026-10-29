@@ -8,6 +8,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  GOVERNED_CHANGESET_EDIT_TOOL_ID,
+  TOOL_CATALOG_LIMITS,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { emitToolLifecycleEvent, validateToolLifecycleEvent } from "./catalogToolLifecycle.js";
 import {
   expectActivityLogProof,
@@ -219,6 +224,42 @@ describe("closed runtime lifecycle emission", () => {
       expect(() => validateToolLifecycleEvent({ ...failed, ...change })).toThrow();
     expect(() =>
       validateToolLifecycleEvent({ ...phase("terminal"), errorKind: "TypeError" }),
+    ).toThrow();
+  });
+  // Owner decision 2026-10-28: the governed changeset edit carries its own, larger argument
+  // ceiling; the bytes of its call are valid evidence up to it and not one byte beyond, while every
+  // other tool (and an event naming none) stays at the generic ceiling pinned above.
+  it("holds a call's argument bytes to the ceiling of the tool it names", () => {
+    const failed = generated.terminalFixtures.find(
+      (item) => item.evidence.status === "failed",
+    )?.evidence;
+    const edit = { canonicalId: GOVERNED_CHANGESET_EDIT_TOOL_ID, contractVersion: 1 };
+    const withBytes = (inputBytes: number, toolRef: unknown): Record<string, unknown> => ({
+      ...failed,
+      inputBytes,
+      toolRef,
+    });
+    expect(() =>
+      validateToolLifecycleEvent(withBytes(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1, edit)),
+    ).not.toThrow();
+    expect(() =>
+      validateToolLifecycleEvent(withBytes(CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes, edit)),
+    ).not.toThrow();
+    expect(() =>
+      validateToolLifecycleEvent(
+        withBytes(CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes + 1, edit),
+      ),
+    ).toThrow();
+    expect(() =>
+      validateToolLifecycleEvent(
+        withBytes(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1, {
+          canonicalId: "keiko.workspace.read",
+          contractVersion: 1,
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      validateToolLifecycleEvent(withBytes(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1, null)),
     ).toThrow();
   });
   it("attempts the primary write before an auxiliary failure and reports structured diagnostics", () => {

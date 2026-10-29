@@ -104,7 +104,9 @@ import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandler,
 } from "./codingRepositorySearchHandler.js";
-import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import { detectWorkspaceAt, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { openCodeNativeCreditedKinds } from "./opencodeNativePolicy.js";
 import type {
   RepositorySemanticSearchLease,
   RepositorySemanticSearchResolver,
@@ -347,7 +349,14 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["not-run", "target-bound", "passed", "proof-unavailable"],
+      values: [
+        "not-run",
+        "target-bound",
+        "passed",
+        "proof-unavailable",
+        "credited",
+        "credit-unavailable",
+      ],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
     steps: {
@@ -358,6 +367,12 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       values: CODING_VERIFICATION_STEP_NAMES,
     },
     verifierId: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+    creditedBy: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
@@ -2561,7 +2576,103 @@ function nativeVerificationHooks(
       sequence += 1;
       publishNativeVerification(input, sequence, result);
     },
+    credited: (resources, readScripts): readonly VerificationKind[] =>
+      openCodeNativeCreditedKinds(
+        resources,
+        readScripts
+          ? (): ReadonlyMap<string, string> | undefined => packageScripts(input)
+          : undefined,
+      ),
   };
+}
+
+const PACKAGE_SCRIPTS_READ_BYTES = 262_144;
+const PACKAGE_SCRIPTS_MAX = 512;
+const PACKAGE_SCRIPT_CHARS_MAX = 4_096;
+
+/**
+ * The task workspace's package scripts, by name, as a native check line admitted now would run
+ * them. An unreadable or malformed package.json credits nothing beyond the line's own checks, and
+ * the log says why.
+ */
+function packageScripts(
+  input: ProductionManagedWorktreeToolInput,
+): ReadonlyMap<string, string> | undefined {
+  try {
+    const workspace = {
+      root: input.workspaceRoot,
+      selectedRoot: input.workspaceRoot,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    } as const;
+    const read = readWorkspaceFile(
+      workspace,
+      "package.json",
+      { maxBytes: PACKAGE_SCRIPTS_READ_BYTES },
+      nodeWorkspaceFs,
+    );
+    return scriptTable(JSON.parse(read.text));
+  } catch (error) {
+    recordVerificationCreditUnavailable(input, error);
+    return undefined;
+  }
+}
+
+function scriptTable(manifest: unknown): ReadonlyMap<string, string> {
+  const scripts =
+    typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)
+      ? (manifest as { readonly scripts?: unknown }).scripts
+      : undefined;
+  if (typeof scripts !== "object" || scripts === null || Array.isArray(scripts)) return new Map();
+  return new Map(
+    Object.entries(scripts)
+      .filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === "string" && entry[1].length <= PACKAGE_SCRIPT_CHARS_MAX,
+      )
+      .slice(0, PACKAGE_SCRIPTS_MAX),
+  );
+}
+
+function recordVerificationCreditUnavailable(
+  input: ProductionManagedWorktreeToolInput,
+  error: unknown,
+): void {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      {
+        correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "unavailable",
+      },
+      {
+        state: "credit-unavailable",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
+}
+
+/** A check a passing line also proved, beside the one its exit status is named for. */
+function recordVerificationCredited(
+  input: ProductionManagedWorktreeToolInput,
+  verifierId: VerificationKind,
+  creditedBy: VerificationKind,
+): void {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      { correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID },
+      { state: "credited", verifierId, creditedBy },
+    ),
+  );
 }
 
 function publishNativeVerification(
@@ -2602,6 +2713,8 @@ function publishNativeVerification(
     throw new Error("runtime-native-verification-event-invalid");
   }
   input.onRuntimeEvent(event);
+  if (result.creditedBy !== undefined)
+    recordVerificationCredited(input, result.kind, result.creditedBy);
 }
 
 export function codingVerificationTargetDigest(verifierId: string, targetPath?: string): string {

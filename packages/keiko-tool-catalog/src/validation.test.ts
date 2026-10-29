@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { copyCatalogJson, catalogBytes } from "./json.js";
 import {
   compileCatalogSchema,
@@ -408,5 +411,47 @@ describe("schema mismatch account", () => {
     );
     expect(account?.droppedPathCount).toBe(24);
     expect(matchesCatalogSchema(wide, copyCatalogJson({}))).toBe(false);
+  });
+});
+
+describe("per-tool argument ceilings (owner decision 2026-10-28)", () => {
+  const limits = CHANGESET_EDIT_ARGUMENT_LIMITS;
+
+  it("carries a string far above the generic 64 KiB only under the named ceilings", () => {
+    const text = "x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1);
+    expect(() => copyCatalogJson({ text }, TOOL_CATALOG_LIMITS.maxArgumentBytes)).toThrow(
+      "input-bound",
+    );
+    expect(copyCatalogJson({ text }, limits.maxArgumentBytes, limits)).toEqual({ text });
+  });
+
+  it("bounds one string at the named string ceiling in UTF-8 bytes", () => {
+    const atCap = "x".repeat(limits.maxStringBytes);
+    expect(copyCatalogJson(atCap, limits.maxArgumentBytes, limits)).toBe(atCap);
+    expect(() => copyCatalogJson(`${atCap}x`, limits.maxArgumentBytes, limits)).toThrow(
+      "input-bound",
+    );
+    // Multi-byte text counts bytes, not characters.
+    const wide = "é".repeat(limits.maxStringBytes / 2 + 1);
+    expect(() => copyCatalogJson(wide, limits.maxArgumentBytes, limits)).toThrow("input-bound");
+  });
+
+  it("bounds the whole call at the named argument ceiling", () => {
+    const half = "x".repeat(limits.maxStringBytes);
+    const value = [half, half, half];
+    expect(copyCatalogJson(value, limits.maxArgumentBytes, limits)).toEqual(value);
+    expect(() => copyCatalogJson([...value, half], limits.maxArgumentBytes, limits)).toThrow(
+      "input-bound",
+    );
+  });
+
+  it("never lets a caller ask for more than its named ceiling", () => {
+    expect(() => copyCatalogJson({}, limits.maxArgumentBytes + 1, limits)).toThrow("input-bound");
+  });
+
+  it("leaves the plain budget untouched: the ceiling a copy may ask for stays the advertisement's", () => {
+    expect(() => copyCatalogJson({}, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES + 1)).toThrow(
+      "input-bound",
+    );
   });
 });

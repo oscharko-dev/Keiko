@@ -65,7 +65,7 @@ OpenCode runtime the model's answer under the preserving policy (credential floo
 OpenCode is its own producer and uses the gateway as infrastructure; Coding repository search and
 Coding History exports and imports keep the default projection. Preserved content still loses
 configured infrastructure-secret literals, private keys, URL credentials, `Authorization` header
-values, encoded-looking Bearer/Basic values and known token shapes, and memory proposals keep the
+values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known token shapes, and memory proposals keep the
 default projection. Diagnostics, audit evidence, support exports and
 tool-argument protections remain unconditional. The setting applies to every configured provider;
 it does not infer trust from a provider hostname. `chat.request.dispatch` records the per-call
@@ -634,9 +634,9 @@ previous line, the deltas that grew a live part (`liveDeltaCount`), the ones tha
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
 (`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
-Changeset-edit arguments reach the governed edit tool byte for byte (#4009): the gateway removes
-only the configured provider literals from them, never a heuristic secret shape; every other
-tool's arguments keep the full redaction. When a literal was removed,
+Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
+#4009) reach the tool byte for byte: the gateway removes only the configured provider literals
+from them, never a heuristic secret shape; every other tool's arguments keep the full redaction. When a literal was removed,
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit

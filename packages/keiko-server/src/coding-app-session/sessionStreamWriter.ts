@@ -9,6 +9,7 @@ import {
   markSseStreamBackpressureKilled,
   markSseStreamServerErrored,
   recordSseStreamFrame,
+  SSE_STALLED_READER_TIMEOUT_MS,
 } from "../sse-write.js";
 import type { CodingAppSessionChannelSnapshot } from "./channelContract.js";
 
@@ -16,9 +17,10 @@ import type { CodingAppSessionChannelSnapshot } from "./channelContract.js";
  * How long one buffered app-session frame may wait for its peer to drain it, and how long a closing
  * stream may take to flush. `res.write()` returning `false` only says that Node's buffer is above its
  * high-water mark — Node 24 answers so for any single write of 64 KiB or more, even to an idle local
- * browser — so a frame that drains within this bound is ordinary flow, not a stalled client.
+ * browser — so a frame that drains within this bound is ordinary flow, not a stalled client. It is
+ * the shared stalled-reader bound of every SSE stream, so no stream gives up on a reader sooner.
  */
-export const CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS = 1_000;
+export const CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS = SSE_STALLED_READER_TIMEOUT_MS;
 
 type SessionStreamSource =
   | "coding-app-session.session-channel.initial"

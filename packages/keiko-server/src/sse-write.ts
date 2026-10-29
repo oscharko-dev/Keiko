@@ -1,11 +1,15 @@
-// Shared SSE backpressure helper. Every SSE path in the server must call res.write() and react to
-// the boolean it returns: false means the kernel send-buffer is full and the client is not draining.
-// Continuing to write would grow Node's internal stream buffer without bound; the correct response is
-// to abort the in-flight generator (so the model/queue call stops producing) and destroy the socket.
+// Shared SSE flow control. Every SSE path in the server writes through `writeSseFrame` (or, for a
+// framing helper that writes itself, calls `awaitSseDrain` on a false write). `res.write()` returning
+// false means Node buffered the frame above its high-water mark — true for any single frame of
+// 64 KiB or more even to an idle client — so the frame is queued and the stream waits for `drain`.
+// Frame size never ends a stream. Only a reader that drains nothing within
+// `SSE_STALLED_READER_TIMEOUT_MS` is a stalled reader: the producer is aborted and the socket
+// destroyed, so a dead peer cannot grow the buffer without bound.
 //
 // Usage (mirrors terminal-routes.ts writeTerminalEvent and run-handlers.ts SseWriter.write):
 //
-//   writeOrDestroy(ctx.res, frame, controller);
+//   writeSseFrame(ctx.res, frame, controller);
+//   await whenSseWritable(ctx.res, controller?.signal);
 //
 // The controller parameter is an AbortController (or null when the caller manages abort separately
 // via its own signal). Destroying the socket fires "close" on res, which the caller's existing
@@ -17,14 +21,20 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import { getServerLogger } from "./observability/index.js";
 
 /**
- * Backpressure signal (GEN-PERF-CHAT-006). Emitted exactly once when a write is rejected because the
- * client is not draining, BEFORE the socket is destroyed, so a slow-client termination is observable
- * and distinguishable from an intentional user cancel. Carries only non-secret counts — never body
- * bytes — so it cannot leak model tokens if logged.
+ * Stalled-reader signal (GEN-PERF-CHAT-006). Emitted exactly once when a stream is torn down because
+ * its reader drained nothing within `SSE_STALLED_READER_TIMEOUT_MS`, BEFORE the socket is destroyed,
+ * so a stalled-reader termination is observable and distinguishable from an intentional user cancel.
+ * `frameBytes` is the size of the frame that started the wait. Carries only non-secret counts —
+ * never body bytes — so it cannot leak model tokens if logged.
  */
 export interface SseBackpressureSignal {
   readonly frameBytes: number;
@@ -44,6 +54,9 @@ const SSE_STREAM_CLOSED_OPERATION = defineActivityLogOperation({
   fields: {
     frameCount: { type: "integer", dataClass: "count", required: true },
     bytesStreamed: { type: "integer", dataClass: "count", required: true },
+    // Writes that left Node's buffer above its high-water mark and then waited for `drain`; absent
+    // when the stream never had to wait.
+    drainWaitCount: { type: "integer", dataClass: "count", required: false },
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -100,12 +113,13 @@ interface SseStreamCounterState {
   readonly startedAt: number;
   backpressureKilled: boolean;
   serverErrored: boolean;
+  drainWaitCount: number;
   emitted: boolean;
   correlationId: string | undefined;
 }
 
 // Per-response frame/byte counters (#2902 w5-sse-counters), keyed by the live `ServerResponse` so
-// every SSE write path in the server — `writeOrDestroy` here, plus `sse.ts`'s legacy write path,
+// every SSE write path in the server — `writeSseFrame` here, plus `sse.ts`'s legacy write path,
 // `writeEvent`/`writeMessageEvent` and the heartbeat — shares ONE count per stream without any of
 // them needing a threaded "deps" object. A `WeakMap` means a stream that never gets tracked (a
 // minimal unit-test double with no `.on`) costs nothing and is never retained past `res`'s own
@@ -143,6 +157,7 @@ function emitSseStreamClosed(res: ServerResponse, state: SseStreamCounterState):
       {
         frameCount: state.frameCount,
         bytesStreamed: state.bytesStreamed,
+        ...(state.drainWaitCount === 0 ? {} : { drainWaitCount: state.drainWaitCount }),
         reason: sseStreamReason(res, state),
       },
     ),
@@ -164,6 +179,7 @@ function sseStreamState(res: ServerResponse): SseStreamCounterState | undefined 
     startedAt: Date.now(),
     backpressureKilled: false,
     serverErrored: false,
+    drainWaitCount: 0,
     emitted: false,
     correlationId: undefined,
   };
@@ -180,7 +196,7 @@ function sseStreamState(res: ServerResponse): SseStreamCounterState | undefined 
 
 /**
  * Records one SSE frame write against `res`'s per-stream counter (#2902 w5-sse-counters). Closed
- * over the SAME write path every SSE route already funnels through — `writeOrDestroy` below, plus
+ * over the SAME write path every SSE route already funnels through — `writeSseFrame` below, plus
  * `sse.ts`'s legacy write path, `writeEvent`, `writeMessageEvent` and the heartbeat — so no route
  * handler has to opt in. Never throws: observability must never break a write.
  */
@@ -200,10 +216,9 @@ export function recordSseStreamFrame(
 
 /**
  * Marks `res`'s stream as ended-by-backpressure so the terminal line reports `"backpressure-killed"`
- * rather than the generic `"client-disconnected"`. Called only from a write path that is about to
- * `destroy()` the socket as a direct, deterministic consequence of the rejected write — never from
- * `writeEvent`/`writeMessageEvent`, where a caller-observed `false` does not by itself mean the
- * stream is being torn down.
+ * rather than the generic `"client-disconnected"`. Called only when a stalled reader is about to be
+ * destroyed because it drained nothing within its bound — never for a write that merely returned
+ * `false`, which is ordinary flow control and does not by itself mean the stream is torn down.
  */
 export function markSseStreamBackpressureKilled(res: ServerResponse): void {
   const state = sseStreamCounters.get(res);
@@ -217,42 +232,140 @@ export function markSseStreamServerErrored(res: ServerResponse): void {
 }
 
 /**
- * Writes `frame` to `res`. When `res.write` returns false (TCP send-buffer full / slow client),
- * aborts `controller` (stops the upstream producer) and destroys the socket.
- *
- * When the write is rejected, `onBackpressure` (if supplied) is invoked exactly once with the frame
- * byte count before the socket is destroyed, giving callers a distinct, observable signal for a
- * backpressure kill rather than silently relabeling it as a user cancel. The callback is wrapped in a
- * try/catch so an observer throw can never propagate into the write loop.
+ * How long a stream may keep frames above Node's high-water mark without its peer draining any of
+ * them before it counts as a stalled reader. `res.write()` returning `false` only says that Node's
+ * buffer is above its high-water mark — Node 24 answers so for every single write of 64 KiB or more,
+ * even to an idle loopback client — so a false write is ordinary flow control, never by itself a
+ * reason to end a stream. Only a peer that drains nothing for this long is torn down: that bound is
+ * time, never frame size, so a frame of any size reaches a reader that is still reading.
+ */
+export const SSE_STALLED_READER_TIMEOUT_MS = 30_000;
+
+// One pending drain wait per stream. A stream already waiting keeps its first deadline: frames
+// written meanwhile are buffered behind the ones the peer has not taken yet, and the stall bound
+// measures how long the peer has taken nothing.
+const pendingSseDrains = new WeakSet<ServerResponse>();
+
+/**
+ * Holds `res` open until its peer drains what Node buffered above the high-water mark. Called after a
+ * write returned `false`. When the peer drains, the stream simply continues. When it drains nothing
+ * within `SSE_STALLED_READER_TIMEOUT_MS`, the stream is a stalled reader: it is marked
+ * `backpressure-killed`, `onBackpressure` is told once, `controller` is aborted so the producer stops,
+ * and the socket is destroyed. A peer that closes first ends the wait through its own `close`.
+ */
+export function awaitSseDrain(
+  res: ServerResponse,
+  frameBytes: number,
+  controller: AbortController | null,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+): void {
+  // A response double without `.once` cannot report a drain; it never reaches a real socket either.
+  if (typeof res.once !== "function" || pendingSseDrains.has(res)) return;
+  pendingSseDrains.add(res);
+  const state = sseStreamCounters.get(res);
+  if (state !== undefined) state.drainWaitCount += 1;
+  const settle = (): void => {
+    clearTimeout(timer);
+    pendingSseDrains.delete(res);
+    res.off("drain", settle);
+    res.off("finish", settle);
+    res.off("close", settle);
+  };
+  const timer = setTimeout(() => {
+    settle();
+    killStalledSseStream(res, frameBytes, controller, onBackpressure);
+  }, SSE_STALLED_READER_TIMEOUT_MS);
+  timer.unref();
+  res.once("drain", settle);
+  res.once("finish", settle);
+  res.once("close", settle);
+}
+
+/**
+ * Resolves once `res` can take more data: at once while Node's buffer is below the high-water mark,
+ * otherwise on `drain`, or on `close` (a peer that left, or a stalled reader the bound destroyed).
+ * An optional producer signal also settles the wait without destroying the stream or marking a
+ * stalled reader. The producer re-checks its cancellation before publishing or pulling more input.
+ * Every settlement removes both response listeners and the optional abort listener.
+ */
+export function whenSseWritable(res: ServerResponse, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true || res.destroyed || res.writableEnded || !res.writableNeedDrain) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const settle = (): void => {
+      res.off("drain", settle);
+      res.off("close", settle);
+      signal?.removeEventListener("abort", settle);
+      resolve();
+    };
+    res.once("drain", settle);
+    res.once("close", settle);
+    signal?.addEventListener("abort", settle, { once: true });
+    if (signal?.aborted === true) settle();
+  });
+}
+
+function killStalledSseStream(
+  res: ServerResponse,
+  frameBytes: number,
+  controller: AbortController | null,
+  onBackpressure: ((signal: SseBackpressureSignal) => void) | undefined,
+): void {
+  // An ended stream whose buffered tail the peer still has not taken is a stalled reader too: it
+  // would otherwise hold its socket and buffer for as long as the peer stays silent.
+  if (res.destroyed || res.writableFinished) return;
+  markSseStreamBackpressureKilled(res);
+  if (onBackpressure !== undefined) {
+    try {
+      onBackpressure({ frameBytes, accepted: false });
+    } catch (error) {
+      // Observability must never break the protective abort+destroy path, and a throwing observer
+      // is itself recorded rather than lost.
+      emitServerDiagnostic(
+        undefined,
+        serverDiagnosticFromError({
+          correlationId: sseStreamCounters.get(res)?.correlationId ?? UNKNOWN_CORRELATION_ID,
+          operation: "sse.stream.stalled-reader",
+          source: "sse.stream.stalled-reader.observer",
+          error,
+          redact: () => "sse-stalled-reader-observer-failed",
+        }),
+      );
+    }
+  }
+  controller?.abort();
+  res.destroy();
+}
+
+/**
+ * Writes one SSE `frame` to `res` with drain-based flow control. A `false` result from `res.write`
+ * is Node's buffer accounting, not a dead client: the frame is already queued and the stream waits
+ * for `drain` (see `awaitSseDrain`). Only a reader that drains nothing within
+ * `SSE_STALLED_READER_TIMEOUT_MS` is torn down: `onBackpressure` (if supplied) is invoked exactly once
+ * with the byte count of the frame that started the wait, `controller` is aborted and the socket is
+ * destroyed — so a stalled-reader termination stays distinguishable from a user cancel.
  *
  * `correlationId` is optional (most SSE routes never received a `RouteContext`, mirroring
  * `readBoundedRequestBody`'s own optional correlation id) and, when supplied, is attached to this
  * stream's terminal `sse.stream.closed` line.
  *
- * Returns the raw boolean from `res.write` so callers can short-circuit if needed.
+ * Returns `false` only when the frame could not be queued because the stream is already gone, so a
+ * caller that sees `false` stops producing.
  */
-export function writeOrDestroy(
+export function writeSseFrame(
   res: ServerResponse,
   frame: string,
-  controller: AbortController,
+  controller: AbortController | null,
   onBackpressure?: (signal: SseBackpressureSignal) => void,
   correlationId?: string,
 ): boolean {
+  if (res.destroyed || res.writableEnded) return false;
   recordSseStreamFrame(res, frame, correlationId);
-  const accepted = res.write(frame);
-  if (!accepted) {
-    markSseStreamBackpressureKilled(res);
-    if (onBackpressure !== undefined) {
-      try {
-        onBackpressure({ frameBytes: Buffer.byteLength(frame, "utf8"), accepted: false });
-      } catch {
-        // Observability must never break the protective abort+destroy path.
-      }
-    }
-    controller.abort();
-    res.destroy();
+  if (!res.write(frame)) {
+    awaitSseDrain(res, Buffer.byteLength(frame, "utf8"), controller, onBackpressure);
   }
-  return accepted;
+  return true;
 }
 
 /**

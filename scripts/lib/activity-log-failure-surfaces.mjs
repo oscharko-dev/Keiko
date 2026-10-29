@@ -140,6 +140,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
       "gitChangeSnapshotRegistry",
       "gitChangeSnapshotService",
       "gitDelivery",
+      "gitDiffView",
       "gitProcessActivity",
     ],
     "runtime-packages": [

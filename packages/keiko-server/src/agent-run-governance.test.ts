@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayStreamChunk, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
@@ -264,5 +265,25 @@ describe("agent-run governance", () => {
     for (let index = 0; index < 4; index += 1) guarded("node", [], options);
     expect(() => guarded("node", [], options)).toThrow("Agent run budget exhausted.");
     expect(toolCalls).toBe(4);
+  });
+
+  // Owner decision 2026-10-28: no coding path refuses a patch at 64 KiB. An agent run's apply
+  // reserves one changeset's worth of patch bytes, so its envelope budget is the changeset cap.
+  it("carries a patch budget of exactly one changeset", () => {
+    const binding = mint("supervised-coding");
+    const reserve = (patchBytes: number): ReturnType<typeof reserveAgentRunBudget> =>
+      reserveAgentRunBudget({
+        binding,
+        workspaceRoot: "/repo",
+        usage: { toolCalls: 0, patchBytes, promptTokens: 0 },
+        nowIso: NOW,
+      });
+
+    expect(reserve(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1)).toEqual({
+      ok: false,
+      reason: "budget-exceeded",
+    });
+    expect(reserve(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)).toEqual({ ok: true });
+    expect(reserve(1)).toEqual({ ok: false, reason: "budget-exceeded" });
   });
 });

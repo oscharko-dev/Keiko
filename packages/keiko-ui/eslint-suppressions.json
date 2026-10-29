@@ -1182,9 +1182,6 @@
   "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchTimeline.tsx": {
     "complexity": {
       "count": 1
-    },
-    "max-lines-per-function": {
-      "count": 1
     }
   },
   "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": {

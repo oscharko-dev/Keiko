@@ -27,7 +27,7 @@ import {
   type RouteResult,
 } from "../../routes.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../../sse.js";
-import { writeOrDestroy } from "../../sse-write.js";
+import { writeSseFrame } from "../../sse-write.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import type { WorkspaceWatchSubscribeResult } from "./workspaceWatchService.js";
 
@@ -178,12 +178,12 @@ function writeInitialFrames(
   const snapshotEvent = result.snapshotRequired
     ? "editor-watch:snapshot-required"
     : "editor-watch:snapshot";
-  writeOrDestroy(res, frameSnapshot(result.snapshot, snapshotEvent), controller);
+  writeSseFrame(res, frameSnapshot(result.snapshot, snapshotEvent), controller);
   for (const event of result.replay) {
     if (controller.signal.aborted) return;
-    writeOrDestroy(res, frameWatchEvent(event), controller);
+    writeSseFrame(res, frameWatchEvent(event), controller);
   }
-  if (!controller.signal.aborted) writeOrDestroy(res, readyMessage(), controller);
+  if (!controller.signal.aborted) writeSseFrame(res, readyMessage(), controller);
 }
 
 function openWatchStream(
@@ -238,9 +238,9 @@ export async function handleEditorWorkspaceWatchEvents(
   const result = service.subscribe({
     root: root.realRoot,
     lastSequence: parseLastSequence(ctx),
-    onEvent: (event) => writeOrDestroy(ctx.res, frameWatchEvent(event), controller),
+    onEvent: (event) => writeSseFrame(ctx.res, frameWatchEvent(event), controller),
     onSnapshot: (snapshot) => {
-      if (ctx.res.headersSent) writeOrDestroy(ctx.res, frameSnapshot(snapshot), controller);
+      if (ctx.res.headersSent) writeSseFrame(ctx.res, frameSnapshot(snapshot), controller);
     },
     correlationId: ctx.correlationId,
     // The resolver itself, not a boolean reduction of it (#3347 owner P1): the watch session runs

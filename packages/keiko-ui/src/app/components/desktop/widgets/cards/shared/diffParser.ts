@@ -27,6 +27,16 @@ export interface DiffParseResult {
 // 512 KB cap keeps the renderer fast; large diffs use the evidence manifest.
 export const MAX_DIFF_BYTES = GIT_EDITOR_DIFF_MAX_BYTES;
 
+/**
+ * A caller whose diff is bounded by a stronger contract states its own byte bound. The change
+ * review of a governed changeset (up to `EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES`) is the one such
+ * caller: the operator approves the whole changeset, so the review must show the whole of it
+ * instead of the display cut every other surface keeps.
+ */
+export interface DiffParseOptions {
+  readonly maxBytes?: number;
+}
+
 // Issue #645: hard cap on the number of files surfaced to the Review widget. The remaining file
 // headers in the parsed prefix are dropped and `truncated:true` signals the renderer to render a
 // "truncated" indicator instead of an unbounded list.
@@ -146,13 +156,13 @@ interface TruncateResult {
   byteTruncated: boolean;
 }
 
-/** Slice raw input to the MAX_DIFF_BYTES boundary, then trim to the last complete line. */
-function truncateToByteLimit(raw: string, totalBytes: number): TruncateResult {
-  if (totalBytes <= MAX_DIFF_BYTES) {
+/** Slice raw input to the byte boundary, then trim to the last complete line. */
+function truncateToByteLimit(raw: string, totalBytes: number, maxBytes: number): TruncateResult {
+  if (totalBytes <= maxBytes) {
     return { input: raw, truncated: false, byteTruncated: false };
   }
   const bytes = new TextEncoder().encode(raw);
-  const slice = new TextDecoder().decode(bytes.slice(0, MAX_DIFF_BYTES));
+  const slice = new TextDecoder().decode(bytes.subarray(0, maxBytes));
   const lastNl = slice.lastIndexOf("\n");
   const input = lastNl === -1 ? slice : slice.slice(0, lastNl + 1);
   return { input, truncated: true, byteTruncated: true };
@@ -350,7 +360,7 @@ function processDiffLine(line: string, state: ParserState): void {
 
 // --- main parser ------------------------------------------------------------
 
-export function parseUnifiedDiff(raw: string): DiffParseResult {
+export function parseUnifiedDiff(raw: string, options: DiffParseOptions = {}): DiffParseResult {
   const totalBytes = new TextEncoder().encode(raw).byteLength;
 
   if (raw.length === 0) {
@@ -361,7 +371,7 @@ export function parseUnifiedDiff(raw: string): DiffParseResult {
     input,
     truncated: initialTruncated,
     byteTruncated,
-  } = truncateToByteLimit(raw, totalBytes);
+  } = truncateToByteLimit(raw, totalBytes, options.maxBytes ?? MAX_DIFF_BYTES);
   const lines = splitDiffLines(input);
 
   const state: ParserState = {

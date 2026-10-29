@@ -8,6 +8,11 @@ import {
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
+  ProviderEmptyAnswerError,
+  ProviderError,
+  ProviderOutputExhaustedError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
+import {
   activityLogErrorKind,
   logEndpointHost,
   logErrorKind,
@@ -296,6 +301,20 @@ describe("activityLogErrorKind", () => {
     );
     expect(activityLogErrorKind({ message: "GATEWAY_ATTEMPT_ADMISSION_DENIED" })).toBe("unknown");
   });
+  // Keiko 1.3.1 stress test (F4): a model that answered with nothing usable is a model outcome, not
+  // an internal fault, on `chat.response.streamed` and `gateway.retry.scheduled` alike. Both inherit
+  // the provider error code, so the class (never the shared code) tells them from a real provider
+  // fault, which keeps the generic classification.
+  it.each([
+    ["an empty answer after reasoning", new ProviderEmptyAnswerError("model", [], true)],
+    ["an empty answer", new ProviderEmptyAnswerError("model")],
+    ["an exhausted output budget", new ProviderOutputExhaustedError("model")],
+  ])("does not classify %s as an internal fault", (_label, error) => {
+    expect(activityLogErrorKind(error)).toBe("validation-failed");
+  });
+  it("keeps the generic classification for a real provider fault", () => {
+    expect(activityLogErrorKind(new ProviderError("provider failed", 500))).toBe("internal");
+  });
   it("maps the gateway authentication taxonomy to the closed permission denial kind", () => {
     const error = Object.assign(new Error("provider rejected credentials"), {
       code: "GATEWAY_AUTHENTICATION",
@@ -495,4 +514,94 @@ it("#3918 preserves inherited fallback observations through the registered failu
   } finally {
     resetActivityLogLossCountersForTests();
   }
+});
+
+describe.each([
+  {
+    label: "a rejected prototype read",
+    expectedKind: "unknown",
+    create: (): Error => {
+      const cause = Object.defineProperty(new Error("private-classifier-canary"), "name", {
+        value: undefined,
+      });
+      return new Proxy(cause, {
+        getPrototypeOf(): never {
+          throw new TypeError("private-prototype-classifier-canary");
+        },
+      });
+    },
+  },
+  {
+    label: "a revoked proxy",
+    expectedKind: "unknown",
+    create: (): Error => {
+      const revocable = Proxy.revocable(new Error("private-classifier-canary"), {});
+      revocable.revoke();
+      return revocable.proxy;
+    },
+  },
+  {
+    label: "a rejected prototype with a readable authentication code",
+    expectedKind: "permission-denied",
+    create: (): Error => {
+      return new Proxy(
+        Object.assign(new Error("private-classifier-canary"), { code: "GATEWAY_AUTHENTICATION" }),
+        {
+          getPrototypeOf(): never {
+            throw new TypeError("private-prototype-classifier-canary");
+          },
+        },
+      );
+    },
+  },
+])("#3918 contains $label in failure classification", ({ create, expectedKind }): void => {
+  it("preserves the guarded code/name classification", (): void => {
+    expect(activityLogErrorKind(create())).toBe(expectedKind);
+  });
+
+  it("retains the registered failure line and the original operation correlation", (): void => {
+    resetActivityLogLossCountersForTests();
+    try {
+      const cause = create();
+      const notices: ModelGatewayLogTransport[] = [];
+      const sink: ModelGatewayLogSink = {
+        write(event): void {
+          if (event.op !== "gateway.log.sink-failed") throw cause;
+          notices.push(event);
+        },
+      };
+      expect((): void => {
+        resolveLogSink(sink).write({
+          level: "info",
+          category: "gateway",
+          op: "gateway.chat.started",
+          correlationId: "hostile-classifier-correlation",
+        });
+      }).not.toThrow();
+      expect(notices).toHaveLength(1);
+      const line = formatActivityLogProofLine(notices[0] ?? {});
+      const persisted = expectActivityLogProof("gateway.log.sink-failed.emitted-line", line);
+      expect(persisted.errorKind).toBe(expectedKind);
+      expect(persisted.correlationId).toBe("hostile-classifier-correlation");
+      expect(line).not.toContain("private-prototype-classifier-canary");
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
+});
+
+it("#3918 contains prototype rejection from non-Error classification inputs", (): void => {
+  const foreign = new Proxy(
+    {},
+    {
+      getPrototypeOf(): never {
+        throw new TypeError("private-prototype-classifier-canary");
+      },
+    },
+  );
+  const revocable = Proxy.revocable({}, {});
+  revocable.revoke();
+  expect(activityLogErrorKind(foreign)).toBe("unknown");
+  expect(activityLogErrorKind(revocable.proxy)).toBe("unknown");
 });

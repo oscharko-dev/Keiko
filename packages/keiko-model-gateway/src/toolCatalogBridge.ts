@@ -2,6 +2,7 @@ import {
   GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES,
   GATEWAY_NATIVE_EXACT_CONTENT_TOOLS,
   isGatewayNativeToolAdvertisement,
+  toolArgumentLimitsByToolName,
   type GatewayNativeToolAdvertisement,
   type GatewayToolAdvertisement,
   type GatewayToolCatalogAdvertisement,
@@ -12,7 +13,10 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
+  GENERIC_TOOL_ARGUMENT_LIMITS,
   TOOL_CATALOG_LIMITS,
+  toolArgumentLimits,
+  type ToolArgumentLimits,
   type ToolResultReason,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
@@ -400,8 +404,37 @@ function normalizerFor(advertisement: GatewayToolCatalogAdvertisement): ToolInvo
   };
   return createToolInvocationNormalizer(binding);
 }
-function captureCall(input: NormalizedToolCall): NormalizedToolCall {
-  const object = captureCatalogJson(input) as Readonly<Record<string, unknown>>;
+/**
+ * The argument ceilings the call is captured under: the changeset ceilings for the governed
+ * changeset edit and for the native file-content tools, the generic ones for everything else. The
+ * name is read without running an accessor; anything unreadable is captured (and rejected) under the
+ * generic ceilings.
+ */
+function callArgumentLimits(
+  input: NormalizedToolCall,
+  normalizer: ToolInvocationNormalizer | undefined,
+  native: GatewayNativeToolAdvertisement | undefined,
+): ToolArgumentLimits {
+  const descriptor =
+    typeof input === "object" ? Object.getOwnPropertyDescriptor(input, "name") : undefined;
+  const name: unknown = descriptor !== undefined && "value" in descriptor ? descriptor.value : null;
+  if (typeof name !== "string") return GENERIC_TOOL_ARGUMENT_LIMITS;
+  if (native !== undefined) return toolArgumentLimitsByToolName(name);
+  const tool = normalizer?.binding.projection.tools.find((entry) => entry.alias === name);
+  return tool === undefined
+    ? GENERIC_TOOL_ARGUMENT_LIMITS
+    : toolArgumentLimits(tool.toolRef.canonicalId);
+}
+function captureCall(
+  input: NormalizedToolCall,
+  normalizer: ToolInvocationNormalizer | undefined,
+  native: GatewayNativeToolAdvertisement | undefined,
+): NormalizedToolCall {
+  const object = captureCatalogJson(
+    input,
+    undefined,
+    callArgumentLimits(input, normalizer, native),
+  ) as Readonly<Record<string, unknown>>;
   requireBridge(
     Object.keys(object).length === 3 &&
       ["id", "name", "arguments"].every((key) => Object.hasOwn(object, key)),
@@ -546,7 +579,7 @@ function bindCall(
 ): NormalizedToolCall {
   let captured: NormalizedToolCall | undefined;
   try {
-    const call = captureCall(input);
+    const call = captureCall(input, normalizer, native);
     captured = call;
     if (native !== undefined) return bindNativeCall(native, call, now, log);
     requireBridge(normalizer !== undefined, "unoffered-tool");
@@ -630,7 +663,7 @@ function bindCalls(
   let entries: readonly NormalizedToolCall[];
   try {
     requireGenuineCallArray(calls);
-    entries = calls.map(captureCall);
+    entries = calls.map((call) => captureCall(call, normalizer, native));
     requireBridge(
       new Set(entries.map((call) => call.id)).size === entries.length,
       "invalid-arguments",

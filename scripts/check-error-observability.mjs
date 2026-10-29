@@ -121,6 +121,10 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
+    "packages/keiko-model-gateway/src/observability.ts:isModelOutputFailure",
+    "A rejected foreign prototype read declines the model-output class probe with the literal false. The guarded Security classifier still supplies the existing registered failure event's closed kind; no caught value is inspected and no fictitious loss is counted.",
+  ],
+  [
     "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateScorecard",
     "Pure scorecard inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
   ],
@@ -526,23 +530,33 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "packages/keiko-activity-log/src/server-log.ts:syncActiveSegment",
     "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
   ],
+  [
+    "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile",
+    "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+  ],
+]);
+
+const REVIEWED_FIXED_FAILURE_FALLBACKS = new Map([
+  ["packages/keiko-contracts/src/git-editor.ts:parserInspectionClass", "unknown error"],
+  ["packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass", "unknown"],
+  ["packages/keiko-model-gateway/src/observability.ts:isModelOutputFailure", false],
+  ["packages/keiko-contracts/src/observability.ts:completeRegistrationShape", false],
+  [
+    "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind",
+    "registration-mismatch",
+  ],
 ]);
 
 function isReviewedFailurePath(path, owner, node) {
   const site = `${path}:${owner}`;
   if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(site)) return false;
-  if (path === "packages/keiko-contracts/src/git-editor.ts" && owner === "parserInspectionClass")
-    return exactFailureFallback(node, "unknown error");
-  if (site === "packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass")
-    return exactFailureFallback(node, "unknown");
-  if (path === "packages/keiko-contracts/src/command-runner.ts")
+  if (REVIEWED_FIXED_FAILURE_FALLBACKS.has(site))
+    return exactFailureFallback(node, REVIEWED_FIXED_FAILURE_FALLBACKS.get(site));
+  if (
+    path === "packages/keiko-contracts/src/command-runner.ts" ||
+    path === "packages/keiko-contracts/src/prompt-enhancer-validation.ts"
+  )
     return exactCommandInspectionRefusal(node);
-  if (path === "packages/keiko-contracts/src/prompt-enhancer-validation.ts")
-    return exactCommandInspectionRefusal(node);
-  if (path !== "packages/keiko-contracts/src/observability.ts") return true;
-  if (owner === "completeRegistrationShape") return exactFailureFallback(node, false);
-  if (owner === "rejectedActivityLogEventKind")
-    return exactFailureFallback(node, "registration-mismatch");
   return true;
 }
 

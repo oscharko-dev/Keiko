@@ -33,7 +33,7 @@ import {
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
-import { readPidRecord, writeExclusivePidFile } from "./state-paths.js";
+import { readPidRecord, UI_LAUNCH_ID_FLAG, writeExclusivePidFile } from "./state-paths.js";
 
 const TEST_LAUNCH_ID = "ab".repeat(16);
 
@@ -1088,6 +1088,88 @@ describe("runLifecycleCli", () => {
     expect(openExternal).not.toHaveBeenCalled();
     expect(existsSync(join(root, ".keiko", "ui.browser-open"))).toBe(true);
     expect(c.out()).toContain("already running");
+  });
+
+  describe("a running UI tracked on another port (L1)", () => {
+    const trackedCommandLine = (port: string, host = "127.0.0.1"): string =>
+      `node /opt/keiko/cli.js ui --port ${port} --host ${host} ${UI_LAUNCH_ID_FLAG} ${TEST_LAUNCH_ID}`;
+
+    async function startWithTracked(
+      root: string,
+      commandLine: string | undefined,
+      healthyPorts: readonly string[],
+    ): Promise<{
+      code: number;
+      c: Captured;
+      probed: string[];
+      killProcess: ReturnType<typeof vi.fn>;
+      spawnFn: ReturnType<typeof vi.fn>;
+    }> {
+      mkdirSync(join(root, ".keiko"), { recursive: true });
+      writeExclusivePidFile(join(root, ".keiko", "ui.pid"), 12345, TEST_LAUNCH_ID, true);
+      const c = makeIo();
+      const probed: string[] = [];
+      const killProcess = vi.fn();
+      const spawnFn = vi.fn();
+      const code = await runLifecycle(
+        "start",
+        ["--port", "1993", "--start-timeout", "1", "--stop-timeout", "1"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          spawnFn,
+          fetchImpl: (input) => {
+            const port = new URL(input).port;
+            probed.push(port);
+            return healthyPorts.includes(port)
+              ? Promise.resolve(
+                  Response.json({ status: "ok", version: SDK_VERSION, launchId: TEST_LAUNCH_ID }),
+                )
+              : Promise.reject(new Error("connect ECONNREFUSED"));
+          },
+          readCommandLine: () => commandLine,
+          isProcessAlive: () => true,
+          isPortAvailable: () => Promise.resolve(true),
+          killProcess,
+          sleep: () => Promise.resolve(),
+        },
+      );
+      return { code, c, probed, killProcess, spawnFn };
+    }
+
+    it("reports the healthy instance on its own port and does not stop it", async () => {
+      const result = await startWithTracked(makeRoot(), trackedCommandLine("1991"), ["1991"]);
+      expect(result.code).toBe(0);
+      expect(result.c.out()).toContain("already running on http://127.0.0.1:1991");
+      expect(result.c.out()).not.toContain("stale");
+      expect(result.probed).toEqual(["1991"]);
+      expect(result.killProcess).not.toHaveBeenCalled();
+      expect(result.spawnFn).not.toHaveBeenCalled();
+    });
+
+    it("still calls the tracked instance stale when its own port is unreachable", async () => {
+      const result = await startWithTracked(makeRoot(), trackedCommandLine("1991"), []);
+      expect(result.probed[0]).toBe("1991");
+      expect(result.c.out()).toContain("stale (health check is unreachable); restarting pid 12345");
+      expect(result.killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
+    });
+
+    it.each([
+      ["no readable command line", undefined],
+      ["a port outside the valid range", trackedCommandLine("70000")],
+      ["a non-numeric port", trackedCommandLine("abc")],
+      ["a host that is not loopback", trackedCommandLine("1991", "evil.example")],
+      [
+        "another launch's command line",
+        trackedCommandLine("1991").replace(TEST_LAUNCH_ID, "cd".repeat(16)),
+      ],
+    ])("falls back to the requested port for %s", async (_label, commandLine) => {
+      const result = await startWithTracked(makeRoot(), commandLine, ["1993"]);
+      expect(result.probed[0]).toBe("1993");
+      expect(result.c.out()).toContain("already running on http://127.0.0.1:1993");
+      expect(result.killProcess).not.toHaveBeenCalled();
+    });
   });
 
   it("restarts an already-running UI when the health version is stale", async () => {

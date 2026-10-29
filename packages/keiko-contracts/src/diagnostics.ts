@@ -2025,6 +2025,12 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   "pending-decision-focused",
   "repository-trust-bound",
   "changeset-review-prepared",
+  // A history task from another repository than the active one was returned and not activated: the
+  // operator switched repositories, an ordinary transition and not a failure.
+  "history-repository-switched",
+  // The first interruption of a shared event stream whose browser source was closed; the stream is
+  // reopened by its own reconnect and any session repair is reported on the same streak.
+  "event-stream-reconnecting",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2078,7 +2084,9 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly repositoryId: string;
       readonly workspaceId: string;
     }
-  | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number };
+  | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number }
+  | { readonly interaction: "history-repository-switched" }
+  | { readonly interaction: "event-stream-reconnecting" };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
@@ -2115,6 +2123,8 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   },
   "agent-selected": { agent: (value) => isSetMember(value, CODING_WORKBENCH_AGENT_KIND_SET) },
   "pending-decision-focused": {},
+  "history-repository-switched": {},
+  "event-stream-reconnecting": {},
   "repository-trust-bound": {
     repositoryId: (value) => typeof value === "string" && BODY_FREE_ID_PATTERN.test(value),
     workspaceId: (value) =>

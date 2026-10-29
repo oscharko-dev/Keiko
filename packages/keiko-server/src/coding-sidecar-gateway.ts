@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   findConfiguredCapability,
   resolveCodingSafeSidecarGatewayProfile,
+  ProviderResponseInvalidError,
   ResponseRedactionError,
   type Gateway,
   type GatewayCallRequest,
@@ -104,7 +105,8 @@ import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./rou
 import {
   sseBackpressureReporter,
   type SseBackpressureSignal,
-  writeOrDestroy,
+  whenSseWritable,
+  writeSseFrame,
 } from "./sse-write.js";
 import { startSseHeartbeat } from "./sse.js";
 import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogToolFacadeBridge.js";
@@ -284,7 +286,14 @@ const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
 const CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID = "coding-safe-openai-compatible";
 const SIDECAR_SSE_HEARTBEAT_MS = 5_000;
+// Bytes per token the sidecar ESTIMATES with (usage reporting, the reasoning allowance). It never
+// ends an answer by itself: a legitimate answer can be denser than this.
 const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
+// The runaway backstop for a provider that ignores its output limit: a turn is cut only once its
+// output is this many bytes per allowed token. It sits at twice the estimate so that dense tokenizers,
+// escaped tool arguments and whitespace-heavy files that obey `max_tokens` are never cut mid-answer,
+// and is applied identically while streaming and on the finished answer.
+const OUTPUT_BYTES_PER_TOKEN_BACKSTOP = 8;
 // The #2680 live-probe fingerprint (many model requests, zero keiko_* facade calls) becomes
 // judgeable once the replayed history holds the two system messages, the task prompt, and three
 // assistant/user rounds without one governed tool call; legitimate coding turns read a file
@@ -1980,6 +1989,10 @@ function outputByteBudget(maxOutputTokens: number): number {
   return maxOutputTokens * OUTPUT_BYTES_PER_TOKEN_LIMIT;
 }
 
+function outputByteBackstop(maxOutputTokens: number): number {
+  return maxOutputTokens * OUTPUT_BYTES_PER_TOKEN_BACKSTOP;
+}
+
 function incrementalUtf8ByteCount(
   token: string,
   previousEndedWithHighSurrogate: boolean,
@@ -2019,13 +2032,45 @@ function outputMetrics(response: NormalizedResponse): {
   };
 }
 
+// The bytes the model actually produced, on the basis the stream counts them: the answer text as is
+// plus the tool calls and structured output as JSON. `outputMetrics` reports the same fields inside
+// a JSON envelope, whose keys the model never wrote; the output guard judges this count so a finished
+// answer is never stricter than the stream that carried it.
+function producedOutputBytes(response: NormalizedResponse): number {
+  const calls = response.toolCalls.length === 0 ? "" : JSON.stringify(response.toolCalls);
+  const structured =
+    response.structuredOutput === null ? "" : JSON.stringify(response.structuredOutput);
+  return (
+    Buffer.byteLength(response.content, "utf8") +
+    Buffer.byteLength(calls, "utf8") +
+    Buffer.byteLength(structured, "utf8")
+  );
+}
+
+function finishedAnswerExceedsBudget(
+  response: NormalizedResponse,
+  usage: ReturnType<typeof completionUsage>,
+  maxOutputTokens: number,
+): boolean {
+  const guarded = {
+    completionTokens: usage.completionTokens,
+    outputBytes: producedOutputBytes(response),
+  };
+  return exceedsOutputBudget(guarded, maxOutputTokens, usage.source === "provider-reported");
+}
+
+// Whether a turn spent more than its output allowance. The provider's own token count is the
+// authority when it reported one (`providerReportedTokens`): an answer within its token budget is
+// never cut for its byte size. Without a provider count, tokens are only a byte estimate and cannot
+// end an answer. In both cases the byte backstop still stops a provider that ignores its limit.
 function exceedsOutputBudget(
   metrics: { readonly completionTokens: number; readonly outputBytes: number },
   maxOutputTokens: number,
+  providerReportedTokens: boolean,
 ): boolean {
   return (
-    metrics.completionTokens > maxOutputTokens ||
-    metrics.outputBytes > outputByteBudget(maxOutputTokens)
+    (providerReportedTokens && metrics.completionTokens > maxOutputTokens) ||
+    metrics.outputBytes > outputByteBackstop(maxOutputTokens)
   );
 }
 
@@ -2214,8 +2259,11 @@ function emitGatewayFailureDiagnostic(
   error: unknown,
   runId: string,
   turnFailureRecorded: boolean,
+  // Absent for a failure before any cancellation source is armed for the request.
+  cancellation?: GatewayRequestCancellation,
 ): void {
   if (turnFailureRecorded && isModelAnswerFailure(error)) return;
+  if (cancellation !== undefined && isUserInitiatedCancellation(cancellation)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -2553,7 +2601,11 @@ function isStreamInterruption(error: unknown): boolean {
   return (
     error instanceof TimeoutError ||
     error instanceof TransportError ||
-    (error instanceof ProviderError && error.httpStatus === 200)
+    // An oversized or unparseable answer is HTTP 200 too, but the provider did answer, and the same
+    // request answers the same way: that is a final rejection, not an interruption to retry.
+    (error instanceof ProviderError &&
+      error.httpStatus === 200 &&
+      !(error instanceof ProviderResponseInvalidError))
   );
 }
 
@@ -3155,10 +3207,12 @@ function unavailableGatewayReason(
 type CodingSidecarGatewayCancellationCause =
   "client-disconnect" | "route-deadline" | "backpressure-killed" | "run-stopped";
 
-// The sidecar's SSE frames go through the server's shared protective write path (`writeOrDestroy`):
-// a frame the client is not draining aborts this controller, reports the body-free backpressure
-// diagnostic and destroys the socket, exactly as every other SSE route does. The controller is one
-// of the request's abort sources, so the outcome line can name the kill instead of guessing.
+// The sidecar's SSE frames go through the server's shared flow-controlled write path
+// (`writeSseFrame`): a frame above Node's high-water mark waits for `drain`, and only a reader that
+// drains nothing within the shared stalled-reader bound aborts this controller, reports the
+// body-free backpressure diagnostic and loses its socket, exactly as on every other SSE route. The
+// controller is one of the request's abort sources, so the outcome line can name the kill instead
+// of guessing.
 interface SidecarSseTransport {
   readonly backpressure: AbortController;
   readonly onBackpressure: (signal: SseBackpressureSignal) => void;
@@ -3390,9 +3444,10 @@ async function dispatchGatewayChat(
   }
 }
 
-// The opening frame never reached the client — the shared path killed the stream, or the response
-// was already gone — so no provider call is started for an answer nobody can receive, exactly as
-// `beginGatewayStream` ends the streamed path (#3602 review). The outcome names the abort source.
+// The opening frame could not be queued because the response was already gone (the client left, or
+// an earlier stalled-reader teardown), so no provider call is started for an answer nobody can
+// receive, exactly as `beginGatewayStream` ends the streamed path (#3602 review). The outcome names
+// the abort source.
 function settleUndeliverableBufferedStream(
   ctx: RouteContext,
   dispatch: GatewayChatDispatchContext,
@@ -3458,7 +3513,7 @@ function settleFailedGatewayChat(
   const runtimeRetry = runtimeRetryFor(error, failureCode);
   const turnFailureRecorded =
     !cancelled && reportGatewayTurnFailure(ctx, deps, runId, { failureCode, runtimeRetry, error });
-  emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
+  emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded, cancellation);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   const refusal = bufferedStream === undefined ? refusalAnswer(ctx, runId, error) : undefined;
   if (refusal !== undefined) return refusal;
@@ -3517,7 +3572,7 @@ async function executeBufferedGatewayChat(
       : settleBufferedOpenAiStreamError(stream, "error");
   }
   const maxOutputTokens = request.maxOutputTokens ?? 1;
-  if (exceedsOutputBudget(metrics, maxOutputTokens)) {
+  if (finishedAnswerExceedsBudget(response, usage, maxOutputTokens)) {
     record("output-limit", { limit: "answer" });
     return stream === undefined
       ? unavailableError()
@@ -3685,13 +3740,15 @@ async function pumpGatewayStreamWithCancellation(
         runtimeRetry,
         error,
       });
-    emitGatewayStreamFailureDiagnostic(
-      session.ctx,
-      deps,
-      error,
-      session.runId,
-      turnFailureRecorded,
-    );
+    if (!isUserInitiatedCancellation(cancellation)) {
+      emitGatewayStreamFailureDiagnostic(
+        session.ctx,
+        deps,
+        error,
+        session.runId,
+        turnFailureRecorded,
+      );
+    }
     settleGatewayStreamError(session, runtimeRetry, outputRepairOf(error));
   } finally {
     stopHeartbeat();
@@ -3810,18 +3867,30 @@ function writeSessionTerminal(
   );
 }
 
+// A stream aborted by the route deadline or a run stop leaves the runtime connected: nobody closed
+// the socket, so the response must end here, with the same error finish the buffered path writes. A
+// client that left (or one the backpressure guard destroyed) has no response left to end.
+function settleAbortedStream(session: GatewayStreamSession, repair: RepairEvidence): void {
+  const cause = session.cancellation.cause();
+  if (cause === "route-deadline" || cause === "run-stopped") writeSessionTerminal(session, "error");
+  recordSessionOutcome(session, "cancelled", repair);
+}
+
 async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
   const { cancellation, iterator } = session;
   const cancellationSignal = cancellation.signal;
   for (;;) {
+    // Pull the provider no faster than the runtime reads: while the response is above Node's
+    // high-water mark the next chunk waits for `drain` (or the stalled-reader bound's teardown).
+    await whenSseWritable(session.ctx.res);
     if (isGatewayRequestCancelled(cancellationSignal)) {
       await iterator.return?.();
-      recordSessionOutcome(session, "cancelled", REPAIR_NOT_SETTLED);
+      settleAbortedStream(session, REPAIR_NOT_SETTLED);
       return;
     }
     const next = await iterator.next();
     if (cancellationSignal.aborted) {
-      recordSessionOutcome(session, "cancelled", REPAIR_NOT_SETTLED);
+      settleAbortedStream(session, REPAIR_NOT_SETTLED);
       return;
     }
     if (next.done) break;
@@ -3831,6 +3900,9 @@ async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
       return;
     }
     await streamGatewayResponse(session, chunk.response);
+    // The terminal response is the stream's last chunk; releasing the iterator here frees the
+    // provider stream at once instead of leaving it suspended behind a reader that is still behind.
+    await iterator.return?.();
     return;
   }
   // A stream without a terminal response must reach the shared diagnostic and turn-event path.
@@ -3855,7 +3927,8 @@ function streamGatewayDelta(session: GatewayStreamSession, token: string): Promi
   metrics.previousDeltaEndedWithHighSurrogate = deltaMetrics.endsWithHighSurrogate;
   metrics.completionTokens = Math.ceil(metrics.outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT);
   const budget = { completionTokens: metrics.completionTokens, outputBytes: metrics.outputBytes };
-  const overBudget = exceedsOutputBudget(budget, request.maxOutputTokens ?? 1);
+  // Mid-stream only the byte backstop applies: the token count here is an estimate.
+  const overBudget = exceedsOutputBudget(budget, request.maxOutputTokens ?? 1, false);
   return forwardStreamText(session, { content: token }, overBudget ? "answer" : undefined);
 }
 
@@ -3929,6 +4002,7 @@ async function streamGatewayResponse(
 ): Promise<void> {
   const { ctx, id, created, modelId, request, iterator, metrics, promptTokenReservation } = session;
   const outcome = outputMetrics(response);
+  const producedBytes = Math.max(producedOutputBytes(response), metrics.outputBytes);
   metrics.outputBytes = Math.max(outcome.outputBytes, metrics.outputBytes);
   metrics.promptTokens = response.usage.promptTokens;
   const promptSettlement = settlePromptTokenReservation(
@@ -3938,7 +4012,9 @@ async function streamGatewayResponse(
     discardedPromptTokens(response),
   );
   settleStreamCompletionUsage(session, response, outcome, promptSettlement);
-  if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
+  const providerReported = response.usage.completionTokens > 0;
+  const guarded = { completionTokens: metrics.completionTokens, outputBytes: producedBytes };
+  if (exceedsOutputBudget(guarded, request.maxOutputTokens ?? 1, providerReported)) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit", settledRepair(response.outputRepair), "answer");
     writeSessionTerminal(session, "length");
@@ -4114,7 +4190,7 @@ function settleGatewayStreamError(
   repair?: GatewayOutputRepairOutcome,
 ): void {
   if (session.cancellation.signal.aborted) {
-    recordSessionOutcome(session, "cancelled", settledRepair(repair));
+    settleAbortedStream(session, settledRepair(repair));
     return;
   }
   recordSessionOutcome(session, "failed", settledRepair(repair));
@@ -4124,6 +4200,16 @@ function settleGatewayStreamError(
   } else {
     writeSessionTerminal(session, "error");
   }
+}
+
+// A user stop or a client that left is the human's own decision, not a failure: the outcome line
+// already names it (`cancelled` with its `cancellationCause`), so it writes no error-level
+// diagnostic, which would also open a spurious support-incident candidate. A route-deadline or
+// backpressure abort is a real fault and keeps its diagnostic.
+function isUserInitiatedCancellation(cancellation: GatewayRequestCancellation): boolean {
+  if (!cancellation.signal.aborted) return false;
+  const cause = cancellation.cause();
+  return cause === "client-disconnect" || cause === "run-stopped";
 }
 
 function isGatewayRequestCancelled(signal: AbortSignal): boolean {
@@ -4176,7 +4262,8 @@ function beginBufferedOpenAiStream(
 }
 
 // SSE comments that keep the runtime's connection alive while the model is silent, written through
-// the shared protective path so a client that stops draining kills the stream like any frame.
+// the shared flow-controlled path, so a reader that drains nothing within the stalled-reader bound
+// loses the stream exactly as it would on any frame.
 function sidecarSseHeartbeat(ctx: RouteContext, transport: SidecarSseTransport): () => void {
   return startSseHeartbeat(ctx.res, SIDECAR_SSE_HEARTBEAT_MS, undefined, {
     controller: transport.backpressure,
@@ -4260,16 +4347,16 @@ function bufferedOpenAiStream(
   return session === undefined ? STREAMING : completeBufferedOpenAiStream(session, response);
 }
 
-// False means the frame did not reach the client: either the response was already gone (the
-// client's own `close` is the abort source that names it) or the shared path killed the stream for
-// backpressure (its controller is). A caller that sees false stops producing; it never resumes.
+// False means the frame could not be queued because the response is already gone: the client's own
+// `close`, or an earlier stalled-reader teardown (whose controller is the abort source that names
+// it). A caller that sees false stops producing; it never resumes.
 function writeOpenAiSse(
   ctx: RouteContext,
   payload: Readonly<Record<string, unknown>>,
   transport: SidecarSseTransport,
 ): boolean {
   if (ctx.res.writableEnded || ctx.res.destroyed) return false;
-  return writeOrDestroy(
+  return writeSseFrame(
     ctx.res,
     `data: ${JSON.stringify(payload)}\n\n`,
     transport.backpressure,

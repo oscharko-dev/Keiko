@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import type { ReactElement } from "react";
@@ -315,14 +317,22 @@ describe("CodingWorkbenchTimeline", () => {
         questions={IDLE_QUESTIONS}
       />,
     );
-    const cards = [...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]')];
-    expect(cards).toHaveLength(2);
-    const [execute, shell] = cards;
+    const failed = [
+      ...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]'),
+    ];
+    expect(failed).toHaveLength(1);
+    const [execute] = failed;
     expect(execute?.open).toBe(true);
+    expect(execute).toHaveTextContent("Failed");
     expect(execute).toHaveTextContent("The tool reported an error to the model.");
     expect(execute).not.toHaveTextContent("exited with code");
+    // A command that ran and returned non-zero shows its exit code, as OpenCode reports it, not a
+    // red "Failed"; it still opens to the reason (#4098 acceptance).
+    const shell = container.querySelector<HTMLDetailsElement>('[data-tool-state="exited"]');
     expect(shell?.open).toBe(true);
+    expect(shell?.querySelector('[data-state="exited"]')).toHaveTextContent("Exit code 1");
     expect(shell).toHaveTextContent("The command exited with code 1.");
+    expect(shell).not.toHaveTextContent("Failed");
     expect(shell).not.toHaveTextContent("reported an error");
   });
 
@@ -417,7 +427,8 @@ describe("CodingWorkbenchTimeline", () => {
     );
     const list = view.container.querySelector<HTMLElement>(`.${styles.timeline}`);
     if (list === null) throw new Error("timeline list not found");
-    Object.defineProperty(list, "scrollTop", { configurable: true, value: 50_000 });
+    // Writable: the list follows its newest rows and may assign its own scrollTop.
+    Object.defineProperty(list, "scrollTop", { configurable: true, writable: true, value: 50_000 });
     act(() => {
       list.dispatchEvent(new UIEvent("scroll", { bubbles: true }));
     });
@@ -1698,6 +1709,44 @@ describe("CodingWorkbenchTimeline native tool labels", () => {
     }
   });
 
+  // The ids are read from the server's registration list as text (the UI never imports the
+  // server), so a tool added there without a catalog entry fails this test instead of rendering
+  // title-cased English in the German UI.
+  function shippedKeikoToolIds(): readonly string[] {
+    const source = readFileSync(
+      join(
+        import.meta.dirname,
+        "../../../../../../../keiko-server/src/coding-runtime/opencodeToolSchemas.ts",
+      ),
+      "utf8",
+    );
+    const block =
+      /OPENCODE_MODEL_VISIBLE_TOOLS = \[([\s\S]*?)\] as const;/u.exec(source)?.[1] ?? "";
+    return [...block.matchAll(/name: "(keiko_[a-z_]+)"/gu)].map((match) => match[1] ?? "");
+  }
+
+  it("localizes every shipped keiko_* tool id in German instead of title-casing the raw id", async () => {
+    const ids = shippedKeikoToolIds();
+    expect(ids.length).toBeGreaterThanOrEqual(18);
+    const container = await renderIn("de", ids);
+    const shown = titles(container);
+
+    expect(shown).toHaveLength(ids.length);
+    ids.forEach((id, index) => {
+      const fallback = id
+        .replace(/^keiko_/u, "")
+        .split("_")
+        .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+        .join(" ");
+      // "Skill" and "Pull Request" are the same words in both languages.
+      if (id !== "keiko_skill" && id !== "keiko_pull_request") {
+        expect(shown[index]).not.toBe(fallback);
+      }
+    });
+    expect(shown).toContain("Dateien ändern");
+    expect(shown).toContain("Git-Commit");
+  });
+
   it("keeps the existing Keiko tool labels", async () => {
     const container = await renderIn("en", ["keiko_git_status", "keiko_workspace_read"]);
 
@@ -1864,5 +1913,406 @@ describe("CodingWorkbenchTimeline plan card", () => {
     const { container } = renderPlan(planFeed(1, ["completed", "pending"]), true);
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+// Stability audit items 2, 8, 11 and 13.
+function feedWithMessages(count: number): AvailableCodingSafeActivityFeed {
+  return {
+    schemaVersion: "1",
+    availability: "available",
+    runId: "run-1",
+    updatedAt: AT,
+    turns: [
+      {
+        turnId: "turn-1",
+        messages: Array.from({ length: count }, (_, index) => ({
+          messageId: `message-${String(index + 1)}`,
+          role: "assistant" as const,
+          occurredAt: new Date(Date.UTC(2026, 6, 19, 12, 0, 0, index)).toISOString(),
+          segments: [
+            { kind: "text" as const, text: `Answer ${String(index + 1)}`, truncated: false },
+          ],
+          truncated: false,
+        })),
+        tools: [],
+        truncated: false,
+      },
+    ],
+    truncated: false,
+    droppedEventCount: 0,
+  };
+}
+
+const PENDING_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
+  ...IDLE_QUESTIONS,
+  status: "ready",
+  questions: [
+    {
+      id: "que_1",
+      questions: [
+        { header: "Pick", question: "Continue?", options: [{ label: "Yes", description: "Go" }] },
+      ],
+    },
+  ] as unknown as UseCodingWorkbenchQuestionsResult["questions"],
+};
+
+// jsdom has no layout, so the list's scroll geometry is supplied: a tall scroll height and a
+// scrollTop that records every assignment the component makes.
+function installListGeometry(): {
+  readonly assigned: number[];
+  readonly set: (value: number) => void;
+  readonly restore: () => void;
+} {
+  const assigned: number[] = [];
+  const offsets = new WeakMap<object, number>();
+  const heightDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
+  const topDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+  Object.defineProperty(Element.prototype, "scrollHeight", {
+    configurable: true,
+    get: () => 100_000,
+  });
+  Object.defineProperty(Element.prototype, "scrollTop", {
+    configurable: true,
+    get(this: Element) {
+      return offsets.get(this) ?? 0;
+    },
+    set(this: Element, value: number) {
+      assigned.push(value);
+      offsets.set(this, value);
+    },
+  });
+  return {
+    assigned,
+    set: (value): void => {
+      for (const list of document.querySelectorAll("ol[data-virtual]")) offsets.set(list, value);
+    },
+    restore: (): void => {
+      if (heightDescriptor)
+        Object.defineProperty(Element.prototype, "scrollHeight", heightDescriptor);
+      if (topDescriptor) Object.defineProperty(Element.prototype, "scrollTop", topDescriptor);
+    },
+  };
+}
+
+describe("CodingWorkbenchTimeline long runs", () => {
+  afterEach(() => cleanup());
+
+  it("keeps the virtualized list at its newest rows instead of stranding it at the oldest", () => {
+    const geometry = installListGeometry();
+    try {
+      const { container } = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(150))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const list = container.querySelector<HTMLOListElement>("ol[data-virtual='true']");
+      if (list === null) throw new TypeError("expected the virtualized list");
+      act(() => {
+        fireEvent.scroll(list);
+      });
+
+      expect(screen.getByText("Answer 150")).toBeInTheDocument();
+      expect(screen.queryByText("Answer 1")).not.toBeInTheDocument();
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  it("does not yank a reader who scrolled up, but follows again once they return to the end", () => {
+    const geometry = installListGeometry();
+    try {
+      const view = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(150))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const list = view.container.querySelector<HTMLOListElement>("ol[data-virtual='true']");
+      if (list === null) throw new TypeError("expected the virtualized list");
+      geometry.set(0);
+      act(() => {
+        fireEvent.scroll(list);
+      });
+      const before = geometry.assigned.length;
+
+      view.rerender(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(151))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(geometry.assigned).toHaveLength(before);
+
+      geometry.set(99_950);
+      act(() => {
+        fireEvent.scroll(list);
+      });
+      view.rerender(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(152))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(geometry.assigned.length).toBeGreaterThan(before);
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  it("brings a newly raised question into view even when the reader had scrolled up", () => {
+    const geometry = installListGeometry();
+    try {
+      const view = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(150))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const list = view.container.querySelector<HTMLOListElement>("ol[data-virtual='true']");
+      if (list === null) throw new TypeError("expected the virtualized list");
+      geometry.set(0);
+      act(() => {
+        fireEvent.scroll(list);
+      });
+      const before = geometry.assigned.length;
+
+      view.rerender(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(150))}
+          questions={PENDING_QUESTIONS}
+        />,
+      );
+
+      expect(geometry.assigned.length).toBeGreaterThan(before);
+      expect(geometry.assigned.at(-1)).toBe(100_000);
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  // Audit item 5: the feed kept across a reconnect is captioned, not presented as live.
+  it("captions a feed that is kept on screen while its connection is re-read", () => {
+    const loading = { ...activityLike(feedWithMessages(2)), status: "loading" as const };
+    const view = render(
+      <Timeline active events={[]} activity={loading} questions={IDLE_QUESTIONS} />,
+    );
+    expect(screen.getByText("Connecting activity…")).toBeInTheDocument();
+    expect(screen.getByText("Answer 2")).toBeInTheDocument();
+    view.unmount();
+
+    render(
+      <Timeline
+        active
+        events={[]}
+        activity={{ ...loading, feed: null }}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(screen.queryByText("Connecting activity…")).not.toBeInTheDocument();
+  });
+
+  // The activity status sits inside the session stream's role="log", which already announces what
+  // is added; a second live region around it announced the same sentence twice (audit item 11).
+  it("does not nest a live region for the activity status inside the log", () => {
+    const activity = { ...activityLike(bareFeed()), status: "disconnected" as const };
+    const { container } = render(
+      <div role="log" aria-label="Session stream">
+        <Timeline active={false} events={[]} activity={activity} questions={IDLE_QUESTIONS} />
+      </div>,
+    );
+
+    const status = container.querySelector("[data-activity-state]");
+    expect(status).not.toBeNull();
+    expect(status?.querySelector("[role='status'], [aria-live]")).toBeNull();
+    expect(status).toHaveTextContent("Disconnected.");
+  });
+
+  // Audit item 13: the row id is the React key and the `<details>` is uncontrolled, so an id that
+  // changed when the next same-kind call settled collapsed a row the reader had just opened.
+  it("keeps an expanded merged tool row mounted as further calls of its kind settle", () => {
+    const readCall = (
+      id: string,
+      at: number,
+    ): AvailableCodingSafeActivityFeed["turns"][number]["tools"][number] => ({
+      callId: id,
+      tool: "grep",
+      state: "succeeded" as const,
+      occurredAt: new Date(Date.UTC(2026, 6, 19, 12, 0, at)).toISOString(),
+    });
+    const feedWith = (calls: number): AvailableCodingSafeActivityFeed => ({
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-1",
+          messages: [],
+          tools: [
+            { callId: "edit-1", tool: "edit", state: "failed", occurredAt: AT },
+            ...Array.from({ length: calls }, (_, index) =>
+              readCall(`g${String(index)}`, index + 1),
+            ),
+          ],
+          truncated: false,
+        },
+      ],
+    });
+    const view = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWith(1))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const row = view.container.querySelector<HTMLElement>('[data-timeline-kind="tool"]:last-child');
+    if (row === null) throw new TypeError("expected the search row");
+    const details = row.querySelector("details");
+    if (details === null) throw new TypeError("expected the row details");
+    details.open = true;
+
+    view.rerender(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWith(2))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const after = view.container.querySelector<HTMLElement>(
+      '[data-timeline-kind="tool"]:last-child',
+    );
+    expect(after).toBe(row);
+    expect(after?.querySelector("details")?.open).toBe(true);
+    expect(after).toHaveTextContent("2 calls");
+  });
+});
+
+// Audit item 8: a height measurement re-renders the list; it must not re-render every row, must not
+// run at all for a list that is not virtualized, and the sort must not collate per comparison.
+describe("CodingWorkbenchTimeline render cost", () => {
+  class RecordingResizeObserver {
+    public static readonly instances: RecordingResizeObserver[] = [];
+    public readonly observed: Element[] = [];
+    public constructor(public readonly callback: () => void) {
+      RecordingResizeObserver.instances.push(this);
+    }
+    public observe(element: Element): void {
+      this.observed.push(element);
+    }
+    public disconnect(): void {
+      this.observed.length = 0;
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    RecordingResizeObserver.instances.length = 0;
+    cleanup();
+  });
+
+  function failedTools(count: number, onRead: () => void): readonly Record<string, unknown>[] {
+    return Array.from({ length: count }, (_, index) => ({
+      callId: `call-${String(index)}`,
+      tool: "edit",
+      state: "failed",
+      occurredAt: new Date(Date.UTC(2026, 6, 19, 12, 0, 0, index)).toISOString(),
+      presentation: {
+        get relativePath(): string {
+          onRead();
+          return `src/file-${String(index)}.ts`;
+        },
+      },
+    }));
+  }
+
+  function feedOf(tools: readonly Record<string, unknown>[]): AvailableCodingSafeActivityFeed {
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-1",
+          messages: [],
+          tools: tools as unknown as AvailableCodingSafeActivityFeed["turns"][number]["tools"],
+          truncated: false,
+        },
+      ],
+    };
+  }
+
+  it("does not observe row heights for a list that is not virtualized", () => {
+    vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
+    render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedOf(failedTools(20, () => undefined)))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(RecordingResizeObserver.instances.flatMap((observer) => observer.observed)).toEqual([]);
+  });
+
+  it("re-renders no unchanged row when a height is measured", () => {
+    vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
+    let reads = 0;
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(
+          feedOf(
+            failedTools(110, () => {
+              reads += 1;
+            }),
+          ),
+        )}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const observer = RecordingResizeObserver.instances[0];
+    const row = observer?.observed[0];
+    if (observer === undefined || !(row instanceof HTMLElement)) {
+      throw new TypeError("expected a virtualized row to be observed");
+    }
+    const before = reads;
+    expect(before).toBeGreaterThan(0);
+
+    overrideOffsetHeight(row, 321);
+    act(() => {
+      observer.callback();
+    });
+
+    expect(container.querySelectorAll("[data-timeline-kind='tool']").length).toBeGreaterThan(0);
+    expect(reads).toBe(before);
+  });
+
+  it("orders ISO timestamps without a locale-aware collation per comparison", () => {
+    const collate = vi.spyOn(String.prototype, "localeCompare");
+    render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedOf(failedTools(30, () => undefined)))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(collate).not.toHaveBeenCalled();
   });
 });

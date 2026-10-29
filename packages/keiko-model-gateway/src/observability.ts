@@ -31,6 +31,10 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { securityErrorKind } from "@oscharko-dev/keiko-security";
+import {
+  ProviderEmptyAnswerError,
+  ProviderOutputExhaustedError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
 export type ModelGatewayLogLevel = "debug" | "info" | "warn" | "error";
@@ -344,7 +348,22 @@ const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{
   { pattern: /unavailable|econn/u, result: "unavailable" },
 ];
 
+function isModelOutputFailure(error: unknown): boolean {
+  try {
+    return (
+      error instanceof ProviderEmptyAnswerError || error instanceof ProviderOutputExhaustedError
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function activityLogErrorKind(error: unknown): ActivityLogErrorKind {
+  // These classes identify model-output outcomes rather than a provider fault. Prototype reads
+  // are foreign observations too, so a rejected class probe retains guarded code/name fallback.
+  if (isModelOutputFailure(error)) {
+    return "validation-failed";
+  }
   const kind = logErrorKind(error).toLowerCase();
   if (kind === "gateway_attempt_admission_denied") return "authority-denied";
   const matched = ACTIVITY_LOG_ERROR_KIND_RULES.find(({ pattern }) => pattern.test(kind));

@@ -1,5 +1,8 @@
 import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  GENERIC_TOOL_ARGUMENT_LIMITS,
   TOOL_CATALOG_LIMITS,
+  type ToolArgumentLimits,
   type CatalogJsonObject,
   type CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -14,6 +17,7 @@ const ENCODER = new TextEncoder();
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 interface CopyBudget {
   readonly maxBytes: number;
+  readonly maxStringBytes: number;
   readonly ancestors: Set<object>;
   bytes: number;
 }
@@ -37,10 +41,7 @@ function scalar(value: unknown, budget: CopyBudget): CatalogJsonValue {
   );
   if (typeof value === "number") requireCatalog(Number.isFinite(value), "invalid-shape");
   if (typeof value === "string")
-    requireCatalog(
-      ENCODER.encode(value).length <= TOOL_CATALOG_LIMITS.maxStringBytes,
-      "input-bound",
-    );
+    requireCatalog(ENCODER.encode(value).length <= budget.maxStringBytes, "input-bound");
   const result = value;
   charge(budget, JSON.stringify(result));
   return result;
@@ -117,19 +118,35 @@ function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJs
   return result;
 }
 
-/** Validate and detach before canonicalization, freezing, hashing, or schema interpretation. */
+/**
+ * Validate and detach before canonicalization, freezing, hashing, or schema interpretation.
+ *
+ * `limits` names the per-tool argument ceilings of the one tool whose call is being captured
+ * (`toolArgumentLimits`): the whole-copy budget and the largest single string. Without it the copy
+ * is held to the generic ceilings, and the largest budget a plain copy may ask for is unchanged.
+ */
 export function copyCatalogJson(
   value: unknown,
-  maxBytes: number = TOOL_CATALOG_LIMITS.maxArgumentBytes,
+  requestedBytes?: number,
+  limits: ToolArgumentLimits = GENERIC_TOOL_ARGUMENT_LIMITS,
 ): CatalogJsonValue {
+  // Only the contract's own ceilings are accepted: a caller cannot invent a larger one.
   requireCatalog(
-    Number.isSafeInteger(maxBytes) &&
-      maxBytes > 0 &&
-      maxBytes <= Math.max(TOOL_CATALOG_LIMITS.maxResultBytes, MAX_ADVERTISEMENT_COPY_BYTES),
+    limits === GENERIC_TOOL_ARGUMENT_LIMITS || limits === CHANGESET_EDIT_ARGUMENT_LIMITS,
     "input-bound",
   );
+  const maxBytes = requestedBytes ?? limits.maxArgumentBytes;
+  const ceiling =
+    limits === GENERIC_TOOL_ARGUMENT_LIMITS
+      ? Math.max(TOOL_CATALOG_LIMITS.maxResultBytes, MAX_ADVERTISEMENT_COPY_BYTES)
+      : limits.maxArgumentBytes;
+  requireCatalog(
+    Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= ceiling,
+    "input-bound",
+  );
+  const { maxStringBytes } = limits;
   try {
-    return copyValue(value, { maxBytes, ancestors: new Set(), bytes: 0 }, 1);
+    return copyValue(value, { maxBytes, maxStringBytes, ancestors: new Set(), bytes: 0 }, 1);
   } catch (error) {
     if (error instanceof ToolCatalogError) throw error;
     throw new ToolCatalogError("invalid-shape");

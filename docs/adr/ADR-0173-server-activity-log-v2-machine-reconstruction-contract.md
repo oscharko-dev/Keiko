@@ -1297,6 +1297,10 @@ load-bearing:
   reflective-read mechanics nor the canonical pattern is copied by these four ports. Their local
   writers, reporters, loss accounting and Gateway's subsequent closed-vocabulary mapping remain
   owned by their respective packages.
+  Gateway's model-output class probe also guards prototype inspection: a rejected `instanceof`
+  declines only that special case, then uses the same guarded code/name fallback. A revoked proxy
+  or throwing prototype trap cannot escape sink isolation or suppress its registered failure line;
+  healthy empty-answer and output-exhaustion classes retain `validation-failed`.
 - `@oscharko-dev/keiko-activity-log`'s `errorKindOf`
   (`packages/keiko-activity-log/src/server-log.ts`) was rewritten in the same wave to route through
   `packages/keiko-activity-log/src/error-classification.ts`'s
@@ -1409,9 +1413,24 @@ request":
 - **Every SSE stream ends with exactly one terminal line.** `sse.stream.closed` (`frameCount`,
   `bytesStreamed`, `durationMs`, `reason`) is emitted once per response on its `close` event by the
   shared frame recorder every SSE writer already funnels through; `reason` is the closed
-  vocabulary `completed | client-disconnected | backpressure-killed | server-error`, and a write path
-  that destroys the socket because a write was rejected marks the stream first so a backpressure
-  kill is never reported as a client disconnect. `http.request.body.received` records the media
+  vocabulary `completed | client-disconnected | backpressure-killed | server-error | server-shutdown`,
+  and a write path
+  that destroys the socket for a stalled reader marks the stream first so that kill is never
+  reported as a client disconnect. Amended 2026-10-28: a write that returns `false` is flow control,
+  never a kill — Node answers `false` for any single frame of 64 KiB or more, even to an idle local
+  reader, and the old writer destroyed healthy streams carrying a large tool call or answer. Every
+  SSE writer (`writeSseFrame` in `sse-write.ts`, which the framing helpers in `sse.ts` call) queues
+  the frame and waits for `drain`; only a reader that drains nothing within
+  `SSE_STALLED_READER_TIMEOUT_MS` (30 s) is `backpressure-killed`, including an ended stream whose
+  queued tail the reader never takes. Frame size never ends a stream. Producers that pull from a
+  model (the coding sidecar and desktop chat) await `whenSseWritable` before the next chunk, and
+  desktop chat also waits before framing more tokens from the same delta, so a slow reader slows
+  the provider instead of growing an in-memory backlog. A refused write or a response that ended
+  while waiting stops further framing and provider pulls. Cancelling a producer releases its own
+  wait listeners; it does not cancel the writer's 30-second protection for an undrained queued tail.
+  Drain, finish and close settlement remove the writer's listeners symmetrically. The optional
+  `drainWaitCount` counts the
+  writes that waited for `drain`. `http.request.body.received` records the media
   type and byte count of an accepted request body; the six ad hoc body readers that predated
   `readBoundedRequestBody` were consolidated onto it so the line — and the 413 path — have one
   owner.

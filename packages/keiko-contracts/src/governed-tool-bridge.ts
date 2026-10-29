@@ -1,12 +1,16 @@
 import { isRecord } from "./run-result-validation.js";
-import type {
-  CatalogCompatibility,
-  CatalogDigest,
-  CatalogJsonValue,
-  CatalogProfile,
-  CompiledToolProjection,
-  ToolDescriptor,
-  ToolRef,
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  GENERIC_TOOL_ARGUMENT_LIMITS,
+  GOVERNED_CHANGESET_EDIT_TOOL_ALIAS,
+  type CatalogCompatibility,
+  type CatalogDigest,
+  type CatalogJsonValue,
+  type CatalogProfile,
+  type CompiledToolProjection,
+  type ToolArgumentLimits,
+  type ToolDescriptor,
+  type ToolRef,
 } from "./governed-tool-catalog.js";
 import type { ToolCallMetadata } from "./tools.js";
 import type {
@@ -143,6 +147,30 @@ export const GATEWAY_NATIVE_EXACT_CONTENT_TOOLS: readonly string[] = Object.free
   "execute",
   "shell",
 ]);
+
+/**
+ * The native tools whose arguments are workspace file content. Their calls are captured under the
+ * changeset-edit argument ceilings (`CHANGESET_EDIT_ARGUMENT_LIMITS`), like the governed changeset
+ * edit: Keiko refuses no file content at the generic 64 KiB string bound (owner decision,
+ * 2026-10-28). Every other native tool keeps the generic ceilings.
+ */
+export const GATEWAY_NATIVE_FILE_CONTENT_TOOLS: readonly string[] = Object.freeze([
+  "edit",
+  "write",
+  "patch",
+]);
+
+/**
+ * The argument ceilings of a tool call known by name alone, as the coding runtime records it in its
+ * own history: the changeset ceilings for the governed changeset edit and the native file-content
+ * tools, the generic ones for every other tool.
+ */
+export function toolArgumentLimitsByToolName(toolName: string): ToolArgumentLimits {
+  return toolName === GOVERNED_CHANGESET_EDIT_TOOL_ALIAS ||
+    GATEWAY_NATIVE_FILE_CONTENT_TOOLS.includes(toolName)
+    ? CHANGESET_EDIT_ARGUMENT_LIMITS
+    : GENERIC_TOOL_ARGUMENT_LIMITS;
+}
 
 const NATIVE_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;

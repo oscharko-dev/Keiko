@@ -421,6 +421,45 @@ describe("subscribeSharedEventSource", () => {
     vi.useRealTimers();
   });
 
+  // Keiko 1.3.1 stress test (F3): the first interruption of a stream whose browser source was
+  // closed (readyState 2) is reopened by the stream's own reconnect and any session repair, so it is
+  // routine evidence on the info line. A reconnect that fails again, and any other readyState, stay
+  // genuine client diagnostics.
+  it("reports the first closed-source interruption as routine and the repeat as a diagnostic", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: string[] = [];
+    setClientDiagnosticWriter((message, meta) =>
+      reported.push(
+        meta?.codingWorkbenchInteraction === undefined
+          ? message
+          : `interaction:${meta.codingWorkbenchInteraction.interaction}`,
+      ),
+    );
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/editor/settings/events",
+      ["settings"],
+      () => {},
+    );
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    first.onerror?.();
+    expect(reported).toEqual(["interaction:event-stream-reconnecting"]);
+
+    vi.advanceTimersByTime(1_500);
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+    second.onerror?.();
+
+    expect(reported).toEqual([
+      "interaction:event-stream-reconnecting",
+      "[keiko] shared-event-source sse stream error (kind=sse-error, readyState=2, reason=closed)",
+    ]);
+    unsubscribe();
+    vi.useRealTimers();
+  });
+
   // A restarted BFF invalidates its in-memory app session (ADR-0141 D5), so every reconnect after
   // that was denied again forever, with nothing ever re-establishing one (the defect a live dev
   // Activity Log caught: 35 `workspace.root.denied` warn lines, one per backoff attempt). The

@@ -367,3 +367,30 @@ describe("Managed LSP parser closed classification catch (#3918)", () => {
     expect(unregisteredFailurePathViolations(changed, path)).toHaveLength(1);
   });
 });
+
+describe("gateway model-output class probe fallback", () => {
+  const path = "packages/keiko-model-gateway/src/observability.ts";
+  const source =
+    "function isModelOutputFailure(error) { try { return error instanceof ProviderEmptyAnswerError || error instanceof ProviderOutputExhaustedError; } catch { return false; } }";
+
+  it("accepts only the reviewed owner and closed false fallback", () => {
+    expect(unregisteredFailurePathViolations(source, path)).toEqual([]);
+    expect(unregisteredFailurePathViolations(source, "packages/fixture/src/other.ts")).toHaveLength(
+      1,
+    );
+    expect(
+      unregisteredFailurePathViolations(source.replace("isModelOutputFailure", "otherOwner"), path),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    "return true;",
+    "return fallback;",
+    "return Boolean(error);",
+    "inspect(error); return false;",
+  ])("rejects a widened or observing fallback: %s", (fallback) => {
+    expect(
+      unregisteredFailurePathViolations(source.replace("return false;", fallback), path),
+    ).toHaveLength(1);
+  });
+});

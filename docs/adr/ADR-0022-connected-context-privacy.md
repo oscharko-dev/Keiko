@@ -883,6 +883,17 @@ line, preserving diff prefixes, LF/CRLF, UTF-16 positions and no-final-newline a
 function context, preamble and tails retain strict protection. Unsupported or incomplete private
 fragments, parser exhaustion and the existing size ceiling fail closed. Public supported patches
 remain byte-exact; this adds neither combined-diff support nor execution authority.
+Owner decision 2026-10-28 (#4114): the raw Git diff view of the local user's own repository
+(`GET /api/git/diff`) keeps a file whose hunks fail only the syntax check readable under the
+credential floor, as standalone OpenCode shows it. Each old/new image is floored as a whole, so a
+private key spanning lines, token shapes, configured secrets and private literals known from other
+files of the same patch stay masked; a value that is secret only by its key name (for example a
+`password` field) stays readable in such a hunk, as in standalone OpenCode. Depth and size refusals
+and a floor that changes the line count keep whole-file masking. Every other redaction caller keeps the fail-closed default. A view cut at
+its byte cap (#4113) drops its partial last line and restates the cut hunk's shown line counts before
+redaction; body lines are never rewritten, and output that is not a patch is unchanged. The registered
+`git.diff.view-bounded` Activity Log operation records truncation, shown and maximum bytes and the
+floored-file count, never diff content or paths.
 Markdown credential labels use the same emphasis-aware field grammar for terminal value spans and
 pending streaming context, including nested emphasis. Completed public prose labels pass the same
 strict check in whole-text inference and publication; YAML anchor/alias grammar remains unchanged.
@@ -1497,7 +1508,7 @@ and the deps graph); no lower layer reads the environment. Missing, empty or `on
 original content redaction; any other value also retains it and records a `warn`-level
 `chat.content-policy.resolved` line. Preserved content still loses the credential floor (configured
 secret literals, private keys, URL credentials, `Authorization` header values, encoded-looking
-Bearer/Basic values and known token shapes). A removed multi-line span keeps its line count, so
+Bearer/Basic values, JWT-shaped bearer tokens and known token shapes). A removed multi-line span keeps its line count, so
 source coordinates and line hints stay physical. Memory proposals derived from a preserved answer
 use the default projection again. The existing `redacted` atom state means the guarded content policy has been
 applied; it is not a claim that all personal data was anonymized. `raw-internal` packs remain
