@@ -29239,7 +29239,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["pending", "complete", "failed", "expired", "cancelled", "revoked"],
+        values: [
+          "pending",
+          "complete",
+          "failed",
+          "expired",
+          "cancelled",
+          "revoked",
+          "credential-ready",
+          "credential-required",
+          "credential-unavailable",
+        ],
       },
       attemptId: {
         type: "string",

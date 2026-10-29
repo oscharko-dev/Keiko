@@ -1429,6 +1429,7 @@ function WorkbenchHeader({
   readonly columns: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">;
 }): ReactNode {
   const { repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
+  const t = useCodingWorkbenchTranslate();
   return (
     <header className={styles["cmp-workbench-header"]}>
       <div className={styles.cmpHeaderRow}>
@@ -1443,6 +1444,11 @@ function WorkbenchHeader({
           active={runIsActive}
           onHistory={columns.onOpenHistory}
         />
+        {columns.onOpenMcpSettings !== undefined && (
+          <button type="button" onClick={columns.onOpenMcpSettings}>
+            {t("codingWorkbench.mcp.manage")}
+          </button>
+        )}
       </div>
       <CodingWorkbenchTrustAffordance
         binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
@@ -1528,7 +1534,6 @@ function LocationBindingNotices({
 }
 
 function WorkbenchColumns({
-  onOpenMcpSettings,
   history,
   state,
   actions,
@@ -1553,7 +1558,7 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   runIsActive,
-}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
+}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel" | "onOpenMcpSettings">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
   const issueIntake = useCodingWorkbenchIssueIntake(
@@ -1869,11 +1874,6 @@ function WorkbenchColumns({
               runId={state.run.value?.runId}
               revision={state.run.value?.revision}
             />
-            {onOpenMcpSettings !== undefined && (
-              <button type="button" onClick={onOpenMcpSettings}>
-                {t("codingWorkbench.mcp.manage")}
-              </button>
-            )}
             <Timeline
               active={runIsActive}
               generating={generatingRunState(state.run.value?.state)}

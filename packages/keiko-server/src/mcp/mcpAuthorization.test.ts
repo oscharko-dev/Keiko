@@ -110,6 +110,13 @@ async function started(f: ReturnType<typeof fixture>): Promise<{ id: string; cal
   return { id: result.attemptId, callback };
 }
 describe("server-owned shared MCP OAuth", () => {
+  it("reports an elapsed authorization deadline as expired when status observes it first", async () => {
+    const f = fixture();
+    const attempt = await started(f);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 300001);
+    expect(f.owner.status("synthetic", "session", attempt.id)).toBe("expired");
+  });
+
   it("detaches the generation listener when an authorization attempt is cancelled", async () => {
     const f = fixture();
     const generation = f.settings.generation(f.server, "fixture");
@@ -140,6 +147,7 @@ describe("server-owned shared MCP OAuth", () => {
     const current = f.settings.read("fixture").servers[0];
     if (current === undefined) throw new Error("Missing fixture server");
     expect(await f.reopen().token(current, "fixture")).toBe("synthetic-oauth-private-access");
+    expect(f.events.some((entry) => entry.extra?.state === "credential-ready")).toBe(true);
     const event = f.events.find(
       (entry) => entry.op === "mcp.authorization.state" && entry.extra?.state === "complete",
     );
@@ -155,6 +163,7 @@ describe("server-owned shared MCP OAuth", () => {
     const revoked = f.settings.read("fixture").servers[0];
     if (revoked === undefined) throw new Error("Missing fixture server");
     await expect(f.reopen().token(revoked, "fixture")).rejects.toThrow();
+    expect(f.events.some((entry) => entry.extra?.state === "credential-required")).toBe(true);
   });
   it("rejects forged state and foreign sessions without dispatching a token exchange", async () => {
     const f = fixture();

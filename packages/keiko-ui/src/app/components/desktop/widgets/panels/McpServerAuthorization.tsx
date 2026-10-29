@@ -7,7 +7,7 @@ import {
 import { bffFetchJson } from "@/lib/http";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
-import { useSettingsTranslate } from "./settings-i18n";
+import { useSettingsTranslate as useTranslate } from "./settings-i18n";
 interface Props {
   readonly name: string;
   readonly authorized: boolean;
@@ -118,7 +118,7 @@ function useAuthorization(props: Props): {
   return { pending, failed, busy, perform };
 }
 export function McpServerAuthorization(props: Props): ReactNode {
-  const t = useSettingsTranslate();
+  const t = useTranslate();
   const { pending, failed, busy, perform } = useAuthorization(props);
   return (
     <div>

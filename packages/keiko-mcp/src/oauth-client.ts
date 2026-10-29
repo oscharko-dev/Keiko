@@ -3,6 +3,8 @@ import {
   discoverAuthorizationServerMetadata,
   discoverOAuthProtectedResourceMetadata,
   refreshAuthorization,
+  OAuthError,
+  OAuthErrorCode,
   type OAuthClientProvider,
   type OAuthDiscoveryState,
   type StoredOAuthClientInformation,
@@ -11,6 +13,11 @@ import {
 } from "@modelcontextprotocol/client";
 import type { McpRemoteOAuth } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { ManagedMcpError } from "./definitions.js";
+const PERMANENT_REFRESH_ERRORS = new Set<string>([
+  OAuthErrorCode.InvalidGrant,
+  OAuthErrorCode.InvalidClient,
+  OAuthErrorCode.UnauthorizedClient,
+]);
 
 export interface McpOAuthPersistence {
   readonly read: () => Readonly<Record<string, unknown>> | undefined;
@@ -77,6 +84,39 @@ function requestedMetadata(
     ),
   };
 }
+interface AccessCredential {
+  readonly value: string;
+  readonly expiresAt: number;
+}
+function accessCredential(value: unknown): value is AccessCredential {
+  return (
+    object(value) &&
+    typeof value.value === "string" &&
+    value.value.length > 0 &&
+    value.value.length <= 8192 &&
+    typeof value.expiresAt === "number" &&
+    Number.isFinite(value.expiresAt) &&
+    value.expiresAt >= 0
+  );
+}
+function credentialFloor(value: unknown): AccessCredential[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 256 || !value.every(accessCredential))
+    return undefined;
+  const live = value.filter((entry) => entry.expiresAt > Date.now());
+  const bytes = live.reduce((sum, entry) => sum + new TextEncoder().encode(entry.value).length, 0);
+  return bytes <= 65536 ? live : undefined;
+}
+function rememberAccess(
+  history: readonly AccessCredential[],
+  value: string,
+  expiresAt: number,
+): AccessCredential[] | undefined {
+  return credentialFloor([
+    ...history.filter((entry) => entry.value !== value && entry.expiresAt > Date.now()),
+    { value, expiresAt: expiresAt === 0 ? Number.MAX_SAFE_INTEGER : expiresAt + 30000 },
+  ]);
+}
 class OAuthSession implements OAuthClientProvider {
   redirectUrl: string | undefined;
   #verifier: string | undefined;
@@ -87,11 +127,13 @@ class OAuthSession implements OAuthClientProvider {
   #client: StoredOAuthClientInformation | undefined;
   #expiresAt = 0;
   #refresh: Promise<string> | undefined;
+  #credentialFloor: readonly AccessCredential[] = [];
   constructor(private readonly options: McpOAuthClientOptions) {
     const saved = options.persistence.read();
     this.#tokens = restoredTokens(saved?.tokens, options.oauth.issuer);
     if (typeof saved?.expiresAt === "number" && Number.isFinite(saved.expiresAt))
       this.#expiresAt = saved.expiresAt;
+    this.restoreFloor(saved?.credentialFloor);
     const client = saved?.client;
     if (
       object(client) &&
@@ -99,6 +141,15 @@ class OAuthSession implements OAuthClientProvider {
       typeof client.client_id === "string"
     )
       this.#client = client as StoredOAuthClientInformation;
+  }
+  private restoreFloor(value: unknown): void {
+    const prior = credentialFloor(value);
+    const next =
+      prior === undefined || this.#tokens === undefined
+        ? prior
+        : rememberAccess(prior, this.#tokens.access_token, this.#expiresAt);
+    this.#credentialFloor = next ?? [];
+    if (next === undefined) this.#tokens = undefined;
   }
   get clientMetadata(): OAuthClientProvider["clientMetadata"] {
     return {
@@ -137,12 +188,20 @@ class OAuthSession implements OAuthClientProvider {
     if (tokens.scope?.split(/\s+/u).some((scope) => !requested.has(scope)))
       throw new ManagedMcpError("not-admitted");
     this.requireCurrent();
+    const expiresAt = tokens.expires_in === undefined ? 0 : Date.now() + tokens.expires_in * 1000;
+    const floor = rememberAccess(this.#credentialFloor, tokens.access_token, expiresAt);
+    if (floor === undefined) throw new ManagedMcpError("not-admitted");
+    this.#credentialFloor = floor;
     this.#tokens = { ...tokens, token_type: "Bearer" };
-    this.#expiresAt = tokens.expires_in === undefined ? 0 : Date.now() + tokens.expires_in * 1000;
+    this.#expiresAt = expiresAt;
+    this.persist();
+  }
+  private persist(): void {
     this.options.persistence.write({
       tokens: this.#tokens,
       client: this.#client,
       expiresAt: this.#expiresAt,
+      credentialFloor: this.#credentialFloor,
     });
   }
   saveCodeVerifier(verifier: string): void {
@@ -186,12 +245,19 @@ class OAuthSession implements OAuthClientProvider {
     if (scope === "all" || scope === "discovery") this.#discovery = undefined;
   }
   authorized(): boolean {
-    return this.#tokens !== undefined;
+    return (
+      this.#tokens !== undefined &&
+      (this.#expiresAt === 0 || this.#expiresAt > Date.now() || Boolean(this.#tokens.refresh_token))
+    );
   }
   credentials(): readonly string[] {
-    return [this.#tokens?.access_token, this.#tokens?.refresh_token].filter(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    );
+    return [
+      this.#tokens?.access_token,
+      this.#tokens?.refresh_token,
+      ...this.#credentialFloor
+        .filter((entry) => entry.expiresAt > Date.now())
+        .map((entry) => entry.value),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0);
   }
   private requireCurrent(): void {
     if (!this.options.beforeEffect()) throw new ManagedMcpError("not-admitted");
@@ -269,13 +335,27 @@ class OAuthSession implements OAuthClientProvider {
   }
   async token(): Promise<string> {
     this.requireCurrent();
-    if (this.#tokens === undefined) throw new ManagedMcpError("not-admitted");
-    if (this.#expiresAt === 0 || this.#expiresAt > Date.now() + 30_000)
+    if (this.#tokens === undefined || !this.authorized()) throw new ManagedMcpError("not-admitted");
+    if (
+      this.#expiresAt === 0 ||
+      this.#expiresAt > Date.now() + 30_000 ||
+      !this.#tokens.refresh_token
+    )
       return this.#tokens.access_token;
-    this.#refresh ??= this.refresh().finally(() => {
-      this.#refresh = undefined;
-    });
+    this.#refresh ??= this.refresh()
+      .catch((error: unknown) => this.refreshFailure(error))
+      .finally(() => {
+        this.#refresh = undefined;
+      });
     return this.#refresh;
+  }
+  private refreshFailure(error: unknown): never {
+    if (error instanceof OAuthError && PERMANENT_REFRESH_ERRORS.has(error.code)) {
+      this.#tokens = undefined;
+      this.#expiresAt = 0;
+      this.persist();
+    }
+    throw error;
   }
   private async refresh(): Promise<string> {
     await this.discover();

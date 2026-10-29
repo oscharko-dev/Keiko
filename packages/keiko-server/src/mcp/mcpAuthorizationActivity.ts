@@ -20,7 +20,17 @@ const AUTHORIZATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["pending", "complete", "failed", "expired", "cancelled", "revoked"],
+      values: [
+        "pending",
+        "complete",
+        "failed",
+        "expired",
+        "cancelled",
+        "revoked",
+        "credential-ready",
+        "credential-required",
+        "credential-unavailable",
+      ],
     },
     attemptId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
   },
@@ -35,7 +45,16 @@ export function recordMcpAuthorization(
   log: ServerLogSink,
   correlationId: string,
   attemptId: string,
-  state: "pending" | "complete" | "failed" | "expired" | "cancelled" | "revoked",
+  state:
+    | "pending"
+    | "complete"
+    | "failed"
+    | "expired"
+    | "cancelled"
+    | "revoked"
+    | "credential-ready"
+    | "credential-required"
+    | "credential-unavailable",
 ): void {
   try {
     log.write(

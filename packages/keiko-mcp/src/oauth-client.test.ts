@@ -3,7 +3,11 @@ import { createMcpOAuthClient } from "./oauth-client.js";
 
 const issuer = "https://identity.example.test";
 const url = "https://tools.example.test/mcp";
-function fixture(scope: string | null = "tools.read"): {
+function fixture(
+  scope: string | null = "tools.read",
+  rotate = false,
+  denyRefresh = false,
+): {
   client: ReturnType<typeof createMcpOAuthClient>;
   saved: () => Readonly<Record<string, unknown>> | undefined;
   requests: { url: string; body: string }[];
@@ -42,8 +46,13 @@ function fixture(scope: string | null = "tools.read"): {
           token_endpoint_auth_methods_supported: ["none"],
           authorization_response_iss_parameter_supported: true,
         });
+      if (denyRefresh && requests.at(-1)?.body.includes("grant_type=refresh_token"))
+        return Response.json({ error: "invalid_grant" }, { status: 400 });
       return Response.json({
-        access_token: "synthetic-access-token",
+        access_token:
+          rotate && requests.at(-1)?.body.includes("grant_type=refresh_token")
+            ? "synthetic-rotated-access-token"
+            : "synthetic-access-token",
         token_type: "Bearer",
         expires_in: 3600,
         refresh_token: "synthetic-refresh-token",
@@ -61,6 +70,69 @@ function fixture(scope: string | null = "tools.read"): {
   };
 }
 describe("central MCP OAuth SDK adapter", () => {
+  it("requires sign-in after an authoritative refresh rejection and never repeats it", async () => {
+    const f = fixture("tools.read", false, true);
+    await f.client.start("http://127.0.0.1:1999/callback", "synthetic-state");
+    await f.client.complete("synthetic-code", issuer);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3700000);
+    try {
+      await expect(f.client.token()).rejects.toThrow();
+      expect(f.client.authorized()).toBe(false);
+      expect(f.saved()?.tokens).toBeUndefined();
+      await expect(f.client.token()).rejects.toThrow();
+      expect(f.requests.filter((request) => request.url.endsWith("/token"))).toHaveLength(2);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+  it.each([20000, -1])(
+    "handles a non-refreshable token with %i milliseconds remaining",
+    async (remaining) => {
+      const fetch = vi.fn();
+      const client = createMcpOAuthClient({
+        url,
+        oauth: { issuer, clientId: "synthetic-public" },
+        persistence: {
+          read: () => ({
+            tokens: { issuer, access_token: "synthetic-short-token", token_type: "Bearer" },
+            expiresAt: Date.now() + remaining,
+          }),
+          write: vi.fn(),
+        },
+        beforeEffect: () => true,
+        fetch,
+      });
+      expect(client.authorized()).toBe(remaining > 0);
+      if (remaining > 0) expect(await client.token()).toBe("synthetic-short-token");
+      else await expect(client.token()).rejects.toThrow();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps overlapping access tokens in the credential floor across refresh and restart", async () => {
+    const f = fixture("tools.read", true);
+    await f.client.start("http://127.0.0.1:1999/callback", "synthetic-state");
+    await f.client.complete("synthetic-code", issuer);
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 3571000);
+    try {
+      expect(await f.client.token()).toBe("synthetic-rotated-access-token");
+      expect(f.client.credentials()).toContain("synthetic-access-token");
+      const reopened = createMcpOAuthClient({
+        url,
+        oauth: { issuer, clientId: "synthetic-public-client", scope: "tools.read" },
+        persistence: { read: f.saved, write: vi.fn() },
+        beforeEffect: () => true,
+        fetch: vi.fn(),
+      });
+      expect(reopened.credentials()).toContain("synthetic-access-token");
+      vi.mocked(Date.now).mockReturnValue(now + 3700000);
+      expect(reopened.credentials()).not.toContain("synthetic-access-token");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("refuses returned scopes beyond the operator grant before persisting tokens", async () => {
     const f = fixture("tools.none");
     await f.client.start("http://127.0.0.1:1999/callback", "synthetic-state");

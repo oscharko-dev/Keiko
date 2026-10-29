@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e31987d28350cb3aa47c882545dde32ca28cd3e13c9fba9430f5fbdde3760fb8",
+    "catalogDigest": "943c4d2863e672da6ae59938ae20e3740df60ca583b7fdb7ae9c8db3e7e448c9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -30539,7 +30539,17 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["pending", "complete", "failed", "expired", "cancelled", "revoked"]
+            "values": [
+              "pending",
+              "complete",
+              "failed",
+              "expired",
+              "cancelled",
+              "revoked",
+              "credential-ready",
+              "credential-required",
+              "credential-unavailable"
+            ]
           },
           "attemptId": {
             "type": "string",
@@ -30555,7 +30565,7 @@
         "proofIds": ["mcp.authorization.state.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/mcp/mcpAuthorizationActivity.ts:8",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpAuthorizationActivity.ts:42"]
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpAuthorizationActivity.ts:61"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -105974,14 +105984,14 @@
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:290",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:304",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:347",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:361",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

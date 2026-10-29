@@ -243,7 +243,21 @@ class AuthorizationOwner implements McpAuthorization {
     return this.client(server, "mcp-authorization").credentials();
   }
   async token(server: McpServerDefinition, correlationId: string): Promise<string> {
-    return this.client(server, correlationId).token();
+    const client = this.client(server, correlationId);
+    const evidenceId = `con_${randomBytes(24).toString("hex")}`;
+    try {
+      const token = await client.token();
+      recordMcpAuthorization(this.options.log, correlationId, evidenceId, "credential-ready");
+      return token;
+    } catch (error) {
+      recordMcpAuthorization(
+        this.options.log,
+        correlationId,
+        evidenceId,
+        client.authorized() ? "credential-unavailable" : "credential-required",
+      );
+      throw error;
+    }
   }
   private settle(attempt: Attempt, state: State): void {
     if (attempt.state !== "pending") return;
@@ -423,7 +437,10 @@ class AuthorizationOwner implements McpAuthorization {
   status(name: string, session: string, id: string): State | "unavailable" {
     const attempt = this.#attempts.get(id);
     if (attempt?.server !== name || attempt.session !== session) return "unavailable";
-    if (attempt.state === "pending" && !this.active(attempt)) this.settle(attempt, "cancelled");
+    if (attempt.state === "pending" && Date.now() >= attempt.expiresAtMs)
+      this.settle(attempt, "expired");
+    else if (attempt.state === "pending" && !this.active(attempt))
+      this.settle(attempt, "cancelled");
     return attempt.state;
   }
   cancel(name: string, session: string, id: string): void {
