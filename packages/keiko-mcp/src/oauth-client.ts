@@ -66,6 +66,9 @@ function restoredTokens(value: unknown, issuer: string): StoredOAuthTokens | und
   return value as StoredOAuthTokens;
 }
 
+function validStoredExpiry(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
 function requestedScopes(scope: string | undefined): string[] {
   return scope?.split(/\s+/u) ?? [];
 }
@@ -129,8 +132,7 @@ class OAuthSession implements OAuthClientProvider {
     const saved = options.persistence.read();
     this.#tokens = restoredTokens(saved?.tokens, options.oauth.issuer);
     const expiresAt = saved?.expiresAt;
-    const validExpiry =
-      typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt >= 0;
+    const validExpiry = validStoredExpiry(expiresAt);
     if (validExpiry) this.#expiresAt = expiresAt;
     this.restoreFloor(saved?.credentialFloor);
     // Refused authority still retains the known token in the bounded redaction floor.
