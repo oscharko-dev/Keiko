@@ -2369,7 +2369,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   change made while a turn ran, to a file no edit of that turn wrote, is the one change Keiko cannot
   tell apart from the turn's own once the turn settled; the runtime's snapshot counts it as the
   turn's. Evidence is `coding-runtime.revert.applied`, `.refused` and `.dispatch-failed`: counts
-  and closed words, never a path, patch or message.
+  and closed words, never a path, patch or message. A revert-state read that
+  a stop overtook (the run disposed under it, #4119, or its session interrupted before the disposal,
+  #3907: `abortTask` advances the run's `interruptSeq` around the interrupt) ends like a read of a gone
+  run, with no `.refused` line; a failure on a live, uninterrupted run still logs it.
 - **A healthy settled native run keeps its undo for a bounded window (#3904 AC3).** A run used to settle when its turn ended and to remove its private state,
   snapshots included, so a settled turn could not be undone, unlike standalone OpenCode. Now a
   native run that succeeded or failed with an undoable newest turn (`session.diff` names a file, or an undo
