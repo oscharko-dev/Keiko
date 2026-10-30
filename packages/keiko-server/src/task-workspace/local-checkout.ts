@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
 import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
@@ -9,7 +9,7 @@ import {
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
-import { UNKNOWN_CORRELATION_ID, correlationIdOrUnknown } from "../correlation.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiStore } from "../store/types.js";
 import {
   readProductionWorkspaceGitState,
@@ -19,11 +19,11 @@ import type { ActiveWorkspacePointerStore } from "./active-store.js";
 import { buildBinding } from "./binding.js";
 import {
   logWorkspaceLifecycle,
-  recordWorkspaceLifecycle,
+  recordWorkspaceSelection,
   type WorkspaceActivityLogSeam,
   type WorkspaceSelectionEvidenceDeps,
+  type WorkspaceSelectionOutcome,
 } from "./activity-log.js";
-import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
 
 import { TaskWorkspaceError } from "./errors.js";
 import { isCanonicalLocalRoot } from "./canonical-root.js";
@@ -374,46 +374,18 @@ function localInstance(
   };
 }
 
-interface LocalSelectionEvidence {
-  readonly request: LocalSelectionRequest;
-  readonly identity: string;
-  readonly startedAt: number;
-  readonly fromState?: TaskWorkspaceLifecycleState | undefined;
-  readonly error?: TaskWorkspaceError | undefined;
-}
-
 function recordLocalSelection(
   deps: LocalCheckoutEvidenceDeps,
-  input: LocalSelectionEvidence,
+  request: LocalSelectionRequest,
+  identity: string,
+  outcome: Pick<WorkspaceSelectionOutcome, "startedAt" | "fromState" | "error">,
 ): void {
-  const { request, identity, startedAt, fromState, error } = input;
-  const recordedAt = deps.now();
-  recordWorkspaceLifecycle(deps, {
-    evidenceStore: deps.evidenceStore,
-    redactString: deps.redactString,
-    record: {
-      kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
-      schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
-      recordedAt,
-      operation: "activate",
-      outcome: error?.outcome ?? "activated",
-      attempt: 1,
-      durationMs: Math.max(0, recordedAt - startedAt),
-      worktreeCount: 0,
-      event: buildWorkspaceEvent({
-        eventId: randomUUID(),
-        workspaceId: `${LOCAL_PREFIX}${identity}`,
-        taskId: `coding-workbench-local-${identity.slice(0, 16)}`,
-        type: error === undefined ? "activated" : "transition-rejected",
-        at: new Date(recordedAt).toISOString(),
-        correlationId: correlationIdOrUnknown(request.correlationId),
-        fromState,
-        toState: error === undefined ? "active" : undefined,
-      }),
-    },
+  recordWorkspaceSelection(deps, {
+    ...outcome,
+    workspaceId: `${LOCAL_PREFIX}${identity}`,
+    taskId: `coding-workbench-local-${identity.slice(0, 16)}`,
+    correlationId: request.correlationId,
     baseBranch: request.branch,
-    errorCode: error?.code,
-    error,
   });
 }
 
@@ -453,7 +425,7 @@ function selectLocalCheckout(
     fromState = instances.getById(`${LOCAL_PREFIX}${identity}`)?.lifecycleState;
     requireLocalBranch(request.root, request.branch);
     const active = activateLocalCheckout(request, identity, instances, pointerStore, getActive);
-    recordLocalSelection(deps, { request, identity, startedAt, fromState });
+    recordLocalSelection(deps, request, identity, { startedAt, fromState });
     return active;
   } catch (cause) {
     const error =
@@ -465,7 +437,7 @@ function selectLocalCheckout(
             [],
             { cause },
           );
-    recordLocalSelection(deps, { request, identity, startedAt, fromState, error });
+    recordLocalSelection(deps, request, identity, { startedAt, fromState, error });
     throw error;
   }
 }

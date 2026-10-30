@@ -4,6 +4,7 @@ import type {
   CodingHistoryTask,
   CodingTaskExportFormat,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { FOLDER_WORKSPACE_BRANCH } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { ApiError } from "@/lib/api";
 import {
   CODING_HISTORY_CHANGED,
@@ -291,12 +292,15 @@ function HistoryItem({
   readonly task: CodingHistoryTask;
   readonly onOpen: (task: CodingHistoryTask) => void;
 }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const branch =
+    task.branch === FOLDER_WORKSPACE_BRANCH ? t("codingWorkbench.history.noBranch") : task.branch;
   return (
     <li className={styles.cmpItem}>
       <button className={styles.cmpOpen} type="button" onClick={() => onOpen(task)}>
         <strong>{task.title}</strong>
         <span>
-          {repositoryName(task.projectPath)} · {task.branch}
+          {repositoryName(task.projectPath)} · {branch}
         </span>
         <time dateTime={new Date(task.updatedAt).toISOString()}>
           {new Date(task.updatedAt).toLocaleString()}

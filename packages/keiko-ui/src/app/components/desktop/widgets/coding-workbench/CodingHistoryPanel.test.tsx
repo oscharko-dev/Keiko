@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingHistoryTask } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { FOLDER_WORKSPACE_BRANCH } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { CodingHistoryPanel, CodingHistoryWindowHost } from "./CodingHistoryPanel";
 import {
   CODING_HISTORY_CHANGED,
@@ -72,6 +73,15 @@ describe("coding history navigation", () => {
     expect(screen.getByText(/No tasks match/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "New task" }));
     expect(create).toHaveBeenCalledOnce();
+  });
+
+  it("names a plain folder task's missing branch instead of its reserved placeholder", async () => {
+    vi.mocked(fetchCodingHistory).mockResolvedValue([{ ...task, branch: FOLDER_WORKSPACE_BRANCH }]);
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    expect(await screen.findByText("example · Folder")).toBeVisible();
+    expect(
+      screen.queryByText(new RegExp(FOLDER_WORKSPACE_BRANCH.replace(/[()]/gu, "\\$&"), "u")),
+    ).toBeNull();
   });
 
   it("shows loading then recovers from a failed fetch through Refresh", async () => {

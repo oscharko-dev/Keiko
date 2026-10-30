@@ -462,6 +462,30 @@ async function admitWorkspaceSelection(deps: UiHandlerDeps): Promise<void> {
   }
 }
 
+interface InPlaceSelection {
+  readonly body: Record<string, unknown>;
+  readonly realRoot: string;
+  readonly requestedBy: string;
+}
+
+// Reads an in-place selection (Local checkout, folder) and admits it against the coding runtime.
+// Body parsing and root resolution yield to other requests, so the run check repeats immediately
+// before the caller's synchronous mutation: a run started meanwhile cannot lose its bound workspace.
+async function readInPlaceSelection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<InPlaceSelection> {
+  const body = await readJsonObject(ctx.req);
+  const root = requireSafeField(body.root, "root");
+  const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
+  const resolved = await resolveRoot(deps.store, root, deps.redactor);
+  await admitWorkspaceSelection(deps);
+  if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
+    throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
+  }
+  return { body, realRoot: resolved.realRoot, requestedBy };
+}
+
 // The Workbench's Local choice binds the registered checkout itself. Git's ordinary safety checks
 // govern branch switching; a failed switch never changes the active workspace pointer.
 export async function handleSelectLocalCheckout(
@@ -480,21 +504,12 @@ export async function handleSelectLocalCheckout(
       correlationId: ctx.correlationId,
     },
     async () => {
-      const body = await readJsonObject(ctx.req);
-      const root = requireSafeField(body.root, "root");
+      const { body, realRoot, requestedBy } = await readInPlaceSelection(ctx, deps);
       const branch = requireSafeField(body.branch, "branch");
-      const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-      const resolved = await resolveRoot(deps.store, root, deps.redactor);
-      await admitWorkspaceSelection(deps);
-      // Body parsing and root resolution yield to other requests. Recheck immediately before the
-      // synchronous checkout mutation so a run started meanwhile cannot lose its bound branch.
-      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
-        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
-      }
       let active: ActiveWorkspaceView;
       try {
         active = selectLocal({
-          root: resolved.realRoot,
+          root: realRoot,
           branch,
           requestedBy,
           ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
@@ -532,16 +547,9 @@ export async function handleSelectFolderWorkspace(
       correlationId: ctx.correlationId,
     },
     async () => {
-      const body = await readJsonObject(ctx.req);
-      const root = requireSafeField(body.root, "root");
-      const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-      const resolved = await resolveRoot(deps.store, root, deps.redactor);
-      await admitWorkspaceSelection(deps);
-      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
-        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
-      }
+      const { realRoot, requestedBy } = await readInPlaceSelection(ctx, deps);
       const active = selectFolder({
-        root: resolved.realRoot,
+        root: realRoot,
         requestedBy,
         ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
       });

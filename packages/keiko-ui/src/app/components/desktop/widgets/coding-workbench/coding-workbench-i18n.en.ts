@@ -9,6 +9,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.answer": "Answer question",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "New task",
+  "codingWorkbench.history.noBranch": "Folder",
   "codingWorkbench.history.search": "Search coding tasks",
   "codingWorkbench.history.filter": "Task status",
   "codingWorkbench.history.active": "Active",
@@ -495,7 +496,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.gitUnavailableHelp":
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
   "codingWorkbench.repository.folderModeHint":
-    "This folder is not a Git repository. The agent can read, edit, run commands and verify here; Git features such as commits, pushes and pull requests are unavailable.",
+    "Not a Git repository: the agent edits, runs and verifies here, without commits or pushes.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":

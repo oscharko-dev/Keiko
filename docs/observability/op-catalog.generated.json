@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "62113080b4177c3f9bd6da337054f452c7de87f4523a51c1f22c3926179bf0e6",
+    "catalogDigest": "7ffc89c1e3dddada7a8afe079f33d2dbe9d1fab90d27710ddf58e8e016689f51",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -40657,8 +40657,8 @@
         "failureClasses": ["workspace-identity-capability"],
         "proofIds": ["task-workspace.identity.creation-time-probe.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/task-workspace/activity-log.ts:195",
-        "emitterSites": ["packages/keiko-server/src/task-workspace/activity-log.ts:588"]
+        "registrationSite": "packages/keiko-server/src/task-workspace/activity-log.ts:200",
+        "emitterSites": ["packages/keiko-server/src/task-workspace/activity-log.ts:641"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -40806,8 +40806,8 @@
         "failureClasses": ["task-workspace-lifecycle", "evidence-persistence"],
         "proofIds": ["task-workspace.lifecycle.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/task-workspace/activity-log.ts:77",
-        "emitterSites": ["packages/keiko-server/src/task-workspace/activity-log.ts:332"]
+        "registrationSite": "packages/keiko-server/src/task-workspace/activity-log.ts:82",
+        "emitterSites": ["packages/keiko-server/src/task-workspace/activity-log.ts:337"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -107837,13 +107837,13 @@
     {
       "op": "task-workspace.identity.creation-time-probe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:198",
+      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:203",
       "package": "keiko-server"
     },
     {
       "op": "task-workspace.lifecycle",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:80",
+      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:85",
       "package": "keiko-server"
     },
     {

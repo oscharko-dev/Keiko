@@ -10,7 +10,7 @@
 // The identity is the directory's filesystem identity, so a folder replaced under the same path is a
 // different workspace and the bound pointer fails closed.
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
@@ -21,15 +21,17 @@ import {
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
-import { correlationIdOrUnknown } from "../correlation.js";
 import { readProductionWorkspaceHead } from "../coding-runtime/productionWorkspaceHeadReader.js";
 import type { UiStore } from "../store/types.js";
 import type { ActiveWorkspacePointerStore } from "./active-store.js";
-import { recordWorkspaceLifecycle, type WorkspaceSelectionEvidenceDeps } from "./activity-log.js";
+import {
+  recordWorkspaceSelection,
+  type WorkspaceSelectionEvidenceDeps,
+  type WorkspaceSelectionOutcome,
+} from "./activity-log.js";
 import { buildBinding } from "./binding.js";
 import { isCanonicalLocalRoot } from "./canonical-root.js";
 import { TaskWorkspaceError } from "./errors.js";
-import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
 import { deriveRepositoryId } from "./naming.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type { ActiveWorkspaceView } from "./types.js";
@@ -144,46 +146,18 @@ function requireFolderRoot(store: UiStore, root: string): string {
   return folderIdentity(root);
 }
 
-interface FolderSelectionEvidence {
-  readonly request: FolderSelectionRequest;
-  readonly identity: string;
-  readonly startedAt: number;
-  readonly fromState?: TaskWorkspaceLifecycleState | undefined;
-  readonly error?: TaskWorkspaceError | undefined;
-}
-
 function recordFolderSelection(
   deps: WorkspaceSelectionEvidenceDeps,
-  input: FolderSelectionEvidence,
+  request: FolderSelectionRequest,
+  identity: string,
+  outcome: Pick<WorkspaceSelectionOutcome, "startedAt" | "fromState" | "error">,
 ): void {
-  const { request, identity, startedAt, fromState, error } = input;
-  const recordedAt = deps.now();
-  recordWorkspaceLifecycle(deps, {
-    evidenceStore: deps.evidenceStore,
-    redactString: deps.redactString,
-    record: {
-      kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
-      schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
-      recordedAt,
-      operation: "activate",
-      outcome: error?.outcome ?? "activated",
-      attempt: 1,
-      durationMs: Math.max(0, recordedAt - startedAt),
-      worktreeCount: 0,
-      event: buildWorkspaceEvent({
-        eventId: randomUUID(),
-        workspaceId: folderWorkspaceId(identity),
-        taskId: folderTaskId(identity),
-        type: error === undefined ? "activated" : "transition-rejected",
-        at: new Date(recordedAt).toISOString(),
-        correlationId: correlationIdOrUnknown(request.correlationId),
-        fromState,
-        toState: error === undefined ? "active" : undefined,
-      }),
-    },
+  recordWorkspaceSelection(deps, {
+    ...outcome,
+    workspaceId: folderWorkspaceId(identity),
+    taskId: folderTaskId(identity),
+    correlationId: request.correlationId,
     workspaceKind: "folder",
-    errorCode: error?.code,
-    error,
   });
 }
 
@@ -229,11 +203,11 @@ export function selectFolderWorkspace(
     identity = requireFolderRoot(store, request.root);
     fromState = instances.getById(folderWorkspaceId(identity))?.lifecycleState;
     const active = activateFolder(request, identity, instances, pointerStore, getActive);
-    recordFolderSelection(deps, { request, identity, startedAt, fromState });
+    recordFolderSelection(deps, request, identity, { startedAt, fromState });
     return active;
   } catch (cause) {
     const error = classifiedSelectionFailure(cause);
-    recordFolderSelection(deps, { request, identity, startedAt, fromState, error });
+    recordFolderSelection(deps, request, identity, { startedAt, fromState, error });
     throw error;
   }
 }

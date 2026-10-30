@@ -165,7 +165,7 @@ describe("CodingWorkbenchRepositorySelector recovery notices", () => {
     renderSelector();
 
     expect(await screen.findByTestId("coding-workbench-folder-hint")).toHaveTextContent(
-      "This folder is not a Git repository",
+      "Not a Git repository",
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Git" })).not.toBeInTheDocument();

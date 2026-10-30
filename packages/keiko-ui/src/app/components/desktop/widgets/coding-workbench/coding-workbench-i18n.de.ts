@@ -11,6 +11,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.answer": "Frage beantworten",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "Neue Aufgabe",
+  "codingWorkbench.history.noBranch": "Ordner",
   "codingWorkbench.history.search": "Coding-Aufgaben suchen",
   "codingWorkbench.history.filter": "Aufgabenstatus",
   "codingWorkbench.history.active": "Aktiv",
@@ -519,7 +520,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.gitUnavailableHelp":
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
   "codingWorkbench.repository.folderModeHint":
-    "Dieser Ordner ist kein Git-Repository. Der Agent kann hier lesen, bearbeiten, Befehle ausführen und prüfen; Git-Funktionen wie Commits, Pushes und Pull Requests sind nicht verfügbar.",
+    "Kein Git-Repository: Der Agent bearbeitet, führt aus und prüft hier, ohne Commits oder Pushes.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":
