@@ -81,13 +81,13 @@ async function compile(sourcePath, output) {
   );
 }
 
-function runProcess(command, env, args, timeout) {
+function runProcess(command, env, args, { timeout, stdin = "ignore" } = {}) {
   return new Promise((resolveResult, reject) => {
     // KEIKO-0802: MSVC's `cl.exe` writes `error C####` diagnostics to STDOUT, not stderr, so the
     // pre-fix stdio: ["ignore", "ignore", "pipe"] tuple threw them away and every compile failure
     // reported an empty `${result.stderr.toString("utf8")}` — a "native compile failed:" with no
     // clue what failed. Capture both streams and hand both back for the assertion message.
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"], timeout });
+    const child = spawn(command, args, { env, stdio: [stdin, "pipe", "pipe"], timeout });
     const stdout = [];
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
@@ -404,7 +404,8 @@ async function qualifyMcpFinalResponse(helper) {
       "--eval",
       "process.stdout.write('MCP_FINAL_RESPONSE\\n');process.exitCode=7;",
     ],
-    DEADLINE_MS,
+    // Keep the transport open: EOF intentionally cancels a lifetime owner before provider exit.
+    { timeout: DEADLINE_MS, stdin: "pipe" },
   );
   assert.equal(result.code, 7, "MCP native owner must preserve the provider exit status");
   assert.equal(result.stdout.toString(), "MCP_FINAL_RESPONSE\n", "MCP final output must drain");
