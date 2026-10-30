@@ -296,6 +296,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: [
+        "chat.compaction.summary.work",
         "chat.context.management",
         "chat.continuity.capture",
         "chat.continuity.degraded",
@@ -306,6 +307,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       loss: [],
     },
     requiredCausalOperations: [
+      "chat.compaction.summary.work",
       "chat.context.failed",
       "chat.context.management",
       "chat.continuity.capture",
@@ -314,6 +316,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "chat.compaction.summary.work",
       "chat.context.failed",
       "chat.context.management",
       "chat.continuity.capture",
@@ -322,6 +325,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "chat.compaction.summary.work",
       "chat.context.management",
       "chat.continuity.capture",
       "chat.continuity.degraded",

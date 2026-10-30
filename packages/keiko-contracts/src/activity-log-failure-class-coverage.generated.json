@@ -2193,6 +2193,7 @@
       "lifecycleOperations": {
         "start": [],
         "state": [
+          "chat.compaction.summary.work",
           "chat.context.management",
           "chat.continuity.capture",
           "chat.continuity.degraded",
@@ -2203,6 +2204,10 @@
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "chat.compaction.summary.work",
+          "mode": "correlation"
+        },
         {
           "op": "chat.context.failed",
           "mode": "correlation"
@@ -2226,6 +2231,7 @@
       ],
       "lossSignals": [],
       "resourceSignals": [
+        "chat.compaction.summary.work",
         "chat.context.management",
         "chat.continuity.capture",
         "chat.continuity.degraded",
@@ -2233,6 +2239,54 @@
       ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "chat.compaction.summary.work",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "elapsedMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "modelPortCalled",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "promptCodeUnitsPlanned",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "timeoutMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.compaction.summary.work.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "chat.context.failed",
           "owner": "keiko-server",

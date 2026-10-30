@@ -38,6 +38,37 @@ The paired native-producer observations are retained as
 digests match exactly. The candidate was measured at `ba6f321e0`, before synchronizing subsequent
 upstream `dev` changes, so this isolated delta is attributable to the retrieval iteration.
 
+### Iteration 2: summary timing and duplicate work
+
+The unchanged isolated runtime emitted six `SummaryRejected` diagnostics with reason `timed-out`
+by the retained snapshot. The subject's detached summary timer is 15 seconds. This is observed
+runtime evidence, not a claim that every attempt failed: the snapshot does not establish the total
+attempt denominator. The body-free observation, source/build identity and exact selected diagnostic
+fields are retained in [`iteration-00-summary-timeouts.json`](evidence/4155/iteration-00-summary-timeouts.json).
+
+Two failure-first cases reproduce the defects: a healthy result after 20 seconds is discarded,
+and two concurrent identical enrichments invoke the model twice. The candidate instead derives
+the backstop from the existing normal buffered Gateway budget plus the shared transport grace,
+bounded by the platform timer ceiling. It adds no Coding outage policy. Tests cover the buffered
+floor, a larger configured timeout, overflow protection, cancellation and the unconfigured fallback.
+
+Identical in-flight work is coalesced inside the exact handler graph and current configuration
+identity. Existing `depsRoot` bindings let request-scoped copies share their composed owner; changed store/evidence/model-port views remain isolated. Keys include chat, model, safe prompt hash, response mode, source revision/boundary and
+source-reference hash. Only transient hashes and ownership state are retained; there is no new
+persisted response cache. Changed inputs/scopes remain separate, and failure releases the key so
+the work can retry. Existing validated checkpoint reuse remains separate from this optimization.
+
+The graph's existing disposal path cancels and drains detached summaries before disposing services.
+A queued job cannot start after disposal, and an already-resolved response cannot persist after
+shutdown begins. The existing four-job admission bound remains. `chat.compaction.summary.work`
+records the chosen deadline, monotonic local duration, planned UTF-16 prompt size, whether the model
+port was called, and a closed outcome. `accepted` means output validation succeeded; it does not
+certify source coverage, semantic accuracy or durable checkpoint persistence. `coalesced` is not
+provider KV-cache reuse and does not imply a cached-token count.
+
+The six-file targeted run passes 107 tests, including bound request-copy and narrowed-store/model-port cases. An additional five-file Chat/dependency regression run passes 402 tests. The native-model success-rate delta and global quality
+score remain open. This timing repair does not fix the separately measured sampled-source coverage.
+
 ## Measurement design
 
 The existing connected-chat laboratory supplies authenticated application pairing, native BFF and

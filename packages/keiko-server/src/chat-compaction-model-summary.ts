@@ -1,6 +1,12 @@
 import { countConversationCheckpointTokens } from "./conversation-compaction.js";
-import { callChatCompactionModel } from "./chat-compaction-model-call.js";
+import {
+  callChatCompactionModel,
+  beginChatCompactionWork,
+  chatCompactionWorkStopped,
+} from "./chat-compaction-model-call.js";
 import { TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { bufferedCallBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import type {
   ContextCompactionModelSummary,
   ContextCompactionRecord,
@@ -26,6 +32,7 @@ import {
   findConfiguredCapability,
   type NormalizedResponse,
   type ResponseFormat,
+  type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
@@ -46,8 +53,16 @@ import { getServerLogger } from "./observability/index.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { logChatContextManagement } from "./chat-context-log.js";
 import { readChatContextStatus } from "./chat-context-status.js";
+import { logChatCompactionSummaryWork } from "./chat-continuity-log.js";
+import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
+import { GATEWAY_ROUTE_DEADLINE_GRACE_MS } from "./gateway-route-deadline.js";
+import { depsRoot } from "./request-deps-root.js";
 
-const MODEL_SUMMARY_TIMEOUT_MS = 15_000;
+const UNCONFIGURED_MODEL_SUMMARY_TIMEOUT_MS = 15_000;
+const pendingSummaryInputs = new WeakMap<
+  UiHandlerDeps,
+  Map<GatewayConfig | undefined, Set<string>>
+>();
 const MAX_SOURCE_TURNS = 16;
 const HEAD_SOURCE_TURNS = 4;
 const MAX_TURN_SOURCE_CHARS = 1_200;
@@ -133,6 +148,7 @@ type StructuredSummaryParseResult =
 type ModelSummaryCallResult =
   | { readonly kind: "response"; readonly response: NormalizedResponse }
   | { readonly kind: "timed-out" }
+  | { readonly kind: "cancelled" }
   | { readonly kind: "unavailable"; readonly error: unknown };
 
 type ModelSummaryResponseMode = "structured" | "legacy";
@@ -189,7 +205,7 @@ export async function enrichChatCompactionWithModelSummary(
   input: ChatCompactionModelSummaryInput,
 ): Promise<void> {
   const record = input.compaction;
-  if (record === undefined || summaryAlreadyCoversRecord(record)) {
+  if (!needsSummaryEnrichment(deps, record)) {
     return;
   }
   try {
@@ -208,7 +224,11 @@ export async function enrichChatCompactionWithModelSummary(
         ? failureModelSummary(record, input.modelId, "unavailable", "model-unavailable")
         : await buildModelSummary(model, deps, input, record, prompt, responseMode);
     logRejectedSummary(deps, input.correlationId, modelSummary, model === undefined);
-    if (modelSummary !== undefined && currentSummaryTarget(deps, input, record)) {
+    if (
+      modelSummary !== undefined &&
+      !chatCompactionWorkStopped(deps) &&
+      currentSummaryTarget(deps, input, record)
+    ) {
       const enriched = { ...record, modelSummary: refreshedModelSummary(record, modelSummary) };
       persistChatCompactionEvidence(deps, {
         ...input,
@@ -224,6 +244,15 @@ export async function enrichChatCompactionWithModelSummary(
   } catch (error) {
     logSummaryFailure(deps, correlationIdOrUnknown(input.correlationId), error);
   }
+}
+
+function needsSummaryEnrichment(
+  deps: UiHandlerDeps,
+  record: ContextCompactionRecord | undefined,
+): record is ContextCompactionRecord {
+  return (
+    record !== undefined && !chatCompactionWorkStopped(deps) && !summaryAlreadyCoversRecord(record)
+  );
 }
 
 function refreshedModelSummary(
@@ -302,14 +331,64 @@ async function buildModelSummary(
   prompt: string,
   responseMode: ModelSummaryResponseMode,
 ): Promise<ContextCompactionModelSummary | undefined> {
-  // Detached work retains the originating request correlation when one was supplied.
-  const result = await callModelWithTimeout(
-    model,
-    input.modelId,
-    prompt,
-    responseMode,
-    correlationIdOrUnknown(input.correlationId),
-  );
+  const timeoutMs = summaryCallTimeoutMs(deps, input.modelId);
+  const release = claimSummaryInput(deps, input, record, prompt, responseMode);
+  const planned = { timeoutMs, promptCodeUnitsPlanned: prompt.length };
+  if (release === undefined) {
+    logChatCompactionSummaryWork(
+      { ...planned, outcome: "coalesced", modelPortCalled: false, elapsedMs: 0 },
+      input.correlationId,
+    );
+    return undefined;
+  }
+  const work = beginChatCompactionWork(deps);
+  if (work === undefined) {
+    release();
+    return undefined;
+  }
+  const started = performance.now();
+  try {
+    const result = await callModelWithTimeout(
+      model,
+      input.modelId,
+      prompt,
+      responseMode,
+      correlationIdOrUnknown(input.correlationId),
+      timeoutMs,
+      work.signal,
+    );
+    const summary = modelSummaryFromCallResult(deps, input, record, responseMode, result);
+    logChatCompactionSummaryWork(
+      {
+        ...planned,
+        outcome: summaryWorkOutcome(result, summary),
+        modelPortCalled: true,
+        elapsedMs: Math.max(0, Math.round(performance.now() - started)),
+      },
+      input.correlationId,
+    );
+    return summary;
+  } finally {
+    release();
+    work.finish();
+  }
+}
+
+function summaryWorkOutcome(
+  result: ModelSummaryCallResult,
+  summary: ContextCompactionModelSummary | undefined,
+): Parameters<typeof logChatCompactionSummaryWork>[0]["outcome"] {
+  if (result.kind === "cancelled") return "cancelled";
+  return summary?.status === "valid" ? "accepted" : (summary?.status ?? "invalid");
+}
+
+function modelSummaryFromCallResult(
+  deps: UiHandlerDeps,
+  input: ChatCompactionModelSummaryInput,
+  record: ContextCompactionRecord,
+  responseMode: ModelSummaryResponseMode,
+  result: ModelSummaryCallResult,
+): ContextCompactionModelSummary | undefined {
   return result.kind === "response"
     ? modelSummaryFromResponse(record, input.modelId, result.response, deps.redactor, responseMode)
     : modelSummaryFromCallFailure(
@@ -319,6 +398,59 @@ async function buildModelSummary(
         input.modelId,
         result,
       );
+}
+
+function summaryCallTimeoutMs(deps: UiHandlerDeps, modelId: string): number {
+  const provider = currentGatewayConfig(deps)?.providers.find((item) => item.modelId === modelId);
+  return provider === undefined
+    ? UNCONFIGURED_MODEL_SUMMARY_TIMEOUT_MS
+    : Math.min(
+        bufferedCallBudgetMs(provider, 0) + GATEWAY_ROUTE_DEADLINE_GRACE_MS,
+        MAX_TIMER_DELAY_MS,
+      );
+}
+
+function claimSummaryInput(
+  deps: UiHandlerDeps,
+  input: ChatCompactionModelSummaryInput,
+  record: ContextCompactionRecord,
+  prompt: string,
+  responseMode: ModelSummaryResponseMode,
+): (() => void) | undefined {
+  const root = depsRoot(deps);
+  const owner =
+    deps.store === root.store &&
+    deps.evidenceStore === root.evidenceStore &&
+    deps.modelPortFactory === root.modelPortFactory
+      ? root
+      : deps;
+  let configurations = pendingSummaryInputs.get(owner);
+  if (configurations === undefined) {
+    configurations = new Map();
+    pendingSummaryInputs.set(owner, configurations);
+  }
+  const config = currentGatewayConfig(deps);
+  let keys = configurations.get(config);
+  if (keys === undefined) {
+    keys = new Set();
+    configurations.set(config, keys);
+  }
+  const key = sha256Hex(
+    JSON.stringify([
+      input.chatId,
+      input.modelId,
+      prompt,
+      responseMode,
+      record.conversationCoverage,
+      record.summaryRefHash,
+    ]),
+  );
+  if (keys.has(key)) return undefined;
+  keys.add(key);
+  return (): void => {
+    keys.delete(key);
+    if (keys.size === 0) configurations.delete(config);
+  };
 }
 
 function modelSummaryFromResponse(
@@ -372,6 +504,7 @@ function modelSummaryFromCallFailure(
   if (result.kind === "timed-out") {
     return failureModelSummary(record, modelId, "timed-out", "timed-out");
   }
+  if (result.kind === "cancelled") return undefined;
   logSummaryFailure(deps, correlationId, result.error, "model-unavailable");
   return failureModelSummary(record, modelId, "unavailable", "model-unavailable");
 }
@@ -382,6 +515,8 @@ async function callModelWithTimeout(
   prompt: string,
   responseMode: ModelSummaryResponseMode,
   correlationId: string,
+  timeoutMs: number,
+  signal: AbortSignal,
 ): Promise<ModelSummaryCallResult> {
   try {
     const response = await callChatCompactionModel(
@@ -398,11 +533,13 @@ async function callModelWithTimeout(
         ...(responseMode === "structured" ? { responseFormat: MODEL_SUMMARY_RESPONSE_FORMAT } : {}),
         logContext: { correlationId },
       },
-      new AbortController().signal,
-      MODEL_SUMMARY_TIMEOUT_MS,
+      signal,
+      timeoutMs,
     );
+    if (signal.aborted) return { kind: "cancelled" };
     return { kind: "response", response };
   } catch (error) {
+    if (signal.aborted) return { kind: "cancelled" };
     return error instanceof TimeoutError ? { kind: "timed-out" } : { kind: "unavailable", error };
   }
 }

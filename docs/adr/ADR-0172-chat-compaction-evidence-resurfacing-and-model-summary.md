@@ -184,6 +184,21 @@ retains that summary and its earlier `coveredItems`; it must not claim coverage 
 turns. Later enrichment can retry those uncovered turns. Successful enrichment recounts the complete
 checkpoint through the shared gateway token-accounting path before persistence.
 
+The detached buffered call's backstop follows the normal Gateway buffered budget and shared
+transport grace, with the platform timer ceiling; it must not cut a valid native attempt short at
+an independent 15-second limit (#4155). No Coding outage policy is added. Identical in-flight
+summaries are coalesced per exact handler graph and current configuration identity, keyed by chat,
+model, safe prompt hash, response mode, revision/boundary and source-reference hash. Failed work
+releases its key. This is transient work sharing, not a new persistent response cache or source
+freshness guarantee.
+
+The existing handler disposal cancels and drains these calls before closing its services. Queued
+work is refused once that graph stops, and a late result cannot persist after shutdown begins.
+`chat.compaction.summary.work` records the actual backstop, local monotonic elapsed time, planned
+UTF-16 prompt size, model-port invocation and closed outcome without source bodies. Its `accepted`
+outcome denotes output validation, not complete source coverage, answer accuracy or durable
+persistence. Coalesced work does not count as a second model-port call or provider KV-cache hit.
+
 A reader can normally distinguish an attempted enrichment from an absent attempt using the
 persisted failure state or the correlated diagnostic when a valid earlier summary was retained.
 A record carrying only a rejected summary remains a complete, valid compaction record.

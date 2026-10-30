@@ -145,6 +145,57 @@ const CHAT_CONTINUITY_DEGRADED = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+interface SummaryWorkEvidence {
+  readonly outcome:
+    "accepted" | "invalid" | "timed-out" | "unavailable" | "coalesced" | "cancelled";
+  readonly modelPortCalled: boolean;
+  readonly timeoutMs: number;
+  readonly elapsedMs: number;
+  readonly promptCodeUnitsPlanned: number;
+}
+
+const CHAT_COMPACTION_SUMMARY_WORK = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.compaction.summary.work",
+  owner: "keiko-server",
+  category: "gateway",
+  emitter: "chat-continuity-log.logChatCompactionSummaryWork",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["accepted", "invalid", "timed-out", "unavailable", "coalesced", "cancelled"],
+    },
+    modelPortCalled: { type: "boolean", dataClass: "closed-enum", required: true },
+    timeoutMs: { type: "integer", dataClass: "count", required: true },
+    elapsedMs: { type: "integer", dataClass: "count", required: true },
+    promptCodeUnitsPlanned: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-context-management"],
+  proofIds: ["chat.compaction.summary.work.line"],
+  releaseImpact: "patch",
+});
+
+export function logChatCompactionSummaryWork(
+  evidence: SummaryWorkEvidence,
+  correlationId?: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_COMPACTION_SUMMARY_WORK,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { ...evidence, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
 export function logChatHistoryCapture(
   evidence: ChatHistoryCaptureEvidence,
   correlationId?: string,

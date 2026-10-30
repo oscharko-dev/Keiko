@@ -1158,6 +1158,58 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "chat.compaction.summary.work",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "chat-continuity-log.logChatCompactionSummaryWork",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["accepted", "invalid", "timed-out", "unavailable", "coalesced", "cancelled"],
+      },
+      modelPortCalled: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      timeoutMs: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      elapsedMs: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      promptCodeUnitsPlanned: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["chat-context-management"],
+    proofIds: ["chat.compaction.summary.work.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "chat.content-policy.resolved",
     category: "security",
     owner: "keiko-server",
