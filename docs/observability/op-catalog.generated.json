@@ -107083,7 +107083,14 @@
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:22",
+      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:27",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "mcp.connection",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:68",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

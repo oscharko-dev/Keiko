@@ -265,17 +265,17 @@ async function createRun(apply = false): Promise<{ status: number; body: CreateR
   return { status: res.status, body: (await res.json()) as CreateResponse };
 }
 
-// Polls the registry until the background run terminates (deterministic; the fake model resolves
-// synchronously, so this settles within a few microtasks).
+// The engine closes the existing sink after registry completion. Verify runs real npm commands,
+// so a one-second polling budget raced subprocess startup under coverage. Keep Vitest's existing
+// test deadline and observe actual completion instead of imposing a second, shorter deadline.
 async function awaitTerminal(runId: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    const record = registry.get(runId);
-    if (record !== undefined && record.status !== "running") {
-      return;
-    }
-    await new Promise((res) => setTimeout(res, 5));
-  }
-  throw new Error("run did not terminate");
+  const record = registry.get(runId);
+  if (record === undefined) throw new Error("run was not registered");
+  if (record.status !== "running") return;
+  await new Promise<void>((resolve) => {
+    record.sink.attach({ write: () => true, close: resolve }, 0);
+  });
+  expect(registry.get(runId)?.status).not.toBe("running");
 }
 
 async function awaitAcceptedRunTerminal(response: Response): Promise<void> {

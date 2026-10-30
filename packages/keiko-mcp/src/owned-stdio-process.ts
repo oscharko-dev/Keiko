@@ -58,6 +58,7 @@ export async function runOwnedStdio(options: OwnedStdioOptions): Promise<number>
     stdio: ["pipe", "pipe", "pipe"],
   }) as ChildProcessWithoutNullStreams;
   let stopping: Promise<boolean> | undefined;
+  let drainDeadline: ReturnType<typeof setTimeout> | undefined;
   const stop = (): void => {
     if (options.stopOwner !== undefined) options.stopOwner(0);
     stopping ??= stopGroup(child.pid).then(
@@ -65,7 +66,38 @@ export async function runOwnedStdio(options: OwnedStdioOptions): Promise<number>
       () => true,
     );
   };
-  const completed = new Promise<number>((resolve) => {
+  const completed = providerCompletion(child);
+  child.once("exit", (code) => {
+    if (options.stopOwner === undefined) {
+      stop();
+      return;
+    }
+    const stopOwner = options.stopOwner;
+    // A descendant can retain the provider's pipes. Bound draining before closing its Job.
+    drainDeadline = setTimeout(() => stopOwner(code ?? 1), 150);
+  });
+  options.signal.addEventListener("abort", stop, { once: true });
+  options.input.once("end", stop);
+  const unwire = wireStdio(child, options, stop);
+  try {
+    const code = await completed;
+    if (options.stopOwner !== undefined) {
+      await Promise.all([flushOutput(options.output), flushOutput(options.errors)]);
+      options.stopOwner(code);
+    }
+    stop();
+    if ((await stopping) === true) throw new Error("Local process cleanup failed");
+    return code;
+  } finally {
+    clearTimeout(drainDeadline);
+    options.signal.removeEventListener("abort", stop);
+    options.input.off("end", stop).unpipe(child.stdin);
+    unwire();
+  }
+}
+
+function providerCompletion(child: ChildProcessWithoutNullStreams): Promise<number> {
+  return new Promise((resolve) => {
     child.once("error", () => {
       resolve(1);
     });
@@ -73,20 +105,15 @@ export async function runOwnedStdio(options: OwnedStdioOptions): Promise<number>
       resolve(code ?? 1);
     });
   });
-  child.once("exit", stop);
-  options.signal.addEventListener("abort", stop, { once: true });
-  options.input.once("end", stop);
-  const unwire = wireStdio(child, options, stop);
-  try {
-    const code = await completed;
-    stop();
-    if ((await stopping) === true) throw new Error("Local process cleanup failed");
-    return code;
-  } finally {
-    options.signal.removeEventListener("abort", stop);
-    options.input.off("end", stop).unpipe(child.stdin);
-    unwire();
-  }
+}
+
+function flushOutput(output: Writable): Promise<void> {
+  return new Promise((resolve, reject) => {
+    output.write("", (error) => {
+      if (error) reject(new Error("Local process output failed"));
+      else resolve();
+    });
+  });
 }
 
 function wireStdio(

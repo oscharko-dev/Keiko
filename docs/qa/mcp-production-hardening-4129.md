@@ -148,7 +148,7 @@ Repeated Workbench management links consume their initial navigation request and
 after a manual Settings tab change. Invalid JSON status bodies are covered explicitly. The Windows
 missing-system-root test now uses host-independent invalid values.
 
-An additional confirmed lifecycle defect remains open: a real local MCP server's ordinary child
+An additional confirmed lifecycle defect was repaired: a real local MCP server's ordinary child
 process survived closing its SDK connection. Both isolated reproductions reported the survivor;
 the owned synthetic processes were then terminated. The POSIX lifetime owner now removes ordinary descendants on close, cancellation, input end,
 output failure and provider exit. The same independent real-SDK probe reports no survivor and
@@ -274,3 +274,58 @@ matrix are still open. The earlier complete package result is retained as checkp
 not substituted for the corrected release candidate. The macOS OpenCode acceptance uses the
 existing admitted evaluation runtime; it does not qualify a stronger native isolation/signing
 mode than that platform currently provides.
+
+## Final review repair batch
+
+The six remaining CodeRabbit conversations were rechecked against the current source. The process
+leak was already repaired; its receipt incorrectly still called it open. The receipt now separates
+the repaired defect from platform qualification. The other confirmed repairs are:
+
+- **Medium — Windows argument corruption:** the native writer emitted only `b + 1` backslashes
+  before a quote instead of `2b + 1`. Compiling the actual C function into a portable probe failed
+  before the repair and passed afterward. The real Windows qualification now checks a backslash
+  immediately before a quote, whitespace, an empty argument, a trailing backslash and Unicode.
+- **Medium — final native output loss:** provider exit could terminate the lifetime owner before
+  its stdout closed and always used status zero. Failure-first tests now prove final-response
+  draining and exit-status propagation. A 150 ms deadline still closes a Job whose descendants
+  retain its pipes; abort, input end and pipe failure stop immediately. The Windows native lane
+  additionally executes the built Node lifetime worker and verifies its final bytes and status.
+- **Low — probe refusals lacked evidence:** failed and mismatched probes now emit body-free
+  diagnostics through the injected sink. Missing optional assets stay silent. Three failure-first
+  cases and a successful-status/wrong-schema case cover refusal without recording private output.
+- **Low — qualification cleanup could signal a reused PID:** each PID is removed from the forced
+  cleanup set as soon as its absence is confirmed. Successful qualification does not signal those
+  PIDs again.
+
+All 44 focused process/owner tests and the corrected full typecheck pass. Actual Sonar, architecture,
+negative architecture fixtures and error-observability pass for this batch. The complete final
+qualification and current-head Windows execution remain required before production sign-off.
+
+The candidate's last complete package run reported 2,772 passing suites, two failing suites and
+21 existing skipped suites: 62,861 tests passed, three failed and 299 were skipped. One failure
+copied the publish surface while a concurrent independent scripts run was changing that same
+surface; two verification tests exceeded their existing terminal-wait budget. The independent
+scripts run passed 322 suites but its workflow-inventory scan exceeded 15 seconds. That inventory's
+23 tests subsequently passed both normally and with coverage without changing the timeout.
+Neither red full run is counted as a passing release gate. The remaining exact failures are being
+rerun in isolation, followed by serialized final qualification.
+
+On the actual 1.3.3 App Browser, Supervised mode approved both an OAuth read and one stdio write,
+with the expected markers and exactly one write. Full mode read the legacy-SSE and encrypted-header
+servers and then exercised connection loss both before and after a synthetic write. Independent
+counters remained zero and one respectively across complete document reloads, while the UI retained
+recovery-required status. The central SSE server was removed and recreated through Settings and
+connected again with one tool. The first post-effect attempt stopped before MCP dispatch while
+model verification was pending; its zero-effect counter is retained as an unsuccessful attempt,
+not positive MCP acceptance evidence.
+
+The isolated release pipeline and native-source suites passed. The remaining verify-handler
+failure was reproduced independently: verify launches a real npm subprocess, whereas its shared
+helper incorrectly assumed all runs finished as soon as the fake model resolved. The helper now
+observes the existing sink close after registry completion, under the unchanged Vitest deadline.
+All 60 handler tests and the combined 104 process/handler regressions pass. Scoped lint over every
+file in this repair batch, the production build, architecture, negative cases, Activity Log,
+error observability and actual Sonar pass. Serialized complete final coverage is still pending.
+A further real Gemma/OpenCode read against the newly launched built provider succeeded with its
+expected marker and no write. A literal scan of 148 isolated application state/log files
+(50,747,787 bytes) found zero occurrences of the current static test credential.

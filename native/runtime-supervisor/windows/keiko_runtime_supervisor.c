@@ -217,6 +217,7 @@ static wchar_t *append_quoted(wchar_t *output, const wchar_t *value) {
     if (*value == L'\\') {
       ++backslashes;
     } else {
+      if (*value == L'"') backslashes *= 2;
       while (backslashes-- != 0) *output++ = L'\\';
       backslashes = 0;
       if (*value == L'"') *output++ = L'\\';

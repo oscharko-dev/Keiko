@@ -3067,6 +3067,7 @@
     "MalformedToolCallError",
     "ManagedMcpError",
     "ManualPodRequestError",
+    "McpNativeOwnerProbeFailure",
     "MemoryCaptureProjectionReadError",
     "MemoryStorageError",
     "MemoryStoragePreconditionError",

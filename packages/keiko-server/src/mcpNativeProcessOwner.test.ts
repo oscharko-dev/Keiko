@@ -34,6 +34,7 @@ it("does not probe irrelevant platforms or missing native assets", () => {
   expect(discoverMcpNativeProcessOwner({}, "darwin")).toBeUndefined();
   expect(discoverMcpNativeProcessOwner({}, "win32")).toBeUndefined();
   expect(spawnSync).not.toHaveBeenCalled();
+  expect(emitServerDiagnostic).not.toHaveBeenCalled();
 });
 it.each(["portable", "development"])(
   "admits only a verified %s owner with the current capability",
@@ -63,22 +64,59 @@ it.each(["portable", "development"])(
     );
   },
 );
-it.each(["stale", "tampered", "missing-digest"])("refuses a %s owner", (failure) => {
-  vi.mocked(discoverQualifiedPortableOpenCode).mockReturnValue({
-    ...binding,
-    ...(failure === "missing-digest" ? { nativeHelperSha256: undefined } : {}),
-  } as ReturnType<typeof discoverQualifiedPortableOpenCode>);
-  if (failure === "stale")
-    vi.mocked(spawnSync).mockReturnValue({ status: 1, stdout: "" } as ReturnType<typeof spawnSync>);
-  if (failure === "tampered")
-    vi.mocked(assertMcpNativeStdioOwner).mockImplementation(() => {
-      throw new Error("synthetic private path");
-    });
-  expect(discoverMcpNativeProcessOwner({}, "win32")).toBeUndefined();
-  if (failure === "tampered") {
-    expect(spawnSync).not.toHaveBeenCalled();
-    expect(JSON.stringify(vi.mocked(emitServerDiagnostic).mock.calls)).not.toContain(
-      "synthetic private path",
+it.each(["stale", "mismatched-output", "tampered", "missing-digest"])(
+  "refuses a %s owner",
+  (failure) => {
+    vi.mocked(discoverQualifiedPortableOpenCode).mockReturnValue({
+      ...binding,
+      ...(failure === "missing-digest" ? { nativeHelperSha256: undefined } : {}),
+    } as ReturnType<typeof discoverQualifiedPortableOpenCode>);
+    if (failure === "stale")
+      vi.mocked(spawnSync).mockReturnValue({ status: 1, stdout: "" } as ReturnType<
+        typeof spawnSync
+      >);
+    if (failure === "mismatched-output")
+      vi.mocked(spawnSync).mockReturnValue({
+        status: 0,
+        stdout: '{"schemaVersion":2,"ownedStdio":"windows-job"}',
+      } as ReturnType<typeof spawnSync>);
+    if (failure === "tampered")
+      vi.mocked(assertMcpNativeStdioOwner).mockImplementation(() => {
+        throw new Error("synthetic private path");
+      });
+    expect(discoverMcpNativeProcessOwner({}, "win32")).toBeUndefined();
+    if (failure === "tampered") {
+      expect(spawnSync).not.toHaveBeenCalled();
+      expect(JSON.stringify(vi.mocked(emitServerDiagnostic).mock.calls)).not.toContain(
+        "synthetic private path",
+      );
+    }
+  },
+);
+
+it.each(["failed", "mismatched", "throwing"])(
+  "records a body-free %s probe refusal through the supplied diagnostic sink",
+  (failure) => {
+    vi.mocked(discoverQualifiedPortableOpenCode).mockReturnValue(
+      binding as ReturnType<typeof discoverQualifiedPortableOpenCode>,
     );
-  }
-});
+    if (failure === "throwing")
+      vi.mocked(spawnSync).mockImplementationOnce(() => {
+        throw new Error("synthetic private probe data");
+      });
+    else
+      vi.mocked(spawnSync).mockReturnValueOnce({
+        status: failure === "failed" ? null : 0,
+        stdout: "synthetic private probe data",
+      } as ReturnType<typeof spawnSync>);
+    const diagnostics = { record: vi.fn() };
+    expect(discoverMcpNativeProcessOwner({}, "win32", diagnostics)).toBeUndefined();
+    expect(emitServerDiagnostic).toHaveBeenCalledWith(
+      diagnostics,
+      expect.objectContaining({ operation: "mcp.connection", source: "mcp.native-owner" }),
+    );
+    expect(JSON.stringify(vi.mocked(emitServerDiagnostic).mock.calls)).not.toContain(
+      "synthetic private probe data",
+    );
+  },
+);

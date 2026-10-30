@@ -81,13 +81,13 @@ async function compile(sourcePath, output) {
   );
 }
 
-function runProcess(command, env, args) {
+function runProcess(command, env, args, timeout) {
   return new Promise((resolveResult, reject) => {
     // KEIKO-0802: MSVC's `cl.exe` writes `error C####` diagnostics to STDOUT, not stderr, so the
     // pre-fix stdio: ["ignore", "ignore", "pipe"] tuple threw them away and every compile failure
     // reported an empty `${result.stderr.toString("utf8")}` — a "native compile failed:" with no
     // clue what failed. Capture both streams and hand both back for the assertion message.
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"], timeout });
     const stdout = [];
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
@@ -333,37 +333,29 @@ function assertMutationRejected(rawSource) {
 async function qualifyMcpStdioOwner(helper, runtime, root) {
   const provider = join(root, "MCP provider & quoted name.exe");
   await copyFile(runtime, provider);
-  const child = spawn(helper, ["--stdio-owner", provider], {
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-  });
+  const child = spawn(
+    helper,
+    ["--stdio-owner", provider, "--mcp-argv-probe", String.raw`a\"b c`, "", "tail\\", "\u00fc"],
+    {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
   const reader = streamReader(child.stdout);
   const exited = new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", resolve);
   });
-  const pids = [];
+  const pids = new Set();
   try {
     const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
     const report = await readBytes(reader, 12).finally(() => clearTimeout(deadline));
     assert.equal(report.subarray(0, 4).toString(), "KRQ1");
-    pids.push(report.readUInt32LE(4), report.readUInt32LE(8));
+    pids.add(report.readUInt32LE(4));
+    pids.add(report.readUInt32LE(8));
     child.kill();
     await exited;
-    const until = Date.now() + 2000;
-    for (const pid of pids) {
-      let running = true;
-      while (running && Date.now() < until) {
-        try {
-          process.kill(pid, 0);
-        } catch (error) {
-          if (error.code !== "ESRCH") throw error;
-          running = false;
-        }
-        if (running) await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      assert.equal(running, false, "MCP native job must remove the provider and grandchild");
-    }
+    await assertMcpProcessesGone(pids);
   } finally {
     child.kill();
     for (const pid of pids) {
@@ -374,6 +366,48 @@ async function qualifyMcpStdioOwner(helper, runtime, root) {
       }
     }
   }
+}
+
+async function assertMcpProcessesGone(pids) {
+  const until = Date.now() + 2000;
+  for (const pid of pids) {
+    let running = true;
+    while (running && Date.now() < until) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+        running = false;
+      }
+      if (running) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(running, false, "MCP native job must remove the provider and grandchild");
+    pids.delete(pid);
+  }
+}
+
+async function qualifyMcpFinalResponse(helper) {
+  const worker = fileURLToPath(
+    new URL("../../packages/keiko-mcp/dist/owned-stdio-worker.js", import.meta.url),
+  );
+  const environment = hermeticWindowsEnv();
+  environment.KEIKO_MCP_STDIO_ENV_0 = JSON.stringify(["SystemRoot", environment.SystemRoot]);
+  const result = await runProcess(
+    helper,
+    environment,
+    [
+      "--stdio-owner",
+      process.execPath,
+      worker,
+      "--native-job",
+      process.execPath,
+      "--eval",
+      "process.stdout.write('MCP_FINAL_RESPONSE\\n');process.exitCode=7;",
+    ],
+    DEADLINE_MS,
+  );
+  assert.equal(result.code, 7, "MCP native owner must preserve the provider exit status");
+  assert.equal(result.stdout.toString(), "MCP_FINAL_RESPONSE\n", "MCP final output must drain");
 }
 
 await assertSourceContract();
@@ -408,6 +442,7 @@ if (process.platform === "win32") {
     if (suppliedHelper === undefined) await compile(source, helper);
     await compile(fixtureSource, runtime);
     await qualifyMcpStdioOwner(helper, runtime, root);
+    await qualifyMcpFinalResponse(helper);
     await qualifyWindows(helper, runtime, root);
     await assertControlEofFailsClosed(helper, runtime, root);
   } finally {

@@ -4897,7 +4897,11 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
   });
   const mcpConnections = createConfiguredMcpConnections({
     authorization: mcpAuthorization,
-    nativeOwner: discoverMcpNativeProcessOwner(args.options.env),
+    nativeOwner: discoverMcpNativeProcessOwner(
+      args.options.env,
+      process.platform,
+      args.options.diagnostics,
+    ),
     settings: mcpSettings,
     stateDir: dirname(args.resolvedUiDbPath),
     log: args.options.activityLog ?? processServerLogSink(),
