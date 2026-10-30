@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -12,6 +14,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import {
   createMemoryVault,
+  MEMORY_DB_FILENAME,
   MemoryStorageError,
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
@@ -2183,6 +2186,49 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     expect(records).toHaveLength(1);
     expect(typeof records[0]?.correlationId).toBe("string");
     expect(records[0]?.correlationId.length).toBeGreaterThan(0);
+  });
+  it("returns a correlated opaque storage failure for an actual reopened schema-mismatched row (#3918)", () => {
+    const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-memory-handler-admission-"));
+    tmpDirs.push(memoryDir);
+    const vaultKey = randomBytes(32);
+    const open = (): MemoryVaultStore =>
+      createMemoryVault({ memoryDir, vaultKey, redactString: (s) => s });
+    const record = makeMemory("private-row-id-canary", "private-memory-body-canary");
+    const { records, diagnostics } = recordingSink();
+    const context = withCorrelation(
+      makeCtx("/api/memory/:id", {}, { id: record.id }),
+      "memory-admission-request",
+    );
+    const writer = open();
+    try {
+      writer.insertMemory(record);
+      expect(handleGetMemory(context, makeDeps({ memoryVault: writer, diagnostics })).status).toBe(
+        200,
+      );
+      expect(records).toHaveLength(0);
+    } finally {
+      writer.close();
+    }
+    const database = new DatabaseSync(join(memoryDir, MEMORY_DB_FILENAME));
+    try {
+      database.prepare("UPDATE memories SET schema_version = ? WHERE id = ?").run("2", record.id);
+    } finally {
+      database.close();
+    }
+    const reopened = open();
+    try {
+      const result = handleGetMemory(context, makeDeps({ memoryVault: reopened, diagnostics }));
+      expect(result).toEqual({
+        status: 500,
+        body: { error: { code: "MEMORY_ERROR", message: "Failed to read memory." } },
+      });
+      expectMemoryStorageDiagnostic(records, "memory-admission-request", "memory.get");
+      const evidence = JSON.stringify({ result, records });
+      for (const marker of [record.id, record.body, memoryDir, "schemaVersion must"])
+        expect(evidence).not.toContain(marker);
+    } finally {
+      reopened.close();
+    }
   });
 });
 

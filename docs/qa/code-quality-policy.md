@@ -397,6 +397,23 @@ defers to it. An error code alone cannot establish prior reporting. The existing
 client diagnostic, writer and analyzer path supplies body-free correlation evidence; no second
 logging or deduplication subsystem is introduced. Public parser qualification does not classify
 the UI callback graph or the remaining domain scope.
+The three Memory records classify the existing record, scope and structured-payload validators
+through the named public `runtime/memory` import and unchanged domain result types. The public
+proof forwards each immutable checked result without a cast. These records append to the prior
+18 responsibilities; all 22 rule dispositions and the remaining domain obligations remain intact.
+They classify only parameter slots supported by the existing resolver's complete helper graph.
+They do not activate the remaining contracts scopes or certify every Memory consumer.
+
+The persisted Memory decoder normalizes the established nullable/ignored column conventions,
+then admits the actual stored schema version and complete candidate through the existing record
+validator. Scope and structured payload use their existing validators and checked values. Reads
+retain exact `pinned === 1`, incomplete model-identity omission, absent retention-policy omission,
+global coordinate ignoring and legacy plaintext support. Malformed rows fail directly with a
+body-free `schema-mismatch`; the vault retains its local unreadable-row `internal` wrapper. The
+actual handler reports its existing correlated opaque error through the registered diagnostic
+writer, and its dependency-failure scenario reconstructs that evidence with the support analyzer.
+No new log operation, encryption format, database migration or storage policy is introduced.
+
 Actual owning runtime tests, strict typed consumer pins (including
 declaration-only nested unknown/any mutants), current-head required CI and independent audits supply
 separate executed acceptance. An unchecked-body mutant and a declaration-only type weakening require

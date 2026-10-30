@@ -7,6 +7,17 @@ import { describe, it, expect, expectTypeOf } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as publicMemory from "@oscharko-dev/keiko-contracts/memory";
 import {
+  validateMemoryRecord as validatePublicMemoryRecord,
+  validateMemoryScope as validatePublicMemoryScope,
+  validateMemoryStructuredPayload as validatePublicMemoryStructuredPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
+import type {
+  MemoryRecord as PublicMemoryRecord,
+  MemoryScope as PublicMemoryScope,
+  MemoryStructuredPayload as PublicMemoryStructuredPayload,
+  MemoryValidation as PublicMemoryValidation,
+} from "@oscharko-dev/keiko-contracts";
+import {
   MEMORY_AUDIT_ACTION_KINDS,
   MEMORY_EDGE_KINDS,
   MEMORY_SCHEMA_VERSION,
@@ -2074,3 +2085,96 @@ it.each(["source", "public"])(
     expect(Object.hasOwn(explicit, "captureReason")).toBe(true);
   },
 );
+
+export function parsePublicMemoryRecord(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryRecord> {
+  const result = validatePublicMemoryRecord(input);
+  return result;
+}
+
+export function parsePublicMemoryScope(input: unknown): PublicMemoryValidation<PublicMemoryScope> {
+  const result = validatePublicMemoryScope(input);
+  return result;
+}
+
+export function parsePublicMemoryPayload(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryStructuredPayload> {
+  const result = validatePublicMemoryStructuredPayload(input);
+  return result;
+}
+
+describe("Memory public parsers (#3918)", () => {
+  it("preserves original record, scope and payload references and optional presence", () => {
+    const payload = { kind: "string-list", items: ["fixture-item"] };
+    const input = { ...happyRecord(), scope: happyScopeUser(), payload };
+    const record = parsePublicMemoryRecord(input);
+    expect(record.ok).toBe(true);
+    if (!record.ok) throw new TypeError("healthy public memory refused");
+    expect(record.value).toBe(input);
+    expect(record.value.scope).toBe(input.scope);
+    expect(record.value.payload).toBe(payload);
+    expect(record.value).not.toHaveProperty("staleReason");
+    const ownUndefined = { ...input, staleReason: undefined };
+    expect(parsePublicMemoryRecord(ownUndefined)).toEqual({ ok: true, value: ownUndefined });
+    expect(Object.hasOwn(ownUndefined, "staleReason")).toBe(true);
+    const scope = parsePublicMemoryScope(input.scope);
+    const parsedPayload = parsePublicMemoryPayload(payload);
+    if (!scope.ok || !parsedPayload.ok) throw new TypeError("healthy public nested memory refused");
+    expect(scope.value).toBe(input.scope);
+    expect(parsedPayload.value).toBe(payload);
+  });
+
+  it("refuses malformed values through each actual public parser with owning reasons", () => {
+    for (const input of [undefined, null, 12, "record", []]) {
+      expect(parsePublicMemoryRecord(input).ok).toBe(false);
+      expect(parsePublicMemoryScope(input).ok).toBe(false);
+      expect(parsePublicMemoryPayload(input).ok).toBe(false);
+    }
+    const record = { ...happyRecord(), schemaVersion: "2", type: "bad", updatedAt: -1 };
+    expect(parsePublicMemoryRecord(record)).toEqual(validateMemoryRecord(record));
+    expect(parsePublicMemoryRecord(record)).toMatchObject({
+      ok: false,
+      errors: [
+        'record.schemaVersion must be the literal "1"',
+        `record.type must be one of ${MEMORY_TYPES.join("|")}`,
+        "record.updatedAt must be a finite non-negative number",
+      ],
+    });
+    expect(parsePublicMemoryScope({ kind: "user", userId: "" })).toEqual({
+      ok: false,
+      errors: ["scope.userId must be a non-empty string for kind=user"],
+    });
+    expect(parsePublicMemoryPayload({ kind: "string-list", items: [12] })).toEqual({
+      ok: false,
+      errors: ["payload.items entry must be a non-empty bounded control-free string"],
+    });
+  });
+
+  it("retains global coordinates and payload bounds and literal domain result identities", () => {
+    const scope = { kind: "global", userId: "ignored" };
+    const parsedScope = parsePublicMemoryScope(scope);
+    expect(parsedScope).toEqual({ ok: true, value: scope });
+    for (const payload of [
+      { kind: "string-list", items: [] },
+      { kind: "key-value", entries: [{ key: "label", value: "" }] },
+    ])
+      expect(parsePublicMemoryPayload(payload)).toEqual({ ok: true, value: payload });
+    expect(
+      parsePublicMemoryPayload({
+        kind: "string-list",
+        items: Array.from({ length: 129 }, () => "item"),
+      }).ok,
+    ).toBe(false);
+    expectTypeOf(parsePublicMemoryRecord).returns.toEqualTypeOf<
+      PublicMemoryValidation<PublicMemoryRecord>
+    >();
+    expectTypeOf(parsePublicMemoryScope).returns.toEqualTypeOf<
+      PublicMemoryValidation<PublicMemoryScope>
+    >();
+    expectTypeOf(parsePublicMemoryPayload).returns.toEqualTypeOf<
+      PublicMemoryValidation<PublicMemoryStructuredPayload>
+    >();
+  });
+});

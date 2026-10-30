@@ -1055,6 +1055,138 @@
           "testName": "Knowledge catalog public capsuleSets parser (#3918) retains browser-safe legacy labels while rejecting malformed list scalars"
         }
       ]
+    },
+    {
+      "id": "memory-record-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRecord",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRecord"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryRecord"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryRecord",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) preserves original record, scope and payload references and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) refuses malformed values through each actual public parser with owning reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) retains global coordinates and payload bounds and literal domain result identities"
+        }
+      ]
+    },
+    {
+      "id": "memory-scope-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryScope",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryScope"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryScope"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryScope",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) preserves original record, scope and payload references and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) refuses malformed values through each actual public parser with owning reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) retains global coordinates and payload bounds and literal domain result identities"
+        }
+      ]
+    },
+    {
+      "id": "memory-payload-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryStructuredPayload",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryStructuredPayload"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "validateMemoryStructuredPayload"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/memory.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/memory",
+        "exportName": "parsePublicMemoryPayload",
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/memory.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) preserves original record, scope and payload references and optional presence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) refuses malformed values through each actual public parser with owning reasons"
+        },
+        {
+          "path": "packages/keiko-contracts/src/memory.test.ts",
+          "testName": "Memory public parsers (#3918) retains global coordinates and payload bounds and literal domain result identities"
+        }
+      ]
     }
   ]
 }
