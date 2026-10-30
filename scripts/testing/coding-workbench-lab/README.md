@@ -156,7 +156,7 @@ node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits> --ledger-
 
 | Script                      | What it does                                                                                                                         |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `tasks.json`                | The task catalog: ids T1 to T20 and C1, their exact texts, modes and baselines                                                       |
+| `tasks.json`                | The task catalog: ids T1 to T32 and C1, their exact texts, modes and baselines                                                       |
 | `wb-ui.mjs`                 | Runs one task through the real Workbench UI in headless Chromium (`--headed` to watch); the driver for every editing task            |
 | `wb-run.mjs`                | Runs one task over the HTTP API; read-only tasks only, because edits need the live editor bridge (finding F4)                        |
 | `wb-stop.mjs`               | Stops a run                                                                                                                          |
