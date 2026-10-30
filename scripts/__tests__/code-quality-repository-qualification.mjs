@@ -117,7 +117,7 @@ export function assertRepositoryQualification(report, policy, policyBytes) {
   assert.equal(responsibilities.execution.process.groupAbsent, true);
 }
 
-export async function qualifyRepository() {
+async function qualifyRepository() {
   const policyPath = new URL("../code-quality-policy.json", import.meta.url);
   const policyBytes = readFileSync(policyPath, "utf8");
   const entry = new URL("../check-code-quality-policy.mjs", import.meta.url);

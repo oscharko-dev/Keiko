@@ -99,9 +99,6 @@ export default defineConfig(
       // Hermetic DAP subprocess fixture (Issue #2343), executed as an external child rather than
       // imported into the TypeScript project. Keep the exclusion as narrow as the existing LSP one.
       "packages/keiko-server/src/editor/dap/testing/*.mjs",
-      // Hand-written declaration for the .mjs fixture beside it (#4145); no TypeScript project
-      // includes scripts/__tests__, so the typed parser cannot see it. Its .mjs owner is linted.
-      "scripts/__tests__/support/private-repository-fixture.d.mts",
     ],
   },
   js.configs.recommended,

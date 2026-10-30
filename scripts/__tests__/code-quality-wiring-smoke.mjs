@@ -65,7 +65,7 @@ export async function isolatedPolicyReport(repositoryRoot, timeout = 180_000, pr
   return JSON.parse(stdout);
 }
 
-export function assertFixturePolicyReport(report, policy) {
+function assertFixturePolicyReport(report, policy) {
   assert.deepEqual(
     {
       outcome: report.outcome,

@@ -2,7 +2,7 @@
 // counts; a run may only reproduce or lower them. Counts are per file, so a finding that moves
 // within one file while another disappears is not distinguishable from the original pair.
 export const REGISTER_PATH = "scripts/code-quality-register.json";
-export const REGISTER_VERSION = 1;
+const REGISTER_VERSION = 1;
 
 // Repository-relative POSIX paths: printable segments (Next.js route folders use brackets).
 const UNSAFE_PATH_CHARACTER = /[\p{Cc}\\]/u;
