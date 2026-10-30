@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1020,
+      "files": 1041,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,
@@ -270,7 +270,7 @@
       }
     },
     "keiko-tool-catalog": {
-      "files": 21,
+      "files": 22,
       "uncoveredFiles": 0,
       "uncoveredLines": 4,
       "totalLines": 595,
