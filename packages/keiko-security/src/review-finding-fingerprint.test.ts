@@ -16,8 +16,14 @@ describe("computeReviewFindingFingerprint", () => {
 
   it("is identical in a separate process", () => {
     const moduleUrl = new URL("../dist/review-finding-fingerprint.js", import.meta.url);
-    const script = `import(${JSON.stringify(moduleUrl.href)}).then((m) => process.stdout.write(m.computeReviewFindingFingerprint(${JSON.stringify(REPORT)}, ${JSON.stringify(EXCERPT)})))`;
-    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    // A fixed script: every value reaches the child as an argument, never as generated code.
+    const script = [
+      "const [url, file, category, excerpt] = process.argv.slice(1);",
+      "const m = await import(url);",
+      "process.stdout.write(m.computeReviewFindingFingerprint({ file, category }, excerpt));",
+    ].join("\n");
+    const args = [moduleUrl.href, REPORT.file, REPORT.category, EXCERPT];
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script, ...args], {
       cwd: fileURLToPath(new URL("..", import.meta.url)),
       encoding: "utf8",
     });
