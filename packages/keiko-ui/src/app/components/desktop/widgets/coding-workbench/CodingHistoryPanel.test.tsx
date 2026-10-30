@@ -79,9 +79,7 @@ describe("coding history navigation", () => {
     vi.mocked(fetchCodingHistory).mockResolvedValue([{ ...task, branch: FOLDER_WORKSPACE_BRANCH }]);
     render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
     expect(await screen.findByText("example · Folder")).toBeVisible();
-    expect(
-      screen.queryByText(new RegExp(FOLDER_WORKSPACE_BRANCH.replace(/[()]/gu, "\\$&"), "u")),
-    ).toBeNull();
+    expect(screen.queryByText(FOLDER_WORKSPACE_BRANCH, { exact: false })).toBeNull();
   });
 
   it("shows loading then recovers from a failed fetch through Refresh", async () => {
