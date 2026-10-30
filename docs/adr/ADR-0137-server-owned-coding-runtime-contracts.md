@@ -2015,7 +2015,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   staged tree is unchanged, so the proof covers exactly the content the check read; a failing line
   records a failed proof, and a line whose status another command decided completes nothing.
   `coding-runtime.verification` records the outcome (`state: "native-proof"`, `verifierId`,
-  `stepCount`, `commitProof`, `commitProofReason`).
+  `stepCount`, `commitProof`, `commitProofReason`). A governed verification run that executed no
+  step (each one skipped, denied or `native-shell-required`) says nothing about the candidate: it
+  is kept for the run's check list, but no longer completes the ticket as a failed proof, which had
+  replaced the passing native proof for the same staged tree and refused every later commit.
   The same parity run then showed a proven, approved commit settling `recovery-required` after
   its signed object already existed: a human who checks out the task branch locally gives the run
   that branch as its own base, and Git refuses a ref transaction that both verifies and updates one

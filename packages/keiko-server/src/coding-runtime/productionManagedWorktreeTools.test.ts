@@ -1994,6 +1994,57 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  // #3907 AC3 (parity run T6f): on macOS every governed step is native-shell-required. A run that
+  // executed no step proves nothing about the staged candidate, yet it completed the ticket as a
+  // failed proof and replaced the passing proof the native shell check had just recorded, so every
+  // later commit was refused. Such a run is kept for the check list and leaves the proof alone.
+  it("leaves the commit proof alone when a governed run executed no step", async () => {
+    const [template] = failedVerificationReport().results;
+    if (template === undefined) throw new TypeError("fixture result missing");
+    const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
+      Promise.resolve(false),
+    );
+    const observeVerification = vi.fn<VerifiedCommitService["observeVerification"]>();
+    const notRun: VerificationReport = {
+      ...verificationReport("skipped"),
+      results: [
+        {
+          ...template,
+          kind: "typecheck",
+          status: "skipped",
+          exitCode: null,
+          durationMs: 0,
+          outputSummary: "",
+          locations: undefined,
+        },
+      ],
+      counts: { ...verificationReport("skipped").counts, skipped: 1 },
+    };
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(notRun),
+      records: [],
+      verifiedCommitService: {
+        ...verificationService(),
+        completeVerification,
+        observeVerification,
+      },
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-no-step",
+          idempotencyKey: "verification-no-step-key",
+          verifierId: "typecheck",
+        }),
+      }),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "VERIFICATION_NOT_RUN" });
+    expect(completeVerification).not.toHaveBeenCalled();
+    expect(observeVerification).toHaveBeenCalledExactlyOnceWith(notRun);
+  });
+
   // F74 (Coding Workbench run 24): a skipped run names the step it did not run and why, to the model
   // and in the activity log, instead of a bare VERIFICATION_NOT_RUN.
   it("names each step a run did not execute, with its closed reason, and logs it", async () => {

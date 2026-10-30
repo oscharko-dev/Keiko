@@ -1775,16 +1775,18 @@ function observeVerificationExecution(
   executed: CodingVerificationExecutedObserver | undefined,
 ): void {
   const target = codingVerificationTargetDigest(request.verifierId, request.targetPath);
-  const executedRedStatuses: readonly string[] = EXECUTED_RED_STATUSES;
-  if (
-    report.results.some(
-      (result) => result.status === "passed" || executedRedStatuses.includes(result.status),
-    )
-  ) {
+  if (verificationRanAStep(report)) {
     executed?.(target);
   } else {
     input.verificationBlocked?.("VERIFICATION_NOT_RUN", target);
   }
+}
+
+function verificationRanAStep(report: VerificationReport): boolean {
+  const executedRedStatuses: readonly string[] = EXECUTED_RED_STATUSES;
+  return report.results.some(
+    (result) => result.status === "passed" || executedRedStatuses.includes(result.status),
+  );
 }
 
 type VerificationAttempt =
@@ -2290,11 +2292,18 @@ async function recordCandidateVerification(
   report: VerificationReport,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-): Promise<CodingToolCommitProofResult> {
+): Promise<CodingToolCommitProofResult | undefined> {
   if (begun.kind !== "ticket") {
     // Not a commit proof, but still a check the run ran: kept for the pull request's list (F57).
     service.observeVerification(report);
     return refusedCommitProof(begun);
+  }
+  // A run that executed no step (each one skipped, denied or native-shell-required) says nothing
+  // about the staged candidate. Completing the ticket would record it as a failed proof and replace
+  // a passing proof the native shell check already recorded for the same tree (#3907 AC3).
+  if (!verificationRanAStep(report)) {
+    service.observeVerification(report);
+    return undefined;
   }
   const recorded = await service.completeVerification(begun.ticket, report, {
     check: guard.check,
