@@ -42,6 +42,9 @@ export * as VoiceAcousticEval from "./voice-acoustic/index.js";
 // so no CLI or embedding consumer could invoke it. Exposed as a single auditable namespace matching
 // the VoiceTwinEval / VoiceAcousticEval convention.
 export * as VoiceActionEval from "./voice-action/index.js";
+// Keiko for Quality review measurement (Epic #4130, Issue #4132; ADR-0182 D9): harvest dataset,
+// labeling rules, chronological replay with its holdout guard, precision gate and seed gate.
+export * as ReviewEval from "./review/index.js";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,

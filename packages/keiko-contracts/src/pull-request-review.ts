@@ -288,6 +288,20 @@ export type ReviewSeedCase =
       readonly cleanControl: true;
     };
 
+/**
+ * One seed case with the change its review runs on: a case of the shipped synthetic corpus or a
+ * Keiko consumer seed planted into a real file. The defect (or, for a clean control, the harmless
+ * change) is the difference between `baseFiles` and `headFiles`. A `repository` fixture is the
+ * whole tree; an `overlay` fixture holds only the planted files and applies over a checkout of the
+ * consumer repository. Paths are repository-relative and use `/`.
+ */
+export interface ReviewSeedFixture {
+  readonly seed: ReviewSeedCase;
+  readonly scope: "repository" | "overlay";
+  readonly baseFiles: Readonly<Record<string, string>>;
+  readonly headFiles: Readonly<Record<string, string>>;
+}
+
 /** The presented findings of one seed case's review run. `stale` runs cannot count as found. */
 export interface ReviewSeedRunResult {
   readonly caseId: string;

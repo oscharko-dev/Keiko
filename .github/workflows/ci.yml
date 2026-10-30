@@ -556,7 +556,7 @@ jobs:
   # and evaluates every floor exactly once, against complete coverage. A per-shard verdict would
   # compare a fraction of the suite against the whole suite's floors.
   coverage-packages:
-    name: Coverage shard (packages ${{ matrix.shard }}/4)
+    name: Coverage shard (packages ${{ matrix.shard }}/5)
     needs: verified-tree
     # The coverage chain feeds the SonarCloud analysis, which files under the branch the scanner
     # names: a proven tree's pull-request analysis never advances `dev`'s branch history. So this
@@ -570,7 +570,7 @@ jobs:
       # One shard's result must never mask another's; `coverage-sonar` fails closed on all of them.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -656,7 +656,7 @@ jobs:
         # before collecting, which increases the pressure that causes the kill.
         env:
           NODE_OPTIONS: --max-old-space-size=3072
-        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/4 --reporter=github-actions
+        run: npm run test:coverage:packages:shard -- --shard=${{ matrix.shard }}/5 --reporter=github-actions
       - name: Upload package coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -938,7 +938,7 @@ jobs:
         # judged as if it were complete.
         run: |
           set -euo pipefail
-          expected=4
+          expected=5
           actual=$(find .vitest-reports -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
           if [ "$actual" -ne "$expected" ]; then
             echo "Expected $expected package coverage shard blobs, found $actual."
