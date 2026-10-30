@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "79178f18968a1b502e833af2451cfb954f6be95b8148cdf371a1b157fce4f9f6"
+      "sha256": "6af8c86d701ebf73781e57d0895563f8518370fa0ef8fe7946a5e99f59c2e37e"
     },
     {
       "path": "package.json",
-      "sha256": "f7376e346aabd3076676d3ce8cefc8cb79cbef267d5587b89ac81ecce3cef93d"
+      "sha256": "8ab1bb8f0881ebf2902ca64bcb525e34eaa07faa07067a041b30ab7e1ba59db9"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "3c667e2fd42ee0d03a6171c99317f3d2342c8271f085df3d8431fee40dcaffc3"
+      "sha256": "16e432236a410ca1f099140c8fe86cc5fde22f67b20ccdae883f0c40d9218b9a"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
@@ -122,8 +122,8 @@
   ],
   "postCssSha256": "ec4cf7c88ede7534c4ee76c0dfcc81be9fdbc40a5139d97d8baf9c14de4ec7f4",
   "run": {
-    "generatedAt": "2026-10-29T22:18:23.912Z",
-    "repoHeadSha": "bbeff16b5d0cab7c067435019dcee4e187d2179b"
+    "generatedAt": "2026-10-30T02:36:55.795Z",
+    "repoHeadSha": "bb8012f81e8f990a0efc83a6ef89c7b5c95efabb"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",

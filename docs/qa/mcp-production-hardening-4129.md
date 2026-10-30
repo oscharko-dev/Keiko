@@ -240,7 +240,37 @@ remains pending. An unrelated existing finalization test raced a real 10 ms time
 injected clock; only that test's clock handling changed, and all 25 tests in its suite pass.
 
 CodeQL alerts 96 and 97 concern public configuration identity digests, not password storage.
-Their heuristic classification was reproduced with the actual CodeQL analyzer. No suppression,
-query or digest change was made; explicit owner disposition is pending. Release version selection,
-final built-source browser qualification, remaining failure journeys and exact-head required CI
-also remain open. This checkpoint is not a production-readiness certificate.
+Their heuristic classification was reproduced with the actual CodeQL analyzer. No query or digest change was made. On 2026-10-30 the owner explicitly approved their false-positive
+disposition and selected patch release 1.3.3. The configured delegated GitHub review path is used;
+no security setting or token scope is widened. Both alerts are dismissed as false positives by
+`oscharko`, and the CodeQL check on bb8012f81 passed. Final built-source browser qualification, remaining
+failure journeys, release-version evidence and exact-head required CI remain open. This checkpoint is not a production-readiness certificate.
+
+## Owner-selected 1.3.3 release candidate
+
+On 2026-10-30 the owner selected patch version 1.3.3. The canonical version writer updated the
+workspace manifests, lockfile and version constants; the public API document and one append-only
+approval-bound release-impact record were updated separately. The record includes already merged
+PRs #4093, #4126 and #4144 since v1.3.2 and retains the existing older-install bootstrap warning.
+Publication remains conditional on final qualification; auto-merge remains disabled.
+
+The actual built App Browser shows 1.3.3. An Ask-mode write received both its outer execution and
+native MCP approval and completed with exactly one independent effect and the expected marker.
+A pending sign-in was cancelled without acquiring a grant, and a subsequent consent produced one
+new authorization exchange. The previous Chat permission was revoked: an unapproved new read
+started no effect, while fresh consent allowed exactly one read under the new central grant.
+
+On this candidate, 439 targeted regressions pass. The UI coverage rerun passes all 617 suites,
+12,025 tests with one existing skip, after rerunning all four original historical design-evidence
+producers. They retain zero gated neutral/token differences, 14/14 editor reference captures,
+zero serious/critical accessibility findings or unresolved incompletes, and all 108 running-app
+captures with active assertions. These historical fixtures do not replace the MCP App Browser
+journeys. The Windows lane on bb8012f81 passed the real native Job Object qualification, including
+the quoted provider path and provider/grandchild termination; the versioned final-head CI must
+still pass independently.
+
+The full final package run, installable-artifact qualification and the remaining interactive
+matrix are still open. The earlier complete package result is retained as checkpoint evidence,
+not substituted for the corrected release candidate. The macOS OpenCode acceptance uses the
+existing admitted evaluation runtime; it does not qualify a stronger native isolation/signing
+mode than that platform currently provides.
