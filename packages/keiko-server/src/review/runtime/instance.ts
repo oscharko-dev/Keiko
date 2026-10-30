@@ -86,6 +86,7 @@ export type ReviewRuntimeRunResult =
       readonly outcome: ReviewRunDriveOutcome["outcome"];
       readonly runtimeRunId?: string | undefined;
       readonly failureCode?: string | undefined;
+      /** The Reviewer's prompt tokens and model turns as the runtime host accounted them (#4136). */
       readonly effort?: ReviewRunDriveOutcome["effort"];
       readonly rules: ReviewRulesFileOutcome;
       /** SHA-256 of the loaded rules text (#4136 run record); absent without rules. */
@@ -342,24 +343,18 @@ async function prepareAndRun(
   if (instance === undefined) {
     return { ok: false, reason: "runtime-unavailable", rules: rules.outcome };
   }
-  return runOnInstance(context, instance, request, {
+  const result = await runOnInstance(context, instance, request, {
     taskText: task.text,
     rules: rules.outcome,
-    ...(rules.outcome === "loaded" ? { rulesDigest: sha256Hex(rules.text) } : {}),
   });
-}
-
-interface PreparedReviewTask {
-  readonly taskText: string;
-  readonly rules: ReviewRulesFileOutcome;
-  readonly rulesDigest?: string | undefined;
+  return withRulesDigest(result, rules);
 }
 
 async function runOnInstance(
   context: ServiceContext,
   live: LiveInstance,
   request: ReviewRuntimeRunRequest,
-  prepared: PreparedReviewTask,
+  prepared: { readonly taskText: string; readonly rules: ReviewRulesFileOutcome },
 ): Promise<ReviewRuntimeRunResult> {
   if (live.busy) return { ok: false, reason: "busy" };
   live.busy = true;
@@ -394,7 +389,7 @@ async function runOnInstance(
       signal: request.signal,
       correlationId: request.correlationId,
     });
-    return collected(live, outcome, prepared);
+    return collected(live, outcome, prepared.rules);
   } finally {
     workspace.clear();
     live.slot.pending = undefined;
@@ -408,7 +403,7 @@ async function runOnInstance(
 function collected(
   live: LiveInstance,
   outcome: ReviewRunDriveOutcome,
-  prepared: Omit<PreparedReviewTask, "taskText">,
+  rules: ReviewRulesFileOutcome,
 ): ReviewRuntimeRunResult {
   const intake = live.slot.intake;
   return {
@@ -417,8 +412,7 @@ function collected(
     ...(outcome.runId === undefined ? {} : { runtimeRunId: outcome.runId }),
     ...(outcome.failureCode === undefined ? {} : { failureCode: outcome.failureCode }),
     ...(outcome.effort === undefined ? {} : { effort: outcome.effort }),
-    rules: prepared.rules,
-    ...(prepared.rulesDigest === undefined ? {} : { rulesDigest: prepared.rulesDigest }),
+    rules,
     candidates: intake?.candidates() ?? [],
     rejections: intake?.rejections() ?? {
       "schema-invalid": 0,
@@ -428,4 +422,13 @@ function collected(
       "limit-reached": 0,
     },
   };
+}
+
+/** The run record's rules identity (Issue #4136): a digest of the loaded rules text, never text. */
+function withRulesDigest(
+  result: ReviewRuntimeRunResult,
+  rules: ReviewRulesReadResult,
+): ReviewRuntimeRunResult {
+  if (!result.ok || rules.outcome !== "loaded") return result;
+  return { ...result, rulesDigest: sha256Hex(rules.text) };
 }

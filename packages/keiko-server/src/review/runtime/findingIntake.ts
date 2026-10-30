@@ -62,8 +62,7 @@ export interface ReviewFindingIntake {
   rejections(): Readonly<Record<ReviewReportRejectionReason, number>>;
 }
 
-/** One head-commit file as the intake and the counter-check verify locations against it. */
-export type ReviewHeadFile =
+export type HeadFile =
   | { readonly kind: "lines"; readonly lines: readonly string[] }
   | { readonly kind: "refused"; readonly reason: "path-outside-worktree" | "range-invalid" };
 
@@ -92,18 +91,12 @@ function admissiblePath(path: string): boolean {
   return !isDenied(path);
 }
 
-/**
- * Reads cited files of the reviewed head commit from its objects (never the worktree), cached per
- * path and bounded per run. Shared by the finding intake and the counter-check (#4136).
- */
-export class ReviewHeadFileReader {
-  private readonly files = new Map<string, Promise<ReviewHeadFile>>();
+export class HeadFileReader {
+  private readonly files = new Map<string, Promise<HeadFile>>();
 
-  public constructor(
-    private readonly input: Pick<ReviewFindingIntakeInput, "worktreeRoot" | "headSha" | "runner">,
-  ) {}
+  public constructor(private readonly input: ReviewHeadReadInput) {}
 
-  public read(path: string, signal: AbortSignal | undefined): Promise<ReviewHeadFile> {
+  public read(path: string, signal: AbortSignal | undefined): Promise<HeadFile> {
     const cached = this.files.get(path);
     if (cached !== undefined) return cached;
     if (this.files.size >= MAX_CACHED_FILES) {
@@ -114,7 +107,7 @@ export class ReviewHeadFileReader {
     return pending;
   }
 
-  private async load(path: string, signal: AbortSignal | undefined): Promise<ReviewHeadFile> {
+  private async load(path: string, signal: AbortSignal | undefined): Promise<HeadFile> {
     if (!admissiblePath(path)) return { kind: "refused", reason: "path-outside-worktree" };
     const ctx = { runner: this.input.runner, timeoutMs: HEAD_READ_TIMEOUT_MS, abortSignal: signal };
     const cwd = this.input.worktreeRoot;
@@ -138,7 +131,7 @@ function locations(report: ReviewFindingReport): readonly ReviewCodeLocation[] {
 }
 
 async function checkLocations(
-  reader: ReviewHeadFileReader,
+  reader: HeadFileReader,
   report: ReviewFindingReport,
   signal: AbortSignal | undefined,
 ): Promise<Exclude<ReviewReportRejectionReason, "limit-reached"> | undefined> {
@@ -162,7 +155,7 @@ function backingDefect(report: ReviewFindingReport): ReviewCodeLocation | undefi
 }
 
 async function judge(
-  reader: ReviewHeadFileReader,
+  reader: HeadFileReader,
   value: unknown,
   signal: AbortSignal | undefined,
 ): Promise<Verdict> {
@@ -183,7 +176,7 @@ async function judge(
 
 /** Creates the intake of one review run. */
 export function createReviewFindingIntake(input: ReviewFindingIntakeInput): ReviewFindingIntake {
-  const reader = new ReviewHeadFileReader(input);
+  const reader = new HeadFileReader(input);
   const accepted: ReviewCandidateFinding[] = [];
   const rejected = emptyRejections();
   const max = input.maxCandidates ?? REVIEW_RUN_MAX_CANDIDATE_REPORTS;
@@ -233,3 +226,14 @@ export function createReviewFindingIntake(input: ReviewFindingIntakeInput): Revi
     rejections: () => ({ ...rejected }),
   };
 }
+
+// ─── Shared with the counter-check (Issue #4136) ─────────────────────────────
+
+/** What reading head-commit files needs: the worktree's object store, the head and the runner. */
+type ReviewHeadReadInput = Pick<ReviewFindingIntakeInput, "worktreeRoot" | "headSha" | "runner">;
+
+/**
+ * The head-commit file reader of the intake, shared with the counter-check, which verifies its
+ * verdict evidence against the same objects (cached per path, bounded per run).
+ */
+export { HeadFileReader as ReviewHeadFileReader };

@@ -145,11 +145,7 @@ export function neutralizeReviewDataMarkers(data: string): string {
     .join("");
 }
 
-/**
- * One fenced, labelled, nonce-bound block of untrusted data. Shared with the counter-check task
- * (#4136), whose candidate block uses the same markers and neutralization.
- */
-export function renderReviewDataBlock(
+function dataBlock(
   label: "rules" | "diff-package" | "candidate",
   nonce: string,
   data: string,
@@ -163,7 +159,7 @@ export function renderReviewDataBlock(
 
 function rulesBlock(rules: ReviewTaskRules, nonce: string): string {
   if (rules.outcome === "loaded" && rules.text !== undefined && rules.text.length > 0) {
-    return renderReviewDataBlock("rules", nonce, rules.text);
+    return dataBlock("rules", nonce, rules.text);
   }
   return "Review rules: none for this repository.";
 }
@@ -184,9 +180,17 @@ export function renderReviewTask(input: ReviewTaskInput): ReviewTaskResult {
     `Base commit: ${input.baseSha}`,
     `Head commit: ${input.headSha}`,
     rulesBlock(input.rules, nonce),
-    renderReviewDataBlock("diff-package", nonce, input.diffPackageText),
+    dataBlock("diff-package", nonce, input.diffPackageText),
   ].join("\n\n");
   const byteCount = Buffer.byteLength(text, "utf8");
   if (byteCount > REVIEW_TASK_MAX_BYTES) return { ok: false, reason: "task-too-large" };
   return { ok: true, text, byteCount };
+}
+
+/**
+ * One fenced, labelled, nonce-bound block of untrusted data, shared with the counter-check task
+ * (Issue #4136): its candidate block uses the same markers and neutralization.
+ */
+export function renderReviewDataBlock(label: "candidate", nonce: string, data: string): string {
+  return dataBlock(label, nonce, data);
 }
