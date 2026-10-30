@@ -334,6 +334,21 @@ describe("paged conversation continuity", () => {
     ).toBeUndefined();
   });
 
+  it("keeps German word-prefix recall for ordinary hyphenated phrases", () => {
+    const { store, chatId, add } = fixture();
+    const source = add("user", "Die vereinbarte Schnittstelle lautet B4.");
+    add("assistant", "Acknowledged.");
+    const result = rehydrateChatHistory(
+      store,
+      chatId,
+      "Welche Daten-Schnittstelle nutzen wir?",
+      new Set(),
+      [],
+    );
+    expect(result).toContain(source.id);
+    expect(result).toContain("B4");
+  });
+
   it("records identifier matching counts without the query or source body", () => {
     const { store, chatId, add } = fixture();
     add("user", "Reference Q7-42: private fixture phrase.");

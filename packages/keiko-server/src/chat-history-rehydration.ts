@@ -26,19 +26,19 @@ interface RecallTerm {
 function recallTerm(token: string, onlyToken: boolean): RecallTerm | undefined {
   const value = token.toLowerCase();
   const identifier =
-    /[\p{N}_.:-]/u.test(value) ||
+    /[\p{N}_.:]/u.test(value) ||
     /^[\p{Lu}\p{Lt}]{2,4}$/u.test(token) ||
-    (onlyToken && /^[\p{L}]{2,4}$/u.test(value));
+    (onlyToken && /^\p{L}{2,4}$/u.test(value));
   if (identifier && Array.from(value).length <= 128) {
     const literal = value
       .split("-")
       .map((part) => RegExp.escape(part))
-      .join("[-\\u2010-\\u2015]");
+      .join(String.raw`[-\u2010-\u2015]`);
     return {
       value,
       kind: "identifier",
       pattern: new RegExp(
-        `(?<![\\p{L}\\p{N}_\\u2010-\\u2015-])${literal}(?![\\p{L}\\p{N}_\\u2010-\\u2015-]|[.:][\\p{L}\\p{N}])`,
+        String.raw`(?<![\p{L}\p{N}_\u2010-\u2015-])${literal}(?![\p{L}\p{N}_\u2010-\u2015-]|[.:][\p{L}\p{N}])`,
         "iu",
       ),
     };
@@ -46,6 +46,16 @@ function recallTerm(token: string, onlyToken: boolean): RecallTerm | undefined {
   if (!/^\p{L}{5,}$/u.test(value)) return undefined;
   const prefix = Array.from(value).slice(0, 5).join("");
   return { value: prefix, kind: "word-prefix", pattern: new RegExp(RegExp.escape(prefix), "iu") };
+}
+
+function tokenRecallTerms(token: string, onlyToken: boolean): readonly RecallTerm[] {
+  const term = recallTerm(token, onlyToken);
+  if (term !== undefined) return [term];
+  if (!/^\p{L}+(?:-\p{L}+)+$/u.test(token)) return [];
+  return token.split("-").flatMap((part) => {
+    const component = recallTerm(part, false);
+    return component === undefined ? [] : [component];
+  });
 }
 
 function queryTerms(query: string): readonly RecallTerm[] {
@@ -58,8 +68,8 @@ function queryTerms(query: string): readonly RecallTerm[] {
       .match(/[\p{L}\p{N}]+(?:[-_.:][\p{L}\p{N}]+)*/gu) ?? [];
   const terms = new Map<string, RecallTerm>();
   for (const token of tokens) {
-    const term = recallTerm(token, tokens.length === 1);
-    if (term !== undefined) terms.set(`${term.kind}:${term.value}`, term);
+    for (const term of tokenRecallTerms(token, tokens.length === 1))
+      terms.set(`${term.kind}:${term.value}`, term);
   }
   return [...terms.values()]
     .sort((left, right) => Number(right.kind === "identifier") - Number(left.kind === "identifier"))
