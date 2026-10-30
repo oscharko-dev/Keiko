@@ -2,7 +2,6 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
@@ -12,6 +11,7 @@ import {
 import { importBuilt, parseCli, runMain } from "./lab-common.mjs";
 import { privateContinuityOutput } from "./chat-continuity-runtime.mjs";
 import { isMainModule } from "../../lib/is-main-module.mjs";
+import { readContinuityBuildIdentity } from "./chat-continuity-build.mjs";
 
 const PROFILE = deriveContextProfile({
   maxInputTokens: 32000,
@@ -217,10 +217,7 @@ async function main() {
   if (cli.help) return;
   const output = privateContinuityOutput(cli.values.output);
   const report = {
-    sourceHead: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-    productTreeDigest: sha256Hex(
-      execFileSync("git", ["ls-tree", "HEAD", "packages", "src"], { encoding: "utf8" }),
-    ),
+    ...readContinuityBuildIdentity(),
     ...(await observeChatContinuityStructure()),
   };
   writeFileSync(output, JSON.stringify(report, null, 2), { mode: 0o600, flag: "wx" });

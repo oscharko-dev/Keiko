@@ -36,6 +36,18 @@ be inferred from the nine-field score.
 ## Running the qualification
 
 Provision and build the checkout with the root lockfile and repository prerequisites first.
+Before starting consumers of package `dist`, create a forced-build provenance record:
+
+```sh
+node scripts/testing/coding-workbench-lab/chat-continuity-build.mjs --build
+```
+
+Both measurement commands reject dirty product inputs, missing provenance and changed compiled
+output. Git is explicitly bound to this checkout. The record binds sorted tracked input paths and
+content hashes, the observed package distribution, compiler metadata and Node version. A later
+documentation-only commit may reuse an otherwise matching build record. The initial legacy runs
+predate this guard; their provenance limitations remain explicit rather than being relabeled.
+
 Choose a new private output directory outside the checkout and an explicit existing configuration.
 The synthetic source project inside that directory must also pass Keiko's existing source-root
 deny-list. Agent configuration directories such as `.codex` are deliberately refused.
@@ -50,13 +62,27 @@ node scripts/testing/coding-workbench-lab/chat-continuity-run.mjs \
 Defaults are a minimum two-hour longitudinal run, at least ten observed compaction cycles per
 plain/grounded campaign, and five additional short repetitions per configured Chat model. Models
 are read from the native configuration; embedding and voice models are not mislabeled as Chat
-subjects. Models share the existing local gateway and execute chronologically rather than creating
-concurrent inference load.
+subjects. This first fixture copies only Chat providers: embedding, speech, enabled Memory and
+actual MCP/source-result competition still require their separate qualifications. Its grounded
+scope binds a synthetic document but does not by itself prove use of document evidence. Models
+share the existing local gateway and execute chronologically rather than creating concurrent
+inference load.
 
 `--duration-ms`, `--cycles` and `--repetitions` support explicit diagnostic smoke runs. A shortened
 run does not qualify the default duration/cycle acceptance. Predeclared metadata records those
 settings. Unobserved compaction and failed requests remain recorded; a terminated campaign is not
 a successful qualification. Read the complete ledger, not just its successful answer rows.
+Failed campaigns stop after three execution failures; completed peers stop consuming model calls.
+The final result includes control, cycle and post-restart recall, duration/count bounds and short
+repetitions. Missing or incorrect critical fields leave the fixture qualification incomplete and
+produce a nonzero exit status. Ledger replacement uses a private temporary file and atomic rename;
+a failed replacement preserves the last complete snapshot. Provider observations retain only
+nonnegative integer input/output/total token counters and closed finish categories.
+
+Oracle revision `chat-continuity-v2` rejects mixed obsolete/current amounts or dates and numeric
+substrings. Its manifest hashes positive and forbidden patterns including flags. The model-facing
+prompts are unchanged. Scores from the ongoing `v1` run need re-evaluation from matching private
+probe answers under this oracle before comparison; they are not silently treated as `v2` results.
 
 For the candidate, rerun with `--phase candidate`, the same corpus and equivalent configuration,
 hardware and workload. Keep the original baseline artifacts immutable. Compare individual models
@@ -76,10 +102,12 @@ The initial runtime smoke used an earlier laboratory revision. It is retained as
 attempt, not promoted into the frozen baseline. It observed slow startup/readiness and real model
 calls; those costs must remain distinguishable from compaction cost in the final report.
 
-The ongoing productive-API campaign has now recovered all nine declared fields in each of the four
-before-pressure controls (Gemma/Qwen, plain/grounded). Its first Gemma plain-chat manual-compaction
-probe also recovered 9/9 fields. This establishes a positive one-cycle result for that fixture;
-a large reduction in occupancy alone therefore does not establish forgetting.
+The ongoing legacy productive-API campaign recovered all nine declared fields in each of the four
+before-pressure controls (Gemma/Qwen, plain/grounded) under its original oracle. After the first
+manual compaction, both Gemma modes and Qwen plain scored 9/9; Qwen grounded scored 8/9, explicitly
+reporting the rejected alternative as unknown. This is an observed score difference, not yet a
+causal separation of model variability from compaction loss. The positive results also show why a
+large reduction in occupancy alone does not establish forgetting.
 
 There is **no completed multi-hour baseline, repeated-compaction acceptance, candidate comparison,
 MCP live qualification or production-readiness claim yet**. Update this section only from actual

@@ -33,6 +33,24 @@ describe("predeclared chat continuity corpus", () => {
     expect(scored.fields.budget.correct).toBe(false);
     expect(scored.fields.termin.correct).toBe(false);
   });
+  it.each(["7300 EUR, later 8100 EUR", "78100", "81000", "8100,00 and 7.300 EUR"])(
+    "rejects ambiguous or substring budget: %s",
+    (budget) => {
+      expect(
+        evaluateContinuityAnswer(JSON.stringify({ ...ANSWER, budget })).fields.budget.correct,
+      ).toBe(false);
+    },
+  );
+  it.each([
+    "18. März 2027, then 9. April 2027",
+    "2027-03-18 / 2027-04-09",
+    "2027-04-090",
+    "19. April 2027",
+  ])("rejects ambiguous or substring deadline: %s", (termin) => {
+    expect(
+      evaluateContinuityAnswer(JSON.stringify({ ...ANSWER, termin })).fields.termin.correct,
+    ).toBe(false);
+  });
   it("does not confuse a negated privacy restriction with preservation", () => {
     const scored = evaluateContinuityAnswer(
       JSON.stringify({ ...ANSWER, einschraenkung: "Die Rohdaten dürfen das Gerät verlassen." }),

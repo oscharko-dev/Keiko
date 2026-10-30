@@ -18,6 +18,27 @@ import { createChaosProxy, createChaosState } from "./chaos-proxy.mjs";
 import { importBuilt, REPO_ROOT } from "./lab-common.mjs";
 import { startObservedBff, listenProxy, responseObservation } from "../chat-skills-lab/runtime.mjs";
 
+export function continuityResponseObservation(raw) {
+  const observed = responseObservation(raw);
+  const usage = Object.fromEntries(
+    ["prompt_tokens", "completion_tokens", "total_tokens"]
+      .filter((key) => Number.isSafeInteger(observed.usage?.[key]) && observed.usage[key] >= 0)
+      .map((key) => [key, observed.usage[key]]),
+  );
+  const known = new Set(["stop", "length", "tool_calls", "function_call", "content_filter"]);
+  const finishReason =
+    observed.finishReason == null
+      ? null
+      : known.has(observed.finishReason)
+        ? observed.finishReason
+        : "other";
+  return {
+    usage: Object.keys(usage).length ? usage : null,
+    finishReason,
+    responseKind: finishReason === "other" ? "unrecognized-finish-reason" : observed.responseKind,
+  };
+}
+
 export function privateContinuityOutput(path) {
   const resolved = resolve(path);
   const candidate = join(realpathSync(dirname(resolved)), basename(resolved));
@@ -65,7 +86,7 @@ function observeResponse(res, row) {
     Object.assign(row, { status: res.statusCode, durationMs: Date.now() - row.startedAt });
     try {
       if (bytes > 2000000) throw new Error("bounded-response-observation");
-      Object.assign(row, responseObservation(Buffer.concat(chunks).toString("utf8")));
+      Object.assign(row, continuityResponseObservation(Buffer.concat(chunks).toString("utf8")));
     } catch {
       row.responseKind = "interrupted-or-invalid";
     }

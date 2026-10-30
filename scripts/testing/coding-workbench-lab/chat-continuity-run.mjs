@@ -1,7 +1,6 @@
 // Real-model, paired baseline/candidate qualification through existing authenticated Chat APIs.
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { arch, platform, totalmem, cpus } from "node:os";
 import { parseArgs } from "node:util";
@@ -21,6 +20,12 @@ import {
   evaluateContinuityAnswer,
 } from "./chat-continuity-corpus.mjs";
 import { activityLogSnapshot, readActivityLogSince } from "../../lib/activity-log-files.mjs";
+import {
+  driveContinuityCampaigns,
+  continuityCampaignQualified,
+  writeContinuityJson,
+} from "./chat-continuity-campaign.mjs";
+import { readContinuityBuildIdentity } from "./chat-continuity-build.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -47,10 +52,9 @@ const ledger = [],
   physical = [];
 const metadata = {
   phase: values.phase,
-  sourceHead: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-  productTreeDigest: continuityDigest(execFileSync("git", ["ls-tree", "HEAD", "packages", "src"])),
+  ...readContinuityBuildIdentity(),
   harnessDigests: Object.fromEntries(
-    ["corpus", "runtime", "run"].map((part) => [
+    ["corpus", "runtime", "run", "campaign", "build"].map((part) => [
       part,
       continuityDigest(readFileSync(new URL(`./chat-continuity-${part}.mjs`, import.meta.url))),
     ]),
@@ -59,6 +63,11 @@ const metadata = {
   requiredDuration,
   requiredCycles,
   repetitions,
+  qualificationKind:
+    requiredDuration >= 7200000 && requiredCycles >= 10 && repetitions >= 5
+      ? "longitudinal-fixture"
+      : "smoke",
+  configurationScope: "configured-chat-providers-only",
   startedAt: new Date().toISOString(),
   hardware: { arch: arch(), platform: platform(), memoryBytes: totalmem(), cpus: cpus().length },
   configurationDigest: continuityDigest(readFileSync(values.config)),
@@ -68,16 +77,16 @@ const metadata = {
 };
 writeFileSync(join(output, "predeclared.json"), JSON.stringify(metadata, null, 2), { mode: 0o600 });
 let runtime, campaign;
-const save = (status) =>
-  writeFileSync(
-    join(output, "ledger.json"),
-    JSON.stringify(
-      { ...metadata, status, updatedAt: new Date().toISOString(), campaign, ledger, physical },
-      null,
-      2,
-    ),
-    { mode: 0o600 },
-  );
+const save = (status, qualification) =>
+  writeContinuityJson(join(output, "ledger.json"), {
+    ...metadata,
+    status,
+    qualification,
+    updatedAt: new Date().toISOString(),
+    campaign,
+    ledger,
+    physical,
+  });
 function record(row) {
   ledger.push({ ...row, recordedAt: new Date().toISOString() });
   save("running");
@@ -179,7 +188,15 @@ async function send(state, content, id, score = false) {
     context: contextProjection(status),
     events,
   };
-  if (score) row.score = evaluateContinuityAnswer(answer);
+  if (score) {
+    row.score = evaluateContinuityAnswer(answer);
+    const phase = id.endsWith(":control")
+      ? "control"
+      : id.endsWith(":restart-recall")
+        ? "restart"
+        : "cycle";
+    (state.probes ??= []).push({ phase, score: row.score });
+  }
   record(row);
   return status;
 }
@@ -317,32 +334,32 @@ async function runCampaigns() {
       await runGuarded(state, () => establish(state));
     }
   campaign = states;
-  while (
-    states.some(
-      (state) => state.cycles < requiredCycles || Date.now() - state.startedAt < requiredDuration,
-    )
-  ) {
-    for (const state of states) {
-      if (state.failures >= 3) continue;
-      await runGuarded(state, () => pressureCycle(state));
-    }
-    if (states.every((state) => state.failures >= 3)) break;
-  }
+  await driveContinuityCampaigns(states, { requiredCycles, requiredDuration }, (state) =>
+    runGuarded(state, () => pressureCycle(state)),
+  );
   await runtime.restart();
   for (const state of states)
     await runGuarded(state, () => probe(state, `${state.model}:${state.kind}:restart-recall`));
-  await runRepetitions();
+  const campaignsPassed = states.every((state) =>
+    continuityCampaignQualified(state, { requiredCycles, requiredDuration }),
+  );
+  const repetitionsPassed = await runRepetitions();
   for (const state of states)
     record({
-      id: `${state.model}:${state.kind}:completed`,
+      id: `${state.model}:${state.kind}:campaign-result`,
       model: state.model,
       kind: state.kind,
       cycles: state.cycles,
       elapsedMs: Date.now() - state.startedAt,
       failures: state.failures,
+      status: continuityCampaignQualified(state, { requiredCycles, requiredDuration })
+        ? "passed"
+        : "incomplete",
     });
+  return { campaignsPassed, repetitionsPassed };
 }
 async function runRepetitions() {
+  let passed = true;
   for (let repetition = 0; repetition < repetitions; repetition++)
     for (const model of runtime.models) {
       const state = await newChat(model, "plain", repetition);
@@ -350,14 +367,25 @@ async function runRepetitions() {
         await establish(state);
         await pressureCycle(state);
       });
+      if (
+        !continuityCampaignQualified(state, {
+          requiredCycles: 1,
+          requiredDuration: 0,
+          requireRestart: false,
+        })
+      )
+        passed = false;
     }
+  return passed;
 }
 try {
   runtime = await startContinuityRuntime(join(output, "runtime"), values.config, physical);
   metadata.models = runtime.models;
   record({ id: "runtime-ready", models: runtime.models });
-  await runCampaigns();
-  save("completed");
+  const qualification = await runCampaigns();
+  const passed = qualification.campaignsPassed && qualification.repetitionsPassed;
+  save(passed ? "completed" : "incomplete", qualification);
+  if (!passed) process.exitCode = 1;
 } catch (error) {
   record({ id: "campaign-failed", errorClass: error.name, code: error.code ?? "operation-failed" });
   save("failed");

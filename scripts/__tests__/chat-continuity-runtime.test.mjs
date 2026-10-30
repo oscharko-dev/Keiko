@@ -7,6 +7,7 @@ import {
   privateContinuityOutput,
   snapshotContinuityState,
   startContinuityRuntime,
+  continuityResponseObservation,
 } from "../testing/coding-workbench-lab/chat-continuity-runtime.mjs";
 import { REPO_ROOT } from "../testing/coding-workbench-lab/lab-common.mjs";
 
@@ -21,6 +22,28 @@ function temporary() {
 }
 
 describe("private continuity qualification state", () => {
+  it("retains only finite numeric provider counters and closed finish categories", () => {
+    const observed = continuityResponseObservation(
+      JSON.stringify({
+        choices: [{ finish_reason: "private-source-text" }],
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 7,
+          total_tokens: 7,
+          private_body: "private-source-text",
+        },
+      }),
+    );
+    expect(observed.usage).toEqual({ prompt_tokens: 0, completion_tokens: 7, total_tokens: 7 });
+    expect(observed.finishReason).toBe("other");
+    expect(JSON.stringify(observed)).not.toContain("private-source-text");
+  });
+  it("does not label invalid provider counters as measured zeros", () => {
+    const observed = continuityResponseObservation(
+      '{"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":-1,"completion_tokens":"7","total_tokens":1e999}}',
+    );
+    expect(observed.usage).toBeNull();
+  });
   it("refuses a denied source location before loading any credential or starting a model", async () => {
     await expect(
       startContinuityRuntime(

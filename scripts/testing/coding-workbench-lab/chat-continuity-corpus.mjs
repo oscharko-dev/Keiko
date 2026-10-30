@@ -1,7 +1,8 @@
 // Synthetic, predeclared conversation facts. Oracles never accompany the recall question.
-import { createHash } from "node:crypto";
+import { sha256 as continuityDigest } from "../../lib/digest.mjs";
+export { continuityDigest };
 
-export const CONTINUITY_CORPUS_VERSION = "chat-continuity-v1";
+export const CONTINUITY_CORPUS_VERSION = "chat-continuity-v2";
 export const INITIAL_CONTEXT = [
   "Wir bearbeiten das Projekt Kestrel. Zuständig ist Mira Seidel.",
   "Die kurze Vorgangskennung lautet Q7-42. Das ursprüngliche Budget beträgt 7300 EUR.",
@@ -30,18 +31,18 @@ const EXPECTED = Object.freeze({
   projekt: /kestrel/iu,
   verantwortlich: /mira\s+seidel/iu,
   kennung: /Q7[-‐‑– ]?42/iu,
-  budget: /8[.,\s]?100/iu,
-  termin: /(?:2027-04-09|0?9[./]0?4[./](?:2027|27)|9\.?\s*april\s*2027)/iu,
+  budget: /^\s*8[.,\s]?100(?:[.,]00)?\s*(?:EUR|€)?\s*$/iu,
+  termin: /^\s*(?:2027-04-09|0?9[./]0?4[./](?:2027|27)|0?9\.?\s*april\s*2027)\s*$/iu,
   ersteEntscheidung: /lokal.{0,35}(?:warteschlange|queue)/iu,
   verworfeneAlternative: /extern.{0,35}volltext/iu,
   offenerSchritt: /integrationsprobe/iu,
   einschraenkung:
     /(?:rohdat|raw\s*data).{0,60}(?:nicht.{0,40}(?:verlassen|extern|übertrag)|(?:bleib|verbleib).{0,20}lokal|(?:must|may).{0,10}not.{0,20}leave)/iu,
 });
-
-export function continuityDigest(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
+const FORBIDDEN = Object.freeze({
+  budget: /(?<!\d)7[.,\s]?300(?!\d)/iu,
+  termin: /(?:2027-03-18|18[./]0?3[./](?:2027|27)|18\.?\s*märz\s*2027)/iu,
+});
 
 export function evaluateContinuityAnswer(content) {
   let parsed;
@@ -57,7 +58,12 @@ export function evaluateContinuityAnswer(content) {
   const fields = Object.fromEntries(
     Object.entries(EXPECTED).map(([key, pattern]) => [
       key,
-      { correct: pattern.test(String(parsed?.[key] ?? "")), unknown: parsed?.[key] == null },
+      {
+        correct:
+          pattern.test(String(parsed?.[key] ?? "")) &&
+          !FORBIDDEN[key]?.test(String(parsed?.[key] ?? "")),
+        unknown: parsed?.[key] == null,
+      },
     ]),
   );
   return {
@@ -75,7 +81,10 @@ export function continuityCorpusManifest() {
     correctionDigest: continuityDigest(CORRECTION_CONTEXT),
     questionDigest: continuityDigest(RECALL_QUESTION),
     oracleDigest: continuityDigest(
-      JSON.stringify(Object.entries(EXPECTED).map(([k, v]) => [k, v.source])),
+      JSON.stringify({
+        expected: Object.entries(EXPECTED).map(([k, v]) => [k, String(v)]),
+        forbidden: Object.entries(FORBIDDEN).map(([k, v]) => [k, String(v)]),
+      }),
     ),
     criticalFields: Object.keys(EXPECTED),
   };
