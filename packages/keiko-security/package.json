@@ -71,6 +71,10 @@
       "types": "./dist/hashing.d.ts",
       "import": "./dist/hashing.js"
     },
+    "./review-finding-fingerprint": {
+      "types": "./dist/review-finding-fingerprint.d.ts",
+      "import": "./dist/review-finding-fingerprint.js"
+    },
     "./secret-vault": {
       "types": "./dist/secret-vault.d.ts",
       "import": "./dist/secret-vault.js"
