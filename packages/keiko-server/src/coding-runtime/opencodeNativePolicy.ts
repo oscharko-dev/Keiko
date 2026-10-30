@@ -208,6 +208,17 @@ const RESERVED_GIT_SUBCOMMANDS = new Set([
   "submodule",
   "gc",
   "filter-branch",
+  // Plumbing and configuration writes that reach the same outcome as the porcelain above (#3907).
+  "update-ref",
+  "symbolic-ref",
+  "pack-refs",
+  "reflog",
+  "replace",
+  "notes",
+  "config",
+  "fast-import",
+  "send-pack",
+  "http-push",
 ]);
 /**
  * Commands a Supervised workspace runs without a decision (ADR-0138: "vetted commands and
@@ -1457,6 +1468,28 @@ const READ_ONLY_BRANCH_FLAGS = new Set([
   "--color",
 ]);
 
+const CONFIG_READ_OPTIONS = new Set(["--get", "--get-all", "--get-regexp", "--list", "-l"]);
+const CONFIG_WRITE_OPTIONS = new Set([
+  "--add",
+  "--replace-all",
+  "--unset",
+  "--unset-all",
+  "--rename-section",
+  "--remove-section",
+  "--edit",
+  "-e",
+]);
+
+/** `git config` reads only through an explicit read option or the `get`/`list` verbs. */
+function readOnlyConfig(args: readonly string[]): boolean {
+  const [first] = args;
+  if (first === "get" || first === "list") return true;
+  return (
+    args.some((arg) => CONFIG_READ_OPTIONS.has(arg)) &&
+    !args.some((arg) => CONFIG_WRITE_OPTIONS.has(arg))
+  );
+}
+
 const READ_ONLY_GIT_FORMS: Readonly<Record<string, (args: readonly string[]) => boolean>> = {
   branch: (args) => args.every((arg) => READ_ONLY_BRANCH_FLAGS.has(arg)),
   stash: ([first]) => first === "list" || first === "show",
@@ -1465,6 +1498,14 @@ const READ_ONLY_GIT_FORMS: Readonly<Record<string, (args: readonly string[]) => 
   tag: ([first]) => first === undefined || first === "-l" || first === "--list",
   worktree: ([first]) => first === "list",
   submodule: ([first]) => first === "status",
+  config: readOnlyConfig,
+  "symbolic-ref": (args) =>
+    args.filter((arg) => !arg.startsWith("-")).length <= 1 &&
+    args.every(
+      (arg) => arg === "-q" || arg === "--quiet" || arg === "--short" || !arg.startsWith("-"),
+    ),
+  reflog: ([first]) => first === undefined || first === "show" || first === "exists",
+  notes: ([first]) => first === undefined || first === "list" || first === "show",
 };
 
 function isReadOnlyGitForm(subcommand: string, args: readonly string[]): boolean {

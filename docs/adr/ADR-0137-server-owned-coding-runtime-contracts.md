@@ -2372,7 +2372,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   and closed words, never a path, patch or message. A revert-state read that
   a stop overtook (the run disposed under it, #4119, or its session interrupted before the disposal,
   #3907: `abortTask` advances the run's `interruptSeq` around the interrupt) ends like a read of a gone
-  run, with no `.refused` line; a failure on a live, uninterrupted run still logs it.
+  run, with no `.refused` line; a failure on a live, uninterrupted run still logs it. A stop closes
+  the read before it revokes anything (`OpenCodeLifecycleAdapter.beginStop`, #3907), so a read
+  between the revocation and the reaping never reaches the dying runtime.
 - **A healthy settled native run keeps its undo for a bounded window (#3904 AC3).** A run used to settle when its turn ended and to remove its private state,
   snapshots included, so a settled turn could not be undone, unlike standalone OpenCode. Now a
   native run that succeeded or failed with an undoable newest turn (`session.diff` names a file, or an undo
