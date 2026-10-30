@@ -427,6 +427,24 @@ provider-side facts.
   "read GitHub immediately before mutating GitHub" check in one place and one pattern, rather than
   inventing a second one inside a local-snapshot evaluator that cannot make network calls.
 
+### D13 — A Workbench pull request stays issue-bound; an issue-free run refuses it with `issue-binding-required` (owner decision, 2026-10-30)
+
+The Coding Workbench works without any issue binding, and an issue-free run delivers by pushing its
+own task branch to `origin` (ADR-0085 D1b). That does not extend to pull requests. A Workbench
+draft pull request takes its target repository, base and head branches, closing line and
+related-issue references from the accepted issue (D9) and its identity from the GitHub provider,
+and the draft delivery record's pull request, CI observation and journey outcome are all keyed to
+that binding. A run with no issue therefore has nothing to open one against, and a non-GitHub
+remote has no pull request provider at all.
+
+`keiko_pull_request` for such a run does not fail silently and does not fall back to anything
+else: the controller refuses the proposal with the closed reason `issue-binding-required` before
+any provider read, writes it as a `git.draft-delivery` line with `phase: refused`, and the coding
+tool facade forwards the reason with guidance telling the model that the branch push is the
+complete delivery and that it must not retry. The branch-push record has no pull request phase, no
+pull request identity and no CI or journey observation (the contract validator refuses them), so a
+later issue-bound run cannot adopt it by accident.
+
 ## Consequences
 
 ### Positive

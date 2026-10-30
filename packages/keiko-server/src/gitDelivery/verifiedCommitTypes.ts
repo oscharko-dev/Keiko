@@ -21,6 +21,8 @@ export interface VerifiedCommitRunContext {
   readonly runtimeAuthorityDigest: string;
   readonly workspaceDigest: string;
   readonly repositoryDigest: string;
+  /** How the repository identity was admitted; `local` has no `origin` to deliver to. */
+  readonly repositoryKind?: "github-origin" | "foreign-origin" | "local";
   readonly workspace: WorkspaceInfo;
   readonly baseRef: string;
   readonly headRef: string;

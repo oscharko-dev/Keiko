@@ -187,7 +187,9 @@ describe("createInboxMutation", () => {
 
       expect(command.expected).toEqual({ runId: "run-1", revision: 4 });
       expect(command.mayInstallNewRun).toBe(false);
-      await expect(command.run()).resolves.toMatchObject({ revision: 5 });
+      await expect(command.run(new AbortController().signal)).resolves.toMatchObject({
+        revision: 5,
+      });
 
       const [url, init] = vi.mocked(fetch).mock.calls[0] ?? [];
       expect(url).toBe("/api/coding-workbench/runtime/runs/run-1/inbox");

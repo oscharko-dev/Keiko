@@ -130,7 +130,9 @@ describe("createRevertMutation", () => {
 
       expect(command.expected).toEqual({ runId: "run-1", revision: 4 });
       expect(command.mayInstallNewRun).toBe(false);
-      await expect(command.run()).resolves.toMatchObject({ revision: 5 });
+      await expect(command.run(new AbortController().signal)).resolves.toMatchObject({
+        revision: 5,
+      });
 
       const fetchMock = vi.mocked(fetch);
       const [url, init] = fetchMock.mock.calls[0] ?? [];

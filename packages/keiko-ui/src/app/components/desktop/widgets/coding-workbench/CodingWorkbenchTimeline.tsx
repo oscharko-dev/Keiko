@@ -20,6 +20,7 @@ import type {
   CodingSafeActivityTool,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
+import type { CodingSafeActivityVerificationOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
@@ -27,7 +28,7 @@ import {
   reportCodingWorkbenchSummaryActivated,
   reportCodingWorkbenchInteraction,
 } from "@/lib/coding-workbench-interaction";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type Locale } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
@@ -39,6 +40,7 @@ import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
 import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
+import { useHeldNotice } from "./codingWorkbenchPairingHold";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const VIRTUAL_THRESHOLD = 100;
@@ -176,17 +178,13 @@ export function Timeline({
   const allItems = useTimelineItems(events, activity.feed, generating, active);
   const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items, questions.questions);
-  if (
-    !active &&
-    allItems.length === 0 &&
-    questions.questions.length === 0 &&
-    !activityNeedsAttention(activity)
-  )
+  const attention = useShownActivityAttention(activity);
+  if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
     return null;
   return (
     <section className={styles.cmpConversation} aria-labelledby="timeline-title">
       <TimelineHeading titleRef={titleRef} t={t} />
-      <ActivityStatus activity={activity} t={t} />
+      <ActivityStatus activity={activity} attention={attention} t={t} />
       <RunDetailsToggle
         visible={events.length > 0}
         expanded={showEvents}
@@ -654,17 +652,26 @@ function activityNeedsAttention(activity: UseCodingWorkbenchSafeActivityResult):
   );
 }
 
+// #3880: an unpaired window cannot connect its activity; the run status sentence says why.
+function useShownActivityAttention(activity: UseCodingWorkbenchSafeActivityResult): boolean {
+  const needed = activityNeedsAttention(activity);
+  const held = useHeldNotice("activity", needed);
+  return needed && !held;
+}
+
 function ActivityStatus({
   activity,
+  attention,
   t,
 }: {
   readonly activity: UseCodingWorkbenchSafeActivityResult;
+  readonly attention: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const truncated =
     activity.feed?.truncated === true ||
     activity.feed?.turns.some((turn) => turn.truncated) === true;
-  if (!activityNeedsAttention(activity)) return null;
+  if (!attention) return null;
   return (
     <div className={styles.activityStatus} data-activity-state={activity.status}>
       {/* This sits inside the session stream's `role="log"`, which already announces additions. A
@@ -702,7 +709,10 @@ function QuestionSummary({
 }: {
   readonly questions: UseCodingWorkbenchQuestionsResult;
 }): ReactNode {
-  if (questions.questions.length > 0 || !QUESTION_SUMMARY_STATES.has(questions.status)) return null;
+  const shown = questions.questions.length === 0 && QUESTION_SUMMARY_STATES.has(questions.status);
+  // #3880: an unpaired window cannot list its questions; the run status sentence says why.
+  const held = useHeldNotice("questions", shown);
+  if (!shown || held) return null;
   return <CodingWorkbenchQuestionsSurface result={questions} variant="inline" />;
 }
 
@@ -908,7 +918,9 @@ function MessageRow({
       data-timeline-kind="message"
     >
       <article className={styles.timelineBody} data-message-role={item.message.role}>
-        <p className={styles.timelineTitle}>
+        {/* The agent's role is announced, not drawn above every step: repeated on each message
+            between tool rows it was the loudest text of the timeline (#3897 UI review). */}
+        <p className={item.message.role === "assistant" ? "sr-only" : styles.timelineTitle}>
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
         </p>
         {item.message.reasoning === undefined ? null : (
@@ -922,9 +934,10 @@ function MessageRow({
   );
 }
 
-// #3878: the model's own reasoning, apart from the answer and labelled as unverified inside the
-// block: its summary sits among tool rows whose badges are statuses, where a warning-coloured
-// "Unverified" read as a failed check on every step (#3897, owner). It is
+// #3878: the model's own reasoning, apart from the answer. It is shown as the model wrote it under a
+// plain "Thinking" summary: a warning-coloured "Unverified" read as a failed check on every step
+// (#3897, owner), and a note inside every block was text Keiko added around the model's own (#3907,
+// owner: less is more). The timeline's boundary sentence still says it is unverified. It is
 // collapsed until the reader opens it, also while its turn streams, and its text is excluded from
 // the log's live announcements: the session stream is a `role="log"`, whose additions a screen
 // reader reads out, and up to 8 KiB of unverified reasoning per message would crowd out the answer
@@ -946,7 +959,6 @@ function ModelReasoning({
       >
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
       </summary>
-      <p className={styles.cmpReasoningNote}>{t("codingWorkbench.activity.reasoning.note")}</p>
       <p className={styles.cmpReasoningText}>
         {reasoning.text}
         {reasoning.truncated ? <TruncationMark t={t} /> : null}
@@ -1028,7 +1040,7 @@ function ToolRow({
       <details
         className={styles.toolCard}
         data-tool-state={shownState}
-        open={shownState === "failed" || shownState === "denied" || shownState === "exited"}
+        open={OPEN_WITH_REASON_STATES.has(shownState)}
       >
         <summary
           className={styles.cmpActivitySummary}
@@ -1061,13 +1073,45 @@ function ToolRow({
 // failed call. The timeline shows that code as OpenCode does instead of a red "Failed" (#4098
 // acceptance). The run's own state and its verification evidence still count the command as
 // failed; only the card's presentation changes.
-type ShownToolState = CodingSafeActivityTool["state"] | "exited";
+//
+// The same holds for a verification the server knows never checked anything (#3579): the operator's
+// package-script decision still open, a repository with nothing the verifier can run, and a run whose
+// steps were skipped, denied or cancelled. The model still reads a refusal; the card says what
+// happened instead of "Failed". A check that ran and went red keeps the failed badge.
+type UnrunVerificationOutcome = Extract<
+  CodingSafeActivityVerificationOutcome,
+  "waiting-for-trust" | "no-runnable-steps" | "not-run"
+>;
+type ShownToolState = CodingSafeActivityTool["state"] | "exited" | UnrunVerificationOutcome;
+
+const UNRUN_VERIFICATION_OUTCOMES: ReadonlySet<CodingSafeActivityVerificationOutcome> = new Set([
+  "waiting-for-trust",
+  "no-runnable-steps",
+  "not-run",
+]);
+
+// The cards that open to the reason they ended as they did, rather than staying a one-line row.
+const OPEN_WITH_REASON_STATES: ReadonlySet<ShownToolState> = new Set([
+  "failed",
+  "denied",
+  "exited",
+  "waiting-for-trust",
+  "no-runnable-steps",
+  "not-run",
+]);
+
+function isUnrunVerificationOutcome(
+  outcome: CodingSafeActivityVerificationOutcome | undefined,
+): outcome is UnrunVerificationOutcome {
+  return outcome !== undefined && UNRUN_VERIFICATION_OUTCOMES.has(outcome);
+}
 
 function shownToolState(tool: CodingSafeActivityTool): ShownToolState {
+  if (tool.state !== "failed") return tool.state;
   const exitCode = tool.presentation?.exitCode;
-  return tool.state === "failed" && exitCode !== undefined && exitCode !== 0
-    ? "exited"
-    : tool.state;
+  if (exitCode !== undefined && exitCode !== 0) return "exited";
+  const outcome = tool.presentation?.verificationOutcome;
+  return isUnrunVerificationOutcome(outcome) ? outcome : tool.state;
 }
 
 function ToolStateBadge({
@@ -1088,8 +1132,9 @@ function ToolStateBadge({
   );
 }
 
-// Why a call ended as it did, in words: a command's exit status, or that the tool reported an
-// error to the model. Without it a failed call opened to nothing but its tool name (#3897).
+// Why a call ended as it did, in words: a command's exit status, how a verification ended, or that
+// the tool reported an error to the model. Without it a failed call opened to nothing but its tool
+// name (#3897).
 function ToolOutcome({
   tool,
   t,
@@ -1105,6 +1150,14 @@ function ToolOutcome({
       </p>
     );
   }
+  const verificationOutcome = tool.presentation?.verificationOutcome;
+  if (verificationOutcome !== undefined) {
+    return (
+      <p className={styles.cmpToolOutcome}>
+        {t(`codingWorkbench.activity.verification.${verificationOutcome}`)}
+      </p>
+    );
+  }
   return tool.state === "failed" ? (
     <p className={styles.cmpToolOutcome}>{t("codingWorkbench.activity.toolError")}</p>
   ) : null;
@@ -1117,10 +1170,11 @@ function ToolPresentationDetails({
   readonly tool: CodingSafeActivityTool;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const locale = useLocale();
   const facts = tool.presentation;
   if (facts === undefined) return null;
   return (
-    <div className={styles.toolMeta}>
+    <div className={styles.cmpToolFacts}>
       {facts.readByteCount === undefined ? null : (
         <p>
           {facts.totalFileLines === undefined
@@ -1141,7 +1195,11 @@ function ToolPresentationDetails({
         <p>{t("codingWorkbench.activity.affectedFile", { path: facts.affectedRelativePath })}</p>
       )}
       {facts.bridgeDurationMs === undefined ? null : (
-        <p>{t("codingWorkbench.activity.serviceDuration", { duration: facts.bridgeDurationMs })}</p>
+        <p>
+          {t("codingWorkbench.activity.serviceDuration", {
+            duration: formatDurationMs(facts.bridgeDurationMs, locale),
+          })}
+        </p>
       )}
     </div>
   );
@@ -1333,6 +1391,33 @@ function timelineEventDetail(
   return `${cause} ${progress}`;
 }
 
+type VerificationSummary = NonNullable<
+  Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }>["verificationSummary"]
+>;
+
+// A summary in which no check passed and none failed ran nothing: every step was skipped. It is
+// shown as not run rather than as a failure the counts beside it contradict (#3897 UI review:
+// "Tests: Failed · 0 passed, 0 unsuccessful, 1 skipped").
+function shownVerificationStatus(
+  summary: VerificationSummary,
+): VerificationSummary["status"] | "notRun" {
+  if (summary.status !== "passed" && summary.passedCount === 0 && summary.failedCount === 0) {
+    return "notRun";
+  }
+  return summary.status;
+}
+
+/** A duration as a reader takes it in: milliseconds below a second, seconds with one decimal above. */
+function formatDurationMs(durationMs: number, locale: Locale): string {
+  if (durationMs < 1000) {
+    return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(durationMs)} ms`;
+  }
+  const seconds = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(
+    durationMs / 1000,
+  );
+  return `${seconds} s`;
+}
+
 function VerificationDetail({
   event,
   t,
@@ -1348,11 +1433,11 @@ function VerificationDetail({
   const summary = event.kind === "runtime-event" ? event.verificationSummary : undefined;
   if (summary === undefined) return null;
   return (
-    <div className={styles.timelineDetail}>
+    <div className={`${styles.timelineDetail} ${styles.cmpVerificationFacts}`}>
       <p>
         {t("codingWorkbench.verification.result", {
           verifier: t(`codingWorkbench.verification.verifier.${summary.verifierId}`),
-          status: t(`codingWorkbench.verification.status.${summary.status}`),
+          status: t(`codingWorkbench.verification.status.${shownVerificationStatus(summary)}`),
         })}
       </p>
       <p>
@@ -1364,7 +1449,7 @@ function VerificationDetail({
       </p>
       <p>
         {t("codingWorkbench.verification.duration", {
-          duration: number.format(summary.durationMs),
+          duration: formatDurationMs(summary.durationMs, locale),
         })}
       </p>
     </div>
@@ -1375,7 +1460,9 @@ function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routin
   if (event.state === "failed" || event.failureCode !== undefined) return "attention";
   if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") return "attention";
   if (event.kind === "runtime-event" && event.verificationSummary !== undefined) {
-    return event.verificationSummary.status === "passed" ? "success" : "attention";
+    const shown = shownVerificationStatus(event.verificationSummary);
+    if (shown === "notRun") return "routine";
+    return shown === "passed" ? "success" : "attention";
   }
   if (event.state === "succeeded") return "success";
   return "routine";

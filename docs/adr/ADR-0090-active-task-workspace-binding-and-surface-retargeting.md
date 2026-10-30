@@ -125,12 +125,19 @@ The active pointer and workspace instance identify that same root for the runtim
 editor, file tools, and Git delivery. A local checkout is re-proved on each active
 read; managed worktree reconciliation remains scoped to managed instances. Opening
 the Coding Workbench with a registered repository requires no separate Code setup.
+**Folder mode (owner decision, 2026-10-30):** a registered folder whose branch read answers
+`available: false` (an ordinary folder; a rejected or refused read is not one) needs no branch. The
+Workbench binds it in place as a folder workspace (ADR-0088 D1) with **Work in** fixed to Local, the
+branch control disabled, and a non-blocking hint that Git features are unavailable; Code setup binds
+it without provisioning or reconciliation. Execution authority is unchanged: the same containment,
+deny lists, Authority Envelope and budgets apply.
 Changing the Git window's repository or the Chat project never silently retargets
 an existing Coding Workbench window.
 Repository Files/Editor windows opened from Git or an explicit folder selection in the
 New Window dialog carry `rootBinding: "coding-repository"` and preserve the same
 configured root. This presentation binding also applies to ordinary folders without
-Git; it grants no execution authority. Explicit path changes in a repository Files
+Git; it grants no execution authority by itself (the Coding Workbench binds a folder workspace
+separately, above). Explicit path changes in a repository Files
 window or the Editor root picker keep that binding. Legacy task-bound windows retain
 the active-root override, but always expose navigation within that root. Folder
 history is bounded, preserves Back/Forward across explicitly selected roots and

@@ -6,6 +6,7 @@ import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import { Icons } from "../../Icons";
+import { useHeldNotice } from "./codingWorkbenchPairingHold";
 import styles from "./CodingHistory.module.css";
 
 const BranchIcon = Icons.branch;
@@ -101,7 +102,10 @@ function TaskSessionActions({ session, active, onHistory }: SessionBarProps): Re
 export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   const { session } = props;
   const t = useCodingWorkbenchTranslate();
-  if (session.detail === null && !session.pending && !session.error) return null;
+  // #3880: an unpaired window cannot read its task; the run status sentence says why.
+  const errorHeld = useHeldNotice("task-session", session.error);
+  const error = session.error && !errorHeld;
+  if (session.detail === null && !session.pending && !error) return null;
   return (
     <div className={styles.cmpSessionBar}>
       {session.detail !== null ? (
@@ -112,7 +116,7 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
           <TaskSessionActions {...props} />
         </>
       ) : null}
-      {session.error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
+      {error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
       {session.pending ? <output>{t("codingWorkbench.history.loading")}</output> : null}
     </div>
   );

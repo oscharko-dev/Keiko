@@ -80,6 +80,8 @@ import type {
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
+  CodingToolNativeCommitProof,
+  CodingToolNativeCommitProofOutcome,
   CodingToolNativeVerificationHooks,
   CodingToolNativeVerificationResult,
   CodingVerificationBlockedReason,
@@ -356,6 +358,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
         "proof-unavailable",
         "credited",
         "credit-unavailable",
+        "native-proof",
       ],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
@@ -507,6 +510,12 @@ function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): 
 }
 
 export interface ProductionManagedWorktreeToolInput {
+  /**
+   * `"folder"` when the workspace is an ordinary directory without a repository: the Git and
+   * delivery tools stay registered and refuse with the closed `repository-required` reason
+   * (owner decision 2026-10-30). Absent for a repository workspace.
+   */
+  readonly workspaceKind?: "folder" | undefined;
   /** Inactive server-owned initial acquisition projection; absent in ordinary compositions. */
   readonly initializationAuthority?: CodingAcceptedInitializationAuthority | undefined;
   /** Server-captured catalog projection; legacy compositions retain direct tools. */
@@ -919,6 +928,27 @@ const GIT_REFUSAL_REASON_CODES: Readonly<Record<RuntimeGitRefusalReason, string>
   "execution-failed": "git-execution-failed",
 };
 
+// The workspace is a plain folder: the answer is the same closed reason for every repository tool,
+// recorded body-free on the run's Activity Log so the refusal can be reconstructed without the
+// folder (owner decision 2026-10-30).
+function repositoryRequired(
+  input: ProductionManagedWorktreeToolInput,
+  actionKind: "git" | "delivery",
+): GovernedCodingToolResult {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_RESULT_OPERATION,
+      {
+        correlationId: isValidCorrelationId(input.authorityRef.runId)
+          ? input.authorityRef.runId
+          : UNKNOWN_CORRELATION_ID,
+      },
+      { actionKind, state: "refused", reason: "repository-required" },
+    ),
+  );
+  return { status: "failed", reasonCode: "repository-required" };
+}
+
 function buildRuntimeGitPort(
   input: ProductionManagedWorktreeToolInput,
 ): GovernedCodingToolPort<"git"> {
@@ -930,6 +960,7 @@ function buildRuntimeGitPort(
     ): ReturnType<GovernedCodingToolPort<"git">["execute"]> => {
       if (signalAborted(signal) || !guard.check() || !live(input))
         return { status: "failed", reasonCode: "git-authority-revoked" };
+      if (input.workspaceKind === "folder") return repositoryRequired(input, "git");
       if (request.operation === "ci")
         return runCiObservation(input.ciObservationService, request.forceFresh);
       if (
@@ -1050,6 +1081,7 @@ function buildVerifiedCommitPort(
     ): ReturnType<GovernedCodingToolPort<"delivery">["execute"]> => {
       if (signalAborted(signal) || !guard.check() || !live(input))
         return { status: "failed", reasonCode: "delivery-authority-revoked" };
+      if (input.workspaceKind === "folder") return repositoryRequired(input, "delivery");
       return isDraftToolRequest(request)
         ? completeDraftDeliveryRequest(input, request, guard, signal)
         : completeVerifiedCommitRequest(input, request, guard, signal);
@@ -1772,16 +1804,18 @@ function observeVerificationExecution(
   executed: CodingVerificationExecutedObserver | undefined,
 ): void {
   const target = codingVerificationTargetDigest(request.verifierId, request.targetPath);
-  const executedRedStatuses: readonly string[] = EXECUTED_RED_STATUSES;
-  if (
-    report.results.some(
-      (result) => result.status === "passed" || executedRedStatuses.includes(result.status),
-    )
-  ) {
+  if (verificationRanAStep(report)) {
     executed?.(target);
   } else {
     input.verificationBlocked?.("VERIFICATION_NOT_RUN", target);
   }
+}
+
+function verificationRanAStep(report: VerificationReport): boolean {
+  const executedRedStatuses: readonly string[] = EXECUTED_RED_STATUSES;
+  return report.results.some(
+    (result) => result.status === "passed" || executedRedStatuses.includes(result.status),
+  );
 }
 
 type VerificationAttempt =
@@ -2287,11 +2321,18 @@ async function recordCandidateVerification(
   report: VerificationReport,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-): Promise<CodingToolCommitProofResult> {
+): Promise<CodingToolCommitProofResult | undefined> {
   if (begun.kind !== "ticket") {
     // Not a commit proof, but still a check the run ran: kept for the pull request's list (F57).
     service.observeVerification(report);
     return refusedCommitProof(begun);
+  }
+  // A run that executed no step (each one skipped, denied or native-shell-required) says nothing
+  // about the staged candidate. Completing the ticket would record it as a failed proof and replace
+  // a passing proof the native shell check already recorded for the same tree (#3907 AC3).
+  if (!verificationRanAStep(report)) {
+    service.observeVerification(report);
+    return undefined;
   }
   const recorded = await service.completeVerification(begun.ticket, report, {
     check: guard.check,
@@ -2583,6 +2624,121 @@ function nativeVerificationHooks(
           ? (): ReadonlyMap<string, string> | undefined => packageScripts(input)
           : undefined,
       ),
+    commitProof: (): CodingToolNativeCommitProof | undefined => nativeCommitProof(input),
+  };
+}
+
+/**
+ * A native check line proves the staged candidate exactly as the governed verifier does (#3907
+ * AC3). On macOS the governed verifier cannot install for this host (`native-shell-required`) and
+ * tells the model to run the check in its own shell, so without this no native run could commit.
+ * The same service brackets the line: its ticket opens at admission, when the candidate must be
+ * fully staged and clean, and completes at settlement only if the staged tree is unchanged, so
+ * the proof covers the content the check read and nothing else.
+ */
+function nativeCommitProof(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolNativeCommitProof | undefined {
+  if (input.verifiedCommitService === undefined) return undefined;
+  const opened = openNativeCommitProof(input);
+  return {
+    settle: (outcome): void => {
+      void settleNativeCommitProof(input, opened, outcome);
+    },
+  };
+}
+
+async function openNativeCommitProof(
+  input: ProductionManagedWorktreeToolInput,
+): Promise<{ readonly begun: CandidateVerificationStart | undefined; readonly atMs: number }> {
+  const begun = await beginCandidateVerification(input);
+  return { begun, atMs: Date.now() };
+}
+
+async function settleNativeCommitProof(
+  input: ProductionManagedWorktreeToolInput,
+  opened: ReturnType<typeof openNativeCommitProof>,
+  outcome: CodingToolNativeCommitProofOutcome,
+): Promise<void> {
+  const { begun, atMs } = await opened;
+  const report = nativeVerificationReport(input.workspaceRoot, outcome, atMs);
+  const proof = await completeCandidateVerification(
+    input,
+    begun,
+    report,
+    { check: () => true },
+    undefined,
+  );
+  if (proof !== undefined) recordNativeCommitProof(input, outcome, proof);
+}
+
+/** Which native line settled the commit proof, and how: counts and closed words only. */
+function recordNativeCommitProof(
+  input: ProductionManagedWorktreeToolInput,
+  outcome: CodingToolNativeCommitProofOutcome,
+  proof: CodingToolCommitProofResult,
+): void {
+  const [verifierId] = outcome.kinds;
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      { correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID },
+      {
+        state: "native-proof",
+        stepCount: outcome.kinds.length,
+        ...(verifierId === undefined ? {} : { verifierId }),
+        commitProof: proof.commitProof,
+        // A failed line's cause is the failed check on the paired git.verified-commit line; the
+        // service reports any refused completion as drift, which only a passing line can mean.
+        ...(outcome.passed && proof.commitProof === "unavailable"
+          ? { commitProofReason: proof.reasonCode }
+          : {}),
+      },
+    ),
+  );
+}
+
+const EMPTY_VERIFICATION_COUNTS: Readonly<Record<VerificationStatus, number>> = {
+  passed: 0,
+  failed: 0,
+  skipped: 0,
+  denied: 0,
+  "timed-out": 0,
+  cancelled: 0,
+  "resource-exceeded": 0,
+};
+
+/**
+ * The governed report shape of a native line's own exit status: the checks a passing line proved,
+ * or the one that failed. Its start is the ticket's, which the line's admission preceded.
+ */
+function nativeVerificationReport(
+  workspaceRoot: string,
+  outcome: CodingToolNativeCommitProofOutcome,
+  startedAtMs: number,
+): VerificationReport {
+  const status: VerificationStatus = outcome.passed ? "passed" : "failed";
+  const results = outcome.kinds.map((kind): VerificationResult => ({
+    kind,
+    scriptName: undefined,
+    command: "native-shell",
+    args: [],
+    status,
+    exitCode: outcome.exitCode,
+    signal: null,
+    durationMs: outcome.durationMs,
+    truncated: false,
+    redacted: true,
+    outputSummary: "",
+    appliedLimits: [],
+  }));
+  return {
+    workspaceRoot,
+    results,
+    overallStatus: status,
+    startedAtMs,
+    durationMs: outcome.durationMs,
+    counts: { ...EMPTY_VERIFICATION_COUNTS, [status]: results.length },
   };
 }
 
