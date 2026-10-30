@@ -8,6 +8,10 @@ import {
   mcpToolAction,
   type McpServerDefinition,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import {
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   CODING_JIRA_SERVER_NAME,
@@ -139,5 +143,17 @@ describe("a run's MCP servers", () => {
     const servers = codingRunMcpServers(undefined, BINDING);
     expect(servers.mcpServers?.("run-1")).toEqual([codingJiraServerDefinition(BINDING)]);
     expect([...(servers.mcpGrantedServers ?? [])]).toEqual([CODING_JIRA_SERVER_NAME]);
+  });
+});
+
+describe("the coding-runtime.jira-pod Activity Log operation", () => {
+  // The registration must stay one closed literal; this binds its logged tool names to the contract.
+  it("logs exactly the contract's Jira tool names", () => {
+    const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
+    const registration = registry.find((entry) => entry.op === "coding-runtime.jira-pod");
+    expect(registration?.fields.tool?.values).toEqual([
+      ...JIRA_MANAGED_READ_TOOLS,
+      ...JIRA_MUTATION_OPERATIONS,
+    ]);
   });
 });

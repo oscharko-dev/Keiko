@@ -10064,7 +10064,7 @@
             {
               "name": "durationMs",
               "type": "integer",
-              "dataClass": "count",
+              "dataClass": "duration",
               "required": false
             },
             {
@@ -10108,6 +10108,7 @@
             "closed-enum",
             "completeness-state",
             "count",
+            "duration",
             "error-kind",
             "loss-state",
             "opaque-id"

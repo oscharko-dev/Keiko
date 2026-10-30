@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9b41338c31267dc179a2840c321a3aa029b452cead97c611b9e9ef76f3989ca2",
+    "catalogDigest": "aea767852db181888f1f9c42d72d6399027ab7700f944937b932de42b980c529",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -9714,7 +9714,7 @@
           },
           "durationMs": {
             "type": "integer",
-            "dataClass": "count",
+            "dataClass": "duration",
             "required": false
           },
           "frames": {
@@ -9744,8 +9744,8 @@
         "failureClasses": ["coding-runtime-jira-pod"],
         "proofIds": ["coding-runtime.jira-pod.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:169",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:272"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:174",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:267"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10134,8 +10134,8 @@
         "failureClasses": ["coding-runtime-mcp-relay"],
         "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:198",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:290"]
+        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:203",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:275"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46091,6 +46091,7 @@
           "closed-enum",
           "completeness-state",
           "count",
+          "duration",
           "error-kind",
           "loss-state",
           "opaque-id"
@@ -64570,7 +64571,7 @@
                 {
                   "name": "durationMs",
                   "type": "integer",
-                  "dataClass": "count",
+                  "dataClass": "duration",
                   "required": false
                 },
                 {
@@ -64614,6 +64615,7 @@
                 "closed-enum",
                 "completeness-state",
                 "count",
+                "duration",
                 "error-kind",
                 "loss-state",
                 "opaque-id"
@@ -105821,7 +105823,7 @@
     {
       "op": "coding-runtime.jira-pod",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:172",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:177",
       "package": "keiko-server"
     },
     {
@@ -105845,7 +105847,7 @@
     {
       "op": "coding-runtime.mcp-relay",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:201",
+      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:206",
       "package": "keiko-server"
     },
     {

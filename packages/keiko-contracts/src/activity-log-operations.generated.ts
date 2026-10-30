@@ -9307,7 +9307,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       },
       durationMs: {
         type: "integer",
-        dataClass: "count",
+        dataClass: "duration",
         required: false,
       },
       frames: {

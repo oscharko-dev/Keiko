@@ -1,4 +1,4 @@
-import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
@@ -18,6 +18,11 @@ import {
   type JiraLivePodCredential,
   type JiraPodAccessDeps,
 } from "../atlassian/jiraPodAccess.js";
+import {
+  activityErrorFields,
+  activityStateLevel,
+  definedActivityFields,
+} from "../activity-line-fields.js";
 
 /**
  * The Jira Pod a Coding run was started with (owner decision 2026-10-30). The human's explicit
@@ -216,7 +221,7 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
     },
     risk: { type: "string", dataClass: "closed-enum", required: false, values: ["read", "write"] },
     toolCount: { type: "integer", dataClass: "count", required: false },
-    durationMs: { type: "integer", dataClass: "count", required: false },
+    durationMs: { type: "integer", dataClass: "duration", required: false },
     frames: {
       type: "string-array",
       dataClass: "opaque-id",
@@ -252,37 +257,30 @@ export interface CodingJiraPodLine {
   readonly error?: unknown;
 }
 
-function optionalLineFields(line: CodingJiraPodLine): Readonly<Record<string, number | string>> {
-  const fields: Record<string, number | string> = {};
-  for (const key of ["reason", "tool", "risk", "toolCount", "durationMs"] as const) {
-    const value = line[key];
-    if (value !== undefined) fields[key] = value;
-  }
-  return fields;
-}
-
 /** Closed values and counts only: never a Pod id or name, a URL, an issue key or any text. */
 export function recordCodingJiraPod(
   activityLog: ServerLogSink | undefined,
   correlationId: string,
   line: CodingJiraPodLine,
 ): void {
-  const failed = line.outcome === "failed";
   activityLog?.write(
     activityLogEvent(
       CODING_JIRA_POD_OPERATION,
       {
         correlationId,
-        ...(failed ? { level: "warn" as const, errorKind: "internal" as const } : {}),
-        ...(line.outcome === "refused" ? { level: "warn" as const } : {}),
+        ...activityStateLevel(line.outcome),
       },
       {
         action: line.action,
         outcome: line.outcome,
-        ...optionalLineFields(line),
-        ...(line.error === undefined
-          ? {}
-          : { frames: keikoStackFrames(line.error), causeChain: causeChain(line.error) }),
+        ...definedActivityFields(line, [
+          "reason",
+          "tool",
+          "risk",
+          "toolCount",
+          "durationMs",
+        ] as const),
+        ...activityErrorFields(line),
       },
     ),
   );

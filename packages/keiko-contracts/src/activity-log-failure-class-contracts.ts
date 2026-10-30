@@ -2610,6 +2610,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "closed-enum",
       "completeness-state",
       "count",
+      "duration",
       "error-kind",
       "loss-state",
       "opaque-id",
