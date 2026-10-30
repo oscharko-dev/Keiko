@@ -8,6 +8,7 @@ import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { createMcpSettingsStore } from "./mcpSettingsStore.js";
 import { createMcpAuthorization, type McpAuthorization } from "./mcpAuthorization.js";
+import * as oauthPersistence from "./mcpOAuthCredentialStore.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -110,6 +111,33 @@ async function started(f: ReturnType<typeof fixture>): Promise<{ id: string; cal
   return { id: result.attemptId, callback };
 }
 describe("server-owned shared MCP OAuth", () => {
+  it.each([true, false])(
+    "contains vault restoration failure in authorization views (enabled=%s)",
+    (enabled) => {
+      const f = fixture();
+      const write = vi.fn();
+      const clear = vi.fn();
+      vi.spyOn(oauthPersistence, "createCentralMcpOAuthPersistence").mockReturnValue({
+        read: () => {
+          throw new SyntaxError("synthetic-private-vault-payload");
+        },
+        write,
+        clear,
+      });
+      const server = { ...f.server, enabled };
+      expect(f.owner.authorized(server, "vault-read-view")).toBe(false);
+      expect(() => f.owner.credentials(server)).toThrow(SyntaxError);
+      expect(f.requests).toEqual([]);
+      expect(write).not.toHaveBeenCalled();
+      expect(clear).not.toHaveBeenCalled();
+      expect(f.events.find((event) => event.op === "mcp.authorization.state")).toMatchObject({
+        op: "mcp.authorization.state",
+        extra: { state: "credential-unavailable" },
+        correlationId: "vault-read-view",
+      });
+      expect(JSON.stringify(f.events)).not.toContain("synthetic-private-vault-payload");
+    },
+  );
   it("allows signing out a disabled centrally configured OAuth server", () => {
     const f = fixture();
     const current = f.settings.read("fixture");

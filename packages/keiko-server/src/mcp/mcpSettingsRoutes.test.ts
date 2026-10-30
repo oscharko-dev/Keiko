@@ -15,6 +15,10 @@ import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js"
 import { API_ROUTES, type RouteContext } from "../routes.js";
 import { createMcpSettingsStore } from "./mcpSettingsStore.js";
 import { createConfiguredMcpConnections } from "./mcpConfiguredConnections.js";
+import { createMcpAuthorization } from "./mcpAuthorization.js";
+import * as oauthPersistence from "./mcpOAuthCredentialStore.js";
+import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   handleConnectMcpServer,
   handleGetMcpSettings,
@@ -29,9 +33,15 @@ import {
 } from "./mcpAuthorizationRoutes.js";
 const roots: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-function fixture(): { deps: Parameters<typeof handleGetMcpSettings>[1]; cookie: string } {
+function fixture(): {
+  deps: Parameters<typeof handleGetMcpSettings>[1];
+  cookie: string;
+  stateDir: string;
+  env: Readonly<Record<string, string>>;
+} {
   const channel = createCodingAppSessionChannel({
     registry: createSessionRegistry(),
     pairingPort: createFakeSessionPairingPort(),
@@ -39,14 +49,17 @@ function fixture(): { deps: Parameters<typeof handleGetMcpSettings>[1]; cookie: 
   const paired = channel.pair(fakePairingRequestBody());
   if (!paired.paired) throw new Error("fixture pairing failed");
   const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-route-")));
+  const env = { KEIKO_MCP_OAUTH_CREDENTIALS_KEY: randomBytes(32).toString("base64") };
   roots.push(stateDir);
   return {
+    stateDir,
+    env,
     cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
     deps: {
       codingAppSessionChannel: channel,
       mcpSettings: createMcpSettingsStore({
         stateDir,
-        env: { KEIKO_MCP_OAUTH_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
+        env,
         keychainAccess: (): undefined => undefined,
       }),
     },
@@ -68,6 +81,71 @@ function context(cookie: string, body: unknown = {}): RouteContext {
 }
 
 describe("authenticated shared MCP settings routes", () => {
+  it("keeps GET and a committed PUT available when an OAuth vault record cannot be restored", async () => {
+    const f = fixture();
+    const store = f.deps.mcpSettings;
+    if (store === undefined) throw new Error("missing fixture store");
+    const server: McpServerDefinition = {
+      name: "unavailable-vault",
+      enabled: true,
+      description: undefined,
+      transport: {
+        kind: "remote",
+        url: "https://synthetic-tools.example.test/mcp",
+        oauth: { issuer: "https://synthetic-identity.example.test", clientId: "public-fixture" },
+      },
+      tools: {},
+      discovery: "automatic",
+    };
+    store.update(
+      { expectedRevision: store.read("fixture").revision, servers: [server], secrets: {} },
+      "fixture",
+    );
+    vi.spyOn(oauthPersistence, "createCentralMcpOAuthPersistence").mockReturnValue({
+      read: () => {
+        throw new SyntaxError("synthetic-private-vault-payload");
+      },
+      write: vi.fn(),
+      clear: vi.fn(),
+    });
+    const write = vi.fn<(event: ServerLogEvent) => void>();
+    const owner = createMcpAuthorization({
+      stateDir: f.stateDir,
+      env: f.env,
+      keychainAccess: () => undefined,
+      settings: store,
+      log: { write },
+      egress: () => undefined,
+    });
+    try {
+      const deps = { ...f.deps, mcpAuthorization: owner };
+      const read = handleGetMcpSettings(context(f.cookie), deps);
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({ connections: [{ authentication: "required" }] });
+      const result = await handlePutMcpSettings(
+        context(f.cookie, {
+          expectedRevision: store.read("fixture").revision,
+          servers: [server],
+          secrets: {},
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ connections: [{ authentication: "required" }] });
+      expect(
+        write.mock.calls.find(([event]) => event.op === "mcp.authorization.state")?.[0],
+      ).toMatchObject({
+        op: "mcp.authorization.state",
+        extra: { state: "credential-unavailable" },
+        correlationId: "mcp-settings-test",
+      });
+      expect(JSON.stringify([read.body, result.body, write.mock.calls])).not.toContain(
+        "synthetic-private-vault-payload",
+      );
+    } finally {
+      await owner.close();
+    }
+  });
   it("mounts GET and PUT on the production router", () => {
     expect(
       API_ROUTES.filter((route) => route.pattern === "/api/mcp/servers").map(

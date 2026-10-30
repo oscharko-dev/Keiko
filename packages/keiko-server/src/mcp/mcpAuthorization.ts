@@ -49,7 +49,7 @@ interface Attempt {
 }
 export interface McpAuthorization {
   readonly credentials: (server: McpServerDefinition) => readonly string[];
-  readonly authorized: (server: McpServerDefinition) => boolean;
+  readonly authorized: (server: McpServerDefinition, correlationId?: string) => boolean;
   readonly token: (server: McpServerDefinition, correlationId: string) => Promise<string>;
   readonly start: (
     name: string,
@@ -251,15 +251,29 @@ class AuthorizationOwner implements McpAuthorization {
       fetch: oauthFetch(this.options, server, signal, current),
     });
   }
-  private credentialView(server: McpServerDefinition): McpOAuthClient {
+  private credentialView(
+    server: McpServerDefinition,
+    correlationId = "mcp-authorization",
+  ): McpOAuthClient {
     return server.enabled
-      ? this.client(server, "mcp-authorization")
+      ? this.client(server, correlationId)
       : this.restoredClient(server, this.#lifetime.signal, () => false);
   }
-  authorized(server: McpServerDefinition): boolean {
-    return this.credentialView(server).authorized();
+  authorized(server: McpServerDefinition, correlationId = "mcp-authorization"): boolean {
+    try {
+      return this.credentialView(server, correlationId).authorized();
+    } catch {
+      recordMcpAuthorization(
+        this.options.log,
+        correlationId,
+        "mcp-credential-view",
+        "credential-unavailable",
+      );
+      return false;
+    }
   }
   credentials(server: McpServerDefinition): readonly string[] {
+    // Runtime result projection must fail closed when its credential floor cannot be restored.
     return this.credentialView(server).credentials();
   }
   async token(server: McpServerDefinition, correlationId: string): Promise<string> {

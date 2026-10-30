@@ -107055,14 +107055,14 @@
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:324",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:338",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:381",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:395",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

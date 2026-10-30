@@ -99,7 +99,7 @@ function withConnections(
       return {
         ...connection,
         authentication:
-          deps.mcpAuthorization?.authorized(server) === true
+          deps.mcpAuthorization?.authorized(server, correlationId) === true
             ? ("authorized" as const)
             : ("required" as const),
       };

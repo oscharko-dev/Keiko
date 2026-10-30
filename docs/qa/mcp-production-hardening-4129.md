@@ -195,3 +195,19 @@ screenshots and the content-free case receipt are retained outside the repositor
 The final package coverage run, remaining interactive failure cases, native Windows execution,
 required CI on the pushed head and release qualification remain outstanding. This checkpoint
 does not authorize a production-readiness claim.
+
+## Vault-read failure containment
+
+A review identified another reproduced defect: constructing the authorization view could throw
+on an unreadable or malformed encrypted OAuth record. GET Settings then failed; PUT could fail
+after its configuration had already committed. Enabled and disabled-server regressions first
+failed with the constructor exception. The authorization-status view now reports unauthorized
+and emits the existing content-free credential-unavailable state under the request correlation.
+GET and committed PUT integration regressions pass without exposing the stored error payload.
+No grant is cleared and no network request is made. Runtime credential-floor reads deliberately
+still fail closed; returning an empty floor there could disclose an unprojected credential.
+
+The current staged browser build also passed supervised MCP write denial with zero effects,
+Ask-mode cancellation while native MCP approval was pending with zero effects, and two independent
+writes that each returned isError after exactly one effect. Both write-error tasks required recovery;
+the second recovery state survived a complete app reload without replay.
