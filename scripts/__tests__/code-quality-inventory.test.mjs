@@ -12,6 +12,7 @@ import {
 } from "../lib/code-quality-inventory.mjs";
 import * as policyMembership from "../lib/code-quality-inventory.mjs";
 import { validatePolicy } from "../lib/code-quality-policy.mjs";
+import { collectWorkspacePackages } from "../workspace-graph.mjs";
 import { fileURLToPath, URL } from "node:url";
 
 import {
@@ -44,7 +45,10 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
   it("reconciles the actual built workspace public surface with its full source inventory", async () => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const inventory = await collectPolicyInventory(root);
-    expect(inventory.packages).toHaveLength(27);
+    const workspaceNames = (await collectWorkspacePackages(root)).map((owner) => owner.name).sort();
+    const inventoryNames = inventory.packages.map((owner) => owner.name).sort();
+    expect(inventoryNames).toEqual(workspaceNames);
+    expect(new Set(inventoryNames).size).toBe(inventoryNames.length);
     expect(inventory.files.some((file) => file.scope === "root-product" && file.production)).toBe(
       true,
     );
@@ -660,7 +664,7 @@ const FOURTH_PACKAGE_FIXTURE =
   "packages/keiko-server/src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts";
 const NEARBY_PACKAGE_SOURCE = FOURTH_PACKAGE_FIXTURE.replace(".ts", "-unregistered.ts");
 
-function writeFourthPackageFixture(root) {
+function writeFourthPackageFixture(root, fixture = FOURTH_PACKAGE_FIXTURE) {
   const directory = "packages/keiko-server";
   mkdirSync(join(root, directory, "src/tool-catalog/__fixtures__"), { recursive: true });
   writeFileSync(
@@ -676,16 +680,16 @@ function writeFourthPackageFixture(root) {
   );
   const sources = new Map([
     [`${directory}/src/index.ts`, "export const value = 1;\n"],
-    [FOURTH_PACKAGE_FIXTURE, "export const fixtureValue = 1;\n"],
-    [NEARBY_PACKAGE_SOURCE, "export const nearbyValue = 1;\n"],
+    [fixture, "export const fixtureValue = 1;\n"],
+    [fixture.replace(".ts", "-unregistered.ts"), "export const nearbyValue = 1;\n"],
   ]);
   for (const [path, source] of sources) writeFileSync(join(root, path), source);
   return sources;
 }
 
-function writeFourthFixtureChain(root, sources) {
+function writeFourthFixtureChain(root, sources, fixture = FOURTH_PACKAGE_FIXTURE) {
   const directory = "packages/keiko-server/src/tool-catalog/__fixtures__";
-  sources.set(FOURTH_PACKAGE_FIXTURE, 'export * from "./catalogRuntimeFixture.js";\n');
+  sources.set(fixture, 'export * from "./catalogRuntimeFixture.js";\n');
   sources.set(
     `${directory}/catalogRuntimeFixture.ts`,
     'export * from "./catalogToolFixture.js";\n',
@@ -699,11 +703,11 @@ function writeFourthFixtureChain(root, sources) {
   for (const [path, source] of sources) writeFileSync(join(root, path), source);
 }
 
-function exposeFourthPackageFixture(root, linkage) {
+function exposeFourthPackageFixture(root, linkage, fixture = FOURTH_PACKAGE_FIXTURE) {
   if (linkage === "runtime") {
     writeFileSync(
       join(root, "packages/keiko-server/src/index.ts"),
-      'export * from "./tool-catalog/__fixtures__/nativeEffectRuntimeFixture.js";\n',
+      `export * from "${fixture.replace("packages/keiko-server/src/", "./").replace(".ts", ".js")}";\n`,
     );
     return;
   }
@@ -711,7 +715,7 @@ function exposeFourthPackageFixture(root, linkage) {
     join(root, "packages/keiko-server/package.json"),
     JSON.stringify({
       name: "@oscharko-dev/keiko-server",
-      exports: "./src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts",
+      exports: fixture.replace("packages/keiko-server/", "./"),
     }),
   );
 }
@@ -797,4 +801,100 @@ describe("retired owner presence pin relocation (#3918)", () => {
     ]);
     expect(native.every((file) => file.production)).toBe(true);
   });
+});
+
+const CONVERSATION_PACKAGE_FIXTURE =
+  "packages/keiko-server/src/tool-catalog/__fixtures__/conversationConsumer.ts";
+
+describe("exact conversation-consumer fixture inventory (#3918)", () => {
+  it("classifies only the registered conversation fixture as infrastructure", () => {
+    const packages = [{ directory: "packages/keiko-server", name: "@oscharko-dev/keiko-server" }];
+    expect(policyMembership.classifyPolicyPath(CONVERSATION_PACKAGE_FIXTURE, packages)).toEqual({
+      scope: "tests",
+      production: false,
+      reason: "test-or-fixture",
+    });
+    for (const path of [
+      CONVERSATION_PACKAGE_FIXTURE.replace(".ts", "-unregistered.ts"),
+      "packages/keiko-server/src/tool-catalog/__fixtures__/unregisteredConsumer.ts",
+    ]) {
+      expect(policyMembership.classifyPolicyPath(path, packages)).toEqual({
+        scope: "package:@oscharko-dev/keiko-server",
+        production: true,
+        reason: "workspace-owner",
+      });
+    }
+    expect(
+      policyMembership.classifyPolicyPath(CONVERSATION_PACKAGE_FIXTURE, packages, true),
+    ).toEqual({
+      scope: "package:@oscharko-dev/keiko-server",
+      production: true,
+      reason: "workspace-owner",
+    });
+  });
+
+  it("retains every row and source identity while the conversation helper chain is dormant", async () => {
+    const root = trackedRepository();
+    const before = await collectPolicyInventory(root);
+    const sources = writeFourthPackageFixture(root, CONVERSATION_PACKAGE_FIXTURE);
+    writeFourthFixtureChain(root, sources, CONVERSATION_PACKAGE_FIXTURE);
+    const inventory = await collectPolicyInventory(root);
+    const paths = policyMembership.collectPolicyMembership(root).paths;
+    expect(inventory.files.length - before.files.length).toBe(sources.size);
+    expect(inventory.files.filter((row) => !sources.has(row.path))).toEqual(before.files);
+    for (const [path, source] of sources) {
+      expect(paths).toContain(path);
+      expect(inventory.files.find((row) => row.path === path)).toMatchObject({
+        sha256: policyDigest(source),
+        tracked: false,
+      });
+    }
+    for (const path of [CONVERSATION_PACKAGE_FIXTURE, "tests/support/buffered-server-log.ts"])
+      expect(inventory.files.find((row) => row.path === path)).toMatchObject({
+        scope: "tests",
+        production: false,
+        reason: "test-or-fixture",
+      });
+    expect(inventory.productionReachability.promoted).toEqual([]);
+    expect(inventory.packages.map((owner) => owner.name)).toContain("@oscharko-dev/keiko-server");
+  });
+
+  it.each(["runtime", "public"])(
+    "promotes the exact conversation fixture through a healthy actual %s boundary",
+    async (linkage) => {
+      const root = trackedRepository();
+      writeFourthPackageFixture(root, CONVERSATION_PACKAGE_FIXTURE);
+      const dormant = await collectPolicyInventory(root);
+      expect(
+        dormant.files.find((row) => row.path === CONVERSATION_PACKAGE_FIXTURE)?.production,
+      ).toBe(false);
+      exposeFourthPackageFixture(root, linkage, CONVERSATION_PACKAGE_FIXTURE);
+      const reached = await collectPolicyInventory(root);
+      expect(reached.productionReachability.promoted).toEqual([CONVERSATION_PACKAGE_FIXTURE]);
+      expect(reached.files.find((row) => row.path === CONVERSATION_PACKAGE_FIXTURE)).toMatchObject({
+        scope: "package:@oscharko-dev/keiko-server",
+        production: true,
+        reason: "production-runtime-reachable",
+      });
+    },
+  );
+
+  it.each(["runtime", "public"])(
+    "rejects an exposed conversation chain's unsupported root helper after actual %s promotion",
+    async (linkage) => {
+      const root = trackedRepository();
+      const sources = writeFourthPackageFixture(root, CONVERSATION_PACKAGE_FIXTURE);
+      writeFourthFixtureChain(root, sources, CONVERSATION_PACKAGE_FIXTURE);
+      const dormant = await collectPolicyInventory(root);
+      expect(dormant.productionReachability.promoted).toEqual([]);
+      expect(
+        dormant.files.find((row) => row.path === "tests/support/buffered-server-log.ts"),
+      ).toMatchObject({
+        production: false,
+        scope: "tests",
+      });
+      exposeFourthPackageFixture(root, linkage, CONVERSATION_PACKAGE_FIXTURE);
+      await expect(collectPolicyInventory(root)).rejects.toThrow("unclassified-source");
+    },
+  );
 });

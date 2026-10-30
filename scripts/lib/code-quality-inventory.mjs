@@ -77,6 +77,7 @@ const EXACT_TEST_INFRASTRUCTURE = new Set([
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogDefinition.ts",
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogRuntimeFixture.ts",
   "packages/keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.ts",
+  "packages/keiko-server/src/tool-catalog/__fixtures__/conversationConsumer.ts",
   "packages/keiko-server/src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts",
   "native/portable-launcher/test-app-owner-macos.mjs",
   "native/runtime-supervisor/linux/app-owner-cli-fixture.mjs",

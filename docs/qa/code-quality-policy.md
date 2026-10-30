@@ -1847,3 +1847,24 @@ currentness, exact consumer and executed-proof checks decide any additional actu
 All four migration activation scopes remain empty. Source declarations and authored proofs alone
 do not establish qualified-slot counts, a runtime membership total or whole-gate clearance; those
 require fresh complete semantic qualification against the current source and emitted outputs.
+
+### Exact conversation-consumer fixture classification
+
+The existing exact test-infrastructure set also lists
+`packages/keiko-server/src/tool-catalog/__fixtures__/conversationConsumer.ts`. Its current
+callers are test owners; this exact entry prevents a dormant fixture's imported buffered test-log
+helper from becoming a production root. Nearby unregistered source paths retain their package's
+production classification. No directory-wide fixture exclusion or root-helper production owner
+is added: every file remains in the complete source census with its current byte identity.
+
+Real runtime imports and public exports still promote the registered fixture to its server
+package owner. A promoted chain reaching unsupported root test infrastructure remains refused;
+healthy promoted fixtures keep their existing production obligations. Exact classification,
+complete dormant membership/hashes and both promotion paths require regression proof. This
+classification repair does not establish semantic qualification, activate a migration scope,
+change a resource limit or close remaining Chat/MCP/runtime API findings.
+
+The actual-workspace regression compares the complete sorted inventory package-name list
+with the existing workspace graph producer and requires unique inventory names. This replaces
+the obsolete twenty-seven-package count with exact current membership; a missing, duplicate or
+extra workspace cannot pass, and future legitimate packages do not require a fixed count ceiling.
