@@ -19,6 +19,7 @@
 
 import { assertManagedWorkspaceInstance } from "./managed-root.js";
 import { existsSync, realpathSync } from "node:fs";
+import { containsPath } from "@oscharko-dev/keiko-git";
 import {
   detectWorkspaceAt,
   PathEscapeError,
@@ -222,13 +223,30 @@ async function listWorktreesOrUnreachable(
 
 // The repository's worktree list — consulted only for a worktree that still exists on disk — and
 // the managed worktree's entry in it.
+/**
+ * Issue #4133: entries under the review worktree root belong to review runs, never to a task
+ * workspace, so reconciliation neither matches nor counts them.
+ */
+export function withoutReviewWorktrees(
+  entries: readonly WorktreeListEntry[],
+  reviewWorktreeRoot: string | undefined,
+): readonly WorktreeListEntry[] {
+  if (reviewWorktreeRoot === undefined) return entries;
+  const root = realpathOrSelf(reviewWorktreeRoot);
+  return entries.filter((entry) => !containsPath(root, realpathOrSelf(entry.path)));
+}
+
 async function listedWorktrees(
+  ctx: ReconcileCtx,
   worktrees: WorktreesSource,
   instance: WorkspaceInstance,
   worktreeDirExists: boolean,
 ): Promise<{ readonly worktreeCount: number; readonly observedHead: string | undefined }> {
   if (!worktreeDirExists) return { worktreeCount: 0, observedHead: undefined };
-  const listed = await listWorktreesOrUnreachable(worktrees);
+  const listed = withoutReviewWorktrees(
+    await listWorktreesOrUnreachable(worktrees),
+    ctx.deps.reviewWorktreeRoot,
+  );
   return {
     worktreeCount: listed.length,
     observedHead: findWorktreeEntry(listed, instance.managedWorktreePath)?.head,
@@ -250,6 +268,7 @@ async function gatherFacts(
     ? await adapter.localBranchExists(instance.taskBranch)
     : false;
   const { worktreeCount, observedHead } = await listedWorktrees(
+    ctx,
     worktrees,
     instance,
     worktreeDirExists,

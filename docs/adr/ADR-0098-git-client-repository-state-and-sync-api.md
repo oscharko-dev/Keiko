@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted (Issue #1573, Epic #1572, 2026-06-27; amended 2026-08-31)
+Accepted (Issue #1573, Epic #1572, 2026-06-27; amended 2026-08-31; amended 2026-10-30 by Issue #4133)
 
 ## Version
 
-0.3.0
+0.4.0
 
 ## Context
 
@@ -305,6 +305,48 @@ No route is added or re-shaped. `/api/projects`, `/api/repositories/clone`,
 a mid-flight continuity refusal without misclassifying it as `git-error`. `GitDeliveryActionKind`,
 the governed policy packs, the mutation kernel, and `mutationEvidenceLedger.ts` remain untouched;
 the extension grants no new authority and requires no schema-version bump.
+
+
+### D8 — Review worktrees and private review refs (#4133, ADR-0182 D3)
+
+Keiko for Quality reviews the exact head of a pull request or a local range without touching the
+user's checkout. This adds two kinds of transient repository state, and nothing else:
+
+- **A locked, detached review worktree.** One per review run at
+  `<state>/review-worktrees/<leaf>`, beside the task-workspace managed root and outside every user
+  checkout, where `<leaf>` is a domain-separated digest of the run id (run ids may contain `:`,
+  which neither a Windows path segment nor a ref name may hold). It is added with
+  `worktree add --detach --no-checkout --lock --reason keiko-review`, so a user's
+  `git worktree prune` cannot remove it during a run, and it never appears in task workspace lists:
+  reconciliation neither matches nor counts entries below the review root. Before any file is
+  written the tree listing is scanned: case- or Unicode-normalization-colliding paths refuse the
+  worktree (`case-collision`, `normalization-collision`); blobs above the blob limit (2 MiB) and
+  blobs Git classifies as binary are marked skip-worktree in the review index and never
+  materialized. Removal (`worktree unlock`, `worktree remove --force`, which also drops that one
+  administrative entry even when the directory is already gone) runs on settlement, abandonment and
+  server shutdown, and the next start sweeps every orphan a crash left; `git worktree prune`, which
+  would touch the user's other stale entries, is never used.
+- **Private review refs.** `refs/keiko-review/<n>/<headSha>` (and `.../base-<baseSha>` when the
+  base had to be fetched) or `refs/keiko-review/local/<leaf>` keep the reviewed objects available
+  after the worktree is gone. The fetch uses `--no-tags --no-recurse-submodules
+  --no-write-fetch-head --no-auto-maintenance --refmap=` so no branch, remote-tracking ref or
+  `FETCH_HEAD` is written; a ref is swept when its pull request is closed, when no retained run
+  references it, or after 30 days, at server start and daily. Deletion is refused before a spawn
+  for any ref outside `refs/keiko-review/`.
+
+Both run through a third runner profile in `keiko-git` beside D4a's two: `createGitReviewProcessRunner`
+(local review operations, `gitEnv` isolation) and `createGitReviewNetworkProcessRunner` (the pull
+request fetch, `networkGitEnv` plus `NETWORK_CONFIG_ARGS`), each adding `GIT_LFS_SKIP_SMUDGE=1` and
+injecting the one reviewed constant `GIT_REVIEW_HARDENING_CONFIG` ahead of every caller argument:
+`core.hooksPath` = the null device (no file can exist below it, so no hook resolves),
+`core.fsmonitor=false`, `core.symlinks=false`, `core.protectNTFS=true`, `core.protectHFS=true`,
+`core.sparseCheckout=false`, `submodule.recurse=false`, `fetch.recurseSubmodules=false`,
+`protocol.file.allow=never`, `protocol.ext.allow=never`, `gc.auto=0`, `maintenance.auto=false`, plus
+empty `smudge`/`clean`/`process` commands and `required=false` for `lfs` and for every filter
+driver the repository configuration or the head's `.gitattributes` names (validated names only; an
+unsafe configured name refuses the worktree). A review runner refuses every caller-supplied
+`-c`/`--config-env` override. The user's branches, `HEAD`, index, working tree, stash and
+`FETCH_HEAD` are byte-identical before and after resolution, worktree creation and cleanup.
 
 ## Consequences
 

@@ -1,5 +1,13 @@
 import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
 import {
+  REVIEW_PULL_REQUEST_ROUTE,
+  REVIEW_PULL_REQUESTS_ROUTE,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  handleReviewPullRequestDetail,
+  handleReviewPullRequestList,
+} from "./review/target/routes.js";
+import {
   handleListMarkdownSkills,
   handleReadMarkdownSkill,
   handleImportMarkdownSkill,
@@ -770,6 +778,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/git/remotes",
     handler: (ctx, deps) => handleGitRemotes(ctx, deps, deps.gitRouteOptions),
   },
+  // Issue #4133 (Epic #4130, ADR-0182) — read-only pull request list and detail of the Pull requests
+  // area: two fixed GraphQL reads, the repository addressed by `root` like every Git window read.
+  { method: "GET", pattern: REVIEW_PULL_REQUESTS_ROUTE, handler: handleReviewPullRequestList },
+  { method: "GET", pattern: REVIEW_PULL_REQUEST_ROUTE, handler: handleReviewPullRequestDetail },
   // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
   // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted
   // task ids only (never free-form argv), workspace-contained cwd, output cap, timeout, cancellation,

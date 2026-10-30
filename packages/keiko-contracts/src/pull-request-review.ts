@@ -301,3 +301,138 @@ export interface ReviewSeedScore {
   /** Results whose case id matched no seed case, or repeated an earlier result. */
   readonly unmatchedResults: number;
 }
+
+// ─── Review target resolution and pull request reads (Issue #4133) ──────────
+
+/** What a caller asks to review; the resolver turns it into a `ReviewTarget` with exact SHAs. */
+export type ReviewTargetRequest =
+  | { readonly kind: "pull-request"; readonly number: number }
+  | { readonly kind: "local-range"; readonly baseRef: string; readonly headRef: string };
+
+/** Closed reasons a target resolution is refused (`review.target.refused`). */
+export const REVIEW_TARGET_REFUSAL_REASONS = [
+  "gh-unavailable",
+  "gh-unauthenticated",
+  "no-github-remote",
+  "not-found",
+  "target-changed",
+  "ref-invalid",
+  "fetch-failed",
+  "rate-limited",
+] as const;
+export type ReviewTargetRefusalReason = (typeof REVIEW_TARGET_REFUSAL_REASONS)[number];
+
+/** Closed details of a refused review worktree; child 6 settles each as `skipped/worktree-failed`. */
+export const REVIEW_WORKTREE_REFUSAL_REASONS = [
+  "case-collision",
+  "normalization-collision",
+  "checkout-failed",
+  "disk-full",
+  "timeout",
+] as const;
+export type ReviewWorktreeRefusalReason = (typeof REVIEW_WORKTREE_REFUSAL_REASONS)[number];
+
+export const REVIEW_WORKTREE_STATES = [
+  "created",
+  "in-use",
+  "removing",
+  "removed",
+  "orphaned",
+] as const;
+export type ReviewWorktreeState = (typeof REVIEW_WORKTREE_STATES)[number];
+
+/** Files above this size are not materialized in a review worktree (reported as `too-large`). */
+export const REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES = 2 * 1024 * 1024;
+/** Private review refs older than this are swept regardless of run references. */
+export const REVIEW_PRIVATE_REF_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export const REVIEW_PULL_REQUESTS_ROUTE = "/api/git-review/pull-requests";
+export const REVIEW_PULL_REQUEST_ROUTE = "/api/git-review/pull-requests/:number";
+export const REVIEW_PULL_REQUEST_PAGE_SIZE = 50;
+export const REVIEW_PULL_REQUEST_MAX_PAGES = 20;
+export const REVIEW_PULL_REQUEST_TITLE_MAX_CHARS = 256;
+
+/** Closed availability of the read-only pull request list and detail. */
+export const REVIEW_PULL_REQUEST_AVAILABILITY = [
+  "available",
+  "gh-unavailable",
+  "gh-unauthenticated",
+  "no-github-remote",
+  "rate-limited",
+  "failed",
+] as const;
+export type ReviewPullRequestAvailability = (typeof REVIEW_PULL_REQUEST_AVAILABILITY)[number];
+
+export const REVIEW_PULL_REQUEST_REVIEW_DECISIONS = [
+  "approved",
+  "changes-requested",
+  "review-required",
+  "none",
+] as const;
+export type ReviewPullRequestReviewDecision = (typeof REVIEW_PULL_REQUEST_REVIEW_DECISIONS)[number];
+
+export const REVIEW_PULL_REQUEST_MERGEABLE_STATES = [
+  "mergeable",
+  "conflicting",
+  "unknown",
+] as const;
+export type ReviewPullRequestMergeableState = (typeof REVIEW_PULL_REQUEST_MERGEABLE_STATES)[number];
+
+export const REVIEW_PULL_REQUEST_CHECK_STATES = [
+  "success",
+  "failure",
+  "pending",
+  "error",
+  "none",
+] as const;
+export type ReviewPullRequestCheckState = (typeof REVIEW_PULL_REQUEST_CHECK_STATES)[number];
+
+/**
+ * One open pull request as the Pull requests area lists it. `title` and `authorLogin` are
+ * untrusted display data, bounded and stripped of control characters; the body is never fetched.
+ */
+export interface ReviewPullRequestSummary {
+  readonly number: number;
+  readonly title: string;
+  readonly authorLogin: string | null;
+  readonly isDraft: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly baseRef: string;
+  readonly baseSha: string;
+  readonly headRef: string;
+  readonly headSha: string;
+  /** `owner/name` of the head repository, or `null` when the fork was deleted. */
+  readonly headRepository: string | null;
+  readonly isCrossRepository: boolean;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly reviewDecision: ReviewPullRequestReviewDecision;
+  readonly mergeable: ReviewPullRequestMergeableState;
+  readonly checkState: ReviewPullRequestCheckState;
+}
+
+export interface ReviewPullRequestDetail extends ReviewPullRequestSummary {
+  readonly checkCounts: {
+    readonly passing: number;
+    readonly failing: number;
+    readonly pending: number;
+  };
+  readonly approvalCount: number;
+}
+
+export interface ReviewPullRequestListResponse {
+  readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+  readonly availability: ReviewPullRequestAvailability;
+  readonly pullRequests: readonly ReviewPullRequestSummary[];
+  /** More open pull requests exist than the 20-page bound returned. */
+  readonly truncated: boolean;
+}
+
+export interface ReviewPullRequestDetailResponse {
+  readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+  readonly availability: ReviewPullRequestAvailability;
+  /** `null` when unavailable or when the repository has no such open or closed pull request. */
+  readonly pullRequest: ReviewPullRequestDetail | null;
+}

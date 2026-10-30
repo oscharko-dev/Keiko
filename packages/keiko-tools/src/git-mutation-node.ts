@@ -695,6 +695,18 @@ export {
   type NodeGitPullRequestAdapterDeps,
 } from "./git-pr-node.js";
 
+// The read-only pull request list and detail for Keiko for Quality (Issue #4133): two fixed GraphQL
+// reads through the same spawn boundary with their own exact-argv allowlist.
+export {
+  createNodeGitReviewPullRequestReader,
+  type GitReviewPrDetailOutcome,
+  type GitReviewPrListOutcome,
+  type GitReviewPrReadFailure,
+  type GitReviewPrReadFailureSink,
+  type GitReviewPullRequestReader,
+  type NodeGitReviewPullRequestReaderDeps,
+} from "./git-pr-review-read-node.js";
+
 // The Node governed merge executor (Issue #478) shells `gh api` through the same spawn boundary with its
 // OWN dedicated merge allowlist (the merge PUT, the readiness GETs, and the guarded branch DELETE — no
 // generic exec); it is exposed on the SAME `./internal/git-mutation` subpath. The GitHub token is read by

@@ -5352,6 +5352,18 @@ export type {
   ReviewSettlementKind,
   ReviewSkippedReason,
   ReviewTarget,
+  ReviewTargetRefusalReason,
+  ReviewTargetRequest,
+  ReviewPullRequestAvailability,
+  ReviewPullRequestCheckState,
+  ReviewPullRequestDetail,
+  ReviewPullRequestDetailResponse,
+  ReviewPullRequestListResponse,
+  ReviewPullRequestMergeableState,
+  ReviewPullRequestReviewDecision,
+  ReviewPullRequestSummary,
+  ReviewWorktreeRefusalReason,
+  ReviewWorktreeState,
 } from "./pull-request-review.js";
 export type {
   ReviewContractIssue,

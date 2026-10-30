@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "991d7ab601c6975bd85fdc364decac794ddb91f9cb0f16bd459b7a7f3d84bc12"
+    "catalogDigest": "7f18bc6848548344a142706f64abfc612e4fdad39999e8c7d24004a261680868"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 613,
-    "proofCount": 636,
-    "resolvedProofCount": 636,
-    "failureClassCount": 383,
+    "operationCount": 621,
+    "proofCount": 644,
+    "resolvedProofCount": 644,
+    "failureClassCount": 387,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -677,7 +677,15 @@
         "pr-description.model.completed",
         "pr-description.model.failed",
         "pr-description.model.started",
-        "pr-description.repository.mismatch"
+        "pr-description.repository.mismatch",
+        "review.target.listed",
+        "review.target.refused",
+        "review.target.resolved",
+        "review.worktree.created",
+        "review.worktree.orphan-swept",
+        "review.worktree.refs-swept",
+        "review.worktree.refused",
+        "review.worktree.removed"
       ],
       "scenarios": [
         "editor-delivery.crash",
@@ -1185,7 +1193,11 @@
       "bff.rejection",
       "client-diagnostics.rejection",
       "runtime-packages.rejection"
-    ]
+    ],
+    "review-target-read": ["editor-delivery.dependency-failure"],
+    "review-target-resolution": ["editor-delivery.rejection"],
+    "review-worktree-lifecycle": ["editor-delivery.rejection"],
+    "review-private-ref-retention": ["editor-delivery.dependency-failure"]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -2610,6 +2622,14 @@
       "packages/keiko-local-knowledge/src/repository-pod.test.ts"
     ],
     "request.close-line": ["packages/keiko-server/src/server.activity-log-proof.test.ts"],
+    "review.target.listed.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
+    "review.target.refused.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
+    "review.target.resolved.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
+    "review.worktree.created.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
+    "review.worktree.orphan-swept.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
+    "review.worktree.refs-swept.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
+    "review.worktree.refused.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
+    "review.worktree.removed.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
     "runs.apply.settled.line": ["packages/keiko-server/src/run-handlers.test.ts"],
     "runs.patch.refused.line": ["packages/keiko-server/src/sink.test.ts"],
     "runtime.confinement.failed.emitted-line": [

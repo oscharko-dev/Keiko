@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "991d7ab601c6975bd85fdc364decac794ddb91f9cb0f16bd459b7a7f3d84bc12",
+    "catalogDigest": "7f18bc6848548344a142706f64abfc612e4fdad39999e8c7d24004a261680868",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33390,6 +33390,421 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "review.target.listed",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "review/activity-log.logReviewTargetListed",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "read": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["list", "detail"]
+          },
+          "availability": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "available",
+              "gh-unavailable",
+              "gh-unauthenticated",
+              "no-github-remote",
+              "rate-limited",
+              "failed"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "truncated": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "cacheHit": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "pages": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "rejectedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["review-target-read"],
+        "proofIds": ["review.target.listed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:23",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:274"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "review.target.refused",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "review/activity-log.logReviewTargetRefused",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "targetKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["pull-request", "local-range"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "gh-unavailable",
+              "gh-unauthenticated",
+              "no-github-remote",
+              "not-found",
+              "target-changed",
+              "ref-invalid",
+              "fetch-failed",
+              "rate-limited"
+            ]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["review-target-resolution"],
+        "proofIds": ["review.target.refused.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:87",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:330"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "review.target.resolved",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "review/activity-log.logReviewTargetResolved",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "targetKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["pull-request", "local-range"]
+          },
+          "baseShaDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "headShaDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "isCrossRepository": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "baseFetched": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "fetchDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["review-target-resolution"],
+        "proofIds": ["review.target.resolved.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:59",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:306"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "review.worktree.created",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "review/activity-log.logReviewWorktreeCreated",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "runDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "materializedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "skippedLargeCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "skippedBinaryCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "filterDriverCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "start",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["review-worktree-lifecycle"],
+        "proofIds": ["review.worktree.created.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:125",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:353"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "review.worktree.orphan-swept",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "review/activity-log.logReviewWorktreeOrphanSwept",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "removedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "failedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["review-worktree-lifecycle"],
+        "proofIds": ["review.worktree.orphan-swept.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:207",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:409"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "review.worktree.refs-swept",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "review/activity-log.logReviewRefsSwept",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "trigger": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["startup", "daily"]
+          },
+          "deletedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "retainedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "failedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["review-private-ref-retention"],
+        "proofIds": ["review.worktree.refs-swept.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:226",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:433"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "review.worktree.refused",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "review/activity-log.logReviewWorktreeRefused",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "runDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "case-collision",
+              "normalization-collision",
+              "checkout-failed",
+              "disk-full",
+              "timeout"
+            ]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["review-worktree-lifecycle"],
+        "proofIds": ["review.worktree.refused.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:147",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:375"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "review.worktree.removed",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "review/activity-log.logReviewWorktreeRemoved",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "runDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "trigger": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["settled", "abandoned", "shutdown", "startup"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["removed", "failed"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["review-worktree-lifecycle"],
+        "proofIds": ["review.worktree.removed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:177",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:391"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "runs.apply.settled",
         "category": "http",
         "owner": "keiko-server",
@@ -54014,13 +54429,123 @@
           "support.report.failed",
           "support.report.ui.failed"
         ]
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "review-target-read",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["review.target.listed"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["review.target.listed"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["review.target.listed"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["review.target.listed"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "review-target-resolution",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["review.target.resolved"],
+          "failure": ["review.target.refused"],
+          "loss": []
+        },
+        "requiredCausalOperations": ["review.target.refused", "review.target.resolved"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["review.target.refused", "review.target.resolved"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["review.target.resolved"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "digest",
+          "duration",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "review-worktree-lifecycle",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": ["review.worktree.created"],
+          "state": ["review.worktree.orphan-swept"],
+          "end": ["review.worktree.removed"],
+          "failure": ["review.worktree.refused"],
+          "loss": []
+        },
+        "requiredCausalOperations": [
+          "review.worktree.created",
+          "review.worktree.orphan-swept",
+          "review.worktree.refused",
+          "review.worktree.removed"
+        ],
+        "requiredLossOperations": [],
+        "requiredProofOperations": [
+          "review.worktree.created",
+          "review.worktree.orphan-swept",
+          "review.worktree.refused",
+          "review.worktree.removed"
+        ],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [
+          "review.worktree.created",
+          "review.worktree.orphan-swept",
+          "review.worktree.removed"
+        ],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "digest",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "review-private-ref-retention",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["review.worktree.refs-swept"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["review.worktree.refs-swept"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["review.worktree.refs-swept"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["review.worktree.refs-swept"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
       }
     ],
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 383,
-      "completeClassCount": 383,
+      "supportedClassCount": 387,
+      "completeClassCount": 387,
       "completeness": "complete",
       "classes": [
         {
@@ -93257,6 +93782,466 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "review-private-ref-retention",
+          "requirementContract": "review-private-ref-retention",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["review.worktree.refs-swept"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "review.worktree.refs-swept",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["review.worktree.refs-swept"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "review.worktree.refs-swept",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "deletedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "failedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "retainedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "trigger",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.worktree.refs-swept.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "review-target-read",
+          "requirementContract": "review-target-read",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["review.target.listed"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "review.target.listed",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["review.target.listed"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "review.target.listed",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "availability",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "cacheHit",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "count",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "pages",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "read",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "rejectedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "truncated",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.target.listed.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "review-target-resolution",
+          "requirementContract": "review-target-resolution",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end", "failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["review.target.resolved"],
+            "failure": ["review.target.refused"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "review.target.refused",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.target.resolved",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["review.target.resolved"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "review.target.refused",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "targetKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.target.refused.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.target.resolved",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "baseFetched",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "baseShaDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "fetchDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "headShaDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "isCrossRepository",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "targetKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "digest",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.target.resolved.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "review-worktree-lifecycle",
+          "requirementContract": "review-worktree-lifecycle",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end", "failure", "start", "state"],
+          "lifecycleOperations": {
+            "start": ["review.worktree.created"],
+            "state": ["review.worktree.orphan-swept"],
+            "end": ["review.worktree.removed"],
+            "failure": ["review.worktree.refused"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "review.worktree.created",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.worktree.orphan-swept",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.worktree.refused",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.worktree.removed",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [
+            "review.worktree.created",
+            "review.worktree.orphan-swept",
+            "review.worktree.removed"
+          ],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "review.worktree.created",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "start",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "filterDriverCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "materializedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "runDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "skippedBinaryCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "skippedLargeCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.worktree.created.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.worktree.orphan-swept",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "failedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "removedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.worktree.orphan-swept.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.worktree.refused",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "runDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.worktree.refused.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.worktree.removed",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "runDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "trigger",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.worktree.removed.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "runtime-confinement",
           "requirementContract": "runtime-confinement",
           "productSurfaces": ["keiko-server"],
@@ -101900,7 +102885,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 92,
+    "dynamicCount": 93,
     "unknownCategoryCount": 75,
     "authoritative": false
   },
@@ -104020,6 +105005,13 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
+      "site": "packages/keiko-server/src/review/diagnostics.ts:32",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
       "site": "packages/keiko-server/src/sink.ts:233",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
@@ -106070,7 +107062,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1634",
+      "site": "packages/keiko-server/src/deps.ts:1644",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106873,7 +107865,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2401",
+      "site": "packages/keiko-server/src/deps.ts:2411",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107172,6 +108164,75 @@
       "package": "keiko-server"
     },
     {
+      "op": "review.services.compose",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:4993",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.target.listed",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/activity-log.ts:26",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.target.refused",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/activity-log.ts:90",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.target.resolved",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/activity-log.ts:62",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.worktree.created",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/activity-log.ts:128",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.worktree.orphan-swept",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/activity-log.ts:210",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.worktree.refs-sweep",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/review/services.ts:241",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.worktree.refs-swept",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/activity-log.ts:229",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.worktree.refused",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/activity-log.ts:150",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.worktree.removed",
+      "category": "process",
+      "site": "packages/keiko-server/src/review/activity-log.ts:180",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.worktree.startup-sweep",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:5021",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "runs.apply.settled",
       "category": "http",
       "site": "packages/keiko-server/src/run-handlers.ts:86",
@@ -107349,7 +108410,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4665",
+      "site": "packages/keiko-server/src/deps.ts:4676",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107509,7 +108570,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3258",
+      "site": "packages/keiko-server/src/deps.ts:3269",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -108575,6 +109636,17 @@
     "repository.fingerprint-diff.completed",
     "request",
     "retrieval-activity.tryBuild",
+    "review.services.compose",
+    "review.target.listed",
+    "review.target.refused",
+    "review.target.resolved",
+    "review.worktree.created",
+    "review.worktree.orphan-swept",
+    "review.worktree.refs-sweep",
+    "review.worktree.refs-swept",
+    "review.worktree.refused",
+    "review.worktree.removed",
+    "review.worktree.startup-sweep",
     "runs.apply.settled",
     "runs.patch.refused",
     "runtime.confinement.failed",

@@ -208,6 +208,11 @@ import {
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
+import {
+  createReviewServices,
+  REVIEW_WORKTREE_ROOT_NAME,
+  type ReviewServices,
+} from "./review/services.js";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -1182,6 +1187,9 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Test-only Git BFF seams. Production leaves this undefined so repository status/diff use the
   // fixed native Git runner and conservative caps.
   readonly gitRouteOptions?: GitRouteOptions | undefined;
+  // Issue #4133 (ADR-0182 D3): pull request reads, review target resolution and the server-owned
+  // review worktrees. Composed once per graph over `<state>/review-worktrees`.
+  readonly reviewServices?: ReviewServices | undefined;
   // Epic #1941 — native OS file/folder dialog seam. Tests inject a fake adapter, platform, or
   // single-flight state; production leaves this undefined so the route lazily selects the real
   // platform adapter and the module-level single-flight instance.
@@ -1296,6 +1304,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
 }
 
 export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependency {
+  // Issue #4133 test seam: inject review services instead of composing them over the state dir.
+  readonly reviewServices?: ReviewServices | undefined;
   /** Server-composed upstream seam shared by preview, provisioning and runtime intake. */
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
   // Path to a gateway config file (`keiko ui --config`); undefined → no config inspector data.
@@ -3118,6 +3128,7 @@ function buildWorkspaceReconciliation(
     activePointerStore,
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    reviewWorktreeRoot: join(dirname(resolvedUiDbPath), REVIEW_WORKTREE_ROOT_NAME),
     createAdapter: createGitWorktreeAdapterFactory(options.env),
     redactString,
     now: () => Date.now(),
@@ -4916,6 +4927,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // no configured model profile — is the ONE closed reason prDescriptionRoutes.ts's "unavailable"
   // fallback exists for.
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
+  const reviewServices = composeReviewServices(args);
   const deps: UiHandlerDeps = {
     mcpSettings,
     mcpConnections,
@@ -4937,6 +4949,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...(args.options.gatewayReadinessFetch === undefined
       ? {}
       : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),
+    ...(reviewServices === undefined ? {} : { reviewServices }),
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -4953,7 +4966,74 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     deps,
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
+  attachReviewServicesLifecycle(args, deps);
   return installConversationReadinessInitialization(installChatToolCatalogs(deps, args.options));
+}
+
+/**
+ * Issue #4133: the review services live over `<state>/review-worktrees`, beside the task-workspace
+ * managed root and outside every user checkout, and are composed over production persistence only.
+ * A composition failure leaves the review routes unavailable (503) and records a diagnostic; it
+ * never fails server start.
+ */
+function composeReviewServices(args: UiHandlerDepsAssemblyArgs): ReviewServices | undefined {
+  if (args.options.reviewServices !== undefined) return args.options.reviewServices;
+  // An injected store (tests, embedded graphs) owns no server state directory to place it in.
+  if (args.options.store !== undefined) return undefined;
+  try {
+    return createReviewServices({
+      reviewRoot: join(dirname(args.resolvedUiDbPath), REVIEW_WORKTREE_ROOT_NAME),
+      activityLog: args.options.activityLog ?? processServerLogSink(),
+    });
+  } catch (error) {
+    emitServerDiagnostic(
+      args.options.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: args.bootstrapCorrelationId,
+        operation: "review.services.compose",
+        source: "review.bootstrap",
+        error,
+        summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+        redact: (message): string => message,
+      }),
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Sweeps orphaned review worktrees and private refs at start (production persistence only) and
+ * removes every live review worktree when the graph is disposed.
+ */
+function attachReviewServicesLifecycle(args: UiHandlerDepsAssemblyArgs, deps: UiHandlerDeps): void {
+  const reviewServices = deps.reviewServices;
+  if (reviewServices === undefined) return;
+  if (args.options.reviewServices === undefined) {
+    const correlationId = newCorrelationId();
+    void Promise.resolve()
+      .then(() => reviewServices.startup(correlationId))
+      .catch((error: unknown) => {
+        emitServerDiagnostic(
+          args.options.diagnostics,
+          serverDiagnosticFromError({
+            correlationId,
+            parentCorrelationId: args.bootstrapCorrelationId,
+            operation: "review.worktree.startup-sweep",
+            source: "review.bootstrap",
+            error,
+            summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+            redact: (message): string => message,
+          }),
+        );
+      });
+  }
+  const disposeGraph = deps.dispose;
+  Object.assign(deps, {
+    dispose: async (): Promise<void> => {
+      await reviewServices.dispose();
+      await disposeGraph?.();
+    },
+  });
 }
 
 function installChatToolCatalogs(

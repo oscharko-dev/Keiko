@@ -6,7 +6,7 @@
 
 export { KEIKO_GIT_VERSION } from "./version.js";
 
-export { gitEnv, networkGitEnv } from "./env.js";
+export { gitEnv, gitReviewEnv, networkGitEnv, networkGitReviewEnv } from "./env.js";
 export { resolveGitExecutable } from "./git-executable.js";
 export {
   GIT_BASE_ARGS,
@@ -38,3 +38,45 @@ export {
   type GitFailureReason,
   type GitRemoteFailureReason,
 } from "./classify.js";
+export {
+  GIT_REVIEW_HARDENING_CONFIG,
+  createGitReviewNetworkProcessRunner,
+  createGitReviewProcessRunner,
+  gitReviewFilterNeutralizationArgs,
+  gitReviewFixedArgs,
+  isSafeGitFilterDriverName,
+  type GitReviewRunnerOptions,
+} from "./review-runner.js";
+export {
+  GIT_REVIEW_PRIVATE_REF_PREFIX,
+  GIT_REVIEW_WORKTREE_LOCK_REASON,
+  GitReviewOperandError,
+  addGitReviewWorktree,
+  checkoutGitReviewWorktree,
+  createGitReviewRef,
+  deleteGitReviewRef,
+  fetchGitReviewCommit,
+  fetchGitReviewPullRequestHead,
+  gitReviewCommitExists,
+  gitReviewLocalRangeRef,
+  gitReviewPullRequestBaseRef,
+  gitReviewPullRequestRef,
+  isGitReviewPrivateRef,
+  listGitReviewBinaryPaths,
+  listGitReviewConfiguredFilterDrivers,
+  listGitReviewRefs,
+  listGitReviewTree,
+  listGitReviewWorktrees,
+  readGitReviewBlob,
+  readGitReviewTreeIntoIndex,
+  removeGitReviewWorktree,
+  resolveGitReviewCommit,
+  showGitReviewFile,
+  skipGitReviewWorktreePaths,
+  unlockGitReviewWorktree,
+  type GitReviewFetchRequest,
+  type GitReviewOperationContext,
+  type GitReviewOperationResult,
+  type GitReviewTreeEntry,
+  type GitReviewWorktreeListEntry,
+} from "./review-operations.js";

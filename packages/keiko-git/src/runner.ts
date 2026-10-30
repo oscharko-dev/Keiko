@@ -39,7 +39,7 @@ const LOCAL_READ_CONFIG_ARGS: readonly string[] = [
   "-c",
   "core.editor=true",
 ];
-const NETWORK_CONFIG_ARGS: readonly string[] = [
+export const NETWORK_CONFIG_ARGS: readonly string[] = [
   "-c",
   "core.fsmonitor=false",
   "-c",
@@ -133,8 +133,8 @@ const PRE_SUBCOMMAND_FLAG_NO_VALUE: ReadonlySet<string> = new Set([
 // `--no-ext-diff --no-textconv` — silently reopening the repository-local `diff.external` /
 // `textconv` path that #3348 closed, for any key the deny-list does not name. One set now, so a
 // flag added to the grammar cannot be known to one half of it and invisible to the other.
-const CONFIG_OVERRIDE_FLAGS: ReadonlySet<string> = new Set(["-c", "--config-env"]);
-const CONFIG_ENV_JOINED_PREFIX = "--config-env=";
+export const CONFIG_OVERRIDE_FLAGS: ReadonlySet<string> = new Set(["-c", "--config-env"]);
+export const CONFIG_ENV_JOINED_PREFIX = "--config-env=";
 
 const PRE_SUBCOMMAND_FLAG_ONE_VALUE: ReadonlySet<string> = new Set([
   "-C",
@@ -447,7 +447,7 @@ const SPAWN_UNTRUSTED_RESULT: Omit<GitProcessResult, "truncated" | "timedOut" | 
   refusal: "untrusted-executable",
 };
 
-function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitProcessResult {
+export function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitProcessResult {
   return {
     exitCode: 128,
     signal: null,
@@ -540,7 +540,7 @@ function wireGitProcessEvents(
   });
 }
 
-function createGitProcessRunnerWithFixedArgs(
+export function createGitProcessRunnerWithFixedArgs(
   buildEnv: () => NodeJS.ProcessEnv,
   fixedArgs: readonly string[],
 ): GitProcessRunner {
