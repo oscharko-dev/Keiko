@@ -142,17 +142,50 @@ and reconstruction; the host has only an injected port.
 
 ### D6 — Compatibility and scope
 
-The operator `mcp-servers.json` registry, credential relay and OAuth remain owned by
-ADR-0137. The expanded delivery scope also makes configured external MCP tools available
-to ordinary Chat and OpenCode through these existing owners. Managed Jira providers remain
-server-composed; they do not require operator registry entries. Retrieval, citations and
-conversation budgets remain owned by their existing paths.
+The operator `mcp-servers.json` registry, credential relay and encrypted MCP vault remain
+shared by ordinary Chat and OpenCode. Settings own configuration and sign-in for external
+servers. Server composition owns one OAuth lifecycle and connection owner; the official SDK
+inside `keiko-mcp` performs resource/issuer discovery, PKCE and token exchange. The configured
+issuer must match protected-resource metadata and validated authorization-server metadata.
+Both RFC 8414 and OIDC discovery remain supported. Explicit public client IDs (including
+configured metadata-document IDs) or the SDK's legacy dynamic registration path are used;
+Keiko does not publish a new public metadata service.
+
+Each sign-in attempt has a private one-use IPv4 loopback callback, separate random OAuth state,
+app-session ownership, a five-minute expiry and configuration-generation cancellation. Callback
+issuers are validated before code exchange. SDK credentials live in a separate namespace of the
+existing MCP vault, bound to server, exact resource, issuer, client and requested scope. Opaque
+legacy runtime credentials are never interpreted as SDK tokens; those installations sign in again.
+Restored SDK grants require a finite, non-negative stored expiry. Zero explicitly represents a
+token without a server-provided lifetime; missing or malformed expiry requires sign-in again.
+Refused expiry metadata does not discard a known token from the bounded credential-redaction
+floor. Malformed or oversized historical credential floors refuse restored authority before any
+network effect.
+Refreshes are coalesced per current server generation and occur before dispatch. Authentication
+failures never replay an MCP tool call. Native production runs consume OAuth servers through the
+same run-bound relay as other configured servers; external tokens never enter their configuration
+or credential database. The standalone legacy runtime OAuth adapter remains compatibility code.
+
+Successful sign-in and explicit sign-out rotate a durable per-server `credentialGeneration` and
+the registry revision. Old connection/relay generations and Chat disclosures become stale while
+unrelated server connections remain usable. Removing or changing an OAuth target removes orphaned
+central ciphertext through the existing Settings reconciliation; unchanged disabled definitions
+retain credentials for explicit later re-enablement. Terminal logging loss never changes an
+observed authentication outcome. Registered `mcp.authorization.state` evidence contains only
+closed states, opaque attempt identity and completeness/loss/count fields; OAuth state, tokens,
+verifiers, endpoints and provider responses are excluded.
+
+Managed Jira providers remain server-composed and require no operator registry entry. Retrieval,
+citations and conversation budgets remain owned by their existing paths.
 
 Settings extend the same registry additively: explicit automatic discovery permits an
 initially empty tool map, and local secret environment entries use references instead of
 literal credentials. Existing explicit tool maps retain their admission semantics. Discovery
 never grants execution authority. Server names accept lowercase letters, digits, underscores
-and hyphens; ambiguous native action identities across servers are refused.
+and hyphens; ambiguous native action identities across servers are refused. External tool
+names retain the MCP grammar through 128 characters. Native action admission allows the full
+64-character server name plus separator and 128-character normalized tool name (193 total);
+length admission never replaces the exact server/tool grant.
 
 Static credentials reuse the existing MCP encrypted vault in a separate reference namespace.
 References are immutable and sealed values are bound to the server name and exact remote
@@ -177,10 +210,32 @@ crash between vault and registry publication cannot revive an earlier disclosure
 External servers use the same package's SDK client adapter with automatic protocol-version
 negotiation. Streamable HTTP is the modern remote transport; explicit legacy HTTP+SSE and
 local stdio preserve compatibility with existing servers. Process launch parameters and HTTP
-egress are admitted by server composition. The adapter bounds discovery/payloads, validates
+egress are admitted by server composition. The adapter bounds discovery/payloads, rechecks uncached declarations before each call, validates
 arguments, keeps invocation context out of MCP arguments, rechecks authority at dispatch and
 never replays a tool call after a transport failure. Local stdio explicitly overrides the
 SDK's inherited environment defaults; credentials remain in memory at the launch boundary.
+The default executable search path includes the configured program's own directory and the
+platform's minimal system directories, never the parent process's PATH. Windows keeps the
+validated system directory for DLL lookup and uses the private connection directory for
+profiles and temporary files. Explicit Windows environment keys are case-folded; collisions
+fail closed. Registry paths accept fully qualified drive paths as well as POSIX absolute
+paths; UNC shares, device namespaces and drive-relative paths remain denied.
+The execution boundary additionally requires the native host path form; a Windows root-relative
+POSIX-looking path never inherits the current drive. Local stdio runs behind a byte-preserving
+lifetime owner: ordinary POSIX descendants share an owned process group; Windows uses the existing
+digest-admitted native supervisor with a non-breakaway, kill-on-close Job Object before launching
+the Node owner. Interpreter and loader variables are encoded for the provider, so they cannot
+execute inside the lifetime owner. The native owner is an MCP host-process lifetime scope, not a
+Coding sandbox or a grant of Coding authority. Windows installations without an admitted owner
+report local MCP as unsupported and continue to support remote transports. Daemonized provider
+services should use remote MCP; the POSIX process group is not a sandbox against deliberately
+escaping operator-trusted code.
+
+Legacy resource URLs containing access_token are normalized by Settings into the existing
+encrypted Authorization-header custody before they can be returned or persisted. Startup applies
+the same migration. OAuth-configured entries remove the obsolete URL bearer and use their bound
+authorization instead. Conflicting or repeated bearer sources fail closed; the protocol adapter
+refuses any remaining bearer query URL before network dispatch.
 
 The configured connection owner shares one client per current server definition. Registry
 commits synchronously abort the old generation when its server changes, is disabled or is

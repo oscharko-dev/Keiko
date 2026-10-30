@@ -85,6 +85,7 @@ function fixture(
     mcpSettings: {
       read: () => settings,
       generation: () => new AbortController().signal,
+      revoke: (): void => undefined,
       revisionSignal: () => new AbortController().signal,
       secret: () => undefined,
       update: () => ({ ok: false, snapshot: settings }),

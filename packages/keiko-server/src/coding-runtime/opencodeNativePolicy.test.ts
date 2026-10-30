@@ -71,7 +71,7 @@ function effectOf(mode: string, permission: string, resources: readonly string[]
 
 describe("native policy request parsing", () => {
   it("accepts the complete bounded MCP permission identity without allowing arbitrary long names", () => {
-    const permission = mcpToolAction("s".repeat(64), "t".repeat(64));
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(128));
     const body = {
       action: "native-policy",
       ...request(permission, ["*"]),

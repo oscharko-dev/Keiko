@@ -66,6 +66,40 @@ beforeEach(() => {
 });
 
 describe("MCP Settings", () => {
+  it("edits OAuth definitions without dropping their issuer, scopes or tool admission", async () => {
+    const previous = saved.servers[0];
+    if (previous === undefined) throw new Error("Missing fixture server");
+    const oauth: McpSettingsSnapshot = {
+      ...saved,
+      servers: [
+        {
+          ...previous,
+          transport: {
+            kind: "remote",
+            url: "https://synthetic.example.test/mcp",
+            oauth: {
+              issuer: "https://identity.example.test",
+              clientId: "synthetic-public",
+              scope: "tools.read",
+            },
+          },
+          tools: { search: "read" },
+        },
+      ],
+    };
+    api.mockResolvedValueOnce(oauth).mockResolvedValueOnce(oauth);
+    panel();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Expected OAuth issuer (HTTPS)")).toHaveValue(
+      "https://identity.example.test",
+    );
+    expect(screen.getByLabelText("Public client ID (optional)")).toHaveValue("synthetic-public");
+    fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+    const update = JSON.parse(String(api.mock.calls[1]?.[1]?.body)) as McpSettingsUpdate;
+    expect(update.servers[0]?.transport).toEqual(oauth.servers[0]?.transport);
+    expect(update.servers[0]?.tools).toEqual({ search: "read" });
+  });
   it("saves token references, connects only after saving, and clears the password field", async () => {
     api
       .mockResolvedValueOnce(empty)
@@ -77,7 +111,7 @@ describe("MCP Settings", () => {
       target: { value: "synthetic-private-ui-token" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
-    await screen.findByText("Connected · 2 tools");
+    await screen.findByText("Connected · Tools: 2");
     expect(api.mock.calls.map(([path, init]) => [path, init?.method ?? "GET"])).toEqual([
       ["/api/mcp/servers", "GET"],
       ["/api/mcp/servers", "PUT"],
@@ -115,7 +149,7 @@ describe("MCP Settings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
     expect(screen.getByLabelText(/^Name /)).toHaveAttribute("readonly");
     fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
-    await screen.findByText("Connected · 1 tools");
+    await screen.findByText("Connected · Tools: 1");
     const mutation = JSON.parse(String(api.mock.calls[1]?.[1]?.body)) as McpSettingsUpdate;
     expect(mutation.secrets).toEqual({});
     expect(mutation.servers[0]?.transport).toEqual(saved.servers[0]?.transport);
@@ -139,9 +173,31 @@ describe("MCP Settings", () => {
     fireEvent.submit(form);
     expect(api).toHaveBeenCalledTimes(2);
     resolveSave?.(saved);
-    await screen.findByText("Connected · 1 tools");
+    await screen.findByText("Connected · Tools: 1");
     expect(api).toHaveBeenCalledTimes(3);
   });
+});
+
+it("offers sign-out for stored OAuth credentials while the server is disabled", async () => {
+  api.mockResolvedValueOnce({
+    ...saved,
+    servers: saved.servers.map((server) => ({
+      ...server,
+      enabled: false,
+      transport: {
+        kind: "remote",
+        url: "https://synthetic.example.test/mcp",
+        oauth: { issuer: "https://identity.example.test", clientId: "synthetic-client" },
+      },
+    })),
+    connections: [
+      { name: "notes", state: "disabled", toolCount: null, authentication: "authorized" },
+    ],
+  });
+  panel();
+  expect(await screen.findByRole("button", { name: "Sign out" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Check connection" })).toBeDisabled();
 });
 
 it("keeps a disabled server disabled when editing and does not start its transport", async () => {
@@ -226,7 +282,7 @@ it("requires confirmation before removing a saved server and supports cancellati
 it("shows the server-owned connection state on initial load", async () => {
   api.mockResolvedValueOnce(connectedSnapshot(3).snapshot);
   panel();
-  expect(await screen.findByText("Connected · 3 tools")).toBeInTheDocument();
+  expect(await screen.findByText("Connected · Tools: 3")).toBeInTheDocument();
   expect(api).toHaveBeenCalledTimes(1);
 });
 
@@ -235,9 +291,9 @@ it("does not keep a green connection badge after the connection can no longer be
     .mockResolvedValueOnce(connectedSnapshot(3).snapshot)
     .mockRejectedValueOnce(new Error("connection lost"));
   panel();
-  await screen.findByText("Connected · 3 tools");
+  await screen.findByText("Connected · Tools: 3");
   fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
   await screen.findByRole("alert");
-  expect(screen.queryByText("Connected · 3 tools")).not.toBeInTheDocument();
+  expect(screen.queryByText("Connected · Tools: 3")).not.toBeInTheDocument();
   expect(screen.getByText("Status unavailable")).toBeInTheDocument();
 });

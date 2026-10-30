@@ -224,7 +224,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
       listed.tools.length,
       this.#registrySha256,
       "none",
-      invocationId,
+      invocationId === undefined ? {} : { invocationId },
     );
   }
 
@@ -289,7 +289,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
       this.#toolCount,
       this.#registrySha256,
       "none",
-      context.invocationId,
+      { invocationId: context.invocationId },
     );
     try {
       if (this.#closed) throw new ManagedMcpError("closed");
@@ -308,7 +308,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
         this.#toolCount,
         this.#registrySha256,
         "none",
-        context.invocationId,
+        { invocationId: context.invocationId },
       );
       return result;
     } catch (error) {
@@ -320,7 +320,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
         this.#toolCount,
         this.#registrySha256,
         refused.reason,
-        context.invocationId,
+        { invocationId: context.invocationId },
       );
       throw refused;
     }
