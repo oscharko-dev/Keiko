@@ -1213,6 +1213,8 @@ function validReadGrantSubject(value: Record<string, unknown>): boolean {
 }
 export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGrantView {
   if (!isWireRecord(value)) return false;
+  // chat-tool-authority imports this module, so its exports are read at call time, never at load.
+  const states: readonly unknown[] = CHAT_TOOL_READ_GRANT_STATES;
   const keys = [
     ...CHAT_READ_VIEW_KEYS,
     ...(value.kind === "mcp-chat-read"
@@ -1228,8 +1230,7 @@ export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGr
     ) &&
     [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
     Number(value.expiresAt) > Number(value.requestedAt) &&
-    // chat-tool-authority imports this module, so its exports are read at call time, never at load.
-    CHAT_TOOL_READ_GRANT_STATES.some((state) => state === value.state)
+    states.includes(value.state)
   );
 }
 

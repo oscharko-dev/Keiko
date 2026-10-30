@@ -584,14 +584,15 @@ describe("configured canonical symbol resolver interface (#3918)", () => {
           return originalExecFileSync(join(scratch, "missing-compiler"), [], options);
         const scripts = {
           nonzero: "process.exit(7)",
-          timeout: "process.stdout.write(String(process.pid)); setInterval(() => {}, 1000)",
+          timeout: "setInterval(() => {}, 1000)",
           output: "process.stdout.write('x'.repeat(4096))",
         };
         try {
           return originalExecFileSync(process.execPath, ["-e", scripts[mode]], options);
         } catch (error) {
           failureCode = error.code ?? error.status;
-          if (mode === "timeout") timedOutPid = Number(error.stdout);
+          // A loaded host can kill the child before it writes anything; the error carries its pid.
+          if (mode === "timeout") timedOutPid = error.pid;
           throw error;
         }
       });
