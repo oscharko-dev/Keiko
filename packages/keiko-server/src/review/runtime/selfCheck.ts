@@ -54,7 +54,9 @@ export type ReviewRuntimeSelfCheck =
     };
 
 const REVIEW_PLUGIN_FILES = ["keiko_governed_tools", "keiko_native_context"] as const;
-const REGISTRATION = /^\s*register_([A-Za-z0-9_]+)\(editor\);$/gmu;
+// A registration call (`register_<tool>(editor);`); the tool functions' own definitions carry no
+// semicolon after the parameter list, so only calls match.
+const REGISTRATION = /register_(\w+)\(editor\);/gu;
 
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);

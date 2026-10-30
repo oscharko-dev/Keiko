@@ -199,7 +199,7 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
   }
 
   public async dispose(correlationId?: string): Promise<void> {
-    for (const key of [...this.instances.keys()]) await this.stop(key, "shutdown", correlationId);
+    for (const key of this.instances.keys()) await this.stop(key, "shutdown", correlationId);
   }
 
   public start(key: string, correlationId?: string): LiveInstance | undefined {
