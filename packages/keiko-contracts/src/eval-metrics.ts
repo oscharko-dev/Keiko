@@ -57,3 +57,48 @@ export function binaryNdcgAtK<Value>(
   const idealGain = discountedGain(ideal);
   return idealGain === 0 ? 1 : discountedGain(actual) / idealGain;
 }
+
+/** The two-sided 95 % normal quantile the review measurement reports its intervals at. */
+export const WILSON_Z_95 = 1.959963984540054;
+
+/** A proportion with its Wilson score interval; `rate` is absent when nothing was counted. */
+export interface WilsonInterval {
+  readonly successes: number;
+  readonly trials: number;
+  readonly rate: number | null;
+  readonly lower: number | null;
+  readonly upper: number | null;
+}
+
+/**
+ * The Wilson score interval of `successes` out of `trials` (Wilson 1927). Unlike the normal
+ * approximation it stays inside [0, 1] and is honest for the small counts a review baseline has,
+ * which is why Issue #4132 reports it next to every rate. Zero trials yield nulls, never a
+ * fabricated 0 % or 100 %; non-integral or inconsistent counts fail closed.
+ */
+export function wilsonInterval(successes: number, trials: number, z = WILSON_Z_95): WilsonInterval {
+  if (
+    !Number.isSafeInteger(successes) ||
+    !Number.isSafeInteger(trials) ||
+    successes < 0 ||
+    successes > trials ||
+    !Number.isFinite(z) ||
+    z <= 0
+  ) {
+    throw new RangeError("wilsonInterval: counts must be integers with 0 <= successes <= trials");
+  }
+  if (trials === 0) return { successes, trials, rate: null, lower: null, upper: null };
+  const rate = successes / trials;
+  const z2 = z * z;
+  const denominator = 1 + z2 / trials;
+  const centre = (rate + z2 / (2 * trials)) / denominator;
+  const margin =
+    (z * Math.sqrt((rate * (1 - rate)) / trials + z2 / (4 * trials * trials))) / denominator;
+  return {
+    successes,
+    trials,
+    rate,
+    lower: Math.max(0, centre - margin),
+    upper: Math.min(1, centre + margin),
+  };
+}

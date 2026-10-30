@@ -66,7 +66,7 @@
       }
     },
     "keiko-evaluations": {
-      "files": 83,
+      "files": 95,
       "uncoveredFiles": 0,
       "uncoveredLines": 33,
       "totalLines": 1555,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 970,
+      "files": 975,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,

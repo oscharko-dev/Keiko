@@ -16,6 +16,7 @@ describe("KEIKO-0313 evaluations barrel exposes every eval suite as a namespace"
     { name: "VoiceTwinEval" },
     { name: "VoiceAcousticEval" },
     { name: "VoiceActionEval" },
+    { name: "ReviewEval" },
   ])("$name namespace is defined on the barrel", ({ name }) => {
     const value = (pkg as unknown as Record<string, unknown>)[name];
     expect(value, `expected ${name} on package barrel`).toBeDefined();

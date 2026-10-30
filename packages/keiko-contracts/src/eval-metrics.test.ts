@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { binaryNdcgAtK, mean } from "./eval-metrics.js";
+import { binaryNdcgAtK, mean, wilsonInterval, WILSON_Z_95 } from "./eval-metrics.js";
 
 describe("mean", () => {
   it("returns 0 for an empty input so a callers' empty-case aggregate does not divide by zero", () => {
@@ -100,5 +100,51 @@ describe("binaryNdcgAtK", () => {
     // Duplicates outside the prefix also collapse: unique-first-seen order is what indexes the
     // discount, so `["a", "a", "b"]` at k=2 sees `["a", "b"]` and misses relevant `["c"]`.
     expect(binaryNdcgAtK(["a", "a", "b"], ["c"], 2)).toBe(0);
+  });
+});
+
+describe("wilsonInterval", () => {
+  // Reference values from the published Wilson score interval tables (95 %, z = 1.95996).
+  it.each([
+    [5, 10, 0.5, 0.2366, 0.7634],
+    [0, 10, 0, 0, 0.2775],
+    [10, 10, 1, 0.7225, 1],
+    [1, 3, 1 / 3, 0.0615, 0.7923],
+  ])("%i of %i has rate %f and interval [%f, %f]", (successes, trials, rate, lower, upper) => {
+    const interval = wilsonInterval(successes, trials);
+    expect(interval.rate).toBe(rate);
+    expect(interval.lower).toBeCloseTo(lower, 3);
+    expect(interval.upper).toBeCloseTo(upper, 3);
+    expect(interval).toMatchObject({ successes, trials });
+  });
+
+  it("reports nulls instead of a fabricated rate when nothing was counted", () => {
+    expect(wilsonInterval(0, 0)).toEqual({
+      successes: 0,
+      trials: 0,
+      rate: null,
+      lower: null,
+      upper: null,
+    });
+  });
+
+  it("uses the two-sided 95 % quantile by default and widens with a larger z", () => {
+    expect(WILSON_Z_95).toBeCloseTo(1.96, 2);
+    const wide = wilsonInterval(5, 10, 2.5758);
+    expect(wide.lower).toBeLessThan(0.2366);
+    expect(wide.upper).toBeGreaterThan(0.7634);
+  });
+
+  it.each([
+    [-1, 10],
+    [11, 10],
+    [1.5, 10],
+    [1, Number.NaN],
+  ])("fails closed on the malformed counts %f of %f", (successes, trials) => {
+    expect(() => wilsonInterval(successes, trials)).toThrow(RangeError);
+  });
+
+  it("fails closed on a non-positive quantile", () => {
+    expect(() => wilsonInterval(1, 2, 0)).toThrow(RangeError);
   });
 });
