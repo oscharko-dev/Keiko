@@ -574,7 +574,10 @@ The mandatory inventory syntax visitors
 also observe richer detached module references and top-level binding descriptors while their
 existing AST is available. No second complete source parse/walk is needed for compatible facts.
 Additional expression traversal is checked by the same policy-leaf-owned visit primitive and
-unchanged limits during preparation. A frozen private receipt binds its actual extra visits and
+the same `SYMBOL_LIMITS` during preparation. Preparation keeps its own source-byte counter against
+`SYMBOL_LIMITS.sourceBytes` (96 MiB since the owner decision of 2026-10-30, ADR-0167 D4); those
+bytes are not seeded into compiler counters, and a compiler with a larger source limit than the
+receipt's uses charged extraction instead of a preparation source refusal. A frozen private receipt binds its actual extra visits and
 facts to original source/configuration/ownership/membership/output metadata. Each independent
 compiler seeds those visits once into its own cumulative counter; an already-exhausted strict
 profile retains an explicit refusal on the first operation. Incompatible alias profiles use the

@@ -165,12 +165,20 @@ helper group, retaining independently valid legacy root slots and every unmatche
 
 The cumulative 96 MiB source, 5-million-node, two-retained-Program and existing emission/proof
 budgets, currentness checks and independently valid root slots remain authoritative. The source
-ceiling was 64 MiB until an owner decision on 2026-10-30 raised it: a whole-repository
-qualification measured 65.8 MiB of admitted source across 5,877 files (production programs,
-prepared-receipt digest verification and declaration-map provenance), each read once and each
-carrying a currentness or provenance guarantee, so no guard could be dropped to fit. The ceiling
-remains a finite resource bound, not an acceptance threshold; its refusal stays sticky and
-fail-closed. The mandatory inventory syntax visitors provide detached private
+ceiling was 64 MiB until an owner decision on 2026-10-30 raised it. A source-demand diagnostic of
+the whole-repository qualification recorded 65.8 MiB of compiler-admitted source across 5,877
+distinct files (production programs, prepared-receipt digest verification and declaration-map
+provenance) before it stopped at the `anti-slop/no-unsafe-dictionary-type` public-parser join
+group. The later join groups and the runtime proof witness were not measured, so that figure is a
+lower bound on demand, not a total. Each read carries a currentness or provenance guarantee, so no
+guard could be dropped to fit. A subsequent complete whole-repository qualification under the
+96 MiB ceiling visited every inventoried file and qualified every responsibility without a source
+budget refusal. The ceiling remains a finite resource bound, not an acceptance threshold; its
+refusal stays sticky and fail-closed. The same constant also bounds the separate inventory
+preparation counter described below, so the decision raised that bound to 96 MiB as well.
+Preparation bytes are counted once by that counter and are not seeded into compiler counters. A
+compiler whose source limit exceeds the receipt's uses charged extraction instead of inheriting a
+preparation source refusal. The mandatory inventory syntax visitors provide detached private
 module facts through a frozen, privately witnessed source/configuration/ownership/membership/output
 receipt. Added traversal uses the same unchanged checked visit ruler before compiler creation;
 each independent compiler seeds that actual preparation cost once and continues the same counter.

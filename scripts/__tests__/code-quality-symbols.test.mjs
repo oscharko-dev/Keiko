@@ -3741,6 +3741,21 @@ describe("inventory-prepared private module receipt", () => {
     }
   }, 30_000);
 
+  // REVIEW-3918-012: preparation shares the 96 MiB symbol source ceiling (ADR-0167 D4) and charges
+  // each production source once on its own counter.
+  it("charges preparation once per production source against the shared source ceiling", async () => {
+    const own = await privateModuleSymbolFixture("fact-shapes");
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(receipt.limits).toEqual(symbolLimits());
+    expect(receipt.limits.sourceBytes).toBe(96 * 1024 * 1024);
+    expect(receipt.sourceBytes).toBe(
+      receipt.rows.reduce(
+        (total, row) => total + Buffer.byteLength(readFileSync(join(own.root, row.path), "utf8")),
+        0,
+      ),
+    );
+  });
+
   it("matches the complete existing extractor without a second inventory AST walk", async () => {
     const own = await privateModuleSymbolFixture("fact-shapes");
     const receipt = preparedModuleReceipt(own.subject);
