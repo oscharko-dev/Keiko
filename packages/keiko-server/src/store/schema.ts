@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 54;
+export const SCHEMA_VERSION = 55;
 
 interface Migration {
   readonly version: number;
@@ -1847,6 +1847,33 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE chat_tool_mutations ADD COLUMN native_mcp_action_digest TEXT
       CHECK (native_mcp_action_digest IS NULL OR (consumer_kind = 'coding'
         AND length(native_mcp_action_digest) = 64 AND native_mcp_action_digest NOT GLOB '*[^0-9a-f]*'));`,
+  },
+  {
+    version: 55,
+    sql: `CREATE TABLE chat_continuity_checkpoints (
+      chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+      generation INTEGER NOT NULL CHECK (generation BETWEEN 1 AND 9007199254740991),
+      history_revision INTEGER NOT NULL CHECK (history_revision >= 0),
+      through_message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+      record_json TEXT NOT NULL CHECK (json_valid(record_json)
+        AND length(CAST(record_json AS BLOB)) BETWEEN 1 AND 262144),
+      record_digest TEXT NOT NULL CHECK (length(record_digest) = 64
+        AND record_digest NOT GLOB '*[^0-9a-f]*')
+    ) STRICT;
+    CREATE TRIGGER chat_continuity_revision_invalidated
+      AFTER UPDATE OF history_revision ON chats
+      WHEN OLD.history_revision IS NOT NEW.history_revision
+      BEGIN DELETE FROM chat_continuity_checkpoints WHERE chat_id = NEW.id; END;
+    CREATE TRIGGER chat_history_revision_late_completion
+      AFTER UPDATE OF client_turn_state ON chat_messages
+      WHEN NEW.role = 'user' AND OLD.client_turn_state = 'pending'
+        AND NEW.client_turn_state = 'completed'
+        AND EXISTS (SELECT 1 FROM chat_messages later
+          WHERE later.chat_id = NEW.chat_id AND later.role = 'user'
+            AND (later.client_turn_state = 'completed' OR later.client_turn_id IS NULL)
+            AND (later.timestamp > NEW.timestamp
+              OR (later.timestamp = NEW.timestamp AND later.rowid > NEW.rowid)))
+      BEGIN UPDATE chats SET history_revision = history_revision + 1 WHERE id = NEW.chat_id; END;`,
   },
 ];
 

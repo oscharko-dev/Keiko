@@ -2,6 +2,83 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 import { MIGRATIONS, SCHEMA_VERSION, runMigrations } from "./schema.js";
+import { buildUiStoreOverDatabase } from "./db.js";
+import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
+
+function v54Conversation(): DatabaseSync {
+  const db = openWithForeignKeys();
+  applyMigrationsUpTo(db, 54);
+  db.prepare(
+    "INSERT INTO projects (path, name, created_at, last_opened_at) VALUES (?, ?, ?, ?)",
+  ).run("/fixture", "Fixture", 1, 1);
+  db.prepare(
+    "INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run("existing-chat", "/fixture", "Existing", "model", 1, 1);
+  db.prepare(
+    "INSERT INTO chat_messages (id, chat_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+  ).run("existing-user", "existing-chat", "user", "Preserve the original request.", 1);
+  db.prepare(
+    "INSERT INTO chat_messages (id, chat_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+  ).run("existing-assistant", "existing-chat", "assistant", "Acknowledged.", 2);
+  return db;
+}
+
+describe("v55 migration — private chat continuity", () => {
+  it("preserves a v54 conversation and admits its private checkpoint after an idempotent upgrade", () => {
+    const db = v54Conversation();
+    try {
+      runMigrations(db);
+      runMigrations(db);
+      const store = buildUiStoreOverDatabase(db);
+      expect(store.countMessages("existing-chat")).toBe(2);
+      expect(store.listMessages("existing-chat")[0]?.content).toBe(
+        "Preserve the original request.",
+      );
+      expect(
+        store.writeChatContinuityCheckpoint(
+          "existing-chat",
+          {
+            schemaVersion: "1",
+            laneId: "history-summary",
+            reason: "Migration fixture",
+            itemsBefore: 2,
+            itemsAfter: 1,
+            tokensBefore: 100,
+            tokensAfter: 20,
+            conversationCoverage: {
+              version: 1,
+              throughMessageId: "existing-assistant",
+              historyRevision: store.chatHistoryRevision("existing-chat"),
+              contextWindowTokens: 4096,
+            },
+          },
+          undefined,
+        ),
+      ).toBe(true);
+      expect(store.readChatContinuityCheckpoint("existing-chat")?.generation).toBe(1);
+      expect(() =>
+        db.prepare("UPDATE chat_continuity_checkpoints SET generation = ?").run(1.5),
+      ).toThrow();
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps the shared historical-schema fixture able to rewind and reapply the current schema", () => {
+    const db = v54Conversation();
+    try {
+      runMigrations(db);
+      rewindSchemaFixture(db, 54);
+      runMigrations(db);
+      expect(db.prepare("SELECT count(*) AS count FROM chat_messages").get()).toEqual({ count: 2 });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});
 
 // KEIKO-0573: runMigrations filters and applies pending migrations in declaration order (no
 // .sort()), so the array's order-of-declaration is trusted to equal ascending version order. This

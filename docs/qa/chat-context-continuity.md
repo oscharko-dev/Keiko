@@ -23,9 +23,10 @@ fraction on the same frozen cases. Scores name their scope, case count, model wh
 unmeasured areas. A narrow score is not an overall production-readiness claim. An expanded matrix
 receives a new version and is replayed on the baseline as well as the candidate.
 
-| Iteration | Measurement                                                    | Before       | After         | Evidence                                                                                                              |
-| --------- | -------------------------------------------------------------- | ------------ | ------------- | --------------------------------------------------------------------------------------------------------------------- |
-| 1         | Literal identifier retrieval, eight fixed producer-level cases | 0/8 = 0.0/10 | 8/8 = 10.0/10 | Failure-first history suite: identifiers, Unicode dash, abbreviation, numeric/version and substring/punctuation cases |
+| Iteration | Measurement                                                     | Before       | After         | Evidence                                                                                                                   |
+| --------- | --------------------------------------------------------------- | ------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 1         | Literal identifier retrieval, eight fixed producer-level cases  | 0/8 = 0.0/10 | 8/8 = 10.0/10 | Failure-first history suite: identifiers, Unicode dash, abbreviation, numeric/version and substring/punctuation cases      |
+| 3         | Operational persistence, four fixed native-producer regressions | 0/4 = 0.0/10 | 4/4 = 10.0/10 | Audit retention/failure, newer captures and late turn completion; this selected defect suite is not a global quality score |
 
 This iteration also passes current-policy credential-floor, exclusion and body-free logging checks.
 The complete targeted history/content/continuity run passes 55 tests across three files. The
@@ -68,6 +69,42 @@ provider KV-cache reuse and does not imply a cached-token count.
 
 The six-file targeted run passes 107 tests, including bound request-copy and narrowed-store/model-port cases. An additional five-file Chat/dependency regression run passes 402 tests. The native-model success-rate delta and global quality
 score remain open. This timing repair does not fix the separately measured sampled-source coverage.
+
+### Iteration 3: required private continuity
+
+Four native-producer regressions fail on `538eec7f079a1241185c9f77b2d6058e1db86315`:
+audit retention removes the operational summary; enrichment disappears behind a newer capture
+of the same prefix; audit-write failure breaks manual compaction; and late completion of an
+earlier pending turn leaves a checkpoint's revision unchanged. The same four cases pass after
+the private-checkpoint repair. This is a targeted robustness result, not a global quality score.
+
+The candidate stores operational continuity in the existing private SQLite store, independently
+of audit retention. Revision/boundary bindings, atomic generation checks, payload integrity,
+the existing content projection and credential floor apply. Tests additionally cover reopen,
+newer-summary races, cross-chat boundaries, canonical edits/deletion, unknown-field removal,
+damaged state and body-free evidence. Buffered and streaming public handlers refuse to call
+the model when the required private write fails; streaming reports an error instead of success.
+
+The final broader run passes 264 tests in nine files. A separate public-handler fault run
+passes 13 tests. Typecheck and the complete Activity Log gate pass, including its architecture,
+negative-architecture and error-observability checks. Retrieval quality, grounded retrieval,
+grounded faithfulness and ADR-index gates also pass. Delivery gates are recorded in the PR when
+they finish. Full-prefix summary coverage, manual summary generation and native recall improvement
+remain separate work; this repair does not establish them.
+
+### Unchanged native baseline: interim recall loss
+
+The first hash-matched v4 re-score covers 23 recorded probe answers from the unchanged frozen
+subject. All three prompt digests match the frozen corpus; all answer hashes match the private
+SQLite snapshots. Re-scoring changes no result. Qwen plain Chat scores **2/9** after both its
+fifth and sixth observed compaction. Seven early fields are explicitly unknown; only the two
+later corrected fields remain correct. The originals remain stored, so this establishes failed
+working recall, not irreversible deletion of all source messages.
+
+This is an interim snapshot, not the completed ten-cycle/restart qualification. Native request
+failures are retained separately. Grounded probes currently ask about conversation facts; they
+do not establish source-answer accuracy. No model average or global 0–10 claim is derived from
+these observations.
 
 ## Measurement design
 
@@ -287,7 +324,7 @@ Recent research informs explicit experiments, independently of provider guides:
 | ----------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | [JustMem](https://arxiv.org/abs/2609.19877)                       | 17 September 2026; preprint                          | Vary discovery breadth and recover original evidence when a compact representation is insufficient                             |
 | [TRACE](https://arxiv.org/abs/2608.06503)                         | Revised 14 October 2026; preliminary empirical study | Compare paired continuations at the same compaction boundary to separate state-loss effects from model variability             |
-| [Compact-Bench](https://arxiv.org/abs/2610.31710)                 | 22 October 2026; preprint                            | Measure continuing the task and retaining recurring details separately, including successive compactions                       |
+| [Compact-Bench v2](https://arxiv.org/abs/2610.31710v2)            | Revised 28 October 2026; preprint                    | Measure task continuation and recurring details separately; compare extractive retention with generated summaries              |
 | [Bud ContextCompact 2.0](https://arxiv.org/abs/2610.25516)        | 18 October 2026; preprint                            | Test protected literal channels, complete newly folded spans and early enough triggers; measure summary latency and cache cost |
 | [Rate–distortion view](https://arxiv.org/abs/2607.08032)          | 9 July 2026; survey/proposal                         | Evaluate task utility lost at each budget rather than the compression ratio alone                                              |
 | [Continuous Context Management](https://arxiv.org/abs/2609.35540) | 28 September 2026; preprint                          | Treat per-turn compaction as an experimental arm; its untrained performance varies by model                                    |

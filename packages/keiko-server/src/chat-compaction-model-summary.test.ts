@@ -623,16 +623,27 @@ describe("enrichChatCompactionWithModelSummary", () => {
         content: "The current owner is Mara and the corrected budget is 60000 euros.",
         coveredItems: 2,
       };
+      const source = history.createMessages(
+        Array.from({ length: 70 }, (_unused, index) => ({
+          ...message(
+            index % 2 === 0 ? "user" : "assistant",
+            index === 0 ? prior.content : `Refresh source ${String(index)}`,
+            index,
+          ),
+          chatId,
+        })),
+      );
       const input = {
         ...defaultEnrichmentInput(70),
         chatId,
+        historyPrefix: source,
         compaction: {
           ...compactionRecord(),
           itemsBefore: 70,
           modelSummary: prior,
           conversationCoverage: {
             version: 1 as const,
-            throughMessageId: "old-boundary",
+            throughMessageId: sourceBoundary(source),
             historyRevision: history.chatHistoryRevision(chatId),
             contextWindowTokens: 4096,
           },
@@ -1099,3 +1110,9 @@ describe("enrichChatCompactionWithModelSummary", () => {
     });
   });
 });
+
+function sourceBoundary(source: readonly ChatMessage[]): string {
+  const last = source.at(-1);
+  if (last === undefined) throw new TypeError("Missing source boundary");
+  return last.id;
+}

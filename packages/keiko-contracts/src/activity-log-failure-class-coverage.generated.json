@@ -2196,6 +2196,7 @@
           "chat.compaction.summary.work",
           "chat.context.management",
           "chat.continuity.capture",
+          "chat.continuity.checkpoint",
           "chat.continuity.degraded",
           "chat.continuity.rehydration"
         ],
@@ -2221,6 +2222,10 @@
           "mode": "correlation"
         },
         {
+          "op": "chat.continuity.checkpoint",
+          "mode": "correlation"
+        },
+        {
           "op": "chat.continuity.degraded",
           "mode": "correlation"
         },
@@ -2234,6 +2239,7 @@
         "chat.compaction.summary.work",
         "chat.context.management",
         "chat.continuity.capture",
+        "chat.continuity.checkpoint",
         "chat.continuity.degraded",
         "chat.continuity.rehydration"
       ],
@@ -2566,6 +2572,42 @@
             "causeChain": false
           },
           "proofIds": ["chat.continuity.capture.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.continuity.checkpoint",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "generation",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "operation",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.continuity.checkpoint.line"],
           "replayReferences": [],
           "missingObligations": []
         },

@@ -1,4 +1,5 @@
 import { updateChatToolTranscript } from "./chatToolTranscript.js";
+import { readContinuityCheckpoint, writeContinuityCheckpoint } from "./chatContinuity.js";
 import { createChatToolMutationStore } from "./chatToolMutations.js";
 import { withImmediateTransaction } from "./transaction.js";
 import { replayChatCreationIntent, withChatCreationIntent } from "./chatCreationIntents.js";
@@ -788,6 +789,16 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       sqlVisitGatewayMessageUnits(db, chatId, currentUserMessageId, visit);
     },
     chatHistoryRevision: (chatId): number => sqlChatHistoryRevision(db, chatId),
+    readChatContinuityCheckpoint: (chatId) =>
+      readContinuityCheckpoint(db, chatId, options.redactContentString),
+    writeChatContinuityCheckpoint: (chatId, record, expectedGeneration): boolean =>
+      writeContinuityCheckpoint(
+        db,
+        chatId,
+        record,
+        expectedGeneration,
+        options.redactContentString,
+      ),
     countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     updateChatToolTranscript: (id, update, correlationId): void => {

@@ -1,4 +1,6 @@
 import { countConversationCheckpointTokens } from "./conversation-compaction.js";
+import { isDeepStrictEqual } from "node:util";
+import { persistRequiredChatContinuityCheckpoint } from "./chat-continuity-checkpoint.js";
 import {
   callChatCompactionModel,
   beginChatCompactionWork,
@@ -50,7 +52,7 @@ import {
 import { correlationIdOrUnknown } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { getServerLogger } from "./observability/index.js";
-import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import { loadHistoryCheckpoint, type LoadedHistoryCheckpoint } from "./chat-history-snapshot.js";
 import { logChatContextManagement } from "./chat-context-log.js";
 import { readChatContextStatus } from "./chat-context-status.js";
 import { logChatCompactionSummaryWork } from "./chat-continuity-log.js";
@@ -224,23 +226,7 @@ export async function enrichChatCompactionWithModelSummary(
         ? failureModelSummary(record, input.modelId, "unavailable", "model-unavailable")
         : await buildModelSummary(model, deps, input, record, prompt, responseMode);
     logRejectedSummary(deps, input.correlationId, modelSummary, model === undefined);
-    if (
-      modelSummary !== undefined &&
-      !chatCompactionWorkStopped(deps) &&
-      currentSummaryTarget(deps, input, record)
-    ) {
-      const enriched = { ...record, modelSummary: refreshedModelSummary(record, modelSummary) };
-      persistChatCompactionEvidence(deps, {
-        ...input,
-        compaction: {
-          ...enriched,
-          tokensAfter: countConversationCheckpointTokens(
-            enriched,
-            currentContextProfileForModel(deps, input.modelId)?.tokenAccounting,
-          ),
-        },
-      });
-    }
+    persistSummaryEnrichment(deps, input, record, modelSummary);
   } catch (error) {
     logSummaryFailure(deps, correlationIdOrUnknown(input.correlationId), error);
   }
@@ -297,30 +283,29 @@ function currentSummaryTarget(
   deps: UiHandlerDeps,
   input: ChatCompactionModelSummaryInput,
   record: ContextCompactionRecord,
-): boolean {
+): LoadedHistoryCheckpoint | undefined {
   const coverage = record.conversationCoverage;
-  if (coverage === undefined) return true;
+  if (coverage === undefined) return { record, disposition: "available" };
   const revision = deps.store.chatHistoryRevision(input.chatId);
-  const latest = loadChatContinuityCheckpoint(
-    deps.evidenceStore,
-    input.chatId,
-    revision,
-    input.correlationId,
-  );
+  const loaded = loadHistoryCheckpoint({
+    ...deps,
+    chatId: input.chatId,
+    correlationId: input.correlationId,
+  });
+  const latest = loaded.record;
   if (
+    loaded.disposition !== "read-failed" &&
     revision === coverage.historyRevision &&
-    (latest === undefined ||
-      (latest.conversationCoverage?.throughMessageId === coverage.throughMessageId &&
-        latest.itemsBefore === record.itemsBefore))
+    summaryTargetMatches(latest, record)
   )
-    return true;
+    return loaded;
   logChatContextManagement(
     "summary-discarded",
     readChatContextStatus(deps, input.chatId, input.modelId, input.correlationId),
     0,
     correlationIdOrUnknown(input.correlationId),
   );
-  return false;
+  return undefined;
 }
 
 async function buildModelSummary(
@@ -1002,4 +987,45 @@ function compactionSourceMessages(
     const message = deps.store.findMessageById(source.stableId);
     return message?.chatId === input.chatId ? [message] : [];
   });
+}
+
+function persistSummaryEnrichment(
+  deps: UiHandlerDeps,
+  input: ChatCompactionModelSummaryInput,
+  record: ContextCompactionRecord,
+  modelSummary: ContextCompactionModelSummary | undefined,
+): void {
+  const target =
+    modelSummary !== undefined && !chatCompactionWorkStopped(deps)
+      ? currentSummaryTarget(deps, input, record)
+      : undefined;
+  if (modelSummary !== undefined && target !== undefined) {
+    const current = target.record ?? record;
+    const enriched = { ...current, modelSummary: refreshedModelSummary(current, modelSummary) };
+    const enrichedInput = {
+      ...input,
+      compaction: {
+        ...enriched,
+        tokensAfter: countConversationCheckpointTokens(
+          enriched,
+          currentContextProfileForModel(deps, input.modelId)?.tokenAccounting,
+        ),
+      },
+    };
+    persistRequiredChatContinuityCheckpoint(deps, enrichedInput, target);
+    persistChatCompactionEvidence(deps, enrichedInput);
+  }
+}
+
+function summaryTargetMatches(
+  latest: ContextCompactionRecord | undefined,
+  record: ContextCompactionRecord,
+): boolean {
+  return (
+    latest === undefined ||
+    (latest.itemsBefore === record.itemsBefore &&
+      isDeepStrictEqual(latest.conversationCoverage, record.conversationCoverage) &&
+      (latest.modelSummary?.status !== "valid" ||
+        isDeepStrictEqual(latest.modelSummary, record.modelSummary)))
+  );
 }

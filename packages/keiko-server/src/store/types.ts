@@ -1,4 +1,5 @@
 import type { ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
+import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolMutationStore } from "./chatToolMutationTypes.js";
 import type { ChatReadGrantStore } from "../atlassian/chatReadGrantState.js";
 // ADR-0013 D4 — UiStore port and entity types. The port is the seam for testing; the concrete
@@ -124,6 +125,12 @@ export type ChatTurnCompletion =
     }
   | { readonly kind: "conflict" };
 
+export interface ChatContinuityCheckpoint {
+  readonly generation: number;
+  /** Undefined means a damaged payload; its generation still permits an explicit rebuild. */
+  readonly record: ContextCompactionRecord | undefined;
+}
+
 export interface UiStore {
   readonly chatToolReadGrants?: ChatReadGrantStore;
   readonly chatToolMutations?: ChatToolMutationStore;
@@ -178,6 +185,13 @@ export interface UiStore {
     visit: (messages: readonly ChatMessage[]) => boolean | undefined,
   ) => void;
   readonly chatHistoryRevision: (chatId: string) => number;
+  readonly readChatContinuityCheckpoint: (chatId: string) => ChatContinuityCheckpoint | undefined;
+  /** Compare and swap inside the private database; undefined expects no existing checkpoint. */
+  readonly writeChatContinuityCheckpoint: (
+    chatId: string,
+    record: ContextCompactionRecord,
+    expectedGeneration: number | undefined,
+  ) => boolean;
   readonly countMessages: (chatId: string) => number;
   readonly findMessageById: (id: string) => ChatMessage | undefined;
   readonly updateChatToolTranscript: (

@@ -5,6 +5,72 @@ import {
 import { correlationIdOrUnknown } from "./correlation.js";
 import { getServerLogger } from "./observability/index.js";
 
+const CHAT_CONTINUITY_CHECKPOINT = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.continuity.checkpoint",
+  owner: "keiko-server",
+  category: "gateway",
+  emitter: "chat-continuity-log.logChatContinuityCheckpoint",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["read", "write"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "available",
+        "missing",
+        "invalid",
+        "persisted",
+        "retained",
+        "stale",
+        "rejected",
+        "failed",
+      ],
+    },
+    generation: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-context-management"],
+  proofIds: ["chat.continuity.checkpoint.line"],
+  releaseImpact: "patch",
+});
+
+export function logChatContinuityCheckpoint(
+  evidence: {
+    readonly operation: "read" | "write";
+    readonly outcome:
+      | "available"
+      | "missing"
+      | "invalid"
+      | "persisted"
+      | "retained"
+      | "stale"
+      | "rejected"
+      | "failed";
+    readonly generation?: number;
+  },
+  correlationId?: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_CONTINUITY_CHECKPOINT,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { ...evidence, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
 export type CheckpointDisposition =
   | "none"
   | "read-failed"

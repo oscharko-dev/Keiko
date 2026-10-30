@@ -339,7 +339,8 @@ function redactStringArrays(
   };
 }
 
-function redactCompactionRecord(
+/** Whitelist the record under the caller's projection; audit uses its unconditional redactor. */
+export function projectContextCompactionRecord(
   record: ContextCompactionRecord,
   redact: Redactor,
 ): ContextCompactionRecord {
@@ -357,7 +358,7 @@ function buildCompactionManifest(
   costClassResolver?: (modelId: string) => CostClass | "unknown",
 ): EvidenceManifest {
   const durationMs = Math.max(0, input.finishedAt - input.startedAt);
-  const compaction = input.records.map((record) => redactCompactionRecord(record, redact));
+  const compaction = input.records.map((record) => projectContextCompactionRecord(record, redact));
   const fingerprintSeed = input.workspaceRoot ?? input.chatIdHash ?? input.runId;
   return {
     evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,

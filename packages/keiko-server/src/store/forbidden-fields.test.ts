@@ -197,6 +197,7 @@ const EXPECTED_TABLES = new Set([
   "browser_approvals",
   "browser_approval_installation",
   "chat_creation_intents",
+  "chat_continuity_checkpoints",
   "chat_tool_mutations",
   "chat_tool_read_grants",
   "chat_drafts",
@@ -245,6 +246,26 @@ describe("forbidden-fields — browser public identity approval (#4043)", () => 
     const inspector = openMigratedSchema(join(tmpDir, "browser-approval-inventory.db"));
     try {
       expect(new Set(columnNames(inspector, table))).toEqual(new Set(columns));
+    } finally {
+      inspector.close();
+    }
+  });
+});
+
+describe("forbidden-fields — private chat continuity metadata", () => {
+  it("stores only the scoped bounded continuity record and its revision/generation bindings", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "chat-continuity-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, "chat_continuity_checkpoints"))).toEqual(
+        new Set([
+          "chat_id",
+          "generation",
+          "history_revision",
+          "through_message_id",
+          "record_json",
+          "record_digest",
+        ]),
+      );
     } finally {
       inspector.close();
     }

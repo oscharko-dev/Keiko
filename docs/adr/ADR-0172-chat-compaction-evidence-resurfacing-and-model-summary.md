@@ -50,6 +50,32 @@ change if that latency ever becomes material.
 
 The fast path (no compaction record) returns immediately without touching the store.
 
+**Operational-state correction (#4155, 2026-10-30).** Audit manifests are optional evidence,
+not the owner of the working continuity checkpoint. Revision-bound captures now commit to the
+existing private Chat SQLite store before a buffered/streaming answer or grounded answer uses
+the compacted history; manual compaction also requires this write. An unavailable private store
+pauses that request with a retryable error. A subsequent audit failure cannot undo the private
+commit or fail the answer. Post-answer audit persistence remains best-effort.
+
+The private row is chat-scoped, generation-checked and bound to an existing message and current
+history revision. Its bounded, whitelisted payload carries an integrity digest; writes use the
+existing immediate transaction. History revisions invalidate the row and Chat deletion cascades
+to it. Completing an earlier pending turn behind a later eligible turn also advances the revision:
+that completion changes the prefix even though it does not edit an older message's text.
+
+Loads prefer private state; legacy audit checkpoints remain a compatibility input. A damaged or
+unreadable private checkpoint does not fall back to an older audit summary. A damaged payload's
+generation remains available for a compare-and-swap rebuild from canonical originals. Model
+enrichment rechecks the exact prefix/profile and current summary before atomically committing;
+late work cannot replace a newer valid summary. A newer capture of the same prefix can retain
+the completed enrichment. Valid existing summaries survive unsuccessful refreshes.
+
+Private persistence uses the store's existing Chat content projection, including the credential
+floor. Audit projection remains unconditional. This does not change the summary model call's
+content policy, grant cross-chat memory authority or turn historical observations into fresh
+source evidence. `chat.continuity.checkpoint` records only I/O outcome and optional generation;
+its complete observation is not a claim of complete semantic recall or summary source coverage.
+
 ### D2 — Resurfacing renders persisted context as bounded, sanitized text
 
 `buildChatCompactionResurfacingContext` emits a `# Persisted compaction context` block built from at
