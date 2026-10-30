@@ -1,3 +1,4 @@
+import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -168,6 +169,10 @@ export interface ProductionOpenCodeActivationInput {
   readonly sessionContinuity?: ProductionOpenCodeBackendInput["sessionContinuity"];
   /** The server's MCP relay for credentialed remote servers (#3903 AC3); absent admits none. */
   readonly mcpRelay?: ProductionOpenCodeBackendInput["mcpRelay"];
+  readonly mcpMutations?: ProductionOpenCodeBackendInput["mcpMutations"];
+  readonly mcpConnections?: ConfiguredMcpConnections | undefined;
+  /** The Jira Pods a Coding run may be started with (owner decision 2026-10-30). */
+  readonly codingJiraPods?: ProductionOpenCodeBackendInput["codingJiraPods"];
   readonly env: NodeJS.ProcessEnv;
   /** Host identity injection for deterministic tests; production omits both. */
   readonly platform?: NodeJS.Platform | undefined;
@@ -297,6 +302,17 @@ function mcpOAuthPorts(input: ProductionOpenCodeActivationInput): {
   };
 }
 
+function nativeMcpBackendInputs(
+  input: ProductionOpenCodeActivationInput,
+): Partial<Parameters<typeof createProductionOpenCodeBackend>[0]> {
+  return {
+    ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
+    ...(input.mcpMutations ? { mcpMutations: input.mcpMutations } : {}),
+    ...(input.mcpConnections ? { mcpConnections: input.mcpConnections } : {}),
+    ...(input.codingJiraPods ? { codingJiraPods: input.codingJiraPods } : {}),
+  };
+}
+
 /** The backend inputs a deployment may leave out; an absent one adds no key. */
 function optionalBackendInputs(
   input: ProductionOpenCodeActivationInput,
@@ -306,7 +322,7 @@ function optionalBackendInputs(
       ? {}
       : { gatewayCodingModelIds: input.gatewayCodingModelIds }),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
-    ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
+    ...nativeMcpBackendInputs(input),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
     ...(input.nativeWebSearch ? { nativeWebSearch: input.nativeWebSearch } : {}),

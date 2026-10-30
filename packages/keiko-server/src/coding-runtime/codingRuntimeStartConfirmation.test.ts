@@ -22,6 +22,12 @@ const facts = {
   modelProfileId: "coding-safe-openai-compatible",
 } as const;
 
+const JIRA_POD = {
+  podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+  authenticationGeneration: 3,
+  verificationRevision: 1,
+} as const;
+
 describe("coding runtime start confirmation binding", () => {
   it("is deterministic while binding every authority-bearing dimension", () => {
     const expected = codingRuntimeStartConfirmationClaim(facts, 1).bindingDigest;
@@ -48,10 +54,33 @@ describe("coding runtime start confirmation binding", () => {
       { issueBindingDigest: "e".repeat(64) },
       { repositoryIdentity: { kind: "github-origin" as const, digest: "f".repeat(64) } },
       { repositoryIdentity: { kind: "local" as const, digest: "f".repeat(64) } },
+      { jiraPod: JIRA_POD },
     ]) {
       expect(
         codingRuntimeStartConfirmationClaim({ ...facts, ...changed }, 1).bindingDigest,
       ).not.toBe(expected);
     }
+  });
+
+  it("binds the chosen Jira Pod and its exact credential identity (owner decision 2026-10-30)", () => {
+    const withPod = codingRuntimeStartConfirmationClaim({ ...facts, jiraPod: JIRA_POD }, 1);
+    expect(
+      codingRuntimeStartConfirmationClaim({ ...facts, jiraPod: JIRA_POD }, 2).bindingDigest,
+    ).toBe(withPod.bindingDigest);
+    for (const changed of [
+      { podId: "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10" },
+      { authenticationGeneration: 4 },
+      { verificationRevision: 2 },
+    ])
+      expect(
+        codingRuntimeStartConfirmationClaim({ ...facts, jiraPod: { ...JIRA_POD, ...changed } }, 1)
+          .bindingDigest,
+      ).not.toBe(withPod.bindingDigest);
+  });
+
+  it("leaves the claim of a start without a Pod exactly as it was", () => {
+    expect(codingRuntimeStartConfirmationClaim({ ...facts, jiraPod: undefined }, 1)).toEqual(
+      codingRuntimeStartConfirmationClaim(facts, 1),
+    );
   });
 });

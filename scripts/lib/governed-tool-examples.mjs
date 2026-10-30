@@ -161,7 +161,19 @@ function validPage(contract, page) {
   if (truncated && reason === "none") return false;
   return validCursor(cursor, contract.bounds.maxCursorBytes);
 }
+function validProviderErrorData(value) {
+  return (
+    value.data !== null &&
+    typeof value.data === "object" &&
+    !Array.isArray(value.data) &&
+    value.page === null &&
+    value.metrics?.resultCount === 0 &&
+    value.metrics?.outputBytes === Buffer.byteLength(JSON.stringify(value.data))
+  );
+}
 function validResultData(contract, value) {
+  if (value.status === "failed" && value.reason === "provider-reported-error")
+    return validProviderErrorData(value);
   if (value.status === "completed")
     return value.data !== undefined && value.data !== null && validPage(contract, value.page);
   return value.data === null && value.page === null;

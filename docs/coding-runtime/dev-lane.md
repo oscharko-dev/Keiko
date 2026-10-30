@@ -119,16 +119,19 @@ npm run dev:start
 
 ## Repository working instructions
 
-Every coding run attaches the task workspace's own `AGENTS.md` (exact name, workspace root only,
-never a parent directory or a symlink) to the model's initial turn as bounded, labelled, untrusted
-context, so the model knows the repository's conventions and verification guidance from its first
-turn (ADR-0137 D1). The file is read through the same secure read helper `keiko_workspace_read`
-uses, only while the run's own workspace is the active one, and the model receives the window that
-read would answer for the first 800 lines, cut at a line boundary to 16,384 bytes and to the turn's
-remaining prompt budget (a cut file ends with one explicit truncation line naming the total line
-count), inside a nonce-framed `repository-instructions` block that grants no authority and cannot
-change the tool rules or the autonomy mode. The block is re-sent with every turn; the context line
-records its estimated tokens.
+Every coding run gives the model the task workspace's own `AGENTS.md` (exact name, workspace root
+only, never a parent directory or a symlink) as labelled, untrusted context, so the model knows the
+repository's conventions and verification guidance from its first turn (ADR-0137 D1). The file is
+read through the same secure read helper `keiko_workspace_read` uses, only while the run's own
+workspace is the active one. On the mapped profiles the model receives the window that read would
+answer for the first 800 lines, cut at a line boundary to 16,384 bytes and to the turn's remaining
+prompt budget (a cut file ends with one explicit truncation line naming the total line count),
+inside a nonce-framed `repository-instructions` block of the initial turn that grants no authority
+and cannot change the tool rules or the autonomy mode. That block is re-sent with every turn; the
+context line records its estimated tokens. A native run gets the whole credential-masked file as the
+copy its own instruction plugin loads, as a standalone run does, bounded by the helper's 1 MiB
+ceiling and by half the model's input window (`limitByteCount`, `omittedByteCount`), and its initial
+turn carries no block.
 
 - The loader is on by default. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables it
   before the server starts; `true` is the default. Any other explicit value fails composition

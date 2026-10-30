@@ -1,4 +1,4 @@
-import { PassThrough } from "node:stream";
+import { PassThrough, type Duplex } from "node:stream";
 import {
   createServer as createHttpServer,
   request as httpRequest,
@@ -469,6 +469,11 @@ describe("gatewayFetch", () => {
     const proxySockets = new Set<Socket>();
     const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
       originRequests += 1;
+      if (req.url === "/empty") {
+        res.writeHead(204, { connection: "keep-alive" });
+        res.end();
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
       res.end(JSON.stringify({ path: req.url, count: originRequests }));
     });
@@ -501,10 +506,18 @@ describe("gatewayFetch", () => {
       });
       expect(await first.json()).toEqual({ path: "/first", count: 1 });
 
+      const empty = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/empty`, {
+        egress,
+        method: "PUT",
+      });
+      expect(empty.status).toBe(204);
+      expect(empty.body).toBeNull();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
       const second = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
         egress,
       });
-      expect(await second.json()).toEqual({ path: "/second", count: 2 });
+      expect(await second.json()).toEqual({ path: "/second", count: 3 });
       expect(proxyConnects).toBe(1);
     } finally {
       _resetWarnedCaBundlePaths();
@@ -721,6 +734,32 @@ describe("gatewayFetch DNS lookup deadline (#3907 AC10)", () => {
       vi.resetModules();
     }
   }
+
+  it("rechecks final authority after the pinned DNS answer arrives", async () => {
+    await withHeldResolver(async (fetchVia, lookup, answerAll) => {
+      let admitted = true;
+      const prepareHeaders = vi.fn(() => {
+        if (!admitted) throw new Error("synthetic-authority-revoked");
+        return new Headers();
+      });
+      const pending = fetchVia("http://silent-resolver.invalid/action", {
+        method: "POST",
+        body: "{}",
+        prepareHeaders,
+        singleAttempt: true,
+        timeoutMs: 1000,
+      });
+      const rejected = expect(pending).rejects.toThrow("synthetic-authority-revoked");
+      await vi.waitFor(() => {
+        expect(lookup).toHaveBeenCalledOnce();
+      });
+      expect(prepareHeaders).not.toHaveBeenCalled();
+      admitted = false;
+      answerAll();
+      await rejected;
+      expect(prepareHeaders).toHaveBeenCalledOnce();
+    });
+  });
 
   const timedOut = { timeoutMs: 20 } as const satisfies GatewayFetchOptions;
 
@@ -1856,6 +1895,52 @@ function makePassThrough(
 function noop(): void {}
 
 describe("streamingResponseFromNode", () => {
+  it.each(["data", "error", "aborted"])(
+    "retires a bodyless peer on %s without returning its socket",
+    (event) => {
+      const src = makePassThrough(205);
+      const cancel = vi.fn();
+      const done = vi.fn();
+      const response = streamingResponseFromNode(
+        src as unknown as IncomingMessage,
+        cancel,
+        100,
+        done,
+      );
+      src.emit(
+        event,
+        event === "error" ? new Error("synthetic failure") : Buffer.from("unexpected"),
+      );
+      src.emit("end");
+      expect(response.body).toBeNull();
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(done).not.toHaveBeenCalled();
+      src.destroy();
+    },
+  );
+  it.each([204, 205, 304])(
+    "preserves bodyless status %i and completes the underlying response",
+    async (status) => {
+      const src = makePassThrough(status, "", { etag: "synthetic-version" });
+      const done = vi.fn();
+      const cancel = vi.fn();
+      const response = streamingResponseFromNode(
+        src as unknown as IncomingMessage,
+        cancel,
+        100,
+        done,
+      );
+      expect(response.status).toBe(status);
+      expect(response.body).toBeNull();
+      expect(response.headers.get("etag")).toBe("synthetic-version");
+      await expect(response.text()).resolves.toBe("");
+      src.end();
+      await once(src, "end");
+      expect(done).toHaveBeenCalledTimes(1);
+      expect(cancel).not.toHaveBeenCalled();
+    },
+  );
+
   it("delivers chunks incrementally before end() is called (mutation guard: buffered impl hangs)", async () => {
     const src = makePassThrough();
     const res = streamingResponseFromNode(src as unknown as IncomingMessage, noop);
@@ -2635,4 +2720,208 @@ describe("readSseStream silence and abort bounds", () => {
     await expect(reading).rejects.toMatchObject({ name: "TimeoutError" });
     expect(stream.cancelled()).toBe(true);
   });
+});
+
+describe("final request preparation for governed effects", () => {
+  it("prepares private headers once and never forwards its callback to injected fetch", async () => {
+    const prepareHeaders = vi.fn(() => new Headers({ authorization: "Bearer synthetic-private" }));
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      expect(init).not.toHaveProperty("prepareHeaders");
+      expect(init).not.toHaveProperty("singleAttempt");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer synthetic-private");
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    await gatewayFetch("https://example.test/action", {
+      fetchImpl,
+      prepareHeaders,
+      singleAttempt: true,
+    });
+    expect(prepareHeaders).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks admission after asynchronous body preparation and before native HTTP", async () => {
+    let hits = 0;
+    const origin = createHttpServer((_req, res) => {
+      hits++;
+      res.writeHead(204);
+      res.end();
+    });
+    const port = await listen(origin);
+    let bodyStarted = (): void => {
+      throw new Error("Uninitialized body signal");
+    };
+    const started = new Promise<void>((resolve) => {
+      bodyStarted = resolve;
+    });
+    let releaseBody = (_value: ArrayBuffer): void => {
+      throw new Error("Uninitialized body release");
+    };
+    const pendingBody = new Promise<ArrayBuffer>((resolve) => {
+      releaseBody = resolve;
+    });
+    const body = new Blob(["synthetic"]);
+    vi.spyOn(body, "arrayBuffer").mockImplementation(() => {
+      bodyStarted();
+      return pendingBody;
+    });
+    let admitted = true;
+    const prepareHeaders = vi.fn(() => {
+      if (!admitted) throw new Error("synthetic-authority-revoked");
+      return new Headers();
+    });
+    try {
+      const pending = gatewayFetch(`http://127.0.0.1:${String(port)}/action`, {
+        method: "POST",
+        body,
+        prepareHeaders,
+        singleAttempt: true,
+      });
+      await started;
+      admitted = false;
+      releaseBody(new ArrayBuffer(0));
+      await expect(pending).rejects.toThrow("synthetic-authority-revoked");
+      expect(prepareHeaders).toHaveBeenCalledOnce();
+      expect(hits).toBe(0);
+    } finally {
+      releaseBody(new ArrayBuffer(0));
+      await close(origin);
+    }
+  });
+
+  it("uses configured TLS trust on the first and only mutation attempt", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-one-attempt-"));
+    const caBundlePath = join(directory, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let hits = 0;
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      hits++;
+      res.writeHead(204);
+      res.end();
+    });
+    const tlsFailures = vi.fn();
+    origin.on("tlsClientError", tlsFailures);
+    const port = await listen(origin);
+    const prepareHeaders = vi.fn(() => new Headers({ authorization: "Bearer synthetic-private" }));
+    try {
+      const response = await gatewayFetch(`https://127.0.0.1:${String(port)}/action`, {
+        method: "POST",
+        body: "{}",
+        prepareHeaders,
+        singleAttempt: true,
+        egress: { caBundlePath },
+      });
+      expect(response.status).toBe(204);
+      expect(hits).toBe(1);
+      expect(prepareHeaders).toHaveBeenCalledOnce();
+      expect(tlsFailures).not.toHaveBeenCalled();
+    } finally {
+      await close(origin);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+it("refuses asynchronous header preparation before invoking any transport", async () => {
+  const fetchImpl = vi.fn<typeof fetch>();
+  const prepareHeaders = (() => Promise.resolve(new Headers())) as unknown as () => Headers;
+  await expect(
+    gatewayFetch("https://example.test/action", { fetchImpl, prepareHeaders }),
+  ).rejects.toThrow("synchronously");
+  expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+it("does not retry a single-attempt injected request after a TLS-shaped failure", async () => {
+  const fetchImpl = vi.fn<typeof fetch>(() => {
+    return Promise.reject(
+      Object.assign(new Error("synthetic-tls-failure"), {
+        code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+      }),
+    );
+  });
+  const prepareHeaders = vi.fn(() => new Headers());
+  await expect(
+    gatewayFetch("https://example.invalid/action", {
+      method: "PUT",
+      body: "{}",
+      fetchImpl,
+      prepareHeaders,
+      singleAttempt: true,
+      useCaFallback: true,
+    }),
+  ).rejects.toMatchObject({ code: "TLS_CA_FAILURE" });
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(prepareHeaders).toHaveBeenCalledOnce();
+});
+
+it("rechecks authority after CONNECT and disposes a tunnel refused before target HTTP", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-final-connect-"));
+  const caBundlePath = join(directory, "ca.pem");
+  writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+  let hits = 0;
+  let admitted = true;
+  const sockets = new Set<Duplex>();
+  const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+    hits++;
+    res.writeHead(204);
+    res.end();
+  });
+  const originPort = await listen(origin);
+  const proxy = createHttpServer();
+  proxy.on("connect", (_req, client, head) => {
+    sockets.add(client);
+    client.once("close", () => sockets.delete(client));
+    const upstream = netConnect(originPort, "127.0.0.1", () => {
+      admitted = false;
+      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length > 0) upstream.write(head);
+      pipeBounded(upstream, client);
+      pipeBounded(client, upstream);
+    });
+    sockets.add(upstream);
+    upstream.once("close", () => sockets.delete(upstream));
+    upstream.on("error", () => client.destroy());
+  });
+  const proxyPort = await listen(proxy);
+  const prepareHeaders = vi.fn(() => {
+    if (!admitted) throw new Error("synthetic-authority-revoked");
+    return new Headers({ authorization: "Bearer synthetic-private" });
+  });
+  try {
+    await expect(
+      gatewayFetch(`https://127.0.0.1:${String(originPort)}/action`, {
+        method: "POST",
+        body: "{}",
+        prepareHeaders,
+        singleAttempt: true,
+        egress: { httpsProxy: `http://127.0.0.1:${String(proxyPort)}`, caBundlePath },
+      }),
+    ).rejects.toThrow("synthetic-authority-revoked");
+    expect(hits).toBe(0);
+    expect(prepareHeaders).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(sockets.size).toBe(0);
+    });
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await close(proxy);
+    await close(origin);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("observes cancellation raised by final preparation before injected transport", async () => {
+  const controller = new AbortController();
+  const fetchImpl = vi.fn<typeof fetch>();
+  await expect(
+    gatewayFetch("https://example.test/action", {
+      signal: controller.signal,
+      fetchImpl,
+      prepareHeaders: () => {
+        controller.abort();
+        return new Headers();
+      },
+    }),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(fetchImpl).not.toHaveBeenCalled();
 });

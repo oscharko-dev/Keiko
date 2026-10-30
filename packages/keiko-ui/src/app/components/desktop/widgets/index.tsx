@@ -500,10 +500,20 @@ registerWindowRender("inspector", () => <InspectorPanel />);
 registerWindowRender("notifications", () => <NotificationsPanel />);
 registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
-function SettingsPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
+function SettingsPanelSessionHost({
+  ctx,
+  initialTab,
+}: {
+  readonly ctx: WindowRenderContext;
+  readonly initialTab?: "mcp" | undefined;
+}): ReactNode {
   const { activeProject } = useChatSessionContext();
   return (
     <SettingsPanel
+      initialTab={initialTab}
+      onInitialTabHandled={() => {
+        ctx.updateCfg({ initialTab: undefined });
+      }}
       root={ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined}
       openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })}
       openWorkspaceTrust={() => ctx.openWindow("workspaceTrust")}
@@ -511,7 +521,9 @@ function SettingsPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }
   );
 }
 
-registerWindowRender("settings", (_cfg, ctx) => <SettingsPanelSessionHost ctx={ctx} />);
+registerWindowRender("settings", (cfg, ctx) => (
+  <SettingsPanelSessionHost ctx={ctx} initialTab={cfg.initialTab === "mcp" ? "mcp" : undefined} />
+));
 registerWindowRender("workspaceTrust", () => <WorkspaceTrustPanel />);
 registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);

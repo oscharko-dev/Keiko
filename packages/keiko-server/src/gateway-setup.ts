@@ -1427,6 +1427,7 @@ export function rawConfigFromCurrent(
 // is the operator's fail-fast opt-out and must survive a save as well.
 function operatorPolicyBlocks(config: GatewayConfig | undefined): Record<string, unknown> {
   return {
+    ...(config?.atlassian === undefined ? {} : { atlassian: config.atlassian }),
     ...(config?.groundedAnswers === undefined ? {} : { groundedAnswers: config.groundedAnswers }),
     ...(config?.branding === undefined ? {} : { branding: config.branding }),
     ...(config?.codingOutageWindowMs === undefined

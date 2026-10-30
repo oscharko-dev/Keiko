@@ -4655,6 +4655,14 @@ function logReadinessShortfall(
   );
 }
 
+function probeCuresShortfall(reason: CodingWorkbenchSidecarGatewayUnavailableReason): boolean {
+  return (
+    reason === "tool-calling-unverified" ||
+    reason === "no-tool-calling" ||
+    reason === "non-coding-capable"
+  );
+}
+
 export async function handleCodingSidecarGatewayProfile(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -4663,8 +4671,10 @@ export async function handleCodingSidecarGatewayProfile(
   // limits gets its context window proven here, before the projection judges it.
   const elected = resolveGatewayProfile(deps).result;
   // Only while the gateway is the usable source: a subscription source, a disabled policy or a
-  // missing configuration must never cause a paid provider probe (ADR-0124 D5).
-  if (elected.status === "available" || elected.reason === "tool-calling-unverified") {
+  // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
+  // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
+  // one, and a refuted or non-chat model never does.
+  if (elected.status === "available" || probeCuresShortfall(elected.reason)) {
     // #3591 (1.1.7): the browser reads this profile with a 15 s deadline while a probe against a
     // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
     // answer with the projection (`model-verification-pending` while the probe runs) and let

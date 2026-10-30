@@ -1,3 +1,9 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  formatActivityLogProofLine,
+  expectActivityLogProof,
+} from "../../../../tests/support/activity-log-proof.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 // Issue #2243 — Jira sync composition tests: routes + service + Jira adapter + shared sync lane +
 // local-knowledge sink, end to end. Hermetic: the transport is the in-memory Jira fixture from
 // keiko-connectors (no atlassian.net, no network), custody is in-memory with synthetic secrets,
@@ -43,6 +49,9 @@ import { createInMemoryUiStore } from "../store/index.js";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
 import {
   configuredProviderForCapsule,
+  handleCreateLocalKnowledgeCapsuleSet,
+  handleGetLocalKnowledgeCapsule,
+  handleListLocalKnowledgeCapsuleSets,
   localKnowledgeEmbeddingAdapterForProvider,
 } from "../local-knowledge-handlers.js";
 import {
@@ -445,6 +454,41 @@ async function expectJqlOpacity(
 }
 
 describe("Jira sync — initial run over the AC fixture project", () => {
+  it("keeps a sync-created Jira capsule indexed and composable through the Data routes", async () => {
+    const port = createInMemoryJiraFixture({
+      baseUrl: BASE_URL,
+      projects: [{ key: "PLAT", issues: fixtureIssues(SECRET_BODY_MARKER).slice(0, 1) }],
+    });
+    const { deps, credential } = depsFor(port);
+    const started = await startSync(deps, credential, { projectKeys: ["PLAT"] });
+    expect((await awaitTerminal(started.job.jobId)).status).toBe("succeeded");
+    const created = await handleCreateLocalKnowledgeCapsuleSet(
+      ctxFor("POST", {}, { displayName: "Synced Jira control", capsuleIds: [started.capsuleId] }),
+      deps,
+    );
+    expect(created).toMatchObject({
+      status: 201,
+      body: { capsuleSet: { capsuleIds: [started.capsuleId], capsuleCount: 1 } },
+    });
+    expect(await handleListLocalKnowledgeCapsuleSets(ctxFor("GET", {}), deps)).toMatchObject({
+      status: 200,
+      body: { capsuleSets: [{ displayName: "Synced Jira control", capsuleCount: 1 }] },
+    });
+    expect(
+      await handleGetLocalKnowledgeCapsule(ctxFor("GET", { capsuleId: started.capsuleId }), deps),
+    ).toMatchObject({ status: 200, body: { capsule: { id: started.capsuleId } } });
+    const pod = openJiraPod(deps, started.capsuleId);
+    try {
+      expect(buildKnowledgePodSummary(pod.store, pod.capsule)).toMatchObject({
+        counts: { documentCount: 1 },
+        retrieval: { lexicalIndex: true, vectorIndex: true, hybridGrounding: true },
+        compatibility: { backingKind: "knowledge-capsule", capsuleIds: [started.capsuleId] },
+      });
+    } finally {
+      pod.close();
+    }
+  });
+
   it("syncs ≥50 issues with exact counts, bounds the hostile document, and cites KEY: summary with structured metadata", async () => {
     const requests: AtlassianHttpBodyRequest[] = [];
     const port = createInMemoryJiraFixture({
@@ -751,4 +795,73 @@ describe("Jira sync — degradation and validation", () => {
     );
     expect(resyncWithScope.status).toBe(400);
   });
+});
+
+it.each(["{", "[]"])(
+  "reconstructs malformed sync metadata through the registered Activity Log",
+  async (bodyText) => {
+    const { deps, credential } = depsFor(() =>
+      Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText,
+        bodyBytes: bodyText.length,
+        truncated: false,
+      }),
+    );
+    const logs = createBufferedServerLogSink();
+    const credentials = deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new Error("Missing fixture credentials");
+    const started = await startSync(
+      { ...deps, atlassianConnectorCredentials: { ...credentials, activityLog: logs } },
+      credential,
+      { projectKeys: ["PLAT"] },
+    );
+    const terminal = await awaitTerminal(started.job.jobId);
+    expect(terminal).toMatchObject({ status: "failed", failureReason: "malformed-payload" });
+    const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    if (event === undefined) throw new Error("Missing sync outcome");
+    const line = formatActivityLogProofLine(event);
+    expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
+      actionType: "sync-project",
+      outcome: "failed",
+      failureReason: "malformed-payload",
+    });
+    expect(analyzeLogText(line).timelines).toHaveLength(1);
+    expect(line).not.toContain(BASE_URL);
+    expect(line).not.toContain(credential.authRef);
+  },
+);
+
+it("retains a malformed item failure in the registered partial-sync outcome", async () => {
+  const port = createInMemoryJiraFixture({
+    baseUrl: BASE_URL,
+    projects: [{ key: "PLAT", issues: [plainIssue(1), { ...plainIssue(2), malformedBody: true }] }],
+  });
+  const { deps, credential } = depsFor(port);
+  const logs = createBufferedServerLogSink();
+  const credentials = deps.atlassianConnectorCredentials;
+  if (credentials === undefined) throw new Error("Missing fixture credentials");
+  const started = await startSync(
+    { ...deps, atlassianConnectorCredentials: { ...credentials, activityLog: logs } },
+    credential,
+    { projectKeys: ["PLAT"] },
+  );
+  expect(await awaitTerminal(started.job.jobId)).toMatchObject({
+    status: "partial",
+    failureReasons: ["malformed-payload"],
+  });
+  const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
+  expect(events).toHaveLength(1);
+  const event = events[0];
+  if (event === undefined) throw new Error("Missing partial outcome");
+  const line = formatActivityLogProofLine(event);
+  expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
+    actionType: "sync-project",
+    outcome: "partial",
+    failureReason: "malformed-payload",
+  });
+  expect(analyzeLogText(line).timelines).toHaveLength(1);
 });

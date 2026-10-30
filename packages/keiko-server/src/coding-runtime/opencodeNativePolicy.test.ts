@@ -26,6 +26,8 @@ import {
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
+import { codingJiraServerDefinition } from "./codingJiraPodBinding.js";
+import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -69,6 +71,20 @@ function effectOf(mode: string, permission: string, resources: readonly string[]
 }
 
 describe("native policy request parsing", () => {
+  it("accepts the complete bounded MCP permission identity without allowing arbitrary long names", () => {
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(128));
+    const body = {
+      action: "native-policy",
+      ...request(permission, ["*"]),
+      source: { type: "tool", messageID: "msg_1", id: "call_1" },
+    };
+    expect(
+      parseOpenCodeNativePolicyRequest({ ...body, permission: "notes_probe" })?.permission,
+    ).toBe("notes_probe");
+    expect(parseOpenCodeNativePolicyRequest(body)?.permission).toBe(permission);
+    for (const invalid of ["x".repeat(65), `${permission}x`, `${"s".repeat(65)}_tool`])
+      expect(parseOpenCodeNativePolicyRequest({ ...body, permission: invalid })).toBeUndefined();
+  });
   it("accepts the plugin's bounded ask and refuses every other shape", () => {
     const body = {
       action: "native-policy",
@@ -1217,5 +1233,195 @@ describe("accepted external references (#3900 AC5)", () => {
     } finally {
       rmSync(paths.root, { recursive: true, force: true });
     }
+  });
+});
+
+it("asks before managed MCP effects in either restricted mode while retaining direct-network denial", () => {
+  const admission = openCodeNativeMcpAdmission({
+    servers: [
+      {
+        name: "managed",
+        enabled: true,
+        description: undefined,
+        transport: { kind: "local", command: ["/synthetic/server"], environment: {} },
+        tools: { read: "read", write: "write" },
+      },
+    ],
+    mode: "governed-assist",
+    home: "/synthetic/home",
+    managed: true,
+    relays: new Map([
+      ["managed", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
+    ]),
+  });
+  for (const permission of ["managed_read", "managed_write"]) {
+    const decisions = ["governed-assist", "supervised-coding", "autonomous-delivery"].map((mode) =>
+      decideOpenCodeNativePolicy({
+        mode,
+        workspaceRoot: WORKSPACE,
+        request: request(permission, ["*"]),
+        nowMs: NOW,
+        mcp: admission.grants,
+      }),
+    );
+    expect(decisions.map((decision) => decision.effect)).toEqual(["ask", "ask", "allow"]);
+    expect(decisions[0]).toMatchObject({
+      classification: { scope: "internet", label: "native-mcp" },
+    });
+  }
+  const direct = {
+    actions: new Map([["direct_read", { risk: "read" as const, remote: true }]]),
+    servers: new Map(),
+  };
+  expect(
+    decideOpenCodeNativePolicy({
+      mode: "governed-assist",
+      workspaceRoot: WORKSPACE,
+      request: request("direct_read", ["*"]),
+      nowMs: NOW,
+      mcp: direct,
+    }),
+  ).toMatchObject({ effect: "deny", reason: "mode-denied" });
+});
+
+describe("a Jira Pod the human chose for the run (owner decision 2026-10-30)", () => {
+  const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
+  const READS = [
+    "jira.projects",
+    "jira.issue-types",
+    "jira.create-fields",
+    "jira.edit-fields",
+    "jira.search",
+    "jira.issue",
+    "jira.comments",
+    "jira.transitions",
+    "jira.assignable-users",
+  ] as const;
+  const WRITES = [
+    "jira.create",
+    "jira.edit",
+    "jira.assign",
+    "jira.comment",
+    "jira.transition",
+  ] as const;
+  const jira = (
+    binding: "bound" | "registry-only",
+  ): ReturnType<typeof openCodeNativeMcpAdmission>["grants"] => {
+    const definition = codingJiraServerDefinition({
+      podId: "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10",
+      authenticationGeneration: 3,
+      verificationRevision: 1,
+    });
+    return openCodeNativeMcpAdmission({
+      servers: [definition],
+      mode: "governed-assist",
+      home: "/synthetic/home",
+      managed: true,
+      relays: new Map([
+        ["jira", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
+      ]),
+      ...(binding === "bound" ? { grantedServers: new Set(["jira"]) } : {}),
+    }).grants;
+  };
+  const decideTool = (
+    grants: ReturnType<typeof jira>,
+    mode: (typeof MODES)[number],
+    tool: string,
+  ): OpenCodeNativePolicyDecision =>
+    decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: WORKSPACE,
+      request: request(mcpToolAction("jira", tool), ["*"]),
+      nowMs: NOW,
+      mcp: grants,
+    });
+
+  it("allows every Jira read in all three modes without asking", () => {
+    const grants = jira("bound");
+    for (const tool of READS)
+      for (const mode of MODES)
+        expect(decideTool(grants, mode, tool).effect, `${mode} ${tool}`).toBe("allow");
+  });
+
+  it("lets Jira writes follow the mode: ask below Full access, allowed in Full access", () => {
+    const grants = jira("bound");
+    for (const tool of WRITES)
+      expect(
+        MODES.map((mode) => decideTool(grants, mode, tool).effect),
+        tool,
+      ).toEqual(["ask", "ask", "allow"]);
+  });
+
+  it("keeps the classification the approval card and the effect admission already use", () => {
+    const grants = jira("bound");
+    expect(decideTool(grants, "governed-assist", "jira.issue")).toMatchObject({
+      effect: "allow",
+      classification: { actionClass: "network-egress", scope: "internet", label: "native-mcp" },
+    });
+    expect(decideTool(grants, "supervised-coding", "jira.comment")).toMatchObject({
+      effect: "ask",
+      classification: { actionClass: "network-egress", scope: "internet", label: "native-mcp" },
+    });
+  });
+
+  it("grants nothing without the human's choice: reads follow the ordinary managed matrix", () => {
+    const grants = jira("registry-only");
+    for (const tool of [...READS, ...WRITES])
+      expect(
+        MODES.map((mode) => decideTool(grants, mode, tool).effect),
+        tool,
+      ).toEqual(["ask", "ask", "allow"]);
+  });
+
+  it("admits no Jira tool at all for a run whose Pod was refused or revoked at the start", () => {
+    const none = openCodeNativeMcpAdmission({
+      servers: [],
+      mode: "autonomous-delivery",
+      home: "/synthetic/home",
+      managed: true,
+      relays: new Map(),
+      grantedServers: new Set(["jira"]),
+    }).grants;
+    for (const tool of [...READS, ...WRITES])
+      for (const mode of MODES)
+        expect(decideTool(none, mode, tool), `${mode} ${tool}`).toMatchObject({
+          effect: "deny",
+          reason: "unsupported-action",
+        });
+  });
+
+  it("never grants an action of another server, a resource listing, or an unknown tool", () => {
+    const grants = jira("bound");
+    for (const mode of MODES) {
+      expect(
+        decideOpenCodeNativePolicy({
+          mode,
+          workspaceRoot: WORKSPACE,
+          request: request("other_jira_issue", ["*"]),
+          nowMs: NOW,
+          mcp: grants,
+        }),
+      ).toMatchObject({ effect: "deny", reason: "unsupported-action" });
+      expect(decideTool(grants, mode, "jira.delete-everything")).toMatchObject({
+        effect: "deny",
+        reason: "unsupported-action",
+      });
+    }
+  });
+
+  it("marks only read tools as run-granted, and never a registry server of the same shape", () => {
+    const granted = jira("bound");
+    for (const tool of READS)
+      expect(granted.actions.get(mcpToolAction("jira", tool))).toMatchObject({
+        risk: "read",
+        managed: true,
+        runGrantedRead: true,
+      });
+    for (const tool of WRITES)
+      expect(granted.actions.get(mcpToolAction("jira", tool))?.runGrantedRead).toBeUndefined();
+    for (const tool of READS)
+      expect(
+        jira("registry-only").actions.get(mcpToolAction("jira", tool))?.runGrantedRead,
+      ).toBeUndefined();
   });
 });

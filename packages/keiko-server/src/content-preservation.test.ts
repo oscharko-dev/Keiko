@@ -30,6 +30,8 @@ import {
 import { CONVERSATION_SYSTEM_PROMPT, conversationSystemPrompt } from "./conversation-prompt.js";
 import { GROUNDED_SYSTEM_PROMPT, groundedSystemPrompt } from "./grounded-prompt.js";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
+import { conversationForGateway } from "./conversation-gateway.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import {
   buildGroundedGatewayMessages,
   handleGroundedAsk,
@@ -150,6 +152,58 @@ afterEach(() => {
 });
 
 describe("Chat content policy resolution (#4098)", () => {
+  it("keeps Jira arguments and logs protected while preserving authorized private Chat content", () => {
+    const fixture = createFixture("preserve");
+    const log = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
+    try {
+      const message = fixture.store.createMessage({
+        chatId: fixture.chatId,
+        role: "user",
+        content: String(currentContentRedactor(fixture.deps)(CONTENT + PROVIDER_SECRET)),
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      fixture.store.updateChatToolTranscript(
+        message.id,
+        {
+          kind: "started",
+          call: {
+            id: "policy-call",
+            name: "jira_comment",
+            arguments: { issueKey: "SYN-1", body: CONTENT + PROVIDER_SECRET },
+          },
+        },
+        "content-policy-tools",
+      );
+      const stored = fixture.store.findMessageById(message.id);
+      if (stored === undefined) throw new TypeError("Missing synthetic Chat history");
+      expect(stored.content).toContain(CONTENT);
+      expect(stored.content).not.toContain(PROVIDER_SECRET);
+      const call = stored.toolTranscript?.exchanges[0]?.call;
+      if (call === undefined) throw new TypeError("Missing synthetic tool call");
+      expect(call.arguments.body).not.toContain("customer-owned-example");
+      expect(call.arguments.body).not.toContain("+49 30 12345678");
+      expect(call.arguments.body).not.toContain(PROVIDER_SECRET);
+      const history = conversationForGateway([stored], "preserve");
+      expect(history.find((item) => item.toolCalls !== undefined)?.toolCalls).toEqual([call]);
+      expect(history.find((item) => item.role === "tool")?.toolCallId).toBe("policy-call");
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({ op: "chat.tool-transcript.updated" }),
+      );
+      const events = JSON.stringify(log.mock.calls);
+      expect(events).not.toContain(CONTENT);
+      expect(events).not.toContain(PROVIDER_SECRET);
+      expect(events).not.toContain("customer-owned-example");
+    } finally {
+      log.mockRestore();
+      disposeFixture(fixture);
+    }
+  });
+
   it("keeps the injected redactor for a deps graph without a policy, whatever the environment", () => {
     vi.stubEnv("KEIKO_CONTENT_REDACTION", "off");
     const fixture = createFixture(undefined);

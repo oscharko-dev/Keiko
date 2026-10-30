@@ -29,32 +29,45 @@ import {
   type SecureWorkspaceTextReadFailure,
   type SecureWorkspaceTextReadPort,
 } from "./secureWorkspaceTextRead.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 
 /**
- * The repository's own working instructions, attached to every coding run as bounded, labelled,
- * untrusted initial context (ADR-0137 D1). For that block exactly one file is read: `AGENTS.md` at
- * the task workspace root, through the same secure read helper `keiko_workspace_read` uses — never a second
- * filesystem path, never a parent directory, never a symlink (the helper opens with O_NOFOLLOW) —
+ * The repository's own working instructions, attached to every coding run as labelled, untrusted
+ * context (ADR-0137 D1). For that text exactly one file is read: `AGENTS.md` at the task workspace
+ * root, through the same secure read helper `keiko_workspace_read` uses -- never a second
+ * filesystem path, never a parent directory, never a symlink (the helper opens with O_NOFOLLOW) --
  * and only while the run's own workspace is the one that helper resolves to, checked before and
  * after the read (`exactWorkspaceRead`, #3873 review): the helper follows the global active
- * pointer, which an operator may move mid-run. What the model receives is the window that read
- * would answer for the first 800 lines, cut to 16 KiB and to the turn's remaining prompt budget.
- * The block is part of the first message and so re-sent with every turn: 16 KiB is about 4,000
- * tokens per turn, and the context line records the estimate (`estimatedTokens`) so the cost is
- * reconstructable against the run's allowance (#3873 review). The block is framed by a nonce drawn
- * after the text exists and checked against it, so the file can never close its own frame early;
- * every other part of the first message has the frame's tag neutralized
- * (`withoutRepositoryInstructionsTags`), so no issue body or memory can forge one (#3873 review). The helper delivers whole files up to its own
+ * pointer, which an operator may move mid-run. The helper delivers whole files up to its own
  * pinned 1 MiB content ceiling (`SECURE_WORKSPACE_TEXT_READ_MAX_BYTES`, fixed in its wire
  * protocol and the digest-pinned native binary). Larger files are refused as `too-large`; this
- * loader cannot widen it. Its attached excerpt remains bounded to 16 KiB and 800 lines. The text reaches the model as context,
- * not as authority: it cannot change the governed tool rules, the Authority Envelope or the
- * autonomy mode, and it never enters durable state or the log. A native run takes the same bounded
- * read as a labelled copy its own instruction plugin loads (`materializeForRun`, #3900 AC3); the
- * copy lives only in that run's private configuration and is refreshed before every turn. With a
- * `discovery`, the copy also carries the further sources a standalone run loads -- the user's global
- * instructions, the ancestors' AGENTS.md and the configured and remote `instructions`
- * (`codingRuntimeInstructionSources.ts`) -- each masked, bounded and named the same way.
+ * loader cannot widen it. The text reaches the model as context, not as authority: it cannot
+ * change the governed tool rules, the Authority Envelope or the autonomy mode, and it never enters
+ * durable state or the log.
+ *
+ * Two deliveries exist, and each carries the file the way its producer does.
+ *
+ * A native run (`native-instructions`, the production profile) takes the whole credential-masked
+ * file as a labelled copy its own instruction plugin loads, as a standalone run loads AGENTS.md
+ * (`materializeForRun`, #3900 AC3). The copy lives only in that run's private configuration and is
+ * refreshed before every turn, and the first message carries no block, so the instructions reach
+ * the model once. Nothing cuts the file short of the helper's ceiling unless the caller names the
+ * run's prompt budget (`contentByteBudget`, `repositoryInstructionsCopyBudget`): the production
+ * backend does, from the model's input window, so a file the window could not hold arrives cut at
+ * a line boundary with an explicit marker instead of failing every turn. With a `discovery`, the
+ * copy also carries the further sources a standalone run loads -- the user's global instructions,
+ * the ancestors' AGENTS.md and the configured and remote `instructions`
+ * (`codingRuntimeInstructionSources.ts`) -- each masked, bounded to 16 KiB and 800 lines, and named.
+ *
+ * The mapped profile (`initial-context`) has no instruction plugin, so the file rides as a block in
+ * the first message. That message is re-sent with every turn: what the model receives is the window
+ * `keiko_workspace_read` would answer for the first 800 lines, cut to 16 KiB and to the turn's
+ * remaining prompt budget, about 4,000 tokens per turn, and the context line records the estimate
+ * (`estimatedTokens`) so the cost is reconstructable against the run's allowance (#3873 review).
+ * The block is framed by a nonce drawn after the text exists and checked against it, so the file can
+ * never close its own frame early; every other part of the first message has the frame's tag
+ * neutralized (`withoutRepositoryInstructionsTags`), so no issue body or memory can forge one
+ * (#3873 review).
  */
 export const REPOSITORY_INSTRUCTIONS_FILE_NAME = "AGENTS.md";
 export const REPOSITORY_INSTRUCTIONS_MAX_BYTES = 16_384;
@@ -170,6 +183,11 @@ const CODING_RUNTIME_REPOSITORY_INSTRUCTIONS_CONTEXT_OPERATION = defineActivityL
     estimatedTokens: { type: "integer", dataClass: "count", required: false },
     totalByteCount: { type: "integer", dataClass: "count", required: false },
     totalLineCount: { type: "integer", dataClass: "count", required: false },
+    // The byte bound this read was cut against (the loader's 16 KiB for the initial-turn block; the
+    // helper's ceiling or the run's prompt budget for a native copy) and, on a truncated read, the
+    // masked bytes left out: with `byteCount` and `totalByteCount` they say what the model got.
+    limitByteCount: { type: "integer", dataClass: "count", required: false },
+    omittedByteCount: { type: "integer", dataClass: "count", required: false },
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -236,6 +254,11 @@ export interface CodingRuntimeRepositoryInstructionsCopyRequest {
   readonly isRunWorkspace: () => boolean;
   /** The copy's path: the producer's global instruction file in the run's private configuration. */
   readonly targetPath: string;
+  /**
+   * Bytes of the credential-masked AGENTS.md the run's turns can carry in their system prompt
+   * (`repositoryInstructionsCopyBudget`). Absent, the secure read helper's ceiling is the only bound.
+   */
+  readonly contentByteBudget?: number | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -300,6 +323,8 @@ export interface BoundedRepositoryInstructions {
   /** SHA-256 of the whole file as read: the digest `keiko_workspace_read` reports for it. */
   readonly contentSha256: string;
   readonly truncated: boolean;
+  /** The byte bound this read was cut against. */
+  readonly limitByteCount: number;
 }
 
 /**
@@ -349,7 +374,12 @@ async function materializeForRun(
 ): Promise<boolean> {
   const additional = await additionalSources(input, request, remoteCache);
   const counts = additional?.counts;
-  const bounded = await readBoundedInstructions(input, request, counts);
+  const bounded = await readBoundedInstructions(
+    input,
+    request,
+    instructionBounds("native-copy", request.contentByteBudget),
+    counts,
+  );
   const next = instructionsCopy(bounded, additional?.sections ?? []);
   let changed: boolean;
   try {
@@ -636,20 +666,72 @@ export function repositoryInstructionsContentBudget(
   );
 }
 
+/** The byte and line bound one read of AGENTS.md is cut against. */
+interface InstructionBounds {
+  readonly maxBytes: number;
+  readonly maxLines: number;
+}
+
 /**
- * The window `keiko_workspace_read` would answer for the file's first 800 lines (its own
- * `readWindow`, with the file's total line count), cut at a line boundary to the loader's byte
- * ceiling and the turn's remaining budget. The digest is the whole file's, as that read reports it.
+ * The initial-turn block is re-sent with every turn, so it keeps the loader's 16 KiB and 800 lines
+ * (and the turn's remaining budget). A native copy is what a standalone run loads: every line, up
+ * to the helper's own ceiling and the run's prompt budget when the caller names one.
+ */
+function instructionBounds(
+  delivery: "initial-turn" | "native-copy",
+  contentByteBudget: number | undefined,
+): InstructionBounds {
+  if (delivery === "initial-turn") {
+    return {
+      maxBytes: Math.min(
+        REPOSITORY_INSTRUCTIONS_MAX_BYTES,
+        contentByteBudget ?? REPOSITORY_INSTRUCTIONS_MAX_BYTES,
+      ),
+      maxLines: REPOSITORY_INSTRUCTIONS_MAX_LINES,
+    };
+  }
+  return {
+    maxBytes: Math.min(
+      SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+      contentByteBudget ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+    ),
+    maxLines: LINE_COUNT_DIGIT_CEILING,
+  };
+}
+
+/** Ordinary English is about four bytes per token, so three errs towards fewer bytes than fit. */
+const COPY_BUDGET_BYTES_PER_TOKEN = 3;
+/** The share of the model's input window the instructions may fill; the rest stays for the task. */
+const COPY_BUDGET_WINDOW_SHARE = 0.5;
+
+/**
+ * How many bytes of AGENTS.md a native run's system prompt may carry: half the model's input window
+ * at three bytes per token. The copy is re-sent with every turn beside the tools, the task and the
+ * history, and a window it fills cannot take a turn at all, so a file beyond this budget arrives cut
+ * at a line boundary with a marker instead. A 131,072-token window less its 16,384-token output
+ * reserve holds 168 KiB, more than any ordinary repository instruction file.
+ */
+export function repositoryInstructionsCopyBudget(maxInputTokens: number): number {
+  return Math.floor(maxInputTokens * COPY_BUDGET_WINDOW_SHARE * COPY_BUDGET_BYTES_PER_TOKEN);
+}
+
+/**
+ * The window `keiko_workspace_read` would answer for the file's first lines (its own `readWindow`,
+ * with the file's total line count), cut at a line boundary to the given byte bound. The initial
+ * turn takes the first 800 lines and the loader's 16 KiB; a native copy takes every line within its
+ * own bound. The digest is the whole file's, as that read reports it.
  */
 export function boundRepositoryInstructions(
   text: string,
   maxBytes = REPOSITORY_INSTRUCTIONS_MAX_BYTES,
   file = text,
+  maxLines = REPOSITORY_INSTRUCTIONS_MAX_LINES,
 ): BoundedRepositoryInstructions {
-  const window = readWindow(text, 1, REPOSITORY_INSTRUCTIONS_MAX_LINES);
+  const window = readWindow(text, 1, maxLines);
   const whole = {
     totalByteCount: Buffer.byteLength(text, "utf8"),
     totalLineCount: window.totalLines,
+    limitByteCount: maxBytes,
     // The file's own digest, as the read tool reports it; the text and its counts are what the
     // model may see.
     contentSha256: wholeFileDigest(file),
@@ -745,6 +827,7 @@ const FRAMING_OVERHEAD_BYTES = Buffer.byteLength(
       totalLineCount: LINE_COUNT_DIGIT_CEILING,
       contentSha256: wholeFileDigest(""),
       truncated: true,
+      limitByteCount: 0,
     },
     "0".repeat(REPOSITORY_INSTRUCTIONS_NONCE_BYTES * 2),
   ),
@@ -761,7 +844,11 @@ async function loadForRun(
   input: CodingRuntimeRepositoryInstructionsInput,
   request: CodingRuntimeRepositoryInstructionsRequest,
 ): Promise<string | undefined> {
-  const bounded = await readBoundedInstructions(input, request);
+  const bounded = await readBoundedInstructions(
+    input,
+    request,
+    instructionBounds("initial-turn", request.contentByteBudget),
+  );
   if (bounded === undefined) return undefined;
   const rendered = renderRepositoryInstructions(bounded);
   recordBounded(input.activityLog, request.runId, bounded, estimateTokens(rendered));
@@ -780,15 +867,13 @@ interface EmptyOutcome {
 // frames and cause chain of the error (AGENTS.md §8), never a rejected start.
 async function readBoundedInstructions(
   input: CodingRuntimeRepositoryInstructionsInput,
-  request: CodingRuntimeRepositoryInstructionsRequest,
+  request: Pick<CodingRuntimeRepositoryInstructionsRequest, "runId" | "isRunWorkspace" | "signal">,
+  bounds: InstructionBounds,
   counts?: SourceCounts,
 ): Promise<BoundedRepositoryInstructions | undefined> {
   const { source, activityLog } = input;
   const { runId, signal } = request;
-  const maxBytes = Math.min(
-    REPOSITORY_INSTRUCTIONS_MAX_BYTES,
-    request.contentByteBudget ?? REPOSITORY_INSTRUCTIONS_MAX_BYTES,
-  );
+  const { maxBytes, maxLines } = bounds;
   const refused = admissionRefusal(input, maxBytes);
   if (refused !== undefined || source === undefined) {
     recordEmpty(activityLog, runId, refused ?? refusal("source-unavailable"), counts);
@@ -804,7 +889,12 @@ async function readBoundedInstructions(
       ...(signal === undefined ? {} : { signal }),
     });
     if (result.ok)
-      return boundRepositoryInstructions(modelSafeInstructions(result.text), maxBytes, result.text);
+      return boundRepositoryInstructions(
+        modelSafeInstructions(result.text),
+        maxBytes,
+        result.text,
+        maxLines,
+      );
     recordEmpty(activityLog, runId, readFailureOutcome(result.reason), counts);
     return undefined;
   } catch (error) {
@@ -895,8 +985,13 @@ function recordBounded(
         lineCount: bounded.lineCount,
         contentSha256: bounded.contentSha256,
         estimatedTokens,
+        limitByteCount: bounded.limitByteCount,
         ...(bounded.truncated
-          ? { totalByteCount: bounded.totalByteCount, totalLineCount: bounded.totalLineCount }
+          ? {
+              totalByteCount: bounded.totalByteCount,
+              totalLineCount: bounded.totalLineCount,
+              omittedByteCount: bounded.totalByteCount - bounded.byteCount,
+            }
           : {}),
         ...counts,
       },

@@ -195,9 +195,14 @@ export function dictationInsertionPending(controller: DictationController): bool
   return controller.error?.reason === "draft-too-long";
 }
 
-export function remainingDictationCharacters(draft: string): number {
+// The room a completed dictation has in a composer draft of at most `limit` characters, counting
+// the space the composer adds before an appended transcript.
+export function remainingDictationCharacters(
+  draft: string,
+  limit: number = MAX_DESKTOP_CHAT_INPUT_CHARS,
+): number {
   const occupied = draft.trim().length === 0 ? 0 : draft.trimEnd().length + 1;
-  return Math.max(0, MAX_DESKTOP_CHAT_INPUT_CHARS - occupied);
+  return Math.max(0, limit - occupied);
 }
 
 export interface UseDictationOptions {

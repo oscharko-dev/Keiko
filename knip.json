@@ -5,7 +5,6 @@
     "@oscharko-dev/keiko-memory-consolidation",
     "@oscharko-dev/keiko-quality-intelligence",
     "@oscharko-dev/keiko-sandbox",
-    "@oscharko-dev/keiko-tool-catalog",
     "fallow",
     "ws"
   ],
@@ -28,7 +27,19 @@
         "tests/e2e/servers/**/*.mts!",
         "native/**/*.test.mjs",
         "native/**/test-*.mjs",
-        "docs/design-system/evidence/1300/browser/capture.mjs"
+        "docs/design-system/evidence/1300/browser/capture.mjs",
+        "scripts/testing/jira-chat-lab/browser-disconnect.mjs",
+        "scripts/testing/jira-chat-lab/catalog-chat.mjs",
+        "scripts/testing/jira-chat-lab/chat-faults.mjs",
+        "scripts/testing/jira-chat-lab/mixed-chat.mjs",
+        "scripts/testing/jira-chat-lab/preflight.mjs",
+        "scripts/testing/jira-chat-lab/qualify-fields.mjs",
+        "scripts/testing/jira-chat-lab/restricted-chat.mjs",
+        "scripts/testing/jira-chat-lab/seed-content.mjs",
+        "scripts/testing/jira-chat-lab/seed.mjs",
+        "scripts/testing/jira-chat-lab/session.mjs",
+        "scripts/testing/jira-chat-lab/verify-connection.mjs",
+        "scripts/testing/jira-chat-lab/tls-front.mjs"
       ],
       "project": ["src/**/*.ts", "scripts/**/*.mjs", "tests/**/*.{ts,mts,mjs}", "native/**/*.mjs"],
       "ignore": [
@@ -36,7 +47,8 @@
         "tests/fixtures/**",
         "tests/e2e/fixtures/**",
         "packages/keiko-ui/public/**"
-      ]
+      ],
+      "ignoreBinaries": ["openssl"]
     },
     "packages/*": {
       "entry": ["src/*.ts!", "src/**/index.ts!"]

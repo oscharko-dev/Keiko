@@ -1031,7 +1031,7 @@ function sanitizedBoundConnector(
   conn: Readonly<Record<string, unknown>>,
 ): Pick<Connection, "boundConnectorKind" | "boundConnectorId"> | undefined {
   const kind = conn.boundConnectorKind;
-  if (kind !== "capsule" && kind !== "capsule-set") return undefined;
+  if (kind !== "capsule" && kind !== "capsule-set" && kind !== "jira-live") return undefined;
   if (typeof conn.boundConnectorId !== "string" || conn.boundConnectorId.length === 0) {
     return undefined;
   }

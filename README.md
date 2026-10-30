@@ -34,7 +34,7 @@
   ·
   <a href="#install-with-npm">npm</a>
   ·
-  <a href="#whats-new-in-131">What's new in 1.3</a>
+  <a href="#whats-new-in-132">What's new in 1.3</a>
   ·
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md">Contributing</a>
   ·
@@ -99,6 +99,19 @@ Connected folders do not need Git metadata or a `package.json`. Run `npx keiko i
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `npx keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `npx keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's new in 1.3.2
+
+- **Live feeds no longer stop on a long message.** Chat answers, task timelines and the other live feeds used to close when a single update was large. They now wait for your browser to catch up, and only a browser that reads nothing for 30 seconds is disconnected.
+- **Bigger code changes fit in one task.** The Coding Workbench accepts changes of up to 8 MiB per changeset and 64 MiB per run, and the model is told the same limits.
+- **Large Git diffs open.** A diff above the size limit now opens as a shortened view instead of failing with an error. The diff of your own repository keeps unusual sections readable, while keys, tokens and other secrets stay masked.
+- **A busy local model stays available.** A local model that is still answering another request, such as a single-slot server, can be picked in the Coding Workbench instead of showing as not ready.
+- **Steadier coding runs.** A model answer that stops in the middle of a tool call is repaired once, runs left over from an interrupted session are cleaned up when Keiko starts, and the task timeline follows the newest entry and tells you when it reconnects. `keiko start` also tells you when Keiko already runs on another port.
+- **More secrets removed.** Credentials shaped like a JSON Web Token are masked wherever Keiko removes credentials, and the bundled search tool runs only after its checksum has been verified.
+
+Updating from 1.3.0 or 1.3.1 needs no action, and your tasks and Coding History carry over unchanged.
+
+An installation on 1.2.6 or earlier must run the verified updater bootstrap once before automatic updates. Back up local state and preserve private keys during that step; the [repair evidence](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/portable-updater-repair-4055.md) describes it.
 
 ## What's new in 1.3.1
 

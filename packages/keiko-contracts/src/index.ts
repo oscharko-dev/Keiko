@@ -18,6 +18,21 @@
 // lands in subsequent epic children.
 
 export type { KEIKO_CONTRACTS_VERSION, KEIKO_PRODUCT_VERSION } from "./version.js";
+export type {
+  ChatToolAuthorityEnvelope,
+  ChatToolAuthoritySubject,
+  JiraChatToolAuthoritySubject,
+  McpChatToolAuthoritySubject,
+  McpChatToolReadGrantView,
+  McpChatToolWriteApprovalView,
+  ChatToolReadGrant,
+  ChatToolReadGrantState,
+  ChatToolReadGrantView,
+  ChatToolReadConsentDecision,
+  ChatToolWriteApprovalView,
+  ChatToolWriteApprovalState,
+  ChatToolWriteApprovalDecision,
+} from "./chat-tool-authority.js";
 export type { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG, isKeikoUiLaunchId } from "./ui-launch.js";
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
@@ -1231,6 +1246,14 @@ export type {
   AtlassianConnectorActivityReasonCode,
   AtlassianConnectorActivityRecord,
   AtlassianConnectorAuthScheme,
+  AtlassianConnectorDeployment,
+  AtlassianPrivateTarget,
+  AtlassianNetworkConfig,
+  AtlassianCredentialMetadata,
+  AtlassianCredentialPublicMetadata,
+  JiraLivePodView,
+  AtlassianCredentialCreateRequest,
+  AtlassianLivePodUpdateRequest,
   AtlassianConnectorAuthorityFailureReason,
   AtlassianConnectorDescriptor,
   AtlassianConnectorHumanInitiationReason,
@@ -4689,6 +4712,7 @@ export type {
   WorkspaceEventType,
   WorkspaceEvent,
   WorkspaceInstance,
+  WorkspaceKind,
   WorkspaceBinding,
   WorkspaceBindingV1,
   WorkspaceBoundRootV2,
@@ -4756,6 +4780,9 @@ export type {
   taskWorkspaceProvisioningSource,
   validateWorkspaceEvent,
   validateWorkspaceInstance,
+  FOLDER_WORKSPACE_BRANCH,
+  folderWorkspaceHead,
+  isFolderWorkspace,
   validateWorkspaceBinding,
   validateWorkspaceBoundRootV2,
   validateWorkspaceBindingV2,
@@ -5283,3 +5310,13 @@ export type {
   McpServerRegistryRefusal,
   McpToolRisk,
 } from "./mcp-servers.js";
+
+export type {
+  ManagedMcpHost,
+  ManagedMcpInvocationContext,
+  ManagedMcpProvider,
+  ManagedMcpTool,
+  ManagedMcpToolResult,
+  ManagedMcpLogPort,
+  ManagedMcpFailure,
+} from "./managed-mcp.js";

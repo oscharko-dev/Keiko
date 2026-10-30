@@ -1,4 +1,8 @@
 import {
+  bindNativeMcpHumanTurn,
+  type NativeMcpMutationJournal,
+} from "./opencodeNativeMcpMutationJournal.js";
+import {
   answerNativeWebSearch,
   parseNativeWebSearchRequest,
   type NativeWebSearch,
@@ -26,7 +30,6 @@ import {
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-
 import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
@@ -40,7 +43,6 @@ import {
   encodeSecureWorkspaceNativeDirectory,
 } from "./secureWorkspaceTextReadProtocol.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
-
 import {
   contentFreeErrorClass,
   describeError,
@@ -91,6 +93,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
+  codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
 } from "./codingToolFacade.js";
@@ -102,6 +105,7 @@ import {
 import {
   isCodingSafeActivityPresentationPath,
   type CodingSafeActivityToolPresentation,
+  type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
@@ -204,7 +208,11 @@ import {
   type OpenCodeNativeMcpAdmission,
   type OpenCodeNativeMcpRelayEndpoint,
 } from "./opencodeNativeMcp.js";
-import { bindNativeMcpRelays, type OpenCodeMcpRelayInput } from "./opencodeNativeMcpRelay.js";
+import {
+  bindNativeMcpRelays,
+  recoverNativeMcpRun,
+  type OpenCodeMcpRelayInput,
+} from "./opencodeNativeMcpRelay.js";
 import type { McpOAuthIssuerValidation } from "../mcp/mcpOAuthIssuer.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import { harvestMcpCredentials, seedMcpCredentials } from "./opencodeNativeMcpCredentials.js";
@@ -491,6 +499,7 @@ export type McpOAuthIssuerPort = (
 ) => Promise<McpOAuthIssuerValidation>;
 
 export interface OpenCodeRuntimeCompositionInput {
+  readonly mcpMutations?: NativeMcpMutationJournal | undefined;
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   /**
@@ -586,6 +595,11 @@ export interface OpenCodeRuntimeCompositionInput {
    * is not admitted.
    */
   readonly mcpRelay?: OpenCodeMcpRelayInput | undefined;
+  /**
+   * Managed MCP servers the human chose for this run (a Jira Pod picked in the composer): the choice
+   * is the grant of their read tools, in every mode. Absent, the run grants nothing.
+   */
+  readonly mcpGrantedServers?: ReadonlySet<string> | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -824,6 +838,8 @@ export interface OpenCodeRunPort {
 }
 
 interface PreparedRun {
+  mcpRecovery?: Promise<void> | undefined;
+  nativeMutationTurnBound?: boolean | undefined;
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
@@ -906,25 +922,18 @@ export function createOpenCodeRuntimeComposition(
   const captured = { ...configured };
   const toolProfile = captured.toolProfile ?? "direct";
   openCodeVisibleToolNames(toolProfile);
-  const input = { ...captured, toolProfile };
   const runs = new Map<string, PreparedRun>();
+  const mcpRecovery = (runId: string): Promise<void> =>
+    recoverJournaledMcpRun(captured, runs, runId);
+  const input = {
+    ...captured,
+    toolProfile,
+    mcpRecovery,
+    onRuntimeEvent: nativeMutationRuntimeEvents(captured, mcpRecovery),
+  };
   const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics);
   const bridge = createToolBridge(
-    {
-      capability: input.capabilities.toolFacadeCapability,
-      facade: input.toolFacade,
-      settleTool: input.safeActivity?.settleTool,
-      beginTool: input.safeActivity?.beginTool,
-      diagnostics: input.diagnostics,
-      renderedResults: renderedResultLog(input),
-      resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
-      activityLog: input.activityLog ?? processServerLogSink(),
-      ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
-      ...(input.externalReadRoots === undefined
-        ? {}
-        : { externalReadRoots: input.externalReadRoots }),
-      ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
-    },
+    compositionToolBridgeDeps(input, mcpRecovery),
     input.toolBridge,
     input.toolFacadeOrigin,
     { approvals, runs },
@@ -941,6 +950,8 @@ export function createOpenCodeRuntimeComposition(
     toolBridge: bridge.publicPort,
     runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals, {
       selectableAgents: openCodeSelectableAgents(toolProfile),
+      mcpMutations: input.mcpMutations,
+      mcpRecovery,
       snapshots: toolProfile === "native",
       mcpAuthorization: toolProfile === "native",
       mcpCredentials: input.mcpCredentials,
@@ -948,6 +959,81 @@ export function createOpenCodeRuntimeComposition(
       refreshInstructions: (run) =>
         refreshRepositoryInstructions(input, run.runId, run.runRoot, undefined),
     }),
+  };
+}
+
+function compositionToolBridgeDeps(
+  input: OpenCodeRuntimeCompositionInput,
+  mcpRecovery: (runId: string) => Promise<void>,
+): ToolBridgeExecutionDeps {
+  return {
+    capability: input.capabilities.toolFacadeCapability,
+    facade: input.toolFacade,
+    mcpMutations: input.mcpMutations,
+    mcpRecovery,
+    settleTool: input.safeActivity?.settleTool,
+    beginTool: input.safeActivity?.beginTool,
+    diagnostics: input.diagnostics,
+    renderedResults: renderedResultLog(input),
+    resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
+    activityLog: input.activityLog ?? processServerLogSink(),
+    ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
+    ...(input.externalReadRoots === undefined
+      ? {}
+      : { externalReadRoots: input.externalReadRoots }),
+    ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
+  };
+}
+
+function recoverJournaledMcpRun(
+  input: OpenCodeRuntimeCompositionInput,
+  runs: ReadonlyMap<string, PreparedRun>,
+  runId: string,
+): Promise<void> {
+  const onRuntimeEvent = input.onRuntimeEvent;
+  if (onRuntimeEvent === undefined)
+    return Promise.reject(new Error("Native MCP recovery unavailable"));
+  const recover = async (): Promise<void> => {
+    try {
+      input.mcpMutations?.settleUnconfirmed(runId);
+    } finally {
+      await recoverNativeMcpRun({
+        runId,
+        authorityLifecycle: input.authorityLifecycle,
+        onRuntimeEvent,
+      });
+    }
+  };
+  const run = runs.get(runId);
+  if (run === undefined) return recover();
+  run.mcpRecovery ??= Promise.resolve().then(recover);
+  return run.mcpRecovery;
+}
+
+function nativeMutationRuntimeEvents(
+  input: OpenCodeRuntimeCompositionInput,
+  recover: (runId: string) => Promise<void>,
+): OpenCodeRuntimeCompositionInput["onRuntimeEvent"] {
+  const emit = input.onRuntimeEvent;
+  if (emit === undefined) return undefined;
+  return (event): void => {
+    const terminal =
+      event.kind === "runtime-stopped" ||
+      (event.kind === "failure-redacted" && event.failureCode !== "recovery-required");
+    if (!terminal || !input.mcpMutations?.unsettled(event.runId)) {
+      emit(event);
+      return;
+    }
+    void recover(event.runId).catch((error: unknown): void => {
+      emitServerDiagnostic(input.diagnostics, {
+        correlationId: event.runId,
+        timestamp: new Date().toISOString(),
+        operation: "coding-runtime.tool-bridge",
+        source: "opencode-runtime-composition.native-mcp-recovery",
+        errorClass: contentFreeErrorClass(error),
+        message: "tool-facade-failed",
+      });
+    });
   };
 }
 
@@ -1035,6 +1121,8 @@ function recordNativeNarrowingRefused(
 
 /** What the tool profile decides about a run's port. */
 interface RunPortProfile {
+  readonly mcpMutations?: NativeMcpMutationJournal | undefined;
+  readonly mcpRecovery: (runId: string) => Promise<void>;
   readonly selectableAgents: readonly CodingWorkbenchBuiltInAgent[];
   /** Native runs record turn images for undo. */
   readonly snapshots: boolean;
@@ -1068,6 +1156,23 @@ function nativeMcpAuthorization(
   };
 }
 
+async function finishNativeTurn(
+  run: ReadyRun,
+  signal: AbortSignal,
+  profile: RunPortProfile,
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): ReturnType<OpenCodeRunPort["waitForTerminal"]> {
+  const outcome = await run.runtimeAdapter.waitForTerminal(signal);
+  if (profile.mcpMutations?.unsettled(run.runId)) {
+    await profile.mcpRecovery(run.runId);
+    return false;
+  }
+  if (outcome === false && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+  if (profile.snapshots) recordOpenCodeTurnImage(run, activityLog);
+  return outcome;
+}
+
 function createRunPort(
   runs: Map<string, PreparedRun>,
   diagnostics: ServerDiagnosticSink | undefined,
@@ -1091,7 +1196,7 @@ function createRunPort(
   return {
     submitTask: createSubmitTask(
       readyRun,
-      { diagnostics, activityLog, refreshInstructions },
+      { diagnostics, activityLog, refreshInstructions, mcpMutations: profile.mcpMutations },
       selectableAgents,
     ),
     selectableAgents,
@@ -1105,12 +1210,7 @@ function createRunPort(
     waitForTerminal: async (runId, signal): Promise<OpenCodeTurnOutcome> => {
       const run = readyRun(runId);
       if (run === undefined) return false;
-      const outcome = await run.runtimeAdapter.waitForTerminal(signal);
-      if (outcome === false && !signal.aborted)
-        recordOpenCodeTurnFailure(diagnostics, run, "terminal");
-      // What an undo of this turn must find unchanged, recorded as the turn settled.
-      if (snapshots) recordOpenCodeTurnImage(run, activityLog);
-      return outcome;
+      return finishNativeTurn(run, signal, profile, diagnostics, activityLog);
     },
     replyPermission: createReplyPermission(readyRun, diagnostics, approvals),
     ...createQuestionRunPort(readyRun, diagnostics, activityLog),
@@ -1169,6 +1269,7 @@ function createSubmitTask(
     readonly diagnostics: ServerDiagnosticSink | undefined;
     readonly activityLog: ServerLogSink | undefined;
     readonly refreshInstructions: (run: ReadyRun) => Promise<boolean>;
+    readonly mcpMutations?: NativeMcpMutationJournal | undefined;
   },
   selectableAgents: readonly CodingWorkbenchBuiltInAgent[],
 ): OpenCodeRunPort["submitTask"] {
@@ -1194,7 +1295,7 @@ function createSubmitTask(
     // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
     // continuation of the human's request keeps that request's images: its undo reaches back to it.
     if (origin === undefined) beginOpenCodeTurnImages(run);
-    return postTurnPrompt(run, text, initialContext, inputs, diagnostics, activityLog, origin);
+    return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
   };
 }
 
@@ -1288,19 +1389,25 @@ async function postTurnPrompt(
   text: string,
   initialContext: string | undefined,
   inputs: AdmittedPromptInputs | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
-  activityLog: ServerLogSink | undefined,
+  sinks: {
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+    readonly activityLog: ServerLogSink | undefined;
+    readonly mcpMutations?: NativeMcpMutationJournal | undefined;
+  },
   origin?: CodingRuntimeTurnOrigin,
 ): Promise<boolean> {
+  const { diagnostics, activityLog, mcpMutations } = sinks;
   // A turn that is not a command must never take a command's presentation.
   run.commandPresentation.disarm();
   if (inputs?.command !== undefined) {
+    run.nativeMutationTurnBound = false;
     return postTurnCommand(run, inputs.command.name, text, inputs, diagnostics, activityLog);
   }
   if (!reserveTurnInputs(run, inputs, activityLog)) return false;
   // One id for the turn's input: a resend after a lost acknowledgement is the same input, never a
   // second one, so a lost reply does not end a turn the runtime already started (#3897 review).
   const id = mintTurnMessageId();
+  bindNativeMcpHumanTurn(mcpMutations, run, { messageId: id, text, origin });
   let attempts = 0;
   const post = (): Promise<void> => {
     attempts += 1;
@@ -1927,6 +2034,8 @@ function nativeMcpAdmission(
     home: join(runRoot, "home"),
     validations: checks.validations,
     relays: checks.relays,
+    managed: input.mcpRelay?.managed !== undefined,
+    grantedServers: input.mcpGrantedServers,
   });
 }
 
@@ -1942,16 +2051,42 @@ async function nativeMcpChecks(
 
 /** The relays a native run's servers with credential headers are reached through. */
 function nativeMcpRelays(
-  input: OpenCodeRuntimeCompositionInput,
+  input: OpenCodeRuntimeCompositionInput & {
+    readonly mcpRecovery?: (runId: string) => Promise<void>;
+  },
   request: OpenCodeLifecyclePrepareRequest,
 ): ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> {
   if (input.toolProfile !== "native" || input.mcpServers === undefined) return new Map();
+  const onRuntimeEvent = input.onRuntimeEvent;
   return bindNativeMcpRelays({
     servers: input.mcpServers(request.runId),
     mode: request.env.KEIKO_CODING_MODE,
     runId: request.runId,
     relay: input.mcpRelay,
     activityLog: input.activityLog,
+    mutations: input.mcpMutations,
+    readmitMutation: (identity) =>
+      identity.mcpActionDigest !== undefined &&
+      input.toolFacade.nativeEffect?.admit({
+        capability: input.capabilities.toolFacadeCapability,
+        actionClass: "network-egress",
+        invocation: {
+          sessionId: identity.sessionId,
+          messageId: identity.messageId,
+          callId: identity.callId,
+          mcpActionDigest: identity.mcpActionDigest,
+        },
+      }).ok === true,
+    onUncertainMutation:
+      onRuntimeEvent === undefined
+        ? undefined
+        : (): Promise<void> =>
+            input.mcpRecovery?.(request.runId) ??
+            recoverNativeMcpRun({
+              runId: request.runId,
+              authorityLifecycle: input.authorityLifecycle,
+              onRuntimeEvent,
+            }),
   });
 }
 
@@ -2393,7 +2528,7 @@ function nativeToolSettlementObserver(
   run: PreparedRun,
 ): ((signal: CompositionSafeActivitySignal) => void) | undefined {
   const settlement = input.toolProfile === "native" ? input.toolFacade.nativeSettlement : undefined;
-  if (settlement === undefined) return undefined;
+  if (settlement === undefined && input.mcpMutations === undefined) return undefined;
   return (signal): void => {
     if (signal.kind !== "tool" || signal.messageId === undefined) return;
     if (signal.state !== "succeeded" && signal.state !== "failed") return;
@@ -2401,7 +2536,8 @@ function nativeToolSettlementObserver(
       const key = openCodeNativeCallKey(signal.messageId, signal.callId);
       recordOpenCodeEditSettled(run, key, input.activityLog);
     }
-    settlement.settled({
+    observeNativeMcpCompletion(input, run, signal);
+    settlement?.settled({
       messageId: signal.messageId,
       callId: signal.callId,
       tool: signal.tool,
@@ -2410,6 +2546,32 @@ function nativeToolSettlementObserver(
       ...nativeExitEvidence(signal),
     });
   };
+}
+
+/** Only the existing committed producer-history signal can confirm a consumed mutation. */
+function observeNativeMcpCompletion(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  signal: Extract<CompositionSafeActivitySignal, { readonly kind: "tool" }>,
+): void {
+  if (input.toolProfile !== "native" || signal.messageId === undefined) return;
+  const outcome = input.mcpMutations?.observeCompletion(
+    { runId: run.runId, messageId: signal.messageId, callId: signal.callId },
+    signal.state === "succeeded",
+  );
+  if (outcome !== "uncertain") return;
+  void recoverJournaledMcpRun(input, new Map([[run.runId, run]]), run.runId).catch(
+    (error: unknown): void => {
+      emitServerDiagnostic(input.diagnostics, {
+        correlationId: run.runId,
+        timestamp: new Date().toISOString(),
+        operation: "coding-runtime.tool-bridge",
+        source: "opencode-runtime-composition.native-mcp-completion",
+        errorClass: contentFreeErrorClass(error),
+        message: "tool-facade-failed",
+      });
+    },
+  );
 }
 
 /** A finished shell call's exit status, the check it speaks for and where it ran (#3901). */
@@ -2605,7 +2767,11 @@ function readinessV2Ports(
       try {
         // A session past the read bound keeps its run alive on the newest window (audit 2026-10,
         // finding 3); the complete read stays strict for the continuation of a retained session.
-        const window = await client.recentMessages(fixedSessionId, signal);
+        // Once the projection holds the session up to a message near its end, a sync reads only the
+        // messages from there on, so its cost follows the newest messages and not the whole run
+        // (#4104); the projection plans that, and the read falls back to the whole window by itself.
+        const plan = history.readPlan(checkpoints[fixedSessionId]);
+        const window = await client.recentMessages(fixedSessionId, signal, plan.anchorId);
         messages = window.messages;
         reportTruncation(window);
         // A continued session already holds the messages of earlier runs, which Coding History has
@@ -2613,6 +2779,7 @@ function readinessV2Ports(
         const ownMessages = withoutBaseline(messages, run.continuation?.baselineIds);
         const events = history.project(fixedSessionId, ownMessages, checkpoints[fixedSessionId], {
           truncated: window.truncated,
+          anchored: window.anchored,
         });
         observeNativeStepChanges(input, run, ownMessages);
         staged.clear();
@@ -3378,6 +3545,8 @@ const CLOSE_ABORT = "tool-bridge-close";
 // The execution collaborators travel the whole bridge chain (listener → handler → executor) as
 // one unit; bundling them keeps every signature within the parameter budget (typescript:S107).
 interface ToolBridgeExecutionDeps {
+  readonly mcpMutations?: NativeMcpMutationJournal | undefined;
+  readonly mcpRecovery: (runId: string) => Promise<void>;
   readonly activityLog: ServerLogSink;
   readonly resolveWorkspaceRootAccess: OpenCodeRuntimeCompositionInput["resolveWorkspaceRootAccess"];
   readonly capability: string;
@@ -3991,6 +4160,42 @@ const NATIVE_AUTHORITY_REFUSED_MESSAGE =
  * run's tool-call budget once per original tool invocation, reads included. A wiring without that
  * owner refuses every effect.
  */
+function prepareNativeMcpMutation(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  journal: NativeMcpMutationJournal | undefined,
+): boolean {
+  const mutation = run.mcp?.actions.get(request.permission)?.mutation;
+  if (mutation !== undefined) {
+    if (
+      run.nativeMutationTurnBound !== true ||
+      journal === undefined ||
+      request.source === undefined ||
+      request.mcpInput === undefined ||
+      request.mcpActionDigest === undefined
+    )
+      return false;
+    const prepared = journal.prepare({
+      ...mutation,
+      runId: run.runId,
+      sessionId: request.sessionID,
+      messageId: request.source.messageID,
+      callId: request.source.id,
+      argumentsValue: request.mcpInput,
+      mcpActionDigest: request.mcpActionDigest,
+    });
+    return prepared.kind !== "blocked" && prepared.record.phase === "prepared";
+  }
+  return true;
+}
+
+function hasRequiredMcpIdentity(
+  classification: NonNullable<OpenCodeNativePolicyDecision["classification"]>,
+  request: OpenCodeNativePolicyRequest,
+): boolean {
+  return classification.label !== "native-mcp" || request.mcpActionDigest !== undefined;
+}
+
 async function settleNativePolicyOutcome(
   run: PreparedRun,
   decision: OpenCodeNativePolicyDecision,
@@ -4005,6 +4210,8 @@ async function settleNativePolicyOutcome(
   const { approvals, sessionRelation } = context;
   if (signal?.aborted === true) return { outcome: "cancelled" };
   if (decision.effect === "deny") return { outcome: decision.reason };
+  if (!hasRequiredMcpIdentity(decision.classification, request))
+    return { outcome: "authority-refused", authority: { reason: "unavailable" } };
   const outcome: OpenCodeNativePolicyOutcome =
     decision.effect === "ask"
       ? await nativePolicyHumanDecision(run, decision, signal, deps, approvals)
@@ -4019,6 +4226,8 @@ async function settleNativePolicyOutcome(
   );
   if (!admission.ok)
     return { outcome: "authority-refused", authority: { reason: admission.reason } };
+  if (!prepareNativeMcpMutation(run, request, deps.mcpMutations))
+    return { outcome: "authority-refused" };
   noteAdmittedEditTargets(run, request);
   noteAdmittedEditEvidence(run, request, decision.classification, { deps, sessionRelation });
   noteAdmittedVerification(run, deps, request);
@@ -4241,7 +4450,7 @@ function nativeEffectAdmission(
   signal: AbortSignal | undefined,
 ): CodingToolNativeEffectAdmission {
   if (signal?.aborted === true) return { ok: false, reason: "unavailable" };
-  const { source, patchBytes } = request;
+  const { source, patchBytes, mcpActionDigest } = request;
   return (
     deps.facade.nativeEffect?.admit({
       capability: deps.capability,
@@ -4254,6 +4463,7 @@ function nativeEffectAdmission(
               sessionId: request.sessionID,
               messageId: source.messageID,
               callId: source.id,
+              ...(mcpActionDigest === undefined ? {} : { mcpActionDigest }),
             },
           }),
     }) ?? { ok: false, reason: "unavailable" }
@@ -4744,6 +4954,7 @@ function responseForToolResult(
       actionId,
       result,
       presentation.bridgeDurationMs,
+      presentation.verificationOutcome,
     );
   }
   return { status: 200, body: responseBody };
@@ -4761,9 +4972,16 @@ function recordRenderedToolResult(
   actionId: string | undefined,
   result: CodingToolResult,
   bridgeDurationMs: number | undefined,
+  verificationOutcome: CodingSafeActivityVerificationOutcome | undefined,
 ): void {
   try {
-    recordGovernedToolModelContent(rendered.sink, rendered.correlationId, result, bridgeDurationMs);
+    recordGovernedToolModelContent(
+      rendered.sink,
+      rendered.correlationId,
+      result,
+      bridgeDurationMs,
+      verificationOutcome,
+    );
   } catch (error) {
     emitServerDiagnostic(diagnostics, {
       correlationId: actionCorrelationId(actionId),
@@ -4903,6 +5121,7 @@ function governedToolPresentation(
   result: CodingToolResult,
 ): CodingSafeActivityToolPresentation {
   if (request.action === "edit") return codingToolEditPresentation(result);
+  if (request.action === "verification") return codingToolVerificationPresentation(result);
   if (result.status !== "completed" || !("read" in result)) return {};
   if (request.action === "discover") {
     return "returnedPathCount" in result.read && typeof result.read.returnedPathCount === "number"

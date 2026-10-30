@@ -46,6 +46,44 @@ what every merge into `packages/keiko-editor/`, `packages/keiko-ui/`, `packages/
 undoes any repair. That finding is reported in the run's job summary instead, where it says how far
 the committed numbers have travelled from the product without pretending anyone owes work for it.
 
+### Editor release bundle evidence (B1/B2/B3)
+
+`1209-bundle-evidence.json` describes the actual packaged static export. Its freshness check is
+separate from the immutable D12 performance record above: changed assets or asset inventory may
+require a new bundle record even when the measurement toolchain and editor byte budgets are unchanged.
+
+Use Linux and the Node version pinned by the required UI job in `.github/workflows/ci.yml`. The
+existing [local-gates image](local-gates.md) supplies that environment. Keep Linux dependencies and
+build outputs isolated from a macOS checkout; when another qualification is using its `dist`, build
+an independent source snapshot that also includes the intended uncommitted changes. The snapshot
+must use the same lockfile, source files and canonical build scripts. Never copy host `node_modules`
+into the container. A local deterministic bundle check is valid evidence here; it is not a D12
+wall-clock performance measurement.
+
+From that isolated Linux source tree:
+
+```bash
+npm ci --ignore-scripts --no-audit --no-fund
+npm run build
+npm run prepare:bin
+npm run build:ui
+npm run check:editor-release-evidence
+```
+
+If the fresh export differs from the committed record, inspect the reported discrepancy and run the
+canonical producer against that same actual export, then rerun the unchanged gate:
+
+```bash
+node scripts/editor-release-evidence.mjs --json
+npm run check:editor-release-evidence
+npx vitest run scripts/__tests__/editor-release-evidence.test.mjs scripts/__tests__/editor-bundle-size.test.mjs
+```
+
+Only copy back the generated JSON after the budgets and validation pass and the measured source
+inputs still match the intended change. Review its diff; do not substitute a macOS fingerprint,
+hand-edit hashes or raise budgets to obtain a pass. No D12 baseline/candidate record is regenerated
+by this procedure.
+
 ### Workspace browser-performance evidence
 
 The workspace measurement has its own toolchain digest, defined by
@@ -148,6 +186,13 @@ there is no host-speed multiplier or automatic threshold recalibration. Case ide
 complete sampling procedure must match, and source, ruler or host changes during the run abort it.
 The old single-candidate writer refuses a portable calibration. A portable refresh always measures
 both revisions again; it cannot attach new samples to a previous host's measurements.
+
+A schema 2 calibration has no single-candidate rebind writer. When a reviewed producer change
+intentionally moves a case identity (catalog revision or projection digest) without changing the
+ruler, the lockfile, the case inventory or any tool count, pass the first commit that carries the
+new identity as `--baseline`. The pair then calibrates and measures the new producer on one host and
+carries all six maxima and ceilings forward exactly, which is the schema 1 rebind's semantics.
+State the reason and the unchanged ruler, lockfile and tool counts in the pull request.
 
 Review and commit all three generated documents. Their commit IDs identify the measured source
 commits before the evidence-only commit; the documents themselves are outside the subject digest.
@@ -556,6 +601,11 @@ ceiling.
 After the 1.3.1 version bump at `a6f1f5238`, which also carries the coding-runtime fixes of #4095
 and #4096, it was measured again: p95 1527.1, 1.79, 2.40 and 129.5 ms, each below its committed
 ceiling.
+After the 1.3.2 version bump at `434b407e7`, which also carries the stream flow-control and
+parity fixes of #4102 and #4116, it was measured again: p95 1570.2, 2.18, 2.39 and 149.7 ms, each
+below its committed ceiling. The host was shared with other work, and five earlier complete runs
+of the producer on the same tree exceeded the cold-start or throughput ceiling; the committed run
+is the first in a quieter window, with no sample deleted or retried within it.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

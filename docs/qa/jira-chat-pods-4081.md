@@ -1,0 +1,3863 @@
+# Epic #4081: Jira access Pods in Chat
+
+Source-publication acceptance checkpoint: **46/55** (#4082 AC1/AC2/AC3/AC4/AC5, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4083 AC1/AC2/AC3/AC4/AC5/AC6/AC7, #4084 AC1/AC2/AC3/AC4/AC6, #4091 AC1/AC2/AC3/AC5/AC6, #4085 AC1/AC2/AC3/AC4/AC5/AC7, #4086 AC1/AC2/AC3/AC4/AC5/AC7, #4087 AC1/AC2/AC3/AC6/AC8/AC9).
+All local qualification is complete at this publication checkpoint. The nine integrated gate criteria await the delivered-head GitHub verdict and review settlement. Their live acceptance state is maintained in the [canonical child issues](https://github.com/oscharko-dev/Keiko/issues/4081); this versioned report records the evidence available before that verdict.
+
+## Final qualification checkpoint — complete live groups and literal acceptance audit
+
+The original 55 statements were reread against the actual implementation and retained proofs.
+This checkpoint accepts only their stated behavior; criteria that explicitly require complete
+final gates or required PR checks remain open. Individual acceptance is now **46/55**.
+The remaining work is current UI/evidence and complete
+quality/required-PR qualification. Owner-authorized merge remains a later prerequisite to issue closure.
+
+### Repaired immutable live catalog and permission groups
+
+Both normal catalog groups pass 14/14 (nine reads and five governed writes each) on clean signed
+`56c32e3e256cf17383a363762c5e4e25ce539dd0`. Buffered/SSE wrapper SHA-256 values are
+`4735315b3fa607d98bd8e57529d62f007ded753b3973244b633e099ed9ec1dba` and
+`a6673c73b8bd3a0430423a0aba5c871c8770edba69c6572f7be5d324e57155f7`;
+their group hashes are `a8f11694a60069eef4edfecfa7a4153c924a19a37b4225fe3add37ca4ea06788`
+and `a1cfda1ea1c7a3b711c24ead5808e065fa88ad0a1dfc89c78d4e29d4500e5489`.
+Their opening→closing licenses are 7568→7374s and 7373→7149s. Each independently verifies
+remote fields, counts, changelog or transition state rather than trusting model text.
+
+The following complete follow-up chain adds 46/46 cases. All seven groups retain the identical
+6,934-file package/helper artifact SHA-256
+`2656fe6d29c126e1ad675b8f866a026d856a00a759fcc869dcfb774d668c7564` before/after.
+Actual execution uses Node 24.18.0 and installed official MCP client/server 2.4.0, real
+`gemma-4-31b-it` through the running Docker LiteLLM gateway, Jira 10.3.26/PostgreSQL 16 and synthetic data.
+All wrappers run the public `preflight.mjs` first; the following public group entry points are used:
+
+```text
+node scripts/testing/jira-chat-lab/catalog-chat.mjs <private-session> gemma-4-31b-it buffered
+node scripts/testing/jira-chat-lab/catalog-chat.mjs <private-session> gemma-4-31b-it stream
+node scripts/testing/jira-chat-lab/restricted-chat.mjs <private-session> gemma-4-31b-it buffered catalog
+node scripts/testing/jira-chat-lab/restricted-chat.mjs <private-session> gemma-4-31b-it stream catalog
+node scripts/testing/jira-chat-lab/restricted-chat.mjs <private-session> gemma-4-31b-it buffered focused
+node scripts/testing/jira-chat-lab/restricted-chat.mjs <private-session> gemma-4-31b-it stream focused
+node scripts/testing/jira-chat-lab/mixed-chat.mjs <private-session> gemma-4-31b-it <qualified-embedding-model>
+```
+
+| Group               | Cases | License seconds: opening → after preflight → closing | Wrapper SHA-256                                                    | Group SHA-256                                                      |
+| ------------------- | ----: | ---------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| restricted-buffered | 14/14 | 5851 → 5850 → 5615                                   | `79578b5d69bf6e6e91c1a61a4e44aeecd1bb4cb354bd127d2385dea8d83f7420` | `ee1077743a5237057ccc482213d3dd4d722f6abb1c356f2c7537df0cdc460870` |
+| restricted-stream   | 14/14 | 5613 → 5612 → 5392                                   | `baa67d04ff07d8a84c7894378e3a977a531264efc25171215a0cb1334097a8f1` | `43ca174f139277683c6fdebd1b6139e9979915f3dba8c6ed47f7c7940c672e0e` |
+| focused-buffered    |   8/8 | 5391 → 5390 → 5201                                   | `c32cadf0b9ae48408abec5d7e67cc817d1f551e15cfde0532a9da4a231ba38c5` | `fad358acab46259a230d1834052fa9523491bc377af1539f788d508f6f56b94b` |
+| focused-stream      |   8/8 | 5199 → 5196 → 5020                                   | `df6f2f67736e6683e0d49f7fd03fba5fc71385e075742e69f801e49cc4765185` | `c73830bf05d1bf93b83a21e873a89eeff9e681219c564144bc90e444e3fdf5d8` |
+| mixed               |   2/2 | 5019 → 5018 → 4876                                   | `809c591f4cebba3052f6342e2528bbf0b6ddc5777ceec83a955f9f4be6a27ed7` | `392dc7d35108bb344599c80de3d8a12fff56d60a308dbc7bc5e1564f9ddaad9f` |
+
+Both restricted catalog groups assert zero remote effects. Each focused group permits exactly
+one explicitly authorized comment while denied cases have zero effect. The mixed read/write
+group verifies its single comment and separates Data citations from Jira attribution. No pending
+group intents remain. This is 74 successful acceptance scenarios, including expected refusals;
+it is not a claim of 74 successful Jira writes or arbitrary customer/plugin/network coverage.
+
+### Actual browser lifecycle on clean 4c129
+
+A separate clean assembled artifact from `4c129452229068c2cbde5d454b5add0d02187933`
+contains 7324 package/helper/static-UI files, SHA-256
+`9d8a8deca3ec94261ccedc9dea9a6908ec31bb5f4dce0b22195ebd7c79698cfd`, unchanged before/after.
+The real browser helper runs under Node 24.18.0, Playwright 1.64.1, actual Gemma/LiteLLM/Jira,
+with the UI built on supported macOS Node 24.22.0. It creates/connects the Pod, redeems read
+consent and exact write approval, and observes exactly one remote comment. Rename, distinct
+PAT rotation, re-verification and removal each survive an actual reload; all ten lifecycle,
+revocation and disconnected-state flags pass. Existing direct-route 235-case coverage additionally
+proves selective invalidation and unchanged persisted Data-capsule reads, lists and set membership.
+
+```text
+node scripts/testing/jira-chat-lab/chat-write.mjs <private-session> gemma-4-31b-it governed-assist browser dropdown lifecycle
+```
+
+Opening/group-opening/closing licenses are 4582/4582/4547s. Wrapper SHA-256:
+`da933021a27e6f3ecaaf201b7054b05175e85a20edb8f049ee76b6bc651fa1b5`;
+group receipt SHA-256: `d202ca2f11583d1e68bd2d8569aa143000ae7d0ae1eb55a0154d270f2e0bb83e`.
+An earlier private wrapper used the noncanonical macOS temporary-directory alias, so the CLI
+entry-point guard skipped execution. Its missing completion receipt was correctly rejected;
+no Chat mutation ran. Canonicalizing only the private runner path repaired setup. The failed
+wrapper remains retained separately; it is never counted as an accepted scenario.
+
+### Paired production Data-only compatibility
+
+The exact same extended owner fixture runs against clean `dev` commit `9b30f3d05`
+and the candidate's unchanged production grounding pipeline. Its complete observation includes
+the actual grounding pack, every Gateway request and response including usage, the route response
+with citation, and stored Chat history. Only external model/embedding ports, time and IDs are fixed;
+retrieval, assembly and answer generation execute their real owners. Both outputs contain exactly
+12,860 identical bytes, SHA-256 `c120e5cabeba9d2865a105f42fbde04a8a2d6b7fc406e1e99894d6f1e380fbfe`.
+No observation value or path is normalized. The complete candidate owner passes 102/102 tests;
+selected baseline/candidate cases, root-inclusive strict types, lint and formatting all pass.
+Ordinary tests retain unique temporary roots; paired export refuses any pre-existing fixed root.
+The expected digest is enforced by the recorded paired qualification command:
+
+```text
+KEIKO_DATA_ONLY_DIFFERENTIAL_BASELINE_SHA256=c120e5cabeba9d2865a105f42fbde04a8a2d6b7fc406e1e99894d6f1e380fbfe
+KEIKO_DATA_ONLY_DIFFERENTIAL_PATH=<distinct-private-observation-file>
+node node_modules/vitest/vitest.mjs run packages/keiko-server/src/grounded-qa-hybrid.test.ts -t "threads the request correlation id into the local-knowledge answerer"
+```
+
+### Current scoped final gates
+
+On signed 4c129, complete root strict typecheck, lint and formatting pass. Full UI coverage passes
+613 suites / 11972 tests with one existing skip: 91.78% statements, 85.28% branches, 93.23% functions
+and 94.38% lines. Real local Sonar passes with its documented 12 GiB analyzer heap; no rule or
+threshold is disabled. The isolated assembled/pruned package-surface gate also passes.
+Complete package coverage on signed `95546e333` passes 62,544 tests / 2763 files, with 300 tests
+and 22 files intentionally skipped; statements 91.88%, branches 86.44%, functions 96.05%, lines 94.08%.
+The backend runtime is unchanged in the later 4c129 UI/helper/test increment. Complete scripts
+coverage on clean 4c129 passes 8108 tests / 323 files, with 28 existing skips. Its coverage is 75.87%
+statements, 75.44% branches, 81.02% functions and 76.86% lines. Twenty fresh isolated qualification
+steps pass: exact toolchain/native prerequisites, build, dependency currency/hygiene, SBOM/licenses,
+install approvals, version/release/ADR, retrieval/grounding/faithfulness/context and latency checks.
+A stale copied dev dependency tree was rejected, repaired using pinned npm ci, and the affected
+checks repeated successfully; the failed setup diagnostic is retained separately.
+
+The unchanged coverage-quality checker passes all four metrics for 28 packages, both strict release
+targets and 73 file floors with zero violations. Four existing branch ratchets are unchanged.
+Original coverage summaries and SHA-256 identities are retained. Derived checker inputs only
+normalize verified checkout prefixes to repository-relative paths; all 2284 package and 602 UI entries
+retain byte-identical full metric objects, without drops/collisions or baseline changes.
+Current Linux visual/evidence producers retain their own source identities; the final required PR
+checks and review settlement remain pending.
+
+## Final local performance repair and qualification
+
+The fresh-volume Linux fast suite initially passed every deterministic gate but retained a
+5,882.1ms physical-line public-handler failure against its unchanged 5,000ms ceiling.
+The first outcome and coverage remain retained. The measured window began more than 90 seconds
+after the last Sonar scan completed; the failure is not attributed to that scan. Native comparisons
+and a Linux CPU profile were diagnostic only and never substituted for the controlled gate.
+
+The profile identified redundant pre-existing symbol-atom construction in graph expansion:
+already-directly-matched immutable symbol records were rebuilt and hashed, then discarded by the
+existing stable-ID deduplication. One query-local Set now avoids those repeated constructions.
+It retains only records from the existing bounded index. Ordering, scores, limits, admission,
+redaction, emitted atoms and existing registered timing/count events are unchanged.
+
+The deterministic regression fails before the change at 3,096 geometry accesses and passes after
+at 1,500 for 500 symbols. The complete 500-atom serialized output is byte-identical on macOS and Linux,
+SHA-256 `3deaabe9197d16f202576dd9af0f20d1cb80c2833b6d924ed0ef0b710befe17a`.
+Only `packages/keiko-workspace/src/codeIntelligence.ts` and its existing test change at runtime/test scope.
+Production owner SHA-256:
+`2df6d6f546bd682f4d5c12b34f85e1b5e08cba8b6f414e51ff22532bd0259788`.
+
+After this real code correction and an independent idle preflight, the first new canonical Linux
+pair passes both unchanged 1,000ms and 5,000ms predicates. The five pattern cases and the original
+physical-line case pass; the latter's Vitest test body reports 4,644ms (the handler's passing elapsed
+value is not printed). Its unchanged fixture contains 10,000 lines / 696,669 bytes. No limit,
+timeout, test predicate, performance baseline, authority or logging field changes.
+
+```text
+COMPOSE_PROJECT_NAME=<isolated-project> docker compose -f docker/gates/docker-compose.yml run --rm gates npm run check:grounded-workspace-pattern-performance
+```
+
+Full owner validation passes 114 suites / 2,803 native tests, 55 server/reconstruction cases, root strict
+TypeScript, complete lint/format and the full seven-part Activity Log/architecture chain including
+78 negative fixtures. Real local Sonar passes on the corrected source. Fresh Linux owner coverage
+passes 2,802 tests plus one existing macOS-only skip: 92.56% statements, 87.16% branches, 97.20% functions
+and 94.45% lines. The changed file measures 94.88/89.89/99.15/96.56% respectively.
+
+The final unchanged coverage-quality checker passes 28 packages, all four metrics, both release
+targets and 73 file floors. Its derived package input replaces only the changed file with its exact
+fresh measured entry. All 2,282 reused package owners and 601 UI owners are independently byte-identical
+to their earlier measured source versions; their full metric objects are unchanged. Raw summaries,
+source hashes, prefix mapping and aggregate arithmetic are retained. This is derived evidence,
+not a claim that another full package aggregate ran. The measured baseline remains unchanged.
+
+A further independent synthetic Jira session is normally bootstrapped while CI finishes. It
+retains the public three-hour testing license without clock/license edits; all fixture classes,
+trusted/untrusted TLS/admission checks and actual production read/write preflight pass. Its
+closing license remains 10,650 seconds. The preceding owned session is stopped through its manifest
+and its volumes/receipts retained; unrelated Jira services are untouched. No new live mutation
+acceptance is inferred from this availability renewal.
+
+## Final review documentation correction
+
+A historical outside-diff review advisory identified an outdated option/environment precedence
+comment in `BuildHandlerDepsOptions`. The three-line comment now describes the implemented
+stricter-wins intersection and unchanged fail-closed default. TypeScript scanning confirms all
+12,389 executable tokens and their line positions are identical before/after. The earlier
+byte-reuse coverage proof retains its measured checkpoint; this separately bound comments-only
+delta preserves the measured statement/branch/function inventory. Scoped lint/format and the
+final real Sonar check cover the corrected documentation. No runtime or authority change is made.
+
+## Delivery contract
+
+Owner instruction, 2026-10-26: implement the complete epic on branch
+`codex/4081-jira-chat-pods` and one regular pull request against `dev`.
+No child pull requests; auto-merge stays disabled. Publish signed incremental commits
+approximately every 10–15 minutes with targeted checks for the affected behavior.
+Run the complete applicable quality gates and Sonar at final acceptance. This scoped
+execution amendment supersedes the issues' earlier per-child PR and full pre-push
+check cadence; no acceptance criterion, required CI check or security boundary is waived.
+Integration requires separate owner authorization. Issues remain open until verified merge.
+
+## Revalidation
+
+Implementation starts from `1c4464abbf1b352d3c280e7c67d9dcf2f1b22f10` (`dev`).
+PR #4076 is integrated. Reconcile overlapping work in #4013 (contracts, Chat and
+connector tests), #4074 (dependencies), #4080 (guidance filename), and #4092
+(release versions/evidence). #3943 remains a separate server-boundary workstream.
+This epic owns the Jira/shared-contract subset needed from #2953; its Confluence
+acceptance remains open. Existing #2952 performance ceilings remain authoritative.
+
+The independent Jira 10.3.26/PostgreSQL 16 lab now has trusted local HTTPS and a
+normally bootstrapped, synthetic licensed session. Checkout dependencies, USearch and
+ripgrep are provisioned. The earlier session expired; a fresh independent session was
+bootstrapped on 2026-10-28. License validity is checked at each group's opening and
+completion rather than inferred from a previous session's expiry or container health.
+Read/write preflights, browser read/write/lifecycle groups and both complete 14-operation
+normal-Chat catalog groups passed within their recorded artifact/session scopes.
+These scoped proofs do not establish full acceptance; the checkpoints below record
+what ran and the remaining obligations.
+
+## Architecture and boundaries
+
+Use the existing connector custody/HTTP, catalog binder, authority, conversation,
+workspace and Activity Log owners. Add one `keiko-mcp` package for the official SDK
+client/server at exact version 2.4.0 and explicit MCP 2026-07-28 in-process transport.
+No per-Pod listener, arbitrary REST proxy, customer fixture or parallel policy store.
+Extend contracts additively and preserve Cloud/Data Pod/Workbench behavior.
+
+Persist the canonical mutation identity before dispatch and its observed result before
+resuming orchestration. Never automatically repeat a completed or uncertain mutation.
+Keep confirmed, acknowledged-but-unconfirmed and unknown outcomes distinct.
+A bound Chat gets one current-generation read grant and the existing three-mode write
+policy; grants and approvals never survive invalidation by acquiring new credentials.
+Mixed-source turns retain original cumulative budgets and grounded synthesis limits.
+
+## Acceptance map
+
+Each numbered row is a separate obligation. `Pending` means unproven, including any
+implementation already present. Behavioral changes need a meaningful red/green proof;
+compatibility uses baseline/post-change checks; delivery uses the actual artifact/check.
+Evidence records the tested source identity, command, outcome and relevant limitation.
+`Partial` includes implemented behavior whose complete acceptance evidence is still outstanding.
+The [complete catalog groups](#complete-live-catalog-groups-and-cancellation-recovery),
+[retained consent](#incremental-qualification--retained-consent-and-controlled-empty-evidence-answers),
+[UI/Data-surface proofs](#incremental-qualification--capability-empty-evidence-and-current-jira-pages)
+and [fresh setup](#incremental-qualification--renewed-laboratory-and-reproducible-cold-setup)
+are scoped evidence; live receipts from prior artifacts do not establish acceptance at the final PR head.
+The initial 10/10 fault receipt interrupted by an artifact rebuild is diagnostic only.
+The subsequent [stable-artifact fault group](#stable-artifact-fault-qualification-and-custody-races)
+passes all ten cases on `6c63f33a0f7a`; its scope remains separate from browser transport loss.
+The [latest licensed lifecycle groups](#licensed-jira-pat-availability-and-retained-consent)
+add real LiteLLM/Gemma evidence for PAT revocation, Jira recovery and consent across a process
+restart and credential rotation. All eight canonical issues were reread on 2026-10-28:
+their 55 AC statements still match this map exactly. No checkbox is completed by these scoped proofs.
+
+### #4082 — Support Jira Data Center PAT connections through the existing Atlassian connector
+
+- [x] **AC1:** A generated PAT for a non-admin lab user verifies against real Jira 10.3.26 at REST v2. Invalid/revoked PAT, insufficient permission, redirect, HTML/login response, unsupported version, stopped Jira and timeout have distinguishable safe outcomes; an HTML 2xx is never `ok`. Cloud Basic/v3 behaviour passes its existing regression tests, and a non-mocked UI-client → route test proves real Cloud and Data Center creation (the omitted `authScheme` defect fails this test before the fix).
+
+Status: **Accepted.** Production verifier tests cover bounded REST-v2 serverInfo/myself responses, HTML 200/login, redirects, 401/403, unsupported versions, malformed/inactive identity, timeout, TLS and network errors. The real UI client-to-route suite proves Cloud Basic/v3 compatibility and Data Center PAT creation/verification. Current scoped provider/server runs pass 673 and 1,197 cases. Licensed non-admin verification, native PAT revocation and stopped-instance recovery have complete live receipts. The former response-class gap note was stale; no additional live simulation of every protocol failure is required by this criterion.
+
+- [x] **AC2:** Name/base URL/deployment/credential reference persist through the current owner; cleartext PAT is absent from saved metadata, responses, browser recovery, MCP configuration, logs and evidence. Resolve the PAT only at outbound execution; Keiko-managed rotation/revocation updates the connector generation for dependent consumers. Jira-side revocation is enforced by Jira on each call; an observed auth failure invalidates local readiness and pending work.
+
+Status: **Accepted.** Current custody/route/metadata/transport/redaction suites pass 376/376. They assert public and on-disk secret absence, execution-only PAT materialization, stale-generation refusal before ciphertext access, current-401 invalidation and isolation from stale responses. Existing browser persistence/restore and token replacement tests retain no cleartext credential. Complete native PAT and actual Chat consent/rotation receipts independently verify revocation, generation advance, stale-success refusal, process restart and use of the newly authorized identity. Their artifact/log sweeps are non-vacuous; no credential owner is duplicated.
+
+- [x] **AC3:** Root and non-root Jira context paths work. Exactly admitted enterprise/private and trusted local-lab HTTPS targets work; other hosts/ports, path escape, Keiko's own listener, metadata/link-local addresses, DNS rebinding and mixed-class answers, cross-origin redirects, untrusted certificates and expired certificates remain refused, including the proxy path. Admission cannot be enabled through environment variables or the global private-egress flag.
+
+Status: **Accepted.** The fresh 376-case run includes exact origin/port/context admission, path escape before credential lookup, own-listener/metadata/link-local refusals, direct/proxy rebinding and mixed-class DNS rejection, real pinned HTTPS CONNECT and trusted/untrusted/expired TLS behavior. Environment/global private-egress flags cannot create connector admission. The retained live HTTPS checkpoint proves trusted-CA success and trust/admission removal; other refusals are deterministic transport proofs, not falsely described as physical Jira experiments.
+
+- [x] **AC4:** Existing saved Cloud connectors and Data Pods load without migration loss. Live Jira Pod creation and readiness do not require USearch, an embedding model, indexing or a sync job. A Data Center connector refuses sync with a closed reason and performs no sync request; Cloud sync is unchanged.
+
+Status: **Verified**. Current rebuilt-source compatibility passes 284 tests in six server/store suites and 46 UI/client tests. The corresponding six baseline suites pass 207 cases on `246efd463` (including the unchanged synced-Jira composition proof). Saved schema-1 Cloud metadata and populated legacy Data stores retain their data; real client-to-BFF Live creation/verification requires no embedding/index dependency. Its Data Center sync refusal makes no additional HTTP request, while Cloud Jira/Confluence sync remains green. The real Hub creation/verification proof is retained under #4085 AC5. See the individual AC4 acceptance below.
+
+- [x] **AC5:** A repeatable local-only bootstrap/preflight produces every listed fixture class, verifies license validity and both reads and writes, preserves volumes and never prints credentials. The published timebomb license is re-entered per qualification session by owner decision; there is no clock change, license modification or customer licensing.
+
+Status: **Accepted.** The independent empty-volume bootstrap completed the normal Jira setup and every declared fixture class, followed by real HTTPS/read/write preflight. Setup/readiness regressions pass, persistent volumes and interrupted intents are retained, and qualification receipts carry opening/closing valid-license checks. The published license is entered through the normal supported setup; there is no clock or license modification. Future qualification groups still need fresh preflight, but do not leave this repeatable-bootstrap criterion incomplete.
+
+- [ ] **AC6:** Real adapter and registered Activity Log tests prove successful and failed paths without retaining tokens, endpoint strings, identity data, request bodies or raw provider errors. All applicable gates pass on the actual implementation head.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** Actual adapter/redaction, token-free failures and registered reconstruction pass. Current root strict/lint/format, full Activity Log/architecture, relevant owner coverage, real Sonar and fresh Linux gates pass; final delivered-head required GitHub verdict remains external.
+
+### #4089 — Establish a shared MCP host for Keiko-managed providers and governed non-OpenCode consumers
+
+- [x] **AC1:** A real SDK client and server execute MCP 2026-07-28 through the modern in-process request path without sockets or spawned processes. Tests exercise `server/discover`, `tools/list`, `tools/call`, required per-request metadata and unsupported-version rejection, and record the actual protocol revision. Malformed messages, unknown tools and schema-invalid arguments are refused before a handler runs. A legacy `initialize` handshake or linked in-memory transport alone does not satisfy this criterion; legacy compatibility is tested separately only if deliberately implemented.
+
+Status: **Verified**. The current checkout passes all 42 production-host SDK tests, including 13 explicit wire-boundary cases. Actual discovery/list/call carry protocol 2026-07-28 in HTTP and request metadata while network/process creation is guarded. Unsupported discovery/call revisions, missing or malformed required metadata, malformed JSON/JSON-RPC/method, unknown tools and schema-invalid arguments are refused before the provider; each call refusal has successful before/after controls. Optional clientInfo remains optional. See [individual AC1 acceptance](#individual-acceptance--4089-ac1). Dependency, package and architecture gates remain obligations of AC5/6.
+
+- [x] **AC2:** Every tool the model can see originates from a compiled `keiko-tool-catalog` projection through the bound gateway advertisement; a hand-written, unknown or post-admission-drifted tool cannot be advertised or dispatched. Existing `projection-mismatch` protection stays green.
+
+Status: **Verified**. Within this issue's explicit Keiko-managed/non-OpenCode scope, production Chat advertises only a compiled canonical projection and current binder offer through the real Gateway adapters. Hand-written tool arrays, unknown tools, projection mismatch and post-admission metadata/handler drift are refused. Current source review plus 498 unchanged tests in twelve suites and 58 combined-catalog tests prove this path. OpenCode remains its own MCP client under the issue Purpose/Scope/Engineering Notes and ADR-0175 D2; its bounded native advertisements are transport data, not falsely claimed canonical projections. See [individual AC2 acceptance](#individual-acceptance--4089-ac2).
+
+- [x] **AC3:** Call context is injected server-side only; routing and authority overrides are refused. Ordinary links in supported issue content remain data. Interleaved calls from two differently bound consumers, with cancellation and reversed completion order, cannot observe or use each other's context. Unsupported SDK input fulfillment or retries cannot bypass canonical admission and invocation accounting.
+
+Status: **Verified**. Server-only AsyncLocalStorage and exact Request-context binding isolate consumers; routing/authority overrides are refused while supported issue links remain data. Current SDK/Gateway/binder tests cover separate Chats, reversed completion, cancellation and generation/custody changes. A new actual-SDK regression exposed HEADER_MISMATCH replay after a completed handler (two executions before the fix); the admitted frozen toolDefinition now prevents the second invocation. Request-state, sampling, elicitation and roots input fulfillment perform no extra invocation. The current rebuilt candidate passes 299 tests in ten suites, strict typecheck/lint and the registered body-free failure proof. See [individual AC3 acceptance](#individual-acceptance--4089-ac3). Final aggregate gates remain separate AC6 obligations.
+
+- [x] **AC4:** The admission pipeline composes stricter-wins in all three modes; a denied call performs no handler call; approval and grant redemption re-validate binding, generation, envelope, mode and budget; cancellation and timeout settle exactly once.
+
+Status: **Verified**. The current combined authority/admission/SDK/settlement regression group passes 263 cases in ten suites. Four additional race cases explicitly exhaust real authority or change mode while a read grant is pending and assert zero handler/HTTP calls, then exercise late completion after timeout both before and after effect start with exactly one terminal event and one release or commit. Existing tests cover all three modes, stricter ceilings, binding/credential/envelope drift, exact write-approval claims and cancellation settlement. See the individual AC4 acceptance below; AC6 retains the complete final-gate obligation.
+
+- [x] **AC5:** An import of `@modelcontextprotocol/*` outside the host fails `arch:check`, proven by a negative fixture in `arch:check:negative`; dependency matrix, currency, hygiene, SBOM and package-surface gates pass.
+
+Status: **Verified**. On `44d18c688`, the complete current architecture gate passes and the pinned Linux negative gate rejects all 78 fixtures, including the forbidden SDK import. Dependency currency verifies all 63 dependency-matrix rows and 12 action rows; hygiene passes over 29 manifests/9018 tracked paths. CycloneDX generation, all 28 workspace SBOM/license checks and exact install-script approvals pass. The isolated assembled/pruned package surface passes over 7210 files, including the built UI and unchanged Editor ceiling. See [individual AC5 acceptance](#individual-acceptance--4089-ac5). No full epic or integrated release acceptance is inferred.
+
+- [ ] **AC6:** Registered body-free Activity Log events reconstruct provider admission and the call lifecycle with correlation and failure classes; existing Workbench MCP registry, relay and OAuth suites are unchanged and green. All applicable gates pass on the actual implementation head.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** Registered provider/settlement events and unchanged Workbench registry/relay/OAuth owners pass. Current full activity/architecture, source-bound local qualification and real Sonar pass; final delivered-head required GitHub verdict remains external.
+
+- [x] **AC7:** A hermetic non-Coding consumer executes through the production catalog binder and admission pipeline without a synthetic Coding session or workspace authority. Existing Coding identity, mutation and approval guards retain their regression coverage.
+
+Status: **Verified**. The hermetic conversation consumer executes through the actual production binder, compiled Gateway projection and managed SDK host without a Coding session, workspace root or Coding action. The current Native candidate passes the 99-test non-Coding/budget compatibility group and the 515-test native policy, identity, approval, journal, real-SDK loss and runtime-composition group. Scope changes, cancellation and descriptor drift refuse effects; existing Coding guards remain covered. See [the individual AC7 acceptance](#individual-acceptance--4089-ac7). This completes this criterion only; the other criteria retain their own outstanding obligations.
+
+### #4083 — Expose Jira Data Center ticket operations as the first managed provider on the shared MCP host
+
+- [x] **AC1:** Real modern MCP discovery, per-request protocol metadata, `tools/list` and `tools/call` through the shared host exercise the production Jira provider and list exactly the implemented typed capabilities; every listed tool has a catalog descriptor and an ADR-0128 D4 row. Unknown tools, malformed arguments and caller-supplied credentials, arbitrary destinations or connector switching are refused before HTTP execution.
+
+Status: **Accepted.** The production SDK host protocol tests cover modern discovery, per-request metadata, tools/list and tools/call, including pre-handler schema and routing/credential override refusals. The complementary immutable 44d18c688 real-model catalog groups exercise all nine reads and five writes through ordinary Chat, the production binder and this shared host against licensed Jira. Every advertised capability has its canonical descriptor and ADR-0128 D4 row. These are complementary protocol and live-provider proofs, not a claim that one receipt alone covers both.
+
+- [x] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
+
+Status: **Verified**. On the independent clean `44d18c688` compiled runtime, all 14 advertised operations pass through normal Chat, LiteLLM/Gemma, the production binder and actual MCP host against licensed Jira 10.3.26, in both buffered and streamed groups. Both complete restricted-identity catalog groups also pass, with zero remote write effects; separate focused permission groups pass 8/8 in each transport. Independent Jira state and dispatch observations distinguish allowed reads, pre-dispatch refusal, current-auth invalidation and conservative post-dispatch uncertainty. The bounded operation/endpoint matrix and exact artifact/receipt hashes are recorded below. This does not claim unrestricted Jira REST or full epic acceptance.
+
+- [x] **AC3:** Required supported custom fields, constrained fields and workflow-specific transitions are discovered/validated from real metadata through the post-9.0 endpoints. A real transition-screen fixture requires a supported field; omitting it fails, and the approved field value and transition succeed in one request. Undeclared mutation verbs, worklogs and unsupported compound effects are refused before HTTP. Unknown plugin-specific field types are reported as unsupported with no fabricated values. Missing/invalid values and unauthorized issues/actions produce honest safe errors without escalating to an admin identity.
+
+Status: **Accepted.** Current metadata/mutation/read owner suites pass 194/194. They prove the supported field/verb matrix, omission and clearing, constrained values, unknown plugin projections, metadata-bound create/transition validation, undeclared verbs/worklogs and compound-effect refusal before HTTP. The actual SDK/binder reports unsupported fields without private values or fabricated data. Both complete licensed real catalog groups verify required create fields and one-request transition fields/resolution/status; both restricted groups refuse omitted fields without mutation. The former presentation/final-gates note imposed obligations beyond this literal criterion.
+
+- [x] **AC4:** Pagination, empty results, partial results, bounds, timeout and cancellation behave deterministically. Jira content and tool metadata cannot modify the tool allowlist, credential, chat binding, read grant or approval state.
+
+Status: **Accepted.** Production read suites cover bounds before credential resolution, malformed/failed responses, continuation, partial pages and empty termination. The immutable real Gemma streamed pagination group verifies 26 reference issues with cursors 0/10/20/26, pages 10/10/6/0, four HTTP200 reads and zero writes. A new actual Chat/binder/SDK loop regression delivers hostile field metadata, deliberately attempts an unoffered tool and forged control arguments, and proves unchanged catalog projection, credential, binding and granted consent, no write approval, exactly one GET and zero writes. Its complete 50-case owner suite passes, including timeout/cancellation. No runtime change or authority widening was needed.
+
+- [x] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
+
+Status: **Accepted.** Current production journal/HTTP and SDK/binder suites pass 49 cases, including explicit oversized/truncated 201 followed by canonical replay: succeeded-unconfirmed, one provider execution and one remote effect. Existing proofs cover malformed/body-stream-lost acknowledgement, cancellation, all five mutation operations, foreign field/assignee changes, stale approval identities and consistent journal/route/UI/activity outcomes. Complete immutable live groups additionally prove all five mutations under lost observation and committed-then-503, fresh-process recovery and preserved foreign PUT changes. The three-case actual-browser group now closes physical response loss/reload/Regenerate with independent counts. Empty reconciliation cannot authorize execution; ADR-0128 states the unavoidable concurrency limits.
+
+- [x] **AC7:** With no explicit ceiling configured, the connector policy evaluates Chat-consumer and Coding-run calls against the same resolved `autonomous-delivery` ceiling; `KEIKO_CODING_DEPLOYMENT_CEILING=governed-assist` clamps both, and an unrecognized value fails closed to `governed-assist`. Proven through the production policy and composition, not a hand-built deps object.
+
+Status: **Accepted.** The added production Coding composition proof uses buildUiHandlerDeps, the actual resolver, prepared Git workspace, minted run authority and connector facade. Unset, governed-assist, supervised-coding and invalid values produce the resolved ceiling and effective policy; narrower/invalid calls are denied before execution. Default Full access passes policy, then the independent unconfigured CI-repair budget refuses execution. The connector scope of the Coding Authority Envelope remains denied for Jira at this checkpoint; the test does not widen it. Since 2026-10-30 (#3907) a Coding run reaches Jira by a different, explicit path: only through a Jira Pod the human picked in the composer for that run, via the managed MCP relay ([ADR-0181](../adr/ADR-0181-shared-managed-mcp-host.md)), where the pick grants the read tools and the write tools follow the autonomy mode. Together with existing production Chat composition/authority cases, 89/89 tests pass.
+
+- [x] **AC6:** Tool descriptions, inputs and output envelopes contain no PAT; activity/evidence contain no Jira content or private endpoints. Existing Cloud v3 services and Workbench MCP tests remain green.
+
+Status: **Accepted.** Actual provider/HTTP redaction sweeps cover PAT-free schemas and outputs plus body-free Activity Log/evidence. The complete stable 5aed package run passes the unchanged Cloud v3 and Workbench owners; the later shared binder lifetime change passes 915 affected cases and 50 production Chat cases. No separate final-head gate clause is added to this criterion.
+
+### #4084 — Bind one Jira Pod to ordinary Chat with per-chat mode, Chat authority and a one-time read grant
+
+- [x] **AC1:** Server-side concurrent connect/replace requests cannot leave two Jira Pods attached to one Chat. The binding, grounding identity and generation update atomically through the authenticated PATCH pattern; restart/reload restores valid bindings without cross-chat or cross-token reuse. A registry entry, guessed ID, client-side edge or another Chat's binding grants no access, and a Chat without a binding offers no Jira tool to the consumer context.
+
+Status: **Accepted.** Authenticated concurrent PATCH tests admit one binding and reject the stale competitor; grounding identity and generations commit atomically. Store reopen, foreign binding/credential and unbound-consumer tests pass. A complete real-model lifecycle group restores the persisted Chat in a fresh Node process without restoring expired authority or budgets. The current frozen-runtime in-app browser reload also restores the same server-confirmed binding and canonical tool history. No live-only concurrency condition is added beyond the criterion.
+
+- [x] **AC2:** All three modes have explicit regression coverage through the shared action-class policy, including per-chat mode persistence, the unconfigured `autonomous-delivery` tool-source ceiling delivered by the one server resolver from #4083 and an explicitly narrower ceiling: required approval precedes network/effect, denied actions make no call, bounded allowed actions execute without invented extra approval. The read grant is requested once, covers only read-class tools of the current binding and credential generation, and never covers writes. Missing/expired authority remains denied in every mode.
+
+Status: **Accepted.** Production shared-policy/composition tests cover all three modes, default and narrower deployment ceilings, per-chat persistence, denied/expired authority and zero-dispatch refusal. Exact action approval is separate from the binding/generation-scoped reusable read grant. The current combined authority/composition run passes 89/89; retained actual-model buffered/SSE/browser mode groups and current UI approval/remote-effect observations support the execution behavior. Complete operations are independently qualified under #4083 AC2; this criterion does not require an additional full catalog for every mode.
+
+- [x] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
+
+Status: **Accepted.** Current lifecycle/isolation/approval/authority owner suites pass 207/207. Actual credential routes and custody rotation revoke both shared-Pod pending writes with zero requests while an unrelated Pod remains usable; disconnect, deletion, replacement, delayed verification and pre-effect generation checks cannot substitute old/new credentials. Ordinary HTTP-port tests distinguish current401 invalidation from403 and stale observations. Complete native-PAT/actual Chat rotation receipts supply the real revocation and fresh-identity proof. This criterion asks for these lifecycle tests; it does not require every permutation to be repeated as a live browser experiment.
+
+- [x] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
+
+Status: **Accepted.** The same production Data-only fixture runs on clean dev 9b30f3d05 and the candidate, with fixed external model/embedding ports, clock and identifiers. Complete grounding pack, Gateway requests/responses and usage, grounded route output/citation and stored history are byte-identical: 12,860 bytes, SHA-256 c120e5cabeba9d2865a105f42fbde04a8a2d6b7fc406e1e99894d6f1e380fbfe. No fields are normalized or omitted. Existing shared/distinct-Pod isolation, copied-Chat refusal and unchanged Workbench owner proofs complement it; the complete current grounding owner passes 102 cases.
+
+- [ ] **AC5:** Production-path lifecycle logging for binding, mode, grant and approval is registered and body-free. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects. All applicable gates pass.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** Persistence/expiry/mode/revocation and fresh-process/no-resume behavior are proved. Current seven-part registered lifecycle reconstruction, owner coverage and real Sonar pass; final delivered-head required GitHub verdict remains external.
+
+- [x] **AC6:** Through the trusted non-Coding test consumer against local Jira 10.3.26, an admitted read-class call reaches the real provider only with a valid grant, and a write-class call only under the mode matrix or a redeemed approval that re-ran the complete pipeline; a denied, expired or revoked call performs no HTTP request.
+
+Status: **Accepted.** Normal Chat is the actual trusted non-Coding consumer. Both repaired 56c32 catalogs pass14 operations; the all-mode groups and current admission tests prove granted reads, policy-required exact approvals and zero HTTP for denied/expired/revoked work. The actual in-app-browser expired-consent group ends not-dispatched with zero matching writes. See the final qualification checkpoint.
+
+### #4091 — Run a governed tool loop in ordinary Chat through the shared MCP host
+
+- [x] **AC1:** Before this child closes, an authenticated normal Chat API performs a read and a governed write through the real gateway → production catalog binder → shared MCP host → local Jira 10.3.26, using a verified tool-capable real model and checking remote state. Exercise both buffered and streaming turns; the unfinished UI is not a substitute runtime or a reason to defer this proof to #4087. A normal Chat with a valid connected Jira Pod discovers and invokes the real provider through the shared host; a Chat without that binding is offered no Jira tool. A registry entry, guessed ID, client-side edge or another Chat's binding grants no access.
+
+Status: **Accepted.** The clean frozen `44d18c688` runtime completes all fourteen operations in both buffered and streaming Chat through verified LiteLLM/Gemma, the production binder, shared SDK host and licensed Jira. Normal and restricted catalog groups each pass 14/14 with independent remote state. The current 49-case ordinary-Chat suite rejects absent/foreign bindings and missing, stale or mismatched tool proof before dispatch. The full-catalog repetition gap is closed; final integrated delivery remains separately open.
+
+- [x] **AC2:** In-flight cancellation never reports a false rollback or false success. An already applied Jira effect is shown as completed; uncertain outcomes are reconciled or clearly shown as unknown, without automatic duplication.
+
+Status: **Accepted.** Current ordinary-Chat tests prove zero Jira requests when cancellation precedes consent and retain late-acknowledged effects after cancellation. The immutable `6c63f33a0f7a` ten-case fault group covers every mutation with lost observation or committed-then-503, same/fresh-process duplicate delivery and real-model Regenerate. Independent counts remain exactly ten original Chat effects and no replay. History distinguishes acknowledged and unknown outcomes, without promising rollback. Physical browser reconnect/reload coverage remains a separate AC5 obligation.
+
+- [x] **AC3:** Data-Pod-only grounding is byte-for-byte unchanged in behaviour, the mixed-scope schedule is tested through actual gateway admission, existing Workbench MCP works unchanged, Jira works with no embedding/index setup, and a model without verified tool calling yields the truthful unavailable state instead of silently answering without tools.
+
+Status: **Accepted.** The paired production Data-only fixture proves complete byte equality against clean dev 9b30f3d05, including pack, model request/output/usage, citations and saved history. The complete 102-case owner suite passes. Existing mixed Gateway scheduling/empty-evidence/tool-capability cases and the complete real mixed group preserve cumulative budgets and separate Data/Jira attribution; unchanged Cloud/Data/Workbench owners pass the full package run. See the final qualification checkpoint.
+
+- [ ] **AC4:** Production-path tool-loop lifecycle logging (offered, started, grant-required, approval-required, completed, failed, unknown) is registered and body-free; the provider receives only authorized scoped calls; tool output and prompt injection cannot extend authority, select a credential or change the binding. All applicable gates pass.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** Production offered/started/grant/approval/completed/failure/unknown events, scoped dispatch and hostile metadata/control refusal pass. Current full local logging/error/architecture/coverage/Sonar qualification passes; final delivered-head required GitHub verdict remains external.
+
+- [x] **AC5:** Response-loss, duplicate-delivery, streaming fallback, context-window retry, reconnect, reload and Regenerate tests assert Jira mutation counts. Completed or unresolved effects are not replayed; crash recovery presents unknown outcomes truthfully. Compaction and provider-adapter round trips preserve tool-call/result IDs, relationships and cumulative usage.
+
+Status: **Accepted.** The completed immutable real Gemma/LiteLLM/Jira browser group covers lost write observation, committed-then-503 and physically cut browser completion. Each preserves canonical identity and exactly one remote effect through duplicate delivery, visible reload and Regenerate to response version 2. Existing production Gateway/context suites cover pre-admission streaming fallback, context overflow after a committed write, cumulative usage and paired tool/result IDs; durable journal/fresh-process proofs cover crash recovery. See the recorded artifact/receipt and limits below. Whole-PR final gates remain separate and are not claimed green.
+
+- [x] **AC6:** Mixed Jira/Data-Pod turns retain separate source attribution and the existing physical grounded-synthesis ceiling across orchestration, retries and repair. Production-path tests exhaust each cumulative budget without resetting it. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects.
+
+Status: **Accepted.** The current production-Gateway ordinary/mixed suites pass 90/90 after the analyzer repairs: cumulative input/output, 30 tool calls, retrieval/excerpts, deadline and ten-round exhaustion preserve the original physical synthesis/repair ceiling. The frozen `44d18c688` mixed-source live group passes 2/2 with separate Jira/Data attribution. Current authority tests reject stale/replayed grants and queued effects after mode/binding changes and exhausted budgets; persistent grant/restart cases remain covered. No budget or authority was widened.
+
+### #4085 — Create and manage Jira access Pods in the existing Knowledge Pods hub
+
+- [x] **AC1:** The existing Knowledge Pods hub offers Data and Jira creation. A Jira Pod is created using name, address and PAT against the real local lab through the production API; Data creation and existing saved Pods, including synced Jira knowledge Pods, still work and remain distinguishable.
+
+Status: **Accepted.** The actual licensed in-app-browser journey creates, verifies and binds a Jira Pod with name/address/PAT through the production API, including the new56c32 runtime. Current Hub/graph tests retain ordinary Data creation/list behavior and distinct Live-Jira controls. The production sync test creates a genuinely synced Jira knowledge capsule and preserves indexing/composition/Data routes; saved Cloud/Data compatibility and the already accepted AC7 capability boundary provide complementary unchanged-baseline proofs. This completes the creation/distinguishability criterion, not all Hub lifecycle/UI gates.
+
+- [x] **AC2:** The PAT is write-only, cleared on save/cancel/unmount and never returned in later reads, stored in browser persistence, placed in URLs, screenshots, analytics or error strings. Duplicate submits/retries do not create duplicate Pods or orphan credentials.
+
+Status: **Accepted.** Existing form/card/custody/persistence tests cover write-only tokens, clearing on save/cancel/unmount, duplicate/uncertain-create recovery and absence from serialized browser state. Actual-adapter secret sweeps and the inspected masked browser captures cover returned data, URLs, errors, diagnostics and evidence. Current full UI coverage passes 11972 tests.
+
+- [x] **AC3:** The card reports actual verification status. Bad/revoked token, inaccessible Jira, trust failure, redirect/HTML response, permission refusal and, where observable, license or read-only restrictions have actionable bounded presentation; saving or probing identity does not promise every action is permitted.
+
+Status: **Accepted.** The closed verification-state UI matrix and current real-client/custody tests cover revoked credentials, unreachable/trust/redirect/HTML/permission failures and bounded repair actions. Generation/race controls preserve authoritative readiness. Identity verification does not promise write permission; license/read-only limits are stated only where observable.
+
+- [x] **AC4:** Rename, reverify, token replacement and removal survive reload and use the existing server owner. Tests delete/replace a Pod-owned credential through the existing credential route while two Chats share the Pod and deliver stale verification replies after rotation; neither alternate entry points nor late replies restore stale access. Removal deletes the owned credential and dependent Chat bindings; token rotation preserves their visible association but invalidates authorization, read grants and pending work until re-verification; deleting one Pod never damages unrelated credentials or Data Pods.
+
+Status: **Accepted.** Clean frozen4c129 completes the actual browser create/connect/read-consent/approved-comment flow, then rename, distinct-token rotation, re-verification and removal, with real reloads after all four lifecycle actions. Every reload/old-grant/disconnect assertion passes and independent Jira observation confirms exactly one comment. The 235 route cases complement it with alternate credential routes, shared-Chat invalidation, stale replies and unchanged real Data storage/read/list/set state.
+
+- [x] **AC5:** The ordinary Jira form requires no email, MCP configuration or vector-index setup. The initial implemented ticket capabilities are explained plainly without claiming all Jira APIs or guaranteed write permissions.
+
+Status: **Verified**. The current paired in-app browser created a synthetic Jira Pod through exactly name, HTTPS address and PAT, then verified it against the licensed local Jira. No email, MCP or indexing setup was required. Its actual card explains the implemented ticket operations and Jira-permission/Chat-approval limits. The 35-test form/Hub/card group additionally proves the server-advertised read-only and read/write descriptions; UI typecheck, lint and formatting pass. See [individual AC5 acceptance](#individual-acceptance--4085-ac5). Complete accessibility and aggregate UI gates remain separate AC6 obligations.
+
+- [ ] **AC6:** The relevant design-state matrix, keyboard/focus/screen-reader behavior, English/German text, light/dark/high-contrast and reduced-motion/zoom proofs pass with synthetic visible data. UI and wired browser gates pass.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** Current Linux original producers pass the full design/state/EN-DE/keyboard/axe/theme/contrast/reduced-motion/constrained-layout matrix, including the stated 200% viewport emulation. Updater 9/9, Jira 5/5, all 14 declared source hashes, complete UI coverage and both Editor release/performance evidence gates pass. Exact-head integrated PR verdict remains external.
+
+- [x] **AC7:** Live-access Pod variants cannot enter capsule-set composition, capsule export or indexing through either UI or direct server requests. They advertise no fabricated capsule, retrieval or storage state, and unsupported Cloud sync controls are absent. Existing Data and synced-Jira Pods preserve these capabilities.
+
+Status: **Verified**. The current 236-case server group rejects Live capsule read, index/reindex, connection and export requests and mixed Live/Data composition without partial state or HTTP/embedding effects. Data controls retain their routes. A genuinely sync-created Jira capsule stays indexed, readable and composable, preserving its real retrieval projection; the identical compatibility case also passes against `246efd463`, whose complete five-case Jira sync suite passes. The 80-case UI and 44-case Pod/projection groups preserve ordinary Data controls and exclude fabricated Live capsule/storage, index, export and sync controls. There is no mounted capsule-export capability for either kind; this is an absence/refusal proof, not a claim that Data Pods support export. See [individual AC7 acceptance](#individual-acceptance--4085-ac7). Complete issue/UI and integrated gates remain open.
+
+### #4086 — Connect Jira Pods to Chat using existing workspace connectors and in-Chat tool cards
+
+- [x] **AC1:** Drag/drop and the existing keyboard alternatives (port buttons and the Chat header select) can place and connect the same saved Jira Pod. The server acknowledges the connection before the UI indicates active tool access; a failed operation leaves no phantom edge or duplicate authority.
+
+Status: **Accepted.** Current connection/workspace UI suites pass 223 cases, including delayed/refused server acknowledgement and superseded-binding rejection with no phantom edge. Retained complete licensed browser groups cover saved-Pod placement and connection by keyboard ports and native drag; the actual header selector is additionally exercised in the completed in-app-browser recovery group. Every path activates from server acknowledgement. These complementary interaction proofs satisfy the criterion; older visual receipt hashes are not claimed fresh.
+
+- [x] **AC2:** Connecting a second Jira Pod requires an explicit replacement interaction, and the server still enforces one. Cancel or a failed replacement preserves the old binding. Successful atomic replacement invalidates old grants and pending work without granting both Pods, and replacement/disconnect updates edge, source indicator and tool availability coherently. Data Pod connections continue to function.
+
+Status: **Accepted.** Existing Workspace/picker/header tests and actual authenticated binding routes prove explicit replacement, cancel/failure preservation, atomic one-Pod replacement, coherent disconnect and selective grant/work invalidation. The current UI regression suite and existing Data connection controls pass. No extra simultaneous live experiment is imposed beyond the literal criterion.
+
+- [x] **AC3:** Before this child closes, the assembled browser journey creates/connects a Pod and performs a read and governed write through normal Chat to the real local Jira lab, verifying remote state. The user can search/read/create/edit/assign/comment/transition via normal Chat through the actual MCP path and see clear sources, progress and remote outcome. Identical ticket keys on different Jira instances are distinguishable in authorized presentation.
+
+Status: **Accepted.** Actual assembled browser journeys create/connect/read and approve one independently verified Jira comment through ordinary Chat. Both repaired 56c32 catalog groups prove every advertised search/read/create/edit/assign/comment/transition through Gateway, binder, real MCP host and Jira. Existing instance-qualified issue/source presentation tests distinguish identical keys. The 4c129 lifecycle group adds current browser/remote-state evidence.
+
+- [x] **AC4:** The read-grant request appears when the current binding/credential generation has no valid grant; a still-valid grant, including one restored after restart, does not prompt again. Approval UI appears exactly when current policy requires it; both identify the proposed scope or action and support deny/cancel. Stale grants or approvals after disconnect/token change cannot execute; pending/expired/unknown/partial/error states are truthful.
+
+Status: **Accepted.** Current grant/approval UI and owner tests prove subject/generation-bound reuse (including store reopen and retained real-process restart), exact action disclosure and decisions, stale refusal, and truthful pending/revoked/unknown/unconfirmed/error states. The new real licensed56c32 browser case closes expiry presentation with Permission revoked / Not sent to Jira, canonical not-dispatched and zero matching mutation attempts/effects. A separate regression exposed missing partial-result presentation: completed Jira pages marked truncated now show an EN/DE limited-result notice without inventing a next page. Four relevant suites pass44/44 with actual-contract partial/complete controls. The existing settlement log already records the closed truncated flag; mutation outcome states are unchanged.
+
+- [x] **AC5:** Reload, network interruption, Pod removal, Jira shutdown and token replacement preserve the authoritative state without stale access. Retry, reconnect and Regenerate never silently repeat a completed or uncertain Jira mutation; retain its canonical outcome and show safe reconciliation. Browser tests lose the response after Jira accepts a write, deliver duplicates and regenerate, then assert remote effect counts. Restored bindings cannot recreate missing/expired grants or approvals. All content-bearing presentation follows existing retention/redaction rules and is excluded from diagnostics/evidence.
+
+Status: **Accepted.** The stable ten-case fault matrix, three actual in-app-browser response-loss/duplicate/reload/Regenerate cases and fresh-process grant/rotation groups prove no blind replay and truthful retained outcomes. Current custody/restart owner tests cover expiry, deleted/replaced Pods and late replies; the complete 4c browser lifecycle proves authoritative state after real reloads. Diagnostics/evidence remain content-free under existing redaction tests.
+
+- [ ] **AC6:** Root connector/window/tool/source/permission designs and relevant state/accessibility/theme requirements are met; existing workspace/Data Pod/Workbench journeys remain green.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** Current root component/window/tool/source/permission reference producers and inspected UI captures pass. All five Jira browser cases, nine updater cases, 83 axe checks and preserved workspace/Data/Workbench owner suites are green locally. Final exact-head integrated PR verdict remains external.
+
+- [x] **AC7:** The Chat mode selection persists per chat, defaults to Ask for approval, shows ceiling-clamped modes truthfully, and a model without verified tool calling presents an actionable unavailable state instead of silently answering without tools.
+
+Status: **Accepted.** Current UI tests prove Ask as the default, saved per-chat selection, server-clamped effective mode and disabled unavailable choices. Store/route tests persist and project the mode. The wired browser refusal case gives actionable guidance for a model without verified tool calling and asserts unchanged provider/Jira counters with no read grant. The current 223-case connection/workspace run is green. The criterion does not require all final release gates or a separate screenshot for every clamp state.
+
+### #4087 — Qualify the complete Jira Pod to MCP to Chat workflow against local Jira 10.3.26
+
+- [x] **AC1:** Every initial supported operation has a real end-to-end receipt from normal Chat through the shared MCP host to local Jira 10.3.26, with remote read-after-write verification and only synthetic data. The assembled artifact/source identity, commands, model identity, test versions, wiring class and outcomes are recorded without secrets or bodies.
+
+Status: **Accepted.** Repaired frozen 56c32 completes all 14 advertised operations in each normal Chat transport:28/28 through real LiteLLM/Gemma, binder, MCP and local Jira 10.3.26, including independent read-after-write checks. Node 24.18.0, MCP client/server 2.4.0, exact commands and immutable source/artifact/receipt identities are recorded in the final qualification checkpoint.
+
+- [x] **AC2:** All-mode, read-grant and Jira permission cases pass: no unauthorized effect; allowed operations work; approval denial/cancellation and stale approval or grant perform no new call. Ordinary Chat is tested directly rather than a Workbench-only substitute.
+
+Status: **Accepted.** The complete repaired 56c32 restricted catalog groups pass 14/14 each with zero effects. Both focused permission groups pass 8/8, each with exactly one explicitly allowed effect and no denied effect. Existing all-mode/read-consent/approval, cancellation and stale-authority production tests provide the remaining policy composition. Ordinary Chat is used throughout.
+
+- [x] **AC3:** Isolation/revocation, replay-prevention and restart tests pass, including two chats, deliberate reuse of one Pod, different Pod credentials, replacement, disconnect during approval and token rotation. Tests assert remote effect counts after lost responses, duplicate delivery, retries and Regenerate. Completed remote effects are not falsely described as rolled back; acknowledged-but-unconfirmed and unknown outcomes remain distinct. Old verification replies and alternate credential-management entry points cannot restore revoked readiness.
+
+Status: **Accepted.** Complete durable fault/restart and actual browser recovery matrices prove effect counts through response loss, duplicate delivery and Regenerate. Current shared/distinct-Pod two-Chat, rotation/delete/disconnect, stale-verification and restored-consent owner tests prove isolation and revocation. Acknowledged-unconfirmed and unknown outcomes remain distinct; no completed effect is described as rolled back.
+
+- [ ] **AC4:** The small UI flow matches the root design reference and passes keyboard, screen-reader, theme/contrast, reduced-motion and constrained-layout checks. Product readiness does not depend on embedding/indexing.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** Current Linux five-case UI producer and all 83 document-wide axe checks pass with bounded keyboard/focus/status semantics, themes/contrast/reduced motion/layout and the explicitly stated zoom emulation. All 93 synthetic captures and 14 current source hashes are retained. Real Jira readiness remains independent of embeddings/indexing; final integrated verdict is external.
+
+- [ ] **AC5:** Existing Data Pod grounding, Cloud connector and Workbench MCP regressions pass, and the deterministic lane runs in its wired CI class. Timeout, pagination, cancellation and response-size tests show bounded behavior; existing performance ceilings remain unchanged.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** Complete Data/Cloud/Workbench owner regressions, bounded timeout/pagination/cancellation/response sizes, unchanged canonical catalog ceilings and the corrected first-after-change 1000/5000ms performance pair pass locally. The deterministic Jira lane is wired and locally executes 5/5; final execution in its required current-head CI class is pending.
+
+- [x] **AC6:** The independent local lab preflight proves license validity and both read and write availability. A stopped instance, expired license or missing trusted test endpoint is reported as blocked real qualification; no silent skip, customer fallback, clock change or license modification is accepted.
+
+Status: **Accepted.** Each complete repaired 56c32 live group has an independent valid-license/HTTPS/read/write preflight and valid closing license. The fresh-session normal setup/recovery and prior stopped/expired attempts are retained as blocked/reconciled diagnostics. The complete 4c browser lifecycle is separately bracketed by valid licenses. No expired/incomplete group is counted.
+
+- [ ] **AC7:** Applicable local gates including Sonar and the complete required PR checks pass on the delivered head; all review findings are settled. Only then are final evidence and AC completion recorded, with owner-authorized merge verified before issue closure.
+
+Status: **Local proof complete; delivered-head PR verdict pending.** All applicable local qualification is complete. Required GitHub checks and settled reviews must now be verified on the delivered head. Canonical issue checkboxes and PR checks hold that live verdict; no merge or closure is authorized by this report.
+
+- [x] **AC8:** User/developer runbooks and release-impact metadata accurately describe initial API coverage, setup, privacy (ticket content reaches the configured model), mode and read-grant behavior, troubleshooting and remaining limitations. No claim of generic full-API coverage, all-source MCP migration or customer-network certification is made.
+
+Status: **Accepted.** The existing connector guide, troubleshooting runbook, ADRs and normalized release-impact record describe exact bounded operations, setup, model disclosure/retention, modes/grants, uncertain-write reconciliation and known plugin/network/concurrency limits. The current isolated release-impact gate passes; no generic full Jira API or customer-network certification is claimed.
+
+- [x] **AC9:** Before the live run, record the finite acceptance scenario/operation matrix, qualified model configuration and expected outcomes. Every required operation has successful live evidence and every required refusal has evidence of no unauthorized effect. Record failed attempts and repairs as well as the successful run; model retries or selective reruns must not hide failures. The report states the exact Jira/model/deployment scope proved and does not extrapolate to arbitrary customer workflows, plugins or networks.
+
+Status: **Accepted.** Finite operation/fault/permission matrices and the qualified real model preceded the runs. Complete normal 28 plus restricted/focused/mixed 46 cases retain source/artifact identities and independent outcomes; failed/interrupted attempts and repairs remain separate. The bounded receipt index below records exact scope and versions without bodies or credentials.
+
+## Acceptance audit at checkpoint `2f4f4928495c`
+
+The eight linked GitHub issues were reread on 2026-10-27; their 55 AC statements
+remain unchanged and unchecked. The current statuses above supersede stale pending
+implementation prose; historical checkpoints below retain their original scope.
+No new runtime or live qualification was executed by this documentation audit.
+
+Prioritized work identified at that checkpoint (later repairs are reflected in the AC statuses above):
+
+1. Repair bound-but-unverified model fallback (#4091 AC3, #4086 AC7), complete the
+   mixed empty-evidence edge, and implement safe restoration of still-valid read
+   grants after restart (#4086 AC4). Current cold restart fails closed; stored public
+   consent/approval views must never become authoritative by themselves.
+2. Predeclare and run all nine reads/five writes through normal Chat, including
+   required create/transition fields and restricted/edit-only identities. Seed and
+   direct REST proofs are prerequisites, not normal-Chat operation receipts.
+3. Complete lifecycle and no-replay qualification with two Chats, alternate credential
+   routes, in-flight approval invalidation, response loss, restart, duplicates and
+   Regenerate; assert independent remote-effect counts and retain failed groups.
+4. Qualify the rebuilt Hub/Workspace/header/edge artifact, explicit Live-Pod
+   capsule/export/index refusal, and the complete design-state/accessibility matrix.
+5. Wire the deterministic assembled journey into its CI lane; complete user/developer
+   runbooks, source/artifact-qualified evidence and normalized release impact.
+6. Run the final full quality/compatibility/coverage/evidence/Sonar and required PR
+   checks on the delivered head, then settle reviews. No merge authority is implied.
+
+## Verification checkpoints
+
+### Bounded Jira pagination through actual streamed Chat
+
+On merge head `3e5c1469385a756d4b8a8640aecc6a7707318729`, the real LiteLLM/Gemma
+SSE Chat → catalog/binder → managed MCP → Jira group passed in the licensed synthetic
+session. The independent ordered reference contained 26 issues. Actual cursors were
+`0,10,20,26`, with `10,10,6,0` returned records: the two nonterminal pages exposed
+`nextStartAt=10,20`, while the final content page and empty terminal page exposed no
+continuation. The combined ordered keys matched the full independent reference exactly.
+
+The unchanged pass-through observer counted four physical search requests, each with the
+requested cursor/query, `maxResults=10` and status 200. There were zero mutation attempts
+and zero mutation-journal rows. Read-grant counts were `1,0,0,0`; no write approval occurred.
+The actual saved model configuration had zero retries. Per-call result counts were
+`10,10,6,0`, and result sizes were `4471,4414,2672,58` bytes. The reference count/digest
+remained unchanged after every page. The 6,932-file runtime/helper inventory was identical
+before and after the group, SHA-256
+`b23c896e92c25af3fea7cf668ea3b7900721cbb4786d9e31ce41b64daa4ebbdd`;
+opening/closing license checks reported 8,249/8,166 seconds remaining.
+
+An initial incomplete attempt incorrectly required a repeated public grant projection
+on an already authorized later turn. Its two product pages had succeeded; independent
+SQLite/Jira reconciliation proved zero mutations and unchanged remote state. That attempt
+is retained as interrupted/reconciled. The helper now accepts the existing production
+grant-reuse form after the exact grant's authenticated route check, and refuses missing
+first grants or contradictory projections. The actual failure has a red/green regression;
+46 focused helper/consent/lifecycle cases, scoped lint and formatting pass. No product
+pagination or policy change was necessary. This supports #4083 AC4 and #4087 AC5/9 within
+the recorded artifact scope; full catalog/refusal/browser and final gates remain open.
+
+### Licensed Jira PAT, availability and retained consent
+
+On 2026-10-28, three complete groups passed against the fresh synthetic Jira 10.3.26
+session through the existing production ports and the actual Docker LiteLLM Gateway with
+`gemma-4-31b-it`. The Gateway configuration and credential were resolved from their existing
+private owners; no provider credential was copied into the retained product configurations
+or a second vault. Each group required production HTTPS/read/write preflight and positive
+opening/closing license checks. The runtime/helper inventory contained 6,919 files and was
+identical before and after each group; the distinct digests below record the actual artifacts.
+
+| Complete group                | Result and independent observation                                                                                                                                                                                                                            | Artifact SHA-256                                                   | Opening / closing license seconds |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------- |
+| Native PAT verification       | 2/2: revoke only the group's generated non-admin PAT; current verification fails authentication and a delayed prior success receives `CREDENTIAL_CHANGED`. An invalid synthetic PAT also fails.                                                               | `aae3cc2bf7e089d98dfd3a7075822c7aeddcbd581f5928ad76a46f9de170fa6a` | 5,629 / 5,625                     |
+| Stopped Jira and recovery     | 1/1: stopped Jira reports unreachable and invalidates verified readiness; the same Jira container restarts, peers/volumes remain intact, and renewed preflight plus verification pass.                                                                        | `ecce474a860dfda0c7118db5cc4b99603379af13b7dc00baeceed3f4689de3ec` | 10,295 / 10,777                   |
+| Retained consent and rotation | 4/4 real Chat turns: read-grant counts `1,0,1,0`, write-approval counts `0,0,0,1`; an actual child-process restart reuses valid consent, rotation invalidates it, and an approved streamed comment has exactly one remote match authored by the new identity. | `5c7b85246ec67bf26b6710a8c12c669237f58863a2f7a313f914fe0e72103c91` | 10,422 / 10,226                   |
+
+Two earlier attempts remain incomplete and preserved. Recovery initially reached container
+health before Jira's license endpoint was ready; the existing bounded wait now retries only
+that read-only readiness check while continuing to verify container/volume ownership. Consent
+qualification initially timed out during model readiness because the helper replaced the selected
+Gateway's timeout; it now retains that configured timeout. Both defects have failure-before and
+pass-after regressions. Independent reconciliations checked actual Jira effects and retained
+product state before archiving the interrupted markers; no uncertain mutation was repeated.
+
+The five affected helper suites pass 90 tests; scoped lint, formatting and whitespace checks
+pass. A private credential-floor sweep checks eight actual synthetic secret values across 31
+retained log/product files with zero matches, and five retained product states contain no newly
+created Gateway vault files. The separate current-session fixture checks prove required-field
+and transition-screen setup, distinct search pages, hostile content, and permission separation;
+these direct setup/oracle reads are not normal-Chat operation acceptance.
+
+These receipts support #4082 AC1/2/5/6, #4084 AC1/3/5, #4091 AC1 and #4087 AC3/6/9
+within their recorded scopes. They do not complete those criteria. The full normal catalog on
+the final selected Gateway artifact, restricted SSE catalog, physical Jira browser response-loss
+and Regenerate groups, remaining compatibility/visual proofs and final aggregate/Sonar/current-head
+checks remain outstanding. Private paths, endpoints, identities, tokens and raw receipts are not
+part of this public evidence.
+
+### Central HTTPS MCP: actual Settings, Chat and OpenCode UI
+
+The 2026-10-28 browser group ran at `8318665ff248f2e48cb7a2de326d46c09d1181b5`
+through the running Docker LiteLLM gateway and its configured Gemma model. An independent
+synthetic HTTPS/Bearer MCP server supplied three tools and a durable remote effect counter.
+No customer endpoints, tokens, screenshots or issue content were used.
+
+- Settings created the server through its ordinary form. The explicit private-network option
+  and operator-provided CA were required; discovery displayed **Connected · 3 tools**.
+  A preceding public-target attempt was refused before the server received a request.
+- A new ordinary Chat, without a Jira binding or Coding session, displayed read disclosure
+  and exact-action approvals. Its write had zero matching effects before approval and one
+  afterward. The following read returned the actual record ID and original synthetic text;
+  both tool cards settled as confirmed.
+- A separate OpenCode task used that same configured server in **Ask for approval**.
+  The real Code Mode and network-action approvals preceded its write and read. It finished
+  **Succeeded, revision 13**, with the actual second record ID and matching text.
+- Independent server inspection measured one baseline preflight write and exactly two
+  additional writes: one from Chat and one from OpenCode. The Coding repository remained clean.
+
+The retained local screenshots and receipt are private qualification artifacts. This group
+proves the normal modern HTTPS/static-token path through both real UI consumers. It does not
+claim native durable acknowledgement, legacy-SSE disconnect recovery, the complete original
+Jira acceptance matrix or final aggregate gates. The earlier uncertain-write UI group separately
+proved persisted **Recovery required** and one effect after reload. Its synthetic remote effect
+was reconciled before a fresh, different HTTPS task was accepted; it was never replayed.
+
+### Deterministic normal-Chat browser CI lane — #4087 AC5 (partial)
+
+`npm run test:e2e:jira-chat` owns `playwright.jira-chat-4081.config.ts` and
+`jira-chat-4081.spec.ts`. Its blocking UI workflow step is classified
+`runs-per-pr` by `check:e2e-suite-wiring`; no unwired-suite exemption was added.
+The fixture composes `buildUiHandlerDeps` and the real BFF, gateway HTTP adapter,
+canonical catalog/binder, managed MCP host, vault, consent/approval and mutation
+journal. The only controlled peers are an OpenAI-compatible HTTP provider and a
+Jira REST-v2 HTTPS fixture with an ephemeral trusted certificate, exact loopback
+allowance and a `/jira` context path. It creates no Coding task or session.
+
+The three browser journeys cover:
+
+- Hub creation and verification, server-confirmed Chat binding, mandatory read
+  disclosure, real project read, exact write preview, explicit approval, one
+  confirmed comment and persisted `claimed` approval history.
+- A wrong action digest refused with 409 and a disconnect invalidating the pending
+  action before dispatch; the stale decision is refused with 404, the canonical
+  turn is cancelled, and write/readback counts remain unchanged.
+- A bound model without verified tool calling presenting actionable unavailability
+  while every physical provider/Jira request counter remains unchanged.
+
+The full fresh-build invocation first passed two journeys; the cancellation test
+incorrectly expected `failed` although disconnect correctly settles `cancelled`.
+After correcting that fixture assertion, all three journeys passed against the
+same assembled product without rebuilding during the separate live lab group.
+Final counters were 8 model requests (including readiness), 9 Jira HTTP requests
+(including six verification probes), 1 project read, 1 write, 1 readback and zero
+credential disclosures to model bodies. Earlier fixture preparation also corrected
+an incomplete synthetic identity and a Chat snapshot request missing project scope.
+These fixture results do not qualify a real Jira deployment or a real model.
+
+Scoped ESLint, root typecheck, formatting, 422 workflow-consumer tests, 87 wiring
+gate tests, wiring classification, branch parity, required-workflow names and
+Zizmor anchors passed. Logs are `/tmp/keiko-4081-e2e-{lane,assembled,lint,types,workflow-tests,wiring-tests,wiring,final-format}.log`.
+The delivered-head full invocation and all remaining final gates stay open.
+
+### Initial Cloud creation regression (#4082 AC1, partial)
+
+The real UI client previously omitted `authScheme`; the actual HTTP route rejected its
+request with `VALIDATION_FAILED` (`authScheme must be basic-api-token`). The new
+`tests/atlassian-connector-client.integration.test.ts` failed on that exact defect before
+the fix. It now traverses the real client, HTTP server, route, custody, private metadata
+store and encrypted vault; only browser-relative URL resolution is supplied by the test.
+It verifies successful creation/listing, secret absence and the matching Activity Log
+correlation. Data Center creation and real remote verification remain pending.
+
+Targeted local results on the initial implementation diff, 2026-10-26:
+
+- `npm run build:packages`: passed.
+- `npm run typecheck --workspace @oscharko-dev/keiko-ui`: passed.
+- `npx vitest run tests/atlassian-connector-client.integration.test.ts packages/keiko-server/src/atlassian/credentialActivity.test.ts packages/keiko-server/src/atlassian/credentialRoutes.test.ts packages/keiko-connectors/src/atlassian-credential-custody.test.ts`: 71 passed.
+- `npm test --workspace @oscharko-dev/keiko-ui -- src/lib/atlassian-connectors-api.test.ts`: 9 passed.
+- ESLint on changed implementation/tests: passed; root invocation emitted the existing Next Pages-directory notice.
+- `npm run generate:op-catalog`: passed, zero registration/inventory violations, 604/604 resolved proofs.
+
+These focused results do not substitute for final current-head gates, real-model
+qualification or settled reviews. All 55 complete acceptance criteria remain open.
+
+### Data Center custody and verification increment (#4082 AC1/2/4/6, partial)
+
+Shared contracts now distinguish Cloud Basic from explicitly selected Jira Data Center
+PAT connections. Legacy Cloud metadata and vault envelopes retain their original shape.
+Data Center metadata starts at generation 1. The token is materialized as a Bearer header
+only in the existing outbound adapter. Generation changes and invalidation are still pending.
+
+The new Data Center creation tests failed before this increment (unsupported scheme and
+rejected UI request) and pass afterwards. The real UI client/HTTP route/custody/vault test
+also traverses the actual outbound adapter with synthetic fetch responses: REST-v2 version
+and active identity checks preserve the context path, and sync is refused without an extra
+outbound request. This is deterministic composition evidence, not a real Jira-lab result.
+
+Verification reads at most 64 KiB per response and shares one 30-second deadline across
+`serverInfo` and `myself`. Only Jira Data Center 10.3.26 is admitted. Redirect, invalid/HTML,
+authentication, permission, unsupported-version, TLS and network outcomes are closed;
+English/German presentation is included. `atlassian.connection.checked` records only the
+action and outcome with correlation and completeness/loss markers. An initial proof exposed
+redaction of the generic field name `result`; the producer now uses the permitted closed
+`outcome` field, leaving the security redactor unchanged.
+
+Targeted results on this increment, 2026-10-26:
+
+- Package build and UI TypeScript check passed.
+- Nine affected connector/server/client suites: **178 passed**.
+- UI API and status-label suites: **15 passed**.
+- Changed-source/test ESLint, formatting and `git diff --check` passed.
+- Operation generation: **605/605** resolved proofs, zero registry/inventory violations.
+
+Still pending: exact operator-configured private target admission, lifecycle invalidation,
+real HTTPS lab and real-model qualification, complete epic implementation and final gates.
+The message catalogs changed; updater UI evidence must be regenerated through its original
+producer before final acceptance. Public-contract/export changes still require final package
+surface qualification. These pending checks are not represented as passing.
+
+### Exact private-network admission increment (#4082 AC3, partial)
+
+The existing operator configuration accepts `atlassian.privateTargets`, an array of at
+most 64 exact HTTPS base URLs with `addressClass: "private" | "loopback"`. The hostname,
+port and context path must match the stored Data Center connection. Global permissive
+egress flags and request bodies cannot grant this admission. Setup rebuilds and reloads
+preserve the operator block. Safe config projections omit it. Context paths are canonical,
+without encoded separators, percent escapes, repeated separators or dot traversal.
+
+The existing gateway pins direct and proxied connections to the vetted DNS result and now
+enforces the declared address class on every resolved address. Mixed public/private DNS,
+metadata/link-local targets and the active BFF listener remain denied. Removing the operator
+entry takes effect on the next request. Cloud connectors retain their existing restricted
+network posture. A context-path escape regression failed before the containment fix.
+
+Targeted results on this increment, 2026-10-26:
+
+- Package build passed.
+- Seven gateway/config/setup/connector/client suites: **907 passed**.
+- Final client/transport rerun including actual BFF-listener isolation: **49 passed**.
+- Changed TypeScript source/test lint and formatting passed.
+
+This is deterministic transport/configuration evidence; real HTTPS Jira qualification is
+still pending. The auditor identified the existing Cloud HTML-2xx false-positive in the
+status-only verification path. That finding is accepted and will be fixed next for both Jira
+and Confluence Cloud, with real client-to-route regression tests. No complete AC is closed.
+
+The cross-boundary client fixture now lives in the UI test lane and imports the built server:
+`packages/keiko-ui/src/lib/atlassian-connector-client.integration.test.ts`. This preserves
+separate browser and Node compiler environments while exercising the real HTTP server/vault.
+The root TypeScript check and UI TypeScript check pass; the final UI client/integration run
+passed **12 tests**. Root test narrowing was updated for the credential discriminated union.
+The operation catalog remains **605/605** proofs with zero inventory violations.
+
+The fixture move initially triggered `proof-outside-owner`: a UI test cannot own the server
+operation's proof. The follow-up uses the existing `expectRegisteredActivityLogLine` helper
+for cross-package evidence; the owner proof remains in `credentialActivity.test.ts`.
+Regeneration now passes with **605/605** proofs and zero violations. Two valid review comments
+are also addressed: the owner proof asserts `authScheme`, and the real support analyzer must
+retain the event in the correlated timeline. Package build, root typecheck, affected lint,
+7 owner tests and 3 client/HTTP integration tests passed after the correction.
+
+### Cloud HTML/identity verification correction (#4082 AC1/2/6, partial)
+
+The auditor finding was reproduced through the real browser client, HTTP route, vault and
+outbound adapter: both Jira and Confluence Cloud returned `ok` for HTML-200 responses.
+Those two regression tests failed before the fix and pass now. Valid JSON responses and
+Basic authentication passed both before and after. Both Cloud paths now use the existing
+bounded body transport and the same JSON/status parser as Data Center; no parallel verifier
+or credential path was introduced. The current-user result must contain a bounded nonempty
+account ID and an active Jira user or known Confluence user. Malformed/truncated/oversized
+bodies and anonymous users are rejected. Remote content never enters the result or log.
+
+Targeted results: package build, root and UI typechecks, changed-source/test lint and formatting;
+**73** connector/server tests and **7** real client/HTTP tests passed. The final route rerun
+passed **25** tests. The operation catalog has **605/605** proofs and zero violations.
+The accepted HTML finding is fixed; real HTTPS lab qualification and the remaining epic
+criteria are still pending.
+
+### Real HTTPS transport checkpoint (#4082 AC3/AC5, partial)
+
+The committed `scripts/testing/jira-chat-lab` tooling creates a private laboratory
+CA/server certificate and a loopback-only TLS frontend for the existing synthetic Jira.
+It leaves system trust unchanged and forwards only to one fixed loopback backend.
+The production custody, encrypted vault, HTTP adapter and domain verifier were exercised
+against actual Jira 10.3.26: trusted HTTPS returned `ok`, removing CA trust returned
+`tls-failed`, and revoking exact operator admission returned `unreachable`. All three
+probes passed; script lint and formatting passed. The temporary vault was removed.
+
+The independent license preflight found the existing ten-user Data Center test license
+expired. A normal update did not renew it. The probes above are exploratory transport
+checks, not an accepted scenario group: complete live acceptance must run again under a
+valid license with the read/write preflight and all required fixture classes. Fresh-session
+provisioning and the remaining live prerequisites are open. No AC is closed by this checkpoint.
+
+### Fresh-session provisioning checkpoint (#4082 AC5, partial)
+
+Added pinned Jira/PostgreSQL Compose configuration and a private session launcher.
+Each newly initialized session gets an independent Compose project, volumes and
+three distinct private passwords; stop retains its data. Existing laboratory data
+is untouched. Initializer assertions verify the synthetic manifest, independent
+secrets and file permissions; start/status were exercised on the fresh instance.
+Script lint and formatting pass.
+
+The normal Jira first-run UI accepted the published test license in the fresh
+instance. The admin API then reported `valid: true`, `expired: false` and 10,553
+seconds remaining. This resolves the expired-instance prerequisite for the current
+session without changing clocks or licensing code. Automated setup, complete
+synthetic fixtures and licensed read/write/model/browser qualification remain open.
+
+### Licensed basic fixture and Compose TLS checkpoint (#4082 AC3/AC5/AC6, partial)
+
+The digest-pinned Compose frontend now exposes only loopback HTTPS, mounts its server
+key/certificate read-only, and leaves the development CA key on the host. The basic
+seed checked license validity, created the non-admin PAT actor and three synthetic
+issues, and independently read all three back. Repeating the seed reused the PAT and
+issues without another creation. The production vault/adapter/verifier then passed
+trusted HTTPS, untrusted-CA refusal and revoked-admission refusal through this
+frontend. License checks remained valid before and after the group. Script lint,
+formatting and actual Compose startup passed.
+
+This supersedes the original expired-instance transport-only checkpoint for these
+three cases. Fixture administration currently uses the private loopback admin path;
+product qualification uses HTTPS. Required permission/custom-field/transition-screen,
+pagination, hostile-content and isolation classes, automated setup, product mutations,
+model/browser qualification and the remaining complete ACs are still pending.
+
+### Permission fixture checkpoint (#4082 AC5, partial)
+
+The reproducible seed now creates four independent non-admin PAT actors and two
+projects. Explicit user grants provide full primary-project access, edit without
+assignment/transition, an assignable account, and browse-only access to the isolated
+project. Five actor/project permission combinations pass. Actual restricted reads
+and assignment return 403; an unavailable transition returns 400. Status and assignee
+are independently compared before/after the denied mutations. Repeated seeding
+reuses the actors, PATs and permission schemes and fails on scheme drift. License
+checks, script lint and formatting pass. Complete mandatory-field/screen, pagination,
+hostile-content and integrated isolation acceptance remain pending.
+
+### Required-field and transition fixture checkpoint (#4082 AC5, partial)
+
+Supported REST and scripted Jira administration now provision a required built-in
+text custom field and a real transition screen. The licensed qualification script
+passes missing-field create refusal (400), unchanged issue count, valid create data
+readback, missing-field transition refusal (400), unchanged status, and field-plus-
+transition success (204) with independent status/value/resolution readback. The legacy
+transition fixture is restored for the next consumer. The mandatory requirement is
+restored after preparation; no third-party validator or modified Jira code is used.
+
+The Resolution field alone was rejected as qualification evidence: Jira automatically
+fills its default when omitted. A legacy issue lacking the newly mandatory custom
+field supplies a genuine refusal. Data Center 10.3.26 also requires the paginated
+create-metadata endpoints; the retired aggregate endpoint returns 404. Script lint,
+formatting, scripted admin reset and the full field qualification passed. Pagination,
+hostile fixtures, automated initial setup and remaining integrated acceptance stay open.
+
+### Native response and content fixture checkpoint (#4082 AC5, partial)
+
+The licensed fixture lane now supplies 21 pagination issues, hostile issue/comment
+content and an isolated-project issue. Two disjoint pages and exact content readback
+pass. The restricted identity can read its project; the primary identity receives
+403 there; a forbidden comment returns 400 with unchanged remote count.
+
+The first production-adapter write exposed a native HTTP bug: constructing a Fetch
+Response with a body for 204 threw outside the request promise after Jira had already
+committed an assignment. Read-only changelog reconciliation confirmed exactly one
+assignment effect; that assignment was not replayed. Native 204/205/304 responses now
+have null bodies, completion controls socket reuse, and construction errors reject
+the request. Three focused cases failed before the fix. The full HTTP/logging suites
+pass **130 tests**, including CONNECT reuse across 204; four native integration cases
+prove one request, registered body-free Activity Log reconstruction and invalid-status
+rejection. Package build, root typecheck and changed lint pass. ADR-0038 is corrected.
+
+A subsequent licensed production preflight passed a distinct description edit (204)
+and comment creation (201), independent readbacks, exactly one matching changelog
+effect and a one-comment increase. Its exclusive private pending marker prevents
+blind reruns after interruption. Trusted HTTPS, untrusted-CA refusal and revoked
+admission then passed through the same retained port. Review fixes also make shared
+English/German Atlassian errors provider-neutral; 14 UI client/panel tests and UI
+typechecking passed. These adapter checks do not claim MCP, model or Chat acceptance.
+Automated first-run setup, the shared host and the remaining complete ACs stay open.
+
+The complete Activity Log gate passed its seven checks after recording two exact
+observability delegations: bounded Atlassian JSON validation returns invalid-response
+to its existing connection-check logger; native Response construction rejects to the
+existing gateway failure logger. No legacy failure entry was added. The real
+Jira/Confluence client-route tests and native HTTP integration assert exactly one
+registered owner outcome and absence of remote content. The observability gate tests
+and native integration passed 24 tests; the real client-route lane passed 7 tests.
+
+## Shared MCP protocol checkpoint — #4089 (partial)
+
+The new `keiko-mcp` package owns official client/server SDK 2.4.0 imports and
+activates protocol 2026-07-28 on both ends. One in-process handler/client uses
+injected fetch without listeners or per-Pod processes. Invocation-local context
+is outside protocol arguments; uncached listing checks and declaration digests
+reject drift. Provider errors are closed, result sizes bounded, and calls are
+not automatically repeated. Read/write hints are descriptive; durable invocation
+accounting and server authority remain separate obligations.
+
+Six actual-SDK tests cover discovery/request metadata, list/call, schema and
+reserved-argument refusal, drift, concurrent context isolation, failure closure
+and registered emission. A separate integration uses a real canonical descriptor
+and reconstructs admission and invocation through the existing Activity Log
+reader without result content. The generated catalog covers 606/606 proofs and
+30/30 scenarios; its 97 drift tests pass. Package build, root typecheck, changed
+lint, package graph, dependency hygiene/currency, ADR index and error observability
+pass. The negative architecture suite passes all 76 fixtures; positive dependency,
+import, contract, vector, governed-tool and catalog-conformance checks pass.
+
+The full `arch:check` aggregate currently fails its final performance-evidence
+step because the new lockfile changes the measured subject. The documented
+reference procedure requires committed, clean revisions and a paired measurement.
+That evidence, complete package surface/coverage qualification and full gates
+remain pending for final acceptance as requested. No performance budget or gate
+was weakened. The native HTTP Promise rejection is now recognized directly by
+the observability checker, removing its temporary exact exemption; only the
+previously proved pure JSON-classifier delegation remains.
+
+This checkpoint does **not** complete #4089: generalized production binder
+composition, a bound non-Coding consumer, Jira provider admission and downstream
+Chat delivery still require implementation and evidence. All 55 complete ACs
+remain open. ADR-0181 records the new host decision; affected existing ADRs and
+package/dependency documentation are updated in the same change.
+
+## Auditor follow-up — #4089 cancellation and terminal evidence
+
+Two real-SDK regressions first failed against `14d8c9695`: a delayed provider
+performed one effect after SDK timeout because its signal/guard remained live;
+a sink throwing on `completed` changed confirmed success into `protocol-error`.
+The host now combines caller/host/request/SDK cancellation, applies one deadline
+across list and call, and revokes the effect guard at settlement. After timeout,
+the released provider observes cancellation and performs zero effects. A parallel
+invocation still completes once. Terminal logging failure preserves the confirmed
+result and counts one `port-sink-failed` in the existing Activity Log loss ledger.
+Admission/start evidence failures remain closed before effects.
+
+Eleven SDK tests pass, plus the integration that formats the actual registered loss
+summary and projects it through the existing reader. Package build, root typecheck,
+changed lint, error observability and all 97 registry drift tests pass. The existing
+12 binder suites / 200 tests also passed unchanged before binder refactoring.
+No new logging subsystem or error-observability exemption was introduced.
+
+## Binder preparation — #4089 (partial)
+
+Coding action decoding, effect classification and approval decoding now enter the
+existing binder through a captured consumer port. The native-read exception keeps
+its exact descriptor/profile checks. The decoder functions are frozen at binding;
+a regression first demonstrated that replacing a supplied decoder changed an
+already bound invocation, then passed after capture. Admission, context checks,
+budgets, cursors, invocation records, terminal settlement and lifecycle emission
+remain in their existing owners. This preparation still uses Coding context types;
+it is not yet the required non-Coding consumer.
+
+All 200 existing binder cases pass before and after extraction; the new replacement
+regression raises the total to 201. Package build, root typecheck, changed lint,
+dependency/import/contract checks, all 76 negative architecture fixtures, governed
+tool contract, catalog conformance and error observability pass. The regenerated
+operation inventory reports no violations. The auditor code-reviewed the preceding
+MCP cancellation/terminal-log fixes and confirmed both reported paths addressed;
+that confirmation is not a full host/binder acceptance.
+
+## Shared binder — #4089 (partial)
+
+The production binder now accepts a consumer context/action/effect-guard specification.
+Coding composes its existing adapter explicitly; a non-Coding conversation fixture uses
+chat/actor/binding-generation scope and a distinct lookup action, with no workspace or
+Coding session. Offers, request identities and cursors capture a bounded scope digest.
+Every pre-effect check compares the admitted digest with current scope; replacing the
+offer while a delayed old invocation is pending does not revive its authority. The
+existing invocation registry, approval/budget ports and terminal lifecycle remain shared.
+
+Six new consumer tests cover successful settlement, changed chat/actor/generation,
+re-offer during a delayed invocation, and model-supplied chat routing rejection. The
+201 Coding binder regressions remain required alongside these tests. At that checkpoint the consumer did
+not yet invoke the managed MCP host: provider composition and the complete #4089 AC7
+path remain open. No full acceptance criterion is marked complete by this increment.
+
+Focused validation also passes: 97 gateway catalog tests, 97 registry drift tests,
+package build, root typecheck, changed-file lint, governed-tool contract, regenerated
+catalog conformance and error observability. The operation inventory has 606/606
+proofs, 30/30 scenarios and no violations. Full final qualification remains pending.
+
+## Managed provider composition — #4089 (partial)
+
+Server composition now admits one SDK host and converts its verified metadata into
+an existing `createKeikoToolCatalog` registration set. Only that compiled projection
+feeds the bound gateway advertisement. The shared binder invokes SDK tools through
+captured server routes, validates canonical results and retains its authority,
+approval, budget and settlement ports. No Pod creates a separate host. Provider
+declaration drift refuses new offers and calls. Host metadata contains no handler or
+consumer context and is immutable; its absence was demonstrated by a failing test
+before the catalog method was added.
+
+The hermetic non-Coding consumer now traverses the actual gateway/binder/SDK/provider
+path. Two differently bound consumers complete in reverse order; cancelling the
+first leaves exactly one effect in the second and one settlement per consumer.
+Unknown model tools are rejected. Existing Coding authority and approval suites run
+alongside the binder tests. This qualifies the scoped runtime path, not the unfinished
+Jira provider, Chat authority/mode composition or the full #4089 acceptance.
+
+Additional review coverage exercises captured action/effect/scope/approval decoders
+and rejects every missing/non-function port member. ADR-0019 now records the MCP
+boundary revision and SDK confinement. The dependency matrix distinguishes actual
+client/server declarations from their reviewed transitive closure; all rows render
+as tables. The server-to-host edge is explicit in both package and architecture
+gates; the host remains restricted to contracts/security and all SDK import
+confinement rules remain active.
+
+Focused results: 353 server tests across 16 suites (220 catalog/consumer tests plus
+133 Coding authority/approval tests), 12 actual-SDK tests, 5 integration/package-graph
+tests and 97 registry tests pass. Package build, root typecheck, changed lint, package
+graph, dependency hygiene/currency, supply-chain decision matrix, ADR index and error
+observability pass. Full final performance, SBOM/assembled-package, coverage, Linux,
+Sonar and GitHub qualification remain open.
+
+## Auditor follow-up — admitted handler continuity (#4089)
+
+Against `a284d25bc`, two real-SDK regressions failed: an unchanged declaration with
+a replaced execute function ran the replacement, and a delayed original handler
+still reached its effect after replacement. The host now captures immutable tool
+bindings, checks handler references as well as metadata, executes only those captured
+references, and revalidates continuity before execution and around the final effect
+guard. Stable provider ports remain invocation-local; metadata exposes no functions.
+The corresponding fixtures now declare stable handler references instead of creating
+new functions during each registration query. Both regressions require zero unwanted
+effects; cancellation and independent concurrent invocation coverage remain in place.
+
+After the repair, all 14 SDK tests, 353 server tests, the registered Activity Log
+reader/loss-summary integration and 97 registry drift tests pass. Package build,
+root typecheck, affected lint/format and error observability pass. The generated
+inventory still resolves all 606 proofs and 30 scenarios without violations.
+
+## Mutation transport replay safety — #4083 AC5 (partial), Epic #4081
+
+The existing shared Atlassian HTTP helper retried PUT after 5xx/429 and POST after 429. Three new regressions failed because a committed first attempt was resent;
+the PUT cases could overwrite an intervening actor change. Automatic retries are
+now restricted to GET. Every POST/PUT dispatches once, regardless of Retry-After,
+while bounded GET backoff/deadline behavior remains covered. This also protects
+existing Cloud Jira and Confluence write callers.
+
+The existing action activity owner now projects its outcome into the registered
+Activity Log without credentials, targets or Jira content. A real server-route
+fixture proves one PUT attempt after 503 and reconstructs the failed/unavailable
+outcome through the formatter and reader. A terminal sink failure records loss
+without changing an observed successful write. ADR-0128 D3 reflects the retry rule.
+
+Focused transport/Jira/Confluence tests: 50 passed. Existing write/live-search route
+suites including the new route and log-loss proofs: 69 passed. Package build, root
+typecheck, affected lint, error observability and ADR index pass. The regenerated
+inventory resolves 607 proofs and 30 scenarios with zero violations. All 97 registry
+drift tests and changed-file format checks pass.
+
+This is not complete AC5 acceptance: existing route failure reasons still do not
+prove absence of a remote effect. Durable invocation intent, distinct uncertain
+and acknowledged-but-unconfirmed results, reconciliation and Chat/UI folds remain
+to be implemented. No automatic retry is permitted to bridge that gap.
+
+## Shared connector deployment ceiling — #4083 AC7 foundation
+
+Production `buildUiHandlerDeps` previously left the connector policy ceiling unset,
+while Coding resolved all-mode availability or configured limits. Six regression
+cases failed through actual composition. Both now consume the same resolver,
+including narrower retained compatibility options. Two further failure-before
+cases showed that a runtime option could hide a narrower or invalid environment
+value; explicit configuration is now intersected instead of widened by precedence.
+Invalid values fail closed. The existing action outcome records the resolved
+ceiling for reconstruction, and ADR-0124/0128 describe the corrected behavior.
+ADR-0128's stale Supervised table cells now match its existing ADR-0138 amendment.
+
+All 354 tests in 15 affected server suites pass, including actual composition and
+connector policy, existing Atlassian routes, Coding context and Memory isolation.
+All 97 registry tests pass. Package build, root typecheck, affected lint, error
+observability and ADR index pass; the generated registry has zero violations.
+The selected mode and scoped authority remain separate requirements. Memory keeps
+its explicit-or-Ask default. Chat authority integration and the full AC7 acceptance
+remain open; no artificial Coding session is presented as a Chat proof.
+
+## Jira metadata field matrix — #4083 AC3 foundation
+
+Added additive shared field-capability types and a bounded connector-owned parser/validator.
+Supported standard and explicitly named core custom-field types cover text, finite numbers,
+calendar dates, millisecond datetimes, user/option references and bounded lists. Options and users
+are checked against advertised allowed values; Cloud account IDs and Data Center usernames stay
+separate. Cloud rich text uses the existing ADF composer; Data Center retains plain text.
+
+Unknown plugin types remain unsupported even when their base schema resembles a supported type.
+Required values, current metadata verbs, explicit clearing and omission are distinguished. A
+Jira-declared create default can remain omitted without fabricating its value. Add/remove is
+implemented only for labels and cannot be combined with replacement of the same field. Metadata,
+references and update lists are bounded; malformed objects, duplicate field IDs, invalid dates,
+unsupported verbs, extra reference keys and unsupported labels schemas fail closed.
+
+All 62 focused tests pass (26 new field tests plus existing Jira/Confluence writes and ADF tests).
+Package build, root typecheck and changed-source lint pass. The first feature test failed because
+the implementation was absent. This is pure validation groundwork, not provider/HTTP acceptance:
+fetching fresh target metadata, live fixtures, atomic transition requests and shared MCP provider
+integration remain open. No #4083 criterion is marked complete by this checkpoint.
+
+Review gate follow-up: the targeted semantic-duplication check currently fails with nine clone
+groups and five stale baseline entries, including the reported shared offer-admission preamble
+and the Atlassian transport paths. This is recorded as an open gate, not an accepted exemption;
+reproduction is complete and the next increment addresses the verified duplication. No new
+clone is reported in this field-validation increment.
+
+## Review repair — shared binder and unchanged gate policy (#4089 / #4082)
+
+The two offer paths now reuse one admission preamble, preserving context/scope capture,
+compatibility, expiry and minted-ID checks. The native Coding adapter no longer requires a
+consumer port that it replaces. A failing managed-host close no longer replaces the original
+admission failure; a focused regression failed before the repair and now verifies the original
+error plus two content-free diagnostics. The duplicate Atlassian base-URL check is also shared.
+
+The semantic gate was reproduced against both this branch and an isolated clean `origin/dev`
+source snapshot with the same pinned toolchain: dev passed with 938 baseline groups. After
+extracting the two actual new code clones, remaining reports involved data vocabularies or
+completely unchanged dev sources regrouped by Fallow. The existing exemption Map now uses keyed
+object data; an AST comparison verified all 90 exact keys/reasons unchanged and in order against
+`2714df157`. The existing ratchet command refreshed only the baseline representation and retained
+938 groups. No threshold, matching rule or exemption was added; the full semantic gate now passes.
+
+267 affected server tests, 97 registry tests and 48 gate/propagation regression tests pass. Package build, root typecheck, changed lint,
+error observability and the 607-proof/30-scenario registered inventory pass. The prior semantic
+failure is repaired. The separate clean-revision performance measurement and final full gates
+remain open; this increment does not complete any unfinished Jira/Chat acceptance criterion.
+
+## Collection transport — #4083 AC1 / #4081 (foundation)
+
+The existing bounded Atlassian HTTP helper now accepts explicit JSON-array responses for Jira
+collection endpoints while retaining object-response validation, byte/deadline limits and GET-only
+retries. Empty collections are valid; objects in an array response, malformed JSON and truncated
+arrays fail closed. Three new cases failed before implementation; all 55 transport/Jira/Confluence
+write tests now pass, including the unchanged mutation no-retry tests.
+
+The shared pure JSON decoder replaces the previous legacy-listed `parseJsonRecord` catch. One
+exact file/function ownership rule documents propagation to `atlassian.action.outcome`; two real
+transition-route regressions prove exactly one reconstructed failure and no mutation after invalid
+metadata. The legacy register shrank from 1453 to 1452 entries. All prior 90 exceptions are retained;
+this increment explicitly adds one scoped ownership rule, with no generic parser exemption.
+46 route tests and 20 observability-gate tests pass, as do package build, root typecheck, changed
+lint and error observability. Fallow's two regrouped data-only windows involve the added ownership
+text and otherwise untouched translation data; its existing baseline refresh retains 938 groups
+and the semantic gate passes. No executable clone or matching-rule change was introduced.
+
+Production Jira tool composition, live operation acceptance and the remaining Chat/Pod/UI work
+remain open. This checkpoint does not complete #4083 or any other acceptance criterion.
+
+## First Jira capability and complete parser ownership — #4083 / #4089 / #4081
+
+`jira.projects` now executes through the production gateway projection, generalized binder,
+shared SDK host and real connector provider. Its canonical server descriptor is the only model
+offer; connection/context data remains private. The Data Center v2 collection is fully validated,
+bounded, sorted and paged. Only project id/key/name are returned. Provider failures use the
+existing managed-host failure event. Four integration cases cover pagination, field minimization,
+no second HTTP dispatch for the same invocation, permission refusal and malformed object/JSON
+responses. This is a hermetic HTTP fixture and a non-Coding consumer, not a real-model or Chat test.
+
+The auditor correctly identified that the shared JSON-parser ownership justification omitted sync
+consumers. Production SyncRun previously wrote only the existing connector activity ring. It now
+also calls the existing registered `atlassian.action.outcome` projection. Partial runs remain
+explicitly partial, warn, and retain their execution failure rather than replacing it with a
+governance rationale. Four metadata-route regressions failed before this fix with no global event;
+Jira and Confluence item failures and the live-search route are also reconstructed through the
+reader. All five production decoder call sites are accounted for; the new array consumer is
+covered through the actual MCP path. The one exact parser rule now names all these owners.
+
+80 affected route/sync tests and 12 binder/SDK tests pass, alongside 97 registry and 20 gate tests.
+Package build, root typecheck, changed lint, error observability and ADR index pass. The generated
+607-proof/30-scenario inventory has no violations. The two data-only Fallow windows regrouped
+because the ownership explanation changed; the existing refresh retains 938 groups and passes.
+Production Chat grants/approvals, all other Jira operations, durable write outcomes, Live Pods,
+UI and real-model/live-lab qualification remain open. No full acceptance criterion is closed.
+
+The full `check:activity-log` aggregate was also executed: its registry, replay, inventory and
+negative checks pass, but the aggregate remains red solely because its nested `arch:check` requires
+the already-open clean-revision catalog performance measurement. This is not an Activity Log pass
+claim; final architecture/performance qualification remains outstanding. Review prose about
+Supervised workspace was corrected to match the D4 table and ADR-0138. The newly reported oversized
+Jira allowed-values field issue remains queued for the next metadata increment.
+
+## Bounded metadata review repair — #4083 AC3 / #4081
+
+An oversized allowed-values list now disables only its field, preserving other valid metadata.
+Versions, fix versions and components above 500 choices become unsupported with no values or
+advertised verbs; requesting that field fails before mutation, and a required unsupported field
+without a server default still prevents creation. Unknown plugin choice structures are not
+interpreted. Supported fields with structurally invalid reference metadata still fail closed.
+The metadata offer now intersects Jira verbs with the implemented matrix: add/remove is offered
+only for labels, and unsupported fields offer no verbs.
+
+Five regressions failed before this repair. The metadata and existing Jira/Confluence write tests,
+plus the unchanged ADF composer baseline, pass (69 tests total). Package build, root typecheck,
+changed lint and semantic duplication pass; no baseline or gate rule changed. This repairs review
+comment 4383946211. It does not complete the still-pending provider metadata/live-operation matrix.
+
+## Managed metadata reads — #4083 AC1/AC3/AC7, #4089 / #4081
+
+The existing connector provider now exposes issue types, create fields and edit fields beside
+projects. Server-owned canonical descriptors feed the same compiled catalog, non-Coding binder
+and in-process SDK host. DC create metadata uses the supported project/type endpoints and validates
+`start`, `size`, `last`, optional totals and continuation consistency. Edit metadata preserves the
+server's field-map keys; response-supplied field IDs cannot override them. All operations retain
+context paths, bounded transport, per-effect checks and private invocation connections. Cloud is
+still explicitly refused by this DC provider; the existing Cloud write path remains separate.
+Human choice labels are exposed separately from validated mutation identities.
+
+Three integration regressions failed before provider admission. Their successors exercise actual
+binder/SDK/HTTP-port calls and registered, content-free Activity Log reconstruction. Controls reject
+malformed or inconsistent pages, Cloud pagination shapes and path overrides. This is hermetic
+provider evidence, not ordinary Chat or a current live Jira qualification. The expired lab license
+must be replaced by a fresh legitimate session before the next full live group. No AC is closed.
+
+Targeted checks for this increment: package build, root typecheck, changed lint/format, ADR index and unchanged semantic-duplication gate pass; 21 binder/SDK tests and 70 connector field/write/ADF tests pass. Final package-surface, architecture/performance, complete coverage and live acceptance remain open.
+
+## Issue content reads — #4083 AC1/AC2/AC7 / #4081
+
+The same provider now includes bounded opaque JQL search, individual issue reads with selected
+standard fields and plain-text descriptions, and independently paged comments. Raw self links,
+email fields and avatars are excluded. Search never returns descriptions or reporter data even
+when an upstream response includes those unrequested fields. Missing totals remain absent; a
+nonempty page provides a continuation and an empty page ends that unknown-total traversal.
+Cloud ADF in this DC-only lane and oversized content fail closed instead of being silently cut.
+
+Three integration cases failed before these capabilities were admitted. After implementation,
+28 binder/SDK tests and 66 existing live-search/document/HTTP tests pass. Package build, root
+typecheck, changed lint and unchanged semantic checks pass. The tested HTTP is synthetic; live
+DC operation coverage, arbitrary custom-field value reads, transitions, assignable users,
+mutations and actual Chat admission remain open. This checkpoint does not accept a complete AC.
+
+## Workflow and assignment discovery — #4083 AC1/AC3/AC7 / #4081
+
+The provider now offers nine implemented read capabilities. Transition discovery includes current
+screen-field requirements; absent metadata remains explicitly unavailable and is never converted
+into an empty requirement list. Assignable-user discovery requires exactly one issue or creation
+project scope. Results contain only username, display name and activity status, without ancillary
+email, avatar or self-link fields. Totals remain unknown for Jira's array response. Collection
+projection and duplicate-identity rejection share one bounded helper across these and issue reads.
+
+Two capability tests failed before implementation. The resulting 36 binder/SDK integration tests,
+package build, root typecheck, changed lint/format, ADR index and semantic gate pass with the
+unchanged 938 baseline. The synthetic transition requirements are not the still-pending live
+mutation-screen acceptance. Mutations, full custom-field value reads and the normal Chat authority,
+grant and durable invocation paths remain open. Review comment 4384251867 on partial-sync failure
+classification is accepted and queued immediately after this increment.
+
+## Partial-sync error classification repair — #4081 / #4087, review 4384251867
+
+A partial sync with a sync-only failure (for example `scope-exceeded`) previously emitted
+`failureReason: none`, because its legacy UI activity record uses `succeeded`. The registered
+projection now derives one effective outcome and maps such partial failures to `other`. A partial
+record carrying a governance approval reason still emits `none`; existing detailed transport
+failure codes remain intact. One regression failed before the fix and both controls passed.
+
+After repair, 83 route/projection tests pass. The new case uses the registered production formatter
+and real Activity Log reader. Regeneration resolves 607 proofs and 30 scenarios with zero
+violations; all 97 registry tests pass. Package build, root typecheck, changed lint/format and
+semantic gate pass. This closes the concrete classification finding, not the outstanding full
+Activity Log/architecture/performance qualification.
+
+## Structured MCP failure preservation — #4089 / #4083 AC4 / #4081
+
+The host previously discarded structured provider failures and retained only `tool-error`.
+It now captures and bounds provider results, validates their declared output schema even for
+MCP error results, and retains valid failure data through an immutable, non-enumerable accessor.
+Arbitrary thrown exceptions, malformed result shapes, unexpected fields and oversized error
+results remain generic. The registered failed lifecycle still settles once and contains no data.
+
+One regression failed before the fix. All 18 SDK-host tests, 36 existing binder/provider tests
+and 97 registry tests pass, along with package build, root typecheck, changed lint/format,
+ADR index and unchanged semantic checks. Catalog failure-envelope propagation, durable mutation
+intent and explicit Jira remote-result states are the next integration step; preserving data in
+the host alone does not complete the user-visible outcome requirements.
+
+## Catalog settlement retains provider errors — #4089 / #4083 AC4 / #4081
+
+Explicit MCP error results now reach the consumer as `failed` / `provider-reported-error`,
+with the admitted schema-validated JSON object, no page, zero result count and exact output-byte
+accounting. Other failures and all cancellations retain null data. The binder validates the
+payload again, settles invalid/missing error payloads without leaving reservations pending, and
+keeps the existing single settlement/replay behavior. The legacy string-returning adapter cannot
+claim this structured variant. ADR-0175 and its generated lifecycle contracts describe the addition.
+
+The regression failed in three provider integration cases and one pure result-contract case before
+implementation. Afterward, all 252 server catalog tests, 954 selected pure/contract/Harness/gate tests
+and 97 registry tests pass. Build, root typecheck, changed lint/format, ADR index and semantic
+checks pass; registry generation resolves 607 proofs and 30 scenarios without violations.
+Actual emitted settlement lines are registered proofs and both log owners remain body-free.
+Durable mutation intent, Jira write outcomes and ordinary Chat admission remain pending.
+
+## Selected issue field values — #4083 AC1/AC3/AC4 / #4081
+
+`jira.issue` contract version 2 accepts up to 20 explicit field IDs and requests the corresponding
+values with `names,schema` expansion. The existing field matrix and pure value validator project
+bounded text/numbers/dates/datetimes, users/options and supported lists. Empty, unavailable and
+unsupported fields are distinct; unrequested and unknown-plugin values are never projected.
+Reference projection excludes email/self fields, rejects duplicate identities and bounds lists.
+Jira compact datetime offsets round-trip through the shared normalizer. Duplicate field IDs,
+wildcards, reserved names and excessive selection fail before connection resolution/HTTP.
+
+The original integration test failed before implementation. Afterward, 41 actual binder/SDK
+integration tests and 217 selected field/Cloud-write/contract tests pass. Build, root typecheck,
+changed lint/format, ADR index and unchanged semantic checks pass. The field read uses the
+existing managed-MCP/catalog lifecycle and its body-free result-byte accounting. The REST-v2
+expansion is documented in [Atlassian's Server REST reference](https://docs.atlassian.com/software/jira/docs/api/REST/9.12.0/).
+Full operation and licensed 10.3.26 live qualification remain pending, as do durable writes and
+ordinary Chat authority. This is not an accepted AC or an epic-completion claim.
+
+## Durable Chat mutation journal — #4083 AC5, #4084 AC5, #4091 / #4081 (foundation)
+
+Schema 47 adds the journal to the existing UiStore. It binds a canonical persisted user turn to
+server-owned invocation/actor/Pod identities, binding/authentication generations and authority/action
+digests. It stores no request, response body, endpoint or credential. A standalone FULL-synchronous
+SQLite transaction records possible dispatch before permission is returned to the caller; savepoints
+and weaker synchronization are refused. Final synchronous authorization can atomically redeem an
+approval, and rejection rolls the transaction back. The journal itself grants no authority.
+
+Equivalent actions in the same turn share a tombstone even with different model call IDs. At most
+32 intents are retained per turn, and only one is active. An unknown effect blocks further mutations
+in that turn, including already prepared work. A new explicit user turn remains separate. Removing
+a message retains the tombstone; deleting the owning Chat removes it. Known rejection, confirmed
+success, acknowledged-but-unconfirmed success, unknown effect and no dispatch are distinct and
+terminal outcomes are immutable. HTTP acknowledgement must be recorded before body processing;
+provider/HTTP composition is still pending. There is no universal exactly-once or lost-update claim.
+
+The original on-disk restart regression failed before implementation. All **704 store tests** now
+pass, including restart, duplicate identity, changed context, guard rollback, storage/log failure,
+ambiguous status, prior acknowledgement, parallel prepared intents, deletion and schema-46 upgrade.
+The schema inventory and shared reverse fixture were extended; no production migration or privacy
+gate was relaxed. The registered `chat.tool-mutation` proof reconstructs committed states without
+private content. Pre-effect logging failure stops the caller; terminal logging failure preserves the
+observed result and enters the existing loss ledger. ADR-0013 documents these boundaries.
+
+The error-observability gate also found a missing explicit diagnostic for rejected structured
+provider results in the preceding catalog increment. Three new assertions failed before the repair;
+the actual validation catch now emits the existing body-free server diagnostic before single
+settlement. All **257 catalog tests**, **97 registry tests**, build, root typecheck, changed lint/format,
+ADR index, error observability and unchanged semantic checks pass. Registry generation resolves
+608 proofs and 30 scenarios without violations. Jira mutation transport, current-authority wiring,
+normal Chat, licensed live qualification and all complete-epic gates remain pending. No AC is accepted.
+
+## Audit repair: status is not effect certainty — #4083 AC5 / #4081
+
+The read-only auditor correctly found that the initial journal classified HTTP 429 as a known
+rejection, contradicting the existing committed-then-429 transport regression. The entire status
+whitelist has been removed: after possible dispatch, every non-2xx response remains an unknown
+remote effect. Diagnostic reasons such as permission denied or rate limited remain separate from
+that effect classification. A known local rejection is permitted only before possible dispatch.
+Schema 48 also repairs retained schema-47 post-dispatch rejections to unknown before work resumes.
+ADRs 0013 and 0128 record the corrected semantics.
+
+Nineteen assertions/cases failed before the repair. Synthetic committed-then-400/401/403/429 tests
+retain the unknown state and prevent both queued and new actions across on-disk restart; migration
+regressions cover the previously persisted incorrect state. These are store/transport proofs, not
+licensed Jira or ordinary Chat acceptance. All **712 store tests**, **31 existing HTTP tests** and
+**97 registry tests** pass, along with build, root typecheck, changed lint/format, ADR index and the
+unchanged semantic gate. Registry generation remains at 608 proofs/30 scenarios without violations.
+The provider/HTTP/authority integration and complete epic qualification remain pending.
+
+## Final transport preparation — #4083 AC5 / #4084 AC3 / #4081 (foundation)
+
+The existing gateway now accepts a trusted synchronous header-preparation callback. Native requests
+invoke it after pinned DNS and body preparation; HTTPS proxy requests additionally wait for the
+CONNECT/TLS handshake. A refused or cancelled preparation sends no target HTTP request and disposes
+an acquired tunnel. Callback/control fields never reach injected fetch implementations. Existing
+callers retain their original header and cancellation semantics.
+
+An explicit `singleAttempt` uses the configured native CA trust set on the first HTTPS attempt and
+disables fallback, including for TLS-shaped errors from injected transports. It preserves certificate
+verification and DNS pinning. This lets the future mutation adapter record durable admission at the
+actual request boundary without a hidden second attempt. The gateway itself grants no authority.
+
+Three initial regressions failed before implementation. All **2,290 gateway tests** and **46 existing
+Atlassian port tests** pass, including actual native/CONNECT refusal, post-DNS revocation, cancellation,
+invalid asynchronous callbacks and first-attempt custom-CA success. Build, root typecheck, changed
+lint/format, ADR index, error observability and unchanged semantic checks pass. Existing registered
+HTTP lifecycle operations retain their body-free evidence; ADR-0038 describes the boundary.
+Connecting the Atlassian credential owner, durable journal and ordinary Chat authority to this seam
+remains pending. No AC is accepted by this transport checkpoint.
+
+## Atlassian final request boundary — #4082 AC2 / #4083 AC5 / #4084 AC3
+
+Both existing Atlassian ports now use final gateway preparation for credential resolution. A trusted
+synchronous admission callback sees a frozen request snapshot and runs before secret materialization;
+false, asynchronous or throwing callbacks stop the request. Credential and admission failures retain
+their original identity instead of becoming retryable network errors. POST and PUT select the
+single-attempt transport. Response observers run before body consumption, preserving the distinction
+between an observed status and a later body failure. Observer failure cancels the unread stream and
+emits the existing body-free diagnostic channel. ADR-0128 documents the composition boundary.
+
+The initial three regressions failed before implementation. All **60 port tests** pass, including
+held native DNS with subsequent revocation, immutable request identity, cancelled requests, custody
+errors, asynchronous callback rejection and response-stream cleanup. All **168 connector integration
+and HTTP helper tests** pass. Build, root typecheck, changed lint and error observability pass.
+This increment supplies the concrete transport hooks; durable journal/current-authority composition,
+managed Jira mutations, ordinary Chat and complete epic qualification remain pending. No AC is accepted.
+
+## Review repair: aggregate issue projection — #4083 AC3 / Epic #4081
+
+CodeRabbit's aggregate `jira.issue` result-size finding is confirmed. Three production SDK/binder
+regressions failed before the repair even though the synthetic upstream bodies fit the existing HTTP
+ceiling. The projection now charges the complete issue data, including description and metadata,
+reserves 4 KiB for the bounded catalog envelope, and accounts for serialized UTF-8 bytes and JSON
+escapes. Every selected field's unavailable placeholder is reserved before any value is admitted.
+The first value that cannot fit, and all subsequent fields, retain that explicit unavailable state;
+supported values and the issue itself remain intact. The unchanged catalog gate still validates the
+complete terminal envelope. Individual selected strings also respect its existing string-byte cap.
+An unrepresentable base description returns a structured bounds failure. No new truncation state,
+larger ceiling or schema exception was introduced.
+
+The SDK/binder regressions now pass, including duplicate standard-field data, escaped control text,
+multibyte values, all 20 selected fields and single settlement. Focused projection tests cover exact
+byte boundaries, placeholder reservation and invalid budgets. The existing lifecycle still records
+bounded result metrics without Jira content. All **261 catalog/consumer tests** and **76 field/Cloud
+write regressions** pass, as do package build, root typecheck, changed lint/format and the unchanged
+semantic gate. Full epic and live qualification remain pending.
+
+## Mutation journal/transport composition — #4083 AC5 / #4084 AC3 / #4091 AC2
+
+The server now composes the existing durable journal with the existing Atlassian HTTP port. A new
+intent alone owns execution; duplicate deliveries only report retained state, including while the
+first invocation is still preparing. Final transport admission repeats the injected current-authority
+guard inside the journal transaction. Owner-supplied transport admission/response callbacks remain
+composed. Metadata GETs do not acknowledge a mutation, and one invocation can send at most one
+POST/PUT. The operation's validated receipt identities distinguish confirmed success from 2xx without
+usable confirmation. Lost/error responses remain unknown; failed terminal persistence retains the
+barrier and returns uncertainty. This composes an injected authority owner; real Chat admission is
+still the next integration layer.
+
+An integration regression exposed a missing barrier after `succeeded-unconfirmed`: it failed before
+the store repair. Both new and previously prepared mutations in that turn are now blocked, while an
+explicit new turn remains separate. The **791 store/port/composition tests** pass, including actual
+gateway/port dispatch with synthetic transport, concurrent duplicate delivery, committed-then-error,
+malformed and broken response bodies, metadata reads, final guard revocation, missing capabilities,
+second dispatch refusal and terminal storage failure. This is not a licensed Jira/normal Chat proof.
+No managed mutation is advertised until provider and Chat-authority composition is complete.
+Package build, root typecheck, changed lint/format, ADR index, unchanged semantic checks and error
+observability pass. The diagnostic emitter is explicit at each caught failure; no legacy failure-path
+exemption was added. Registry generation resolves 608 proofs/30 scenarios without violations and its
+97 drift tests pass. The narrower 18-test composition suite also passed after the diagnostic repair.
+
+## Auditor repair: non-terminal mutation replays — #4083 AC5 / #4091 AC2
+
+The read-only auditor identified a valid distinction lost in the initial composer: a concurrent
+replay of a prepared record said `not-dispatched` while its original owner could still dispatch.
+The closed result-state contract now adds `pending` separately from terminal journal outcomes.
+Every unsettled replay reports `pending`; only a retained settlement is replayed as terminal.
+Missing journal/current admission or a preparation failure also leave prior state unqualified and
+cannot justify a no-effect claim. This state asserts neither an active owner nor permission to take
+one over. Existing journal settlement rules and dispatch barriers remain unchanged.
+
+Eight composer regressions failed before the repair and pass afterward. They cover a waiting owner
+that subsequently writes, a cancelled owner that never dispatches, revocation while HTTP remains
+outstanding, failed terminal persistence, and prepared/dispatched/acknowledged records reopened
+without an owner. An additional store test refuses to settle `pending` as a terminal outcome.
+The full targeted store/port/composer selection passes **797 tests**. Package build, root typecheck,
+changed lint, ADR index and error observability pass. Registry generation still resolves 608 proofs
+and 30 scenarios without violations; all 97 registry tests and the unchanged 938-entry semantic
+baseline check pass. Actual Chat admission and managed writes remain outstanding;
+this repair does not constitute complete acceptance of an epic criterion.
+
+## Data Center mutation executor — #4083 AC2/AC3/AC5
+
+The connector's private executor now implements create/edit/assign/comment/transition against REST
+v2. Eight initial behavior tests failed before implementation. Fresh create metadata is collected
+through bounded post-9.0 pages, then the existing field validator checks the complete field set;
+edit and transition metadata are refreshed for their corresponding actions. Transition fields and
+transition are one POST. Named assignment checks current active assignable users without depending
+on edit permission; clearing requires metadata permission. Input snapshots cannot change during
+metadata I/O. Unknown fields/verbs, routing overrides and compound actions are refused. Cloud's
+existing v3/ADF executor remains separate. An unexpected 2xx status or missing returned identity
+is not confirmation, and POST/PUT are never automatically retried.
+
+The **355-test selection** passes: new executor scenarios, field validation, existing Cloud writes
+and the current catalog suites. It covers required fields on later metadata pages, duplicate and
+never-ending pages, unsupported required plugin fields, changed edit capabilities, inactive users,
+unassignment refusal, contradictory duplicate identities, pending-input mutation, cancellation, rechecking admission between metadata
+and dispatch, unexpected statuses and POST/PUT error responses. Package build, root typecheck and
+changed lint pass. This private executor is not yet advertised by the managed provider or connected
+to normal Chat. The next integration joins it to the durable server composer and actual SDK binder;
+real Jira/Chat/browser acceptance remains outstanding. Existing host, HTTP and action-log owners
+remain responsible for correlated runtime evidence; no additional logging subsystem is introduced.
+
+The 45 executor tests were rerun successfully after extracting the unique-active-assignee check.
+Changed formatting, ADR index and the staged-diff semantic gate also pass.
+
+## Auditor repair: independent mutation confirmation — #4083 AC3/AC5
+
+The auditor correctly identified that an expected 201/204 response was only an acknowledgement.
+The private Data Center executor now reads the exact affected resource after every acknowledged
+operation and validates identity plus the requested state. Edits, assignments and transitions also
+read the relevant state before dispatch; already matching state and self-transitions do not establish
+a new effect. Transition metadata must identify its target status. Failed or contradictory readback
+returns a failed attempt without repeating the mutation; the existing journal composer retains the
+acknowledgement as `succeeded-unconfirmed`. The provider/composer/SDK integration proof is still pending.
+
+Sixteen tests failed against the acknowledgement-only implementation. The resulting **403-test
+selection** passes, including **66 mutation tests**. All five operations cover forbidden and
+contradictory post-write reads with exactly one mutation; additional cases cover wrong returned
+identity, unchanged state, lost authority before readback, refused prerequisite reads, explicit
+clearing, reordered replacements and additive label membership. Package build and root typecheck
+passed after the runtime changes. This remains synthetic component evidence, not licensed Jira,
+normal Chat or browser acceptance. Readback does not establish exclusive causation or atomic
+lost-update protection. The earlier ADR choice-list limit is also corrected to the implemented
+500 choices (the separate submitted-array bound remains 100).
+
+Changed lint/format, ADR index and the staged-diff semantic gate pass; the clone ceiling remains 938.
+
+## Managed mutation composition — #4083 AC2/AC5/AC7 / #4089 AC4
+
+The existing Jira provider now accepts an explicit server-owned mutation executor. Without it,
+write declarations are rejected; the default provider remains read-only. The server builds the five
+canonical mutation descriptors and the connector executes only through the HTTP port supplied by
+the durable composer. Independent snapshots prevent later argument or connection mutation from
+changing the admitted operation. Assignment clearing is explicit and ambiguous combinations fail
+before HTTP dispatch. Existing test fixtures were extracted and shared rather than duplicated.
+
+The positive write-declaration test failed before implementation. The **369-test selection** passes
+across provider, connector mutations, journal composer and the complete catalog directory. It
+includes **16 actual SDK integration cases**: all five operations with verified synthetic remote
+state, all five with denied readback and a barrier against further writes in the same turn, all five with a lost
+response after the synthetic remote applied the mutation, and explicit/ambiguous clearing. Every
+case asserts one mutation at most; repeated actions return retained journal outcomes. This path
+uses the real gateway projection, non-Coding binder, MCP SDK, existing HTTP adapter and SQLite
+journal. The consumer's authority port is a trusted test port, not the still-pending product Chat
+authority implementation. No real model, licensed Jira, normal Chat or browser acceptance is claimed.
+
+Package build, root typecheck and changed lint pass. The fixture refactor and provider snapshot
+test are rerun after their final lint/type repairs. Final package, architecture/performance and
+full-quality qualification remain deferred to the agreed overall acceptance.
+
+The final 64-test provider/SDK/non-Coding rerun, changed formatting, ADR index and staged-diff semantic gate pass.
+
+## Shared Jira policy vocabulary — #4083 AC3/AC6 / #4084 AC2
+
+The nine managed read actions and `assign-issue` now belong to the existing closed connector action
+vocabulary. A single mapping connects the fourteen canonical Jira tools to those policy actions.
+Reads require `issue-tracker.read` with low risk; assignment requires `issue-tracker.write` with
+medium risk. Existing action-class, scope and strictest-mode decisions remain authoritative.
+No Chat read grant or action approval is implied by adding these vocabulary entries.
+
+Ten recognition regressions failed before implementation. The **315-test contract/validation/
+policy/activity selection** passes: its expanded integration matrix drives the old HTTP routes and
+new managed admission through the real authority registry across all three modes, including absent
+scopes. The existing route compatibility cases remain. Every new action also passes the registered
+formatter and Activity Log reader proof. All **97 registry tests** pass after regeneration: 608
+proofs, 30 scenarios, no violations. The static registry requires explicit closed field literals;
+the outcome definition retains that representation and its typed producer and tests prevent drift.
+
+The corresponding English/German labels pass **11 UI tests**, UI typecheck and full UI lint.
+Package build, root typecheck, changed backend lint/format and ADR index pass. The optional message
+catalog changes require final UI-evidence regeneration; full UI coverage, aggregate Activity Log,
+architecture/performance and remaining final gates are not claimed by these focused results.
+
+## Instance-qualified results — #4083 AC1/AC2/AC4/AC7
+
+Issue reads/search hits, issue-scoped read results and mutation results now derive browse links
+from the selected connection's HTTPS instance and context path. Remote `self` URLs are ignored.
+The existing live-search base-path helper was extracted and reused. Links are attached outside
+the durable journal; the existing content-free log tests continue to reject endpoint leakage.
+Create replays without a retained issue identity omit a link instead of inventing one.
+
+Two SDK regressions failed before implementation: the missing qualified issue link and an oversized
+search-page projection with long context-path links. Read results now account for the complete
+serialized data plus the existing envelope reserve. Oversized pages retain a fitting prefix and
+resume at the first unreturned item, preserving the remote total; an individually oversized item
+fails explicitly. No byte ceiling was widened. Result-schema versions advance consistently.
+
+The **328-test catalog/provider/SDK/field/legacy-live-search selection** passes. All five mutation
+SDK cases additionally assert the correct qualified link while journal/MCP logs remain endpoint-free.
+Package build, root typecheck and changed lint pass. These synthetic results do not replace the
+outstanding licensed Jira, product Chat or browser qualification.
+
+## Atomic Chat state foundation — #4084 AC1/AC2/AC4/AC5
+
+Schema 49 extends the existing Chat row with versioned Jira state: one independent Pod UUID,
+binding/authentication generations and the selected tool mode. It stores no endpoint, credential
+reference, token, grant or approval. Missing legacy state defaults to Ask for approval and preserves
+the previous grounding identity. Effective Pod, authentication or mode changes advance the binding
+generation; disconnect retains it and an unchanged reconnect does not reset it. The store requires
+a trusted resolved Pod target, rejecting absent/mismatched/invalid targets. Read/preview/commit use
+the same codec and scope projection. Corrupt persisted state fails closed with a body-free error.
+
+The existing transaction helper now protects Chat update validation and writes together. Scope
+preconditions are rechecked inside that transaction, so a stale combined patch cannot partially
+rename or rebind a Chat. Existing registered scope-update logging includes optional Jira counts,
+generation and mode; the persisted reader proof rejects title/Pod-ID leakage. Reopen, corruption,
+separate-Chat defaults and existing scope/store/migration/serializer/route regressions are covered.
+
+Five behavioral tests failed against the preceding implementation after correcting the test's
+temporary-directory prerequisite. The **342-test affected selection** passes, including the actual
+registered writer/reader. The first log assertion used the in-memory event shape instead of the
+persisted flattened record; it was corrected and the full selection rerun. The **97 registry tests**
+also pass; regeneration resolves 608 proofs and 30 scenarios without violations. This checkpoint
+does **not** claim authenticated Pod route resolution, current credential readiness, read grants,
+approval redemption, ordinary Chat execution or any complete acceptance criterion.
+
+## Private Live-Pod identity and generation capture — #4084 AC3/#4085 AC2/AC3/AC4
+
+The existing custody owns optional Data Center Live-Pod metadata and single-use verification
+tickets. Creation needs a trusted owner digest and rejects duplicate creation intent before another
+vault write. Latest-probe and credential-generation checks prevent stale completion and deleted-row
+resurrection. Failed verification advances the generation. These are owner primitives; normal create
+and verification routes required their Live-Pod composition at that checkpoint; see the subsequent
+owner/projection checkpoint below.
+
+All existing production HTTP factories now snapshot the selected generation. Resolution checks that
+generation before reading ciphertext, including when the caller later mutates its metadata object.
+Three new lifecycle tests failed before implementation, followed by a separate stale-resolver test
+and a real-factory regression that failed before the generation capture. The **282-test custody,
+metadata, route, legacy-write/live-search and policy selection** passes; the new rejection reasons
+also pass the real registered formatter/reader proof. All **97 registry tests** pass. Package build,
+root typecheck and changed lint pass. Final package, full coverage and product/live qualification
+remain open. Token rotation, deletion-driven Chat invalidation and actual binding admission are
+not yet claimed by this checkpoint.
+
+## Credential owner and public projection — #4084 AC3/#4085 AC2/AC4
+
+The auditor identified the conditional metadata leak before Live-Pod creation was wired. Three
+HTTP regressions first failed against the preceding routes: private GET metadata, missing trusted
+owner on Create, and visibility of another operator's Pod. The routes now derive ownership from
+the existing server operator, select only owned Live Pods, and explicitly project public credential
+fields for both GET and Create. Verify/Delete hide foreign records with the existing not-found
+rejection and no outbound Jira call. Legacy Cloud credential behavior remains covered.
+
+The existing Activity Log records only the visible list count, with a registered writer/reader
+reconstruction test. Pod verification completion, binding admission, lifecycle invalidations,
+grants and approvals still require their subsequent composition. This is not AC completion.
+
+All 83 credential custody/route tests and 97 registry tests pass. Package build, root typecheck,
+changed lint/format, ADR and semantic checks pass. Regeneration resolves 609 proofs and 30 scenarios
+without violations. The diagnostic vocabulary addition required refreshing clone locations;
+the baseline still contains the same 938 group memberships, verified by comparing every member
+path before/after. No duplicated implementation or additional baseline group was accepted.
+
+## Verification completion through HTTP — #4084 AC3/#4085 AC3/AC4
+
+Five real HTTP cases failed before ticket composition: retained success/failure readiness,
+both newer-success and newer-failure races, deletion during a probe, and an internally aborted
+probe. The existing Verify route now uses the custody generation/revision checks. Stale answers
+return 409; failed or aborted current probes advance the generation, and internal aborts become
+unverified instead of remaining in progress. Existing Cloud verification stays unchanged.
+
+The actual Activity Log writer/reader reconstructs applied and stale verification observations
+and aborted probes, without response content. Custody tests also check that a stale start leaves
+the stored revision untouched. Chat binding admission, restart/lifecycle coordination and
+grant/approval invalidations remain separate work; this checkpoint does not complete an AC.
+
+All 107 focused custody/credential-route/Data-Center-verification tests and 97 registry tests pass.
+Package build, root typecheck, changed lint/format, ADR and staged semantic checks pass. Registry
+regeneration resolves 609 proofs and 30 scenarios without violations. Final integrated, live,
+coverage and aggregate gates remain pending as listed above.
+
+## Authenticated Chat binding PATCH — #4084 AC1/AC4/#4085 readiness boundary
+
+Ten actual HTTP regression cases first failed: connect/replace/disconnect and mode persistence,
+foreign/unverified/unknown Pod selection, malformed/server-owned fields, missing scope precondition
+and competing updates. The existing PATCH route now admits only an owned, verified Pod and passes
+its current generation to the existing atomic store. It requires the current scope identity for
+Jira/mode intent, rejects generation overrides, uses the existing turn serializer and rechecks the
+Pod during application. Another Chat remains unchanged. No Coding session is created.
+
+Store and route logging avoid duplicate applied events. A real writer/reader HTTP proof reconstructs
+one application, two denials and one conflict without Pod IDs or credential contents. This checkpoint
+adds binding admission; it does not mint authority, read grants or approvals. Those controls and the
+normal-Chat tool loop, Pod lifecycle coordination and UI remain incomplete.
+
+All 239 affected credential-route/Chat-handler/binding-store tests and 97 registry tests pass.
+Package build, root typecheck and changed lint pass. The regenerated registry resolves 609 proofs
+and 30 scenarios without violations. Final integrated and live acceptance remain pending.
+
+## Review corrections: update bounds and current AC status — #4083/#4081
+
+The review correctly identified that the schema admitted 100 additive updates while the existing
+field validator rejected more than 50. Both now use `JIRA_METADATA_MAX_UPDATES` from the connector
+owner; mutation descriptors advance to version 3. Actual gateway/binder regressions with 51 and
+100 updates first failed against the previous descriptor. The corrected gateway rejects them
+before journal preparation and remote writes, with registered body-free rejection evidence.
+The existing runtime control accepts 50 supported label updates and refuses the next one.
+
+The AC matrix was reconciled with the retained checkpoints: 29 rows now describe implemented
+portions and their specific remaining work, including SDK/journal composition and normal Chat
+binding admission. No acceptance checkbox was marked complete. Product Chat authority, live
+qualification and final aggregate gates are still explicitly outstanding.
+
+All 103 field/provider/non-Coding-consumer/SDK-mutation tests and 97 registry tests pass after the
+correction. Package build, root typecheck, changed lint/format and staged semantic checks pass.
+The existing registered gateway rejection is checked through its production formatter; its owning
+package retains the canonical proof. Final assembled-package and aggregate qualification remain pending.
+
+A read-only lab recheck on 2026-10-27 confirms healthy Jira/PostgreSQL containers and all three
+production HTTPS/PAT connection cases (trusted connection, untrusted certificate and revoked
+exact admission). The license check reports expired. This is connection evidence only, not a
+licensed write/model/browser qualification; the next complete live group needs a valid session.
+
+### Credential-owned Chat invalidation — #4084 AC3, #4085 AC4
+
+- Current failed/aborted verification and credential deletion notify the server through the existing
+  custody owner, including direct credential-management routes. Notification follows durable
+  generation revocation or ciphertext removal; metadata cleanup failure cannot skip it.
+- The existing UI store changes all matching Chat bindings in one immediate transaction, advances
+  scope generations and preserves Pod association on credential-generation changes. Deletion
+  disconnects the Pod. Repeated/older generation notifications do nothing; unrelated Pods remain
+  unchanged. Exhausted generations roll back the complete affected set.
+- The existing turn serializer cancels matching active generations. An actual authenticated DELETE
+  test covers two Chats on one Pod and a third on another; a direct Verify route test covers failed
+  re-verification and rejection of the old scope identity. Real Activity Log writer/reader evidence
+  reconstructs both applications and both cancellation requests without Pod/authRef values.
+- Three focused custody/store regressions fail before implementation. Targeted final results are
+  recorded in the PR checkpoint. This increment does not complete restart reconciliation, token
+  rotation, Chat authority/grants/approvals or UI lifecycle integration; the affected ACs remain partial.
+
+Final focused results for this checkpoint: 217 custody/HTTP-route/store/serializer tests and 97
+registry tests pass, with package build, root typecheck, changed lint/format, staged semantic and
+ADR-index checks. Full aggregate, assembled-package, licensed live and UI qualification remain pending.
+
+### Durable token replacement and removal primitives — #4085 AC4, #4084 AC3
+
+The existing custody owner now accepts a generation-checked Live-Pod rename/token replacement.
+Replacement retains Pod identity, advances the credential and verification generations, clears
+readiness and notifies existing Chat invalidation before changing ciphertext. Rename leaves the
+credential generation unchanged. A private pending-operation marker blocks execution and
+verification before vault reads until replacement has fully settled; interrupted replacement
+requires an explicit fresh replacement at the current generation. A deletion intent is now retained
+and invalidated before ciphertext removal, so either cleanup failure leaves a durable denied state.
+Retry completes deletion without reopening verification, rename or replacement.
+
+Four focused tests fail before implementation. Coverage includes retained-store custody reopening
+after vault and metadata settlement failures, explicit recovery, stale probe/transport refusal,
+invalid input and impossible persisted states, failure before the pending intent is written, and
+retrying interrupted removal. This is not a real-process restart or authenticated update-route
+qualification: the update endpoint/UI, startup reconciliation and grant/approval integration remain
+pending. All affected acceptance criteria remain partial.
+
+Focused checkpoint results: 329 custody, metadata, Chat binding, credential/write/search route and
+policy-regression tests pass. Package build, root typecheck, changed lint/format, staged semantic,
+ADR-index and 97 registry tests pass. Final aggregate/live/UI qualification remains pending.
+
+### Authenticated rename/token replacement — #4085 AC2/AC4, #4084 AC3
+
+The existing credential resource now accepts generation-checked PATCH through the standard
+CSRF/body-size/owner/error paths. It accepts only name/token changes to owned Live-Pod credentials;
+responses use the public metadata projection. Rotation preserves two shared-Pod Chat associations,
+advances their generations and leaves another Pod untouched. Old updates and delayed verification
+cannot restore prior access. Two HTTP regressions fail against the previous route table. Additional
+HTTP coverage checks CSRF and a paused verification during replacement.
+
+The new registered `atlassian.credential.updated` event reconstructs rename, token replacement and
+combined update with generation counts only. Real writer/reader proof checks the absence of token
+and credential reference; logging failure after mutation does not turn success into a retryable
+operation. Canonical failure-class obligations and generated inventories include the event. The
+existing semantic baseline needed a location refresh: all 938 group membership multisets were
+compared and remained identical; no group or exception was added. Management UI, startup
+reconciliation, grants/approvals and full live qualification remain pending.
+
+Focused results: 130 custody/credential-route/activity tests, 109 route-table/diagnostic regressions
+and 97 registry tests pass. Package build, root typecheck, changed lint/format, semantic membership
+comparison and refreshed gate, ADR index and error-observability checks pass. Full aggregate,
+assembled-package, management UI and licensed live checks remain pending.
+
+### Corrupt-row isolation during invalidation — review of #4084 AC3 / #4085 AC4
+
+Confirmed the review finding that syntactically invalid JSON in an unrelated Chat could abort the
+bulk query. A guarded SQL expression now excludes unreadable JSON from binding selection. The
+regression fails before the change and passes afterward: a valid matching binding is revoked while
+the corrupt Chat remains unreadable and its state is not reset. All 70 binding/credential-route
+tests, package build, root typecheck, changed lint/format and staged semantic checks pass.
+
+### Causal credential lifecycle evidence — #4084 AC5 / #4085 AC4
+
+The trusted request correlation now passes through credential deletion, replacement and verification
+settlement into the existing binding invalidation and turn cancellation. It is separate from user
+payload fields and grants no authority. Operations outside a request retain the server-generated
+correlation fallback. The actual DELETE regression fails before this change; real writer/reader
+proof now ties all its binding effects and cancellation records to the HTTP response. Replacement
+proof similarly reconstructs both shared-Pod Chat updates under each credential update's request.
+All 122 custody/HTTP tests, 97 registry tests, package build, root typecheck, changed lint/format,
+staged semantic and ADR checks pass. Final acceptance and remaining lifecycle/Chat/UI work stay open.
+
+### Ordinary Chat authority contract checkpoint — #4084 AC2–AC4
+
+The additive `ChatToolAuthorityEnvelope` and subject validator bind actor digest, Chat,
+Pod, binding generation and credential generation without a repository, branch or Coding
+session. The existing mode ordering and budget dimensions remain authoritative. Only Jira
+scopes and connector/network action classes are accepted; file-patch capacity is zero.
+Malformed or widened inputs fail with closed diagnostics, including unknown hostile keys.
+
+The new contract suite initially failed to load because this capability was absent
+(`/tmp/keiko-4081-chat-authority-contract-before.log`). The new and retained Coding contract
+suites pass 198 tests after implementation. This is a structural contract checkpoint:
+registry admission, current-state enforcement, consent, approvals and the ordinary Chat
+execution loop are not yet implemented or accepted. Final assembled-package qualification
+remains pending and runs after the other gates because it prunes the live dependency tree.
+
+### Shared authority registry checkpoint — #4084 AC2–AC5
+
+The existing registry now retains discriminated Coding/Chat records in the same bounded
+store. It uses the existing canonical digest, cumulative budget rules, expiry and revocation.
+Every Chat resolution compares current actor, Chat, Pod, binding generation, credential
+generation and deployment ceiling. A private immutable snapshot prevents caller mutation.
+Coding consumers cannot resolve or refund Chat records, and Chat consumers cannot resolve
+Coding records. Duplicate registration preserves usage and revocation; Chat-wide revocation
+leaves other Chats and Coding records untouched. This private API is not an HTTP authority
+registration route and does not yet compose human acceptance, read grants or approvals.
+
+Before implementation, 14 new registry tests fail while 33 retained tests pass. Afterward,
+249 contract/registry tests and 235 existing connector-policy, agent-run and Coding-runtime
+consumer tests pass. Three additional regressions fail before rejecting inherited subject,
+budget and envelope facts; required facts must be own fields. A real Activity Log writer/reader
+proof reconstructs register, changed-generation refusal, cumulative reservation, exhausted
+budget, revoke and revoked-reference refusal under one correlation. Repeated revocation records
+zero affected entries. No raw Chat/Pod/run identifiers enter those records.
+
+Package builds, root typecheck, changed lint, staged semantic and the 97-test operation-registry
+check pass; the generator resolves 611 proofs and 30 scenarios with no violations. Final
+aggregate gates and product Chat/lifecycle integration remain pending. No AC is accepted by
+this checkpoint alone. Retained logs: `/tmp/keiko-4081-chat-authority-registry-*.log` and
+`/tmp/keiko-4081-chat-authority-own-facts-before.log`.
+
+### Graph-owned authority lifecycle checkpoint — #4084 AC3–AC5, #4085 AC4
+
+Production composition gives each server graph its own instance of the existing authority
+registry and clears it on disposal. Credential invalidation passes that same instance to the
+existing Pod/Chat lifecycle callback. Committed Chat mode/binding changes, closure and deletion
+revoke the affected Chat's authority. Unchanged mode selection and rejected stale PATCH requests
+do not revoke valid authority. This does not replace the still-pending current-state checks
+at actual Chat tool dispatch, grant/approval invalidation or the complete restart scenarios.
+
+Three regression cases fail before implementation: graph ownership/disposal, committed Chat
+changes and direct credential deletion across two shared-Pod Chats plus an unrelated Pod.
+After implementation, 387 tests pass across dependency composition, actual credential/Chat HTTP
+routes, existing store handlers and the authority registry. The shared fixture contains only
+ordinary Chat facts and uses the production mode resolver. Build and root typecheck pass;
+changed lint is green after simplifying the graph fixture's optional access. The registry dependency is declared once for composition input and output. The duplicate
+baseline is unchanged; no new groups or exemptions are admitted. Final aggregate gates and complete ordinary Chat execution remain
+pending; no AC is accepted by this checkpoint alone.
+
+The final focused registry rerun passes 48 tests and the regenerated operation catalog passes
+all 97 gate tests. Regeneration was repeated after the dependency interface extraction moved
+source positions; neither operation definitions nor the duplicate baseline were relaxed.
+
+### Current-state authority checkpoint — #4084 AC2–AC5, #4085 AC4
+
+The private Chat authority resolver reloads the current Chat, server principal and owned
+credential metadata on every call. Closed/deleted/unbound Chats, changed ownership or
+generations, pending/failed verification, pending custody work, absent authority ownership,
+mode drift and narrowed deployment ceilings fail closed. It returns private credential metadata
+only after the shared registry accepts the current subject. Consent, action approval, budget
+reservation and actual Chat dispatch are separate gates and remain to be composed.
+
+The Chat binding PATCH now shares that readiness check. A real HTTP regression returns 200
+instead of the required 400 on the previous implementation when a previously verified Pod is
+undergoing re-verification. After the repair it refuses attachment until verification finishes.
+The new resolver suite first fails to load before its implementation. Afterward all 119 resolver,
+actual credential/Chat HTTP and registry tests pass. The real Activity Log writer/reader proof
+reconstructs ready, verification-required, authority-denied and unbound decisions under one
+correlation without raw subject identifiers or credential metadata.
+
+Build, root typecheck, changed lint and staged semantic checks pass; the 938-group semantic
+baseline is unchanged. All 97 operation-catalog tests pass; generation resolves 612 proofs and
+30 scenarios with zero violations. Logs: `/tmp/keiko-4081-jira-current-authority-*.log` and
+`/tmp/keiko-4081-jira-pending-verification-before.log`. No complete AC is accepted here; full
+normal Chat execution, licensed live acceptance and final aggregate gates remain pending.
+
+### Shared policy and reservation checkpoint — #4084 AC2–AC5
+
+Ordinary Chat now has private adapters to the existing Atlassian action policy and shared
+cumulative authority budget. The policy accepts the same mode/scope/action-class facets from
+Coding and Chat envelopes, with the strictest mode winning. Ask for approval and Supervised
+workspace return review-required for network access; a future active read grant must satisfy
+that read disposition. Full access still needs separate read consent before model transmission.
+Read-only authority cannot gain Jira writes or Confluence access. Policy inspection does not
+consume budget. Reservation reloads current Chat/credential readiness immediately beforehand;
+this adapter does not itself satisfy consent/approval or execute tools.
+
+Six valid ordinary-Chat policy regressions fail on the previous resolver exports. After the
+implementation, 82 current-state, existing Atlassian policy and authority-registry tests pass.
+The real Activity Log writer/reader reconstructs review-required, allowed, denied and reserved
+states with their closed action types and one correlation; ordinary pending review logs at info
+level. Build, root typecheck and changed lint pass. Catalog generation resolves 613 proofs and
+30 scenarios without violations. Final aggregate gates and actual permission/dispatch composition
+remain pending; no complete AC is accepted here. Logs: `/tmp/keiko-4081-chat-policy-*.log`.
+
+### Read-consent contract checkpoint — #4084
+
+The additive private read-grant contract binds actor, Chat, Pod, both generations and an
+ordered lifetime. The fixed disclosure version covers model transmission and retention in
+this conversation; it confers neither writes nor import rights. Pending/rejected grants have
+no acceptance proof; granted state requires a SHA-256 consent proof, retained if that grant
+later expires or is revoked. Unknown fields, broadened scopes, inherited required facts,
+invalid lifetimes and unknown disclosure versions fail with closed diagnostics. Structural
+validation itself confers no authority; runtime retention, human acceptance and dispatch
+composition remain pending. Browser projections must omit the private actor and proof facts.
+
+Before implementation, 30 new tests fail while all 45 prior authority tests pass. Afterward,
+101 contract, retained Coding validation and ordinary Chat adapter tests pass. The final
+contract-only rerun passes 75 tests after replacing mutation of a test object's dynamic key
+with explicit construction of its own fields. Package build, root typecheck, changed lint,
+format and semantic checks pass; no baseline exemption is added. Logs:
+`/tmp/keiko-4081-read-grant-contract-*.log`. Public package assembly and full gates remain
+scheduled for final acceptance; no complete AC is accepted by this contract increment.
+
+### Shared read-grant owner checkpoint — #4084 AC2–AC5
+
+The existing Atlassian approval registry retains discriminated legacy approvals and private
+Chat read grants in the same capacity-bounded map. Legacy get/list/consume/reject cannot see,
+consume or replace Chat grants. Requests must be pending, within the existing approval TTL and
+bound to an immutable subject/authority snapshot. Acceptance checks the exact actor, Chat,
+Pod, generations and original authority reference. Repeated acceptance preserves the first
+proof and expiry. Reuse checks the current subject; rejection/revocation cannot be revived.
+Per-Chat revocation preserves other Chats, and graph disposal clears only its owner's grants.
+
+Twelve new owner tests fail before implementation while 38 legacy tests pass. Afterward, 191
+approval, real existing write/search/sync route, Chat-adapter and authority-registry tests pass.
+The real writer/reader proof reconstructs pending, granted, reused, revoked and expired records,
+including zero affected entries on reuse/already-inactive expiry, without raw subject or grant
+identifiers. All 97 operation-catalog tests pass; generation resolves 614 proofs and 30 scenarios
+without violations. Build, root typecheck, changed lint/format, staged semantic and ADR checks
+pass; the duplicate baseline remains unchanged.
+
+This is a private retention API: current authority/readiness must still be checked at human
+acceptance and use. Authenticated consent routes, once-per-binding request orchestration,
+credential/Chat lifecycle wiring and actual tool admission remain pending. No complete AC is
+accepted here. Logs: `/tmp/keiko-4081-read-grant-registry-*.log`.
+
+### Read-grant lifecycle composition checkpoint — #4084 AC3–AC5, #4085 AC4
+
+Existing invalidation paths now receive both existing authority/approval owners from the same
+server dependency graph. Only committed binding/mode changes revoke access; no-op mode changes
+and stale PATCH conflicts preserve valid grants. Chat closure/deletion and project removal
+revoke the affected grants. The credential-owner callback applies the same revocation to token
+replacement, failed direct re-verification and direct credential deletion. Two shared-Pod Chats
+are revoked while an unrelated Pod's Chat remains granted. Disposal carries its correlation
+through the existing approval reset.
+
+Six actual HTTP regression cases fail on the previous implementation because grants remain
+granted. The fixtures use one current clock for authority and grant records; the earlier mixed
+historical/current fixture timestamps are not acceptance evidence. After implementation, all
+395 composition, credential/Chat-route, store-handler and approval-owner tests pass, along with
+97 operation-catalog tests. A real writer/reader proof joins credential deletion to the single
+read-grant revocation using the response correlation, without raw Chat/Pod/credential identifiers.
+Build, root typecheck, changed lint/format, staged semantic and ADR checks pass. Generation
+resolves 615 proofs and 30 scenarios without violations. Logs:
+`/tmp/keiko-4081-read-grant-lifecycle-*.log`.
+
+At 13:45 Europe/Berlin on 2026-10-27, the production Node connection verifier was rerun against
+the existing Docker Jira lab: trusted HTTPS/PAT succeeded, an untrusted certificate produced
+TLS failure and revoked target admission produced unreachable. This is connection-only evidence
+(`/tmp/keiko-4081-jira-verifier-latest.log`); the lab license remains expired, so licensed live
+mutation/model/browser qualification is still pending. Human grant acceptance, action approvals,
+observed tool-call auth failure and the ordinary Chat execution path remain open. No complete
+AC is accepted here.
+
+### Authenticated read-consent checkpoint — #4084 AC2/AC4/AC5
+
+The existing approval API now exposes a typed `chat-read-consent` subresource for a retained
+Chat read grant. GET returns only the public card contract. POST accepts a closed decision and
+current disclosure version, with a 4 KiB body limit and the existing CSRF guard. It re-resolves
+current actor, Chat/Pod generations, verification, original authority, read scope and expiry
+**after** reading the request body. It computes acceptance evidence server-side; caller-supplied
+authority, proof or scope overrides fail. Repeated approval preserves the original proof and
+expiry; rejection cannot become approval. Legacy approval routes continue to exclude these grants.
+No tool or Jira request is executed by this endpoint.
+
+Three actual HTTP regressions return 404 before implementation and pass afterward. The
+204 targeted credential/consent, legacy write/live-search/sync-policy and approval-owner tests
+pass, including malformed/oversized bodies, CSRF, stale state, mismatched subjects, excessive
+lifetimes, absent read scope and expiry. A real writer/reader proof joins the human consent
+request to its response correlation without private identifiers or payloads. Root typecheck,
+changed ESLint, build, formatting, semantic and ADR checks pass; 97 operation-catalog tests pass.
+Registration uses the existing named route-group pattern; semantic baseline remains unchanged.
+The final route-group integration rerun passes all 83 HTTP tests. A direct native ESM import
+exposed an eager cycle, repaired by importing the existing `route-error` owner directly; the
+same native import then succeeds. Generation resolves 616 proofs and 30 scenarios without
+violations. Logs:
+`/tmp/keiko-4081-consent-route-*.log`.
+
+This endpoint acts only on a request already retained by the trusted server owner. Automatic
+first-read request production, the complete admission/dispatch path, normal Chat orchestration
+and user-facing consent cards remain pending. No complete AC is accepted in this checkpoint.
+
+### First-read request admission checkpoint — #4084 AC2/AC4/AC5
+
+The current-state authority owner now requests/reuses read consent through the existing bounded
+approval owner. All three modes initially require consent. Requests for the same subject reuse
+a pending grant across current authority references without replacing its issuing reference or
+expiry. Granted consent is reused only after validating both the caller's current authority and
+the retained issuing authority. Invalid retained requests are revoked; rejection does not cause
+an automatic repeat prompt within the same authority. A new human-turn authority may request
+consent again. Creation caps expiry at the earlier of the issuing authority deadline and the
+existing approval TTL; a deadline crossed during creation and exhausted registry capacity fail
+closed. The result contains only the public grant projection, shared with the HTTP endpoint.
+
+Eight initial new cases fail before the API exists, while 22 unchanged authority cases pass.
+After implementation, 168 authority/request, real HTTP consent/credential and approval-owner
+tests pass. A registered writer/reader proof reconstructs one request and reuse with affected
+counts `[1, 0]` and a common correlation without private facts. Build, root typecheck, changed
+lint/format, semantic, native ESM import and ADR checks pass; 97 operation-catalog tests pass.
+Generation resolves 617 proofs and 30 scenarios without violations. Logs:
+`/tmp/keiko-4081-read-admission-*.log`.
+
+This primitive neither reserves a tool budget nor dispatches a tool. The trusted non-Coding
+consumer and ordinary Chat still need the complete catalog → policy → consent/approval → budget
+→ MCP/provider → settlement composition. No complete AC is accepted by this checkpoint.
+
+### Private Chat read consumer checkpoint — #4084 AC2/AC4/AC5, #4089 AC4, #4091 foundation
+
+The private ordinary-Chat consumer now binds the nine read routes to the shared canonical binder
+and actual SDK host, using the existing Harness counter owner through its public composition
+seam. No workspace or Coding session is fabricated. Catalog offers do not create consent
+requests. Dispatch requests consent before reserving a budget; the notification callback cannot
+approve a grant. Admission requires the existing owner to retain actual accepted consent in all
+three modes. It rechecks authority, binding, credential readiness and consent at the final HTTP
+effect. The catalog owns single settlement, pre-effect refund and receipt validation; its existing
+invocation registry and cancellation path remain in use. Paginated results explicitly report
+truncation and retain the provider's nextStartAt instead of claiming a complete result.
+
+185 scoped authority/consumer, Harness-budget, real HTTP credential/consent and non-Coding
+catalog tests pass. They exercise SDK calls after approval in all three modes, grant reuse,
+notification without approval, argument authority/routing injection, last-slot budget refusal and
+invalidation after connection selection but before HTTP. A real Activity Log writer/reader proof
+reconstructs review-required, allowed and refused read admission without private facts. Build,
+root typecheck, changed lint/format, ADR, native ESM imports and semantic checks pass; the 938-group
+semantic baseline is unchanged. The 97 operation-catalog tests pass. Disabling only the final
+read guard in an isolated synthetic fault-injection run makes all four late-invalidation cases
+fail; restoring the exact source makes all four pass. This is a negative guard proof, not a
+claim about an earlier product Chat path. Operation generation resolves 618 proofs and 30
+scenarios without violations. Logs:
+`/tmp/keiko-4081-catalog-consent-*.log`.
+
+The tests compose the production consumer/binder/SDK and budget owners with a synthetic Jira HTTP
+port and retained server authority. Application graph composition, accepted-human authority
+minting, concrete write approvals, normal Chat/model orchestration and UI remain pending. The
+issuing-authority lifetime across actual normal-Chat turn settlement remains an explicit auditor
+integration point. The complete assembled-package gate for the additive Harness export remains
+part of final qualification. No complete criterion or current licensed live pass is claimed.
+
+The laboratory was rechecked at 15:35 Berlin on 2026-10-27: the production HTTPS/PAT verifier
+passes, untrusted TLS is rejected and revoked target admission is unreachable. The license check
+still reports invalid; current licensed live-write/model/browser acceptance remains blocked.
+
+### Observed-authentication and transport-guard checkpoint — #4082 AC2, #4084 AC3, #4085 AC4
+
+Both existing credential HTTP factories now forward private final-dispatch and response hooks;
+the shared factory composition still captures credential generation before token resolution.
+The custody owner handles an observed 401 only for the selected, currently verified Live Pod
+generation and verification revision. It commits auth-failed and advances the generation before
+notifying the existing lifecycle owner. Repeated/stale responses, an in-progress or newer
+verification, deletion and ordinary 403 permission denial cannot invalidate a current credential.
+The response observer captures identity/revision by value, including if caller metadata later
+changes. A caller's acknowledgement hook runs before credential invalidation and before body
+consumption, preserving the mutation journal's existing response-observation seam.
+
+The new factory-guard and current-401 cases fail before implementation; the 403 baseline already
+passes. After implementation, 271 scoped custody/transport/Chat tests pass. The subsequent
+credential/write/policy/operation-catalog regression run passes 374 tests (including the 97
+operation-catalog cases; the runs overlap). A registered real writer/reader proof reconstructs
+request-status invalidation and acknowledgement → invalidation → body ordering without secret
+or endpoint bytes. Build, root typecheck, changed lint, semantic checks and their 938-group
+unchanged baseline pass. Generation resolves 619 proofs and 30 scenarios without violations.
+Logs: `/tmp/keiko-4081-observed-auth-*.log`.
+
+This closes the observed-status custody/transport gap; complete ordinary-Chat and write-approval
+composition and final licensed qualification remain pending. No complete AC is accepted here.
+
+### Late read-result admission checkpoint — #4084 AC3–AC5, #4089 AC4
+
+A read admitted before an access change previously could publish its successful result afterwards.
+The managed route now receives its private invocation context when projecting the result. The
+Jira read consumer uses that existing effect guard again before publication; a disconnected,
+reverifying, differently owned or revoked scope cannot forward the returned Jira data. The shared
+binder keeps the performed-effect charge and settles once. This changes no mutation outcome
+contract and creates no replacement authority, budget or settlement owner.
+
+All four late-result cases fail before the correction and pass afterwards. The 218-test scoped
+run covers Chat admission, managed/non-Coding catalogs, settlement and the 97 operation-catalog
+checks. A real shared writer/reader proof observes the refusal and exactly one committed
+settlement. Build, root types and semantic checks pass; the semantic baseline remains 938 groups.
+Generation resolves 620 proofs and 30 scenarios without violations. Logs:
+`/tmp/keiko-4081-late-read-*.log`.
+
+The production graph, ordinary Chat/model loop, concrete write approvals and UI still require
+composition and complete qualification; this component checkpoint accepts no complete AC.
+
+### Verification observation repair — 2026-10-27 (#4082, #4081)
+
+CodeRabbit identified that a verification HTTP 401 also emitted a stale ordinary-request
+observation. The real authenticated verification route reproduces two connection-check records
+before the fix. Server-owned port purpose now excludes the request observer for explicit probes;
+the verification owner still records its applied/stale outcome and invalidates the generation.
+Ordinary request acknowledgement, 401 invalidation and 403/stale-response isolation are unchanged.
+
+The regression fails before and passes after the correction. All 89 credential-route tests,
+package build, root typecheck and changed-file lint pass. Existing Activity Log writer/reader
+proof verifies exactly one `verify` record without secret bytes. Final full gates/Sonar remain
+pending; this checkpoint does not close an acceptance criterion.
+
+### Application-owned managed catalog — 2026-10-27 (#4089, #4084, #4081)
+
+`buildUiHandlerDeps` now installs one lazy managed Jira catalog per application graph.
+Concurrent consumers share initialization and the nine canonical read bindings. Independent
+graphs retain independent SDK hosts. Disposal before/during discovery rejects late consumers;
+normal disposal closes the host before the remaining services. Discovery emits exactly one
+listing/admission pair through the injected existing Activity Log and resolves no credentials.
+The invocation connection resolver checks current Chat authority and uses custody's existing
+HTTP factory with the final dispatch guard; no token is exposed to the catalog.
+
+The missing-composition regression failed before implementation. The 159-test affected run
+(dependency assembly, Chat authority and managed catalog), plus four final lifecycle cases,
+package build, root typecheck and changed lint pass. The final lifecycle assertions cover
+registered listing/admission evidence. Normal Chat orchestration, accepted-human authority
+minting and write approvals remain open; no complete AC or final gate is claimed.
+
+### Accepted-turn authority and renewed live group — 2026-10-27 (#4084, #4082, #4081)
+
+The accepted-turn helper now mints private authority from an existing human message and fresh
+owned/verified binding facts, with server-derived mode, ceiling and acceptance digest. Its five-minute
+deadline starts with the turn, with 30 tool calls and 100,000 prompt tokens. It does not grant
+read consent or write approval. The retained issuer survives separate later turn admission;
+component tests prove one accepted read grant is reused without replacing its issuer/expiry.
+Normal Chat must still call this once and preserve it throughout all phases.
+
+Two new cases failed before implementation. All 55 authority tests, package build, root typecheck
+and changed lint pass after the correction. These are test counts, not 55 accepted epic criteria.
+The complete Chat entrypoint/lifetime proof and final gates remain pending.
+
+A new independent synthetic Jira 10.3.26 session passed licensed fixture creation, restricted
+identities, required create/custom fields, required transition screen, pagination/hostile content,
+project isolation, trusted HTTPS, untrusted-certificate denial and admission revocation. Its
+production-custody/HTTP write preflight verified assignment, description edit and exactly one added
+comment by independent readback. The final license check reported 10,045 seconds remaining.
+The prior session is stopped with volumes retained. No license or clock manipulation occurred.
+
+Fresh Jira onboarding overlays blocked the fixture's mouse Publish action. The supported keyboard
+action fixed that reproducibly; the complete fields group was rerun successfully. A consolidated
+normal-first-run setup script now retains a private pending marker on uncertain completion. Its
+individual form operations established this session; fresh end-to-end script qualification is still
+pending. These live groups do not yet establish normal Chat, model or browser acceptance.
+
+### Auditor correction — canonical accepted-turn mint (#4084, #4081)
+
+The auditor found that the helper's random run identity and caller-provided start could create
+fresh budgets from the same stored message. Two focused regressions failed before correction.
+Minting now requires the latest persisted accepted user message, pending canonical state (or the
+current legacy message) and its exact stored timestamp. The deterministic Chat/message identity
+makes duplicate admission consumers share the existing registry budget; a changed envelope under
+the same identity fails closed. Revoked authority cannot be replaced. The canonical store admission
+regression runs two concurrent mint callers after exhausting the first budget and proves neither
+gets another budget. Normal HTTP Chat orchestration is still the next integration step.
+
+### Structured ordinary Chat history — #4091 / #4081
+
+Migration 50 retains call/result pairs and the public read-consent view on the canonical human
+message through the existing store. Private authority/binding handles are excluded from calls;
+configured secrets are redacted. Updates are bounded, atomic, idempotent for identical deliveries,
+and immutable after terminal settlement. Public create/PATCH routes do not expose this write seam.
+Legacy messages remain unchanged and corrupt transcript JSON fails closed. The existing history
+revision and Coding History isolation apply.
+
+Verbatim gateway context now preserves assistant/tool roles and matching call IDs. Compaction
+retains or summarizes the complete human-turn unit, including tool observations in accounting.
+An interrupted observation is projected as unavailable with unknown effect. Three context regressions
+failed before the change; 140 scoped store/migration/history/prompt/compaction tests passed afterward
+before two additional bounds/consent tests. The new registered Activity Log proof checks redaction,
+production formatting and analyzer projection. Normal Chat execution/UI wiring remains pending.
+
+### Buffered Chat execution checkpoint — #4091, #4084, #4089 / #4081
+
+The canonical buffered Chat handler now mints authority from the admitted human row,
+uses the graph-owned catalog and the actual gateway binding, awaits the existing
+read-grant owner, and resumes only after fresh binder admission. No Coding session is
+created. The same turn object survives context-window retries. Physical gateway
+attempts, including retries and memory/compaction calls, use the existing admission
+hook and cumulative authority budget; uncertain usage fails closed. Harness counters
+bound iterations and tool calls. Model capability/fingerprint proof is checked each round.
+
+The deterministic normal-route test proves zero HTTP requests before consent, one
+read afterward, matching gateway tool/result IDs, persisted completion, read-grant
+reuse on the next human turn, and no new effect on duplicate canonical delivery.
+An unverified model receives no tool advertisement. This uses a synthetic model and
+injected Jira HTTP response; it is not the real-model/live Chat acceptance.
+
+Two integration faults were repaired: catalog/projection/binding wrappers no longer
+consume the individual descriptor/schema depth budget (the descriptor, argument,
+byte and shape limits remain unchanged); completed transcript results retain a private,
+validated descriptor/projection snapshot so reload can qualify them. This snapshot
+is stripped from the public message. Redaction requalifies the result and byte count.
+
+Checks: 566 catalog, gateway bridge, normal Chat, grant/store and operation-registry
+tests pass. The nested-schema regression failed before the correction. Earlier waiter
+regressions covered acceptance, rejection/revocation, reset, cancellation and expiry.
+Package build, root typecheck and scoped lint pass. Streaming, concrete mutation
+approval/journal wiring, UI and real-model/browser qualification remain pending;
+this checkpoint does not complete an acceptance criterion.
+
+### SSE and visible read-consent checkpoint — #4091, #4086, #4084 / #4081
+
+The existing SSE Chat route now owns the same bounded Jira turn object and metered
+model port as buffered Chat. The provider uses its real streaming interface; tool
+round text is withheld until the completed round distinguishes an invocation from
+a final answer. The final answer then uses the existing redactor/chunk/backpressure
+writer. Context-window retries retain the same tool/usage counters and observations.
+Disconnect during a pending grant cancels the canonical turn and dispatches no Jira request.
+
+A bounded `tool-read-consent` SSE event carries only the public consent projection.
+Its shared closed validator rejects private authority fields and unknown disclosure
+versions. The ordinary Chat UI displays translated consent and result cards. Explicit
+approval/rejection calls the authenticated existing owner; failed requests never imply
+consent. Buffered sends observe only their scoped canonical turn digest through the
+existing GET messages API. Cancellation suppresses late reads; observation never
+replays the send POST. Fresh server revocation overrides an earlier local response.
+
+Checks: 356 wire, normal Chat/SSE, transcript and operation-registry tests pass;
+228 UI/API/observer tests pass, including keyboard activation, disclosure text,
+actual decision payload, rejection, failure, stale updates and an accessibility scan.
+Package build, root/UI typechecks, server lint and complete UI lint pass. Existing
+lint suppressions were preserved unchanged. The loaded local model
+`keiko-qwen36-35b-8bit:latest` passed the real production tool-calling probe; this alone
+is not a live Jira Chat or browser acceptance. Hub creation/binding, write approvals,
+live journeys and final full gates remain open.
+
+### Real normal Chat read and public Pod identity — #4085, #4091, #4084 / #4081
+
+The public credential API now returns a separate typed Live Pod view: connectable Pod
+identity, current credential generation, verification status/revision and supported
+`live-read` capability. Private owner digests, creation intents and incomplete custody
+operation details remain omitted. Incomplete custody work projects unverified. Cloud
+responses retain their shape. The HTTP projection regression failed before repair;
+all 90 credential/lifecycle cases now pass. Older assertions were narrowed to the
+actual private facts, and a lifecycle fixture now uses a new invocation identity for
+a new post-revocation authority rather than replaying the revoked identity.
+
+The real normal Chat HTTP group found a separate canonical-store defect: completion
+returned the pre-commit user projection with a pending state. The store now reloads
+both canonical messages inside the same completion transaction. The targeted normal
+Chat regression failed before correction; 231 route, Chat, store/transcript and
+operation-registry tests pass afterward. Build, root/UI typechecks and affected lint
+pass. Existing completion and credential Activity Log owners are retained.
+
+A licensed Jira 10.3.26 group on 2026-10-27 passed with the actual local
+`keiko-qwen36-35b-8bit` model after the production tool-calling probe. Launcher pairing,
+HTTP Pod creation/HTTPS verification, authenticated binding, normal buffered Chat,
+explicit read consent, Gateway → catalog/binder → shared SDK MCP → Jira, structured
+result persistence and final completion all ran live. One `jira_projects` call
+returned the synthetic project. License checks before and after were valid. The
+reproducible command is `scripts/testing/jira-chat-lab/chat-read.mjs`; its retained
+logs contain counts/status only. A first teardown emitted a log-sink warning; a
+trace-warnings rerun did not reproduce it. The harness now rejects that warning as
+a failed run instead of accepting a successful read with lost diagnostics.
+
+This is one live buffered read journey, not complete AC acceptance. Normal Chat
+writes/approvals, Hub management and binding UI, full browser/mixed-grounding journeys,
+all-operation failure/isolation/restart qualification and final gates remain open.
+
+### Existing Hub creation surface — #4085, #4086 / #4081
+
+The Knowledge Pods Hub now composes the existing connector panel in a Jira Live Pod
+mode. The existing write-only form accepts name, HTTPS address and PAT, omits the
+Cloud-only email/provider fields, and leaves exact private-target authorization to
+the server. One stable creation intent survives a failed response/retry; a synchronous
+submit lock prevents a second request before React renders the disabled button.
+The token is cleared on confirmed creation. Existing verification/removal owners and
+controls are reused. The Hub filters the returned public Live Pods, uses authoritative
+verification state, reloads after verification, and exposes neither Data Center sync
+nor legacy Coding approvals. All Cloud defaults remain unchanged.
+
+The new creation test failed before implementation. The affected connector/Hub suite
+passes 121 tests including duplicate submit, retry identity, existing Cloud behavior,
+Live Pod filtering, verification refresh, keyboard interactions and accessibility.
+The status-rendering test now exhaustively covers the existing nine-member verification
+contract. Full UI typecheck and lint pass. Management rename/token controls, Chat source
+connection/mode controls, drag/drop and the real browser group remain pending.
+
+### Chat connection and selected mode — #4086, #4084 / #4081
+
+The existing Chat source header now exposes a keyboard-operable Jira disclosure.
+It lists public verified Live Pods, persists one binding and the selected canonical
+three-mode value through the existing PATCH/scope-conflict helper, and only publishes
+the server-confirmed Chat. Replacing a non-empty Pod requires explicit confirmation.
+Unavailable Pods cannot be selected; failed refreshes cannot admit a new stale choice.
+The default remains Ask for approval, and the disclosure explains that read consent
+and narrower server limits still apply. Memory authority is not reused or widened.
+The mode control reuses the canonical mode enum and existing translated mode labels.
+
+Scoped view identity suppresses late success and conflict-refresh callbacks after
+context replacement/unmount, a synchronous mutation lock prevents duplicate PATCH,
+and external scope changes discard the stale local draft. Escape closes the control
+and restores summary focus. The new cases and existing Chat/API/scope suites pass
+398 tests; UI typecheck, lint and production static build pass. Browser qualification,
+drag/drop, effective-ceiling presentation, rename/token controls and the complete
+write/mixed-source workflows remain pending. No full AC acceptance is claimed.
+
+## 2026-10-27 browser checkpoint (19:48 Europe/Berlin)
+
+The actual production UI build and Chromium now reach launcher pairing, Hub Pod
+creation, real Jira HTTPS verification and server-confirmed Chat binding. This
+exposed misleading empty-Hub copy: the Live Pod surface inherited the Cloud
+sync invitation. A new regression failed first; the corrected DE/EN text offers
+connecting Jira to Chat. All 11 focused Hub/connection tests, the production UI
+build (including TypeScript), full UI lint, harness lint, scoped format and the
+unchanged 938-group semantic baseline pass.
+
+The browser harness now uses the existing accessible composer control and records
+its stages without contents. The complete browser read is still pending: the
+next full attempt was correctly refused with 269 seconds of license time left,
+below the existing admission minimum. Earlier partial browser stages do not
+constitute a completed qualification group. An independent fresh synthetic
+session is being prepared; the previous session's volumes remain retained.
+
+No full acceptance criterion is newly claimed. Chat write/approval composition,
+mixed grounding, drag/drop, remaining Pod lifecycle UI, complete scenario lanes,
+and final quality/Sonar/current-head qualification remain open. PR #4093 remains
+the only PR, against `dev`, with auto-merge off.
+
+## 2026-10-27 licensed browser read (20:00 Europe/Berlin)
+
+An independent synthetic Jira session completed normal first-run setup with the
+published test license. The basic identity/permission seed, required create field
+and real transition-screen group, pagination/hostile/isolation fixtures, and the
+actual product HTTPS/read/write preflight all passed in that session. Setup now
+waits for `FIRST_RUN` before opening its mutation marker. Re-entry on the running
+instance was refused before a new marker or setup mutation; the cold-start wait
+itself remains to be qualified on a subsequent fresh instance.
+
+The complete Chromium group passed twice with the actual production UI and a
+freshly verified local Qwen model. The second run explicitly waited for visible
+"Reading allowed", "Completed" and the final project-key answer, in addition to
+checking the canonical completed turn and persisted real `jira_projects` result.
+The journey covers launcher pairing, Hub creation/HTTPS verification, confirmed
+Chat binding, the normal composer, explicit read consent and streamed model/tool
+execution. License checks bracket both groups; the second closed with 10,194
+seconds remaining. Private synthetic screenshots were inspected.
+
+The first completed run's existing Activity Log reconstructs one credential
+creation, one verification and scope update, two started/completed gateway
+streams, one started/settled tool invocation, four transcript updates and one
+final response message. No log-sink warning was observed. Diagnostics and this
+checkpoint retain counts, not bodies or credentials.
+
+Harness lint/format and semantic duplication checks pass without changing the
+938-group baseline. The preceding UI build/typecheck, UI lint and 11 focused
+Hub/connection tests remain applicable; this increment changes only the lab
+harness and documentation. This proves a concrete read journey, not all 55 AC.
+Chat mutations/concrete approvals, mixed grounding, remaining lifecycle and
+drag/drop UI, the broader failure/isolation matrix and final quality/Sonar/CI
+qualification remain open. No merge or auto-merge authorization is inferred.
+
+## 2026-10-27 normal Chat write and approval checkpoint
+
+Refs #4081, #4083, #4084, #4086, #4089, #4091, #4087. The public Pod projection now truthfully declares read and write capabilities separately
+from verification, authority and issue-level Jira permissions. The ordinary Chat-owned
+catalog now advertises all nine reads and five governed mutations through the same
+production binder and managed MCP host. Canonical user-turn/call identity owns the
+durable mutation intent. The existing credential owner supplies the outbound HTTP
+factory; metadata reads do not consume a write approval. The exact approval is claimed
+once at journal dispatch, and invalidation revokes read and write work together.
+
+The existing authenticated action-approval routes expose current state and explicit
+approve/reject decisions. They recheck the actor, authority, retained read grant,
+binding and credential generations after bounded body parsing. They perform no remote
+mutation. Persisted approvals bind the Chat/message/call/action, have monotonic states,
+and do not imply a successful write. Duplicate settlement cannot replace its observed
+outcome. Historical approval cards perform a fresh GET before offering decisions;
+failed POST responses require a user-initiated state refresh and are never retried.
+
+Catalog cancellation and remote effect are separate observations. A validated journal
+`mutationOutcome` remains on the original exchange even when its catalog envelope has
+null data. The existing history/compaction owner projects both observations to the
+model; the UI distinguishes success, acknowledged-unconfirmed, rejection and uncertainty.
+The exact action preview is focusable and keyboard-scrollable. Existing Activity Log
+owners record new phases without arguments, results, credentials or endpoint strings.
+ADR-0181 D5 now describes this implemented ownership and dispatch boundary.
+
+Targeted evidence:
+
+- 218 contract tests, 164 owner/policy/real-HTTP-route/log proof tests and 40 combined
+  transcript/ordinary-Chat tests pass. The Chat subset covers all three modes over both
+  buffered and SSE delivery, repeated delivery without another model call/effect, and
+  rejected writes with zero outbound requests.
+- 91 mutation transport/outcome tests pass, including actual SDK/binder execution of all
+  five operations through credential custody, acknowledgement-before-cancellation,
+  response loss, and no automatic write replay. History/compaction: 33 tests pass.
+- UI/API: 268 tests pass. Separate UI typecheck/lint and production UI build pass.
+  Package builds, root TypeScript check and scoped lint/format pass. Meaningful red/green
+  proofs cover missing normal-Chat mutation discovery, approval and durable corruption,
+  outcome loss after cancellation/reload/compaction, and keyboard access to the preview.
+- Six live groups using the verified local Qwen model pass: Ask for approval, Supervised
+  workspace and Full access, each buffered and streamed. Every group requires the first
+  Chat read disclosure; the first two modes require exactly one concrete write approval,
+  Full access requires none. Independent Jira readback proves exactly one matching
+  synthetic comment and total comment-count increase of one. GET reload retains the
+  succeeded outcome. The live harness uses an exclusive durable pending marker and
+  retains private product state on uncertain failure; it does not blindly repeat writes.
+
+Remaining: actual browser-write qualification, complete operation/failure/lifecycle
+matrix, mixed-source grounding, remaining Hub lifecycle and drag/drop UI, full
+compatibility/quality/evidence/Sonar/current-head checks. No AC is promoted to final
+acceptance by this checkpoint. PR #4093 remains open against dev with auto-merge off.
+
+## 2026-10-27 late observations, mixed scope and Pod lifecycle checkpoint
+
+Refs #4081, #4084, #4085, #4086, #4091, #4087. A regression demonstrated a
+cancelled Chat retaining `unknown` after Jira had subsequently acknowledged the write.
+The existing message owner now projects the durable journal for the exact canonical
+turn, call, operation and arguments. It preserves the original catalog envelope and
+never dispatches or reacquires authority. A fresh SQLite reader sees the late
+`succeeded-unconfirmed` observation; no-result history can also recover it. Active
+prepared work remains pending. Tampered identity/action metadata is not attached to
+another exchange. The new registered body-free observation event records only a digest
+and count; independent failure-class obligations include the new operation.
+
+Mixed scope now assembles the existing Data-source evidence pack before Jira tool
+orchestration. One accepted-turn meter covers preparation, retrieval model calls, tools,
+answer and repair. The physical synthesis tracker only releases the exact fully
+observed tool-call attempt; discarded/ambiguous attempts and every token remain charged.
+Jira results stay outside the numbered Data-source citations. The normal desktop
+buffered adapter uses that same owner. Mixed streaming explicitly returns
+`STREAMING_UNSUPPORTED` before turn admission/effects and the existing client falls back
+to buffered execution with the same canonical identity. Empty Data evidence remains a
+separate open qualification edge; this checkpoint does not claim that case complete.
+
+The existing Hub now owns rename, token replacement/reverification and removal with
+fresh generation checks, secret clearing, duplicate-submit/unmount guards and GET-only
+recovery after uncertain mutation responses. Jira creation leaves exactly one canonical
+Pod verification owner; the Cloud inline flow remains. Shared mode controls show the
+server-derived deployment ceiling/effective mode. Existing saved-Pod drag/drop and
+keyboard ports reuse the explicit replacement form and authenticated Chat PATCH; visual
+edges follow server acknowledgement. Remaining connection races/header presentation and
+fresh production-browser qualification are recorded as open.
+
+Scoped evidence (suite counts overlap):
+
+- Late outcome/transcript/ordinary Chat: 92 tests pass, including the meaningful
+  before-failure and fresh-reader recovery. Package build and operation-catalog
+  generation pass with no typed-registry violations.
+- Mixed: 6 actual-gateway integrations, 15 physical budget tests, 45 retry tests,
+  320 plural/local grounding regressions, 217 UI observer/hook tests, 31 schedule-log
+  proofs and 16 selected desktop regressions pass.
+- Hub/API/accessibility/DE-EN/style: 73 tests; custody: 71 tests. Ordinary UI lint and
+  UI typecheck pass; obsolete suppressions are removed, none added.
+- Mode projection: 182 server tests. Connection/workspace/Coding UI regression group:
+  787 tests pass before the final small port re-acknowledgement fix; its focused
+  regression failed before the fix and then passed with all 10 Jira connection tests;
+  the related AppShell suites pass 193 tests. The semantic baseline only shrank from 938 to 932,
+  with zero new normalized fingerprints or clone groups.
+- All nine real-model write groups passed on the preceding UI artifact: three modes
+  over buffered API, streamed API and browser. Each independently observed one matching
+  Jira comment and count +1, with the correct disclosure/approval matrix. The current
+  Hub and shared-mode layout must be rebuilt and browser-qualified again. Twelve live
+  Activity Log files contain neither the nine synthetic comment markers nor the PAT.
+
+Final full quality/coverage/compatibility/UI-evidence/Sonar/current-head acceptance
+remains open. This remains one regular PR against dev with auto-merge off.
+
+### Incremental qualification — capability, empty evidence and current Jira pages
+
+Epic #4081 / #4083 / #4084 / #4086 / #4091 / #4087: bound Chat now refuses absent, stale, unsupported or unverified tool-calling proof through the existing readiness error. Ten failing server and two failing locale cases precede the repair; 23 normal Chat cases, 267 desktop/readiness regressions and 260 UI formatter/hook cases pass. Eighteen actual mixed-handler cases and 510 grounding/Memory regressions cover valid empty Data evidence, settled Jira results, missing-path denial, unchanged Data-only abstention and independently bounded Memory.
+
+The rebuilt real browser artifact passes keyboard connection plus Ask/approved writing and a separate native drag/Full writing group. Both observe exactly one matching remote comment and a total increase of one. The lifecycle group verifies rename, a distinct token replacement, revocation of the previous grant, reverification, removal of credential/binding/edge, and private Activity Log content checks. These are working-artifact qualifications; the final exact-commit full matrix remains pending.
+
+The new finite 14-operation normal Chat driver exposed an actual Jira10.3.26 metadata-envelope incompatibility before any mutation. Independent reads confirmed no remote change. The shared parser now accepts each complete known envelope separately, rejects mixed or contradictory fields, and supplies the same normalized terminal flag to read and create consumers. The regression failed before correction; 81 targeted metadata/mutation tests pass afterward. The API shape is independently observed in the licensed laboratory and documented by the [Atlassian REST examples](https://developer.atlassian.com/server/jira/platform/jira-rest-api-examples/). The rerun progressed through seven reads, then exposed a harness expectation against an empty comment fixture; that case now targets the deliberately seeded hostile-comment fixture. The complete 14-operation group has **not yet passed**.
+
+Four normal Chat tests also reproduced an approval transcript remaining `approved` after consumption; the turn owner now refreshes the exact approval identity from its existing registry before settlement. All 23 normal Chat tests pass, including claimed state in buffered/streamed Ask and Supervised modes and no approval in Full mode. New durable-grant restoration, deterministic browser CI, the remaining live/failure matrix and final aggregate gates remain separate outstanding work. No acceptance checkbox is closed by this checkpoint.
+
+The final bound-Jira source-label correction has two meaningful failing-before/passing-after
+locale cases. A Live-only Chat now labels the existing picker **Data sources / No Data sources**
+(with German equivalents); a mixed Chat retains its selected Data grounding, and clearing that
+selection does not disconnect Jira. The unchanged unbound labels remain covered. The three owning
+suites (`ChatWindow.test.tsx`, `ChatWindow.a11y.test.tsx`, `JiraChatConnection.test.tsx`) pass
+**177/177**; the UI typecheck, scoped normal ESLint, Prettier and whitespace checks pass. This last
+copy change is included in the fresh production UI build used by the passing canonical updater
+evidence regeneration below.
+
+Three existing operator documents now match the implemented path: the connector guide describes
+Live-Pod creation/ports, selected and effective modes, read grants, exact write approvals, field
+limits, mixed citation attribution and lifecycle; ADR-0128 records acknowledgement before body
+consumption and the separate durable remote outcome; the troubleshooting runbook removes unsafe
+write-retry advice for timeouts and 429/5xx responses. False Cloud-only, unchanged-generation
+rotation and unrestricted Chat-ACL claims were corrected in place. The ADR index and scoped
+Markdown formatting checks pass. These corrections do not close an acceptance criterion or imply
+that the remaining live/final gate matrix has passed.
+
+Direct Data-surface compatibility proof now uses a verified, custody-owned Jira Live Pod and an
+independent real Data capsule through the public BFF. Live identity receives 404 on capsule read,
+index, reindex and source connection, and mixed Live/Data set composition fails without creating a
+partial set. The Data control still reads, composes, and reaches its proper empty-source 409 indexing
+response. No Jira calls, embedding requests, fabricated capsules or indexing jobs are created by the
+refused requests. The complete credential-route and Data-handler suites pass 227/227. Two pre-existing
+unrelated-Pod invariance assertions now compare a complete stored-before snapshot with stored-after,
+because server-projected effective-mode fields intentionally are not persisted. Scoped lint,
+no-emit TypeScript, formatting and whitespace checks pass. There is no capsule-export HTTP route in
+the mounted server inventory; this proof does not invent an export endpoint or claim a new Data
+export capability. A semantic Hub regression confirms real Verify/Rename/Add-to-workspace controls
+while no index, reindex, sync, export or fabricated capsule/storage state appears; the two owning
+Live/Cloud card suites pass 12/12. The remaining complete synced-Jira regression is a separate
+acceptance obligation.
+
+The design-system fidelity matrix now names the actual Hub/Chat owners and their implemented states,
+with pending visual acceptance retained. The update-UI source-digest check correctly detects stale
+shared API/catalog evidence. One canonical producer run was interrupted before its final evidence
+case because its build overlapped the reserved live-API qualification slot; its 8 completed updater
+cases are not counted as accepted regeneration. The subsequent complete canonical run passes all
+9 cases (49.1 seconds), including the real-BFF outage journey. Its unchanged freshness gate and
+23 focused updater/editor evidence contract tests pass. All 17 artifacts were produced through the
+original browser harness; 3 PNGs and the 3 provenance records differ, with 25 actual source digests
+and 4 harness digests verified. Changed renders were inspected. This is updater evidence, not Jira
+visual acceptance. The macOS editor bundle measurement meets B1/B2/B3 budgets, but `check:editor-release-evidence` fails its
+committed fingerprint comparison. Existing repository guidance requires a Linux build/check for this
+platform-sensitive record; no committed fingerprint was replaced by macOS measurements.
+
+### Incremental qualification — retained consent and controlled empty-evidence answers
+
+Epic #4081 / #4083 / #4084 / #4086 / #4087 / #4091: granted read consent now persists through the existing bounded private UiStore/registry, with exact-entry state transitions before publication. Later turns still require their own current authority, actor, binding and credential generations, expiry and budgets; an old authority is never restored. Pending decisions are revoked on disposal. Owner, route, migration and actual Gateway restart/next-turn coverage totals 358 distinct tests, including the separately rerun 109-case composition suite after correcting its stale tool-count fixture. Read-only public-history recovery for a crash between consent commit and transcript publication is still being completed separately.
+
+The auditor correctly identified that any settled tool result was too broad a permission for an empty-Data answer. A true failing public-path test reproduced model fabrication after denied consent. Only a successful non-null sanitized observation appended by this exact turn now permits the answer; denied/failed/unavailable and unknown/unconfirmed mutations use the existing abstention, while their structured cards remain available. Successful empty lists remain usable observations.
+
+All nine operations in the finite live catalog read group passed. Creation then exposed another real Jira detail: the endpoint-selected issue type advertises no editable operations. Before dispatch, the old field validator rejected it; remote project digest/count and the unique creation marker independently prove zero writes. The correction treats only canonical endpoint-selected project/issue-type values as create context, rejects caller overrides, preserves ordinary field operations and still checks allowed values. The new case failed before repair; 87 targeted metadata/mutation cases, root TypeScript and scoped lint pass afterward. The full buffered/streamed 14-operation acceptance groups remain pending until complete receipts exist.
+
+The new blocking per-PR browser lane passed all three finite cases against the assembled product: read consent, exact approved mutation, claimed history, forged approval digest, revocation/cancellation, and actionable unverified-model refusal. It uses the actual BFF, gateway transport, catalog, MCP and a deterministic HTTPS Jira fixture; it is distinct from the real-Jira/model live lane. There were 509 passing workflow/wiring tests and no weakened gate classification. The complete owned lane command will run again on final artifacts.
+
+### Linux editor bundle qualification — #4081 / #4087
+
+The platform-sensitive bundle obligation above is now resolved on Linux. An isolated source
+snapshot of the current worktree (8,885 files; archive SHA-256
+`5950af139c188b8965a7078363d4dc3069ba4b6312299c1f0b1120ea4c1bacee`) was built as the non-root
+`node` user with the existing local-gates image
+`sha256:11a52911268b6a1eb5bc57ba366921a3043f7bd00816839161193b8ff5b9a349`, Linux arm64,
+Node 24.18.0 and npm 11.16.0. No shared checkout, host dependencies or active Jira build outputs were
+mounted; only the ordinary npm cache was reused. This is deterministic bundle evidence, not D12
+wall-clock evidence or the full local-gates aggregate.
+
+A clean install and canonical package/root/UI build reproduced the stale-record failure:
+`staticExport.fileCount` was 384 while the actual export contained 380 files. The Linux editor
+fingerprint already matched the committed record. A second fresh build of the identical snapshot
+ran the canonical `editor-release-evidence.mjs --json` producer and the unchanged freshness check;
+both passed. The 50 existing release-evidence/bundle-size tests also passed inside Linux. B1 has
+zero Monaco/editor markers across 21 initial scripts; B2 is 1,026,605 / 2,621,440 gzip bytes; B3 is
+110,896 / 768,000 bytes. The generated JSON changes only the measured static-file count to 380;
+fingerprint, byte measurements and budgets remain unchanged. Relevant UI/editor/contracts/security/
+design sources were compared with the shared worktree before copying the generated record back.
+The targeted reproduction is documented in the existing performance-evidence runbook. Final
+exact-head integrated checks remain separate.
+
+### Complete live catalog groups and cancellation recovery
+
+Both complete 14-operation normal Chat groups passed against the licensed Jira10.3.26 HTTPS laboratory and the actually verified `keiko-qwen36-35b-8bit` model: one buffered, one streamed. Each group recorded 14 first-read grants and five exact write approvals, nine successful reads and successful create/edit/assign/comment/transition. Independent Jira queries checked project counts, fields, changelog increments and exactly one comment. Transition supplied the required custom value and the required resolution together; its resulting status, resolution and field value matched. Both opening and closing license checks passed. Private receipt SHA-256: buffered `d5b7c0ae7f71c444de372819357a1a90f7ef96baf3ab0b35bbb61219dfe8eb39`; streamed `3e31d8fe788e37e273a1ddbcf3a7df0ff0e06a27fd5c7057c7eed45ef610c40c`. These cover the assembled working artifact before the subsequent cancellation fix/dev integration; final relevant qualification remains necessary.
+
+Earlier failed groups were retained and reconciled independently before new intents. The missing resolution was correctly rejected before dispatch. A model-proposed wrong issue key was never approved; the existing project digest and target fields were unchanged. No ambiguous write was repeated. That abort exposed product consent waiters using the outer signal instead of the turn's composite cancellation. Eight buffered/SSE read/write regressions failed first; the repair and actual HTTP response-disconnect proofs now cancel canonical turns and revoke unfulfilled decisions with zero Jira calls. Already-granted read consent remains reusable. The owning final run passed 223 tests, root TypeScript and scoped lint/format.
+
+Read-only consent-history recovery also closes a crash between committing consent and updating its original transcript, pinning the original canonical message and exact grant identity, subject, generations, disclosure and timestamps. It never writes rows or resumes work. The reusable live harness now drains through the existing Chat serializer before closing SQLite, preserves state on timeout, and atomically fsyncs private intent updates. Twenty focused fault/lifecycle/private-intent tests pass. The finite all-five-write/two-fault live matrix is prepared but has not yet run.
+
+The ordinary PR CI was absent because the PR had merge conflicts with advancing `dev`; the workflow itself remains active. A regular merge of current `dev` into this same feature branch is being prepared. No force-push, new PR, gate bypass or integration into `dev` is authorized by this maintenance step.
+
+### Incremental qualification — renewed laboratory and reproducible cold setup
+
+Epic #4081 / #4082 / #4087: a new isolated synthetic session uses the published test license
+through Jira's normal setup forms, with no clock, licensing-code or database modification.
+Its license expires at `2026-10-28T00:25:46.347Z`. Seeded API/restricted/editor/assignee identities,
+project permissions, required custom field, real transition screen, pagination, hostile-content
+and isolated-project fixtures passed their setup checks. Exact TLS admission, untrusted-CA denial,
+read/write preflight and independent mutation readback passed. Only the previous owned session was
+stopped; its volumes were retained, and the unrelated development Jira was not changed.
+
+Independent empty-volume reproduction found two setup-helper gaps: `FIRST_RUN` can precede the
+normal database-page redirect, and the license wizard requires its existing `next` submitter.
+The helper now waits for the actual application-properties phase, posts that normal submitter once,
+and accepts only the expected same-origin redirect. Body-free stage/status diagnostics preserve
+reconciliation without printing keys, filled values or URLs. Failure-first regression checks cover
+both gaps and foreign redirect refusal. The full corrected script subsequently passed on another
+fresh isolated project without manual continuation: license and mail returned their expected 302s,
+license validity and `RUNNING` were confirmed, the completion receipt existed and the pending marker
+was gone. This proof project was then stopped with its volumes retained and never occupied the main
+HTTPS frontend. Earlier incomplete proof states remain preserved without uncertain POST replay.
+
+The existing normal-Chat helper can now select only a seeded non-admin identity's private PAT;
+its default API identity is unchanged, and unknown/path-like identities fail before HTTP. Six of seven
+custody-selection checks failed meaningfully for the old implementation; the unchanged default-API
+baseline passed. All seven now pass alongside seven setup checks (14 total); scoped lint and formatting pass. This helper change prepares restricted
+identity qualification and does not itself claim that the restricted normal-Chat matrix has run.
+
+### Regular dev integration and observed failure boundaries
+
+The single feature branch incorporates `dev` at `44cfbbb3e` by a regular merge. The five
+Chat/grounding import conflicts preserve both the governed Jira tool loop and the upstream
+authorized-content policy. Cross-policy tests cover both Jira rounds, credential protection,
+separate citations, private Chat content, unconditional tool-argument protection and structured
+history/compaction pairs. This integration does not merge the feature into `dev` or enable auto-merge.
+
+The complete failure-path scan identified six catches needing an explicit observable boundary.
+Pure call validation now reuses the existing safe parser and refuses unserializable or hostile
+arguments; mutation-history projection reuses nonthrowing validation, and corrupt transcripts
+propagate the same fixed body-free error to their existing owner. UI decision, connector and
+consent-observation failures use the existing client diagnostic sink with the original request
+correlation, closed error classification and sanitized evidence. Three UI regressions failed first;
+22 affected UI tests now pass, including the real diagnostic wire validator and unchanged refusal,
+state-refresh and read-only retry behavior. The six contract/store/schema suites pass 251 tests.
+Actual databases at versions 46 through 50 upgrade correctly; only test fixture rewinds required
+correction for the current schema. No migration, legacy exemption or observability gate was weakened.
+
+Canonical operation/failure inventories and tool-catalog migration metadata were regenerated.
+The duplication baseline shrinks from 932 feature-branch entries (933 on dev) to 927. The one
+changed normalized fingerprint is a strictly contained shrink of the same six prior source
+instances after upstream removed a diagnostic string; each range was checked against the prior
+committed group. No new duplicate instance or baseline allowance was added.
+
+All ten real-model normal-Chat fault cases completed: all five mutation types under lost observed
+response and committed-then-503 injection. Independent remote state confirms ten single Chat
+effects and four explicitly separate foreign PUT changes; duplicate canonical delivery, fresh
+process restart and Regenerate preserve the recorded unknown outcome and never add a Chat effect.
+This first group remains diagnostic evidence: the Activity Log gate automatically rebuilt shared
+packages during the run, and no prior artifact digest was captured. A complete fresh-intent repeat
+with frozen before/after artifact inventory is required for qualification. Its completed receipt
+and the post-build inventory are retained privately; no uncertain intent was replayed.
+
+Full final quality/Sonar, current-head CI/reviews, restricted identities, browser fault recovery
+and the remaining integrated evidence remain open. Earlier scoped receipts are not promoted to
+final-head acceptance by this merge.
+
+The architecture aggregate now reaches the catalog performance gate: dependency direction,
+imports, contract boundaries and catalog conformance pass, but the inherited paired measurement
+does not bind the merged producer. It must be reproduced on the committed subject using the
+canonical paired-host procedure and unchanged thresholds; no evidence digest is hand-edited.
+
+### Review corrections and stable-artifact qualification
+
+For #4089/#4091, failed lazy catalog initialization now clears only its own cached attempt so a
+later request can retry. Shutdown handles failed initialization and pending admission without
+masking a real host-close error. Buffered Chat settles already-admitted legacy and canonical turns
+when preparation fails, restores legacy recency, and returns the existing bounded catalog error
+classification. The affected server suites pass 345 cases; the final catalog lifecycle suite
+passes five cases and reconstructs actual formatted events without claiming the MCP package's
+proof ownership. Canonical operation/failure generation has zero violations.
+
+For #4084/#4086, read-consent SSE events reject extra outer and data fields. The UI validates the
+grant contract and its exact Chat, Pod, generation, disclosure and time bindings before accepting
+it. Negative cases failed before the fixes. Contract and client suites pass 124 and 47 cases.
+History tests through the real disk store and production redactor preserve distinct Jira browse
+URLs for identical issue keys across Pod replacement and restart: 18 store and 14 UI cases pass.
+Both root and UI typechecks pass on the final fixture source.
+
+The proposed raw-argument digest bypass is deliberately rejected. The real gateway, store and
+binder path proves that additional configured-secret redaction of the saved proposal prevents
+both approval creation and Jira dispatch in all three modes. Thirty mixed-source tests pass,
+including these three regressions and the existing post-write overflow/repair budget controls.
+The invariant is documented at the existing write guard; no hidden payload acquires authority.
+
+For #4082/#4087, all lab browser imports use the declared Playwright dependency. A browser launch
+failure before any Jira request removes only the setup helper's own pending marker; uncertainty
+after launch and replaced markers remain protected. The setup, actor, restricted-case and
+failure-report tests pass 56 cases. Browser fault drivers share the existing lifecycle reporter;
+26 driver/fault tests and the semantic duplication gate pass with the unchanged 927-entry
+baseline. The new restricted and browser fault runners are ready, but their live groups are still
+pending. Their outcomes must not be inferred from harness tests.
+
+The canonical paired Linux catalog performance producer measured committed `d3fc521a9404` against
+`44cfbbb3e` in independent clean checkouts. The two evidence files and the budget's calibration
+reference were regenerated; all numerical ceilings remain unchanged. Architecture checking now
+passes. Current updater evidence was regenerated through its canonical nine-case browser suite;
+the three-case wired Jira browser lane also passes. These checks do not replace final aggregate,
+Sonar, current-head CI, Linux editor qualification or the remaining licensed live groups.
+
+### Regenerate retains the current durable tool observations
+
+The clean fault repeat stopped in its fourth case after one independently verified Jira comment.
+The duplicate request and fresh-process duplicate had preserved that one effect, but Regenerate
+returned a registered `ProviderEmptyAnswerError` after consuming its output allocation. Before and
+after inventories match across 6,824 compiled/helper files, with digest
+`b4ad065a4065d0d793a6403eeba8270da8a1929e2f98705b31a8b16e23983ffa`.
+The incomplete group, pending marker, private reconciliation and database remain retained. It is
+not a ten-case acceptance receipt and its mutation is never replayed.
+
+Two failing regressions then demonstrated the real context defect: Regenerate discarded the
+current user row's stored tool exchanges while rebuilding its prompt. The existing prompt owner
+now includes complete durable call/result pairs and their canonical outcomes in the protected
+current-turn scaffold, counts them before history compaction, and refuses an oversized scaffold.
+Images attach to the latest user message even when tool observations follow it. No tools are
+offered or dispatched by Regenerate; no output budget, retry allowance or authority is widened.
+The eight affected Chat/context suites pass 447 cases, with root typechecking, scoped lint/format,
+semantic duplication and error-observability checks green. The compiled context-quality gate also
+passes, including short-session compatibility and calibrated tool accounting.
+
+Two additional actual-Gateway mixed tests hold the first Jira read until a second Chat completes,
+using the same Pod and distinct Pods. They prove separate grants and call IDs, correct credential
+routing in reversed completion order, and exactly two reads. The final mixed suite passes 32 cases.
+This is hermetic production-path evidence, not a licensed live two-Chat receipt.
+
+The live consent observer now follows the newly admitted durable user row rather than the first
+historical user row. Explicit consent reuse validates the exact current subject/generations before
+the turn and again before write approval. Nine tests failed before this correction; the combined
+helper suite passes 72 tests. A four-turn driver now covers a real process restart, fresh read with
+retained consent, token replacement/reverification, fresh consent and one approved comment with
+independent replacement-identity authorship. Its live execution remains pending. Catalog and
+restricted group receipts also require an explicit final license check.
+
+A new independent project completed normal cold setup, all fixture classes and the production
+HTTPS/read/write preflight. Its license expires at 2026-10-28 02:01:30 UTC. The preceding project is
+stopped with volumes and incomplete records retained; unrelated Jira installations are untouched.
+The corrected artifact requires a new complete fault group with fresh intents on this session.
+
+Separately, exact checkpoint `4269b438c538` passed the isolated canonical Linux package/root/UI
+build, editor release-evidence gate, bundle-size gate and 50 related tests. The existing editor
+evidence matched without regeneration or changed limits. All nine reviewed bot conversations were
+answered with fixes or the documented raw-digest rebuttal and resolved. Final aggregate/Sonar,
+current-head checks, remaining live groups and complete Jira visual acceptance remain open.
+
+### Stable-artifact fault qualification and custody races
+
+Epic #4081 / #4083 / #4084 / #4091 / #4087: the fresh real-model fault group passes **10/10**
+on committed `6c63f33a0f7a`. Every create/edit/assign/comment/transition case covers a lost observed
+response or a committed-then-503 observation, original duplicate delivery, a duplicate from a
+fresh Node process and actual-model Regenerate. Independent Jira state confirms exactly ten Chat
+effects and four separately requested foreign PUT effects. No duplicate, restart or Regenerate
+adds a remote effect. The fault injection changes the journal-visible response after real Jira
+acceptance; it does not claim a physical browser socket interruption.
+
+All 6,824 compiled/helper files match before and after the complete group, with inventory digest
+`6836cb923f68d84e603dce9182e23a0ad2d89d2ae7d4b6030e2ea75c011bf876`.
+The retained private completion receipt has SHA-256
+`2c6bbe7c67b81e837ce6f688a134d3085c5cfe2d6a815257356c2a6ee65f0bdd`.
+Opening and closing license checks found 9,571 and 9,145 seconds remaining. There is no pending
+intent for this group. Earlier diagnostic/incomplete groups remain retained and are not relabelled.
+
+Three additional hermetic production-path tests use actual credential creation/verification,
+vault custody, Chat PATCH, Gateway, catalog/MCP, grants and approvals. Token rotation cancels
+both same-Pod pending writes with zero effects while the distinct Pod writes once. Disconnect
+discards a delayed private result while another Pod completes. Credential deletion after remote
+acknowledgement retains `succeeded-unconfirmed` even when delivery is cancelled. Only the remote
+HTTP tail supplies controlled responses/barriers. No product change was needed for these proofs.
+The complete mixed suite passes 35 cases; its final three targeted cases, root TypeScript,
+scoped ESLint/Prettier and unchanged semantic-duplication gate pass.
+
+Restricted identities, live consent reuse and rotation, physical browser response loss, complete
+visual acceptance, final aggregate/Sonar and required current-head checks remain outstanding.
+
+### Browser accessibility and bounded live-model correction
+
+Epic #4081 / #4086 / #4087: the wired deterministic Jira browser lane now passes five cases,
+including English/German journeys through the actual UI, BFF, Gateway, catalog, MCP host and HTTPS
+fixture. Its 83 full-document axe checks report zero violations, without exclusions. All five
+surfaces are checked across themes, contrast/forced colors, reduced motion, narrow/maximized
+windows and explicit 200% viewport/device-scale emulation. Keyboard controls remain reachable.
+The [retained producer receipts and eight inspected captures](../design-system/evidence/4081/README.md)
+state the exact source hashes, environment and limits; native zoom/screen-reader execution is not
+claimed by this evidence.
+
+The browser run exposed a real question-map target-size failure: existing targets were 48×6 CSS
+pixels, only eight pixels apart. The existing global stylesheet now gives them 48×24 targets,
+visible focus and bounded vertical scrolling, while keeping their two-pixel marks. Thirty actual
+questions remain keyboard reachable and first/last navigation adds no Jira request. The two
+existing component regressions also pass. No light-theme color change was retained: the initial
+contrast sample occurred during an animation; stable measured contrast already passed.
+
+The unchanged canonical Updater producer passes all nine cases and regenerates its required
+source-bound evidence. Its freshness gate and 23 evidence contracts pass. Both Linux Editor
+bundle gates pass without restamping evidence or changing any limit. Root TypeScript, scoped
+lint/format and E2E wiring pass. These checks supplement, rather than replace, the final aggregate.
+
+Restricted live runs exposed malformed optional model arguments before tool admission. Failed
+groups retain their incomplete receipts; independent reconciliation found no mutation-journal row
+or remote effect. The lab can now explicitly select one existing Gateway retry, with its schema
+correction and original budgets; the default remains zero. A composed normal-Chat regression
+observes three physical model requests, remote-effect snapshots of zero/zero/one, and only the
+valid call persisted. The affected Gateway/Chat/helper suites pass 173 cases. Seven configuration
+checks failed before the helper correction; the unchanged default baseline passed throughout.
+
+Both focused restricted groups now pass 8/8, buffered and SSE, with one allowed edit each,
+zero denied-write effects, canonical no-replay and both required-field refusals before dispatch.
+Their before/after inventories match across 6,827 files, digest
+`6886b63c775c83ca19306b78d354027b21b75cbb92c2c2b71b7b7743be458904`.
+The buffered receipt SHA-256 is
+`60b1802bf014f32348a1e304300281de506d7dbd3457479097c6395d3a52104c`.
+The complete restricted catalog groups and live retained-consent lifecycle remain in progress.
+
+Browser fault drivers now share their canonical recovery observer. A separate fixture physically
+destroys the actual BFF response only after it observes a durably completed approved turn; real
+loopback HTTP tests prove interruption and refuse premature completion. This harness proof does
+not claim the licensed browser group has run. An independent mixed-source driver creates and
+indexes a real Data Pod with an explicitly selected embedding model, then checks ordinary mixed
+read/approved-write turns and Data-only citations. Its live group is also pending. Existing
+defaults are preserved, and no product retry, schema, authority or budget was widened.
+
+### Completed mixed-source and browser recovery groups
+
+The stable `55ba6ff64` browser build passes both unknown-result journeys: keyboard connection
+with a lost observed Jira response, and native drag connection with committed-then-503. Each
+approved comment produces exactly one independently observed Jira effect. Canonical duplicate
+delivery, browser reload and visible Regenerate retain the unknown outcome without replay.
+Receipt SHA-256: `e76c288a6309cff4c8a6c6c2a2076f1d7f5ea49d16c4bcbadc70d3b84228b868`.
+A separate real BFF-to-Chromium interruption destroys the actual response after durable tool and
+assistant completion. Chromium observes the network failure; there are zero automatic buffered
+fallbacks. Explicit duplicate/reload/Regenerate preserve the confirmed result and one remote
+comment. Receipt SHA-256: `6d4ccbea70223517c0c6737dddb092df0ef0a7d53ee8b976a93797fa21ac2dd5`.
+Both groups retain matching 6,832-file runtime/helper and 381-file served-UI inventories, valid
+opening/closing license checks and no pending intent. The physical socket-loss group injects no
+Jira fault; its confirmed result is distinct from the first group's unknown Jira observation.
+
+The complete real-model mixed group passes two turns through ordinary Chat: Jira projects read
+and approved comment, each combined with a freshly created, connected and indexed Data Pod.
+The explicit embedding model is `qwen3-embedding:8b`; synthesis uses `keiko-qwen36-35b-8bit`.
+Each turn has one first-read grant; the write has one exact approval and one remote effect.
+Both answers correctly report eleven review steps, retain one Data-only citation, and identify
+Jira separately. Receipt SHA-256:
+`9da82b396b2421c2b81439f74513aa2918238ccc81d4afa17ea384cd9ba186f7`.
+All 6,825 runtime/helper files match before/after, inventory digest
+`775c169e79a1e9fad58a44a294f8f598960ebcccae1137d4bb639dc73f8c0b4f`; closing license has
+6,466 seconds remaining. The earlier ambiguous-question attempt answered only the Data question
+with zero Jira calls and zero effects; its incomplete receipt and reconciliation remain retained.
+The successful fresh group clarifies the natural Jira question without forcing tool choice,
+replacing a provider or weakening acceptance assertions.
+
+### Verification failures through the actual Hub
+
+The existing browser-client integration fixture now also mounts the real Hub panel. Nineteen
+additional cases carry all nine closed verification outcomes in English/German and a later
+revoked-token response through the actual client, HTTP route, custody and visible card. Only the
+remote fetch tail is synthetic; this does not claim a native Jira token was revoked. The tests
+check generation invalidation, removal of stale success, registered body-free outcomes and no
+raw provider details or tokens in the UI. All seven unchanged Cloud/Data Center creation and
+compatibility cases still pass.
+
+Four new checks failed before correction: the shared authentication copy requested an account
+email which PAT connections do not have, and the forbidden copy asserted authentication and a
+permission-only cause. Existing English/German messages now request the account/token check and
+include site/license restrictions as possible causes to inspect. No new outcome is inferred from
+provider text. The 26 integration cases and two existing status/axe tests pass; scoped UI types,
+lint and format pass. The required visual/update evidence refresh follows this source change.
+
+Restricted catalog qualification now has an explicit native-401 case for assignable-user lookup
+and assignment metadata. The harness expects existing fail-closed credential invalidation,
+cancelled delivery, unchanged canonical identity, no mutation dispatch and no duplicate replay.
+It does not reinterpret 401 as permission403. Sixty-five scoped helper cases and the unchanged
+927-entry semantic baseline pass; complete licensed catalog/lifecycle groups are still pending.
+
+The independent Linux full-gate run on `55ba6ff64` has passed root/UI typechecking, lint and
+formatting and is running the full unit matrix. Complete final-head coverage, evidence, Sonar,
+required checks and review closeout remain outstanding; no criterion is marked fully accepted.
+
+### Cumulative budgets, current metadata and measured MCP coverage
+
+Seven additional tests in the existing normal/mixed Chat fixtures close the finite budget gaps:
+original input/output exhaustion after a successful Jira read; thirty cumulative tool calls;
+physical retrieval and the exhausted excerpt allowance carried into later phases; the original
+deadline after consent/tool time; and the actual ten-round Jira loop in buffered and streamed
+Chat. The complete suites pass 90 cases (41 mixed, 49 ordinary), including all earlier isolation,
+approval, custody, replay and Gateway schema-correction cases. No runtime budget changed.
+
+The aggregate exposed a stale non-Coding SDK expectation: a complete current
+`startAt/maxResults/isLast` metadata page was still listed as invalid after the licensed
+Jira10.3.26 parser repair. Both current and legacy positive page shapes now run through the real
+binder/SDK; the negative remains a genuinely contradictory terminal page. All 49 consumer cases
+pass. No payload validation was loosened.
+
+The new MCP package was absent from the coverage baseline, and five existing source inventories
+were stale. Ten additional public-host cases exercise unsafe schema/name/risk declarations,
+registry bounds, duplicate provider/tool identities and actual two-provider SDK discovery with
+zero handler execution. All 28 host cases pass. A scoped V8 measurement over the complete MCP
+source surface records lines98.73%, statements93.75%, branches86.46%, functions100%; every metric
+exceeds the existing85% new-package floor. The canonical coverage collector creates only this
+new entry; the existing source-inventory refresh updates counts. All existing measurements,
+policy, tolerances and governed file floors are byte-for-byte unchanged. The 70 baseline reality
+tests now pass. Full three-producer coverage remains a separate pending gate.
+
+Canonical UI producers were rerun on `71d84996c` after the verification-copy repair: Jira5/5 with
+83 full-document accessibility checks, Updater9/9, all 93 screenshot digests and source
+fingerprints,23 evidence contracts and both unchanged Linux Editor gates pass. Four changed
+screenshots were visually inspected; evidence is retained in the existing4081/3405 directories.
+
+The complete restricted buffered catalog now passes14/14, including native401 cancellation for
+assignable-user lookup and approved assignment, with zero mutation dispatch in both cases.
+All14 cases together produce zero remote effects. Before/after6829-file inventory digest:
+`1029de48bd8f1637abd0a21d673d2fe1691fbe61e64f41539e444b9df89e9de6`.
+The earlier exact-null and missing-CSRF harness defects were proven red/green and corrected;
+66 scoped helper tests pass. Incomplete groups remain reconciled and retained. One later SSE
+group stopped after a successful search because the model returned an empty final answer;
+zero journals/effects and an unchanged inventory were independently confirmed. It remains an
+unsuccessful diagnostic group; a fresh complete group and the consent lifecycle are pending.
+
+The first aggregate Linux run exposed unsupported-host assumptions in native Linux-x64 tests
+when run on ARM64. A separate x64 container now uses the committed gate image and its documented
+namespace settings, with separate native dependencies. No product platform boundary or test
+assertion is bypassed. A separate macOS reproduction of the failed customer-shape CI job passed;
+targeted investigation then reproduced a report-validator error involving optional non-causal
+context. The existing report validator now follows its validated operation registry: optional
+`causal:none` probe context does not invent mandatory ancestors. True causal-parent, mandatory
+member, integrity and budget checks remain unchanged. A staggered startup/probe fixture fails
+before the correction;628 support/query/registry/analyzer/CLI cases pass afterward. The unchanged
+canonical macOS customer-shape producer passes after its isolated package/root/UI rebuild
+(90,165ms). ADR0173 now agrees with its existing registered-closure rule. The failed CI run did
+not retain its private report, so its exact opaque ancestor is not claimed as recovered.
+
+The remaining native verification helper has18 focused guard/recovery cases. It persists owned
+PAT creation intent before dispatch, refuses blind replay, and can restart only its inspected
+synthetic Jira service even if recording recovery fails. Native execution remains pending.
+Natural read questions now precede the exact operation payload in the catalog/lifecycle fixtures;
+14 wire regressions preserve arguments, identities and all five mutation requests. The80-case
+helper run passes. No shared API helper, model budget, expected effect or runtime policy changes.
+Final qualified aggregates, full coverage/Sonar and required current-head checks remain open.
+
+## Shared external MCP priority — foundation checkpoint, 2026-10-28
+
+The owner expanded the primary delivery to central Settings configuration for local stdio
+and remote HTTPS MCP servers, with tools shared by ordinary Chat and OpenCode. Jira Pods
+remain in this same PR. Resources/prompts are not prerequisites for the tools delivery.
+All original 55 criteria remain subject to acceptance; this checkpoint is not closeout.
+
+This increment adds additive registry contracts for automatic discovery and sealed local
+environment references, safe native action collision rejection, and the Settings persistence
+owner over the existing registry, private JSON writer and MCP credential vault. It checks
+revisions before writes and binds immutable stored credentials to their configured target.
+The registered Settings event contains only counts, outcome and a registry digest.
+
+The five focused contract, registry and credential suites pass 69 tests. New capability
+cases first failed against the old contract. Persistence tests cover restart, stale writers,
+private file permissions, corrupt state, target changes, immutable credentials and body-free
+Activity Log reconstruction. Package build and scoped lint/format are checked separately.
+
+Settings routes/UI, external SDK transport composition, discovery admission, Chat integration,
+OpenCode secret launch/relay integration and lifecycle invalidation are still pending at this
+checkpoint. The accepted earlier Jira live evidence does not qualify those new paths.
+
+### Shared Settings API and credential removal checkpoint
+
+The production dependency graph now owns the shared Settings store, mounted at authenticated
+GET/PUT `/api/mcp/servers`. Reads are non-cacheable; writes use the existing bounded JSON reader
+and reject an app session revoked during body delivery. Invalid requests do not reach persistence;
+a stale revision returns a conflict instead of silently replacing the current registry.
+
+Secret resolution checks the currently enabled configuration and its exact transport before
+opening a credential. Deleted references are removed from the MCP vault without touching OAuth
+entries. This is storage/resolution invalidation; revocation of already-bound runtime transports
+remains a separate outstanding integration obligation.
+
+The targeted route, store, credential, route-template and stack-frame suites pass 53 tests.
+This increment also corrects concrete earlier failures: the Activity Log recognizes the real
+`keiko-mcp` package and preserves the literal consent/approval/MCP-settings route segments.
+The full Activity Log gate passed seven checks on the previous foundation checkpoint; error
+observability also passes. Settings UI, external transports/discovery and shared consumer
+execution remain pending; these API tests are not an end-to-end MCP tool qualification.
+
+### Auditor finding: recoverable Settings persistence across partial failures
+
+Confirmed against `6d08fc0cb`: registry publication followed by failed vault cleanup could
+report failure after configuration was committed; a failed registry write after sealing could
+also make a repeated immutable-reference request fail. Three new fault cases fail on that
+commit and pass after the fix (78 tests across six focused suites; registry gate 97 tests).
+
+Identical sealed reference/value/target writes are now idempotent; different values remain
+refused. A credential-free update does not open a nonexistent vault. Registry publication is
+the configuration commit point: cleanup failure returns the committed revision with
+`credentialCleanup: pending`, recorded in body-free Activity Log evidence. Access resolution
+still refuses inactive references. Reads and subsequent updates reconcile orphan ciphertext
+against the durable registry, including after a fresh store/process; malformed registry state
+never authorizes cleanup. The fault tests simulate registry-write failure and an unavailable
+vault key and verify successful retry/restart and actual eventual credential removal.
+
+### External MCP protocol client checkpoint
+
+`keiko-mcp` now owns an external SDK client alongside its in-process host. It negotiates
+modern and legacy protocol versions, supports local stdio, Streamable HTTP and explicit
+legacy HTTP+SSE, and exposes SDK-free tool metadata/results to consumers. Server composition
+must still supply admitted process parameters or policy-controlled HTTP transport.
+
+Discovery has bounded pagination, tool counts and payloads. Input schemas are validated
+before tool dispatch; the current invocation authority is rechecked at the transport boundary.
+Invocation context is process-local, and remote fetch composition receives it separately from
+MCP arguments. Local launches explicitly override SDK ambient environment inheritance and
+discard process stderr. Lifetime cancellation closes the connection; tool requests do not
+reconnect/replay after an uncertain response. Registered lifecycle evidence carries no payloads.
+
+The existing host plus new client suites pass 41 tests, including a real child-process legacy
+server, real SDK Streamable HTTP and HTTP+SSE exchanges, revoked authority during validation,
+unsafe targets, bounded discovery, cancellation, body-free lifecycle proof and exactly one
+remote effect after a lost successful response. Typecheck/scoped lint/format, architecture and
+negative architecture checks are run independently. This qualifies the protocol adapter;
+Settings discovery, Chat/OpenCode composition, complete runtime invalidation and product UI
+remain required before external MCP tools are usable end to end.
+
+### Configured MCP tools in OpenCode: real UI and approval repair
+
+The Settings connection manager now serves admitted tools through the existing authenticated
+native relay. One server-owned SDK connection owns stdio/HTTP and credential materialization;
+OpenCode receives a scoped loopback capability. Disable, replacement and removal revoke the
+generation and abort its relay. Modern and legacy MCP requests carry isolated, private invocation
+context. Managed tools remain external actions under the selected mode, including local stdio
+processes owned by the server: Ask for approval and Supervised workspace require approval;
+Full access permits execution inside the existing authority. Direct remote access below Full
+access remains denied.
+
+The real browser journey exposed two approval defects. A hyphenated MCP tool permission was
+copied into the narrow public evidence contract and rejected as `sidecar-event-denied`; its
+public projection is now the fixed `mcp` category with the registered `native-mcp` command
+label. The authenticated private review retains the actual tool identity. The UI also incorrectly
+required a Research destination for these native requests; it now uses their existing bound
+native review. Red-before/green-after regressions cover both defects without relaxing the
+public contract or admitting unbound approvals. Runtime failures record a closed, body-free
+reason code rather than arbitrary error text.
+
+On 2026-10-28, the in-app browser configured a synthetic three-tool stdio server and used the
+running Docker LiteLLM gateway with Gemma. Actual Workbench journeys succeeded for:
+
+- Full access: read, then a write followed by readback; exactly one new remote record.
+- Ask for approval: read after the visible program/tool approvals.
+- Ask for approval: create and readback after the visible program/tool approvals. Independent
+  fixture inspection found zero matching records before the MCP write approval and exactly one
+  afterward. The UI returned the new record ID and its original text, with a succeeded run and
+  zero changed repository files. Earlier failed approval attempts produced no remote write.
+
+These checks used only synthetic fixtures and an isolated test repository; no customer
+screenshots, service addresses, tokens or response bodies are included. The original failed
+runs remain truthful history; fresh runs demonstrate the corrected behavior.
+
+Focused validation passes: 673 server tests, 345 UI tests, four actual-SDK relay tests, package
+build, root/UI TypeScript, scoped server/UI lint and formatting. After the final UI display
+adjustment, 13 targeted native/research approval tests pass again. Activity Log passes all
+seven inventory checks, including error observability and architecture; the ADR index also
+passes. Final aggregate coverage, UI evidence, assembled-package qualification and Sonar
+remain pending under the owner's final-qualification workflow.
+
+Ordinary Chat consumption of configured external MCP tools is still being integrated. This
+checkpoint does not accept all 55 original criteria, qualify every transport/model combination,
+or establish durable mutation/restart safety for the new native path. The PR remains open and
+not merge-ready, with auto-merge disabled.
+
+### Native MCP follow-up: replacement races and complete private action identities
+
+An independent review reproduced a replacement race: a request awaiting an older connection
+could attach its endpoint to the new entry with the same server name. The relay now captures
+the owning entry before awaiting it; the revoked request fails and the replacement remains
+usable. A deterministic old/new-generation regression fails before and passes after the fix.
+
+The private native policy, sidecar parser and review also capped permission names at 64
+characters, although an admitted MCP server/tool pair can legitimately form a 129-character
+native identity. These three private boundaries now share the existing bounded MCP name
+grammar. Unrelated overlong permission names remain refused; the public fixed `mcp` evidence
+projection is unchanged. All four new regressions failed before the fixes. The six focused
+contract/server suites pass 298 tests; scoped lint, formatting and contract build pass.
+Complete final qualification remains pending.
+
+### Ordinary Chat consumes centrally configured MCP tools
+
+The ordinary Chat buffered/streaming owners now consume the configured MCP catalog without
+requiring a Jira Pod, Coding session or synthetic workspace. The existing bounded Chat loop
+serves both the Jira adapter and the configured-MCP adapter; its gateway capability checks,
+Harness meters, cancellation, transcript pairing and grounding/synthesis limits remain shared.
+The existing authority, read-disclosure and exact-action approval owners use an additive
+configured-MCP subject bound to actor, Chat and current configuration. The existing SQLite
+mutation journal records durable intent before external dispatch, protocol acknowledgement
+and uncertain outcomes without invented HTTP status or Jira identities. Automatic replay and
+Regenerate cannot repeat the mutation. The existing tool-access panel and DE/EN cards present
+these subjects and results. Unknown remote tool annotations never confer read-only authority.
+
+On 2026-10-28 the actual in-app browser used the running Docker LiteLLM gateway and Gemma
+with the same synthetic Settings server already accepted in OpenCode:
+
+- A normal Chat with no bound Jira Pod requested the status tool. Visible read disclosure and
+  exact action approval preceded the real SDK invocation. The model returned the actual
+  fixture marker, and the Activity Log recorded a completed invocation with an effect.
+- A write request left unapproved reached its execution deadline. Independent inspection
+  established zero matching remote records. It was not retried automatically.
+- A separate, explicitly requested write was approved in the UI, followed by approval of the
+  readback of its returned identifier. The model returned that identifier and the exact text
+  read from the server. Independent inspection found exactly one matching new record; the
+  unapproved request still had zero effects. This used real model and transport calls, not a
+  mocked model or an API-only substitute for the UI journey.
+
+The first live normal-Chat attempt exposed an action-decoder defect: catalog metadata was
+spread into the strict authority action. The adapter now projects only its seven canonical
+identity fields. Regression tests cover this production consumer path and the real UI rerun
+succeeds. All fixtures are synthetic; private customer material remains excluded.
+
+Focused evidence includes six production Chat/catalog/binder/SDK integration scenarios,
+56 mutation-journal tests, 165 legacy Jira/journal/transcript tests, 531 authority/approval
+regressions, 74 UI cases and 332 external-schema/SDK/catalog cases. Package builds, scoped
+TypeScript/lint/format checks are recorded separately. These counts overlap and are not a
+claimed aggregate run. Final aggregate coverage, UI evidence, assembled-package, Sonar and
+current-head CI qualification remain open. Combining a bound Jira Pod with configured MCP
+tools in the same Chat is also still under review. This checkpoint does not accept all 55
+original criteria or every external transport/model combination.
+
+The follow-up review reproduces and closes configuration A→B→A revival: every real Settings
+commit stores a fresh private generation atomically with its definitions. Deletion/recreation,
+restart and interruption immediately after commit cannot recover an older consent subject.
+Changing an already active secret requires the existing fresh-reference rotation flow. The
+105-case Settings/connection/authority regression group passes. No-op saves retain their revision.
+
+The live unapproved timeout also exposed incomplete cancellation propagation. Binder approval
+waiters now observe the invocation deadline signal; both Chat adapters revoke pending decisions
+when it expires without increasing budgets. The eight focused consumer/journal/Jira/binder suites
+pass 214 tests, and root TypeScript including tests plus UI TypeScript pass independently.
+
+The operation registry resolves 628 proofs and 30 scenarios with zero violations. The first
+Activity Log gate run found three unobserved catches and an unregistered validator import
+boundary; these are repaired through the existing error owners and an exact pure-validator
+import allowance with negative fixtures. Error observability, import policy and 78 negative
+architecture fixtures now pass. Catalog conformance passes; the portable performance receipt
+correctly reports stale producer provenance and must be regenerated from the committed source
+with its pinned baseline/candidate toolchain. No measurement or budget is manually changed.
+
+Remaining configured-MCP qualification includes an independently reproduced native ambiguous-write
+retry and the SDK's raw schema-warning diagnostic path. The following checkpoint completes
+the focused Settings redesign/lifecycle journey; final qualification remains open.
+
+### Settings overview, management and truthful live status
+
+Refs #4081, #4086, #4089 and #4087. The existing Settings panel now opens with a server
+list instead of a disabled creation form. Each card offers connection checking, editing,
+disable/enable and confirmed removal. Add/edit forms use the existing design tokens and
+DE/EN messages, preserve keyboard focus and remain editable after a failed initial load.
+Saving still requires a valid paired snapshot. Failed observations cannot retain a green
+connected badge; connection state and tool counts come from the actual shared SDK owner.
+A browser reload therefore retains real status rather than resetting a component-local flag.
+
+Editing preserves manually admitted tool policies and stored credentials for unchanged
+targets. Changing a credential-bound target requires new credentials; transport changes
+clear incompatible draft secrets. Stale GET responses cannot overwrite a newer mutation,
+while importing an environment draft does not discard the initial Settings response.
+Independent UI review reproduced three credential/scope failures before repair and added
+stale-response/import race regressions. The two focused UI suites pass 23 tests, including
+accessibility, exact failed-load behavior and status truthfulness; UI TypeScript and scoped
+lint/format are checked independently. The connection/route/SDK/consumer group passes
+38 tests, with root TypeScript including tests and scoped backend lint also passing.
+
+On 2026-10-28, the actual in-app browser created a separate synthetic local MCP entry,
+connected it and displayed its three discovered tools. Editing its launch arguments,
+saving, reopening and inspecting the form proved persistence. Disable showed Disabled;
+Enable showed Not connected until the explicit successful connection check. Cancelling
+removal preserved the entry; confirming removal deleted only that test entry. The original
+server remained present, reconnected with three tools and still displayed Connected after
+a real browser reload. The retained screenshot contains only synthetic fixture metadata.
+This journey uses the production Settings UI and API, not direct API substitutes.
+
+SDK close and tool-list change invalidate the actual connection/catalog and pending Chat
+consent. A possibly lost individual response leaves other consumers' connection lifecycle
+intact. Discovery commits reconnect under the final stored generation before success is
+reported. All final aggregate/coverage/evidence, package, performance, Sonar and current-head
+CI requirements remain pending; native ambiguous-write recovery and combined Jira/MCP Chat
+composition are separate ongoing work. This is not acceptance of all 55 epic criteria.
+
+### Combined Chat sources, SDK metadata admission and native recovery
+
+Refs #4081, #4089, #4091, #4084, #4086 and #4087. A Chat with a bound Jira Pod now
+combines its Jira catalog with centrally configured MCP tools before compiling one projection.
+One binder and one existing Chat tool loop retain the cumulative Harness budget. Source
+registration is atomic before first use; both authority envelopes share counters, actor, Chat,
+mode and deadlines. Neither source can be added later, and invalidating either source stops the
+accepted combined turn. Existing adapters continue to own their own exact consent, approval,
+mutation and transport boundaries. Additive readGrants retains both independent consent cards;
+readGrant remains the backward-compatible latest projection. Legacy transcripts remain readable.
+The buffered UI consent observer also now covers configured MCP without a Jira binding; the
+regression produced zero observations before the fix and passes afterward.
+
+The combined normal-handler tests use the actual shared binder and SDK hosts with synthetic
+model and upstream ports. They prove both model offerings, separate consent and write approvals,
+both durable journals, canonical replay without duplicate effects, invalidation by either source,
+and shared tool/prompt exhaustion. This is deterministic integration evidence, not a claim that
+the combined Jira/MCP scenario has already run through a real model/browser. An isolated test
+loading the previous factory fails specifically on the missing MCP offer in a Jira-bound Chat.
+
+External tool-list responses are now bounded and validated at the public SDK transport boundary
+before its recursive header scan or cache. Invalid metadata rejects the whole list; there is no
+schema pruning or global console override. Actual SDK regressions reproduce the previous raw
+warning with synthetic private metadata, including an invalid array-shaped properties map.
+Valid metadata and parameter headers remain supported. A separate Host-override hypothesis was
+refuted through the real SDK: parameter headers are prefixed and do not replace HTTP Host.
+
+Native MCP writes with observed transport/protocol uncertainty now synchronously revoke that
+run's relay capabilities and use the existing recovery owner. The persisted Coding snapshot
+retains recovery-required despite late stop/failure events and refuses resume. The UI explains
+that an external effect may already exist and asks for result reconciliation before a fresh run.
+This does not claim that the still-open unobserved relay-to-OpenCode response-loss case already
+has stable per-invocation identity or a durable acknowledgement journal.
+
+The actual in-app browser, Docker LiteLLM and Gemma completed a separate synthetic failure
+journey: Settings connected a local two-tool server; a fresh Ask-for-approval Coding run displayed
+and received its Code Mode program approval and exact MCP action approval. Independent fixture
+inspection counted zero effects before tool approval. The tool persisted and fsynced one effect,
+then exited before replying. The Workbench displayed Recovery required, revision 9, with the
+reconciliation instruction. An actual browser reload preserved that status and the effect count
+remained exactly one. The isolated workspace had zero changed files. This is intentional fault
+injection, not a successful ordinary tool result or a production-service outage.
+
+Focused verification: 246 authority/single-source/transcript cases; 65 single/combined Chat turn
+cases; 308 native relay/orchestrator cases; 249 Chat UI cases and 131 Workbench label cases;
+70 MCP cases followed by a 40-case SDK/metadata/combined rerun. These overlap and are not one
+aggregate. npm run typecheck, independent UI TypeScript, scoped lint, import policy, contract
+boundaries, error observability and ADR index pass. Final aggregates, coverage, UI evidence,
+package/performance/Sonar and exact-head CI qualification remain open.
+
+A new independent synthetic Jira session was set up through the normal first-run workflow on
+2026-10-28 using the published Atlassian test license. License checks, identity/permission seed
+and production-port HTTPS/read/write preflight all passed; the closing preflight reported
+10,389 seconds remaining. The prior expired session is stopped with its volumes retained.
+Each subsequent qualification group still requires its own opening and closing license checks.
+
+The SDK review additionally reproduced an automatic mutation replay after an upstream commit
+followed by HEADER_MISMATCH. The client now supplies the official callTool option with the
+validated frozen definition, disabling that refetch/re-dispatch branch. The actual SDK
+regression counts exactly one remote effect after the fix, compared with two before it.
+The final 35 client/metadata cases, scoped lint and MCP build pass independently.
+
+## Incremental qualification — shared Chat admission and duplicate-code repair
+
+The existing Chat owners now share consent-decision parsing, exact write-approval
+settlement and catalog/budget binding across Jira and configured MCP. Provider-specific
+subject checks, authority resolution, result projection and credential custody remain
+with their existing domain owners. Both consumers keep their existing body-free
+Activity Log events; regeneration resolves all 630 proofs and 30 scenarios.
+
+Seven newly introduced semantic clone groups were removed. The remaining thirteen
+reported groups were checked against `dev` at `246efd463`: nine are exact existing
+groups and four are existing groups affected by route-template literals or the native
+MCP permission projection. Their existing baseline identities were refreshed after
+that content review. The complete check passes with the unchanged 927-group ceiling;
+no new Chat duplicate, higher ceiling or exclusion was accepted.
+
+The actual checkout passes all 177 unchanged tests in the seven combined Chat, Jira
+and MCP authority/runtime suites, full root typecheck, scoped ESLint and Prettier,
+error-observability, import policy and contract boundaries. Native producer completion,
+per-physical-call budget identity, final licensed Jira/browser groups and the complete
+final-head gates remain open. The pre-integration Linux fast run found stale catalog
+performance receipts and a wall-clock grounded-handler failure under concurrent load;
+both require final qualification with unchanged limits.
+
+## Individual acceptance — #4089 AC7
+
+Accepted against the integrated Native candidate following `97a6fe5a5`, with the
+unchanged frozen runtime manifest of 6,938 files, SHA-256
+`1e3e908cf8dddaddb6ce27d5536ed2138e4e1616e8ee8ba8ea212853874d13a8`.
+The subsequent signed Native increment carries this candidate and this acceptance.
+
+`catalogNonCodingConsumer.test.ts` executes a hermetic conversation consumer through
+the actual generic binder, canonical compiled Gateway offer and actual managed MCP SDK
+host. It proves the absence of Coding/workspace context, exactly one completed effect,
+current Chat/actor/generation checks, immutable captured scope, routing refusal,
+descriptor-drift refusal and cancellation with reversed completion.
+
+The current-checkout command selecting `catalogNonCodingConsumer.test.ts`,
+`codingToolNativeEffect.test.ts` and `codingToolNativeEffect.patchBudget.test.ts` passes
+99 tests in three suites. The separate current-checkout Native group passes 515 tests
+in nine suites covering composition, policy/plugin, store journal, configured-connection
+compatibility, relay and actual SDK response loss. Full root build/typecheck pass.
+These results meet AC7's non-Coding execution and retained Coding-regression obligations.
+They do not substitute for other ACs' live UI or complete final-head gate obligations.
+
+## Individual acceptance — #4089 AC1
+
+The current production host and real official SDK pass 42 tests in `host.test.ts` and
+`host-protocol.test.ts`. The latter adds the previously missing explicit wire-negative
+proofs; older summary wording overstated their completeness and is replaced by this
+concrete evidence. The adapter changes only synthetic outbound request bytes before
+production context binding. The real client, server, request handler, validators and
+responses execute unchanged.
+
+The positive control records `server/discover`, `tools/list`, `tools/list`, `tools/call`,
+with actual protocol `2026-07-28` in headers and required metadata. Socket/network and
+child-process guards are never called while the provider executes successfully.
+Negatives cover unsupported revision during discovery and invocation, a distinct
+header/body mismatch, missing protocol/capabilities metadata, malformed capabilities,
+JSON, JSON-RPC version and method shape, unknown tool and schema-invalid arguments.
+Every invocation-negative has successful provider controls before and after refusal.
+Optional clientInfo is positively proven optional. Unsupported discovery produces
+only bounded `server/discover` attempts and no legacy initialize or provider effect.
+
+Actual checkout: `npx vitest run packages/keiko-mcp/src/host-protocol.test.ts
+packages/keiko-mcp/src/host.test.ts` passes 42/42, with strict targeted TypeScript,
+ESLint and formatting. AC1 is complete; AC5/6 retain their separate gate requirements.
+
+## Incremental qualification — real native parent-error recovery
+
+The current native candidate was exercised through the In-App Browser, ordinary
+Coding Workbench, Docker LiteLLM and Gemma. After explicit script and exact MCP
+approvals, one HTTPS-fixture create operation succeeded and the same outer Code Mode
+program deliberately threw. Independent remote state moved from three to four total
+writes, with exactly one matching new record. The UI entered Recovery required at
+revision 9; reload preserved that state and the one-effect count. SQLite separately
+retained `succeeded-unconfirmed`, SDK protocol success and the private budget identity.
+The action was not replayed. After independently reconciling it and renewing the dev
+launcher session, the recovery acknowledgement completed at revision 10.
+
+The earlier incomplete attempt encountered a stopped owned HTTPS fixture after the
+pause and made zero matching writes; it is retained as a diagnostic attempt, not a
+successful recovery proof. Restarting the same unchanged fixture preserved all records,
+TLS and credentials, and authenticated preflight preceded the complete fresh UI run.
+A separate positive UI control performs one new approved write: the outer Execute succeeds, SQLite records `succeeded` with SDK protocol success, and independent remote state proves exactly one matching record. Its separate get_note Execute also succeeds against the returned record ID; the final model answer is checked separately.
+
+## Individual acceptance — #4089 AC2
+
+The full issue Purpose and Scope concern Keiko-managed providers and non-OpenCode
+consumers, and explicitly preserve OpenCode as its own MCP client. This acceptance
+uses that scope, consistent with ADR-0175 D2; it does not relabel native producer tools
+as canonically bound tools. No architecture migration or policy exception was added.
+
+`managedProviderCatalog.ts` constructs exact routes from `host.catalog()` through
+`createKeikoToolCatalog` and `compileToolProjection`. Handler readiness checks admission
+drift before every offer, and execution routes exclusively through `host.call`.
+Configured MCP Chat and combined Jira/MCP reuse that owner. `chat-tool-turn.ts` sends
+only a bound catalog, compiled projection and current `binder.offer()` to the real
+Gateway model port, and dispatches its bound invocations. The Gateway adapters derive
+provider definitions through `createGatewayToolCatalogBridge`; the normalizer verifies
+the snapshot, recompiles and compares it. Raw tools, unknown tools, projection mismatch
+and both descriptor/handler drift have retained refusal controls.
+
+On `01e3858cd`, 498 unchanged tests in twelve Gateway, catalog/binder, Chat, mixed Chat,
+host, external-client, relay and Native-compatibility suites pass; another 58 unchanged
+combined Chat/catalog/invocation tests pass. The actual source chain was independently
+reviewed alongside these results. These are criterion-specific proofs, not a replacement
+for the remaining aggregate gates or the Native execution requirements.
+
+## Individual acceptance — #4089 AC3
+
+The actual managed host injects invocation context through AsyncLocalStorage and the
+exact server-owned Request binding; no tool argument supplies routing or authority.
+Provider and compiled catalog checks reject caller overrides and drift. Current
+non-Coding/Gateway/Chat tests exercise two separately bound consumers, same/different
+Pods, reversed completion, cancellation and selective generation invalidation.
+
+The stricter SDK boundary check exposed an actual automatic replay: after the provider
+completed, a synthetic HEADER_MISMATCH response caused SDK2.4.0 to execute the handler
+twice. The current-checkout regression fails with two executions before the fix and
+passes with one afterward. Passing the already admitted frozen toolDefinition through
+the SDK's existing call option prevents implicit rediscovery/re-execution. No replay
+registry or new policy path was introduced.
+
+Four real SDK response cases additionally cover request-state-only, sampling,
+elicitation and roots input fulfillment. They fail closed with one handler invocation,
+no automatic fulfillment or second call, and successful before/after controls.
+The retry regression also validates exactly one registered protocol-error failure
+line and absence of the synthetic raw error text.
+
+After the final package build, the current-checkout ten-suite command for host,
+external client, combined/Jira/MCP Chat and non-Coding/authority/context owners passes
+299/299. Full root build/typecheck, scoped lint/format, error-observability, operation
+registry and the complete unchanged 927-group duplication check pass. The fresh
+6,938-file backend snapshot is `8f71ba25b4f7848e3fc283233932d57e90da006d41c927fdc0296f58ee4d9a6a`.
+The wider preliminary coverage run was intentionally interrupted before final runtime
+fixes; it is not represented as final acceptance.
+
+## Qualification checkpoint — four individual acceptances and CI repairs
+
+The current matrix contains exactly 55 criteria, of which four are individually
+verified: #4089 AC1, AC2, AC3 and AC7. The remaining 51 retain their explicit partial
+status. This does not establish final-head qualification or close a child issue.
+
+The pinned Linux UI producers now complete all 108 browser cases with zero unknown
+fixture APIs, all nine updater scenarios, 427 component probes and seven axe modes.
+The browser fixture supplies the existing credentials metadata GET with an empty
+synthetic result; unknown routes remain refused. All 136 regenerated screenshots
+retain their historical fixture versions, independently of the actual product 1.3.1.
+The 287 focused CSS/evidence tests, updater freshness and editor release evidence
+checks pass. MCP settings classes now follow the established `cmp` convention without
+adding an exception or changing declarations, markup or interaction behavior.
+
+The package coverage producer's five stale source-file counts are corrected without
+changing a coverage floor. The shared autonomy label helper derives its keys from the
+existing typed translation catalog; the i18n guard, strict UI typecheck and 219 guard
+tests pass. The isolated assembled Linux package passes its actual pruned surface check
+over 7,210 files. Its generated root export contract records the intended additive
+`createHarnessCatalogBudget` function and `HarnessCatalogBudget` type; nine root
+contract tests pass and no existing export is removed.
+
+The ordinary tool-turn prompt now instructs the model to invoke an actually requested
+tool so Keiko can present its existing consent or approval control. Prose permission
+requests do not replace the control. Authority, mode, consent, approval and cumulative
+budgets still gate dispatch. Data-only routing and prompt owners are unchanged; this
+instruction is included in the existing physical-call token accounting.
+
+The synthetic Jira session was renewed by restarting only its existing Jira container;
+the database and TLS containers and all three container identities are retained.
+Actual license validation passes. The previous incomplete mixed group was independently
+reconciled with zero matching remote comments and zero mutation journal entries before
+archiving it; unrelated comment-count changes were retained in its private receipt.
+The new complete mixed group passes both read and approved-write turns against the
+frozen corrected backend, with separate Data grounding attribution and exactly one
+independently observed comment. Opening/closing license checks report 9,779/9,720
+seconds remaining. Its complete receipt and unchanged 6,938-file artifact inventory
+are checked; the earlier incomplete group is not counted as a passing result.
+Full coverage, portable performance, aggregate architecture/dependency qualification,
+remaining licensed/browser groups, Sonar and final-head CI/review acceptance remain open.
+
+## Individual acceptance — #4085 AC5
+
+The canonical issue was reread on 2026-10-29 and its criterion is unchanged. On the
+`f13310c03` implementation, the paired in-app browser opened the existing Knowledge
+Pods Hub, entered exactly a name, HTTPS address and generated lab PAT, saved the Pod
+and used its verification action against the actual local Jira. The form required
+no account email, MCP configuration, model selection, embedding or vector-index setup.
+The PAT was supplied privately to the masked field and the form was unmounted after
+save. The displayed card reports Connection verified and names search/read plus
+create, edit, assign, comment and transition, explicitly subject to Jira permissions
+and Chat approvals. Private form and verified-card captures retain synthetic data only.
+
+Two additional capability-bound presentation cases prove that the card advertises only
+reads for the server's read-only projection, while the read/write projection describes
+the implemented mutations and their permission constraints. Together with the existing
+form, Hub and card cases, all 35 tests in five suites pass. Strict UI typecheck, the
+UI lint lane and formatting pass. Existing EN/DE catalog entries are reused unchanged.
+This closes AC5 only; no full Jira CRUD, lifecycle, accessibility or final-gate acceptance
+is inferred from this setup proof. The matrix now has **5 verified criteria out of 55**
+(#4089 AC1/AC2/AC3/AC7 and #4085 AC5), with 50 still partial.
+
+The previously failing Firefox scope case also passed its targeted Linux reproduction
+and all eight tests of the complete affected scope file. The prior CI failure remains
+a prior failure; no timeout or product change was introduced to manufacture a pass.
+
+## Individual acceptance — #4085 AC7
+
+The additional compatibility case uses the existing production Jira sync service and
+its HTTP fixture to create and index an actual Jira-backed knowledge capsule. The
+production Data handlers then create a capsule set containing that ID, read the
+persisted set and capsule, and preserve its real lexical/vector/hybrid projection.
+The same case passes against baseline `246efd463` in pinned Linux, along with all
+four existing baseline Jira sync cases (five passed; none skipped). It also passes
+on the current implementation. No pre-change failure is invented for preserved behavior.
+
+Current targeted results: 236 server route/sync/Data cases, 80 Hub/card cases and
+44 Pod/projection cases pass. Strict root TypeScript, scoped ESLint and formatting
+pass. The HTTP negative matrix now explicitly includes an export request; both
+the mounted route inventory and UI expose no capsule export operation. Data and
+synced-Jira retain their existing capabilities; no new export promise is introduced.
+Live identities cannot create partial sets, invoke indexing/embeddings, acquire
+fabricated capsule identities/storage or expose unsupported sync controls.
+
+This closes AC7, bringing individual acceptance to **6/55**, with 49 still partial.
+No child issue or integrated epic acceptance is claimed.
+
+## Current catalog performance qualification
+
+The preceding head's Core quality and installable-build failures both reported a
+stale catalog producer identity. The canonical portable producer now measures
+baseline `246efd463` and candidate `9006c0b4d` in isolated clean Linux checkouts
+with Node 24.18.0/npm 11.16.0. Both builds and the paired run pass. Its three
+canonical artifacts are copied without manual digest editing; all six reviewed
+time ceilings remain unchanged. The current-checkout performance gate passes
+against those artifacts. Later changes in this increment are tests/documentation
+and generated evidence, not catalog producer or lockfile changes.
+
+The full current architecture check and all 25 portable-producer regression tests
+also pass. Connector coverage initially reproduced the CI failure at 84.07%
+statements and 78.25% branches. Seventy-two new owner-level source tests cover all
+nine managed Jira reads, their real dispatch/HTTP ports, bounded projections,
+pagination and closed refusals. The complete connector package now passes 579
+tests in 22 suites with 94.05% statements and 89.10% branches, above the unchanged
+85% floors. The full cross-package/UI/scripts coverage aggregate is still pending.
+The Firefox trace shows outer window chunks still loading, not an executing
+Chat/MCP failure; its complete lane remains open. No coverage floor or UI timeout
+is relaxed. Final complete gates remain open.
+
+## Individual acceptance — #4089 AC5
+
+All named gates now pass on implementation `44d18c688`: complete architecture;
+78 negative fixtures including the MCP SDK import boundary; dependency currency
+(63 dependency-matrix and 12 action rows); dependency hygiene (29 manifests and
+9018 tracked paths); official CycloneDX production SBOM; 28 per-workspace
+SBOM/license checks; and exact third-party install-script approvals. The final
+assembled package check ran last in an isolated Linux checkout with Node
+24.18.0/npm 11.16.0, including root/UI builds and the canonical pruning steps.
+It passes over 7210 files. The Editor remains 78238 compressed bytes under its
+unchanged 102400-byte limit; static JS compatibility covers 273 files. This closes
+AC5 and brings individual acceptance to **7/55**; 48 remain partial.
+
+The complete affected Firefox shard also passes on that clean checkout: 64/64
+cases in 5.8 minutes. No UI timeout or product code is changed. The earlier
+trace's slow outer-chunk loading and apparent watchdog navigation are retained
+as evidence; the initiating stack/root cause remains unproven and final CI
+is still required.
+
+## Fresh assembled Jira runtime — `44d18c688`
+
+A clean source checkout is rebuilt and copied with its dependencies into an
+independent immutable runtime snapshot. Its 106 symlinks resolve inside the
+snapshot; none are foreign or broken. The 6938-file artifact digest is
+`c0cec226ed80096912f0902f16eeb0c7117da2ce34177baf9d39411db5cf95f1`.
+The source receipt records commit `44d18c688`, a clean working tree and 6000
+source/build-metadata files. Earlier artifact identities are not relabeled.
+
+The owned synthetic Jira application container was normally restarted, preserving
+its identity, database, TLS container and volumes. The published test license is
+valid again (10724 seconds observed after readiness); no clock, license text or
+licensing code is modified. The complete streamed normal-Chat catalog group
+passes all 14 operations with real-model execution and independent remote
+readback. Its preflight passes, license opening/closing values are 10597/10389
+seconds, no pending work remains, and the artifact digest is unchanged across
+the group. Other current-artifact groups are still being qualified separately.
+
+## Individual acceptance — #4082 AC4
+
+On 2026-10-29 the rebuilt release-1.3.2 merge candidate passes the production compatibility suites
+`credentialMetadataStore`, `credentialRoutes`, `syncRoutes.jira`, `syncRoutes`,
+`local-knowledge-handlers` and Local Knowledge `store`: **284 tests**. Their baseline checkout
+at `246efd463` passes **207 tests**, including the previously added identical sync-to-Data composition
+case. The current UI integration/form/card group adds **46 passing tests**.
+
+The saved Cloud shape omits the new deployment/Live fields and still round-trips. The actual populated
+v32-to-current migration preserves capsule, source, document, parsed-unit, chunk and vector rows.
+The UI-client-to-real-BFF Data Center case creates and verifies with exactly two verification HTTP
+requests, without embedding, indexing or USearch services in its dependency graph; attempting sync
+returns `SYNC_UNSUPPORTED_DEPLOYMENT` and leaves that request count unchanged. Cloud Jira and
+Confluence still synchronize/index through the original service. The licensed in-app-browser
+creation/verification under #4085 AC5 independently covers the user flow.
+
+An initial scoped run encountered stale CommonJS output while merge-conflicted package manifests
+were being resolved. A full forced package build through `npm run typecheck` restored correct ESM
+output; the 284/46 passing results above are the subsequent runs. No source workaround or test
+relaxation was introduced for that transient build state.
+
+## Individual acceptance — #4083 AC2
+
+The immutable runtime belongs to clean source `44d18c688` with **6938 files** and artifact SHA-256
+`c0cec226ed80096912f0902f16eeb0c7117da2ce34177baf9d39411db5cf95f1`.
+The real model is `gemma-4-31b-it` behind the locally running LiteLLM Docker Gateway. Each complete
+group opens and closes with a valid Jira license and its own HTTPS/read/write preflight; independent
+Jira observations verify actual effects, not merely model text. All groups retain the same artifact.
+
+| Complete group      | Cases | Receipt SHA-256                                                    | License seconds at opening / closing |
+| ------------------- | ----: | ------------------------------------------------------------------ | ------------------------------------ |
+| Normal streamed     | 14/14 | `de06397839d41984e03a5e6082d3154cd8fc6a388b1cc516444b98827e8a8309` | 10597 / 10389                        |
+| Normal buffered     | 14/14 | `7d80fbe6eceddc01579202ebd2d301a8909aaa2e2c7b081b8f4b03a196a12aa3` | 10279 / 10089                        |
+| Restricted streamed | 14/14 | `1c57b9e21f07e5d71e7ff6709eb6e9516cd577605c501158a4c73aa489431fdc` | 9878 / 9701                          |
+| Restricted buffered | 14/14 | `eee9b9e761e31fc1e49727c49c6c6eca6e014faa711d4a2b337b1a40989b24df` | 9517 / 9345                          |
+
+Both focused permission groups additionally pass **8/8**, including the permitted editor mutation,
+forbidden cross-project access/transition, and omitted mandatory create/transition fields. Their
+license boundaries are 9261/9147 and 9006/8881 seconds. The mixed-source group passes **2/2** at
+8812/8743 seconds. These are separate proofs; they do not convert other incomplete criteria to done.
+
+All following paths are public API templates relative to the admitted Jira context path, with
+prefix `/rest/api/2/`. They contain no customer endpoint or issue identifier.
+
+| Tool                    | Endpoint family                                    | Bounded capability                                     |
+| ----------------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| `jira.projects`         | `GET project`                                      | Visible projects                                       |
+| `jira.issue-types`      | `GET issue/createmeta/{project}/issuetypes`        | Available create issue types                           |
+| `jira.create-fields`    | `GET issue/createmeta/{project}/issuetypes/{type}` | Supported create-field metadata                        |
+| `jira.edit-fields`      | `GET issue/{key}/editmeta`                         | Supported edit-field metadata                          |
+| `jira.search`           | `GET search`                                       | Bounded JQL result pages                               |
+| `jira.issue`            | `GET issue/{key}`                                  | Bounded issue and explicitly selected supported fields |
+| `jira.comments`         | `GET issue/{key}/comment`                          | Bounded comment pages                                  |
+| `jira.transitions`      | `GET issue/{key}/transitions`                      | Available transitions and their field metadata         |
+| `jira.assignable-users` | `GET user/assignable/search`                       | Bounded assignable-user lookup                         |
+| `jira.create`           | `POST issue`                                       | One metadata-validated issue creation                  |
+| `jira.edit`             | `PUT issue/{key}`                                  | Supported metadata-validated field operations          |
+| `jira.assign`           | `PUT issue/{key}/assignee`                         | One validated assignee change                          |
+| `jira.comment`          | `POST issue/{key}/comment`                         | One comment addition                                   |
+| `jira.transition`       | `POST issue/{key}/transitions`                     | Transition and required fields in one mutation         |
+
+The restricted catalog independently verifies browse-only permissions and denies all five write
+permissions. Its reads reflect Jira's actual visibility; two metadata operations fail safely, and
+Jira's observed 401 on assignable-user lookup invalidates readiness and cancels the affected work.
+Pre-dispatch write refusals are known rejections. A dispatched forbidden comment remains conservatively
+`unknown`, carries the observed refusal and is not automatically retried; independent inspection
+proves zero effects in both restricted catalog groups. No production request substitutes an admin
+credential. Administrator reads are used only by the separate synthetic test observer.
+
+Unsupported capabilities remain explicit: arbitrary REST, issue deletion, worklogs, undeclared
+compound mutations, unknown plugin fields, Cloud Live-tool execution and Confluence Live tools.
+Existing Cloud v3 sync is separate and retains its compatibility tests. This is the enumerated
+operation matrix, not full Jira REST coverage or a final-PR-head release verdict.
+
+## Individual acceptance — #4089 AC4
+
+The merge candidate passes **263 tests in ten suites**: `actionPolicy`, `jiraChatAuthority`,
+`mcpChatAuthority`, `catalogToolProduction`, `catalogToolDispatch`, `catalogToolSettlement`,
+`catalogNonCodingConsumer`, the real MCP `host`, `chatWriteApprovalState` and
+`chatWriteApprovalRoutes`. Four new cases close the specific asynchronous boundary gaps.
+
+The pending-grant cases wait at the actual production approval boundary, change the saved mode or
+consume the real authority envelope's last tool slot, accept the read grant, and resume. Every bound
+handler spy remains uncalled; HTTP and tool-effect counters remain zero. The timeout cases resolve
+a late handler after the authoritative deadline, both without and with effect start. Each records
+one discarded late completion, one terminal event, and exactly one release or commit; replay adds
+no accounting. These extend the existing all-mode, stricter-ceiling, identity/generation, exact
+write-action, cancellation and SDK timeout regressions. Scoped lint/formatting pass; no runtime
+behavior was changed to make these proofs pass. Full Activity Log and release gates remain AC6 work.
+
+## Release 1.3.2 merge and ongoing final gates — 2026-10-29
+
+The merge of `dev` release `9b30f3d05` preserves the complete MCP/Jira changes. All 29 manifests use 1.3.2; the normalized lockfile and every third-party resolution remain unchanged. Typecheck, full lint, full formatting, version/currency/hygiene, the complete seven-part Activity Log gate, 281 CSS proof tests and 19 producer tests pass. The original four UI producers were regenerated in Linux, including all 108 app captures.
+
+The Editor release evidence passes against the actual rebuilt static export on the pinned Linux Node 24.18.0 runtime. The host Node 24.22.0 embeds zlib 1.2.12, while that Linux runtime embeds 1.3.1-e00f703; identical raw chunk sizes produce different gzip sizes. Its host freshness comparison therefore fails. The Linux evidence is preserved unchanged; no budget is raised or macOS value substituted. Updater evidence remains fresh.
+
+The complete package coverage run is still in progress and has reported a failure in the unrelated-zombie process-end case; its exact failure still needs targeted reproduction. The full local Sonar analysis initially exhausted its 4.5-GiB heap, then completed with the documented 12-GiB setting and reported 104 findings. Those findings are open repair work. No final quality or merge-ready verdict is claimed.
+
+### Analyzer repairs and individual Chat acceptance — 2026-10-29
+
+The local SonarJS analyzer initially reported104 findings. Behavior-preserving repairs simplify
+control flow, duplicate imports, React state naming, native semantic elements and stable code-unit
+comparisons across the existing owners. Two deprecated-SDK reports are explicitly refuted at
+the opt-in legacy SSE import/constructor: ADR-0181 requires this compatibility transport, and
+the pinned official SDK documents that clients may still need both transports during migration.
+Streamable HTTP remains the default. The narrow suppressions cover only those required legacy
+API references, not general deprecation or any authority/security check.
+
+The first repeat leaves one string-membership finding, subsequently repaired without narrowing
+untrusted input. The final analyzer repeat passes with zero unresolved findings. Targeted suites pass1197 server cases,
+358 UI cases,673 connector/MCP cases,285 contracts cases,19 catalog cases and59 script cases;
+separate current ordinary/mixed Chat budget suites pass90/90. Root strict typecheck passes.
+Registry/failure-inventory source locations are regenerated.
+
+Two failures in the diagnostic aggregate are reproduced individually: the debug-launch test
+correctly rejects the host's non-exact Node24.22.0/npm11.19.1 pair. Both complete files pass82/82
+on the already-installed approved24.18.0/11.16.0 pair. The native zombie fixture also passes five
+additional runs; host process-table churn can conservatively produce `reaped` instead of `clean`.
+Both the fixture and implementation match dev; neither assertions nor governance were weakened.
+The aggregate is not relabelled green and final qualification remains pending.
+
+The complete UI coverage lane passes613 suites and11953 tests (one existing skip), with
+91.79% statements,85.28% branches,93.23% functions and94.38% lines. Linux UI producers complete
+427 component comparisons,160 editor probes,seven accessibility modes and108 browser captures
+without runtime/unknown-route failures. These are scoped evidence runs; full final-head CI
+and the remaining42 acceptance criteria are still open.
+
+The complete post-repair Activity Log chain initially passed six gates and correctly rejected
+stale catalog performance evidence. The canonical producer now measures clean `40002310b`
+against `246efd463` in the isolated approved Linux environment. Both builds, all six unchanged
+performance ceilings, all25 producer tests and the current-producer gate pass. Three generated
+artifacts are copied byte-for-byte from that run; the budget changes only its calibration digest.
+The obsolete diagnostic package-coverage run was stopped after its failures were reproduced;
+it cannot qualify a source tree changed during the run. The final package run uses the approved
+Node24.18.0/npm11.16.0 pair and the committed repaired source.
+
+### Individual acceptance — verification, bootstrap, provider, ceilings and Chat authority
+
+Epic #4081 / PR #4093 now has **19/55** individually accepted criteria. The six added
+criteria are #4082 AC1/AC5, #4083 AC1/AC7 and #4084 AC1/AC2. Their literal requirements
+are covered by the implementation, retained complete live groups and current scoped tests above;
+stale matrix notes demanding a final whole-PR run for each of these criteria were corrected.
+Criteria that explicitly require all applicable gates remain open.
+
+The new `actionPolicy.coding-composition.test.ts` adds four actual composed Coding-run cases
+to the existing Chat authority/composition proofs: **89/89** pass, with scoped lint and formatting.
+It captures the resolver installed by `buildUiHandlerDeps` without replacing its behavior, mints
+real bounded authority and executes the production connector facade. No Jira scope, approval,
+CI-repair budget or deployment ceiling is widened.
+
+On immutable `6638399b6`, the in-app browser created and verified a synthetic Jira Pod and
+confirmed its binding through the ordinary UI. Two completed fault cases (lost Jira observation
+and committed-then-503) each preserve exactly one actual Jira comment and one dispatch through
+canonical duplicate delivery, visible reload and real-model Regenerate. The physical final-browser
+response-cut case is still in progress; these two cases alone do not accept #4091 AC5.
+
+A separate expired-consent attempt made **zero** Jira HTTP requests/effects. Its Activity Log
+records `effectStarted:false`; the UI nevertheless displayed unknown. That concrete canonical
+outcome projection defect is repaired at the existing server owner: a matching new action with
+no journal and catalog proof of no effect is `not-dispatched`. Existing journal outcomes and
+after-dispatch uncertainty remain authoritative. Three unit and five consent-loop regressions
+failed first; 166 server and 17 UI tests pass after repair, with scoped native no-emit checks,
+lint and formatting. This expired attempt is not counted as a successful fault case; historical
+transcripts are not silently rewritten.
+
+Current-head CI passes all four package-coverage shards, UI coverage, build/SBOM smoke and
+CodeQL. Its Firefox scope failure is not reproduced locally: the exact test, all eight scope tests
+and the same complete 64-case Firefox shard pass unchanged. The CI trace shows startup reload
+and delayed chunks; no speculative fix, increased timeout or relaxed assertion is claimed.
+Whole-PR completion, final required checks and remaining acceptance are still open.
+
+### Complete browser recovery and mutation acceptance — 2026-10-29
+
+#4083 AC5 and #4091 AC5 are individually accepted, bringing the total to **21/55**;
+**34 criteria remain open**. This is not a final-head or merge-ready verdict.
+
+A complete manual in-app-browser session used the frozen `6638399b64d8a942d21456d53acac1780e2519a3`
+artifact, actual Gemma 4-31b-it through the local Docker LiteLLM gateway, and licensed Jira10.3.26.
+All three cases create/verify/connect the synthetic Pod, grant reading and approve the exact write.
+Lost write observation and committed-then-503 retain `unknown`; a physical browser SSE socket cut
+after the canonical completed write restores `succeeded`. Each case independently verifies one
+HTTP attempt, one forwarded write and exactly one matching remote comment. An identical canonical
+API redelivery preserves identities and counts; actual UI reload and Regenerate retain the outcome
+and produce response version2 without another mutation. API redelivery is explicitly an API proof;
+UI submission, decisions, reload and regeneration were actually operated in the in-app browser.
+
+Opening/resumed/closing license checks remain valid (2,215seconds remaining at completion). The
+7,320-file artifact inventory is unchanged before/after: SHA-256
+`cf725397870a35d1a9fa92e012d9c9f5f986174c7f95bf7f327f90f8cd1bfaeb`. The private complete receipt
+SHA-256 is `b97184740186a036d23978a7b7ce05e1be8c006aedc59b33a30399a4894da03f`.
+A separate earlier browser-cut diagnostic attempt did commit one comment, but lacked its physical
+cut witness; it is retained separately and never counted as a passed case. Two expired-consent
+attempts made zero requests/effects. Their misleading pre-dispatch outcome caused the canonical
+projection repair in5b99198b4; the new repair still requires its own rebuilt-browser observation.
+No failed intent was blindly repeated. No customer data, endpoints, credentials or raw logs are
+published.
+
+The direct truncated201 regression uses the production capped HTTP response and durable journal:
+`truncated: true` preserves acknowledged success as `succeeded-unconfirmed`; canonical replay under
+a new invocation produces no second journal row, provider execution or remote effect. Settled and
+replayed activity agree. The two production journal/SDK-binder suites pass49/49. Root test-inclusive
+TypeScript, scoped lint and formatting pass. This root check also exposed two fixture typing errors
+in the earlier AC7 test; the launch fixture and optional lifecycle method access are corrected,
+and its four unchanged policy scenarios pass. No product authority was broadened.
+
+The optional browser helpers now use the actual shared labels `Tool access` and `Apply tool settings`,
+as verified in the manual browser journey. The completed package aggregate remains diagnostic, not
+green: its three regression-first failures are repaired; two Dev-runner readiness failures still
+need valid isolated reproduction. The first isolated copy lacked built packages and cannot settle
+the original failure. The first real Sonar repeat exhausted its 4.8-GiB bridge heap. The unchanged gate then passes with zero unresolved findings using the documented 12-GiB setting; no analyzer rule, gate or user container is modified.
+
+### Connection and mode acceptance — 2026-10-29
+
+#4086 AC1 and AC7 are individually accepted from their literal behavior and complementary existing
+live/interaction proofs plus a fresh223/223 connection/workspace test run. The current total is
+**23/55**, with **32 remaining**. The newer physical-cut receipt does not replace keyboard/native-drag
+proofs; each evidence source is cited only for the path it actually exercised. Older accessibility
+receipts have source digest drift and are not claimed current; AC6 and integrated UI gates stay open.
+The two browser-fault helper suites pass10/10 after correcting the shared UI labels.
+
+The Dev-runner readiness cases pass unchanged2/2 in38.90seconds in a valid isolated checkout. The
+first isolated attempt was missing built workspace outputs and workspace-local dependencies; it
+was a setup failure and could not establish a product defect. The complete diagnostic aggregate
+stays failed, and its original shared-checkout readiness cause is not claimed proven. A stable
+isolated final aggregate remains required. The real local Sonar analyzer now passes with the
+documented12-GiB heap:454 analyzed JS/TS sources and zero unresolved findings.
+
+### Metadata boundaries and refreshed UI qualification — 2026-10-29
+
+#4083 AC3 and AC4 are individually accepted, bringing the total to **25/55** with **30 open**.
+Current production metadata/mutation/read suites pass194/194; the complete Chat-loop file passes50/50.
+The hostile-content regression deliberately attempts escalation after receiving malicious metadata;
+it does not depend on a model choosing to ignore the injected text. Offered capabilities, selected
+credential, binding, granted read consent and write-approval state remain under their existing owners.
+Exactly one metadata GET and zero writes occur. Root strict TypeScript, scoped lint/format pass.
+The complete retained catalog/restricted/pagination receipts supply their actual live metadata and
+reference-state proofs; no three-case comment recovery receipt is claimed to cover all operations.
+
+The existing Linux Jira UI producer now passes all five cases after fixing four stale English/German
+helper labels (connection/apply). The exact formerly failing case first passes1/1; no wait, assertion,
+authority or product code was weakened. E2E wiring passes. Two regenerated source-bound receipts
+match all14 inspected source/harness hashes;83 full-document axe checks report zero violations or
+viewport overflow. The complete93-image output is retained, with eight representative images and
+the current producer metadata described in docs/design-system/evidence/4081/README.md.
+
+The isolated package aggregate was restarted because its launcher incorrectly applied private-log
+umask0077 to every test process. The permission fixture passes under0022 and reproduces its exact
+failure under0077; no product or fixture was changed. The contaminated run remains diagnostic.
+The replacement run verifies0022 and exactNode24.18.0/npm11.16.0, with the log precreated0600.
+Full aggregate, final CI/review settlement and remaining acceptance criteria stay open.
+
+### Custody, network and lifecycle acceptance — 2026-10-29
+
+#4082 AC2/AC3 and #4084 AC3 are individually accepted: **28/55**, with **27 still open**.
+Fresh current-source suites pass376 custody/metadata/route/transport/redaction cases and207
+lifecycle/isolation/approval/authority cases. Production custody tests refuse stale generations
+before ciphertext access; current401 observations invalidate readiness and pending work without
+revoking later replacements. Exact direct/proxy target admission, DNS/TLS and environment refusal
+remain enforced. Shared-Pod pending work revokes with zero HTTP while the unrelated Pod remains
+usable. These complement the complete licensed native-PAT, consent/restart/rotation and HTTPS
+receipts; no claim is made that every deterministic boundary was reproduced physically in Jira.
+
+The old session expired after its completed qualification groups. It was stopped via its own
+manifest with volumes retained. A new independent session completed the normal supported wizard,
+all fixture classes and HTTPS/read/write preflight on2026-10-29. A timed-out initial license POST
+was reconciled before continuation; no uncertain mutation was blindly replayed, no clock/license
+code/database data was changed. The new instance has26 reference issues and all three owned
+containers healthy; the closing preflight observed10,475seconds of valid license. Its private
+receipts and synthetic PATs remain outside the repository. Actual UI creation and verification
+of a new Pod against this instance have passed; the additional expiry-display test remains open.
+
+### Slow-model catalog offer repair — 2026-10-29
+
+The actual Gemma browser run exposed a separate pre-effect failure: the registered Activity Log
+reported `gateway.tool-catalog.rejected`, `invalid-arguments`, `expired-compatibility` for a native
+Jira comment response. The shared binder capped every offer at30seconds, shorter than the existing
+admitted Chat authority/consumer deadline (the default harness window is five minutes). The normalizer therefore refused valid delayed model
+output before a consent card could appear. This diagnostic had no Jira mutation effect.
+
+Signed56c32e3e2 changes only the expiry formula to the earlier of the existing consumer deadline and
+authority expiry. It adds no grace, budget, permission or mutation retry. Generation, binding, live
+authority and pre-effect admission remain mandatory. The existing projection/offer events already
+record expiry; ADR0175 is corrected in place. Continuation cursors retain their separate30-second
+lifetime. The real binder→Gateway regression fails before the fix at49seconds, passes within the
+admitted90-second request, and refuses arrivals at either authority/consumer deadline without
+handler execution. Complete affected owner suites pass915/915, the production Chat loop50/50, and
+final binder19/19. Strict root TypeScript, scoped lint/format, ADR index, current catalog performance
+and real local Sonar all pass. The clean isolated56c32 runtime is built for additional actual UI
+qualification; that pending proof is not replaced by the regression results.
+
+The stable isolated5aed44080 complete package coverage run now finishes with exit0:
+2,763files pass,22 are skipped;62,539tests pass,300 are skipped. Coverage is91.89% statements,
+86.44% branches,96.05% functions and94.08% lines. These are the actual reported skips and counts,
+with no new skip introduced. This complete run predates the offer/bootstrap repairs and is not
+misrepresented as a complete qualification of the later final head.
+
+### Actual expiry UI confirmation and bounded bootstrap recovery — 2026-10-29
+
+The clean immutable56c32e3e2 runtime now passes the actual in-app-browser expiry case with
+Gemma4-31b-it through Docker LiteLLM and the newly licensed Jira10.3.26. Normal UI creation,
+verification and server-confirmed binding precede a native comment-tool invocation. The real
+90-second dispatch/consent timer expires without a decision: UI shows `Permission revoked` and
+`Not sent to Jira`; the canonical exchange is `not-dispatched`, the turn completes, and independent
+remote state has zero matching comments and no matching mutation dispatch. The dispatch timer is
+separate from the unchanged five-minute consumer envelope; the earlier90-second-envelope wording
+was inaccurate. Prior `GATEWAY_MALFORMED_TOOL_CALL` symptoms included catalog expiry, not necessarily
+malformed model arguments. The registered log identifies the pre-fix rejection class explicitly.
+
+The complete private receipt SHA-256 is
+`6a21dcf67820b678089352df1ba3386745958a3e6b5ac0b9d576bdf177e6cf02`. Opening/closing license
+budgets are8,593/8,044seconds. Its7,316-file inventory is unchanged before/after, digest
+`c02de0a14eecfe795a3b63c9da697bdfd6e0857f0c9d32da77d69774f78e29c5`. This is a real
+license-valid completed UI observation of both fixes, not a replay of an uncertain earlier intent.
+
+The repeated Firefox startup failure also exposed a separate timing defect: the old inline
+watchdog spent a reload retry at8seconds while initial resources were still progressing. A red
+regression reproduces it. The existing8-second hydration window now starts on load or relevant
+script/stylesheet failure; a separate60-second resource cap retains recovery for never-settling
+requests. One idempotent callback preserves the two-reload bound, mounted-workspace guard and
+localized accessible fallback. Preload/icon failures do not arm recovery early. Existing client
+diagnostics record only validated retry counts1/2 after successful recovery; hostile markers are
+cleared without logging their content. No second transport or logger is introduced.
+
+Final owner tests pass44/44; root/UI strict types, scoped lint and format pass. The exact final
+Firefox480px German case passes1/1. The full affected64-case Linux shard passes on the preceding
+bootstrap artifact, before the narrow cleanup/test repairs; that result is scoped accordingly.
+The complete current UI coverage lane passes613suites and11,968tests, with one existing skip;
+coverage is91.78% statements,85.28% branches,93.22% functions and94.38% lines. Full current root
+typecheck/lint/format, real local Sonar and the complete seven-gate Activity Log chain all pass.
+Final source-bound UI producers, remaining acceptance and exact-head CI remain open.
+
+### Live Pod creation and truthful partial-state acceptance — 2026-10-29
+
+#4085 AC1 and #4086 AC4 are individually accepted: **30/55**, with **25 open**. Actual licensed
+UI creation/verification complements unchanged Data creation, saved/synced-Jira capsule and
+Live-boundary proofs. The partial-state red regression fails in both languages before the repair;
+completed truncated Jira pages now explicitly disclose the limited result. The current flag is
+already registered in the existing settlement log, so the UI projects the canonical observation
+without introducing another state, authority or logger. Four relevant suites pass44/44, along
+with strict root/UI types and scoped lint/format. Other MCP and mutation outcome labels remain
+unchanged. Fresh final UI coverage and original source-bound producers remain required.
+
+The remaining Hub lifecycle proof now has a stronger existing-route/Data test: after direct
+Live credential deletion, Data capsule reads/listings/set membership/storage are unchanged; the
+removed binding/grant are gone and an unrelated Live Pod/Chat/grant remains. Related suites pass
+235/235. The real browser helper additionally checks loaded DOM and public metadata after actual
+reloads following rename, rotation, reverification and removal. Its one-time fixture seed avoids
+overwriting restored layout/edges: an actual installed-Chromium diagnostic passes, while the old
+unconditional seed resets both. The full real lifecycle/reload group has not yet run, so AC4 is
+still open. No unsupported Playwright API or unqualified live pass is retained.
+
+## Post-publication qualification and review follow-up (2026-10-29)
+
+The running Main UI at parent `89e7c66d0` additionally completes a fresh ordinary Chat
+read and a fresh OpenCode task against the same centrally configured synthetic MCP server.
+Actual Gemma through Docker LiteLLM returns the remote marker in both surfaces. Chat redeems
+fresh consent and exact action approval; OpenCode redeems its sandbox and native-action
+approvals and finishes `Succeeded`, revision 9, after 126 seconds with zero changed files.
+Two earlier manually delayed Chat attempts end before dispatch (`effectStarted:false`); their
+diagnostics and unrelated unavailable-server startup diagnostics are retained separately.
+The body-free Main UI receipt has SHA-256 `019b393f50a79161dbafabaabe8edd71d6fbf66bbc82235596fcc1149c019546`.
+These extra reads do not replace the independent earlier Jira or mutation-fault groups.
+
+The public Cloud zero-issue validator reproduces one `typescript:S9382` finding on the older
+`b439a3d0c` analysis, while the pinned local analyzer passes. The existing mixed-source write
+test now holds the first MCP result pending and proves that the second call, consent and
+model continuation cannot start before its receipt/journal/transcript settlement. A temporary
+`Promise.all` mutant fails this assertion; the serial original is restored. All 66 cases in
+the three owner files, root inclusive types, lint and formatting pass. The precise inline
+exception follows the documented S9382 dependency convention in `local-sonar.md`; executable
+tokens and dispatch ordering are unchanged. The Cloud validator must still analyze the
+delivered repair head and report zero unresolved issues.
+
+A deeper provenance audit found nine author-closed conversations whose repairs had no later
+producer assessment. Those nine conversations were reopened. The producing reviewer then
+[verified seven repairs and accepted one evidenced refutation](https://github.com/oscharko-dev/Keiko/pull/4093#issuecomment-6496279136)
+on exact head `89e7c66d0`, with no new actionable defect in the inspected scope. The producing reviewer subsequently
+[accepted the remaining architecture/performance repair](https://github.com/oscharko-dev/Keiko/pull/4093#issuecomment-6496879444)
+after inspecting both successful exact-head aggregate logs, including all 78 negative fixtures.
+Each of the nine conversations was resolved individually only after its matching assessment.
+A skipped full review is not approval; its file-count and temporary quota limits remain
+disclosed. No resolve/approve override, finding dismissal or review filter is used.
+The source-publication checkpoint remains 46/55; live final acceptance belongs to the canonical
+epic/child issues after actual required-check and producer-settlement results.
+
+The same parent-head CI scanner also exposes one real LCOV importer limit: the retained
+scripts coverage artifact `12893994710` records `DA:43,2448021578` for
+`scripts/lib/zip-archive.mjs`. The count is valid measured work; Sonar's integer parser
+cannot represent it. No counter is capped or removed. The existing ZIP owner instead uses
+Node's native `zlib.crc32`, removing the per-byte JavaScript work and private table.
+Nine empty/golden/binary cases verify both header checksums and both readers. Complete
+before/after ZIP pairs are byte-identical on the pinned Node 24.18.0 and 26.3.0 runtimes:
+entries 7,054 bytes (`08de303821161e5fa6ac38ec691a4c18821b6902c4f3ccedc7f5b70126a52f7f`)
+and directory 7,162 bytes (`ecb79680f9bdfcc43b0fc184ef94d8194d7b078b67b0d686f0ae6a2ad0b3081b`).
+All eight complete ZIP/Portable/Packaging owner files pass 887/887 cases on the pinned runtime;
+the focused Node 24 ZIP/adapter lane passes 58/58 and Node 26 ZIP passes 44/44.
+The old loop's coverage/report defect and original CI scanner warning remain retained.
+Fresh full scripts coverage, the exact scanner-log validator and delivered-head Cloud
+analysis determine the final reporting verdict; the archive format and all admission/safety
+checks remain unchanged.

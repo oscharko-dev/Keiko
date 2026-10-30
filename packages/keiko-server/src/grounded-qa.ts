@@ -1,4 +1,21 @@
 import {
+  type ParsedDesktopChatSend,
+  buildCanonicalTurnMemoryResult,
+  buildMemoryResult,
+  chatClosedResult,
+  parseClientTurnId,
+  parseMemoryRequest,
+  logChatRejection,
+  runPostCommitCanonicalTurnMemorySideEffects,
+  type CanonicalTurnMemoryRequest,
+  type ParsedConversationMemoryRequest,
+} from "./chat-handlers.js";
+import { createChatToolTurn, scopeChatToolTurn } from "./chat-tool-runtime.js";
+import {
+  callGroundedSynthesisModel,
+  requiresObservedToolResult,
+} from "./grounded-plural-synthesis.js";
+import {
   deploymentContentPolicy,
   currentContentRedactor,
   withChatContentPolicy,
@@ -40,7 +57,6 @@ import {
   WorkspaceError,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-
 import {
   assistantReferenceExcerptIds,
   type AssistantRetrievalReference,
@@ -58,7 +74,6 @@ import {
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
-
 import {
   groundedConversationContinuity,
   type GroundedConversationContinuity,
@@ -100,9 +115,7 @@ import {
   type ConnectedContextEvidenceInput,
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
-
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-
 import {
   type ContinuityReferentSource,
   connectedContextOmittedCount,
@@ -129,7 +142,6 @@ import {
   type GroundedUncertainty,
   type GroundedAnswerEvidenceDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-
 import type { ContentRedactionPolicy, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
@@ -137,9 +149,7 @@ import {
   maxUtf8BytesForTokenBudget,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
-
 import { type RouteContext, type RouteResult, errorBody } from "./routes.js";
-
 import {
   type Redactor,
   type UiHandlerDeps,
@@ -217,17 +227,6 @@ import {
   type GroundedTurnRecord,
 } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
-import {
-  buildCanonicalTurnMemoryResult,
-  buildMemoryResult,
-  chatClosedResult,
-  parseClientTurnId,
-  parseMemoryRequest,
-  logChatRejection,
-  runPostCommitCanonicalTurnMemorySideEffects,
-  type CanonicalTurnMemoryRequest,
-  type ParsedConversationMemoryRequest,
-} from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
   canonicalChatTurnIdentityContent,
@@ -1873,7 +1872,8 @@ async function dispatchGroundedSynthesis(
   });
   const promptTokens = countGatewayPromptTokens({ messages: sent.messages }, ctx.tokenAccounting);
   try {
-    const response = await ctx.model.call(
+    const response = await callGroundedSynthesisModel(
+      ctx.model,
       {
         modelId: ctx.modelId,
         messages: sent.messages,
@@ -1883,6 +1883,9 @@ async function dispatchGroundedSynthesis(
         attemptAdmission: tracker.admission,
       },
       ctx.signal,
+      tracker,
+      ctx.deps.chatToolTurn,
+      requiresObservedToolResult(ctx.deps, sent.sentReferenceCount),
     );
     ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
@@ -2240,6 +2243,10 @@ interface GroundedMemoryPreparation {
 
 function hasAnswerOnlyContext(prepared: PreparedGroundedAsk): boolean {
   return prepared.memory?.answerOnlyContextAvailable === true;
+}
+
+function canAnswerWithoutDataEvidence(prepared: PreparedGroundedAsk, deps: UiHandlerDeps): boolean {
+  return hasAnswerOnlyContext(prepared) || deps.chatToolTurn !== undefined;
 }
 
 function admittedGroundedUser(prepared: PreparedGroundedAsk): ChatMessage {
@@ -2740,7 +2747,7 @@ async function dispatchMultiSourceAsk(
     args.correlationId,
     {
       currentQuestion: input.content,
-      answerOnlyContextAvailable: hasAnswerOnlyContext(args),
+      answerOnlyContextAvailable: canAnswerWithoutDataEvidence(args, deps),
       userMessageId: admittedGroundedUser(args).id,
     },
   );
@@ -2755,7 +2762,7 @@ async function dispatchMultiSourceAsk(
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
-    answerOnlyContextAvailable: hasAnswerOnlyContext(args),
+    answerOnlyContextAvailable: canAnswerWithoutDataEvidence(args, deps),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
     commitTurnId: groundedCommitTurnId(args),
     userMessage: admittedGroundedUser(args),
@@ -2845,7 +2852,7 @@ async function dispatchFolderAsk(
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
-    answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+    answerOnlyContextAvailable: canAnswerWithoutDataEvidence(prepared, deps),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
     commitTurnId: groundedCommitTurnId(prepared),
     userMessage: admittedGroundedUser(prepared),
@@ -2907,7 +2914,7 @@ async function dispatchHybridAsk(
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
-    answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+    answerOnlyContextAvailable: canAnswerWithoutDataEvidence(prepared, deps),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
     userMessage: admittedGroundedUser(prepared),
     modelId,
@@ -2992,7 +2999,7 @@ async function dispatchPreparedGroundedAsk(
       chat,
       {
         ...prepared.input,
-        answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+        answerOnlyContextAvailable: canAnswerWithoutDataEvidence(prepared, deps),
         userMessage: admittedGroundedUser(prepared),
       },
       deps,
@@ -3371,7 +3378,7 @@ async function runAdmittedGroundedAsk(
     }
     const result = await dispatchPreparedGroundedAsk(
       memoryPrepared,
-      deps,
+      { ...deps, groundedMemoryContextAvailable: hasAnswerOnlyContext(memoryPrepared) },
       runner,
       multiSource,
       hybrid,
@@ -3392,6 +3399,26 @@ async function runAdmittedGroundedAsk(
     if (stagedAssistantId !== undefined) discardGroundedTurn(stagedAssistantId);
     failGroundedChatTurn(admitted, deps, error instanceof CancelledError);
     if (admitted.signal.aborted) return groundedCancelledResult();
+    throw error;
+  }
+}
+
+async function admitGroundedJiraTurn(
+  admitted: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): Promise<Awaited<ReturnType<typeof createChatToolTurn>> | RouteResult> {
+  try {
+    return await createChatToolTurn(
+      deps,
+      groundedModelId(admitted),
+      admittedGroundedUser(admitted),
+      admitted.signal,
+      admitted.correlationId,
+    );
+  } catch (error) {
+    failGroundedChatTurn(admitted, deps, error instanceof CancelledError);
+    const mapped = mappedGatewayError(error, deps, admitted.correlationId);
+    if (mapped !== undefined) return mapped;
     throw error;
   }
 }
@@ -3418,7 +3445,24 @@ async function executeGroundedAskInTurn(
     surface: "grounded-chat",
   });
   try {
-    return await runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
+    const toolTurn = await admitGroundedJiraTurn(admitted, deps);
+    if (isRouteResult(toolTurn)) return toolTurn;
+    const scoped = scopeChatToolTurn(deps, toolTurn);
+    return await runAdmittedGroundedAsk(
+      toolTurn === undefined
+        ? admitted
+        : {
+            ...admitted,
+            signal: AbortSignal.any([
+              toolTurn.signal,
+              AbortSignal.timeout(Math.max(0, toolTurn.deadlineAtMs - Date.now())),
+            ]),
+          },
+      scoped,
+      runner,
+      multiSource,
+      hybrid,
+    );
   } finally {
     releaseSession();
   }
@@ -3551,6 +3595,7 @@ export async function runGroundedAskInput(
   deps: UiHandlerDeps,
   options: {
     readonly signal?: AbortSignal | undefined;
+    readonly correlationId?: string | undefined;
     readonly runner?: GroundedRunner | undefined;
     readonly multiSource?: MultiSourceSeam | undefined;
     readonly hybrid?: HybridSeam | undefined;
@@ -3559,12 +3604,55 @@ export async function runGroundedAskInput(
   const chat = findChatById(deps, input.chatId);
   if (chat === undefined) return notFound("Chat not found.");
   return executeGroundedAsk(
-    { chat, input, signal: options.signal ?? new AbortController().signal },
+    {
+      chat,
+      input,
+      signal: options.signal ?? new AbortController().signal,
+      correlationId: options.correlationId,
+    },
     deps,
     options.runner,
     options.multiSource,
     options.hybrid,
   );
+}
+
+/** Adapt the ordinary buffered API to the same accepted grounded turn and canonical rows. */
+export async function runMixedGroundedChat(
+  parsed: ParsedDesktopChatSend,
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<RouteResult> {
+  const { request, chat } = parsed;
+  if (request.attachments.length > 0 || request.documentContext.length > 0)
+    return badRequest("Mixed grounded turns do not support supplemental attachments.");
+  const result = await runGroundedAskInput(
+    {
+      chatId: chat.id,
+      content: request.content,
+      modelId: request.modelId,
+      clientTurnId: request.clientTurnId,
+      memory: request.memory,
+      expectedGroundingScopeIdentity: request.expectedGroundingScopeIdentity,
+      expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
+    },
+    deps,
+    { signal, correlationId },
+  );
+  if (result.status !== 200 || !groundedAnswerBody(result.body)) return result;
+  const user = deps.store.findMessageById(result.body.userMessageId);
+  const assistant = deps.store.findMessageById(result.body.assistantMessageId);
+  if (user === undefined || assistant === undefined)
+    throw new Error("Grounded canonical rows unavailable");
+  return {
+    status: 200,
+    body: {
+      chat: deps.store.findChatById(chat.id) ?? chat,
+      messages: [user, assistant],
+      memory: result.body.memory,
+    },
+  };
 }
 
 function groundedAnswerBody(value: unknown): value is GroundedAnswer {

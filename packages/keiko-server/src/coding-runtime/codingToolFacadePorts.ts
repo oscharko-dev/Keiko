@@ -1,3 +1,4 @@
+import type { ToolEffectGuard } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
   ActivityLogErrorKind,
   CodingWorkbenchAuthorityEnvelope,
@@ -26,15 +27,10 @@ export interface CodingToolProducerBinding {
   readonly expiresAt: string;
 }
 
-export interface CodingToolMutationGuard {
-  /** Actual catalog invocation clock/deadline, supplied only by server admission. */
-  readonly executionBudget?:
-    { readonly nowMs: () => number; readonly deadlineAtMs: number } | undefined;
+export interface CodingToolMutationGuard extends ToolEffectGuard {
   /** Server-held one-use delivery execution lease, never populated from IPC. */
   readonly deliveryApproval?: object;
   readonly stageApproval?: object;
-  /** Must be called at the final governed mutation/commit boundary. */
-  readonly check: () => boolean;
   /** Server-private live authority projection for narrower auxiliary composition. */
   readonly resolveParentAuthority?:
     (() => CodingWorkbenchAuthorityEnvelope | undefined) | undefined;
@@ -394,6 +390,8 @@ export interface CodingToolNativeInvocation {
   readonly sessionId: string;
   readonly messageId: string;
   readonly callId: string;
+  /** Server-minted identity of one inner MCP policy request; never a producer field. */
+  readonly mcpActionDigest?: string;
 }
 
 /**
@@ -495,6 +493,24 @@ export interface CodingToolNativeVerificationHooks {
   readonly credited?:
     | ((resources: readonly string[], readScripts: boolean) => readonly VerificationKind[])
     | undefined;
+  /**
+   * Opens the staged candidate's commit proof when a check line is admitted, as the governed
+   * verifier opens it before its run (#3907 AC3); absent when the run has no verified commit.
+   */
+  readonly commitProof?: (() => CodingToolNativeCommitProof | undefined) | undefined;
+}
+
+/** A commit proof a native check line opened at admission, settled once by its outcome. */
+export interface CodingToolNativeCommitProof {
+  /** The line ran and reported its own status: the checks it proved, or the one that failed. */
+  readonly settle: (outcome: CodingToolNativeCommitProofOutcome) => void;
+}
+
+export interface CodingToolNativeCommitProofOutcome {
+  readonly passed: boolean;
+  readonly kinds: readonly VerificationKind[];
+  readonly exitCode: number;
+  readonly durationMs: number;
 }
 
 /**

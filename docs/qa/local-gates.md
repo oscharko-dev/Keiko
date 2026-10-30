@@ -46,6 +46,16 @@ both. `node_modules` deliberately lives in that volume rather than a bind mount:
 and a Linux container cannot share one install without swapping platform-native binaries under each
 other.
 
+## Pinned toolchain for a local `npm test`
+
+Run `npm test` under the governed pair that `scripts/check-runtime-toolchain.mjs` approves for exact
+runs: **Node.js 24.18.0 with npm 11.16.0** (the compatibility baseline Node.js 26.8.1 with npm 11.19.0
+is also approved). Required CI provisions exactly that pair. A host inside the supported engine
+range but on another patch, such as Node.js 24.22.0 with npm 11.19.1, is supported for development,
+yet `debug-launch-policy.test.ts` asserts the exact pair: outside CI it skips its npm-policy proof
+and names the reason, and with `CI=true` it never skips, so run `node scripts/check-runtime-toolchain.mjs --exact`
+to see whether your host qualifies (#4111).
+
 ## Git worktrees
 
 A linked worktree's `.git` is a file pointing at the parent checkout, which is outside the mount, so

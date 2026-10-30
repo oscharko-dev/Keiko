@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   LAB_GUIDE,
+  labErrorLine,
+  redactSecretHeaders,
   LAB_REPOSITORY_NAME,
   MODES,
   TERMINAL_STATES,
@@ -18,6 +20,7 @@ import {
   approvalPolicyText,
   assertCheckoutSelected,
   assertLabRepository,
+  LAB_FIXTURE_MARKER,
   assertProjectRegistered,
   browserBaseUrl,
   checkoutRequest,
@@ -35,6 +38,7 @@ import {
   registerProjectRequest,
   resolveMode,
   resolveTaskInput,
+  stopUnfinishedRun,
 } from "../testing/coding-workbench-lab/lab-common.mjs";
 
 const TEMP_DIRECTORIES = [];
@@ -172,6 +176,17 @@ describe("lab repository (fail closed)", () => {
     expect(() => assertLabRepository(empty)).toThrow(UsageError);
   });
 
+  it("accepts a folder with the exact lab fixture marker and refuses any other marker text", () => {
+    const fixture = mkdtempSync(join(tmpdir(), "keiko-lab-fixture-"));
+    TEMP_DIRECTORIES.push(fixture);
+    expect(() => assertLabRepository(fixture)).toThrow(UsageError);
+    writeFileSync(join(fixture, LAB_FIXTURE_MARKER), "something else\n");
+    expect(() => assertLabRepository(fixture)).toThrow(UsageError);
+    writeFileSync(join(fixture, LAB_FIXTURE_MARKER), "keiko-lab-fixture\n");
+    expect(() => assertLabRepository(fixture)).not.toThrow();
+    expect(labRepositoryPath(fixture, {})).toBe(resolve(fixture));
+  });
+
   it("reads the marker through the injected reader", () => {
     const read = vi.fn(() => JSON.stringify({ name: LAB_REPOSITORY_NAME }));
     expect(() => assertLabRepository("/anywhere", read)).not.toThrow();
@@ -234,6 +249,63 @@ describe("describeRefusal", () => {
     expect(describeRefusal(400, body)).toHaveLength(200);
     const noisy = { error: { code: "X", message: "first\u001b[31m\nsecond\u0007" } };
     expect(describeRefusal(400, noisy)).toBe("HTTP 400 X: first [31m second");
+  });
+});
+
+describe("driver error output (#4120)", () => {
+  const COOKIE = "keiko_coding_app_session=s3ss10n.s1gn4tur3";
+  // The shape Playwright's apiRequestContext.get rejects with: the message embeds its call log.
+  const playwrightFailure = (cause) =>
+    new Error(
+      `apiRequestContext.get: ${cause}\nCall log:\n  - → GET http://127.0.0.1:1993/api/x\n` +
+        `    - user-agent: Playwright\n    - cookie: ${COOKIE}\n` +
+        `    - Authorization: Bearer abc.def.ghi\n    - set-cookie: other=value; Path=/`,
+    );
+
+  it("prints one closed line for an unreachable server, without the call log", () => {
+    const line = labErrorLine(playwrightFailure("connect ECONNREFUSED 127.0.0.1:1993"));
+    expect(line).toBe("lab: server unreachable (ECONNREFUSED)");
+  });
+
+  it("keeps cookie and authorization values out of any other request failure", () => {
+    const line = labErrorLine(playwrightFailure("socket hang up"));
+    expect(line).toMatch(/^lab: apiRequestContext\.get: socket hang up/u);
+    expect(line).not.toContain("s3ss10n");
+    expect(line).not.toContain("abc.def.ghi");
+    expect(line).not.toContain("other=value");
+    expect(line).toContain("cookie: [redacted]");
+  });
+
+  // #4126 review: a header serialized as JSON quotes its name, so the separator follows a quote.
+  it("redacts quoted header names and keeps the rest of the JSON", () => {
+    const text = `{"cookie":"session=secret","accept":"*/*",'Authorization': 'Bearer abc.def'}`;
+    const redacted = redactSecretHeaders(text);
+    expect(redacted).toBe(`{"cookie":"[redacted]","accept":"*/*",'Authorization': '[redacted]'}`);
+    expect(redacted).not.toContain("secret");
+    expect(redacted).not.toContain("abc.def");
+    expect(redactSecretHeaders(`{"set-cookie": "a=\\"b\\"; Path=/"}`)).toBe(
+      `{"set-cookie": "[redacted]"}`,
+    );
+    expect(redactSecretHeaders(`{"cookie":session=secret,"accept":"*/*"}`)).toBe(
+      `{"cookie":[redacted],"accept":"*/*"}`,
+    );
+    const array = redactSecretHeaders(`{"set-cookie":["a=one","b=two"],"accept":"*/*"}`);
+    expect(array).toBe(`{"set-cookie":[redacted],"accept":"*/*"}`);
+    expect(array).not.toContain("one");
+    expect(array).not.toContain("two");
+    // An unterminated array of empty strings once made the pattern backtrack exponentially
+    // (CodeQL, #4126 review); it must now finish at once and still redact the value.
+    expect(redactSecretHeaders(`{"cookie":[${'""'.repeat(40)}`)).toBe(`{"cookie":[redacted]`);
+  });
+
+  it("redacts the header values in arbitrary text and leaves other lines alone", () => {
+    expect(redactSecretHeaders(`a\nCookie=${COOKIE}\nproxy-authorization: Basic eA==\nb`)).toBe(
+      "a\nCookie=[redacted]\nproxy-authorization: [redacted]\nb",
+    );
+  });
+
+  it("prints a usage mistake as it is", () => {
+    expect(labErrorLine(new UsageError("pass the run id"))).toBe("pass the run id");
   });
 });
 
@@ -302,6 +374,23 @@ describe("numbers, modes and run ids", () => {
     }
     expect(exitCodeForState("running")).toBe(3);
     expect(exitCodeForState(undefined)).toBe(3);
+  });
+
+  // #3907 parity batch: a lane that hit its deadline left its run active, and every later task in
+  // the batch was refused with LOCK_CONTENTION before it started.
+  it("stops a run the deadline left active, and leaves an ended run alone", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const post = vi.fn(async () => ({ status: 200 }));
+    await expect(stopUnfinishedRun(post, "run-7", { state: "running" })).resolves.toBe(200);
+    expect(post).toHaveBeenCalledExactlyOnceWith("/api/coding-workbench/runtime/runs/run-7/stop", {
+      requestId: "run-7",
+    });
+    await expect(stopUnfinishedRun(post, "run-8", {})).resolves.toBe(200);
+    post.mockClear();
+    for (const state of TERMINAL_STATES) {
+      await expect(stopUnfinishedRun(post, "run-9", { state })).resolves.toBeNull();
+    }
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("describes a run snapshot with the kind of a pending permission", () => {

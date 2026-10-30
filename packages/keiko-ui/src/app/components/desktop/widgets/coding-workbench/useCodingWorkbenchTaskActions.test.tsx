@@ -2,6 +2,12 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
+import { sha256Hex } from "../../hooks/canonical-voice-hasher-runtime";
 
 const previewIssueMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -92,6 +98,20 @@ describe("starting a task", () => {
     const options = vi.mocked(actions.start).mock.calls[0]?.[1] ?? {};
     expect(options).not.toHaveProperty("references");
     expect(options).not.toHaveProperty("command");
+  });
+
+  it("sends the Jira Pod the person picked with the start, and no key when none was", async () => {
+    const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+    const picked = setup({ jiraPodId });
+    const bare = setup();
+
+    act(() => picked.result.current.composer.onStart("implement the ticket"));
+    act(() => bare.result.current.composer.onStart("implement the ticket"));
+
+    await waitFor(() => expect(picked.actions.start).toHaveBeenCalledOnce());
+    await waitFor(() => expect(bare.actions.start).toHaveBeenCalledOnce());
+    expect(vi.mocked(picked.actions.start).mock.calls[0]?.[1]).toMatchObject({ jiraPodId });
+    expect(vi.mocked(bare.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("jiraPodId");
   });
 
   it("sends the first prompt's referenced files with the start", async () => {
@@ -316,5 +336,39 @@ describe("retrying a start the issue intake stopped", () => {
 
     await waitFor(() => expect(actions.start).toHaveBeenCalledOnce());
     expect(vi.mocked(actions.start).mock.calls[0]?.[0]).toBe("the draft");
+  });
+
+  // #3877: a retried start submits a task like a typed one, so it records the same digests of the
+  // shown and the submitted text; a divergence between them stays detectable on the Activity Log.
+  it.each([
+    ["the draft is still the last start", "look at @src/app.ts", "look at @src/app.ts"],
+    ["the person changed the draft", "look at @src/app.ts", " a different task "],
+  ])("records the submitted task's digests when %s", async (_case, started, shown) => {
+    const submissions: ClientDiagnosticMeta["composerSubmission"][] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta?.composerSubmission !== undefined) submissions.push(meta.composerSubmission);
+    });
+    try {
+      const { result, rerender, actions } = setup({}, started);
+      act(() => result.current.composer.onStart(started));
+      await waitFor(() => expect(actions.start).toHaveBeenCalledOnce());
+      rerender({ taskIntent: shown });
+
+      act(() => result.current.retryStart());
+
+      await waitFor(() => expect(actions.start).toHaveBeenCalledTimes(2));
+      const submitted = vi.mocked(actions.start).mock.calls[1]?.[0] ?? "";
+      expect(submissions).toEqual([
+        expect.objectContaining({
+          kind: "start",
+          outcome: "attempted",
+          displayedDigest: sha256Hex(shown),
+          submittedDigest: sha256Hex(submitted),
+          draftMatchesInput: true,
+        }),
+      ]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 });

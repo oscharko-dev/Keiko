@@ -13,7 +13,7 @@ interface VersionRollback {
   readonly sql: string;
 }
 
-// One rollback fragment per structural forward migration (V14..V46), undoing what that
+// One rollback fragment per structural forward migration (V14..V51), undoing what that
 // migration's own `V<n>_SQL` in schema.ts added to reach it — never more, never less — so a rewind
 // can stop at any intermediate version and leave every earlier version's data and shape untouched.
 // Declared newest-first (descending): dropping the newest objects before older ones is always safe
@@ -22,10 +22,37 @@ interface VersionRollback {
 // both compose from this ONE list — neither restates a migration's DDL of its own, and a future
 // migration is covered the moment its own rollback fragment is appended here.
 //
+// V48 only conservatively repairs mutation outcomes; no structural rollback applies.
 // V20/V30/V33/V37/V40 have no fragments: they only widen a `failure_code` CHECK on
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  {
+    version: 54,
+    sql: `ALTER TABLE chat_tool_mutations DROP COLUMN native_mcp_action_digest;
+    DROP INDEX chat_tool_mutations_active;
+    CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
+      WHERE phase IN ('dispatched','acknowledged');`,
+  },
+  {
+    version: 53,
+    sql: `DROP INDEX chat_tool_mutations_native_dispatch;
+    ALTER TABLE chat_tool_mutations DROP COLUMN native_arguments_digest;
+    ALTER TABLE chat_tool_mutations DROP COLUMN native_call_id;
+    ALTER TABLE chat_tool_mutations DROP COLUMN native_message_id;
+    ALTER TABLE chat_tool_mutations DROP COLUMN native_session_id;
+    ALTER TABLE chat_tool_mutations DROP COLUMN coding_run_id;
+    ALTER TABLE chat_tool_mutations DROP COLUMN consumer_kind;
+    ALTER TABLE coding_history_runs DROP COLUMN active_user_message_id;
+    ALTER TABLE coding_history_runs DROP COLUMN active_native_turn_ref;`,
+  },
+  { version: 51, sql: "DROP TABLE chat_tool_read_grants;" },
+  {
+    version: 50,
+    sql: "DROP TRIGGER chat_tool_transcript_revision; ALTER TABLE chat_messages DROP COLUMN tool_transcript_json;",
+  },
+  { version: 49, sql: "ALTER TABLE chats DROP COLUMN jira_state_json;" },
+  { version: 47, sql: "DROP TABLE chat_tool_mutations;" },
   { version: 46, sql: "DROP TABLE chat_creation_intents;" },
   { version: 45, sql: "DROP TABLE browser_approvals; DROP TABLE browser_approval_installation;" },
   { version: 44, sql: "DROP TABLE chat_drafts;" },

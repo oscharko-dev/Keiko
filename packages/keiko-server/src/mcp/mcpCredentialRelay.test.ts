@@ -656,3 +656,38 @@ describe("a credential the server reflects (#3903 AC3)", () => {
     ]);
   });
 });
+
+it("serves the server-owned managed upstream on the existing HTTP relay and revokes its capability", async () => {
+  const relay = createMcpCredentialRelay();
+  const generation = new AbortController();
+  const binding = relay.bind({
+    runId: "managed-run",
+    url: "https://managed.example.test/mcp",
+    headers: {},
+    secrets: [],
+    signal: generation.signal,
+    upstream: () =>
+      Promise.resolve(
+        new Response('{"managed":true}', { headers: { "content-type": "application/json" } }),
+      ),
+  });
+  if (binding === undefined) throw new Error("Missing binding");
+  const origin = await startRelay(relay, { write: () => undefined }, () =>
+    Promise.reject(new Error("Fallback transport must not be used")),
+  );
+  const url = `${origin}${MCP_RELAY_PATH_PREFIX}${binding.relayId}`;
+  const init = {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-keiko-csrf": "1",
+      [MCP_RELAY_CAPABILITY_HEADER]: binding.capability,
+    },
+    body: INITIALIZE,
+  };
+  const response = await fetch(url, init);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ managed: true });
+  generation.abort();
+  expect((await fetch(url, init)).status).toBe(401);
+});

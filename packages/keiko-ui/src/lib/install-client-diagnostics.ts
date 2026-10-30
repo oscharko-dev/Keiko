@@ -192,6 +192,9 @@ function clientBindingPostBody(
     ...(report.decidingLoadCount === undefined
       ? {}
       : { decidingLoadCount: report.decidingLoadCount }),
+    ...(report.projectOpenAttemptCount === undefined
+      ? {}
+      : { projectOpenAttemptCount: report.projectOpenAttemptCount }),
     ...(report.candidateCount === undefined ? {} : { candidateCount: report.candidateCount }),
     ...(report.disambiguatedCount === undefined
       ? {}
@@ -263,11 +266,16 @@ function codingReportFields(
   meta: ClientDiagnosticMeta,
 ): Pick<
   ClientDiagnosticIngestRequest,
-  "codingRunRestore" | "codingWorkbenchInteraction" | "codingHistoryScope" | "codingIssueOutcome"
+  | "codingRunRestore"
+  | "codingWorkbenchInteraction"
+  | "codingRequestTimeout"
+  | "codingHistoryScope"
+  | "codingIssueOutcome"
 > {
   return {
     codingRunRestore: meta.codingRunRestore,
     codingWorkbenchInteraction: meta.codingWorkbenchInteraction,
+    codingRequestTimeout: meta.codingRequestTimeout,
     codingHistoryScope: meta.codingHistoryScope,
     codingIssueOutcome: meta.codingIssueOutcome,
   };
@@ -318,6 +326,7 @@ function clientMessagePostBody(
     supportReportPreparation: meta.supportReportPreparation,
     filesScopeDecision: meta.filesScopeDecision,
     updateNotice: meta.updateNotice,
+    editorLineEnding: meta.editorLineEnding,
     ...codingReportFields(meta),
     composerActivity: meta.composerActivity,
     composerSubmission: meta.composerSubmission,
@@ -404,6 +413,7 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.supportReportPreparation !== undefined ||
     meta.filesScopeDecision !== undefined ||
     meta.updateNotice !== undefined ||
+    meta.editorLineEnding !== undefined ||
     meta.codingRunRestore !== undefined ||
     meta.codingWorkbenchInteraction !== undefined ||
     meta.citationActivation !== undefined ||

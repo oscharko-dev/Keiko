@@ -99,6 +99,36 @@ afterEach(() => {
 });
 
 describe("portable ZIP archive writer", () => {
+  it.each([
+    ["empty", Buffer.alloc(0), 0],
+    ["CRC32 golden", Buffer.from("123456789"), 0xcbf43926],
+    ...[
+      [1, 1281784366],
+      [255, 1352805125],
+      [256, 216650595],
+      [257, 2563875615],
+      [4096, 1562136291],
+      [65536, 2079246634],
+      [1048576, 3559177665],
+    ].map(([length, checksum]) => [
+      `${length} binary bytes`,
+      Buffer.from(Uint8Array.from({ length }, (_, index) => (index * 31 + 7) & 0xff)),
+      checksum,
+    ]),
+  ])("preserves standard ZIP CRC32 for %s", (_name, data, checksum) => {
+    const root = temporaryRoot();
+    const archive = join(root, "checksum.zip");
+    writeZipArchiveEntries(archive, [{ name: "payload.bin", data }]);
+    const bytes = readFileSync(archive);
+
+    expect(bytes.readUInt32LE(14)).toBe(checksum);
+    expect(bytes.readUInt32LE(centralDirectoryOffset(bytes) + 16)).toBe(checksum);
+    expect(readZipArchiveEntries(archive)[0].data).toEqual(data);
+    const extracted = join(root, "extracted");
+    extractZipArchiveEntries(archive, extracted);
+    expect(readFileSync(join(extracted, "payload.bin"))).toEqual(data);
+  });
+
   it("measures final expanded bytes without inflating the payload", () => {
     const archive = join(temporaryRoot(), "payload.zip");
     writeZipArchiveEntries(archive, [

@@ -172,9 +172,9 @@ export async function createConfluencePage(
 }
 
 // PUT /wiki/api/v2/pages/{pageId} — optimistic-version update. A stale `currentVersion` answers
-// the provider's 409, mapped to the typed `conflict` result (Issue #2244 Scope 4). Idempotent
-// under the D3 retry rule: a replay of the same version bump lands as `conflict`, never a
-// double-apply.
+// the provider's 409, mapped to the typed `conflict` result (Issue #2244 Scope 4). The shared
+// transport sends this mutation once. Version conflicts do not authorize a retry or a new
+// version bump without a new validated intent.
 export async function updateConfluencePage(
   deps: ConfluenceWriteActionDeps,
   input: UpdateConfluencePageInput,

@@ -289,7 +289,7 @@ describe("eventDetail auxiliary outcome", () => {
         runtimeEvent({ eventKind: "failure-redacted", failureCode: "recovery-required" }),
         t,
       ),
-    ).toBe("codingWorkbench.event.failure.generic");
+    ).toBe("codingWorkbench.recovery.summary");
     expect(eventDetail(runtimeEvent({ eventKind: "child-run-completed" }), t)).toBe("");
     expect(eventDetail(runtimeEvent({ failureCode: "runtime-failed" }), t)).toBe(
       "codingWorkbench.event.failure.runtime",
@@ -431,13 +431,13 @@ describe("runStatusAnnouncement research grant", () => {
   // state. The run's status and the readiness facts are two separate texts now.
   it("keeps every readiness fact out of the run's status and the run state out of readiness", () => {
     const status = runStatusAnnouncement(state, t);
-    expect(status).toBe("codingWorkbench.announcement.runRevision");
+    expect(status).toBe("codingWorkbench.runState.running");
     const readiness = readinessFacts(state, t);
     expect(readiness).toContain("codingWorkbench.announcement.modelSource.notChecked");
     expect(readiness).toContain("codingWorkbench.announcement.workspace.notChecked");
     expect(readiness).toContain("codingWorkbench.announcement.runtime.notChecked");
     expect(readiness).toContain("codingWorkbench.announcement.authenticationNotSelected");
-    expect(readiness).not.toContain("codingWorkbench.announcement.runRevision");
+    expect(readiness).not.toContain("codingWorkbench.runState.");
   });
 
   it("states a ready Workbench without a run by its state alone, never by a revision", () => {
@@ -456,7 +456,7 @@ describe("runStatusAnnouncement research grant", () => {
 // other phases change with every tool call and would make the region chatter, so they stay visible
 // only; and a phase the sentence states is never shown a second time beside it.
 describe("runStatusAnnouncement run phase", () => {
-  const RUN_SENTENCE = "codingWorkbench.announcement.runRevision";
+  const RUN_SENTENCE = "codingWorkbench.runState.running";
   const GATEWAY_PHASE = "codingWorkbench.runStatus.phase.gateway";
   // Keyed by the phase type, so a new phase cannot be added without deciding here whether it is
   // announced.
@@ -490,10 +490,10 @@ describe("runStatusAnnouncement run phase", () => {
     const de: CodingWorkbenchTranslate = (key, values) =>
       translateCodingWorkbench("de", key, values);
     expect(runStatusAnnouncement(running, en, null, "gateway")).toBe(
-      "Running. Revision 4. Model gateway unavailable, retrying.",
+      "Running. Model gateway unavailable, retrying.",
     );
     expect(runStatusAnnouncement(running, de, null, "gateway")).toBe(
-      "Wird ausgeführt. Revision 4. Modell-Gateway nicht erreichbar, neuer Versuch.",
+      "Wird ausgeführt. Modell-Gateway nicht erreichbar, neuer Versuch.",
     );
   });
 
@@ -550,7 +550,7 @@ describe("runStatusAnnouncement run phase", () => {
 // details. The two lists are derived from the same keys, so the status can only ever repeat a fact
 // the details hold.
 describe("readiness attention facts", () => {
-  const RUN_SENTENCE = "codingWorkbench.announcement.runRevision";
+  const RUN_SENTENCE = "codingWorkbench.runState.running";
 
   function runningState(
     overrides: Partial<CodingWorkbenchRuntimeState>,

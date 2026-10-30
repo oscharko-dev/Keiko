@@ -34,6 +34,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   VerificationReport,
+  VerificationResult,
+  VerificationStatus,
   GitDeliveryApprovalClaim,
   GitCommitMessageValidation,
   CodingWorkbenchRuntimeEvent,
@@ -190,6 +192,29 @@ function report(passed = true): VerificationReport {
     ],
   };
 }
+// A red report whose one check took the given end, with counts that agree with it.
+function redReport(
+  end: Partial<VerificationResult>,
+  overallStatus: VerificationStatus = "failed",
+): VerificationReport {
+  const red = report(false);
+  return {
+    ...red,
+    overallStatus,
+    results: red.results.map((result) => ({ ...result, ...end })),
+    // One result, so one count, stated directly rather than recomputed the way the code checks it.
+    counts: { ...red.counts, failed: 0, [end.status ?? "failed"]: 1 },
+  };
+}
+
+async function proposeAfter(verification: VerificationReport): Promise<string | undefined> {
+  const ticket = ticketOf(await service.beginVerification());
+  if (ticket === undefined) throw new Error("verification ticket unavailable");
+  expect(await service.completeVerification(ticket, verification)).toBe(false);
+  const proposal = await service.propose("feat: commit the requested change");
+  return proposal?.status === "approval-required" ? proposal.proposalId : proposal?.status;
+}
+
 function context(): VerifiedCommitRunContext {
   return {
     runId: "run-1",
@@ -675,6 +700,114 @@ describe("verified Code-task commit service", () => {
       reason: "approval-invalid",
     });
     expect(git(["rev-parse", "HEAD"])).toBe(before);
+  });
+  // Owner decision 2026-10-30 (#3907 AC3, lab lane T6): Full access commits what the human asked
+  // for even when the candidate's checks ran red, as standalone OpenCode does. The failing evidence
+  // stays bound to the commit and its approval line; nothing reports it as a pass.
+  it("commits a candidate whose verification ran red in Full access and keeps the failing evidence", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => true,
+    });
+    const proposalId = await proposeAfter(report(false));
+    if (proposalId === undefined) throw new Error("proposal unavailable");
+
+    const result = await service.execute(proposalId, undefined, { check: () => true });
+
+    expect(result?.status, JSON.stringify(events)).toBe("succeeded");
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("1");
+    const verificationEvidenceId = result?.verificationEvidenceId ?? "";
+    expect(JSON.parse(evidence.get(verificationEvidenceId) ?? "{}")).toMatchObject({
+      status: "failed",
+    });
+    expect(events.filter((event) => event.extra?.phase === "approval").at(-1)).toMatchObject({
+      op: "git.verified-commit",
+      correlationId: "verified-commit-test",
+      extra: { state: "policy-authorized", passed: false, verificationEvidenceId },
+    });
+  });
+  // A skipped step beside a red one is the shape a passing proof already admits beside a green one
+  // (successfulStep); the failing evidence mirrors it, while a run with no red step stays refused.
+  it("admits red checks beside a skipped one in Full access, as a pass admits green beside skipped", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => true,
+    });
+    const red = report(false);
+    const skipped = red.results.map((result): VerificationResult => ({
+      ...result,
+      kind: "lint",
+      status: "skipped",
+      exitCode: null,
+    }));
+    const mixed = {
+      ...red,
+      results: [...red.results, ...skipped],
+      counts: { ...red.counts, skipped: 1 },
+    };
+    expect(await proposeAfter(mixed)).toMatch(/^commit-/u);
+  });
+  it("keeps a red verification as the commit gate outside Full access", async () => {
+    expect(await proposeAfter(report(false))).toBe("verification-failed");
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
+  });
+  it.each([
+    ["cancelled", { status: "cancelled", exitCode: null }, "cancelled"],
+    ["timed out", { status: "timed-out", exitCode: null, signal: "SIGTERM" }, "timed-out"],
+    ["denied", { status: "denied", exitCode: null }, "denied"],
+    ["killed by a signal", { status: "failed", exitCode: null, signal: "SIGKILL" }, "failed"],
+    [
+      "cut by a breached limit",
+      {
+        status: "failed",
+        appliedLimits: [{ dimension: "wall-time", limit: 1, enforced: true, breached: true }],
+      },
+      "failed",
+    ],
+    ["skipped entirely", { status: "skipped", exitCode: null }, "failed"],
+  ] as const)(
+    "refuses a verification that never reached its own red end in Full access: %s",
+    async (_label, end, overallStatus) => {
+      service = createVerifiedCommitService({
+        ...options,
+        policyAllowsWithoutApproval: (): boolean => true,
+      });
+      expect(await proposeAfter(redReport(end, overallStatus))).toBe("verification-failed");
+      expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
+    },
+  );
+  it("refuses red checks of a candidate that changed during its verification in Full access", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => true,
+    });
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    git(["add", "code.js"]);
+    expect(await service.completeVerification(ticket, report(false))).toBe(false);
+    expect(await service.propose("feat: changed candidate")).toMatchObject({
+      status: "verification-failed",
+      reason: "verification-failed",
+    });
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
+  });
+  it("turns red checks back into the gate when Full access ends after the proposal", async () => {
+    let fullAccess = true;
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => fullAccess,
+    });
+    const proposalId = await proposeAfter(report(false));
+    if (proposalId === undefined) throw new Error("proposal unavailable");
+    fullAccess = false;
+    const approval = await claim(proposalId);
+
+    expect(await service.execute(proposalId, approval)).toMatchObject({
+      status: "verification-failed",
+      reason: "verification-failed",
+    });
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
   });
   // #3610: a commit proposed while part of the change is still unstaged used to be refused as
   // "verification-missing"; the model re-ran the verification, which reported candidate-not-staged,

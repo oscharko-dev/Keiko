@@ -1,4 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { investigateBug } from "@oscharko-dev/keiko-workflows";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { QueueEventSink, type StreamEvent, type SseWriter } from "./sink.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
@@ -291,5 +299,142 @@ describe("QueueEventSink terminal-event diagnostic tee", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+// #4110: a patch the workflow refused leaves its closed reason in the Activity Log, not only on an
+// SSE frame that is gone once nobody is attached.
+describe("QueueEventSink patch-refusal activity (#4110)", () => {
+  function refusal(type: string, extra: Record<string, unknown>): StreamEvent {
+    return terminalEvent(1, type, { ok: false, patchBytes: 8_388_609, filesChanged: 1, ...extra });
+  }
+
+  function emitted(events: readonly StreamEvent[]): ReturnType<typeof createBufferedServerLogSink> {
+    const activityLog = createBufferedServerLogSink();
+    const { sink: diagnostics } = recordingDiagnosticSink();
+    const sink = new QueueEventSink({ diagnostics, activityLog });
+    for (const next of events) sink.emit(next);
+    return activityLog;
+  }
+
+  it.each([
+    ["bug:patch:validated", "bug-investigation"],
+    ["patch:validated", "unit-tests"],
+  ])("records a refused %s as one body-free line with its closed reason", (type, workflow) => {
+    const activityLog = emitted([refusal(type, { rejectionCode: "size-limit" })]);
+    expect(activityLog.events).toHaveLength(1);
+    const [line] = activityLog.events;
+    if (line === undefined) throw new Error("expected a runs.patch.refused line");
+    expect(line.op).toBe("runs.patch.refused");
+    expect(line.correlationId).toBe("run-000001");
+    const persisted = expectActivityLogProof(
+      "runs.patch.refused.line",
+      formatActivityLogProofLine(line),
+    );
+    expect(persisted).toMatchObject({
+      workflow,
+      reason: "size-limit",
+      patchBytes: 8_388_609,
+      fileCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("keeps every other reason closed and maps an unknown or absent one to unspecified", () => {
+    const activityLog = emitted([
+      refusal("bug:patch:validated", { rejectionCode: "out-of-scope" }),
+      refusal("bug:patch:validated", { rejectionCode: "a free-text reason with /private/path" }),
+      refusal("patch:validated", {}),
+    ]);
+    expect(activityLog.events.map((line) => line.extra?.reason)).toEqual([
+      "out-of-scope",
+      "unspecified",
+      "unspecified",
+    ]);
+    expect(JSON.stringify(activityLog.events)).not.toContain("/private/path");
+  });
+
+  it("writes nothing for an accepted validation or any other event", () => {
+    const activityLog = emitted([
+      terminalEvent(1, "bug:patch:validated", { ok: true, patchBytes: 10, filesChanged: 1 }),
+      terminalEvent(2, "patch:validated", { ok: true, patchBytes: 10, filesChanged: 1 }),
+      terminalEvent(3, "bug:patch:applied", { ok: false }),
+      event(4, "run:completed"),
+    ]);
+    expect(activityLog.events).toHaveLength(0);
+  });
+
+  it("never carries a diff or a path from the event into the line", () => {
+    const activityLog = emitted([
+      refusal("bug:patch:validated", {
+        rejectionCode: "size-limit",
+        diff: "--- a/secret.ts\n+++ b/secret.ts\n",
+        path: "src/secret.ts",
+      }),
+    ]);
+    expect(JSON.stringify(activityLog.events)).not.toMatch(/secret/u);
+  });
+
+  // The whole chain, no hand-built event: the real workflow refuses an oversized model patch, its
+  // validation event reaches the sink, and the Activity Log alone names the reason.
+  it("reconstructs a size refusal of the real bug workflow from the Activity Log alone", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const sink = new QueueEventSink({ activityLog, diagnostics: recordingDiagnosticSink().sink });
+    const lineCount = 100;
+    const header = `--- /dev/null\n+++ b/src/generated.ts\n@@ -0,0 +1,${String(lineCount)} @@\n`;
+    const lineBytes = Math.ceil((GOVERNED_PATCH_MAX_BYTES + 1) / lineCount);
+    const diff = `${header}${`+${"x".repeat(lineBytes)}\n`.repeat(lineCount)}`;
+    const report = await investigateBug(
+      {
+        workspaceRoot: "/repo",
+        report: { description: "bug" },
+        modelId: "m",
+        limits: { maxRetries: 0, maxModelCalls: 1 },
+      },
+      {
+        sink,
+        idSource: () => "run-000001",
+        fs: memFs("/repo", { "package.json": JSON.stringify({ name: "demo" }) }),
+        model: {
+          call: () =>
+            Promise.resolve({
+              modelId: "m",
+              content: ["```diff", diff, "```", "## Root cause", "x"].join("\n"),
+              finishReason: "stop",
+              toolCalls: [],
+              structuredOutput: null,
+              usage: {
+                requestId: "r",
+                promptTokens: 1,
+                completionTokens: 1,
+                latencyMs: 1,
+                costClass: "high",
+              },
+            }),
+        },
+      },
+    );
+    expect(report.status).toBe("rejected");
+    const lines = activityLog.events.filter((line) => line.op === "runs.patch.refused");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.correlationId).toBe("run-000001");
+    expect(lines[0]?.extra).toMatchObject({
+      workflow: "bug-investigation",
+      reason: "size-limit",
+      fileCount: 1,
+    });
+    expect(Number(lines[0]?.extra?.patchBytes)).toBeGreaterThan(GOVERNED_PATCH_MAX_BYTES);
+  });
+
+  it("still ends a harness run over its patch bound with the closed HARNESS_LIMIT_PATCH_SIZE code", () => {
+    const { sink: diagnostics, records } = recordingDiagnosticSink();
+    const sink = new QueueEventSink({ diagnostics });
+    sink.emit(
+      terminalEvent(1, "run:failed", { failure: { category: "HARNESS_LIMIT_PATCH_SIZE" } }),
+    );
+    expect(records.map((record) => [record.operation, record.code])).toEqual([
+      ["harness.run.failed", "HARNESS_LIMIT_PATCH_SIZE"],
+    ]);
   });
 });

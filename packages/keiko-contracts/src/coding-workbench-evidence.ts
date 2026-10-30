@@ -361,6 +361,7 @@ export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
   "native-edit",
   "native-shell",
   "native-egress",
+  "native-mcp",
   "native-execute",
 ]);
 

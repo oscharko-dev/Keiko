@@ -100,12 +100,9 @@ function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchT
   ) {
     return t("codingWorkbench.header.readyEvaluation");
   }
-  // #3873: a revision belongs to a run; with no run yet the state alone is the status.
-  if (snapshot.runId === undefined) return runStateLabel(snapshot.state, t);
-  return t("codingWorkbench.announcement.runRevision", {
-    state: runStateLabel(snapshot.state, t),
-    revision: snapshot.revision,
-  });
+  // #3907 (owner: less is more): the run's state is the status; its internal revision counter told
+  // the human nothing they could act on.
+  return runStateLabel(snapshot.state, t);
 }
 
 function setupKey(status: CodingWorkbenchResourceStatus): CodingWorkbenchMessageKey | undefined {
@@ -163,7 +160,7 @@ function phaseAnnouncement(
 }
 
 /**
- * What the run itself is doing, for the live run status region: its state and revision, its phase
+ * What the run itself is doing, for the live run status region: its state, its phase
  * when that is one the operator must hear (`runPhaseIsAnnounced`: a model gateway that is being
  * retried), a completed recovery acknowledgement and an active research grant, then — only when
  * there are any — the readiness facts that need attention (`readinessAttentionFacts`). #3873 live
@@ -410,6 +407,7 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   CodingWorkbenchMessageKey
 >([
   ["runtime-failed", "codingWorkbench.event.failure.runtime"],
+  ["recovery-required", "codingWorkbench.recovery.summary"],
   ["prompt-allowance-exhausted", "codingWorkbench.event.failure.prompt-allowance-exhausted"],
   ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
   ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],

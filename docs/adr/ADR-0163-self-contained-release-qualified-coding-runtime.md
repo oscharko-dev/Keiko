@@ -312,6 +312,18 @@ automatically when the monitor becomes `active`. MDM-preapproved machines skip t
 Rejection, replacement deferral, entitlement absence, TCC denial, and activation failure remain
 content-free unavailable states. Keiko cannot approve either permission on the user's behalf.
 
+**Orphaned trees are reaped by the platform owners, not by a server-side recovery port (#4106).**
+The unused `createNativeRuntimeRecoveryPort` (`--reconcile` by persisted handle) was deleted with
+its tests rather than wired into startup reconciliation. A tree outlives neither the server nor the
+supervisor: the Linux supervisor kills the namespace init through its pidfd on control-channel loss
+and the init exits on lease loss (`keiko_runtime_supervisor.c`, `supervise`/`clear_generation`/
+`run_init`); the Windows Job Object carries `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and is terminated on
+control loss, so the kernel closes it with the supervisor (D3); the macOS monitor retires the session
+and fans out a token-bound SIGKILL when the supervisor's connection closes (`close_session`,
+`stop_session`). Startup reconciliation therefore only marks unsettled runs `recovery-required`
+and never needs to reap a process tree. A future defense-in-depth recovery port needs a failing
+qualification that a tree survives both deaths first.
+
 ### D5 — Packaged secure-read is constructed from the same trust root
 
 Production composition resolves the secure-read helper by name from the closed runtime attestation,
@@ -627,3 +639,4 @@ done exactly that; an evaluation runtime is not such a fact and stays in the det
 | 1.6     | 2026-10-23 | Pinned OpenCode 2.1.4 and introduced the one version boundary (`opencodeRuntimeVersions.ts`, #3908): every producer-derived identity (tag, commit, raw schema digest, structural protocol-surface digest) is resolved from the discovered runtime's approved version, the already published npm runtime packages keep their own previous identity until packages built from the current pin replace them, and D6 continues to forbid any fallback outside the approved set. |
 | 1.7     | 2026-10-23 | Shipped the pinned ripgrep 15.1.0 executable and MIT license in every production ZIP (`nativeTools`, `runtime/native/rg`), so the OpenCode search tools never download at run time (#3897). |
 | 1.8     | 2026-10-24 | D6: the runtime knows one provider. Every launch binds the producer's gateway-only provider policy on the server-owned layer and disables OpenCode's hosted free models and the models.dev catalog fetch, after the original 2.1.4 executable was shown to list free models and a local Ollama beside the gateway model (#3905, parity row S11). |
+| 1.9     | 2026-10-29 | D4: recorded that orphaned runtime trees are reaped by the Linux, Windows and macOS supervisors/monitor themselves and deleted the unused server-side native recovery port (#4106). |

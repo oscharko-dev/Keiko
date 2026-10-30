@@ -21,6 +21,8 @@ export interface VerifiedCommitRunContext {
   readonly runtimeAuthorityDigest: string;
   readonly workspaceDigest: string;
   readonly repositoryDigest: string;
+  /** How the repository identity was admitted; `local` has no `origin` to deliver to. */
+  readonly repositoryKind?: "github-origin" | "foreign-origin" | "local";
   readonly workspace: WorkspaceInfo;
   readonly baseRef: string;
   readonly headRef: string;
@@ -46,6 +48,8 @@ export interface VerifiedCommitProposal {
   readonly command: GitCommitCommand;
   readonly context: VerifiedCommitRunContext;
   readonly expiresAtMs: number;
+  /** Full access admitted this candidate although its verification ran and failed (#3907). */
+  readonly verificationFailed?: true;
   readonly review: import("@oscharko-dev/keiko-contracts").CodingWorkbenchRuntimePendingApprovalReview;
 }
 

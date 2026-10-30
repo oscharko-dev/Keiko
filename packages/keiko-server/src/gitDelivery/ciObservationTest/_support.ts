@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isIssueBoundDraftDeliveryRecord,
+  type IssueBoundDraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { runMigrations } from "../../store/schema.js";
@@ -30,7 +33,7 @@ export const COMMIT: VerifiedCommitResult = {
   committedTreeDigest: DIGEST,
   recordedAt: AT,
 };
-const INITIAL: DraftDeliveryRecord = {
+const INITIAL: IssueBoundDraftDeliveryRecord = {
   schemaVersion: "1",
   revision: 0,
   phase: "push-proposed",
@@ -89,13 +92,21 @@ function createRun(snapshots: CodingRuntimeSnapshotStore): void {
     },
   });
 }
+/** The run's recorded delivery, which these fixtures always bind to an issue. */
+export function recordedIssueDraft(
+  snapshots: CodingRuntimeSnapshotStore,
+): IssueBoundDraftDeliveryRecord | undefined {
+  const draft = snapshots.get("run-1")?.draftDelivery;
+  return draft !== undefined && isIssueBoundDraftDeliveryRecord(draft) ? draft : undefined;
+}
+
 export function createDraftRun(db: DatabaseSync): CodingRuntimeSnapshotStore {
   runMigrations(db);
   const snapshots = createCodingRuntimeSnapshotStore(db);
   createRun(snapshots);
   snapshots.recordVerifiedCommit(COMMIT);
   snapshots.recordDraftDelivery(INITIAL, null);
-  const steps: readonly Pick<DraftDeliveryRecord, "phase" | "reason">[] = [
+  const steps: readonly Pick<IssueBoundDraftDeliveryRecord, "phase" | "reason">[] = [
     { phase: "pushing", reason: "in-flight" },
     { phase: "pushed", reason: "completed" },
     { phase: "pr-proposed", reason: "approval-required" },

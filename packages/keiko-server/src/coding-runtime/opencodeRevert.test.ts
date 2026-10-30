@@ -94,9 +94,12 @@ function subject(
     readonly diffFails?: boolean;
     /** `false`: the turn's settlement recorded no image of its files. */
     readonly image?: boolean;
+    /** The run is torn down (server stop) while the runtime is still answering the diff. */
+    readonly disposedDuringDiff?: boolean;
   } = {},
 ): Subject {
   const order: string[] = [];
+  let available = input.available !== false;
   const files = input.files ?? [diff("a.txt")];
   const client = {
     active: vi.fn(() => {
@@ -106,6 +109,10 @@ function subject(
     messages: vi.fn(() => Promise.resolve(input.messages ?? TURN)),
     sessionDiff: vi.fn(() => {
       order.push("diff");
+      if (input.disposedDuringDiff === true) {
+        available = false;
+        return Promise.reject(new Error(`runtime gone ${SECRET}`));
+      }
       return input.diffFails === true
         ? Promise.reject(new Error(`diff failed ${SECRET}`))
         : Promise.resolve(files);
@@ -136,12 +143,13 @@ function subject(
   });
   const log = createBufferedServerLogSink();
   const port = createOpenCodeRevertRunPort({
-    readyRun: (runId) => (runId === RUN_ID && input.available !== false ? run : undefined),
+    readyRun: (runId) => (runId === RUN_ID && available ? run : undefined),
     abortTask,
     activityLog: log,
   });
   // The turn settled before the test begins: the composition records its image at that moment.
-  if (input.image !== false && input.diffFails !== true) recordOpenCodeTurnImage(run, log);
+  if (input.image !== false && input.diffFails !== true && input.disposedDuringDiff !== true)
+    recordOpenCodeTurnImage(run, log);
   client.sessionDiff.mockClear();
   order.length = 0;
   return { run, client, abortTask, port, log, order, settled: Promise.resolve(run.turnImage) };
@@ -766,6 +774,15 @@ describe("revert state", () => {
       },
     ]);
     expect(JSON.stringify(log.events)).not.toContain(SECRET);
+  });
+
+  it("is absent without a revert-failed warning when the run is torn down during the read (#4119)", async () => {
+    const { port, log, client } = subject({ disposedDuringDiff: true });
+
+    await expect(port.revertState(RUN_ID)).resolves.toBeUndefined();
+
+    expect(client.sessionDiff).toHaveBeenCalledTimes(1);
+    expect(log.events).toEqual([]);
   });
 
   it("records no turn image, and says why on the log, when the runtime cannot report the diff", async () => {

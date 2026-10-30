@@ -1,4 +1,5 @@
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { CLIENT_CODING_RUNTIME_CALLS } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import {
   resetServerLogger,
@@ -1577,6 +1578,37 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "changeset-review-prepared", fileCount: 100_000 },
     { interaction: "history-repository-switched" },
     { interaction: "event-stream-reconnecting" },
+    { interaction: "history-workspace-switched" },
+    { interaction: "bridge-registration-refused", refusal: "root-boundary" },
+    { interaction: "bridge-registration-refused", refusal: "lease" },
+    {
+      interaction: "diff-windowed",
+      surface: "changeset-review",
+      fileCount: 8,
+      totalLineCount: 96_000,
+      totalByteCount: 7_800_584,
+    },
+    {
+      interaction: "diff-windowed",
+      surface: "run-changes",
+      fileCount: 1,
+      totalLineCount: 2_001,
+      totalByteCount: 0,
+    },
+    {
+      interaction: "diff-windowed",
+      surface: "answer-diff",
+      fileCount: 100_000,
+      totalLineCount: 16_777_216,
+      totalByteCount: 1_073_741_824,
+    },
+    // #3880: an unpaired window held one of its secondary notices behind the pairing state.
+    { interaction: "notice-held", notice: "task-session" },
+    { interaction: "notice-held", notice: "skills" },
+    { interaction: "notice-held", notice: "mcp" },
+    { interaction: "notice-held", notice: "activity" },
+    { interaction: "notice-held", notice: "questions" },
+    { interaction: "notice-held", notice: "editor-bridge" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1615,6 +1647,57 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "pending-decision-focused", fileCount: 1 },
     { interaction: "history-repository-switched", taskId: "task-one" },
     { interaction: "event-stream-reconnecting", readyState: 2 },
+    { interaction: "history-workspace-switched", workspaceId: "ws-other" },
+    { interaction: "bridge-registration-refused" },
+    { interaction: "bridge-registration-refused", refusal: "EDITOR_AGENT_ROOT_BINDING_INVALID" },
+    { interaction: "notice-held" },
+    { interaction: "notice-held", notice: "Activity not connected." },
+    { interaction: "notice-held", notice: "skills", fileCount: 1 },
+    { interaction: "diff-windowed" },
+    { interaction: "diff-windowed", surface: "changeset-review", fileCount: 1, totalLineCount: 5 },
+    {
+      interaction: "diff-windowed",
+      surface: "src/secret/file.ts",
+      fileCount: 1,
+      totalLineCount: 2_001,
+      totalByteCount: 10,
+    },
+    {
+      interaction: "diff-windowed",
+      surface: "run-changes",
+      fileCount: -1,
+      totalLineCount: 2_001,
+      totalByteCount: 10,
+    },
+    {
+      interaction: "diff-windowed",
+      surface: "run-changes",
+      fileCount: 1,
+      totalLineCount: 16_777_217,
+      totalByteCount: 10,
+    },
+    {
+      interaction: "diff-windowed",
+      surface: "run-changes",
+      fileCount: 1,
+      totalLineCount: 2_001,
+      totalByteCount: 1_073_741_825,
+    },
+    {
+      interaction: "diff-windowed",
+      surface: "run-changes",
+      fileCount: 1,
+      totalLineCount: 2_001.5,
+      totalByteCount: 10,
+    },
+    {
+      interaction: "diff-windowed",
+      surface: "run-changes",
+      fileCount: 1,
+      totalLineCount: 2_001,
+      totalByteCount: 10,
+      path: "src/a.ts",
+    },
     { interaction: "repository-trust-bound", repositoryId: "repo/../x", workspaceId: "w" },
     {
       interaction: "repository-trust-bound",
@@ -1676,6 +1759,128 @@ describe("POST /api/diagnostics/client", () => {
     expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
   });
 
+  // #4109: a runtime request the Workbench gave up on at its own deadline is one warn line that
+  // names the call kind and the deadline, joined to the failed request by its correlation id.
+  it.each(CLIENT_CODING_RUNTIME_CALLS)(
+    "persists a %s deadline expiry as client.coding-workbench.request-timed-out at warn",
+    async (call) => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        message: "[keiko] request timed out for /private/path/of/the/user",
+        clientTs: CLIENT_TS,
+        correlationId: "ui_request-timeout-0001",
+        codingRequestTimeout: { call, deadlineMs: 15_000 },
+      });
+
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      const event = sink.events.find(
+        (candidate) => candidate.op === "client.coding-workbench.request-timed-out",
+      );
+      expect(event?.level).toBe("warn");
+      const line = formatActivityLogProofLine(event ?? {});
+      const record = expectActivityLogProof("client.coding-workbench.request-timed-out.line", line);
+      expect(record).toMatchObject({
+        level: "warn",
+        correlationId: "ui_request-timeout-0001",
+        errorKind: "timeout",
+        call,
+        deadlineMs: 15_000,
+        completeness: "complete",
+        loss: "none",
+      });
+      // Closed values and one duration only: the free-text note is never kept.
+      expect(line).not.toContain("private");
+    },
+  );
+
+  it("joins a timeout report that carries no request id to the ingest request's correlation", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] request timed out",
+      clientTs: CLIENT_TS,
+      codingRequestTimeout: { call: "status", deadlineMs: 10_000 },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.coding-workbench.request-timed-out",
+    );
+    expect(event?.correlationId).toBe(CORRELATION_ID);
+    expect(event?.extra).toMatchObject({ call: "status", deadlineMs: 10_000 });
+  });
+
+  it.each([
+    ["an unknown call", { call: "launch", deadlineMs: 15_000 }],
+    ["a missing call", { deadlineMs: 15_000 }],
+    ["a negative deadline", { call: "stop", deadlineMs: -1 }],
+    ["a zero deadline", { call: "stop", deadlineMs: 0 }],
+    ["a fractional deadline", { call: "stop", deadlineMs: 1.5 }],
+    ["a deadline above the bound", { call: "stop", deadlineMs: 3_600_001 }],
+    ["a deadline that is a string", { call: "stop", deadlineMs: "15000" }],
+    ["a missing deadline", { call: "stop" }],
+    ["an extra field", { call: "stop", deadlineMs: 15_000, runId: "run-secret" }],
+    ["a report that is not an object", "stop"],
+  ])("refuses a request timeout report with %s", async (_name, codingRequestTimeout) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] request timed out",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_request-timeout-0002",
+      codingRequestTimeout,
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(
+      sink.events.some((event) => event.op === "client.coding-workbench.request-timed-out"),
+    ).toBe(false);
+  });
+
+  it("refuses a request timeout report that also carries failure context or another closed report", async () => {
+    const timeout = { call: "stop", deadlineMs: 15_000 };
+    for (const extra of [
+      { kind: "other" },
+      { errorKind: "timeout" },
+      { codingWorkbenchInteraction: { interaction: "pending-decision-focused" } },
+    ]) {
+      const body = JSON.stringify({
+        message: "[keiko] request timed out",
+        clientTs: CLIENT_TS,
+        codingRequestTimeout: timeout,
+        ...extra,
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    }
+  });
+
+  it("spends the failure budget for a request timeout, never the routine one", async () => {
+    const sink = captureServerLog();
+    const timedOut = JSON.stringify({
+      message: "[keiko] request timed out",
+      clientTs: CLIENT_TS,
+      codingRequestTimeout: { call: "status", deadlineMs: 10_000 },
+    });
+    // One more than a budget admits in a window.
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(timedOut));
+    }
+    const routine = JSON.stringify({
+      message: "[keiko] coding workbench interaction: pending-decision-focused",
+      clientTs: CLIENT_TS,
+      codingWorkbenchInteraction: { interaction: "pending-decision-focused" },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(routine))).status).toBe(204);
+    expect(sink.events.some((event) => event.op === "client.coding-workbench.interaction")).toBe(
+      true,
+    );
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["failure"]);
+  });
+
   // PR #3678 review: the copy button's changed transformation must be reconstructable: one line per
   // copy with its outcome and marker counts, and a failed copy with its error kind and frames.
   it("persists a chat answer copy and its failure as client.answer.copied", async () => {
@@ -1721,6 +1926,53 @@ describe("POST /api/diagnostics/client", () => {
       errorKind: "unavailable",
       extra: { outcome: "failed", errorClass: "Error", causeChain: ["Error"] },
     });
+  });
+
+  it("persists an adopted editor line ending as routine closed evidence (#4123)", async () => {
+    const sink = captureServerLog();
+    const editorLineEnding = { lineEnding: "lf", source: "buffer-sync" };
+    const body = {
+      message: "private hostile browser prose",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_line-ending-0001",
+      editorLineEnding,
+    };
+    expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.editor.line-ending.adopted",
+    );
+    if (event === undefined) throw new TypeError("Missing editor line ending evidence");
+    const line = formatActivityLogProofLine(event);
+    const record = expectActivityLogProof("client.editor.line-ending.adopted.line", line);
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_line-ending-0001",
+      ...editorLineEnding,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(line).not.toContain("private hostile");
+  });
+
+  it.each([
+    { lineEnding: "cr", source: "buffer-sync" },
+    { lineEnding: "lf", source: "paste" },
+    { lineEnding: "lf", source: "host-edit", text: "export const leaked = 1;" },
+  ])("refuses an editor line ending report outside its closed shape (#4123)", async (report) => {
+    const sink = captureServerLog();
+    const body = {
+      message: "editor line ending",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_line-ending-0002",
+      editorLineEnding: report,
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(400);
+    expect(sink.events.some((e) => e.op === "client.editor.line-ending.adopted")).toBe(false);
   });
 
   it("persists a setup-only update notice as routine closed presentation evidence", async () => {
@@ -2600,6 +2852,31 @@ describe("POST /api/diagnostics/client", () => {
       expect(events[0]?.extra?.relatedCorrelationIds).toEqual(["ui_chat-list-load-0002"]);
       expect(events[0]?.extra).toMatchObject({ completeness: "complete", loss: "none" });
       expect(events[0]?.extra).not.toHaveProperty("decidingLoadCount");
+    });
+
+    // #4123: a window whose project open was overtaken and repeated says how often it opened it.
+    it("keeps the project open attempts of a binding and refuses an unbounded count", async () => {
+      const sink = captureServerLog();
+      const report = (projectOpenAttemptCount: unknown): string =>
+        JSON.stringify({
+          kind: "binding",
+          surface: "chat-window",
+          windowRef: "chat-mfr3k2x1-1",
+          outcome: "resolved",
+          referenceShape: "uuid",
+          heuristicFlagged: false,
+          correlationId: "ui_chat-list-load-0001",
+          projectOpenAttemptCount,
+        });
+
+      expect((await handleClientDiagnosticIngest(context(report(2)))).status).toBe(204);
+      for (const invalid of [0, 17, 1.5, "2"]) {
+        expect((await handleClientDiagnosticIngest(context(report(invalid)))).status).toBe(400);
+      }
+
+      const events = bindingEvents(sink, "client.binding.resolved");
+      expect(events).toHaveLength(1);
+      expect(events[0]?.extra).toMatchObject({ projectOpenAttemptCount: 2, loss: "none" });
     });
 
     // #3557 review: a deciding load the line cannot name is classified loss, never a quiet count.

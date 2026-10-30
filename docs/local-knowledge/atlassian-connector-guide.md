@@ -10,11 +10,12 @@ Status: user and operator guide for Epic
 [#2244](https://github.com/oscharko-dev/Keiko/issues/2244) (governed write actions),
 [#2245](https://github.com/oscharko-dev/Keiko/issues/2245) (UI),
 [#2246](https://github.com/oscharko-dev/Keiko/issues/2246) (end-to-end verification), and
-[#2248](https://github.com/oscharko-dev/Keiko/issues/2248) (live Jira read).
+[#2248](https://github.com/oscharko-dev/Keiko/issues/2248) (live Jira read), extended by
+[Epic #4081](https://github.com/oscharko-dev/Keiko/issues/4081) (Jira Data Center Live Pods in Chat).
 
 The connector's authority, credential, egress, sync-bounds, evidence, and permissions decisions are
 fixed by [ADR-0128](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md). This guide
-restates that record for operators; where the two differ, the ADR is authoritative. Autonomy-mode
+describes the current operator workflows alongside that record. Autonomy-mode
 language follows [ADR-0129](../adr/ADR-0129-product-wide-authority-and-autonomy-model.md), as
 amended by
 [ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md):
@@ -22,15 +23,18 @@ the three user-facing modes are **Ask for approval**, **Supervised workspace**, 
 
 ## What the connector does
 
-The Atlassian connector is a governed, local-first lane that connects Keiko to an Atlassian Cloud
-site (Confluence and Jira) using a single Atlassian API token supplied by a local user. It supports
-three families of operation:
+The Atlassian connector connects Keiko to Atlassian Cloud (Confluence and Jira) with an
+email/API-token pair, or to Jira Data Center 10.3.26 with a personal access token (PAT).
+Credentials belong to the local user and stay in the existing encrypted vault. It supports these
+families of operation:
 
 - **Sync** — explicit, user-triggered synchronization of selected Confluence spaces and Jira
   projects into Local Knowledge connector pods, so their content is retrievable alongside every
   other [Knowledge Pod](knowledge-pods.md).
-- **Live read** — an ad-hoc live Jira JQL query (for example, the built-in "issues assigned to me"
-  query) that returns current results without persisting a pod.
+- **Live Chat tools** — a Jira Data Center Live Pod supplies current project/issue metadata,
+  JQL search, issue/comment reads and governed issue mutations to an ordinary Chat.
+- **Live read action** — the existing ad-hoc Cloud Jira JQL query (for example, the built-in
+  "issues assigned to me" query) returns current results without creating an indexed pod.
 - **Write** — governed Jira and Confluence write actions (create/update issues and pages,
   transition issues, add comments) whose disposition depends on the workspace's autonomy mode and
   the Authority Envelope.
@@ -40,9 +44,90 @@ synced content, using the same retrieval, grounding, readiness, and redacted-sum
 every other pod. The connector does not add a second retrieval engine, a second registry, or a
 second knowledge store.
 
-v1 targets Atlassian **Cloud** REST APIs only. Data Center, OAuth, webhooks, scheduled sync,
-attachment/worklog content, and deletion actions are out of scope; see
-[Limitations and follow-ups](#limitations-and-follow-ups).
+A Jira **Live Pod** is a saved connection to live tools. It has no capsule, document index or
+storage-readiness state. Data Center synchronization and Confluence Data Center are unsupported.
+Cloud connectors retain their existing sync and action workflows. See
+[Limitations and follow-ups](#limitations-and-follow-ups) for the remaining boundaries.
+
+## Jira Live Pods in Chat
+
+### Create and connect a Pod
+
+In the Knowledge Pods hub, select **Create Jira Pod**, enter a name, the HTTPS Jira base URL
+(including any context path), and a PAT, then save and **Verify connection**. Verification checks
+bounded REST-v2 `serverInfo` and `myself` responses and the active identity. A successful check is
+required before Chat can use the Pod. For a private Jira address, the operator must configure
+exact target admission and the trusted CA through the existing network configuration; the token
+form cannot grant private-network access. See [ADR-0128 D3](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md#d3--governed-egress-single-host-allowlist-shared-transport-fail-closed-redirects).
+
+Open **Jira connection** in the Chat header, choose the verified Pod and **Apply Jira settings**.
+Alternatively, drag the Hub's **Add to workspace** control to the workspace, or activate it with
+the keyboard, then connect the Pod and Chat using the existing window ports. The connection becomes
+active only after the same server-confirmed settings request. One Chat can bind at most one Jira
+Pod; replacing it requires explicit confirmation. The closed header shows the bound Pod's current
+name. A workspace edge is a view of that binding and does not grant access by itself.
+
+### Modes and permissions
+
+The Chat saves its selected mode, initially **Ask for approval**, and shows the effective mode
+allowed by the deployment ceiling. A narrower operator setting always wins.
+
+| Mode                 | First Chat access to Jira | Later reads under the same grant | Writes                                          |
+| -------------------- | ------------------------- | -------------------------------- | ----------------------------------------------- |
+| Ask for approval     | Explicit read consent     | Allowed within current authority | Approve the concrete action                     |
+| Supervised workspace | Explicit read consent     | Allowed within current authority | Approve the concrete action                     |
+| Full access          | Explicit read consent     | Allowed within current authority | No per-action approval within current authority |
+
+Read consent explains that Jira content is sent to the selected model and retained in the
+conversation. It belongs to this actor, Chat, binding and credential generation and expires; it
+never approves a write. A write approval shows the proposed action and exact arguments and can be
+used once for that action. Approval alone is not confirmation that Jira changed. Jira permissions,
+current authority and shared budgets remain mandatory in every mode. A model without verified tool
+calling cannot use these tools. Changing a Pod, token, mode or authority may require fresh consent.
+
+The tools can list projects, issue types and create fields; read edit fields, issues, comments,
+transitions and assignable users; search with JQL; and create, edit, assign, comment on and transition
+issues. Create/edit/transition fields are checked against fresh Jira metadata. Supported types are
+bounded text, numbers, dates/timestamps, user/option references and explicitly supported lists.
+Unknown plugin types are unavailable. Omission preserves an existing field; replacement, allowed
+clearing and label add/remove are distinct operations. Transition fields are sent with the
+transition. Jira Data Center uses plain text and its own user identities; Cloud's ADF representation
+is not reused as a Data Center payload.
+
+### Read the result before deciding what to do next
+
+| Tool outcome                                      | Meaning                                                                                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Not sent / rejected before dispatch               | Keiko did not send this mutation. Correct the stated validation or permission problem before proposing a new action.         |
+| Jira change confirmed                             | Jira acknowledged the write and the affected state was read back successfully.                                               |
+| Jira accepted the change; confirmation incomplete | A successful response was recorded, but full confirmation is unavailable. Inspect Jira before any new mutation.              |
+| Jira outcome unknown                              | Dispatch may have occurred; the available response cannot establish the remote result. Inspect Jira before any new mutation. |
+| Outcome pending                                   | No authoritative final outcome is available. This does not prove an executor is still running or authorize a retry.          |
+
+Keiko retains the canonical turn/action identity and dispatch outcome. Reload, regenerate,
+streaming fallback, restart or a lost response must not resend a possibly executed mutation.
+Cancellation or a later permission loss cannot roll back a Jira write; a known write outcome stays
+visible independently of the enclosing tool-call cancellation or denial. Remote readback proves
+observed state, not that no other actor changed Jira concurrently.
+
+### Mixed sources and Pod lifecycle
+
+A Chat can combine a Jira Live Pod with existing Data Pods. Data Pod grounding retains its own
+citations and retrieval limits; Jira results and issue links remain separately attributed tool
+results. Jira text is not presented as a local grounding citation. Tool orchestration and final
+answering share the turn's existing time, token and tool budgets.
+
+Use the Hub card to **Rename Pod**, **Replace token**, **Verify connection**, **Refresh status** or
+**Remove Pod**. Rename preserves the connection. Replacing a token preserves the Pod identity and
+Chat association, advances the credential generation and revokes current access and pending
+permissions. Verify again and grant new Chat consent before continuing. Removal deletes the saved
+credential and disconnects its Chats; other Pods remain unchanged. Direct credential-management
+routes use the same invalidation. The UI refetches current server metadata after changes and on
+window focus. An unconfirmed lifecycle response requires **Refresh status**; it is not permission
+to repeat a possibly committed operation.
+
+Current integration evidence and outstanding acceptance work are recorded in the
+[Epic #4081 matrix](../qa/jira-chat-pods-4081.md).
 
 ## 1. Create an Atlassian Cloud API token
 
@@ -67,7 +152,7 @@ spaces and projects the workspace should expose, rather than a broad personal ac
 The connector never asks for your Atlassian **password**. Cloud connectors use API-token Basic
 authentication (`email` + token); the password is never entered, stored, or transmitted.
 
-## 2. Register a connector in Keiko
+## 2. Register a Cloud connector in Keiko
 
 Registering a connector stores its non-secret descriptor and seals its token in a dedicated local
 credential vault. Provide three values:
@@ -80,15 +165,15 @@ credential vault. Provide three values:
 
 Keiko generates an opaque reference (`authRef`, of the form `atlassian-cred:<redacted>`) for the
 sealed token. The descriptor Keiko stores and shows you afterward contains only non-secret fields —
-id, provider, display name, base URL, auth scheme, and that `authRef`. The token itself is written
-to the vault exactly once, at registration, and is read back only inside the outbound HTTP adapter
+id, provider, display name, base URL, auth scheme, and that `authRef`. The token is sealed
+in the vault at registration or replacement and is read back only inside the outbound HTTP adapter
 immediately before a request is signed. No screen, log, evidence record, or model prompt ever shows
 the token again (ADR-0128 D2).
 
 The base URL's host becomes the connector's **sole** permitted egress host. A connector can only
 reach that one host; there is no wildcard or cross-connector allowlist (ADR-0128 D3).
 
-### The verify step and its five statuses
+### Cloud verification
 
 After you enter the three values, run **Verify**. Verify makes one authenticated call against the
 site (Jira `/rest/api/3/myself` or Confluence `/wiki/rest/api/user/current`) with a 30-second
@@ -102,8 +187,11 @@ timeout and reports exactly one status:
 | `unreachable` | The host could not be reached (DNS, proxy, CA, or network failure).     | Check connectivity and enterprise proxy/CA configuration.              |
 | `timeout`     | The call did not complete within the timeout.                           | Retry; if it persists, check network latency and proxy health.         |
 
-Each non-`ok` status has a matching entry in the
-[Atlassian connector troubleshooting runbook](../troubleshooting/atlassian-connector.md).
+Connection verification also distinguishes `redirect-refused`, `invalid-response`,
+`unsupported-version` and `tls-failed`. A browser login page is not a successful API response;
+correct the base URL or proxy configuration. Use the supported Jira version and the trusted CA
+configuration, and keep certificate verification enabled. Ordinary HTTP redirects are refused.
+The [troubleshooting runbook](../troubleshooting/atlassian-connector.md) covers the shared failures.
 
 ## 3. Select spaces, projects, and optional JQL
 
@@ -199,7 +287,7 @@ the query may be recorded for correlation (ADR-0128 D6).
 
 ## 6. How write actions behave in each mode
 
-Every governed connector operation maps to exactly one action class, one connector scope, one risk
+The existing Cloud sync/action surface maps each operation to one action class, connector scope, risk
 tier, and one disposition per mode. This is the normative mapping from ADR-0128 D4, as narrowed by
 [ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md),
 restated:
@@ -219,12 +307,10 @@ restated:
 
 How to read this per mode:
 
-- **Ask for approval** — every connector operation, read or write, is `review-required`. Even a
-  sync or a live read parks for your approval before it runs. This mode never acts on the external
-  site without an explicit per-action confirmation.
-- **Supervised workspace** — every connector operation is also `review-required`: connector calls
-  are internet effects, and under ADR-0138 the middle mode keeps unattended work inside the task
-  workspace. Anything that reaches the external site parks for your approval first.
+- **Ask for approval** — Cloud sync/actions are `review-required`. A Jira Live Pod in Chat uses
+  the bounded standing read consent described above; each write still needs concrete approval.
+- **Supervised workspace** — Cloud sync/actions remain `review-required`. The same standing read
+  consent and per-write approval rules apply to Jira Live Pods in Chat.
 - **Full access** — every row is `allowed` **provided the required connector scope is present in
   the Authority Envelope**. Full access removes per-action approval; it does not remove the scope
   requirement.
@@ -253,11 +339,11 @@ the call**. It is a point-in-time snapshot, not a live or continuously re-evalua
 If the identity's Atlassian permissions are later narrowed, an already-synced pod still contains
 what the token could read at sync time until the next re-sync.
 
-**Keiko adds no access control on top of the token.** Keiko does not replicate Confluence space
-permissions or Jira project/issue-level security schemes into a local ACL. It applies no additional
-per-user or per-team access control beyond what the connected token can already see. Treat a synced
-pod as equivalent, from an access-control perspective, to a local export of everything that token
-could read at sync time.
+**Jira permissions are not replicated into a local ACL.** Keiko does not copy Confluence space
+permissions or Jira project/issue-level security schemes into synced content. Treat a synced pod as
+a local export of what that token could read at sync time. Live Chat calls additionally require
+Keiko's current actor-owned binding, authority, read consent and any concrete write approval;
+these checks cannot widen the Jira identity's permissions.
 
 **Single-user scope; no multi-user ACL replication.** The connector is scoped to a single local
 user's own credential. There is no multi-user permission model and no per-viewer filtering of pod
@@ -272,7 +358,7 @@ service.
 
 **What evidence and audit records contain.** The connector's governance trail — the record of what
 was attempted and its disposition — is content-free. Each action attempt (allowed, review-required,
-denied, or failed) produces exactly one audit record carrying: action type, connector id, provider,
+denied, or failed) records a final action outcome carrying: action type, connector id, provider,
 target key or id (an issue key or page id — an identifier, not a body), disposition, reason code,
 correlation id, duration, and result status. A sync run additionally records the change counts, the
 outcome, and the run's fingerprint-set digest. Audit and evidence records **never** contain issue or
@@ -290,21 +376,24 @@ encryption at rest as described above.
   and projects that satisfies the need; the connector cannot restrict below what the token can see.
 - **Re-sync after permission changes.** Because a pod is a point-in-time snapshot, re-sync on your
   organization's cadence after any permission change so the pod reflects the current access posture.
-  Token rotation is a single vault update against the same `authRef`; no descriptor or pod-metadata
-  change is required.
+  Live-Pod token replacement retains the same Pod identity but advances credential/binding
+  generations and requires new verification and Chat consent.
 - **Govern local retention and distribution** of a synced pod as you would any local export of the
   underlying Atlassian content.
 
 ## Limitations and follow-ups
 
-Each limitation below is a deliberate v1 scope decision from ADR-0128 D7, with its stated rationale.
-None is a defect.
+The current platform and operation boundaries below follow ADR-0128 D7. The epic evidence matrix
+separately records incomplete qualification; a passing focused test is not full production acceptance.
 
-- **Cloud only; Data Center is a follow-up.** v1 targets Atlassian Cloud REST APIs against a
-  configurable per-connector base URL. Data Center uses different base-path conventions, more
-  commonly self-signed or private CAs, and the `bearer-pat` auth scheme (declared in the credential
-  shape but not implemented in v1). It is deferred because verifying it requires access to a Data
-  Center instance this epic does not have.
+- **Bounded Data Center support.** Jira Data Center 10.3.26 is the verified version accepted by
+  the REST-v2/PAT connection path. Other versions, Data Center sync and Confluence Data Center are
+  unsupported. Cloud connectors and their existing records remain compatible; a Cloud connector
+  is not automatically converted into a Data Center Live Pod.
+- **Bounded Live Chat operations.** Unsupported plugin fields, issue/page/comment deletion,
+  attachments, worklogs, bulk writes and arbitrary Jira REST requests are unavailable. A live
+  connection does not imply an indexed snapshot. Confluence Live Chat tools remain outside this
+  Epic; see [#2953](https://github.com/oscharko-dev/Keiko/issues/2953).
 - **No OAuth 2.0 (3LO).** API-token Basic authentication is sufficient for a single local user's own
   credential and needs no redirect-based consent flow, browser round-trip, or refresh-token custody.
   OAuth is deferred until multi-user or app-marketplace distribution creates an actual need.

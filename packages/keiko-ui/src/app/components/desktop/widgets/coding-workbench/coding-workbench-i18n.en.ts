@@ -1,4 +1,6 @@
+import { EN_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 export const EN_CODING_WORKBENCH_MESSAGES = {
+  ...EN_AUTONOMY_MODE_LABELS,
   "codingWorkbench.progress.working": "Working",
   "codingWorkbench.progress.approval": "Waiting for your approval",
   "codingWorkbench.progress.question": "Your answer is needed",
@@ -7,6 +9,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.answer": "Answer question",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "New task",
+  "codingWorkbench.history.noBranch": "Folder",
   "codingWorkbench.history.search": "Search coding tasks",
   "codingWorkbench.history.filter": "Task status",
   "codingWorkbench.history.active": "Active",
@@ -299,17 +302,14 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.none": "None",
   "codingWorkbench.mode.eyebrow": "Autonomy",
   "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
-  "codingWorkbench.mode.governed-assist.label": "Ask for approval",
   "codingWorkbench.mode.governed-assist.short":
     "Reads freely; asks before every file change and command",
   "codingWorkbench.mode.governed-assist.description":
     "Reads and searches run freely; every file change and every command asks for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
-  "codingWorkbench.mode.supervised-coding.label": "Supervised workspace",
   "codingWorkbench.mode.supervised-coding.short":
     "Routine edits and vetted project commands run; other commands ask",
   "codingWorkbench.mode.supervised-coding.description":
     "Routine workspace edits and vetted project commands run; other commands ask for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
-  "codingWorkbench.mode.autonomous-delivery.label": "Full access",
   "codingWorkbench.mode.autonomous-delivery.short":
     "Works without asking within the task's authority; internet only here",
   "codingWorkbench.mode.autonomous-delivery.description":
@@ -318,7 +318,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.task.title": "Describe the bounded coding task",
   "codingWorkbench.task.instructions": "Task instructions",
   "codingWorkbench.task.placeholder":
-    "Ask Keiko to inspect, explain, implement, test, or repair something in this repository…",
+    "Ask Keiko to inspect, explain, implement, test, or repair something in this project…",
+  "codingWorkbench.task.placeholder.followUp": "Reply to Keiko, or ask for the next change…",
   "codingWorkbench.task.help":
     "Task text is transient intent. Start unlocks only after every readiness check is confirmed.",
   "codingWorkbench.task.starting": "Starting…",
@@ -385,6 +386,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.model.selected": "Coding model: {model}",
   "codingWorkbench.composer.model.menu": "Choose coding model",
   "codingWorkbench.composer.model.none": "No coding model available",
+  "codingWorkbench.composer.jira.label": "Jira Pod for this run",
+  "codingWorkbench.composer.jira.menu": "Choose Jira Pod",
+  "codingWorkbench.composer.jira.none": "Jira: none",
+  "codingWorkbench.composer.jira.pod": "Jira: {name}",
   "codingWorkbench.composer.source.label": "Model source",
   "codingWorkbench.composer.source.menu": "Choose model source",
   "codingWorkbench.composer.effort.label": "Reasoning effort",
@@ -494,6 +499,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
+  "codingWorkbench.repository.folderModeHint":
+    "Not a Git repository: the agent edits, runs and verifies here, without commits or pushes.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":
@@ -502,6 +509,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.manage": "Open Git",
   "codingWorkbench.setup.title": "Code setup",
   "codingWorkbench.setup.help": "Prepare a governed task workspace for the selected repository.",
+  "codingWorkbench.setup.folderHelp":
+    "Open the selected folder for the agent. No branch is needed: it works directly in this folder.",
+  "codingWorkbench.setup.folderBindFailed":
+    "The folder could not be opened for the Workbench. Check that it is still available, then try again.",
   "codingWorkbench.setup.repositoryNotConnected":
     "This repository is not available in Git. Reconnect it there, then choose it again.",
   "codingWorkbench.setup.repositoryCatalogUnavailable":
@@ -634,6 +645,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.retry": "Retry diff",
   "codingWorkbench.changes.diff.truncated":
     "This bounded file diff is incomplete because it reached the server limit.",
+  "codingWorkbench.diffWindow.notice":
+    "This diff is large: {rows} lines in {files} files, {size} in total. Only one file and up to {page} of its lines are shown at a time, and nothing is left out. Choose a file or a page to read the rest.",
+  "codingWorkbench.diffWindow.files": "Files in this diff",
+  "codingWorkbench.diffWindow.fileMeta": "+{added} −{removed} · {size} · {rows} lines",
+  "codingWorkbench.diffWindow.fileMetaBinary": "Binary file",
+  "codingWorkbench.diffWindow.position": "File {file} of {files}, lines {from} to {to} of {rows}",
+  "codingWorkbench.diffWindow.positionEmpty": "File {file} of {files}, no text lines",
+  "codingWorkbench.diffWindow.pages": "Pages of this file",
+  "codingWorkbench.diffWindow.previous": "Previous lines",
+  "codingWorkbench.diffWindow.next": "Next lines",
+  "codingWorkbench.diffWindow.pageOf": "Page {page} of {pages}",
   "codingWorkbench.changes.diff.addedLine": "Added line",
   "codingWorkbench.changes.diff.deletedLine": "Deleted line",
   "codingWorkbench.changes.diff.contextLine": "Context line",
@@ -654,10 +676,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.richContent.diagram.note":
     "The diagram could not be drawn, so its source is shown as written.",
   "codingWorkbench.activity.reasoningBoundary":
-    "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning. Model reasoning is unverified and is never kept in history or evidence.",
-  "codingWorkbench.activity.reasoning.title": "Model reasoning",
-  "codingWorkbench.activity.reasoning.note":
-    "Unverified model reasoning: how the model approached this step. It can be wrong; the answer and the changes are what count.",
+    "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning, which is unverified and never kept in history or evidence.",
+  "codingWorkbench.activity.reasoning.title": "Thinking",
   "codingWorkbench.activity.status.idle": "No run yet.",
   "codingWorkbench.activity.status.loading": "Connecting activity…",
   "codingWorkbench.activity.status.live": "Live.",
@@ -681,6 +701,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.succeeded": "Succeeded",
   "codingWorkbench.activity.toolState.failed": "Failed",
   "codingWorkbench.activity.toolState.exited": "Exit code {code}",
+  "codingWorkbench.activity.toolState.waiting-for-trust": "Waiting for approval",
+  "codingWorkbench.activity.toolState.no-runnable-steps": "Nothing to run",
+  "codingWorkbench.activity.toolState.not-run": "Not run",
   "codingWorkbench.activity.toolState.denied": "Denied",
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
   "codingWorkbench.activity.plan.title": "Current plan",
@@ -713,7 +736,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Keiko checked it automatically and could not confirm 32,000 tokens. Choose a larger model, or have the gateway declare this model's max_input_tokens.",
   "codingWorkbench.source.unavailableReason.model-verification-pending":
-    "Keiko is still verifying this model with the gateway (basic chat, a context window of at least 32,000 tokens, and tool calling). On a busy gateway this can take a few minutes; the Workbench refreshes by itself when the check settles.",
+    "Keiko is still checking this model with the gateway. The Workbench updates by itself when the check is done.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
     "The latest automatic chat check could not use this model. Keiko continues checking in the background; choose another ready model or wait for recovery.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
@@ -759,7 +782,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.resumeMode.help":
     "Resume with the server-confirmed current mode or a stricter mode. Widening is unavailable.",
   "codingWorkbench.approval.eyebrow": "Approval required",
-  "codingWorkbench.approval.title": "Review the bounded action",
+  "codingWorkbench.approval.details": "Details",
   "codingWorkbench.approval.facts": "Approval facts",
   "codingWorkbench.approval.permissionKind": "Permission kind",
   "codingWorkbench.approval.actionClass": "Action class",
@@ -878,6 +901,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.draftDelivery.remote.notDraft": "Not a draft",
   "codingWorkbench.draftDelivery.details": "Saved delivery target",
   "codingWorkbench.draftDelivery.repository": "Repository",
+  "codingWorkbench.draftDelivery.remoteName": "Remote",
   "codingWorkbench.draftDelivery.issue": "Accepted issue",
   "codingWorkbench.draftDelivery.headRef": "Feature branch",
   "codingWorkbench.draftDelivery.headSha": "Approved commit",
@@ -1043,18 +1067,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.retry": "Retry loading the changed files",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
   "codingWorkbench.approval.native.title": "What the agent wants to do",
-  "codingWorkbench.approval.native.help":
-    "Approve allows exactly this action once; deny tells the agent to continue without it.",
-  "codingWorkbench.approval.native.help.shell":
-    "Approve runs this command once in the task workspace; deny tells the agent to continue without it.",
-  "codingWorkbench.approval.native.help.edit":
-    "Approve applies this change to the listed files once; deny tells the agent to continue without it.",
+  "codingWorkbench.approval.native.help": "Allows exactly this action once.",
+  "codingWorkbench.approval.native.help.shell": "Runs this command once in the task workspace.",
+  "codingWorkbench.approval.native.help.edit": "Applies this change to the listed files once.",
   "codingWorkbench.approval.native.help.internet":
-    "Approve lets the agent use the internet once for this request; deny tells the agent to continue without it. Internet access is only available in Full access.",
+    "Allows this one internet request. Internet access exists only in Full access.",
   "codingWorkbench.approval.native.help.execute":
-    "Approve runs this Code Mode program once in OpenCode's script sandbox: it can call OpenCode's management tools and, below Full access, reach only local addresses. Deny tells the agent to continue without it.",
+    "Runs this Code Mode program once in OpenCode's script sandbox.",
   "codingWorkbench.approval.native.help.worktree":
-    "Approve creates a new managed task workspace with this name, on its own branch from the current task branch; it opens as its own task, and this run keeps working here. Deny tells the agent to continue without it.",
+    "Creates a new task workspace on its own branch; this run keeps working here.",
   "codingWorkbench.approval.native.resources": "Requested command, paths, or addresses",
   "codingWorkbench.approval.native.noResources": "No command, path, or address was named.",
   "codingWorkbench.approval.native.nothingNamed":
@@ -1096,7 +1117,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":
-    "Keiko will start a fresh run. It will not replay prior mutations.",
+    "A previous action may already have changed files. Check its result before retrying; Keiko will not repeat it.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
   "codingWorkbench.header.notReady": "Not ready to start",
@@ -1130,7 +1151,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
   "codingWorkbench.announcement.runChecking": "Run status checking.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",
-  "codingWorkbench.announcement.runRevision": "{state}. Revision {revision}.",
   "codingWorkbench.announcement.recoveryComplete": "Recovery acknowledgement complete.",
   "codingWorkbench.announcement.setupReady": "Authentication setup plan ready.",
   "codingWorkbench.announcement.setupChecking": "Authentication setup plan checking.",
@@ -1244,17 +1264,27 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.status.passed": "Passed",
   "codingWorkbench.verification.status.failed": "Failed",
   "codingWorkbench.verification.status.partial": "Partial",
+  "codingWorkbench.verification.status.notRun": "Not run",
   "codingWorkbench.verification.checks":
     "Checks: {passed} passed, {failed} unsuccessful, {skipped} skipped",
-  "codingWorkbench.verification.duration": "Duration: {duration} ms",
+  "codingWorkbench.verification.duration": "Duration: {duration}",
   "codingWorkbench.activity.readBytes": "Read: {bytes} bytes",
   "codingWorkbench.activity.readFacts": "Read: {bytes} bytes · Whole file: {lines} lines",
   "codingWorkbench.activity.returnedPaths": "Returned paths: {count}",
   "codingWorkbench.activity.editRefusal": "Edit refusal: {reason}",
   "codingWorkbench.activity.affectedFile": "Affected file: {path}",
-  "codingWorkbench.activity.serviceDuration": "Tool service: {duration} ms",
+  "codingWorkbench.activity.serviceDuration": "Duration: {duration}",
   "codingWorkbench.activity.exitCode": "The command exited with code {code}.",
   "codingWorkbench.activity.toolError": "The tool reported an error to the model.",
+  "codingWorkbench.activity.verification.passed": "Every requested verification check passed.",
+  "codingWorkbench.activity.verification.failed-check":
+    "A verification check ran and failed. The model received the failing locations.",
+  "codingWorkbench.activity.verification.waiting-for-trust":
+    "Verification has not run: this workspace's package scripts are not allowed yet. Allow package scripts for verification in the Coding Workbench header, then verify again.",
+  "codingWorkbench.activity.verification.no-runnable-steps":
+    "Verification has not run: this repository defines no script the verifier can run, such as test, lint or build. That is not a failing check.",
+  "codingWorkbench.activity.verification.not-run":
+    "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",
@@ -1286,6 +1316,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.skills.retry": "Try again",
   "codingWorkbench.skills.reason.budgetExhausted": "Budget exhausted",
   "codingWorkbench.mcp.summary": "MCP servers ({count})",
+  "codingWorkbench.mcp.manage": "Manage MCP servers",
   "codingWorkbench.mcp.status.connected": "Connected",
   "codingWorkbench.mcp.status.needsAuthorization": "Needs authorization",
   "codingWorkbench.mcp.status.failed": "Not connected",

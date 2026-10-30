@@ -6,6 +6,7 @@ import type {
 } from "./draftDeliveryTypes.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
+  isDraftDeliveryIssueBinding,
   isDraftDeliveryRecord,
   type DraftDeliveryBinding,
   type DraftDeliveryPhase,
@@ -17,6 +18,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import type { GitPushCommand, GitPrCreateCommand } from "@oscharko-dev/keiko-tools";
 import { draftDeliveryId } from "./draftDeliveryFacts.js";
@@ -70,6 +72,15 @@ const DRAFT_DELIVERY_OPERATION = defineActivityLogOperation({
         "preflight-failed",
         "operation-in-flight",
         "policy-authorized",
+        "issue-unavailable",
+        "verified-commit-required",
+        "proposal-unavailable",
+        "payload-invalid",
+        "provider-unavailable",
+        "repository-required",
+        "remote-required",
+        "github-origin-required",
+        "issue-binding-required",
       ],
     },
     revision: { type: "integer", dataClass: "count", required: false },
@@ -126,7 +137,10 @@ export interface DraftDeliveryActivityFields {
     | "approval"
     | "refused"
     | "failed";
-  readonly reason?: DraftDeliveryReason | "operation-in-flight" | "policy-authorized";
+  readonly reason?:
+    | DraftDeliveryReason
+    | Extract<CodingRuntimeDeliveryResult, { status: "unavailable" }>["reason"]
+    | "policy-authorized";
   readonly revision?: number;
   readonly proposalId?: string;
   readonly proposalDigest?: string;
@@ -210,15 +224,25 @@ export function draftChanged(
     headSha: record.binding.headSha,
     baseSha: record.binding.baseSha,
     remoteDigest: record.binding.remoteDigest,
-    issueBindingDigest: record.binding.issueBindingDigest,
-    issueIdDigest: record.binding.issueIdDigest,
-    issueNumber: record.binding.issueNumber,
+    ...issueActivityFields(record.binding),
     verifiedCommitProposalId: record.binding.verifiedCommitProposalId,
     runtimeAuthorityDigest: record.binding.runtimeAuthorityDigest,
     envelopeDigest: record.binding.envelopeDigest,
     workspaceDigest: record.binding.workspaceDigest,
   });
   options.onChanged(record);
+}
+// An issue-free run has no issue facts to log; the line carries only what exists.
+function issueActivityFields(
+  binding: DraftDeliveryBinding,
+): Pick<DraftDeliveryActivityFields, "issueBindingDigest" | "issueIdDigest" | "issueNumber"> {
+  return isDraftDeliveryIssueBinding(binding)
+    ? {
+        issueBindingDigest: binding.issueBindingDigest,
+        issueIdDigest: binding.issueIdDigest,
+        issueNumber: binding.issueNumber,
+      }
+    : {};
 }
 export function advanceDraft(
   options: DraftDeliveryServiceOptions,

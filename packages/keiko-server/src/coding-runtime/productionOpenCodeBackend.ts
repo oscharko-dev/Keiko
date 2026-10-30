@@ -1,3 +1,7 @@
+import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
+import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
+import { codingRunMcpServers } from "./codingJiraPodBinding.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -57,7 +61,10 @@ import {
   type OperatorPluginRegistry,
   type OperatorPluginsPort,
 } from "./opencodeOperatorPlugins.js";
-import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import {
+  createCodingRuntimeRepositoryInstructionsPort,
+  repositoryInstructionsCopyBudget,
+} from "./codingRuntimeRepositoryInstructions.js";
 import { globalOpenCodeConfigDirectory } from "./codingRuntimeInstructionSources.js";
 import {
   readGlobalConfigDocuments,
@@ -223,6 +230,7 @@ export interface ProductionOpenCodeBackendInput {
   /** The operator's raw `KEIKO_CODING_EXTERNAL_READ_ROOTS` (#3900 AC5); absent admits none. */
   readonly externalReadRoots?: string | undefined;
   /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
+  readonly mcpMutations?: NativeMcpMutationJournal | undefined;
   readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
   /** Validates a remote MCP server's expected OAuth issuer before a native launch (#3903 AC3). */
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
@@ -233,6 +241,12 @@ export interface ProductionOpenCodeBackendInput {
    * at the gateway's origin, with the credentials read from `processEnv`.
    */
   readonly mcpRelay?: McpCredentialRelay | undefined;
+  readonly mcpConnections?: ConfiguredMcpConnections | undefined;
+  /**
+   * The Jira Pods a run may be started with (owner decision 2026-10-30): a run bound to one gets
+   * the Pod's Jira tools through the same managed relay as the operator's configured servers.
+   */
+  readonly codingJiraPods?: CodingJiraPods | undefined;
   /** Pulls the operator's remote skill sources for a Full access native run (#3903 AC3). */
   readonly remoteSkills?: RemoteSkillsPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -428,7 +442,7 @@ function composeOpenCodeRun(
     toolProfile,
     ripgrepVerified: input.ripgrep.outcome === "verified",
     ...(input.processEnv === undefined ? {} : { processEnv: input.processEnv }),
-    ...nativeRunInputs(input, run, toolProfile),
+    ...nativeRunInputs(input, run, toolProfile, contextGeometry),
     portable: compositionPortableInput(input),
     stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
@@ -489,15 +503,45 @@ function withMcpExecutableDirectories(
 }
 
 // The relay answers on the gateway's own attested origin, which the native sandbox already admits.
-function mcpRelayFor(input: LaunchInput): Pick<OpenCodeRuntimeCompositionInput, "mcpRelay"> {
+function mcpRelayFor(
+  input: LaunchInput,
+  jira: BoundJira | undefined,
+): Pick<OpenCodeRuntimeCompositionInput, "mcpRelay"> {
   if (input.mcpRelay === undefined) return {};
   return {
     mcpRelay: {
       relay: input.mcpRelay,
       origin: new URL(input.gatewayUrl).origin,
       secrets: input.processEnv ?? {},
+      managed:
+        jira === undefined
+          ? input.mcpConnections
+          : jira.pods.connections(input.mcpConnections, jira.binding),
     },
   };
+}
+
+interface BoundJira {
+  readonly pods: CodingJiraPods;
+  readonly binding: NonNullable<ProductionRuntimeBackendInput["request"]["jiraPod"]>;
+}
+
+// A run the human started with a Jira Pod: the resolver bound it, and this composition must be able
+// to serve it. A run that cannot be served as asked fails closed instead of starting without Jira.
+function boundJira(input: LaunchInput, run: ProductionRuntimeBackendInput): BoundJira | undefined {
+  const binding = run.request.jiraPod;
+  if (binding === undefined) return undefined;
+  if (input.codingJiraPods === undefined || input.mcpRelay === undefined)
+    throw new Error("jira-pod-unavailable");
+  return { pods: input.codingJiraPods, binding };
+}
+
+// The registry's servers, plus the Pod's tools for a bound run; the human's choice grants their reads.
+function mcpServersFor(
+  input: LaunchInput,
+  jira: BoundJira | undefined,
+): Pick<OpenCodeRuntimeCompositionInput, "mcpServers" | "mcpGrantedServers"> {
+  return codingRunMcpServers(input.mcpServers, jira?.binding);
 }
 
 // What only a native run reads from the repository and the operator: its Markdown items (#3903)
@@ -506,12 +550,15 @@ function nativeRunInputs(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
 ): Pick<
   OpenCodeRuntimeCompositionInput,
   | "repositoryItems"
   | "operatorPlugins"
   | "repositoryInstructions"
+  | "mcpMutations"
   | "mcpServers"
+  | "mcpGrantedServers"
   | "mcpOAuthIssuer"
   | "mcpCredentials"
   | "mcpRelay"
@@ -523,6 +570,7 @@ function nativeRunInputs(
   | "agentModelCatalog"
 > {
   if (toolProfile !== "native") return {};
+  const jira = boundJira(input, run);
   return {
     repositoryItems: repositoryItemsFor(input, run),
     configDocuments: configDocumentsFor(input, run),
@@ -530,11 +578,12 @@ function nativeRunInputs(
     ...(input.operatorPluginRegistry === undefined
       ? {}
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
-    repositoryInstructions: repositoryInstructionsFor(input, run),
-    ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+    repositoryInstructions: repositoryInstructionsFor(input, run, contextGeometry),
+    mcpMutations: input.mcpMutations,
+    ...mcpServersFor(input, jira),
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
     ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
-    ...mcpRelayFor(input),
+    ...mcpRelayFor(input, jira),
     ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
@@ -637,9 +686,12 @@ function forkSourceOf(
 // The run's AGENTS.md and the further sources a standalone run loads, as the native runtime's own
 // instruction source (#3900 AC3), read only while its workspace is still the active one. Remote
 // sources are pulled only for a run launched in Full access, which cannot be narrowed in place.
+// The copy carries the whole file within half the model's input window: that window is this run's
+// prompt budget, and a file it could not hold is cut with a marker rather than failing every turn.
 function repositoryInstructionsFor(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
 ): NonNullable<OpenCodeRuntimeCompositionInput["repositoryInstructions"]> {
   const home = homedir();
   const egress = input.instructionSourceEgress;
@@ -657,9 +709,14 @@ function repositoryInstructionsFor(
         : {}),
     },
   });
+  const contentByteBudget = repositoryInstructionsCopyBudget(contextGeometry.maxInputTokens);
   return {
     materializeForRun: (request) =>
-      port.materializeForRun({ ...request, isRunWorkspace: run.workspaceIsCurrent }),
+      port.materializeForRun({
+        ...request,
+        isRunWorkspace: run.workspaceIsCurrent,
+        contentByteBudget,
+      }),
   };
 }
 

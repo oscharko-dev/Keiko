@@ -53,6 +53,14 @@ function ownMessageKey(
   return Object.hasOwn(keys, name) ? keys[name] : undefined;
 }
 
+/** The localized name of a native permission, which titles its approval card (#3907). */
+export function nativePermissionLabel(permission: string, t: CodingWorkbenchTranslate): string {
+  return t(
+    ownMessageKey(PERMISSION_MESSAGE_KEYS, permission) ??
+      "codingWorkbench.approval.native.permission.other",
+  );
+}
+
 /** The localized name of a native policy ask's closed command label, or the label itself. */
 export function nativeActionLabel(label: string, t: CodingWorkbenchTranslate): string {
   const key = ownMessageKey(NATIVE_LABEL_MESSAGE_KEYS, label);
@@ -74,7 +82,8 @@ export function nativeActionNamesResource(
  * URL or paths, shown so the human decides about the real action. Model-selected text rendered as
  * text, never markup; it rides the authenticated review channel only. Each resource keeps its line
  * breaks, and the list scrolls inside one bounded, keyboard-focusable block so a long command or
- * up to 64 paths cannot push Approve and Deny off the card.
+ * up to 64 paths cannot push Approve and Deny off the card. The card's heading already names the
+ * permission (`nativePermissionLabel`), so the block repeats it only for an assistive technology.
  */
 export function CodingWorkbenchNativeActionReview({
   action,
@@ -83,17 +92,15 @@ export function CodingWorkbenchNativeActionReview({
   readonly action: CodingWorkbenchNativeActionReview;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const title = t("codingWorkbench.approval.native.title");
-  const permission = t(
-    ownMessageKey(PERMISSION_MESSAGE_KEYS, action.permission) ??
-      "codingWorkbench.approval.native.permission.other",
-  );
   const help = ownMessageKey(HELP_MESSAGE_KEYS, action.permission);
   return (
-    <fieldset className={styles.approvalResearch} aria-label={title}>
-      <p className={styles.approvalResearchTitle}>
-        {title}: {permission}
-      </p>
+    <fieldset
+      className={styles.approvalResearch}
+      aria-label={t("codingWorkbench.approval.native.title")}
+    >
+      {ownMessageKey(PERMISSION_MESSAGE_KEYS, action.permission) === undefined && (
+        <p className={styles.approvalResearchDetail}>{action.permission}</p>
+      )}
       {action.resources.length === 0 ? (
         <p className={styles.approvalResearchDetail}>
           {t("codingWorkbench.approval.native.noResources")}

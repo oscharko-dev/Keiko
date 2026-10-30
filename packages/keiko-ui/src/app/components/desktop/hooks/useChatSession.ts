@@ -1,5 +1,7 @@
 "use client";
 
+import { applyChatReadConsent, applyChatWriteApproval } from "@/lib/chat-tool-events";
+import { watchChatToolConsent } from "@/lib/chat-tool-consent";
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
 import {
@@ -3073,6 +3075,35 @@ function synchronizeRenderedIdentity(
   renderedRef.current = next;
 }
 
+function applyStreamWriteApproval(
+  previous: SessionState,
+  event: Parameters<typeof applyChatWriteApproval>[1],
+  optimisticId: string,
+): SessionState {
+  return {
+    ...previous,
+    messages: previous.messages.map((message) =>
+      message.id === optimisticId || message.id === event.messageId
+        ? applyChatWriteApproval(message, event)
+        : message,
+    ),
+  };
+}
+function applyStreamReadConsent(
+  previous: SessionState,
+  event: Parameters<typeof applyChatReadConsent>[1],
+  optimisticId: string,
+): SessionState {
+  return {
+    ...previous,
+    messages: previous.messages.map((message) =>
+      message.id === optimisticId || message.id === event.messageId
+        ? applyChatReadConsent(message, event)
+        : message,
+    ),
+  };
+}
+
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
   // 0.3.0 release audit — the pre-send attachment notices are user-facing text and were hardcoded
   // English. `documentContext` is not a component and cannot call a hook, so the session hook
@@ -4115,6 +4146,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           context.kind = "sse-error";
           context.correlationId = correlationId;
         },
+        onWriteApproval: (event): void => {
+          if (isSupersededOrAborted(chatId, signal) || event.approval.chatId !== chatId) return;
+          setState((previous) => applyStreamWriteApproval(previous, event, optimisticId));
+        },
+        onReadConsent: ({ messageId, grant }): void => {
+          if (isSupersededOrAborted(chatId, signal) || grant.chatId !== chatId) return;
+          setState((previous) =>
+            applyStreamReadConsent(previous, { messageId, grant }, optimisticId),
+          );
+        },
         onToken: (text: string): void => {
           if (isSupersededOrAborted(chatId, signal)) return;
           if (!statusFlippedToStreaming) {
@@ -4279,9 +4320,37 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // Issue #152 Layer 3 — non-streaming fallback path (canStream=false or
   // StreamingUnavailableError pre-stream). Kept separate so sendUngrounded
   // stays within the 50-line function limit.
+  const watchBufferedConsent = useCallback(
+    (
+      request: Pick<SendAttemptRequest, "chat" | "clientTurnId" | "signal" | "optimisticId">,
+    ): (() => void) => {
+      const clientTurnId = request.clientTurnId;
+      return watchChatToolConsent(
+        request.chat,
+        request.chat.projectPath,
+        clientTurnId === undefined
+          ? undefined
+          : (): Promise<string> => canonicalTurnReferenceForClient(request.chat.id, clientTurnId),
+        request.signal,
+        (message) => {
+          if (isSupersededOrAborted(request.chat.id, request.signal)) return;
+          setState((previous) => ({
+            ...previous,
+            messages: replaceCanonicalTurnMessages(
+              previous.messages,
+              [request.optimisticId],
+              [message],
+            ),
+          }));
+        },
+      );
+    },
+    [],
+  );
   const sendUngroundedBuffered = useCallback(
     async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
       const { chat, optimisticId, signal } = request;
+      const stopConsentWatch = watchBufferedConsent(request);
       try {
         updateOwnedSendStatus(signal, "contacting");
         // Issue #148 — byte-bounded document context on the request body.
@@ -4318,9 +4387,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const failure = canonicalTurnInProgressFailure(error_);
         if (failure.canonicalTurnInProgress !== true) setError(errorMessage(error_));
         return failure;
+      } finally {
+        stopConsentWatch();
       }
     },
-    [updateOwnedSendStatus],
+    [updateOwnedSendStatus, watchBufferedConsent],
   );
 
   const sendUngrounded = useCallback(
@@ -4362,6 +4433,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
+      const stopConsentWatch = watchBufferedConsent({ chat, clientTurnId, signal, optimisticId });
       try {
         updateOwnedSendStatus(signal, "contacting");
         const result = await askGrounded(
@@ -4432,9 +4504,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const failure = canonicalTurnInProgressFailure(error_);
         if (failure.canonicalTurnInProgress !== true) setError(errorMessage(error_));
         return failure;
+      } finally {
+        stopConsentWatch();
       }
     },
-    [canonicalVoiceProjectionRef, updateOwnedSendStatus],
+    [canonicalVoiceProjectionRef, updateOwnedSendStatus, watchBufferedConsent],
   );
 
   const executeSendAttempt = useCallback(

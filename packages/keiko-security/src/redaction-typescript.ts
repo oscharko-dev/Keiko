@@ -406,13 +406,16 @@ export function isTypeScriptSource(text: string): boolean {
   return result.valid && hasDeclaration(result.file);
 }
 
-function hasDeclaration(file: Ts.SourceFile): boolean {
+function hasDeclaration(
+  file: Ts.SourceFile,
+  accepted: (node: Ts.Node) => boolean = sourceDeclaration,
+): boolean {
   const ts = typescriptApi();
   const pending: Ts.Node[] = [file];
   while (pending.length > 0) {
     const node = pending.pop();
     if (node === undefined) break;
-    if (sourceDeclaration(node)) return true;
+    if (accepted(node)) return true;
     ts.forEachChild(node, (child) => {
       pending.push(child);
     });
@@ -422,9 +425,13 @@ function hasDeclaration(file: Ts.SourceFile): boolean {
 
 /** Tolerant AST ownership identifies code without certifying malformed source as valid. */
 export function hasSourceDeclaration(text: string): boolean {
-  return hasDeclaration(
-    typescriptApi().createSourceFile("source.ts", text, typescriptApi().ScriptTarget.Latest, true),
+  const file = typescriptApi().createSourceFile(
+    "source.ts",
+    text,
+    typescriptApi().ScriptTarget.Latest,
+    true,
   );
+  return hasDeclaration(file, (node) => sourceDeclaration(node) && startsDeclaration(node, file));
 }
 
 function sourceDeclaration(node: Ts.Node): boolean {
@@ -440,6 +447,147 @@ function sourceDeclaration(node: Ts.Node): boolean {
   );
 }
 
+/**
+ * Error recovery shapes English words into declarations (`function was fully read` is a
+ * FunctionDeclaration named `was`; `using the request` a variable statement), so a tolerant parse
+ * alone cannot tell a sentence from malformed source. A declaration is source only when it begins
+ * where a statement can begin (after a line break, or after `;`, `{` or `}`; never in the middle of
+ * a sentence) and the token after its declared name is one its grammar allows there. Both are
+ * properties of the grammar, not of any document, and a valid parse satisfies them by
+ * construction, so only error-recovered shapes are affected.
+ */
+function startsDeclaration(node: Ts.Node, file: Ts.SourceFile): boolean {
+  return atStatementBoundary(node, file) && headerContinues(node, file);
+}
+
+function atStatementBoundary(node: Ts.Node, file: Ts.SourceFile): boolean {
+  if (node.pos === 0) return true;
+  const start = node.getStart(file);
+  // `pos` is where the previous token ends; everything up to `getStart` is trivia.
+  return (
+    /[;{}]/u.test(file.text.charAt(node.pos - 1)) ||
+    /[\r\n]/u.test(file.text.slice(node.pos, start)) ||
+    modifiersOnlyBefore(file.text, start)
+  );
+}
+
+/** Words that may precede a declaration keyword on its line; `final class` is not valid TypeScript,
+ * so error recovery reads `final` as a statement of its own. */
+const MODIFIER_WORDS: ReadonlySet<string> = new Set([
+  "export",
+  "default",
+  "declare",
+  "async",
+  "abstract",
+  "public",
+  "private",
+  "protected",
+  "static",
+  "final",
+  "sealed",
+  "readonly",
+  "override",
+]);
+
+function modifiersOnlyBefore(text: string, start: number): boolean {
+  const line = text.slice(text.lastIndexOf("\n", start - 1) + 1, start);
+  const boundary = Math.max(line.lastIndexOf(";"), line.lastIndexOf("{"), line.lastIndexOf("}"));
+  return line
+    .slice(boundary + 1)
+    .split(/\s+/u)
+    .every((word) => word === "" || MODIFIER_WORDS.has(word));
+}
+
+function headerContinues(node: Ts.Node, file: Ts.SourceFile): boolean {
+  const ts = typescriptApi();
+  if (ts.isImportDeclaration(node)) return importHeaderContinues(node, file.text);
+  const name = ts.isVariableStatement(node)
+    ? node.declarationList.declarations[0]?.name
+    : declarationName(node);
+  if (name === undefined || name.end <= name.pos) return defaultExport(node);
+  return nextTokenAllowed(file.text, name.end, headerFollowers(node), ts.isVariableStatement(node));
+}
+
+function declarationName(node: Ts.Node): Ts.Identifier | undefined {
+  const ts = typescriptApi();
+  return ts.isFunctionDeclaration(node) ||
+    ts.isClassDeclaration(node) ||
+    ts.isInterfaceDeclaration(node) ||
+    ts.isTypeAliasDeclaration(node) ||
+    ts.isEnumDeclaration(node)
+    ? node.name
+    : undefined;
+}
+
+/** Only `export default function (...)` and `export default class {...}` may omit their name. */
+function defaultExport(node: Ts.Node): boolean {
+  const ts = typescriptApi();
+  return (
+    (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) &&
+    (node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ?? false)
+  );
+}
+
+/** The tokens a declaration's grammar allows directly after its declared name. */
+function headerFollowers(node: Ts.Node): readonly Ts.SyntaxKind[] {
+  const ts = typescriptApi();
+  const kind = ts.SyntaxKind;
+  if (ts.isFunctionDeclaration(node)) return [kind.OpenParenToken, kind.LessThanToken];
+  if (ts.isClassDeclaration(node))
+    return [kind.OpenBraceToken, kind.LessThanToken, kind.ExtendsKeyword, kind.ImplementsKeyword];
+  if (ts.isInterfaceDeclaration(node))
+    return [kind.OpenBraceToken, kind.LessThanToken, kind.ExtendsKeyword];
+  if (ts.isEnumDeclaration(node)) return [kind.OpenBraceToken];
+  if (ts.isTypeAliasDeclaration(node)) return [kind.EqualsToken, kind.LessThanToken];
+  return [
+    kind.EqualsToken,
+    kind.ColonToken,
+    kind.CommaToken,
+    kind.SemicolonToken,
+    kind.ExclamationToken,
+  ];
+}
+
+/** `import "module"`, `import { ... } from`, `import * as ns from`, or a default binding that is
+ * followed by `from` or `,`; a sentence that begins with "import" has none of them. */
+function importHeaderContinues(node: Ts.ImportDeclaration, text: string): boolean {
+  const ts = typescriptApi();
+  const clause = node.importClause;
+  if (clause === undefined)
+    return (
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      node.moduleSpecifier.end > node.moduleSpecifier.pos
+    );
+  if (clause.name === undefined) return true;
+  const kind = ts.SyntaxKind;
+  return nextTokenAllowed(text, clause.name.end, [kind.FromKeyword, kind.CommaToken], false);
+}
+
+/** The end of the text is allowed too: a truncated header is still source. A variable without an
+ * initializer may also end its line, as automatic semicolon insertion lets it. */
+function nextTokenAllowed(
+  text: string,
+  from: number,
+  allowed: readonly Ts.SyntaxKind[],
+  lineEndAllowed: boolean,
+): boolean {
+  const ts = typescriptApi();
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    true,
+    ts.LanguageVariant.Standard,
+    text,
+    undefined,
+    from,
+  );
+  const token = scanner.scan();
+  return (
+    token === ts.SyntaxKind.EndOfFileToken ||
+    allowed.includes(token) ||
+    (lineEndAllowed && scanner.hasPrecedingLineBreak())
+  );
+}
+
 export function typeScriptPrefixLength(text: string): number {
   const ts = typescriptApi();
   const jsx = syntaxSource(text, ts.ScriptKind.TSX);
@@ -449,7 +597,7 @@ export function typeScriptPrefixLength(text: string): number {
   let declaration = false;
   for (const statement of result.file.statements) {
     if (statement.end > result.firstError || !sourceStatement(statement)) break;
-    declaration ||= sourceDeclaration(statement);
+    declaration ||= sourceDeclaration(statement) && startsDeclaration(statement, result.file);
     end = statement.end;
   }
   return declaration ? end : 0;

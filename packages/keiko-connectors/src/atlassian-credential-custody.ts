@@ -23,10 +23,17 @@
 // content-free code and a fixed message — no field VALUE (token, email, URL, display name) ever
 // enters an error, so a thrown custody error can never leak a secret into a diagnostic record.
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { isChatJiraPodId } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  isAtlassianConnectionVerificationStatus,
+  type JiraLivePodMetadata,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { Buffer } from "node:buffer";
 import type {
-  AtlassianConnectorAuthScheme,
+  AtlassianCredentialMetadata,
+  AtlassianLivePodUpdateRequest,
+  AtlassianCredentialCreateRequest,
   AtlassianConnectorProvider,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -81,7 +88,9 @@ export type AtlassianCredentialCustodyErrorCode =
   | "credential-not-found"
   | "credential-unreadable"
   | "vault-unavailable"
-  | "credential-limit-exceeded";
+  | "credential-limit-exceeded"
+  | "creation-conflict"
+  | "credential-changed";
 
 // Fixed, content-free messages per code. Field-level `details` name FIELDS only, never values.
 const CUSTODY_ERROR_MESSAGES: Readonly<Record<AtlassianCredentialCustodyErrorCode, string>> = {
@@ -92,6 +101,8 @@ const CUSTODY_ERROR_MESSAGES: Readonly<Record<AtlassianCredentialCustodyErrorCod
   "credential-unreadable": "Atlassian connector credential could not be read from custody.",
   "vault-unavailable": "Atlassian connector credential vault operation failed.",
   "credential-limit-exceeded": "Atlassian connector credential storage limit has been reached.",
+  "creation-conflict": "This Jira Pod creation request has already been applied.",
+  "credential-changed": "The credential changed before this operation could run.",
 };
 
 export class AtlassianCredentialCustodyError extends Error {
@@ -115,15 +126,7 @@ export class AtlassianCredentialCustodyError extends Error {
 // The non-secret projection of one stored credential. There is deliberately no field that could
 // carry the token or the account email: the email is half of the Basic credential pair and lives
 // only inside the sealed vault envelope.
-export interface AtlassianCredentialMetadata {
-  readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
-  readonly authRef: string;
-  readonly provider: AtlassianConnectorProvider;
-  readonly displayName: string;
-  readonly baseUrl: string;
-  readonly authScheme: AtlassianConnectorAuthScheme;
-  readonly createdAt: number;
-}
+export type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-contracts";
 
 const METADATA_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
@@ -133,6 +136,9 @@ const METADATA_KEYS: ReadonlySet<string> = new Set([
   "baseUrl",
   "authScheme",
   "createdAt",
+  "deployment",
+  "generation",
+  "livePod",
 ]);
 
 function isFiniteNonNegativeNumber(value: unknown): value is number {
@@ -145,6 +151,66 @@ function hasOnlyMetadataKeys(record: Record<string, unknown>): boolean {
   return Object.keys(record).every((key) => METADATA_KEYS.has(key));
 }
 
+function isValidDeploymentMetadata(record: Record<string, unknown>): boolean {
+  if (record.authScheme === "basic-api-token") {
+    return (
+      record.livePod === undefined &&
+      (record.deployment === undefined || record.deployment === "cloud")
+    );
+  }
+  return (
+    record.authScheme === "bearer-pat" &&
+    record.provider === "jira" &&
+    record.deployment === "data-center" &&
+    record.generation !== undefined &&
+    (record.livePod === undefined || validLivePodMetadata(record.livePod))
+  );
+}
+
+const LIVE_POD_KEYS = new Set([
+  "credentialOperation",
+  "podId",
+  "ownerDigest",
+  "creationRequestId",
+  "verificationRevision",
+  "verificationInProgress",
+  "verificationStatus",
+]);
+
+function ownerDigestIsValid(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function validLivePodMetadata(value: unknown): value is JiraLivePodMetadata {
+  if (!isRecord(value) || !Object.keys(value).every((key) => LIVE_POD_KEYS.has(key))) return false;
+  return (
+    isChatJiraPodId(value.podId) &&
+    isChatJiraPodId(value.creationRequestId) &&
+    ownerDigestIsValid(value.ownerDigest) &&
+    validLivePodVerification(value)
+  );
+}
+
+function validLivePodVerification(value: Record<string, unknown>): boolean {
+  return (
+    Number.isSafeInteger(value.verificationRevision) &&
+    Number(value.verificationRevision) >= 0 &&
+    typeof value.verificationInProgress === "boolean" &&
+    validLivePodOperation(value) &&
+    (value.verificationStatus === "unverified" ||
+      isAtlassianConnectionVerificationStatus(value.verificationStatus))
+  );
+}
+
+function validLivePodOperation(value: Record<string, unknown>): boolean {
+  if (value.credentialOperation === undefined) return true;
+  return (
+    (value.credentialOperation === "replace-token" || value.credentialOperation === "delete") &&
+    value.verificationStatus === "unverified" &&
+    value.verificationInProgress === false
+  );
+}
+
 function hasValidMetadataFields(record: Record<string, unknown>): boolean {
   return (
     record.schemaVersion === ATLASSIAN_CONNECTOR_SCHEMA_VERSION &&
@@ -152,7 +218,9 @@ function hasValidMetadataFields(record: Record<string, unknown>): boolean {
     isAtlassianConnectorProvider(record.provider) &&
     isSafeAtlassianDisplayName(record.displayName) &&
     isSafeAtlassianConnectorBaseUrl(record.baseUrl) &&
-    record.authScheme === "basic-api-token" &&
+    isValidDeploymentMetadata(record) &&
+    (record.generation === undefined ||
+      (Number.isSafeInteger(record.generation) && Number(record.generation) > 0)) &&
     isFiniteNonNegativeNumber(record.createdAt)
   );
 }
@@ -181,33 +249,61 @@ export interface AtlassianCredentialMetadataStore {
 }
 
 // ─── Resolved credential (execution path only; in-memory, short-lived) ────────
-export interface AtlassianResolvedCredential {
-  readonly scheme: "basic-api-token";
-  readonly accountEmail: string;
-  readonly apiToken: string;
-}
+export type AtlassianResolvedCredential =
+  | { readonly scheme: "basic-api-token"; readonly accountEmail: string; readonly apiToken: string }
+  | { readonly scheme: "bearer-pat"; readonly apiToken: string };
 
 // The narrow execution-only resolver. NOT part of `AtlassianCredentialCustody`: keiko-server
 // injects it exclusively into the outbound HTTP adapter (ADR-0128 D2 write-only rule), so no
 // route, event, or serialized surface can ever reach the secret.
 export interface AtlassianCredentialExecutionResolver {
-  readonly resolveForExecution: (authRef: string) => AtlassianResolvedCredential;
+  readonly resolveForExecution: (
+    authRef: string,
+    expectedGeneration?: number,
+  ) => AtlassianResolvedCredential;
 }
 
 // ─── Custody surface ───────────────────────────────────────────────────────────
 export interface AtlassianCredentialCustody {
   // Accepts the raw secret exactly once (unknown-shaped: hostile input is validated here, at the
   // enforcement point). Returns metadata only. Throws AtlassianCredentialCustodyError.
-  readonly create: (input: unknown) => AtlassianCredentialMetadata;
+  readonly create: (input: unknown, livePodOwnerDigest?: string) => AtlassianCredentialMetadata;
+  readonly updateLivePod: (
+    authRef: string,
+    input: unknown,
+    correlationId?: string,
+  ) => AtlassianCredentialMetadata;
+  readonly beginVerification: (
+    authRef: string,
+    expectedGeneration?: number,
+  ) => { readonly metadata: AtlassianCredentialMetadata; readonly revision: number } | undefined;
+  readonly finishVerification: (
+    authRef: string,
+    generation: number,
+    revision: number,
+    status: JiraLivePodMetadata["verificationStatus"],
+    correlationId?: string,
+  ) => boolean;
+  /** A current authenticated request observed 401; stale responses cannot invalidate newer verification. */
+  readonly observeAuthenticationFailure: (
+    authRef: string,
+    generation: number,
+    verificationRevision: number,
+    correlationId?: string,
+  ) => boolean;
   readonly getMetadata: (authRef: string) => AtlassianCredentialMetadata | undefined;
   readonly list: () => readonly AtlassianCredentialMetadata[];
   // Removes ciphertext AND metadata; returns false when the authRef is unknown.
-  readonly delete: (authRef: string) => boolean;
+  readonly delete: (authRef: string, correlationId?: string) => boolean;
 }
 
 export interface AtlassianCredentialCustodyDeps {
   readonly vault: AtlassianCredentialVaultPort;
   readonly metadataStore: AtlassianCredentialMetadataStore;
+  // Server-owned invalidation follows durable revocation. null means credential removal.
+  readonly onLivePodInvalidated?:
+    | ((podId: string, authenticationGeneration: number | null, correlationId?: string) => void)
+    | undefined;
   readonly now?: () => number;
 }
 
@@ -216,23 +312,26 @@ export interface CreatedAtlassianCredentialCustody {
   readonly executionResolver: AtlassianCredentialExecutionResolver;
 }
 
-// The sealed vault envelope. Versioned so a future `bearer-pat` payload (ADR-0128 D7) is an
-// additive envelope variant, not a breaking change.
-interface VaultSecretEnvelope {
+// Additive v1 envelopes preserve existing Cloud vault records.
+type VaultSecretEnvelope = AtlassianResolvedCredential & {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
-  readonly scheme: "basic-api-token";
-  readonly accountEmail: string;
-  readonly apiToken: string;
-}
+};
 
 function isVaultSecretEnvelope(value: unknown): value is VaultSecretEnvelope {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== ATLASSIAN_CONNECTOR_SCHEMA_VERSION ||
+    !isSafeAtlassianApiToken(value.apiToken)
+  )
+    return false;
+  const keys =
+    value.scheme === "basic-api-token"
+      ? new Set(["schemaVersion", "scheme", "accountEmail", "apiToken"])
+      : new Set(["schemaVersion", "scheme", "apiToken"]);
+  if (Object.keys(value).some((key) => !keys.has(key))) return false;
   return (
-    record.schemaVersion === ATLASSIAN_CONNECTOR_SCHEMA_VERSION &&
-    record.scheme === "basic-api-token" &&
-    isSafeAtlassianAccountEmail(record.accountEmail) &&
-    isSafeAtlassianApiToken(record.apiToken)
+    value.scheme === "bearer-pat" ||
+    (value.scheme === "basic-api-token" && isSafeAtlassianAccountEmail(value.accountEmail))
   );
 }
 
@@ -261,26 +360,68 @@ const CREATE_INPUT_KEYS: ReadonlySet<string> = new Set([
   "displayName",
   "baseUrl",
   "authScheme",
+  "deployment",
   "accountEmail",
   "apiToken",
+  "livePodCreationRequestId",
 ]);
 
-interface ValidatedCreateInput {
-  readonly provider: AtlassianConnectorProvider;
-  readonly displayName: string;
-  readonly baseUrl: string;
-  readonly accountEmail: string;
-  readonly apiToken: string;
+type ValidatedCreateInput = AtlassianCredentialCreateRequest;
+
+function assertSupportedAuthScheme(input: Record<string, unknown>, errors: string[]): void {
+  validateLivePodCreateIntent(input, errors);
+  validateAuthVariant(input, errors);
 }
 
-// Validates the auth scheme separately so the declared-but-unimplemented `bearer-pat` value
-// (ADR-0128 D2/D7) is refused with its own closed code rather than a generic validation error.
-function assertSupportedAuthScheme(value: unknown, errors: string[]): void {
-  if (value === "basic-api-token") return;
-  if (value === "bearer-pat") {
-    throw new AtlassianCredentialCustodyError("unsupported-auth-scheme");
+function validateLivePodCreateIntent(input: Record<string, unknown>, errors: string[]): void {
+  if (
+    input.livePodCreationRequestId !== undefined &&
+    (input.authScheme !== "bearer-pat" || !isChatJiraPodId(input.livePodCreationRequestId))
+  )
+    errors.push("livePodCreationRequestId must identify a Data Center Pod creation");
+}
+
+function validateAuthVariant(input: Record<string, unknown>, errors: string[]): void {
+  if (input.authScheme === "basic-api-token") {
+    if (input.deployment !== undefined && input.deployment !== "cloud")
+      errors.push("deployment must match authScheme");
+    if (!isSafeAtlassianAccountEmail(input.accountEmail))
+      errors.push("accountEmail must be a bounded email address");
+    return;
   }
-  errors.push("authScheme must be basic-api-token");
+  if (input.authScheme === "bearer-pat") {
+    if (input.provider !== "jira" || input.deployment !== "data-center")
+      throw new AtlassianCredentialCustodyError("unsupported-auth-scheme");
+    if (Object.hasOwn(input, "accountEmail"))
+      errors.push("accountEmail must be absent for bearer-pat");
+    return;
+  }
+  errors.push("authScheme must be basic-api-token or bearer-pat");
+}
+
+function validatedCreateVariant(input: Record<string, unknown>): ValidatedCreateInput {
+  const common = {
+    displayName: input.displayName as string,
+    baseUrl: input.baseUrl as string,
+    apiToken: input.apiToken as string,
+  };
+  if (input.authScheme === "bearer-pat")
+    return {
+      ...common,
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      ...(input.livePodCreationRequestId === undefined
+        ? {}
+        : { livePodCreationRequestId: input.livePodCreationRequestId as string }),
+    };
+  return {
+    ...common,
+    provider: input.provider as AtlassianConnectorProvider,
+    authScheme: "basic-api-token",
+    accountEmail: input.accountEmail as string,
+    ...(input.deployment === "cloud" ? { deployment: "cloud" } : {}),
+  };
 }
 
 // Every message names the field and its rule only — never the submitted value, so a rejected
@@ -296,7 +437,7 @@ function validateCreateInput(input: unknown): ValidatedCreateInput {
   if (Object.keys(input).some((key) => !CREATE_INPUT_KEYS.has(key))) {
     errors.push("input must not include unexpected fields");
   }
-  assertSupportedAuthScheme(input.authScheme, errors);
+  assertSupportedAuthScheme(input, errors);
   if (!isAtlassianConnectorProvider(input.provider)) {
     errors.push("provider must be confluence or jira");
   }
@@ -306,22 +447,13 @@ function validateCreateInput(input: unknown): ValidatedCreateInput {
   if (!isSafeAtlassianConnectorBaseUrl(input.baseUrl)) {
     errors.push("baseUrl must be an https URL without credentials, query, or fragment");
   }
-  if (!isSafeAtlassianAccountEmail(input.accountEmail)) {
-    errors.push("accountEmail must be a bounded email address");
-  }
   if (!isSafeAtlassianApiToken(input.apiToken)) {
     errors.push("apiToken must be printable ASCII between 8 and 1024 characters");
   }
   if (errors.length > 0) {
     throw new AtlassianCredentialCustodyError("invalid-input", errors);
   }
-  return {
-    provider: input.provider as AtlassianConnectorProvider,
-    displayName: input.displayName as string,
-    baseUrl: input.baseUrl as string,
-    accountEmail: input.accountEmail as string,
-    apiToken: input.apiToken as string,
-  };
+  return validatedCreateVariant(input);
 }
 
 // `atlassian-cred:<16 random bytes, base64url>` — 22 unpadded characters (ADR-0128 D2), matching
@@ -343,12 +475,19 @@ function vaultOp<T>(operation: () => T): T {
 }
 
 function serializeSecret(input: ValidatedCreateInput): string {
-  const envelope: VaultSecretEnvelope = {
-    schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-    scheme: "basic-api-token",
-    accountEmail: input.accountEmail,
-    apiToken: input.apiToken,
-  };
+  const envelope: VaultSecretEnvelope =
+    input.authScheme === "bearer-pat"
+      ? {
+          schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+          scheme: "bearer-pat",
+          apiToken: input.apiToken,
+        }
+      : {
+          schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+          scheme: "basic-api-token",
+          accountEmail: input.accountEmail,
+          apiToken: input.apiToken,
+        };
   return JSON.stringify(envelope);
 }
 
@@ -362,19 +501,18 @@ function parseSecretEnvelope(raw: string): AtlassianResolvedCredential {
   if (!isVaultSecretEnvelope(parsed)) {
     throw new AtlassianCredentialCustodyError("credential-unreadable");
   }
-  return {
-    scheme: parsed.scheme,
-    accountEmail: parsed.accountEmail,
-    apiToken: parsed.apiToken,
-  };
+  if (parsed.scheme === "bearer-pat") return { scheme: parsed.scheme, apiToken: parsed.apiToken };
+  return { scheme: parsed.scheme, accountEmail: parsed.accountEmail, apiToken: parsed.apiToken };
 }
 
 function createCredential(
   deps: AtlassianCredentialCustodyDeps,
   now: () => number,
   input: unknown,
+  livePodOwnerDigest?: string,
 ): AtlassianCredentialMetadata {
   const validated = validateCreateInput(input);
+  const livePod = newLivePodMetadata(deps, validated, livePodOwnerDigest);
   // Fail closed once the storage cap is reached (KEIKO-0826), before the vault write — a caller
   // who can already reach the credential-creation route must not be able to grow the vault
   // unboundedly. Deliberately not folded into validateCreateInput: that function validates the
@@ -387,11 +525,22 @@ function createCredential(
   const metadata: AtlassianCredentialMetadata = {
     schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
     authRef,
-    provider: validated.provider,
     displayName: validated.displayName,
     baseUrl: validated.baseUrl,
-    authScheme: "basic-api-token",
     createdAt: now(),
+    ...(validated.authScheme === "bearer-pat"
+      ? ({
+          provider: "jira",
+          authScheme: "bearer-pat",
+          deployment: "data-center",
+          generation: 1,
+          ...(livePod === undefined ? {} : { livePod }),
+        } as const)
+      : ({
+          provider: validated.provider,
+          authScheme: "basic-api-token",
+          ...(validated.deployment === "cloud" ? ({ deployment: "cloud" } as const) : {}),
+        } as const)),
   };
   // Vault write FIRST (mirroring the provider-credential migration ordering): if the metadata
   // insert fails, the orphaned ciphertext is removed best-effort so no unreferenced secret
@@ -412,12 +561,151 @@ function createCredential(
   return metadata;
 }
 
+function newLivePodMetadata(
+  deps: AtlassianCredentialCustodyDeps,
+  input: ValidatedCreateInput,
+  ownerDigest: string | undefined,
+): JiraLivePodMetadata | undefined {
+  if (input.authScheme !== "bearer-pat" || input.livePodCreationRequestId === undefined)
+    return undefined;
+  if (!ownerDigestIsValid(ownerDigest)) throw new AtlassianCredentialCustodyError("invalid-input");
+  const duplicate = deps.metadataStore
+    .list()
+    .some(
+      (row) =>
+        row.deployment === "data-center" &&
+        row.livePod?.ownerDigest === ownerDigest &&
+        row.livePod.creationRequestId === input.livePodCreationRequestId,
+    );
+  if (duplicate) throw new AtlassianCredentialCustodyError("creation-conflict");
+  return {
+    podId: randomUUID(),
+    ownerDigest,
+    creationRequestId: input.livePodCreationRequestId,
+    verificationRevision: 0,
+    verificationInProgress: false,
+    verificationStatus: "unverified",
+  };
+}
+
+type LivePodCredential = Extract<
+  AtlassianCredentialMetadata,
+  { readonly deployment: "data-center" }
+> & { readonly livePod: JiraLivePodMetadata };
+
+function livePodCredential(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+): LivePodCredential | undefined {
+  if (!isAtlassianConnectorAuthRef(authRef)) return undefined;
+  const metadata = deps.metadataStore.get(authRef);
+  if (
+    !isAtlassianCredentialMetadata(metadata) ||
+    metadata.deployment !== "data-center" ||
+    metadata.livePod === undefined
+  )
+    return undefined;
+  return { ...metadata, livePod: metadata.livePod };
+}
+
+function advanceGeneration(value: number): number {
+  const next = value + 1;
+  if (!Number.isSafeInteger(next)) throw new AtlassianCredentialCustodyError("invalid-input");
+  return next;
+}
+
+function beginVerification(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+  expectedGeneration?: number,
+): ReturnType<AtlassianCredentialCustody["beginVerification"]> {
+  const metadata = livePodCredential(deps, authRef);
+  if (metadata === undefined) return undefined;
+  assertCurrentCredential(metadata, expectedGeneration);
+  const revision = advanceGeneration(metadata.livePod.verificationRevision);
+  const next = {
+    ...metadata,
+    livePod: { ...metadata.livePod, verificationRevision: revision, verificationInProgress: true },
+  };
+  deps.metadataStore.insert(next);
+  return { metadata: next, revision };
+}
+
+function finishVerification(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+  generation: number,
+  revision: number,
+  status: JiraLivePodMetadata["verificationStatus"],
+  correlationId?: string,
+): boolean {
+  const metadata = livePodCredential(deps, authRef);
+  if (
+    metadata?.generation !== generation ||
+    metadata.livePod.verificationRevision !== revision ||
+    !metadata.livePod.verificationInProgress
+  )
+    return false;
+  if (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
+    throw new AtlassianCredentialCustodyError("invalid-input");
+  commitVerificationStatus(deps, metadata, status, correlationId);
+  return true;
+}
+
+function commitVerificationStatus(
+  deps: AtlassianCredentialCustodyDeps,
+  metadata: LivePodCredential,
+  status: JiraLivePodMetadata["verificationStatus"],
+  correlationId?: string,
+): void {
+  const generation = metadata.generation;
+  const nextGeneration = status === "ok" ? generation : advanceGeneration(generation);
+  deps.metadataStore.insert({
+    ...metadata,
+    generation: nextGeneration,
+    livePod: { ...metadata.livePod, verificationInProgress: false, verificationStatus: status },
+  });
+  if (nextGeneration !== generation)
+    deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration, correlationId);
+}
+
+function observeAuthenticationFailure(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+  generation: number,
+  revision: number,
+  correlationId?: string,
+): boolean {
+  const metadata = livePodCredential(deps, authRef);
+  if (
+    metadata?.generation !== generation ||
+    metadata.livePod.verificationRevision !== revision ||
+    metadata.livePod.verificationInProgress ||
+    metadata.livePod.credentialOperation !== undefined ||
+    metadata.livePod.verificationStatus !== "ok"
+  )
+    return false;
+  commitVerificationStatus(deps, metadata, "auth-failed", correlationId);
+  return true;
+}
+
 // Fails closed on every path: a malformed reference, missing metadata, missing ciphertext, or an
 // unreadable/mismatched envelope each produce a closed, content-free reason. A deleted credential
 // resolves to `credential-not-found` — the authRef is invalidated, exactly as ADR-0128 D2 requires.
+function assertCurrentCredential(
+  metadata: AtlassianCredentialMetadata,
+  expectedGeneration?: number,
+): void {
+  if (expectedGeneration !== undefined && expectedGeneration !== (metadata.generation ?? 1))
+    throw new AtlassianCredentialCustodyError("credential-changed");
+  if (metadata.deployment === "data-center" && metadata.livePod?.credentialOperation !== undefined)
+    throw new AtlassianCredentialCustodyError("credential-changed");
+}
+
 function resolveForExecution(
   deps: AtlassianCredentialCustodyDeps,
   authRef: string,
+  expectedGeneration?: number,
 ): AtlassianResolvedCredential {
   if (!isAtlassianConnectorAuthRef(authRef)) {
     throw new AtlassianCredentialCustodyError("credential-not-found");
@@ -431,6 +719,7 @@ function resolveForExecution(
   if (metadata === undefined || !isAtlassianCredentialMetadata(metadata)) {
     throw new AtlassianCredentialCustodyError("credential-not-found");
   }
+  assertCurrentCredential(metadata, expectedGeneration);
   const sealed = vaultOp(() => deps.vault.get(authRef));
   if (sealed === undefined) {
     throw new AtlassianCredentialCustodyError("credential-not-found");
@@ -442,12 +731,135 @@ function resolveForExecution(
   return resolved;
 }
 
+const LIVE_POD_UPDATE_KEYS = new Set(["expectedGeneration", "displayName", "apiToken"]);
+
+function validateLivePodUpdate(input: unknown): AtlassianLivePodUpdateRequest {
+  if (!isRecord(input) || Object.keys(input).some((key) => !LIVE_POD_UPDATE_KEYS.has(key)))
+    throw new AtlassianCredentialCustodyError("invalid-input");
+  const generation = input.expectedGeneration;
+  if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1)
+    throw new AtlassianCredentialCustodyError("invalid-input");
+  if (!validLivePodUpdateValues(input)) throw new AtlassianCredentialCustodyError("invalid-input");
+  if (typeof input.apiToken === "string")
+    return {
+      expectedGeneration: generation,
+      apiToken: input.apiToken,
+      ...(typeof input.displayName === "string" ? { displayName: input.displayName } : {}),
+    };
+  if (typeof input.displayName === "string")
+    return { expectedGeneration: generation, displayName: input.displayName };
+  throw new AtlassianCredentialCustodyError("invalid-input");
+}
+
+function validLivePodUpdateValues(input: Record<string, unknown>): boolean {
+  return (
+    (input.displayName === undefined || isSafeAtlassianDisplayName(input.displayName)) &&
+    (input.apiToken === undefined || isSafeAtlassianApiToken(input.apiToken)) &&
+    (input.displayName !== undefined || input.apiToken !== undefined)
+  );
+}
+
+function pendingLivePodOperation(
+  deps: AtlassianCredentialCustodyDeps,
+  metadata: LivePodCredential,
+  operation: NonNullable<JiraLivePodMetadata["credentialOperation"]>,
+  correlationId?: string,
+): LivePodCredential {
+  const pending: LivePodCredential = {
+    ...metadata,
+    generation: advanceGeneration(metadata.generation),
+    livePod: {
+      ...metadata.livePod,
+      credentialOperation: operation,
+      verificationRevision: advanceGeneration(metadata.livePod.verificationRevision),
+      verificationStatus: "unverified",
+      verificationInProgress: false,
+    },
+  };
+  deps.metadataStore.insert(pending);
+  deps.onLivePodInvalidated?.(
+    pending.livePod.podId,
+    operation === "delete" ? null : pending.generation,
+    correlationId,
+  );
+  return pending;
+}
+
+function updateLivePod(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+  input: unknown,
+  correlationId?: string,
+): AtlassianCredentialMetadata {
+  const patch = validateLivePodUpdate(input);
+  const metadata = livePodCredential(deps, authRef);
+  if (metadata === undefined) throw new AtlassianCredentialCustodyError("credential-not-found");
+  if (
+    metadata.generation !== patch.expectedGeneration ||
+    metadata.livePod.credentialOperation === "delete"
+  )
+    throw new AtlassianCredentialCustodyError("credential-changed");
+  if (patch.apiToken === undefined) {
+    if (metadata.livePod.credentialOperation !== undefined)
+      throw new AtlassianCredentialCustodyError("credential-changed");
+    const renamed = { ...metadata, displayName: patch.displayName ?? metadata.displayName };
+    deps.metadataStore.insert(renamed);
+    return renamed;
+  }
+  const pending = pendingLivePodOperation(deps, metadata, "replace-token", correlationId);
+  vaultOp(() => {
+    deps.vault.set(
+      authRef,
+      JSON.stringify({
+        schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+        scheme: "bearer-pat",
+        apiToken: patch.apiToken,
+      }),
+    );
+  });
+  const { credentialOperation: _operation, ...livePod } = pending.livePod;
+  const settled = { ...pending, displayName: patch.displayName ?? metadata.displayName, livePod };
+  deps.metadataStore.insert(settled);
+  return settled;
+}
+
+function deleteCredential(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+  correlationId?: string,
+): boolean {
+  if (!isAtlassianConnectorAuthRef(authRef)) return false;
+  const metadata = deps.metadataStore.get(authRef);
+  if (metadata === undefined) return false;
+  const livePod = livePodCredential(deps, authRef);
+  if (livePod !== undefined) {
+    if (livePod.livePod.credentialOperation !== "delete")
+      pendingLivePodOperation(deps, livePod, "delete", correlationId);
+    else deps.onLivePodInvalidated?.(livePod.livePod.podId, null, correlationId);
+  }
+  // A durable Live-Pod intent denies execution even if either subsequent cleanup fails.
+  // Legacy Cloud deletion retains its original ciphertext-first ordering.
+  vaultOp(() => {
+    deps.vault.delete(authRef);
+  });
+  return deps.metadataStore.delete(authRef);
+}
+
 export function createAtlassianCredentialCustody(
   deps: AtlassianCredentialCustodyDeps,
 ): CreatedAtlassianCredentialCustody {
   const now = deps.now ?? ((): number => Date.now());
   const custody: AtlassianCredentialCustody = {
-    create: (input: unknown): AtlassianCredentialMetadata => createCredential(deps, now, input),
+    create: (input: unknown, ownerDigest?: string): AtlassianCredentialMetadata =>
+      createCredential(deps, now, input, ownerDigest),
+    updateLivePod: (authRef, input, correlationId) =>
+      updateLivePod(deps, authRef, input, correlationId),
+    beginVerification: (authRef, expectedGeneration) =>
+      beginVerification(deps, authRef, expectedGeneration),
+    finishVerification: (authRef, generation, revision, status, correlationId) =>
+      finishVerification(deps, authRef, generation, revision, status, correlationId),
+    observeAuthenticationFailure: (authRef, generation, revision, correlationId) =>
+      observeAuthenticationFailure(deps, authRef, generation, revision, correlationId),
     // Re-validated on read (KEIKO-0894), matching resolveForExecution below: an authRef that
     // resolves to a record failing the key allowlist is indistinguishable from one that was never
     // stored.
@@ -465,22 +877,15 @@ export function createAtlassianCredentialCustody(
       [...deps.metadataStore.list()]
         .filter(isAtlassianCredentialMetadata)
         .sort(compareAtlassianCredentialMetadata),
-    delete: (authRef: string): boolean => {
-      if (!isAtlassianConnectorAuthRef(authRef)) return false;
-      if (deps.metadataStore.get(authRef) === undefined) return false;
-      // Ciphertext removal first: if it fails the metadata row remains and the delete is
-      // retryable; the reverse order could silently orphan a sealed secret on disk.
-      vaultOp(() => {
-        deps.vault.delete(authRef);
-      });
-      return deps.metadataStore.delete(authRef);
-    },
+    delete: (authRef, correlationId) => deleteCredential(deps, authRef, correlationId),
   };
   return {
     custody,
     executionResolver: {
-      resolveForExecution: (authRef: string): AtlassianResolvedCredential =>
-        resolveForExecution(deps, authRef),
+      resolveForExecution: (
+        authRef: string,
+        expectedGeneration?: number,
+      ): AtlassianResolvedCredential => resolveForExecution(deps, authRef, expectedGeneration),
     },
   };
 }
@@ -489,6 +894,7 @@ export function createAtlassianCredentialCustody(
 // sanctioned caller — keiko-server's outbound AtlassianHttpPort adapter — which materialises it
 // immediately before the platform fetch call and never logs or re-emits it (ADR-0128 D2).
 export function atlassianAuthorizationHeaderValue(credential: AtlassianResolvedCredential): string {
+  if (credential.scheme === "bearer-pat") return `Bearer ${credential.apiToken}`;
   const basicToken = `${credential.accountEmail}:${credential.apiToken}`;
   return `Basic ${Buffer.from(basicToken, "utf8").toString("base64")}`;
 }

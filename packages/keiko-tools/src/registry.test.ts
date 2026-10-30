@@ -12,8 +12,10 @@ import {
 } from "./errors.js";
 import { nodeSpawnFn } from "./exec.js";
 import { DEFAULT_COMMAND_RULES, type CommandRule } from "./types.js";
-import { makeWorkspace, recordingSpawn } from "./_support.js";
+import { createDiffOfBytes, makeWorkspace, recordingSpawn } from "./_support.js";
 import type { ToolCallRequest } from "@oscharko-dev/keiko-contracts";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 let root: string;
@@ -395,6 +397,51 @@ describe("WorkspaceToolHost — patch tools", () => {
     expect(parse(result.output).preview).toContain("PATCH OK");
     expect(read("src/x.txt")).toBe(before);
     expect(result.commandExecuted).toBe(false);
+  });
+
+  // #4110: the legacy patch tools take a unified diff up to the shared patch cap, not 64 KiB.
+  it("propose_patch admits a diff of exactly the cap and answers within the result ceiling", async () => {
+    const result = await host().execute(
+      request("propose_patch", {
+        diff: createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES),
+      }),
+    );
+    const output = parse(result.output);
+    expect(output.preview).toContain("PATCH OK");
+    expect(output.validation).toMatchObject({ ok: true, totalBytes: GOVERNED_PATCH_MAX_BYTES });
+    // The verdict and counts only: never the hunks or the normalized diff the model just sent.
+    expect(JSON.stringify(output)).not.toContain("xxxxxxxx");
+    expect(Buffer.byteLength(result.output, "utf8")).toBeLessThanOrEqual(
+      TOOL_CATALOG_LIMITS.maxStringBytes,
+    );
+  });
+
+  it("propose_patch lists at most 50 files and rejections and counts the rest", async () => {
+    const files = Array.from(
+      { length: 60 },
+      (_, index) => `--- /dev/null\n+++ b/src/f${String(index)}.txt\n@@ -0,0 +1,1 @@\n+x\n`,
+    ).join("");
+    const output = parse((await host().execute(request("propose_patch", { diff: files }))).output);
+    expect(output.validation).toMatchObject({ ok: false, fileCount: 60, reasonCount: 1 });
+    expect((output.validation as { files: unknown[] }).files).toHaveLength(50);
+    expect(output.preview).toContain("… 10 more file(s)");
+  });
+
+  it("propose_patch and apply_patch refuse a diff one byte over the cap before any work", async () => {
+    const over = createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES + 1);
+    await expect(host().execute(request("propose_patch", { diff: over }))).rejects.toBeInstanceOf(
+      ToolArgumentError,
+    );
+    await expect(
+      host({ config: { applyEnabled: true } }).execute(request("apply_patch", { diff: over })),
+    ).rejects.toBeInstanceOf(ToolArgumentError);
+  });
+
+  it("apply_patch applies a diff of exactly the cap", async () => {
+    const result = await host({ config: { applyEnabled: true } }).execute(
+      request("apply_patch", { diff: createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES) }),
+    );
+    expect(parse(result.output).created).toEqual(["src/big.txt"]);
   });
 
   it("apply_patch is fail-closed by default (applyEnabled false)", async () => {

@@ -44,8 +44,33 @@ const MIN_RUN_SUFFIX_LENGTH = 6;
 /** A mistake in how the operator invoked a script: reported as usage, exit code 2. */
 export class UsageError extends Error {}
 
+// Playwright's request errors embed their call log, request headers included (#4120).
+const SECRET_HEADER = /\b((?:set-)?cookie|(?:proxy-)?authorization)(\s*[:=]\s*)[^\r\n]*/giu;
+// A header serialized as JSON quotes its name, so the separator follows a quote; only its value, a
+// whole array of values included, is replaced and the rest of the document stays readable (#4126
+// review). A bare array element never starts with a quote, so every element has one parse and an
+// unterminated array cannot backtrack exponentially.
+const QUOTED_SECRET_HEADER =
+  /(["'])((?:set-)?cookie|(?:proxy-)?authorization)\1(\s*:\s*)(?:\[(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\]"'\r\n])*\]|(["'])(?:\\.|(?!\4)[^\\\r\n])*\4|[^,}\r\n]*)/giu;
+const UNREACHABLE = /\b(ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|ETIMEDOUT)\b/u;
+
+/** Replaces the value of every cookie and authorization header line in `text`. */
+export function redactSecretHeaders(text) {
+  return text
+    .replace(QUOTED_SECRET_HEADER, "$1$2$1$3$4[redacted]$4")
+    .replace(SECRET_HEADER, "$1$2[redacted]");
+}
+
 export function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
+  return redactSecretHeaders(error instanceof Error ? error.message : String(error));
+}
+
+/** The one line a script prints for the error that ended it. */
+export function labErrorLine(error) {
+  if (error instanceof UsageError) return error.message;
+  const message = errorMessage(error);
+  const unreachable = UNREACHABLE.exec(message);
+  return unreachable === null ? `lab: ${message}` : `lab: server unreachable (${unreachable[1]})`;
 }
 
 /** Runs a script's async main(); its return value is the process exit code. */
@@ -55,7 +80,7 @@ export function runMain(main) {
       process.exitCode = code ?? 0;
     },
     (error) => {
-      console.error(error instanceof UsageError ? error.message : `lab: ${errorMessage(error)}`);
+      console.error(labErrorLine(error));
       process.exitCode = error instanceof UsageError ? 2 : 1;
     },
   );
@@ -188,11 +213,25 @@ export function gateActions(snapshot, approve, decided) {
   return actions;
 }
 
+/** The marker file of a lab fixture that is not the ledger-lab copy (a Python project, an empty or a plain folder). */
+export const LAB_FIXTURE_MARKER = ".keiko-lab-fixture";
+const LAB_FIXTURE_MARKER_TEXT = "keiko-lab-fixture";
+
+function hasLabFixtureMarker(root, readText) {
+  try {
+    return readText(join(root, LAB_FIXTURE_MARKER), "utf8").trim() === LAB_FIXTURE_MARKER_TEXT;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Fails closed unless `root` is a lab repository: the drivers approve edits and run commands on
- * the repository they are given, so they only accept a copy of the ledger-lab fixture.
+ * the repository they are given, so they only accept a copy of the ledger-lab fixture or a folder
+ * that carries the explicit lab fixture marker (#3907 AC3: other languages, empty and plain folders).
  */
 export function assertLabRepository(root, readText = readFileSync) {
+  if (hasLabFixtureMarker(root, readText)) return;
   const { name, failure } = packageName(root, readText);
   if (name === LAB_REPOSITORY_NAME) return;
   const reason = failure ?? `its package.json names ${JSON.stringify(name ?? null)}`;
@@ -411,6 +450,20 @@ export function describeSnapshot(snapshot) {
 export function exitCodeForState(state) {
   if (state === "succeeded") return 0;
   return TERMINAL_STATES.includes(state) ? 1 : 3;
+}
+
+/**
+ * Stops a run the driver started when its deadline passed before the run ended. An active run keeps
+ * holding the dev server's checkout, so the next task would be refused with LOCK_CONTENTION.
+ * `post(path, body)` resolves to `{ status }`. Returns the stop's status, or null for an ended run.
+ */
+export async function stopUnfinishedRun(post, runId, snapshot) {
+  if (TERMINAL_STATES.includes(snapshot?.state)) return null;
+  const { status } = await post(`/api/coding-workbench/runtime/runs/${runId}/stop`, {
+    requestId: runId,
+  });
+  log(`deadline passed while ${String(snapshot?.state)}; stopped the run (${String(status)})`);
+  return status;
 }
 
 export function loadTasks() {

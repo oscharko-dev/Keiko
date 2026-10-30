@@ -28,6 +28,19 @@ export function makeWorkspace(): { root: string; info: WorkspaceInfo } {
   return { root, info };
 }
 
+// A create diff of exactly `bytes` UTF-8 bytes in 1,000 added lines (the default changed-line bound
+// stays far away), so a byte boundary can be probed without touching any other limit.
+export function createDiffOfBytes(path: string, bytes: number): string {
+  const lineCount = 1_000;
+  const header = `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${String(lineCount)} @@\n`;
+  const lineWidth = Math.floor((bytes - Buffer.byteLength(header, "utf8")) / lineCount) - 2;
+  const body = `+${"x".repeat(lineWidth)}\n`.repeat(lineCount - 1);
+  const rest = bytes - Buffer.byteLength(header + body, "utf8");
+  const diff = `${header}${body}+${"x".repeat(rest - 2)}\n`;
+  if (Buffer.byteLength(diff, "utf8") !== bytes) throw new Error("fixture size drifted");
+  return diff;
+}
+
 export interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
   stderr: EventEmitter;

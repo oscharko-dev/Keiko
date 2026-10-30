@@ -11,6 +11,7 @@ import type { CodingTaskForkSource } from "./useCodingTaskSession";
 import type { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import type { CodingWorkbenchRunWorkspaceBinding } from "./useCodingWorkbenchRunWorkspace";
 import type { PromptDeliveryNoticeController } from "./usePromptDeliveryNotice";
+import { reportTaskSubmission } from "./codingWorkbenchTaskSubmission";
 
 export interface TaskActionsInput {
   readonly actions: CodingWorkbenchRuntimeActions;
@@ -20,6 +21,8 @@ export interface TaskActionsInput {
   /** The composer's draft, which a retry of the last start is compared with. */
   readonly taskIntent: string;
   readonly projectMemoryEnabled: boolean;
+  /** The Jira Pod picked in the composer for the next start; absent starts without Jira. */
+  readonly jiraPodId?: string | undefined;
   readonly conversationId: string | undefined;
   /**
    * The fork the person asked for (S03): the start begins a new task from it and continues no
@@ -85,6 +88,7 @@ function beginStart(
       ...startedFrom(input),
       issue,
       ...startPromptInputs(inputs),
+      ...(input.jiraPodId === undefined ? {} : { jiraPodId: input.jiraPodId }),
     });
   });
 }
@@ -116,6 +120,9 @@ export function useTaskComposerActions(input: TaskActionsInput): TaskActions {
   const retryStart = (): void => {
     const last = lastStart.current;
     const unchanged = last !== null && last.draft.trim() === taskIntent.trim();
+    // #3877: a retried start submits the task the composer shows, like a typed start, so it records
+    // the same digests of the shown and the submitted text on the Activity Log.
+    reportTaskSubmission(taskIntent, taskIntent, "start");
     if (unchanged) startTask(last.draft, last.inputs);
     else startTask(taskIntent);
   };

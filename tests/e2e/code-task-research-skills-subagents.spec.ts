@@ -147,7 +147,7 @@ async function expectResearchApprovalPrompt(page: Page): Promise<void> {
   await expect(workbench(page)).toHaveAttribute("data-state", "awaiting-approval", {
     timeout: 90_000,
   });
-  await expect(page.getByRole("heading", { name: "Review the bounded action" })).toBeVisible();
+  await expect(page.getByText(/^Approval required/u)).toBeVisible();
   // #2387: the operator must be able to READ the destination before deciding — approving a request
   // line nobody was shown would make the grant's request-line binding meaningless. The host and the
   // sanitized request line arrive over the authenticated app-session channel, never on the

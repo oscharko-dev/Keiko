@@ -551,6 +551,8 @@ const STATIC_API_BODIES = {
     truncated: false,
     findings: EMPTY_RELATIONSHIP_FINDINGS,
   },
+  // Live Jira pods share the existing connector metadata owner; this fixture has no credentials.
+  "/api/atlassian-connectors/credentials": { credentials: [] },
   "/api/local-knowledge/capsules": { capsules: [] },
   "/api/local-knowledge/capsule-sets": { capsuleSets: [] },
   "/api/editor/language/capabilities": {

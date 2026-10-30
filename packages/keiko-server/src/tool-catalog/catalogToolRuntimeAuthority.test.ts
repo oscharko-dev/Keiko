@@ -1,3 +1,4 @@
+import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   createKeikoToolCatalog,
@@ -75,17 +76,17 @@ describe("exact private original Read handler action capture", () => {
   it("keeps the unchanged public handler capture refusing the same legal native target", () => {
     const f = nativeCaptureFixture();
     const { captureNativeReadAction: _capture, ...ordinary } = f.override;
-    expect(() => captureHandlerAction(f.handler, {}, f.identity, ordinary, f.profile)).toThrow(
-      "Catalog dispatch rejected",
-    );
+    expect(() =>
+      captureHandlerAction(codingCatalogConsumer, f.handler, {}, f.identity, ordinary, f.profile),
+    ).toThrow("Catalog dispatch rejected");
     expect(f.capture).not.toHaveBeenCalled();
   });
 
   it("uses the server codec only on the actual private profile and exact descriptor", () => {
     const f = nativeCaptureFixture();
-    expect(captureHandlerAction(f.handler, {}, f.identity, f.override, f.profile)).toEqual(
-      f.request,
-    );
+    expect(
+      captureHandlerAction(codingCatalogConsumer, f.handler, {}, f.identity, f.override, f.profile),
+    ).toEqual(f.request);
     expect(f.capture).toHaveBeenCalledOnce();
     expect(Object.isFrozen(f.request)).toBe(true);
   });
@@ -151,9 +152,9 @@ describe("exact private original Read handler action capture", () => {
           canonicalId: "keiko.workspace.read" as typeof override.toolRef.canonicalId,
         },
       };
-    expect(() => captureHandlerAction(handler, {}, f.identity, override, profile)).toThrow(
-      "Catalog dispatch rejected",
-    );
+    expect(() =>
+      captureHandlerAction(codingCatalogConsumer, handler, {}, f.identity, override, profile),
+    ).toThrow("Catalog dispatch rejected");
     expect(f.capture).not.toHaveBeenCalled();
     expect(f.execute).not.toHaveBeenCalled();
   });
@@ -172,6 +173,7 @@ describe("exact private original Read handler action capture", () => {
       const capture = vi.fn(() => changed);
       expect(() =>
         captureHandlerAction(
+          codingCatalogConsumer,
           f.handler,
           {},
           f.identity,
@@ -192,6 +194,7 @@ it("owns the captured target before the private codec and refuses response acces
   });
   expect(() =>
     captureHandlerAction(
+      codingCatalogConsumer,
       f.handler,
       {},
       f.identity,
@@ -204,6 +207,7 @@ it("owns the captured target before the private codec and refuses response acces
   const accessor = Object.defineProperty({ ...f.request }, "action", { get: getter });
   expect(() =>
     captureHandlerAction(
+      codingCatalogConsumer,
       f.handler,
       {},
       f.identity,

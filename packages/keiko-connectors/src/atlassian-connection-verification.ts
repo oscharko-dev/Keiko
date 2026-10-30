@@ -1,8 +1,12 @@
+import {
+  ATLASSIAN_VERIFY_MAX_BYTES,
+  parseAtlassianVerificationProbe,
+} from "./atlassian-verification-probe.js";
 // Bounded Atlassian connection-verification probe (Issue #2241, ADR-0128 D3/D5).
 //
 // One cheap, read-only current-user request against the connector's configured base URL through
-// the injected transport port, mapped onto a closed status union. No response body is requested,
-// read, persisted, or echoed — the port's result shape cannot carry one.
+// the injected transport port, mapped onto a closed status union. The bounded JSON identity is validated in memory; remote content is never logged,
+// persisted or returned. HTML login pages and anonymous/invalid identities fail closed.
 //
 // Endpoint choice per provider (recorded per the issue's engineering note; both are the cheapest
 // authenticated read-only "who am I" endpoints of their product):
@@ -26,11 +30,7 @@ export {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 export type { AtlassianConnectionVerificationStatus } from "@oscharko-dev/keiko-contracts";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
-import type {
-  AtlassianHttpPort,
-  AtlassianHttpRequest,
-  AtlassianHttpResult,
-} from "./atlassian-http-port.js";
+import type { AtlassianHttpBodyPort, AtlassianHttpRequest } from "./atlassian-http-port.js";
 
 // 30 000 ms: the ADR-0128 D3 interactive-request budget.
 export const ATLASSIAN_VERIFY_CONNECTION_TIMEOUT_MS = 30_000;
@@ -82,32 +82,28 @@ export function buildAtlassianVerificationRequest(
   };
 }
 
-// 2xx → ok; 401 → auth-failed; 403 → forbidden; everything else — including a 3xx, which the
-// adapter never follows (ADR-0128 D3: redirects fail closed) — reports the base URL as
-// unreachable for this provider.
-function statusFromResponse(status: number): AtlassianConnectionVerificationStatus {
-  if (status >= 200 && status < 300) return "ok";
-  if (status === 401) return "auth-failed";
-  if (status === 403) return "forbidden";
-  return "unreachable";
-}
-
-function statusFromResult(result: AtlassianHttpResult): AtlassianConnectionVerificationStatus {
-  switch (result.kind) {
-    case "response":
-      return statusFromResponse(result.status);
-    case "timeout":
-      return "timeout";
-    case "network-error":
-      return "unreachable";
-  }
+function cloudIdentityStatus(
+  provider: AtlassianConnectorProvider,
+  value: Record<string, unknown>,
+): AtlassianConnectionVerificationStatus {
+  if (
+    typeof value.accountId !== "string" ||
+    value.accountId.trim().length === 0 ||
+    value.accountId.length > 255
+  )
+    return "invalid-response";
+  const authenticated = provider === "jira" ? value.active === true : value.type === "known";
+  return authenticated ? "ok" : "invalid-response";
 }
 
 // Exactly ONE outbound request, to the configured base URL only, inside the D3 timeout budget.
 export async function verifyAtlassianConnection(
-  port: AtlassianHttpPort,
+  port: AtlassianHttpBodyPort,
   input: VerifyAtlassianConnectionInput,
 ): Promise<AtlassianConnectionVerificationStatus> {
   const request = buildAtlassianVerificationRequest(input);
-  return statusFromResult(await port(request));
+  const result = parseAtlassianVerificationProbe(
+    await port({ ...request, maxBodyBytes: ATLASSIAN_VERIFY_MAX_BYTES }),
+  );
+  return "failure" in result ? result.failure : cloudIdentityStatus(input.provider, result.value);
 }

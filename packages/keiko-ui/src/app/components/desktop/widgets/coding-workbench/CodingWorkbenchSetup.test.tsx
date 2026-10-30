@@ -32,13 +32,17 @@ const reconcileMock = vi.hoisted(() => vi.fn());
 const setActiveMock = vi.hoisted(() => vi.fn());
 const listMock = vi.hoisted(() => vi.fn());
 const repairMock = vi.hoisted(() => vi.fn());
+const selectFolderMock = vi.hoisted(() => vi.fn());
+const folderSelectableMock = vi.hoisted(() => vi.fn());
 const branchRead = vi.hoisted(() => ({
   loading: false,
   error: null as string | null,
   currentBranch: "main",
+  ordinaryFolder: false,
 }));
 vi.mock("./codingWorkbenchRepositories", () => ({
   repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
+  folderSelectable: folderSelectableMock,
   selectableRepositories: (): Promise<readonly never[]> => Promise.resolve([]),
 }));
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
@@ -69,6 +73,7 @@ vi.mock("@/lib/task-workspace-api", () => ({
   setActiveTaskWorkspace: setActiveMock,
   listTaskWorkspaces: listMock,
   repairTaskWorkspace: repairMock,
+  selectFolderWorkspace: selectFolderMock,
 }));
 
 // The persisted row provisioning refused for the (repository, task) pair the setup card derives
@@ -263,6 +268,9 @@ beforeEach(() => {
   setActiveMock.mockReset();
   listMock.mockReset();
   repairMock.mockReset();
+  selectFolderMock.mockReset();
+  folderSelectableMock.mockReset().mockResolvedValue(true);
+  branchRead.ordinaryFolder = false;
   branchRead.currentBranch = "main";
   branchRead.loading = false;
   branchRead.error = null;
@@ -1012,5 +1020,87 @@ describe("Workbench automatic binding through the production Window", () => {
     await flushBindSequence();
     expect(setActiveMock).not.toHaveBeenCalled();
     expect(provisionMock).toHaveBeenCalledOnce();
+  });
+});
+
+// Owner decision 2026-10-30: the Workbench works in any folder. A registered folder that is not a
+// Git repository needs no branch: the card binds it in place, with a hint instead of a failure.
+describe("CodingWorkbenchSetup in an ordinary folder", () => {
+  function folderMode(): void {
+    branchRead.ordinaryFolder = true;
+    branchRead.currentBranch = "";
+    branchRead.error = null;
+  }
+
+  it("enables the bind without a branch, states the folder help and passes axe", async () => {
+    folderMode();
+    const { container } = renderWorkbench(workspaceApi(), liveState(), "/repos/plain-folder");
+    expect(await bindable()).toBeEnabled();
+    expect(screen.getByText(/No branch is needed/u)).toBeInTheDocument();
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  });
+
+  it("binds the folder in place: no provision, no reconcile, no activation, then a refresh", async () => {
+    folderMode();
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    selectFolderMock.mockResolvedValue({});
+    renderWorkbench(api, liveState(), "/repos/plain-folder");
+
+    await user.click(await bindable());
+
+    await waitFor(() => {
+      expect(api.refresh).toHaveBeenCalledTimes(1);
+    });
+    expect(selectFolderMock).toHaveBeenCalledExactlyOnceWith({
+      root: "/repos/plain-folder",
+      requestedBy: "studio-operator",
+    });
+    expect(provisionMock).not.toHaveBeenCalled();
+    expect(reconcileMock).not.toHaveBeenCalled();
+    expect(setActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("names a refused folder binding without exposing server detail, and never refreshes", async () => {
+    folderMode();
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    selectFolderMock.mockRejectedValue(new Error("private folder detail"));
+    renderWorkbench(api, liveState(), "/repos/plain-folder");
+
+    await user.click(await bindable());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The folder could not be opened for the Workbench");
+    expect(alert).not.toHaveTextContent("private folder detail");
+    expect(api.refresh).not.toHaveBeenCalled();
+  });
+
+  it("refuses a folder that is no longer a registered, available project", async () => {
+    folderMode();
+    const user = userEvent.setup();
+    folderSelectableMock.mockResolvedValue(false);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/plain-folder");
+
+    await user.click(await bindable());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/not available in Git/u);
+    expect(selectFolderMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a repository with a failed branch read blocked (folder mode needs a resolved answer)", async () => {
+    branchRead.ordinaryFolder = false;
+    branchRead.error = "Branch lookup failed";
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await flushBindSequence();
+    expect(bindButton()).toBeDisabled();
+    await userEvent.setup().click(bindButton());
+    expect(selectFolderMock).not.toHaveBeenCalled();
+    expect(provisionMock).not.toHaveBeenCalled();
   });
 });

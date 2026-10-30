@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type {
   ChatMessage,
   NormalizedResponse,
@@ -244,6 +245,25 @@ describe("runLoop — limit breaches each map to their category", () => {
       model: port,
       limits: { maxPatchBytes: 10 },
     });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_PATCH_SIZE");
+  });
+
+  // #4110: the harness default bound is the one shared governed patch cap; the boundary is exact.
+  it("accepts a proposed patch of exactly the governed cap under the default limits (#4110)", async () => {
+    const { port } = scriptedModel([response({ content: "x".repeat(GOVERNED_PATCH_MAX_BYTES) })]);
+    const { ctx, sink } = buildContext({ task: GENERATE, model: port });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(failureCategory(sink.events())).toBeUndefined();
+  });
+
+  it("refuses a proposed patch one byte over the governed cap under the default limits (#4110)", async () => {
+    const { port } = scriptedModel([
+      response({ content: "x".repeat(GOVERNED_PATCH_MAX_BYTES + 1) }),
+    ]);
+    const { ctx, sink } = buildContext({ task: GENERATE, model: port });
     const outcome = await runLoop(ctx);
     expect(outcome).toBe("limit-exceeded");
     expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_PATCH_SIZE");

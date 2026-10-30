@@ -71,8 +71,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_CODING_RUNTIME_CALLS,
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+  CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
   CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
+  CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+  CLIENT_CODING_WORKBENCH_HELD_NOTICES,
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
   CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
   CLIENT_BROWSER_APPROVAL_OPERATIONS,
@@ -83,6 +87,8 @@ import {
   CLIENT_FILES_SCOPE_DECISIONS,
   CLIENT_UPDATE_NOTICE_KINDS,
   CLIENT_UPDATE_NOTICE_PRESENTATIONS,
+  CLIENT_EDITOR_LINE_ENDINGS,
+  CLIENT_EDITOR_LINE_ENDING_SOURCES,
   CLIENT_GROUNDING_MUTATION_SURFACES,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
@@ -788,6 +794,8 @@ const CLIENT_BINDING_FIELDS = {
   // How many list loads decided the outcome, when more than the line names; the line is then
   // `partial` with `loss: event-location-unknown`, never silently complete.
   decidingLoadCount: { type: "integer", dataClass: "count", required: false },
+  // How many times the window opened the chat's project before it held, when more than once (#4123).
+  projectOpenAttemptCount: { type: "integer", dataClass: "count", required: false },
   // The other list loads a legacy binding's verdict depended on, beyond the line's correlation id.
   relatedCorrelationIds: {
     type: "string-array",
@@ -842,6 +850,27 @@ const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["client-binding"],
   proofIds: ["client.binding.target-missing.line"],
+  releaseImpact: "patch",
+});
+
+// #4126 review: every bounded attempt to open the chat's project was overtaken by another update, so
+// the window stopped waiting and shows that the chat could not be opened. The line names the attempts.
+const CLIENT_BINDING_PROJECT_OPEN_EXHAUSTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.project-open-exhausted",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingProjectOpenExhausted",
+  fields: {
+    ...CLIENT_BINDING_FIELDS,
+    projectOpenAttemptCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.project-open-exhausted.line"],
   releaseImpact: "patch",
 });
 
@@ -1392,9 +1421,29 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
       required: false,
       values: CLIENT_CODING_WORKBENCH_AGENT_KINDS,
     },
+    refusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
+    },
     repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     fileCount: { type: "integer", dataClass: "count", required: false },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+    },
+    totalLineCount: { type: "integer", dataClass: "count", required: false },
+    totalByteCount: { type: "integer", dataClass: "count", required: false },
+    notice: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1403,6 +1452,36 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
   analyzerProjection: "timeline",
   failureClasses: ["client-coding-workbench-interaction"],
   proofIds: ["client.coding-workbench.interaction.line"],
+  releaseImpact: "patch",
+});
+
+// #4109: a runtime request the Workbench gave up on at its own client-side deadline. The BFF accepted
+// it and never answered in time, so no server line can describe it; this one names the call kind and
+// the deadline it ran out of, under the failed request's correlation id. A request that Stop took the
+// place of is not a timeout and is never reported here. Closed values and one duration only.
+const CLIENT_CODING_WORKBENCH_REQUEST_TIMED_OUT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.coding-workbench.request-timed-out",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logCodingRequestTimeout",
+  fields: {
+    call: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_CODING_RUNTIME_CALLS,
+    },
+    deadlineMs: { type: "integer", dataClass: "duration", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-coding-workbench-request-timeout"],
+  proofIds: ["client.coding-workbench.request-timed-out.line"],
   releaseImpact: "patch",
 });
 
@@ -1474,6 +1553,39 @@ const CLIENT_UPDATE_NOTICE_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["client-update-notice"],
   proofIds: ["client.update-notice.presented.line"],
+  releaseImpact: "patch",
+});
+
+// #4123: the Editor's model adopted the line ending of text the host wrote into it, so a reloaded
+// or host-edited buffer keeps the exact text instead of a normalized copy that reads as dirty.
+const CLIENT_EDITOR_LINE_ENDING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.editor.line-ending.adopted",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientEditorLineEnding",
+  fields: {
+    lineEnding: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_EDITOR_LINE_ENDINGS,
+    },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_EDITOR_LINE_ENDING_SOURCES,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-editor-line-ending"],
+  proofIds: ["client.editor.line-ending.adopted.line"],
   releaseImpact: "patch",
 });
 
@@ -2233,6 +2345,38 @@ function logClientSupportReportPrepared(
   return true;
 }
 
+function logClientEditorLineEnding(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const report = request.editorLineEnding;
+  if (report === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_EDITOR_LINE_ENDING_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        lineEnding: report.lineEnding,
+        source: report.source,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
+// The closed presentation reports: an update notice, or an Editor line-ending adoption.
+function logPresentationClientReport(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  return (
+    logClientUpdateNotice(request, correlationId) ||
+    logClientEditorLineEnding(request, correlationId)
+  );
+}
+
 function logClientUpdateNotice(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -2350,11 +2494,34 @@ function logClientEvidenceInspection(
   return true;
 }
 
-// The two closed Coding Workbench reports: a restored run, else a routine page interaction.
+function logCodingRequestTimeout(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const timeout = request.codingRequestTimeout;
+  if (timeout === undefined) return false;
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_CODING_WORKBENCH_REQUEST_TIMED_OUT_OPERATION,
+      { ...clientDiagnosticCorrelation(request, correlationId), errorKind: "timeout" },
+      {
+        call: timeout.call,
+        deadlineMs: timeout.deadlineMs,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
+// The closed Coding Workbench reports: a request that hit its deadline, else a restored run, else a
+// routine page interaction.
 function logCodingClientReport(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
+  if (logCodingRequestTimeout(request, correlationId)) return true;
   const { codingRunRestore: restore, codingWorkbenchInteraction: interaction } = request;
   const envelope = clientDiagnosticCorrelation(request, correlationId);
   const closed = { completeness: "complete", loss: "none" } as const;
@@ -2397,7 +2564,7 @@ function logClosedClientReport(
     logClientSupportReportDownload(request, correlationId) ||
     logClientSupportReportPrepared(request, correlationId) ||
     logClientFilesScopeDecision(request, correlationId) ||
-    logClientUpdateNotice(request, correlationId) ||
+    logPresentationClientReport(request, correlationId) ||
     logRetrievalClientReport(request, correlationId) ||
     logCodingClientReport(request, correlationId)
   );
@@ -2675,6 +2842,9 @@ function clientBindingFields(request: ClientBindingIngestRequest): ClientBinding
     bindingDigest: clientBindingDigest(request.windowRef),
     ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
     ...(unnamed ? { decidingLoadCount: deciding } : {}),
+    ...(request.projectOpenAttemptCount === undefined
+      ? {}
+      : { projectOpenAttemptCount: request.projectOpenAttemptCount }),
     completeness: unnamed ? "partial" : "complete",
     loss: unnamed ? "event-location-unknown" : "none",
   };
@@ -2785,6 +2955,32 @@ function logClientBindingChoiceDecision(
   logClientBindingChoiceWithdrawn(request, correlationId);
 }
 
+type ClientBindingProjectOpenExhausted = ClientBindingIngestRequest & {
+  readonly outcome: "project-open-exhausted";
+  readonly projectOpenAttemptCount: number;
+};
+
+function isClientBindingProjectOpenExhausted(
+  request: ClientBindingIngestRequest,
+): request is ClientBindingProjectOpenExhausted {
+  return (
+    request.outcome === "project-open-exhausted" && request.projectOpenAttemptCount !== undefined
+  );
+}
+
+function logClientBindingProjectOpenExhausted(
+  request: ClientBindingProjectOpenExhausted,
+  correlationId: string,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_BINDING_PROJECT_OPEN_EXHAUSTED_OPERATION,
+      { correlationId, errorKind: "conflict" },
+      { ...clientBindingFields(request), projectOpenAttemptCount: request.projectOpenAttemptCount },
+    ),
+  );
+}
+
 function logClientBindingTargetMissing(
   request: ClientBindingIngestRequest,
   correlationId: string,
@@ -2816,6 +3012,10 @@ function logClientBinding(
   }
   if (isClientBindingChoiceDecision(request)) {
     logClientBindingChoiceDecision(request, correlationId);
+    return;
+  }
+  if (isClientBindingProjectOpenExhausted(request)) {
+    logClientBindingProjectOpenExhausted(request, correlationId);
     return;
   }
   logClientBindingTargetMissing(request, correlationId);
@@ -2995,6 +3195,7 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
     report.supportReportPreparation !== undefined ||
     report.filesScopeDecision !== undefined ||
     report.updateNotice !== undefined ||
+    report.editorLineEnding !== undefined ||
     report.codingRunRestore !== undefined ||
     report.scopeNotice !== undefined ||
     report.citationActivation !== undefined

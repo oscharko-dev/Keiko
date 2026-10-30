@@ -71,6 +71,7 @@ import { createCodingRuntimeDescriptionJobStore } from "./codingRuntimeDescripti
 import {
   CodingRuntimeAgentUnsupportedError,
   CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeJiraPodRefusedError,
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
 } from "./launchFailure.js";
@@ -2767,6 +2768,38 @@ describe("CodingRuntimeOrchestrator", () => {
       );
     });
 
+    it("hands the human's Jira Pod choice to the launch resolver and omits the key when none was made", async () => {
+      const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+      const f = fixture();
+
+      await f.orchestrator.start({ ...start, jiraPodId });
+
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId }));
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("jiraPodId");
+    });
+
+    it("answers a start whose Jira Pod was refused with invalid-intent and a closed diagnostic", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.launchResolver.resolve.mockImplementationOnce(() => {
+        throw new CodingRuntimeJiraPodRefusedError("pod-not-ready");
+      });
+
+      expect(
+        await f.orchestrator.start({ ...start, jiraPodId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018" }),
+      ).toEqual({ ok: false, failureCode: "invalid-intent", runId: "run-1" });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: "stage=start:reason=launch-resolution:jira-pod:pod-not-ready",
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("d5f5681e");
+    });
+
     it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {
       const f = fixture();
       await f.orchestrator.start(start);
@@ -5024,6 +5057,41 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     },
   );
 
+  it("persists uncertain-write recovery and retains it across late terminal events", async () => {
+    const f = await runningFixture();
+    const recovered = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "mcp-uncertain-write",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:03.000Z",
+      kind: "failure-redacted",
+      failureCode: "recovery-required",
+    });
+    expect(successfulSnapshot(recovered)).toMatchObject({
+      state: "recovery-required",
+      failureCode: "recovery-required",
+    });
+    expect(f.rows.get("run-1")).toMatchObject({
+      state: "recovery-required",
+      failureCode: "recovery-required",
+    });
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+    for (const kind of ["runtime-stopped", "failure-redacted"] as const) {
+      const late = await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: `late-${kind}`,
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:04.000Z",
+        kind,
+      });
+      expect(successfulSnapshot(late).state).toBe("recovery-required");
+    }
+    expect((await f.orchestrator.resume("run-1", { requestId: "resume-uncertain" })).ok).toBe(
+      false,
+    );
+    expect(f.manager.resume).not.toHaveBeenCalled();
+  });
+
   it("still terminates a paused run on a redacted runtime failure", async () => {
     const captured = captureDiagnostics();
     const f = await runningFixture(undefined, captured.diagnostics);
@@ -5049,6 +5117,28 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
   });
+
+  it.each(["sidecar-event-denied", "runtime-event-failed", "private-customer-content"])(
+    "records only allowlisted lifecycle details: %s",
+    async (failureSummary) => {
+      const captured = captureDiagnostics();
+      const f = await runningFixture(undefined, captured.diagnostics);
+      await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: "event-failure",
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:03.000Z",
+        kind: "failure-redacted",
+        failureSummary,
+      });
+      const expected =
+        failureSummary === "private-customer-content" ? "" : `:detail=${failureSummary}`;
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({ code: `stage=lifecycle:reason=failure-redacted${expected}` }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("private-customer-content");
+    },
+  );
 
   it("projects the manager's body-free process result on terminal status", async () => {
     const f = await runningFixture();
@@ -8817,6 +8907,7 @@ describe("coding runtime lifecycle races", () => {
 
   function raceFixture(
     wrap?: (store: CodingRuntimeSnapshotStore) => CodingRuntimeSnapshotStore,
+    activityLog?: ServerLogSink,
   ): ReturnType<typeof fixture> & {
     readonly diagnosticRecords: readonly ServerDiagnosticRecord[];
   } {
@@ -8830,7 +8921,7 @@ describe("coding runtime lifecycle races", () => {
       undefined,
       [],
       captured.diagnostics,
-      undefined,
+      activityLog,
       undefined,
       undefined,
       undefined,
@@ -8921,6 +9012,64 @@ describe("coding runtime lifecycle races", () => {
     expect(typeof outcome.ok).toBe("boolean");
     expect(f.orchestrator.status().state).toBe("cancelled");
     expect(lifecycleCodes(f)).toContain("stage=lifecycle:reason=stale-transition");
+  });
+
+  // #4105: the runtime manager's event callback has no caller, so a handling failure used to vanish
+  // behind the serial queue's swallowing tail and `keiko support analyze` saw nothing.
+  it("logs a runtime event whose ingest was rejected by a stale snapshot write", async () => {
+    const captured = captureActivityLog();
+    let rejectOnce = true;
+    const f = raceFixture(
+      (store) => ({
+        ...store,
+        transition: (runId, change): CodingRuntimeSnapshot => {
+          if (change.state === "failed" && rejectOnce) {
+            rejectOnce = false;
+            throw new Error("runtime revision must increase");
+          }
+          return store.transition(runId, change);
+        },
+      }),
+      captured.activityLog,
+    );
+    await runningRace(f);
+
+    f.orchestrator.receiveRuntimeEvent({
+      schemaVersion: "1",
+      eventId: "failure",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "failure-redacted",
+      failureCode: "runtime-failed",
+      failureSummary: "runtime-failed",
+      retryable: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        captured.records.some(
+          (candidate) =>
+            candidate.op === "coding-runtime.event.dropped" &&
+            candidate.extra?.reason === "ingest-rejected",
+        ),
+      ).toBe(true);
+    });
+    const rejected = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.event.dropped",
+    );
+    if (rejected === undefined) throw new Error("expected an event.dropped line");
+    const line = formatActivityLogProofLine(rejected);
+    expect(expectActivityLogProof("coding-runtime.event.dropped.emitted-line", line)).toMatchObject(
+      {
+        eventKind: "failure-redacted",
+        eventRunId: "run-1",
+        reason: "ingest-rejected",
+        liveRunId: "run-1",
+        frames: expect.arrayContaining([expect.any(String)]) as string[],
+      },
+    );
+    expect(JSON.parse(line)).toMatchObject({ level: "warn", errorKind: "internal" });
+    expect(line).not.toContain("runtime revision must increase");
   });
 
   it("logs a rejected settlement with its error class and moves the run to recovery-required", async () => {

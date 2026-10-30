@@ -4,7 +4,7 @@ Status: Accepted
 
 Date: 2026-06-03
 
-Version: 1.2
+Version: 1.3
 
 ## Decision
 
@@ -49,6 +49,7 @@ The first architecture sprint should converge on the following package map. Name
 | `@oscharko-dev/keiko-contracts` | Shared public contracts, branded IDs, event envelopes, model capability schema, BFF wire types, workflow descriptors. | Runtime IO, provider calls, UI components, persistence. |
 | `@oscharko-dev/keiko-security` | Redaction, secret handling, safe error shaping, content hashing, trust-boundary helpers. | Product workflows, provider routing, UI state. |
 | `@oscharko-dev/keiko-activity-log` | Activity Log writer, segmented store, and support reader engine. | HTTP routes, CLI parsing/rendering, domain logging ports, UI code. |
+| `@oscharko-dev/keiko-mcp` | Shared managed MCP protocol host; official SDK client/server imports; injected provider/log ports (ADR-0181). | Credentials, policy, catalog compilation, domain HTTP and conversation storage. |
 | `@oscharko-dev/keiko-model-gateway` | Provider abstraction, OpenAI-compatible calls, discovery, capability probing, routing, resilience, TLS handling. | UI components, workspace file reads, tool execution, direct persistence of customer UI state. |
 | `@oscharko-dev/keiko-workspace` | Workspace discovery, path containment, safe file reads, context packs, retrieval seams. | Provider calls, browser UI, patch application. |
 | `@oscharko-dev/keiko-tools` | Controlled tool execution, terminal/browser adapters, patch parsing, patch writing boundaries. | Model selection, workflow policy decisions, credential storage. |
@@ -72,7 +73,8 @@ The package graph must be a directed acyclic graph. The intended direction is:
 6. `server` wires runtime dependencies and may depend on domain packages, but domain packages must not depend on `server`.
 7. `cli` may depend on `server` and domain packages for launch and command surfaces, but domain packages must not depend on `cli`.
 8. `ui` consumes browser-safe wire contracts and same-origin BFF APIs; it must not import Node-only domain packages directly unless the import is type-only and explicitly allowed by the architecture gate.
-9. The root product package may compose and bundle internal packages, but should not become a second implementation layer.
+9. `mcp` may depend only on `contracts` and `security` inside Keiko. Server composition supplies providers, policy and domain handler ports (ADR-0181; `adr-0181-mcp-only-contracts-security`).
+10. The root product package may compose and bundle internal packages, but should not become a second implementation layer.
 
 Any dependency against this direction is an architecture violation unless a later ADR explicitly permits it.
 
@@ -81,6 +83,7 @@ Any dependency against this direction is an architecture violation unless a late
 The architecture sprint must add automated rules for these invariants:
 
 - Direct LLM provider SDK imports are allowed only inside `keiko-model-gateway`.
+- Official `@modelcontextprotocol/*` SDK imports are confined to `keiko-mcp` (ADR-0181).
 - Browser-visible packages must not import credential-bearing provider config.
 - UI and server errors must pass through safe error/redaction paths.
 - Workspace file access must go through `keiko-workspace`.
@@ -182,6 +185,7 @@ This ADR is the anchor for the architecture sprint. If a package boundary, depen
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.3 | 2026-10-26 | Add the contracts/security-only `keiko-mcp` boundary and official MCP SDK import confinement (ADR-0181, #4089). |
 | 1.2 | 2026-09-04 | Reserve the pure contracts/security-only governed-tool catalog boundary and server-owned runtime binding in ADR-0175 (#3411); runtime package creation remains #3406. |
 | 1.1 | 2026-07-27 | Narrowly permit the statically checked, egress-free USearch ANN worker boundary while preserving the general Local Knowledge worker/network denial. |
 | 1.0 | 2026-06-03 | Accepted modular package architecture as Keiko's next foundation before major feature expansion. |
