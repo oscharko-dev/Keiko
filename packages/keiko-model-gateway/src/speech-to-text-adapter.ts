@@ -160,6 +160,9 @@ const SPEECH_STT_REQUEST_COMPLETED_OPERATION = defineActivityLogOperation({
     // line above carries, so a timeout outcome reads without joining back to the earlier line.
     timeoutMs: { type: "number", dataClass: "duration", required: false },
     httpStatus: { type: "integer", dataClass: "count", required: false },
+    // Segment separators removed from a provider transcript that joined its segments with line
+    // breaks (whisper.cpp: "die T\nests aus."). Present on success only; 0 when nothing changed.
+    segmentSeparatorsRemoved: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -197,6 +200,7 @@ function logCompleted(
   timeoutMs: number,
   outcome: SpeechToTextOutcome,
   httpStatus?: number,
+  segmentSeparatorsRemoved?: number,
 ): void {
   const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
   const correlationId = logCorrelationId(log);
@@ -218,6 +222,7 @@ function logCompleted(
         ...(failureKind === undefined ? {} : { failureKind }),
         timeoutMs,
         ...(httpStatus === undefined ? {} : { httpStatus }),
+        ...(segmentSeparatorsRemoved === undefined ? {} : { segmentSeparatorsRemoved }),
       },
     ),
   );
@@ -534,37 +539,84 @@ function unitInterval(value: number | undefined): number | undefined {
   return value !== undefined && value >= 0 && value <= 1 ? value : undefined;
 }
 
-function parseTranscription(payload: unknown): SpeechToTextSuccess | null {
+interface ParsedTranscription {
+  readonly value: SpeechToTextSuccess;
+  readonly segmentSeparatorsRemoved: number;
+}
+
+function segmentTexts(payload: Record<string, unknown>): readonly string[] | undefined {
+  const segments = payload.segments;
+  if (!Array.isArray(segments) || segments.length === 0) return undefined;
+  const texts: string[] = [];
+  for (const segment of segments) {
+    if (!isRecord(segment) || typeof segment.text !== "string") return undefined;
+    texts.push(segment.text);
+  }
+  return texts;
+}
+
+// A verbose response's segments carry their own spacing (" und", "ests aus."). whisper.cpp joins
+// them with line breaks in `text`, so a word cut at a segment boundary reaches the composer as
+// "die T\nests aus.". The segments are joined as they are only when `text` is exactly those
+// segments plus separator line breaks; any other text, including one with its own line breaks, is
+// the provider's transcript and stays untouched.
+function joinedTranscript(
+  payload: Record<string, unknown>,
+  text: string,
+): { readonly transcript: string; readonly removed: number } {
+  const texts = segmentTexts(payload);
+  const separators = text.split("\n").length - 1;
+  if (texts === undefined || separators === 0 || texts.some((part) => part.includes("\n"))) {
+    return { transcript: text, removed: 0 };
+  }
+  const joined = texts.join("");
+  if (text.replaceAll("\n", "") !== joined) return { transcript: text, removed: 0 };
+  return { transcript: joined, removed: separators };
+}
+
+function parseTranscription(payload: unknown): ParsedTranscription | null {
   // OpenAI- and Azure-compatible transcription responses carry the transcript under `text`. An
   // empty string is a valid transcript (silence) and is preserved rather than treated as a failure.
   if (!isRecord(payload) || typeof payload.text !== "string") {
     return null;
   }
+  const { transcript, removed } = joinedTranscript(payload, payload.text);
   const confidence = unitInterval(finiteNumber(payload.confidence));
   const language = typeof payload.language === "string" ? payload.language : undefined;
   // OpenAI verbose responses report `duration` in seconds; normalize to milliseconds.
   const durationSeconds = finiteNumber(payload.duration);
   const durationMs = durationSeconds !== undefined ? Math.round(durationSeconds * 1000) : undefined;
   return {
-    transcript: payload.text,
-    ...(confidence !== undefined ? { confidence } : {}),
-    ...(language !== undefined ? { language } : {}),
-    ...(durationMs !== undefined ? { durationMs } : {}),
+    value: {
+      transcript,
+      ...(confidence !== undefined ? { confidence } : {}),
+      ...(language !== undefined ? { language } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+    },
+    segmentSeparatorsRemoved: removed,
   };
 }
 
-async function decodeSuccess(response: Response): Promise<SpeechToTextOutcome> {
+interface DecodedOutcome {
+  readonly outcome: SpeechToTextOutcome;
+  readonly segmentSeparatorsRemoved?: number;
+}
+
+async function decodeSuccess(response: Response): Promise<DecodedOutcome> {
   let payload: unknown;
   try {
     payload = await readJsonCapped(response);
   } catch {
-    return { ok: false, kind: "invalid-response" };
+    return { outcome: { ok: false, kind: "invalid-response" } };
   }
-  const value = parseTranscription(payload);
-  if (value === null) {
-    return { ok: false, kind: "invalid-response" };
+  const parsed = parseTranscription(payload);
+  if (parsed === null) {
+    return { outcome: { ok: false, kind: "invalid-response" } };
   }
-  return { ok: true, value };
+  return {
+    outcome: { ok: true, value: parsed.value },
+    segmentSeparatorsRemoved: parsed.segmentSeparatorsRemoved,
+  };
 }
 
 // Dispatches the built request and decodes its outcome, without touching the activity log — the
@@ -573,7 +625,7 @@ async function decodeSuccess(response: Response): Promise<SpeechToTextOutcome> {
 async function dispatchAndDecode(
   built: BuiltRequest,
   request: SpeechToTextRequest,
-): Promise<{ outcome: SpeechToTextOutcome; httpStatus?: number }> {
+): Promise<DecodedOutcome & { readonly httpStatus?: number }> {
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { outcome: { ok: false, kind: dispatched } };
@@ -583,7 +635,7 @@ async function dispatchAndDecode(
     await discardBody(dispatched);
     return { outcome: { ok: false, kind }, httpStatus: dispatched.status };
   }
-  return { outcome: await decodeSuccess(dispatched), httpStatus: dispatched.status };
+  return { ...(await decodeSuccess(dispatched)), httpStatus: dispatched.status };
 }
 
 // Single round-trip speech-to-text transcription. Provider-neutral, no retry (a dictation request
@@ -596,7 +648,7 @@ export async function requestSpeechToText(
   // call — the narrower, conditional language-normalization line (when one fires) follows it.
   const built = buildRequest(request);
   logLanguageNormalization(request);
-  const { outcome, httpStatus } = await dispatchAndDecode(built, request);
-  logCompleted(request, built.timeoutMs, outcome, httpStatus);
+  const { outcome, httpStatus, segmentSeparatorsRemoved } = await dispatchAndDecode(built, request);
+  logCompleted(request, built.timeoutMs, outcome, httpStatus, segmentSeparatorsRemoved);
   return outcome;
 }

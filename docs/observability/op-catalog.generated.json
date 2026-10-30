@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b3b2a857538df5a4a4cf72e665fd956449fc8152f9394bebff81df5fe77c62d2",
+    "catalogDigest": "810166a8c5bd7e952d308ceef4118f7e0b250de12f30140587481c628085fa15",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -38282,7 +38282,7 @@
         "proofIds": ["speech.stt.language.normalized.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:39",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:351"]
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:356"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38349,6 +38349,11 @@
             "type": "integer",
             "dataClass": "count",
             "required": false
+          },
+          "segmentSeparatorsRemoved": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -38358,7 +38363,7 @@
         "proofIds": ["speech.stt.request.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:121",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:205"]
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:209"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -95379,6 +95384,12 @@
                   "required": true
                 },
                 {
+                  "name": "segmentSeparatorsRemoved",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "timeoutMs",
                   "type": "number",
                   "dataClass": "duration",
@@ -103486,7 +103497,7 @@
     {
       "op": "<dynamic>",
       "category": "embedding",
-      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:488",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:493",
       "package": "keiko-model-gateway"
     },
     {

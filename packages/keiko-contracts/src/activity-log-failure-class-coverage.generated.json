@@ -40843,6 +40843,12 @@
               "required": true
             },
             {
+              "name": "segmentSeparatorsRemoved",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "timeoutMs",
               "type": "number",
               "dataClass": "duration",

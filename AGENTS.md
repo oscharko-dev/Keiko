@@ -1276,7 +1276,10 @@ alone); the `coding-workbench` latency profile selects timeout floors only.
 
 For dictation, `speech.stt.request.dispatch` records the sent container class and byte count,
 and `speech.stt.request.completed` records a received provider HTTP status. An absent status
-means no response was observed. Browser clips are normalized in memory to mono PCM16 WAV;
+means no response was observed. When a provider's `text` is exactly its verbose segments joined
+by line breaks (whisper.cpp), the adapter joins the segments as they are and the same line counts
+the removed separators (`segmentSeparatorsRemoved`); any other line break is the provider's own
+and stays. Browser clips are normalized in memory to mono PCM16 WAV;
 normalization failures use the existing body-free client diagnostic sink (ADR-0100 D8).
 
 Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only.
