@@ -684,6 +684,22 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     expect(session.result.current).toBe(before + 1);
   });
 
+  // #4109 moved the control's failure handling out of its catch: a refused or failed control that
+  // did not hit its own deadline must still leave one body-free note with its correlation.
+  it("records a refused run control once, with its error kind and correlation", async () => {
+    const refused = new ApiError("CODING_RUNTIME_UNAVAILABLE", "runtime offline", 503);
+    refused.correlationId = "corr-stop-1";
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(refused);
+    const { mutations } = renderMutations(readyRunState(snapshot({ state: "running" })));
+
+    await act(() => mutations.stop());
+
+    expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] coding workbench run control failed",
+      expect.objectContaining({ kind: "other", correlationId: "corr-stop-1" }),
+    );
+  });
+
   it("leaves the app session reads alone for any other refused run control", async () => {
     vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
       new ApiError("CODING_RUNTIME_REVISION_CONFLICT", "Runtime revision is stale.", 409),

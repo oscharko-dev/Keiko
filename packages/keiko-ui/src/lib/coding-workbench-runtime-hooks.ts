@@ -524,6 +524,21 @@ async function failMutation(
   if (isServerConflict(error)) await untilPreempted(refreshRun(), signal);
 }
 
+// A control that hit its own deadline is already recorded by the API layer with its call kind and
+// deadline (`client.coding-workbench.request-timed-out`), and one Stop took the place of failed
+// nothing: neither gets a second note.
+function reportMutationFailure(error: unknown, signal: AbortSignal): void {
+  if (wasPreempted(signal)) return;
+  const failure = codingWorkbenchRuntimeApiError(error);
+  if (failure.code === RUNTIME_REQUEST_TIMEOUT_CODE) return;
+  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+  reportClientDiagnostic("[keiko] coding workbench run control failed", {
+    kind: "other",
+    errorKind: bffRequestErrorKind(error),
+    ...(failure.correlationId === undefined ? {} : { correlationId: failure.correlationId }),
+  });
+}
+
 async function runMutation(
   context: RuntimeMutationQueueInput,
   { kind, controller: { signal } }: PendingMutation,
@@ -540,6 +555,7 @@ async function runMutation(
     if (wasPreempted(signal)) return;
     context.dispatch({ kind: "mutation-complete" });
   } catch (error) {
+    reportMutationFailure(error, signal);
     await failMutation(context, error, signal);
   }
 }
