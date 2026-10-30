@@ -99,7 +99,14 @@ import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
-import type { McpOAuthIssuerPort } from "./opencodeRuntimeComposition.js";
+import type {
+  McpOAuthIssuerPort,
+  OpenCodeRuntimeCompositionInput,
+} from "./opencodeRuntimeComposition.js";
+import { createMcpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
+import { createCodingJiraPods, type CodingJiraPodDeps } from "./codingJiraPodMcp.js";
+import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
+import { withCodingJiraServer } from "./codingJiraPodBinding.js";
 
 const ISSUER = "https://login.example.test";
 const METADATA_URL = `${ISSUER}/.well-known/oauth-authorization-server`;
@@ -715,6 +722,9 @@ interface StartBridgeControl {
   /** The operator's MCP registry and the issuer validation of its OAuth servers (#3903 AC3). */
   readonly mcpServers?: () => readonly McpServerDefinition[];
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
+  /** The managed MCP relay and the servers the human chose for the run (a Jira Pod). */
+  readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
+  readonly mcpGrantedServers?: ReadonlySet<string>;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
   /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
@@ -1048,10 +1058,16 @@ function optionalRepositoryItems(control: StartBridgeControl | undefined): {
 function optionalMcp(control: StartBridgeControl | undefined): {
   readonly mcpServers?: () => readonly McpServerDefinition[];
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
+  readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
+  readonly mcpGrantedServers?: ReadonlySet<string>;
 } {
   return {
     ...(control?.mcpServers === undefined ? {} : { mcpServers: control.mcpServers }),
     ...(control?.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: control.mcpOAuthIssuer }),
+    ...(control?.mcpRelay === undefined ? {} : { mcpRelay: control.mcpRelay }),
+    ...(control?.mcpGrantedServers === undefined
+      ? {}
+      : { mcpGrantedServers: control.mcpGrantedServers }),
   };
 }
 
@@ -4085,6 +4101,133 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       }
     },
   );
+
+  // Owner decision 2026-10-30: the Jira Pod the human chose for the run is a managed MCP server of
+  // that run only, reached through the relay, and the choice grants its read tools in every mode.
+  it("binds the run's Jira Pod as a relayed server and allows its reads without asking", async () => {
+    const binding = {
+      podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+      authenticationGeneration: 3,
+      verificationRevision: 1,
+    };
+    const pods = createCodingJiraPods(undefined);
+    pods.attach({
+      serverPrincipal: () => "operator-principal",
+      atlassianConnectorCredentials: {
+        custody: {
+          list: () => [
+            {
+              schemaVersion: "1",
+              authRef: "synthetic-credential",
+              displayName: "Synthetic Jira",
+              baseUrl: "https://jira.example.invalid",
+              createdAt: 1,
+              generation: binding.authenticationGeneration,
+              provider: "jira",
+              deployment: "data-center",
+              authScheme: "bearer-pat",
+              livePod: {
+                podId: binding.podId,
+                ownerDigest: createHash("sha256").update("operator-principal").digest("hex"),
+                creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
+                verificationRevision: binding.verificationRevision,
+                verificationInProgress: false,
+                verificationStatus: "ok",
+              },
+            },
+          ],
+        } as unknown as NonNullable<CodingJiraPodDeps["atlassianConnectorCredentials"]>["custody"],
+        httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+          Promise.resolve({ kind: "network-error" }),
+      },
+    });
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "governed-assist",
+      readToolProfile: () => "native",
+      mcpServers: () => withCodingJiraServer([], binding),
+      mcpRelay: {
+        relay: createMcpCredentialRelay(),
+        origin: "http://127.0.0.1:1983",
+        secrets: {},
+        managed: pods.connections(undefined, binding),
+      },
+      mcpGrantedServers: new Set(["jira"]),
+    });
+    try {
+      const config = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly mcp?: { readonly servers?: Readonly<Record<string, Record<string, unknown>>> };
+      };
+      const jira = config.mcp?.servers?.jira;
+      expect(jira).toMatchObject({ type: "remote", oauth: false });
+      expect(String(jira?.url)).toMatch(/^http:\/\/127\.0\.0\.1:1983\/api\/coding-sidecar\/mcp\//u);
+      expect(JSON.stringify(config)).not.toContain(binding.podId);
+      const ask = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission: "jira_jira_issue",
+          resources: ["*"],
+          mcpInput: { issueKey: "SYN-1" },
+          source: { type: "tool", messageID: "msg_1", id: "call_jira_1" },
+          configured: "ask",
+        }),
+      });
+      expect(ask).toMatchObject({ status: 200, body: '{"effect":"allow"}' });
+    } finally {
+      await fixture.stop();
+      await pods.close();
+    }
+  });
+
+  it("leaves the run's Jira tools out entirely when the Pod is no longer the one chosen at launch", async () => {
+    const binding = {
+      podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+      authenticationGeneration: 3,
+      verificationRevision: 1,
+    };
+    // No custody is attached: the Pod cannot be shown to be the chosen one, so no relay is bound.
+    const pods = createCodingJiraPods(undefined);
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      mcpServers: () => withCodingJiraServer([], binding),
+      mcpRelay: {
+        relay: createMcpCredentialRelay(),
+        origin: "http://127.0.0.1:1983",
+        secrets: {},
+        managed: pods.connections(undefined, binding),
+      },
+      mcpGrantedServers: new Set(["jira"]),
+    });
+    try {
+      const config = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly mcp?: { readonly servers?: Readonly<Record<string, unknown>> };
+      };
+      expect(config.mcp?.servers).toEqual({});
+      const ask = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission: "jira_jira_comment",
+          resources: ["*"],
+          mcpInput: { issueKey: "SYN-1", body: "x" },
+          source: { type: "tool", messageID: "msg_1", id: "call_jira_2" },
+          configured: "allow",
+        }),
+      });
+      expect(ask.status).toBe(200);
+      expect(ask.body).not.toBe('{"effect":"allow"}');
+    } finally {
+      await fixture.stop();
+      await pods.close();
+    }
+  });
 
   // #3897 (parity row C07): the producer runs a built-in formatter after its own edits without any
   // permission, so the launch mode decides whether it may, and the choice is recorded body-free.

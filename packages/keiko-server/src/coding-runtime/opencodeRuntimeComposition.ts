@@ -595,6 +595,11 @@ export interface OpenCodeRuntimeCompositionInput {
    * is not admitted.
    */
   readonly mcpRelay?: OpenCodeMcpRelayInput | undefined;
+  /**
+   * Managed MCP servers the human chose for this run (a Jira Pod picked in the composer): the choice
+   * is the grant of their read tools, in every mode. Absent, the run grants nothing.
+   */
+  readonly mcpGrantedServers?: ReadonlySet<string> | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -2030,6 +2035,7 @@ function nativeMcpAdmission(
     validations: checks.validations,
     relays: checks.relays,
     managed: input.mcpRelay?.managed !== undefined,
+    grantedServers: input.mcpGrantedServers,
   });
 }
 

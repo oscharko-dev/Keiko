@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2403cf685b3b10fbe74475fa1fd3ab305d837ab8cf4b1f88c9cd6d5748f49248"
+    "catalogDigest": "abc467700fa27f4c9498f2b11465c326e0fa3b3731b1e15096d9a49fbfff82fd"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 616,
-    "proofCount": 639,
-    "resolvedProofCount": 639,
-    "failureClassCount": 385,
+    "operationCount": 617,
+    "proofCount": 640,
+    "resolvedProofCount": 640,
+    "failureClassCount": 386,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -365,6 +365,7 @@
         "coding-runtime.inbox.dispatch-failed",
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
+        "coding-runtime.jira-pod",
         "coding-runtime.linked-files.resolved",
         "coding-runtime.mcp-authorization",
         "coding-runtime.mcp-credentials",
@@ -891,6 +892,7 @@
     "coding-runtime-remote-skills": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-credentials": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-relay": ["tools-workflows.dependency-failure"],
+    "coding-runtime-jira-pod": ["tools-workflows.dependency-failure"],
     "coding-runtime-descendant-sweep": ["tools-workflows.dependency-failure"],
     "coding-runtime-websearch": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-authorization": ["tools-workflows.dependency-failure"],
@@ -1635,6 +1637,9 @@
     ],
     "coding-runtime.initial-turn.stop-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
+    ],
+    "coding-runtime.jira-pod.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
     "coding-runtime.linked-files.resolved.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeLinkedFiles.test.ts"

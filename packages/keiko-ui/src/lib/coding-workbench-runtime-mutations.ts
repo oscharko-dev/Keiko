@@ -127,6 +127,7 @@ function startRequest(
     ...managedGatewayModelSelection(current),
     ...startAgentSelection(current),
     ...startPromptInputs(options),
+    ...(options.jiraPodId === undefined ? {} : { jiraPodId: options.jiraPodId }),
   };
   if (options.issue === undefined) return request;
   return {

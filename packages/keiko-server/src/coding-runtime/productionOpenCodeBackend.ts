@@ -1,5 +1,7 @@
 import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
+import { CODING_JIRA_SERVER_NAME, withCodingJiraServer } from "./codingJiraPodBinding.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -240,6 +242,11 @@ export interface ProductionOpenCodeBackendInput {
    */
   readonly mcpRelay?: McpCredentialRelay | undefined;
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
+  /**
+   * The Jira Pods a run may be started with (owner decision 2026-10-30): a run bound to one gets
+   * the Pod's Jira tools through the same managed relay as the operator's configured servers.
+   */
+  readonly codingJiraPods?: CodingJiraPods | undefined;
   /** Pulls the operator's remote skill sources for a Full access native run (#3903 AC3). */
   readonly remoteSkills?: RemoteSkillsPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -496,15 +503,50 @@ function withMcpExecutableDirectories(
 }
 
 // The relay answers on the gateway's own attested origin, which the native sandbox already admits.
-function mcpRelayFor(input: LaunchInput): Pick<OpenCodeRuntimeCompositionInput, "mcpRelay"> {
+function mcpRelayFor(
+  input: LaunchInput,
+  jira: BoundJira | undefined,
+): Pick<OpenCodeRuntimeCompositionInput, "mcpRelay"> {
   if (input.mcpRelay === undefined) return {};
   return {
     mcpRelay: {
       relay: input.mcpRelay,
       origin: new URL(input.gatewayUrl).origin,
       secrets: input.processEnv ?? {},
-      managed: input.mcpConnections,
+      managed:
+        jira === undefined
+          ? input.mcpConnections
+          : jira.pods.connections(input.mcpConnections, jira.binding),
     },
+  };
+}
+
+interface BoundJira {
+  readonly pods: CodingJiraPods;
+  readonly binding: NonNullable<ProductionRuntimeBackendInput["request"]["jiraPod"]>;
+}
+
+// A run the human started with a Jira Pod: the resolver bound it, and this composition must be able
+// to serve it. A run that cannot be served as asked fails closed instead of starting without Jira.
+function boundJira(input: LaunchInput, run: ProductionRuntimeBackendInput): BoundJira | undefined {
+  const binding = run.request.jiraPod;
+  if (binding === undefined) return undefined;
+  if (input.codingJiraPods === undefined || input.mcpRelay === undefined)
+    throw new Error("jira-pod-unavailable");
+  return { pods: input.codingJiraPods, binding };
+}
+
+// The registry's servers, plus the Pod's tools for a bound run; the human's choice grants their reads.
+function mcpServersFor(
+  input: LaunchInput,
+  jira: BoundJira | undefined,
+): Pick<OpenCodeRuntimeCompositionInput, "mcpServers" | "mcpGrantedServers"> {
+  const registry = input.mcpServers;
+  if (registry === undefined) return {};
+  if (jira === undefined) return { mcpServers: registry };
+  return {
+    mcpServers: (runId) => withCodingJiraServer(registry(runId), jira.binding),
+    mcpGrantedServers: new Set([CODING_JIRA_SERVER_NAME]),
   };
 }
 
@@ -522,6 +564,7 @@ function nativeRunInputs(
   | "repositoryInstructions"
   | "mcpMutations"
   | "mcpServers"
+  | "mcpGrantedServers"
   | "mcpOAuthIssuer"
   | "mcpCredentials"
   | "mcpRelay"
@@ -533,6 +576,7 @@ function nativeRunInputs(
   | "agentModelCatalog"
 > {
   if (toolProfile !== "native") return {};
+  const jira = boundJira(input, run);
   return {
     repositoryItems: repositoryItemsFor(input, run),
     configDocuments: configDocumentsFor(input, run),
@@ -542,10 +586,10 @@ function nativeRunInputs(
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
     repositoryInstructions: repositoryInstructionsFor(input, run, contextGeometry),
     mcpMutations: input.mcpMutations,
-    ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+    ...mcpServersFor(input, jira),
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
     ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
-    ...mcpRelayFor(input),
+    ...mcpRelayFor(input, jira),
     ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),

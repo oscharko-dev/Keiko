@@ -46,6 +46,8 @@ export interface CodingWorkbenchStartOptions {
    * of its user messages. Never together with `conversationId`.
    */
   readonly fork?: CodingWorkbenchRuntimeForkRequest | undefined;
+  /** The Jira Pod the person picked for this run; the server checks it is theirs and ready. */
+  readonly jiraPodId?: string | undefined;
 }
 
 export interface CodingWorkbenchRuntimeActions {
