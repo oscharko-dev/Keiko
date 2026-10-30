@@ -1,8 +1,10 @@
 import {
   CodingRuntimeAgentUnsupportedError,
   CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeJiraPodRefusedError,
   CodingRuntimeLaunchRejectedError,
 } from "./launchFailure.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
@@ -218,6 +220,11 @@ export interface ProductionRuntimeBackendResolver {
 }
 
 export interface ProductionCodingRuntimeResolverInput {
+  /**
+   * The Jira Pods a Coding run may be started with (owner decision 2026-10-30). Absent, a start that
+   * names a Pod is refused before the confirmation is consumed.
+   */
+  readonly jiraPods?: CodingJiraPods | undefined;
   readonly verifiedCommit?: VerifiedCommitRuntimeDependencies;
   readonly draftDelivery?: DraftDeliveryDependencies;
   readonly workspaceAuthority: ProductionWorkspaceAuthorityInput;
@@ -675,12 +682,14 @@ function launchResolver(
   const preparation = repositoryPreparationFor(input);
   return {
     ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
-    resolve: (request): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
-      const context = launchContext(input, preparation, request);
+    resolve: (requested): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
+      const context = launchContext(input, preparation, requested);
       // Before the one-use confirmation is consumed or authority minted: a refused agent leaves
       // nothing to undo, and the operator's confirmation stays valid for the corrected request.
-      refuseUnsupportedAgent(request.agent, context.runtimeSource, shared.toolProfile);
-      refuseUnsupportedPromptInputs(request, context.runtimeSource, shared.toolProfile);
+      refuseUnsupportedAgent(requested.agent, context.runtimeSource, shared.toolProfile);
+      refuseUnsupportedPromptInputs(requested, context.runtimeSource, shared.toolProfile);
+      // The Pod the human chose is checked here too, and its identity joins the confirmation claim.
+      const request = withBoundJiraPod(input, requested, context, shared.toolProfile);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
       const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
@@ -751,6 +760,32 @@ function refuseUnsupportedPromptInputs(
   }
 }
 
+/**
+ * The Jira Pod the human picked (owner decision 2026-10-30), checked before the confirmation is
+ * consumed: only the caller's own, ready Pod of a native keiko-sidecar run can be bound. The bound
+ * identity (Pod, credential generation, verification revision) travels with the request, joins the
+ * confirmation claim so it cannot be swapped, and is the identity every later Jira call must match.
+ */
+function withBoundJiraPod(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  toolProfile: OpenCodeToolProfile,
+): ProductionRuntimeBackendInput["request"] {
+  if (request.jiraPodId === undefined) return request;
+  const resolution =
+    context.runtimeSource !== "keiko-sidecar" || toolProfile !== "native"
+      ? ({ ok: false, reason: "unsupported-runtime" } as const)
+      : (input.jiraPods?.resolve(request.jiraPodId) ??
+        ({ ok: false, reason: "unavailable" } as const));
+  input.jiraPods?.recordBind(
+    request.runId,
+    resolution.ok ? { outcome: "bound" } : { outcome: "refused", reason: resolution.reason },
+  );
+  if (!resolution.ok) throw new CodingRuntimeJiraPodRefusedError(resolution.reason);
+  return { ...request, jiraPod: resolution.binding };
+}
+
 function consumeStartConfirmation(
   input: ProductionCodingRuntimeResolverInput,
   request: ProductionRuntimeBackendInput["request"],
@@ -795,6 +830,7 @@ function confirmationFacts(
     ...(context.issueBinding === undefined
       ? {}
       : { issueBindingDigest: context.issueBinding.bindingDigest }),
+    ...(request.jiraPod === undefined ? {} : { jiraPod: request.jiraPod }),
   };
 }
 

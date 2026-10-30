@@ -1225,6 +1225,11 @@ function agentField(agent: CodingWorkbenchAgent | undefined): {
   return agent === undefined ? {} : { agent };
 }
 
+/** The human's Jira Pod choice as an optional key, so a start without one adds none. */
+function jiraPodField(jiraPodId: string | undefined): { readonly jiraPodId?: string } {
+  return jiraPodId === undefined ? {} : { jiraPodId };
+}
+
 /** The first prompt's references and slash command as optional keys, so an absent one adds no key. */
 function promptInputFields(
   request: Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command" | "mentions">,
@@ -4378,6 +4383,7 @@ export class CodingRuntimeOrchestrator {
         projectMemoryEnabled: request.projectMemory?.enabled ?? true,
         ...agentField(request.agent),
         ...promptInputFields(request),
+        ...jiraPodField(request.jiraPodId),
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,

@@ -100,6 +100,20 @@ describe("starting a task", () => {
     expect(options).not.toHaveProperty("command");
   });
 
+  it("sends the Jira Pod the person picked with the start, and no key when none was", async () => {
+    const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+    const picked = setup({ jiraPodId });
+    const bare = setup();
+
+    act(() => picked.result.current.composer.onStart("implement the ticket"));
+    act(() => bare.result.current.composer.onStart("implement the ticket"));
+
+    await waitFor(() => expect(picked.actions.start).toHaveBeenCalledOnce());
+    await waitFor(() => expect(bare.actions.start).toHaveBeenCalledOnce());
+    expect(vi.mocked(picked.actions.start).mock.calls[0]?.[1]).toMatchObject({ jiraPodId });
+    expect(vi.mocked(bare.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("jiraPodId");
+  });
+
   it("sends the first prompt's referenced files with the start", async () => {
     const { result, actions } = setup();
 

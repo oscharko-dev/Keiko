@@ -137,6 +137,7 @@
   "coding-runtime.inbox.dispatch-failed": "tools-workflows",
   "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
   "coding-runtime.initial-turn.stop-failed": "tools-workflows",
+  "coding-runtime.jira-pod": "tools-workflows",
   "coding-runtime.linked-files.resolved": "tools-workflows",
   "coding-runtime.mcp-authorization": "tools-workflows",
   "coding-runtime.mcp-credentials": "tools-workflows",

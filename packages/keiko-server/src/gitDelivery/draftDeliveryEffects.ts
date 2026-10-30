@@ -5,11 +5,13 @@ import type {
 } from "@oscharko-dev/keiko-tools";
 import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
 import {
-  isDraftDeliveryBranchBinding,
   isDraftDeliveryIssueBinding,
+  isDraftDeliveryPullRequestBinding,
+  isDraftDeliveryRepositoryBinding,
   isIssueBoundDraftDeliveryRecord,
+  isPullRequestDraftDeliveryRecord,
   type DraftDeliveryRecord,
-  type IssueBoundDraftDeliveryRecord,
+  type PullRequestDraftDeliveryRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import {
@@ -18,6 +20,7 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
   DraftDeliveryFailure,
+  isGitHubOriginContext,
   isIssueBoundContext,
   type DraftDeliveryRunContext,
   type DraftDeliveryServiceOptions,
@@ -58,18 +61,31 @@ function assertCurrentAttempt(effect: EffectContext): void {
     throw new DraftDeliveryFailure("approval-invalid");
 }
 // An issue-bound run re-reads the frozen issue, the canonical repository and the remote head. An
-// issue-free run has no such record: it re-verifies that `origin` is still the remote the run was
-// admitted with and that the local candidate is still the exact verified commit (ADR-0085 D1b).
+// issue-free run's push has no such record: it re-verifies that `origin` is still the remote the run
+// was admitted with and that the local candidate is still the exact verified commit (ADR-0085 D1b).
+// Its pull request, on a verified github.com origin, re-reads the repository and the remote heads
+// exactly like an issue-bound one, without an issue (ADR-0086 D13).
 async function assertBeforeBranchEffect(effect: EffectContext): Promise<void> {
   await assertDraftBranchTarget(effect.options, effect.context);
   await assertDraftLocalCandidate(effect.options, effect.context, effect.record.binding);
   assertCurrentAttempt(effect);
 }
+function readsProvider(effect: EffectContext): boolean {
+  const { binding } = effect.record;
+  return (
+    isDraftDeliveryIssueBinding(binding) ||
+    (isDraftDeliveryRepositoryBinding(binding) && effect.proposal.command.kind === "pr-create")
+  );
+}
 async function assertBeforeEffect(effect: EffectContext): Promise<void> {
   assertCurrentAttempt(effect);
   const { context, record } = effect;
-  if (isDraftDeliveryBranchBinding(record.binding)) return assertBeforeBranchEffect(effect);
-  if (!isIssueBoundContext(context) || !isDraftDeliveryIssueBinding(record.binding))
+  if (!readsProvider(effect)) return assertBeforeBranchEffect(effect);
+  if (
+    !isDraftDeliveryPullRequestBinding(record.binding) ||
+    isDraftDeliveryIssueBinding(record.binding) !== isIssueBoundContext(context) ||
+    (!isIssueBoundContext(context) && !isGitHubOriginContext(context))
+  )
     throw new DraftDeliveryFailure("remote-drift");
   await resolveDraftRepository(effect.options, context);
   await assertDraftLocalCandidate(effect.options, effect.context, record.binding);
@@ -152,8 +168,9 @@ async function push(effect: EffectContext): Promise<DraftDeliveryRecord> {
     throw new DraftDeliveryFailure(
       result.lifecycle.outcome.status === "blocked" ? "preflight-failed" : "provider-failed",
     );
-  // The pinned non-force push exiting 0 is the only remote evidence an issue-free branch push has.
-  if (isDraftDeliveryBranchBinding(record.binding))
+  // The pinned non-force push exiting 0 is the only remote evidence an issue-free push has, on a
+  // foreign remote and on a github.com origin alike.
+  if (!isDraftDeliveryIssueBinding(record.binding))
     return advanceDraft(options, context, record, "pushed", "completed");
   const remote = await readDraftRemoteState(options, context, record.binding);
   assertKnownDraftIdentity(record, remote);
@@ -179,7 +196,7 @@ async function push(effect: EffectContext): Promise<DraftDeliveryRecord> {
 }
 async function createPullRequest(effect: EffectContext): Promise<DraftDeliveryRecord> {
   const { options, context, record, proposal } = effect;
-  if (proposal.command.kind !== "pr-create" || !isIssueBoundDraftDeliveryRecord(record))
+  if (proposal.command.kind !== "pr-create" || !isPullRequestDraftDeliveryRecord(record))
     throw new DraftDeliveryFailure("payload-changed");
   const seams = options.pullRequestSeams(context);
   const adapter = seams.prAdapterFactory?.(context.workspace);
@@ -217,7 +234,7 @@ async function createPullRequest(effect: EffectContext): Promise<DraftDeliveryRe
 }
 async function confirmCreated(
   effect: EffectContext,
-  record: IssueBoundDraftDeliveryRecord,
+  record: PullRequestDraftDeliveryRecord,
   identity: GitPullRequestIdentity,
 ): Promise<DraftDeliveryRecord> {
   const { options, context } = effect;
@@ -255,7 +272,7 @@ async function confirmCreated(
 
 async function retainCreatedIdentity(
   effect: EffectContext,
-  record: IssueBoundDraftDeliveryRecord,
+  record: PullRequestDraftDeliveryRecord,
   identity: GitPullRequestIdentity,
 ): Promise<DraftDeliveryRecord> {
   try {

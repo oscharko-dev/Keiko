@@ -364,12 +364,15 @@ leftover and is not a delivery precondition. The draft delivery context of such 
 any other, and `keiko_git_push` proposes pushing the run's verified commit to its own task branch on
 `origin`, which may be any Git remote. The proposal is redeemed with `keiko_git_execute`
 (`kind: push`) under the existing delivery approval plane (ADR-0085 D1b); protected targets stay
-blocked, a force push is never constructed, and no pull request is opened (`keiko_pull_request`
-refuses with `issue-binding-required`, ADR-0086 D13). Every refusal of the delivery controller is
+blocked and a force push is never constructed. A pull request never depends on an issue
+(ADR-0086 D13): on a verified github.com origin `keiko_pull_request` opens a draft pull request from
+the task branch with no closing line, and an accepted issue only links it; on any other remote it
+refuses with `github-origin-required`. Every refusal of the delivery controller is
 now written as a `git.draft-delivery` line (`phase: refused`, a closed `reason`, `errorKind`,
 the run's correlation id), and the coding tool facade forwards the complete
 `CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS` vocabulary, including `repository-required`,
-`remote-required` and `issue-binding-required`, with guidance text for the delivery action, so the
+`remote-required`, `github-origin-required` and `issue-binding-required` (the CI observation of a
+pull request opened without an issue), with guidance text for the delivery action, so the
 model learns the true cause instead of inventing one ("remote inaccessible", live lab 2026-10-30).
 
 **Under Full access, a run that stops one step short is given a bounded continuation first**
@@ -1238,7 +1241,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `coding-runtime.native-narrowing.refused`) instead of acknowledged while a shell or a Code Mode
   `fetch` keeps Internet access; narrowing between the modes below Full access applies in place.
   Continuing the same OpenCode session under a relaunched, narrower tree is not implemented.
-- **Managed providers (#4089):** [ADR-0181](ADR-0181-shared-managed-mcp-host.md) adds a shared in-process protocol host for governed non-OpenCode consumers. Its server-declared providers do not enter the operator registry below; that registry, relay and OAuth contract remains unchanged.
+- **Managed providers (#4089):** [ADR-0181](ADR-0181-shared-managed-mcp-host.md) adds a shared in-process protocol host for governed non-OpenCode consumers. Its server-declared providers do not enter the operator registry below; that registry, relay and OAuth contract remains unchanged. A Coding run reaches the managed Jira provider only for a Jira Pod the human picked in the composer for that run (owner decision 2026-10-30, #3907, `jiraPodId` on the start request): the pick is checked against the caller's own, ready Pods before the start confirmation is consumed, joins that confirmation, and becomes a run-local synthetic `jira` server of the same managed relay. The pick grants the Jira read tools in every mode; the Jira write tools keep following the autonomy mode (ask below Full access, allowed in Full access). A run without a pick has no Jira tools.
 - **MCP servers come from the operator's registry, never from the repository (#3903, parity row
   C04, owner decision of 2026-10-24).** `mcp-servers.json` in Keiko's state directory, owned by the
   user Keiko runs as and writable by nobody else, is read for each native run at its launch
@@ -1915,8 +1918,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `keiko_pull_request`, `keiko_git_execute`, `keiko_git_sync`, `keiko_ci_status` and
   `keiko_verification` (`opencodeNativeDeliveryTools.ts` holds the list once).
   `keiko_git_push` proposes pushing the run's verified commit to its own task branch on `origin`,
-  any Git remote and no issue needed (ADR-0085 D1b); `keiko_pull_request` needs a run bound to an
-  issue and otherwise returns `issue-binding-required` (ADR-0086 D13).
+  any Git remote and no issue needed (ADR-0085 D1b); `keiko_pull_request` opens a draft pull request
+  from that task branch on a verified GitHub origin, no issue needed (an accepted issue only links
+  it), and otherwise returns `github-origin-required` or `remote-required` (ADR-0086 D13).
   `keiko_git_sync` fetches the upstream or fast-forwards the run's branch to it through the Git
   sync owner, under the owner's own mode decision (ADR-0138 D3 item 5); the shell's own fetch and
   pull stay refused (#3902 AC2). The managed worktree's Git directory is

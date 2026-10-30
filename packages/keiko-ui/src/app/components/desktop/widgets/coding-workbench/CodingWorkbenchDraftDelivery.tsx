@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import {
+  isDraftDeliveryBranchBinding,
   isDraftDeliveryIssueBinding,
   type DraftDeliveryBinding,
   type DraftDeliveryRecord,
@@ -511,13 +512,15 @@ function deliveryRecordFacts(
   ];
 }
 
-// An issue-bound delivery names its repository and accepted issue; an issue-free branch push has
-// neither, and names the remote it pushes to instead (ADR-0085 D1b).
+// An issue-bound delivery names its repository and accepted issue. An issue-free run on a github.com
+// origin names its repository alone, because no issue exists to name (ADR-0086 D13). An issue-free
+// branch push to any other remote names neither, and names the remote it pushes to instead
+// (ADR-0085 D1b).
 function deliveryIdentityFacts(
   target: DraftDeliveryBinding,
   t: CodingWorkbenchTranslate,
 ): readonly DeliveryFact[] {
-  if (!isDraftDeliveryIssueBinding(target))
+  if (isDraftDeliveryBranchBinding(target))
     return [
       {
         id: "remote",
@@ -525,12 +528,14 @@ function deliveryIdentityFacts(
         value: target.remoteAlias,
       },
     ];
+  const repository: DeliveryFact = {
+    id: "repository",
+    label: t("codingWorkbench.draftDelivery.repository"),
+    value: target.repository,
+  };
+  if (!isDraftDeliveryIssueBinding(target)) return [repository];
   return [
-    {
-      id: "repository",
-      label: t("codingWorkbench.draftDelivery.repository"),
-      value: target.repository,
-    },
+    repository,
     {
       id: "issueNumber",
       label: t("codingWorkbench.draftDelivery.issue"),

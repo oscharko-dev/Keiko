@@ -71,6 +71,7 @@ import { createCodingRuntimeDescriptionJobStore } from "./codingRuntimeDescripti
 import {
   CodingRuntimeAgentUnsupportedError,
   CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeJiraPodRefusedError,
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
 } from "./launchFailure.js";
@@ -2765,6 +2766,38 @@ describe("CodingRuntimeOrchestrator", () => {
           code: "stage=start:reason=launch-resolution:agent-unsupported",
         }),
       );
+    });
+
+    it("hands the human's Jira Pod choice to the launch resolver and omits the key when none was made", async () => {
+      const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+      const f = fixture();
+
+      await f.orchestrator.start({ ...start, jiraPodId });
+
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId }));
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("jiraPodId");
+    });
+
+    it("answers a start whose Jira Pod was refused with invalid-intent and a closed diagnostic", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.launchResolver.resolve.mockImplementationOnce(() => {
+        throw new CodingRuntimeJiraPodRefusedError("pod-not-ready");
+      });
+
+      expect(
+        await f.orchestrator.start({ ...start, jiraPodId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018" }),
+      ).toEqual({ ok: false, failureCode: "invalid-intent", runId: "run-1" });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: "stage=start:reason=launch-resolution:jira-pod:pod-not-ready",
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("d5f5681e");
     });
 
     it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {
