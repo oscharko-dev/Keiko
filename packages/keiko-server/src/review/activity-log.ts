@@ -20,12 +20,39 @@ export type ReviewTargetKind = "pull-request" | "local-range";
 export type ReviewWorktreeRemovalTrigger = "settled" | "abandoned" | "shutdown" | "startup";
 export type ReviewRefSweepTrigger = "startup" | "daily";
 
-const REVIEW_TARGET_LISTED = defineActivityLogOperation({
+// The registration every review operation shares; each operation adds its identity and fields.
+const REVIEW_OPERATION = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "review.target.listed",
   category: "process",
   owner: "keiko-server",
+  causal: "correlation",
+  releaseImpact: "patch",
+} as const;
+const REVIEW_TIMELINE_OPERATION = { ...REVIEW_OPERATION, analyzerProjection: "timeline" } as const;
+const REVIEW_FAILURE_OPERATION = {
+  ...REVIEW_OPERATION,
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+} as const;
+
+const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+const DIGEST_FIELD = {
+  type: "string",
+  dataClass: "digest",
+  required: true,
+  maxLength: 64,
+} as const;
+const TARGET_KIND_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: ["pull-request", "local-range"],
+} as const;
+
+const REVIEW_TARGET_LISTED = defineActivityLogOperation({
+  ...REVIEW_TIMELINE_OPERATION,
+  op: "review.target.listed",
   emitter: "review/activity-log.logReviewTargetListed",
   fields: {
     read: { type: "string", dataClass: "closed-enum", required: true, values: ["list", "detail"] },
@@ -42,62 +69,40 @@ const REVIEW_TARGET_LISTED = defineActivityLogOperation({
         "failed",
       ],
     },
-    count: { type: "integer", dataClass: "count", required: true },
+    count: COUNT_FIELD,
     truncated: { type: "boolean", dataClass: "closed-enum", required: true },
     cacheHit: { type: "boolean", dataClass: "closed-enum", required: true },
-    pages: { type: "integer", dataClass: "count", required: false },
-    rejectedCount: { type: "integer", dataClass: "count", required: false },
+    pages: { ...COUNT_FIELD, required: false },
+    rejectedCount: { ...COUNT_FIELD, required: false },
   },
-  causal: "correlation",
   lifecycle: "state",
-  analyzerProjection: "timeline",
   failureClasses: ["review-target-read"],
   proofIds: ["review.target.listed.line"],
-  releaseImpact: "patch",
 });
 
 const REVIEW_TARGET_RESOLVED = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...REVIEW_TIMELINE_OPERATION,
   op: "review.target.resolved",
-  category: "process",
-  owner: "keiko-server",
   emitter: "review/activity-log.logReviewTargetResolved",
   fields: {
-    targetKind: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["pull-request", "local-range"],
-    },
-    baseShaDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    headShaDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    targetKind: TARGET_KIND_FIELD,
+    baseShaDigest: DIGEST_FIELD,
+    headShaDigest: DIGEST_FIELD,
     isCrossRepository: { type: "boolean", dataClass: "closed-enum", required: false },
     baseFetched: { type: "boolean", dataClass: "closed-enum", required: false },
     fetchDurationMs: { type: "integer", dataClass: "duration", required: false },
   },
-  causal: "correlation",
   lifecycle: "end",
-  analyzerProjection: "timeline",
   failureClasses: ["review-target-resolution"],
   proofIds: ["review.target.resolved.line"],
-  releaseImpact: "patch",
 });
 
 const REVIEW_TARGET_REFUSED = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...REVIEW_FAILURE_OPERATION,
   op: "review.target.refused",
-  category: "process",
-  owner: "keiko-server",
   emitter: "review/activity-log.logReviewTargetRefused",
   fields: {
-    targetKind: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["pull-request", "local-range"],
-    },
+    targetKind: TARGET_KIND_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -114,45 +119,32 @@ const REVIEW_TARGET_REFUSED = defineActivityLogOperation({
       ],
     },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["review-target-resolution"],
   proofIds: ["review.target.refused.line"],
-  releaseImpact: "patch",
 });
 
 const REVIEW_WORKTREE_CREATED = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...REVIEW_TIMELINE_OPERATION,
   op: "review.worktree.created",
-  category: "process",
-  owner: "keiko-server",
   emitter: "review/activity-log.logReviewWorktreeCreated",
   fields: {
-    runDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    materializedCount: { type: "integer", dataClass: "count", required: true },
-    skippedLargeCount: { type: "integer", dataClass: "count", required: true },
-    skippedBinaryCount: { type: "integer", dataClass: "count", required: true },
-    filterDriverCount: { type: "integer", dataClass: "count", required: true },
+    runDigest: DIGEST_FIELD,
+    materializedCount: COUNT_FIELD,
+    skippedLargeCount: COUNT_FIELD,
+    skippedBinaryCount: COUNT_FIELD,
+    filterDriverCount: COUNT_FIELD,
   },
-  causal: "correlation",
   lifecycle: "start",
-  analyzerProjection: "timeline",
   failureClasses: ["review-worktree-lifecycle"],
   proofIds: ["review.worktree.created.line"],
-  releaseImpact: "patch",
 });
 
 const REVIEW_WORKTREE_REFUSED = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...REVIEW_FAILURE_OPERATION,
   op: "review.worktree.refused",
-  category: "process",
-  owner: "keiko-server",
   emitter: "review/activity-log.logReviewWorktreeRefused",
   fields: {
-    runDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    runDigest: DIGEST_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -168,23 +160,16 @@ const REVIEW_WORKTREE_REFUSED = defineActivityLogOperation({
       ],
     },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["review-worktree-lifecycle"],
   proofIds: ["review.worktree.refused.line"],
-  releaseImpact: "patch",
 });
 
 const REVIEW_WORKTREE_REMOVED = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...REVIEW_TIMELINE_OPERATION,
   op: "review.worktree.removed",
-  category: "process",
-  owner: "keiko-server",
   emitter: "review/activity-log.logReviewWorktreeRemoved",
   fields: {
-    runDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    runDigest: DIGEST_FIELD,
     trigger: {
       type: "string",
       dataClass: "closed-enum",
@@ -198,39 +183,24 @@ const REVIEW_WORKTREE_REMOVED = defineActivityLogOperation({
       values: ["removed", "failed"],
     },
   },
-  causal: "correlation",
   lifecycle: "end",
-  analyzerProjection: "timeline",
   failureClasses: ["review-worktree-lifecycle"],
   proofIds: ["review.worktree.removed.line"],
-  releaseImpact: "patch",
 });
 
 const REVIEW_WORKTREE_ORPHAN_SWEPT = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...REVIEW_TIMELINE_OPERATION,
   op: "review.worktree.orphan-swept",
-  category: "process",
-  owner: "keiko-server",
   emitter: "review/activity-log.logReviewWorktreeOrphanSwept",
-  fields: {
-    removedCount: { type: "integer", dataClass: "count", required: true },
-    failedCount: { type: "integer", dataClass: "count", required: true },
-  },
-  causal: "correlation",
+  fields: { removedCount: COUNT_FIELD, failedCount: COUNT_FIELD },
   lifecycle: "state",
-  analyzerProjection: "timeline",
   failureClasses: ["review-worktree-lifecycle"],
   proofIds: ["review.worktree.orphan-swept.line"],
-  releaseImpact: "patch",
 });
 
 const REVIEW_WORKTREE_REFS_SWEPT = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...REVIEW_TIMELINE_OPERATION,
   op: "review.worktree.refs-swept",
-  category: "process",
-  owner: "keiko-server",
   emitter: "review/activity-log.logReviewRefsSwept",
   fields: {
     trigger: {
@@ -239,16 +209,13 @@ const REVIEW_WORKTREE_REFS_SWEPT = defineActivityLogOperation({
       required: true,
       values: ["startup", "daily"],
     },
-    deletedCount: { type: "integer", dataClass: "count", required: true },
-    retainedCount: { type: "integer", dataClass: "count", required: true },
-    failedCount: { type: "integer", dataClass: "count", required: true },
+    deletedCount: COUNT_FIELD,
+    retainedCount: COUNT_FIELD,
+    failedCount: COUNT_FIELD,
   },
-  causal: "correlation",
   lifecycle: "state",
-  analyzerProjection: "timeline",
   failureClasses: ["review-private-ref-retention"],
   proofIds: ["review.worktree.refs-swept.line"],
-  releaseImpact: "patch",
 });
 
 /** A domain-separated digest of an object id or run id: joinable, never the raw value. */

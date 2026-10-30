@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ce8af6dda81a4a6d965233c7a9c6eeb13ad7b732e69e4641847f9ef575631bd1",
+    "catalogDigest": "f60d95195d0c1c3928824d9ed302efb3ab1c5266c6276a1559d453cf1dba506d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33390,9 +33390,12 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "review.target.listed",
         "category": "process",
         "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "analyzerProjection": "timeline",
+        "op": "review.target.listed",
         "emitter": "review/activity-log.logReviewTargetListed",
         "fields": {
           "completeness": {
@@ -33450,21 +33453,22 @@
             "required": false
           }
         },
-        "causal": "correlation",
         "lifecycle": "state",
-        "analyzerProjection": "timeline",
         "failureClasses": ["review-target-read"],
         "proofIds": ["review.target.listed.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:23",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:276"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:53",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:243"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "review.target.refused",
         "category": "process",
         "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "op": "review.target.refused",
         "emitter": "review/activity-log.logReviewTargetRefused",
         "fields": {
           "completeness": {
@@ -33499,21 +33503,20 @@
             ]
           }
         },
-        "causal": "correlation",
-        "lifecycle": "failure",
-        "analyzerProjection": "failure-cluster",
         "failureClasses": ["review-target-resolution"],
         "proofIds": ["review.target.refused.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:87",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:332"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:100",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:299"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "review.target.resolved",
         "category": "process",
         "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "analyzerProjection": "timeline",
+        "op": "review.target.resolved",
         "emitter": "review/activity-log.logReviewTargetResolved",
         "fields": {
           "completeness": {
@@ -33560,21 +33563,21 @@
             "required": false
           }
         },
-        "causal": "correlation",
         "lifecycle": "end",
-        "analyzerProjection": "timeline",
         "failureClasses": ["review-target-resolution"],
         "proofIds": ["review.target.resolved.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:59",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:308"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:83",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:275"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "review.worktree.created",
         "category": "process",
         "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "analyzerProjection": "timeline",
+        "op": "review.worktree.created",
         "emitter": "review/activity-log.logReviewWorktreeCreated",
         "fields": {
           "completeness": {
@@ -33614,21 +33617,21 @@
             "required": true
           }
         },
-        "causal": "correlation",
         "lifecycle": "start",
-        "analyzerProjection": "timeline",
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.created.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:125",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:355"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:126",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:322"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "review.worktree.orphan-swept",
         "category": "process",
         "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "analyzerProjection": "timeline",
+        "op": "review.worktree.orphan-swept",
         "emitter": "review/activity-log.logReviewWorktreeOrphanSwept",
         "fields": {
           "completeness": {
@@ -33652,21 +33655,21 @@
             "required": true
           }
         },
-        "causal": "correlation",
         "lifecycle": "state",
-        "analyzerProjection": "timeline",
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.orphan-swept.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:209",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:411"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:191",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:378"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "review.worktree.refs-swept",
         "category": "process",
         "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "analyzerProjection": "timeline",
+        "op": "review.worktree.refs-swept",
         "emitter": "review/activity-log.logReviewRefsSwept",
         "fields": {
           "completeness": {
@@ -33701,21 +33704,22 @@
             "required": true
           }
         },
-        "causal": "correlation",
         "lifecycle": "state",
-        "analyzerProjection": "timeline",
         "failureClasses": ["review-private-ref-retention"],
         "proofIds": ["review.worktree.refs-swept.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:228",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:435"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:201",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:402"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "review.worktree.refused",
         "category": "process",
         "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "op": "review.worktree.refused",
         "emitter": "review/activity-log.logReviewWorktreeRefused",
         "fields": {
           "completeness": {
@@ -33749,21 +33753,20 @@
             ]
           }
         },
-        "causal": "correlation",
-        "lifecycle": "failure",
-        "analyzerProjection": "failure-cluster",
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.refused.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:147",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:377"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:142",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:344"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "review.worktree.removed",
         "category": "process",
         "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "analyzerProjection": "timeline",
+        "op": "review.worktree.removed",
         "emitter": "review/activity-log.logReviewWorktreeRemoved",
         "fields": {
           "completeness": {
@@ -33795,14 +33798,11 @@
             "values": ["removed", "failed"]
           }
         },
-        "causal": "correlation",
         "lifecycle": "end",
-        "analyzerProjection": "timeline",
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.removed.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:179",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:393"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:167",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:360"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -108175,19 +108175,19 @@
     {
       "op": "review.target.listed",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:26",
+      "site": "packages/keiko-server/src/review/activity-log.ts:55",
       "package": "keiko-server"
     },
     {
       "op": "review.target.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:90",
+      "site": "packages/keiko-server/src/review/activity-log.ts:102",
       "package": "keiko-server"
     },
     {
       "op": "review.target.resolved",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:62",
+      "site": "packages/keiko-server/src/review/activity-log.ts:85",
       "package": "keiko-server"
     },
     {
@@ -108199,7 +108199,7 @@
     {
       "op": "review.worktree.orphan-swept",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:212",
+      "site": "packages/keiko-server/src/review/activity-log.ts:193",
       "package": "keiko-server"
     },
     {
@@ -108212,19 +108212,19 @@
     {
       "op": "review.worktree.refs-swept",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:231",
+      "site": "packages/keiko-server/src/review/activity-log.ts:203",
       "package": "keiko-server"
     },
     {
       "op": "review.worktree.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:150",
+      "site": "packages/keiko-server/src/review/activity-log.ts:144",
       "package": "keiko-server"
     },
     {
       "op": "review.worktree.removed",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:182",
+      "site": "packages/keiko-server/src/review/activity-log.ts:169",
       "package": "keiko-server"
     },
     {
