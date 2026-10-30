@@ -113,6 +113,7 @@ import type {
 } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
+import { commitVerificationReportPassed } from "../gitDelivery/verifiedCommitVerification.js";
 import { readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -4322,6 +4323,166 @@ describe("native verification publication through the production facade", () => 
         rmSync(root, { recursive: true, force: true });
       }
     });
+  });
+});
+
+// #3907 AC3 parity: on macOS the governed verifier refuses to install for this host
+// (`native-shell-required`) and tells the model to run the check in its own shell. That shell check
+// reached the run's ledger but never the commit proof, so no native run could commit: every
+// keiko_git_commit of the Keiko T6 parity run ended `verification-failed`.
+describe("a native check line proves the staged commit candidate (#3907 AC3)", () => {
+  function proofService(
+    begin?: VerifiedCommitService["beginVerification"],
+    recorded = true,
+  ): {
+    readonly service: VerifiedCommitService;
+    readonly begin: ReturnType<typeof vi.fn<VerifiedCommitService["beginVerification"]>>;
+    readonly complete: ReturnType<typeof vi.fn<VerifiedCommitService["completeVerification"]>>;
+    readonly observe: ReturnType<typeof vi.fn<VerifiedCommitService["observeVerification"]>>;
+  } {
+    const begin_ = vi.fn<VerifiedCommitService["beginVerification"]>(
+      begin ??
+        ((): ReturnType<VerifiedCommitService["beginVerification"]> =>
+          Promise.resolve({ kind: "ticket" as const, ticket: {} })),
+    );
+    const complete = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
+      Promise.resolve(recorded),
+    );
+    const observe = vi.fn<VerifiedCommitService["observeVerification"]>();
+    const service = {
+      ...verificationService(),
+      beginVerification: begin_,
+      completeVerification: complete,
+      observeVerification: observe,
+    };
+    return { service, begin: begin_, complete, observe };
+  }
+  function nativeProofFacade(
+    service: VerifiedCommitService,
+    log: ServerLogEvent[] = [],
+  ): {
+    readonly settlement: NonNullable<
+      ReturnType<typeof createProductionManagedWorktreeToolFacade>["nativeSettlement"]
+    >;
+  } {
+    const facade = verificationFacade({
+      toolProfile: "native",
+      verificationRevision: () => 3,
+      verificationAdmitted: () => vi.fn(),
+      records: [],
+      log,
+      verifiedCommitService: service,
+      runToReport: () => Promise.resolve(verificationReport("passed")),
+    });
+    const settlement = facade.nativeSettlement;
+    if (settlement?.verificationAdmitted === undefined)
+      throw new TypeError("native verification admission unavailable");
+    return { settlement };
+  }
+  const call = { messageId: "message-proof-1", callId: "tool-proof-1" };
+
+  it("opens the ticket at admission and completes it with the line's passing report", async () => {
+    const { service, begin, complete } = proofService();
+    const log: ServerLogEvent[] = [];
+    const { settlement } = nativeProofFacade(service, log);
+    settlement.verificationAdmitted?.(call, "test");
+    expect(begin).toHaveBeenCalledOnce();
+    settlement.settled({
+      ...call,
+      tool: "shell",
+      state: "succeeded",
+      exitCode: 0,
+      exitStatusCheck: "test",
+    });
+    await vi.waitFor(() => {
+      expect(complete).toHaveBeenCalledOnce();
+    });
+    const [, report] = complete.mock.calls[0] ?? [];
+    expect(report).toMatchObject({
+      workspaceRoot: "/managed/worktree",
+      overallStatus: "passed",
+      counts: { passed: 1, failed: 0 },
+      results: [{ kind: "test", status: "passed", exitCode: 0, signal: null }],
+    });
+    if (report === undefined) throw new TypeError("native proof report missing");
+    expect(commitVerificationReportPassed(report, 0, Date.now())).toBe(true);
+    await vi.waitFor(() => {
+      expect(log.some((event) => event.extra?.state === "native-proof")).toBe(true);
+    });
+    const line = log.find((event) => event.extra?.state === "native-proof");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      ),
+    ).toMatchObject({
+      op: "coding-runtime.verification",
+      correlationId: "run-verification-3",
+      state: "native-proof",
+      verifierId: "test",
+      stepCount: 1,
+      commitProof: "recorded",
+    });
+  });
+
+  it("completes the ticket with a failed report when the line failed", async () => {
+    const { service, complete } = proofService(undefined, false);
+    const log: ServerLogEvent[] = [];
+    const { settlement } = nativeProofFacade(service, log);
+    settlement.verificationAdmitted?.(call, "lint");
+    settlement.settled({
+      ...call,
+      tool: "shell",
+      state: "failed",
+      exitCode: 2,
+      exitStatusCheck: "lint",
+    });
+    await vi.waitFor(() => {
+      expect(complete).toHaveBeenCalledOnce();
+    });
+    const [, report] = complete.mock.calls[0] ?? [];
+    expect(report).toMatchObject({
+      overallStatus: "failed",
+      results: [{ kind: "lint", status: "failed", exitCode: 2 }],
+    });
+    await vi.waitFor(() => {
+      expect(log.some((event) => event.extra?.state === "native-proof")).toBe(true);
+    });
+    const line = log.find((event) => event.extra?.state === "native-proof");
+    expect(line?.extra).toMatchObject({ verifierId: "lint", commitProof: "unavailable" });
+    expect(line?.extra).not.toHaveProperty("commitProofReason");
+  });
+
+  it("completes nothing for a line whose status another command decided", async () => {
+    const { service, complete } = proofService();
+    const { settlement } = nativeProofFacade(service);
+    settlement.verificationAdmitted?.(call, "test");
+    settlement.settled({ ...call, tool: "shell", state: "succeeded", exitCode: 0 });
+    await Promise.resolve();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("keeps a ticket the candidate refused off the proof path, on the check list", async () => {
+    const { service, complete, observe } = proofService(() =>
+      Promise.resolve({
+        kind: "refused" as const,
+        reason: "candidate-not-staged" as const,
+        blocking: { unstagedCount: 1, untrackedCount: 0, unstaged: ["src/a.ts"], untracked: [] },
+      }),
+    );
+    const { settlement } = nativeProofFacade(service);
+    settlement.verificationAdmitted?.(call, "test");
+    settlement.settled({
+      ...call,
+      tool: "shell",
+      state: "succeeded",
+      exitCode: 0,
+      exitStatusCheck: "test",
+    });
+    await vi.waitFor(() => {
+      expect(observe).toHaveBeenCalledOnce();
+    });
+    expect(complete).not.toHaveBeenCalled();
   });
 });
 

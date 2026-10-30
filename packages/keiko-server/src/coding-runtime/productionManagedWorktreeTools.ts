@@ -80,6 +80,8 @@ import type {
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
+  CodingToolNativeCommitProof,
+  CodingToolNativeCommitProofOutcome,
   CodingToolNativeVerificationHooks,
   CodingToolNativeVerificationResult,
   CodingVerificationBlockedReason,
@@ -356,6 +358,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
         "proof-unavailable",
         "credited",
         "credit-unavailable",
+        "native-proof",
       ],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
@@ -2583,6 +2586,121 @@ function nativeVerificationHooks(
           ? (): ReadonlyMap<string, string> | undefined => packageScripts(input)
           : undefined,
       ),
+    commitProof: (): CodingToolNativeCommitProof | undefined => nativeCommitProof(input),
+  };
+}
+
+/**
+ * A native check line proves the staged candidate exactly as the governed verifier does (#3907
+ * AC3). On macOS the governed verifier cannot install for this host (`native-shell-required`) and
+ * tells the model to run the check in its own shell, so without this no native run could commit.
+ * The same service brackets the line: its ticket opens at admission, when the candidate must be
+ * fully staged and clean, and completes at settlement only if the staged tree is unchanged, so
+ * the proof covers the content the check read and nothing else.
+ */
+function nativeCommitProof(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolNativeCommitProof | undefined {
+  if (input.verifiedCommitService === undefined) return undefined;
+  const opened = openNativeCommitProof(input);
+  return {
+    settle: (outcome): void => {
+      void settleNativeCommitProof(input, opened, outcome);
+    },
+  };
+}
+
+async function openNativeCommitProof(
+  input: ProductionManagedWorktreeToolInput,
+): Promise<{ readonly begun: CandidateVerificationStart | undefined; readonly atMs: number }> {
+  const begun = await beginCandidateVerification(input);
+  return { begun, atMs: Date.now() };
+}
+
+async function settleNativeCommitProof(
+  input: ProductionManagedWorktreeToolInput,
+  opened: ReturnType<typeof openNativeCommitProof>,
+  outcome: CodingToolNativeCommitProofOutcome,
+): Promise<void> {
+  const { begun, atMs } = await opened;
+  const report = nativeVerificationReport(input.workspaceRoot, outcome, atMs);
+  const proof = await completeCandidateVerification(
+    input,
+    begun,
+    report,
+    { check: () => true },
+    undefined,
+  );
+  if (proof !== undefined) recordNativeCommitProof(input, outcome, proof);
+}
+
+/** Which native line settled the commit proof, and how: counts and closed words only. */
+function recordNativeCommitProof(
+  input: ProductionManagedWorktreeToolInput,
+  outcome: CodingToolNativeCommitProofOutcome,
+  proof: CodingToolCommitProofResult,
+): void {
+  const [verifierId] = outcome.kinds;
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      { correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID },
+      {
+        state: "native-proof",
+        stepCount: outcome.kinds.length,
+        ...(verifierId === undefined ? {} : { verifierId }),
+        commitProof: proof.commitProof,
+        // A failed line's cause is the failed check on the paired git.verified-commit line; the
+        // service reports any refused completion as drift, which only a passing line can mean.
+        ...(outcome.passed && proof.commitProof === "unavailable"
+          ? { commitProofReason: proof.reasonCode }
+          : {}),
+      },
+    ),
+  );
+}
+
+const EMPTY_VERIFICATION_COUNTS: Readonly<Record<VerificationStatus, number>> = {
+  passed: 0,
+  failed: 0,
+  skipped: 0,
+  denied: 0,
+  "timed-out": 0,
+  cancelled: 0,
+  "resource-exceeded": 0,
+};
+
+/**
+ * The governed report shape of a native line's own exit status: the checks a passing line proved,
+ * or the one that failed. Its start is the ticket's, which the line's admission preceded.
+ */
+function nativeVerificationReport(
+  workspaceRoot: string,
+  outcome: CodingToolNativeCommitProofOutcome,
+  startedAtMs: number,
+): VerificationReport {
+  const status: VerificationStatus = outcome.passed ? "passed" : "failed";
+  const results = outcome.kinds.map((kind): VerificationResult => ({
+    kind,
+    scriptName: undefined,
+    command: "native-shell",
+    args: [],
+    status,
+    exitCode: outcome.exitCode,
+    signal: null,
+    durationMs: outcome.durationMs,
+    truncated: false,
+    redacted: true,
+    outputSummary: "",
+    appliedLimits: [],
+  }));
+  return {
+    workspaceRoot,
+    results,
+    overallStatus: status,
+    startedAtMs,
+    durationMs: outcome.durationMs,
+    counts: { ...EMPTY_VERIFICATION_COUNTS, [status]: results.length },
   };
 }
 

@@ -2005,6 +2005,17 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   credited check publishes its own `verification-summarized` event at the admitted edit revision,
   and `coding-runtime.verification` records it (`state: "credited"`, `verifierId`, `creditedBy`)
   or why the scripts could not be read (`credit-unavailable`, warn, frames and causes).
+  The same line also proves the staged commit candidate (#3907 AC3). The ledger credit alone
+  never reached the verified commit, so on macOS, where every governed check is
+  `native-shell-required`, no native run could commit: each `keiko_git_commit` of the Keiko T6
+  parity run settled `verification-failed` with zero failed checks. Admission now opens the
+  verified-commit ticket the governed verifier opens before its run, and settlement completes it
+  with the line's own result (its checks, exit code and duration; no output) through the same
+  service. The ticket opens only for a fully staged, clean candidate and completes only when the
+  staged tree is unchanged, so the proof covers exactly the content the check read; a failing line
+  records a failed proof, and a line whose status another command decided completes nothing.
+  `coding-runtime.verification` records the outcome (`state: "native-proof"`, `verifierId`,
+  `stepCount`, `commitProof`, `commitProofReason`).
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

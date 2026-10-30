@@ -493,6 +493,24 @@ export interface CodingToolNativeVerificationHooks {
   readonly credited?:
     | ((resources: readonly string[], readScripts: boolean) => readonly VerificationKind[])
     | undefined;
+  /**
+   * Opens the staged candidate's commit proof when a check line is admitted, as the governed
+   * verifier opens it before its run (#3907 AC3); absent when the run has no verified commit.
+   */
+  readonly commitProof?: (() => CodingToolNativeCommitProof | undefined) | undefined;
+}
+
+/** A commit proof a native check line opened at admission, settled once by its outcome. */
+export interface CodingToolNativeCommitProof {
+  /** The line ran and reported its own status: the checks it proved, or the one that failed. */
+  readonly settle: (outcome: CodingToolNativeCommitProofOutcome) => void;
+}
+
+export interface CodingToolNativeCommitProofOutcome {
+  readonly passed: boolean;
+  readonly kinds: readonly VerificationKind[];
+  readonly exitCode: number;
+  readonly durationMs: number;
 }
 
 /**

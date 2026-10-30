@@ -14139,6 +14139,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "proof-unavailable",
           "credited",
           "credit-unavailable",
+          "native-proof",
         ],
       },
       stepCount: {
