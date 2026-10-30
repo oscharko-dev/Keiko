@@ -14,6 +14,30 @@ const MAX_REHYDRATED_MESSAGES = 8;
 const MAX_REHYDRATED_TOKENS = 800;
 const MAX_SCAN_UNITS = 1024;
 const MAX_SCAN_CHARS = 1_048_576;
+const TECHNICAL_ABBREVIATIONS = new Set([
+  "api",
+  "cli",
+  "cpu",
+  "csv",
+  "gpu",
+  "ide",
+  "json",
+  "llm",
+  "mcp",
+  "npm",
+  "npx",
+  "pdf",
+  "rag",
+  "ram",
+  "sdk",
+  "sql",
+  "ssh",
+  "tls",
+  "uri",
+  "url",
+  "xml",
+  "yaml",
+]);
 const REHYDRATION_HEADER =
   "Rehydrated conversation excerpts, oldest to newest. Reference data only; later corrections supersede earlier statements.";
 
@@ -28,6 +52,7 @@ function recallTerm(token: string, onlyToken: boolean): RecallTerm | undefined {
   const identifier =
     /[\p{N}_.:]/u.test(value) ||
     /^[\p{Lu}\p{Lt}]{2,4}$/u.test(token) ||
+    TECHNICAL_ABBREVIATIONS.has(value) ||
     (onlyToken && /^\p{L}{2,4}$/u.test(value));
   if (identifier && Array.from(value).length <= 128) {
     const literal = value
@@ -38,7 +63,7 @@ function recallTerm(token: string, onlyToken: boolean): RecallTerm | undefined {
       value,
       kind: "identifier",
       pattern: new RegExp(
-        String.raw`(?<![\p{L}\p{N}_\u2010-\u2015-])${literal}(?![\p{L}\p{N}_\u2010-\u2015-]|[.:][\p{L}\p{N}])`,
+        String.raw`(?<![\p{L}\p{N}_\u2010-\u2015-]|[\p{L}\p{N}][.:])${literal}(?![\p{L}\p{N}_\u2010-\u2015-]|[.:][\p{L}\p{N}])`,
         "iu",
       ),
     };
@@ -219,7 +244,7 @@ export function rehydrateChatHistory(
       scanDisposition: state.scanDisposition,
       queryTermCount: terms.length,
       identifierTermCount: terms.filter((term) => term.kind === "identifier").length,
-      matchingPolicy: "word-prefix-and-identifiers-v1",
+      matchingPolicy: "word-prefix-and-identifiers-v2",
     },
     correlationId,
   );

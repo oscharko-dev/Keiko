@@ -295,6 +295,8 @@ describe("paged conversation continuity", () => {
     ["A7?", "A7"],
     ["MCP?", "MCP"],
     ["mcp?", "MCP"],
+    ["Which mcp?", "MCP"],
+    ["Was bedeutet mcp?", "MCP"],
     ["47?", "47"],
     ["v1.2?", "v1.2"],
   ])("rehydrates a literal short identifier without answer hints: %s", (query, identifier) => {
@@ -321,6 +323,28 @@ describe("paged conversation continuity", () => {
     expect(identifier).not.toContain("unrelated");
     expect(version).toContain("offline mode");
     expect(version).not.toContain("remote mode");
+  });
+
+  it.each([
+    ["module.Q7-42", "Q7-42"],
+    ["tenant:Q7-42", "Q7-42"],
+    ["v1.2", "2"],
+  ])("does not retrieve a suffix of the composite identifier %s", (composite, identifier) => {
+    const { store, chatId, add } = fixture();
+    const source = add("user", `Reference ${identifier}: agreed color ochre.`);
+    add("assistant", "Acknowledged.");
+    add("user", `Reference ${composite}: wrong fixture value.`);
+    add("assistant", "Acknowledged.");
+    const result = rehydrateChatHistory(store, chatId, `${identifier}?`, new Set(), []);
+    expect(result).toContain(source.id);
+    expect(result).not.toContain("wrong fixture value");
+  });
+
+  it("does not admit ordinary short words from multiword questions as identifiers", () => {
+    const { store, chatId, add } = fixture();
+    add("user", "Wie ist das zu sehen?");
+    add("assistant", "Acknowledged.");
+    expect(rehydrateChatHistory(store, chatId, "Wie ist das?", new Set(), [])).toBeUndefined();
   });
 
   it("keeps identifier recall inside exclusions and the current credential floor", () => {
@@ -362,7 +386,7 @@ describe("paged conversation continuity", () => {
     expect(event?.extra).toMatchObject({
       queryTermCount: 1,
       identifierTermCount: 1,
-      matchingPolicy: "word-prefix-and-identifiers-v1",
+      matchingPolicy: "word-prefix-and-identifiers-v2",
       excerptCount: 1,
     });
     expectActivityLogProof(

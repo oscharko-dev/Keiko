@@ -1734,7 +1734,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["word-prefix-and-identifiers-v1"],
+        values: ["word-prefix-and-identifiers-v1", "word-prefix-and-identifiers-v2"],
       },
       unitsVisited: {
         type: "integer",

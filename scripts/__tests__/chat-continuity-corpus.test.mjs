@@ -65,6 +65,28 @@ describe("predeclared chat continuity corpus", () => {
     );
     expect(scored.fields.einschraenkung.correct).toBe(false);
   });
+  it.each([
+    ["ersteEntscheidung", "lokale Warteschlange verworfen"],
+    ["ersteEntscheidung", "keine lokale Warteschlange"],
+    ["ersteEntscheidung", "lokale Warteschlange nicht gewählt"],
+    ["verworfeneAlternative", "externe Volltextablage gewählt"],
+    ["verworfeneAlternative", "externe Volltextablage gewa\u0308hlt"],
+    ["verworfeneAlternative", "externe Volltextablage nicht verworfen"],
+  ])("rejects reversed decision polarity for %s: %s", (key, value) => {
+    expect(
+      evaluateContinuityAnswer(JSON.stringify({ ...ANSWER, [key]: value })).fields[key].correct,
+    ).toBe(false);
+  });
+  it.each([
+    ["ersteEntscheidung", "lokale Warteschlange gewählt, externe Volltextablage verworfen"],
+    ["ersteEntscheidung", "lokale Warteschlange nicht verworfen"],
+    ["verworfeneAlternative", "externe Volltextablage verworfen"],
+    ["verworfeneAlternative", "externe Volltextablage nicht gewählt"],
+  ])("keeps supported decision statements for %s: %s", (key, value) => {
+    expect(
+      evaluateContinuityAnswer(JSON.stringify({ ...ANSWER, [key]: value })).fields[key].correct,
+    ).toBe(true);
+  });
   it("records missing and malformed answers rather than removing their denominator", () => {
     expect(evaluateContinuityAnswer("unavailable")).toMatchObject({
       validJson: false,

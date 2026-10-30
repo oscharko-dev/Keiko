@@ -70,7 +70,7 @@ const CHAT_CONTINUITY_CAPTURE = defineActivityLogOperation({
 export interface ChatRehydrationEvidence {
   readonly queryTermCount?: number;
   readonly identifierTermCount?: number;
-  readonly matchingPolicy?: "word-prefix-and-identifiers-v1";
+  readonly matchingPolicy?: "word-prefix-and-identifiers-v1" | "word-prefix-and-identifiers-v2";
   readonly unitsVisited: number;
   readonly scannedChars: number;
   readonly candidateCount: number;
@@ -94,7 +94,7 @@ const CHAT_CONTINUITY_REHYDRATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["word-prefix-and-identifiers-v1"],
+      values: ["word-prefix-and-identifiers-v1", "word-prefix-and-identifiers-v2"],
     },
     unitsVisited: { type: "integer", dataClass: "count", required: true },
     scannedChars: { type: "integer", dataClass: "count", required: true },

@@ -2,7 +2,7 @@
 import { sha256 as continuityDigest } from "../../lib/digest.mjs";
 export { continuityDigest };
 
-export const CONTINUITY_CORPUS_VERSION = "chat-continuity-v3";
+export const CONTINUITY_CORPUS_VERSION = "chat-continuity-v4";
 export const INITIAL_CONTEXT = [
   "Wir bearbeiten das Projekt Kestrel. Zuständig ist Mira Seidel.",
   "Die kurze Vorgangskennung lautet Q7-42. Das ursprüngliche Budget beträgt 7300 EUR.",
@@ -44,6 +44,37 @@ const FORBIDDEN = Object.freeze({
   termin: /(?:2027-03-18|18[./]0?3[./](?:2027|27)|18\.?\s*märz\s*2027)/iu,
 });
 
+const DECISION_CLAUSES = /[,;.!?\n–—]|\b(?:aber|sondern|und)\b/iu;
+const DECISION_POLARITY = Object.freeze({
+  ersteEntscheidung: {
+    opposite:
+      /(?<!\p{L})(?:verworfen|verwerf\p{L}*|abgelehnt|ablehn\p{L}*|ausgeschlossen|nicht|kein\p{L}*)(?!\p{L})/iu,
+    allowedNegation: /\bnicht\s+(?:verworfen|abgelehnt|ausgeschlossen)\b/giu,
+  },
+  verworfeneAlternative: {
+    opposite:
+      /(?<!\p{L})(?:gewählt|ausgewählt|angenommen|übernommen|genutzt|benutzt|verwendet|eingesetzt|bevorzugt)(?!\p{L})|\bnicht\s+(?:verworfen|abgelehnt|ausgeschlossen)\b/iu,
+    allowedNegation:
+      /\bnicht\s+(?:gewählt|ausgewählt|angenommen|übernommen|genutzt|benutzt|verwendet|eingesetzt|bevorzugt)\b/giu,
+  },
+});
+
+function decisionReversed(key, value) {
+  const rule = DECISION_POLARITY[key];
+  if (rule === undefined) return false;
+  return value
+    .split(DECISION_CLAUSES)
+    .some(
+      (clause) =>
+        EXPECTED[key].test(clause) && rule.opposite.test(clause.replace(rule.allowedNegation, "")),
+    );
+}
+
+function fieldAccepted(key, pattern, value) {
+  const text = String(value ?? "").normalize("NFKC");
+  return pattern.test(text) && !FORBIDDEN[key]?.test(text) && !decisionReversed(key, text);
+}
+
 export function evaluateContinuityAnswer(content) {
   let parsed;
   try {
@@ -59,9 +90,7 @@ export function evaluateContinuityAnswer(content) {
     Object.entries(EXPECTED).map(([key, pattern]) => [
       key,
       {
-        correct:
-          pattern.test(String(parsed?.[key] ?? "")) &&
-          !FORBIDDEN[key]?.test(String(parsed?.[key] ?? "")),
+        correct: fieldAccepted(key, pattern, parsed?.[key]),
         unknown: parsed?.[key] == null,
       },
     ]),
@@ -84,6 +113,14 @@ export function continuityCorpusManifest() {
       JSON.stringify({
         expected: Object.entries(EXPECTED).map(([k, v]) => [k, String(v)]),
         forbidden: Object.entries(FORBIDDEN).map(([k, v]) => [k, String(v)]),
+        decisionClauses: String(DECISION_CLAUSES),
+        decisionPolarity: Object.entries(DECISION_POLARITY).map(([key, rule]) => [
+          key,
+          String(rule.opposite),
+          String(rule.allowedNegation),
+        ]),
+        algorithm: "field-patterns-obsolete-exclusion-clause-polarity-v1",
+        textNormalization: "NFKC",
       }),
     ),
     criticalFields: Object.keys(EXPECTED),

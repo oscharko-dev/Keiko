@@ -155,6 +155,15 @@ The isolated ongoing baseline retains its frozen `v2` oracle. Before comparison 
 candidate, re-score matching private baseline answers under `v3`, retain both scores and their
 answer hashes, and report this oracle-only change separately from product improvements.
 
+Oracle revision `chat-continuity-v4` adds clause-scoped decision-polarity checks, including Unicode
+normalization. Reversed local-queue selection or external-fulltext rejection must not receive a
+positive score merely because the expected nouns occur. Supported negated-opposite forms and
+separate explanations about the other option remain accepted. The manifest identifies the rule
+patterns, normalization and algorithm; the campaign also hashes the complete corpus module.
+This remains a bounded lexical oracle, not a universal semantic judge. Preserve frozen v2/v3 runs
+and re-score hash-matched answers under the common v4 oracle before comparison. Model-facing
+prompts remain unchanged.
+
 For the candidate, rerun with `--phase candidate`, the same corpus and equivalent configuration,
 hardware and workload. Keep the original baseline artifacts immutable. Compare individual models
 and modes separately; report changes of model, configuration or environment explicitly.

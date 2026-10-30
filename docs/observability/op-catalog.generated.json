@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4cb83c39d6a7777159cd39269d1582d9337f860c3367ac7ff8921041b84b5fbc",
+    "catalogDigest": "701eb625af7e625244a9bfe62eecf70d23c6bdb03c382b89e602cfeba44d98eb",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1812,7 +1812,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["word-prefix-and-identifiers-v1"]
+            "values": ["word-prefix-and-identifiers-v1", "word-prefix-and-identifiers-v2"]
           },
           "unitsVisited": {
             "type": "integer",
