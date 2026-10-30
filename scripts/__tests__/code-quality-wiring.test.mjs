@@ -1622,11 +1622,15 @@ describe("complete-membership native retirement witness (#3918)", () => {
     const retired = retiredOwnerFixture();
     const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // Scope selection is the subject here; under CI=true the parser refuses any partial scope
+    // first (partial-ci-verdict), so the runner's environment must not decide the verdict.
+    vi.stubEnv("CI", "false");
     try {
       expect(await codeQualityPolicyMain(["--scope", "native-host", "--json"], retired)).toBe(1);
       expect(output).not.toHaveBeenCalled();
       expect(error).toHaveBeenCalledWith(expect.stringContaining("unknown-or-empty-scope"));
     } finally {
+      vi.unstubAllEnvs();
       output.mockRestore();
       error.mockRestore();
     }
