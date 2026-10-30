@@ -281,7 +281,6 @@ function LocationChip({
 }): ReactNode {
   const local = t("codingWorkbench.repository.locationLocal");
   const worktree = t("codingWorkbench.repository.locationWorktree");
-  const label = location === "local" ? local : worktree;
   const LocationIcon = Icons.terminal;
   return (
     <KeikoSelect

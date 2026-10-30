@@ -2,14 +2,15 @@
    design-system/components.css). An inset track the height of the neighbouring model and
    authority chips holds the options; the selected option is a raised segment, so the choice reads
    by shape and contrast, not by a tint alone. A grid track stretches every option to the full
-   inner height, which a fieldset's flex box did not (#3897 UI review: the selection was a 15px
-   strip at the top of a 34px box). */
+   inner height, which a flex fieldset did not (#3897 UI review: the selection was a 15px strip at
+   the top of a 34px box); the fieldset keeps the native group semantics. */
 .cmpAgentControl {
   display: inline-grid;
   flex: 0 0 auto;
   grid-auto-columns: minmax(0, auto);
   grid-auto-flow: column;
   min-width: 0;
+  min-inline-size: 0;
   height: 34px;
   box-sizing: border-box;
   gap: 2px;
