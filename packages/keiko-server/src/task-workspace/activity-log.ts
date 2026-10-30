@@ -134,6 +134,15 @@ const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
     // repository and branch choice takes effect here, so support can check it without the name
     // (PR #3625 review).
     baseBranchDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Present only when an ordinary folder (not a repository) was selected: a folder workspace has
+    // no branch, so this is how the log tells it apart from a Local checkout (owner decision
+    // 2026-10-30). Absent on every repository workspace.
+    workspaceKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["folder"],
+    },
     driftMarker: {
       type: "string",
       dataClass: "closed-enum",
@@ -231,6 +240,13 @@ const FAILURE_OUTCOMES: ReadonlySet<WorkspaceLifecycleOutcome> = new Set([
   "cleanup-refused",
 ]);
 
+/** What an in-place workspace selection (Local checkout, folder) needs to record its outcome. */
+export interface WorkspaceSelectionEvidenceDeps extends WorkspaceActivityLogSeam {
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly now: () => number;
+}
+
 export interface WorkspaceLifecycleLogInput {
   readonly operation: WorkspaceLifecycleOperation;
   readonly outcome: WorkspaceLifecycleOutcome;
@@ -266,6 +282,7 @@ export interface WorkspaceLifecycleLogInput {
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
   // The branch a provisioned workspace was cut from. Only its digest reaches `extra`.
   readonly baseBranch?: string | undefined;
+  readonly workspaceKind?: "folder" | undefined;
 }
 
 export interface WorkspaceLifecycleFailureInput {
@@ -287,6 +304,7 @@ export interface RecordWorkspaceLifecycleInput {
   readonly error?: unknown;
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
   readonly baseBranch?: string | undefined;
+  readonly workspaceKind?: "folder" | undefined;
 }
 
 interface WorkspaceErrorTrace {
@@ -414,6 +432,7 @@ export function logWorkspaceLifecycle(
       ...(input.baseBranch === undefined
         ? {}
         : { baseBranchDigest: baseBranchDigest(input.baseBranch) }),
+      ...(input.workspaceKind === undefined ? {} : { workspaceKind: input.workspaceKind }),
       ...(input.error === undefined ? {} : errorTrace(input.error)),
     },
   });
@@ -482,6 +501,7 @@ export function recordWorkspaceLifecycle(
     error: input.error,
     driftMarker: input.driftMarker,
     baseBranch: input.baseBranch,
+    workspaceKind: input.workspaceKind,
   });
 }
 

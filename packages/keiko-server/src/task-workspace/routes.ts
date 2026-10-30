@@ -513,6 +513,43 @@ export async function handleSelectLocalCheckout(
   );
 }
 
+// The Workbench's folder choice binds a registered ordinary folder that is not a Git repository,
+// in place (owner decision 2026-10-30): no branch, no worktree. Like Local, it ends a settled run's
+// held undo window first and is refused while a run is live.
+export async function handleSelectFolderWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireLifecycle(deps);
+  if (isRouteResult(guard)) return guard;
+  const selectFolder = guard.selectFolder;
+  if (selectFolder === undefined) return unavailable();
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation: "activate",
+      workspaceIdentitySeed: "route-folder-workspace-request",
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      const body = await readJsonObject(ctx.req);
+      const root = requireSafeField(body.root, "root");
+      const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
+      const resolved = await resolveRoot(deps.store, root, deps.redactor);
+      await admitWorkspaceSelection(deps);
+      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
+        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
+      }
+      const active = selectFolder({
+        root: resolved.realRoot,
+        requestedBy,
+        ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+      });
+      return { status: 200, body: redacted(deps, { active }) };
+    },
+  );
+}
+
 // DELETE /api/task-workspaces/active — clear the active pointer → unbound mode.
 export function handleClearActiveTaskWorkspace(
   _ctx: RouteContext,

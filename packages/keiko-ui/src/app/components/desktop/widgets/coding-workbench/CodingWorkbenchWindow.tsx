@@ -570,6 +570,37 @@ function runIsActiveFrom(state: CodingWorkbenchRuntimeState): boolean {
   return activeRunState(state.run.value?.state);
 }
 
+// The root is an ordinary folder when its branch read says so, and stays one while that read is
+// not being made (during a run) or has not resolved yet, as long as the bound workspace for this
+// root is a folder workspace: a run must not lose its binding because the branch read paused. A
+// read that resolved as a repository always wins (the folder became one).
+function workbenchFolderMode(
+  branchInventory: Pick<RepositoryBranchState, "ordinaryFolder" | "response">,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+): boolean {
+  if (branchInventory.ordinaryFolder) return true;
+  if (branchInventory.response?.available === true) return false;
+  const instance = activeWorkspace.activeInstance;
+  return (
+    repositoryRoot !== null &&
+    instance?.workspaceKind === "folder" &&
+    instance.repositoryRoot === repositoryRoot
+  );
+}
+
+// A folder is always Local: there is no repository to put a worktree in.
+function workbenchExecutionLocation(
+  branchInventory: Pick<RepositoryBranchState, "ordinaryFolder" | "response">,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+  selected: WorkbenchExecutionLocation | undefined,
+): WorkbenchExecutionLocation {
+  return workbenchFolderMode(branchInventory, activeWorkspace, repositoryRoot)
+    ? "local"
+    : activeExecutionLocation(activeWorkspace.activeInstance, repositoryRoot, selected);
+}
+
 function repositoryBranchReadRoot(
   runIsActive: boolean,
   repositoryRoot: string | null,
@@ -955,19 +986,23 @@ export function CodingWorkbenchWindow({
     activeWorkspace,
     selectedRoot,
   );
-  const location = activeExecutionLocation(
-    activeWorkspace.activeInstance,
-    repositoryRoot,
-    selectedLocation,
-  );
   const branchInventory = useRepositoryBranchState(
     repositoryBranchReadRoot(runIsActive, repositoryRoot),
+  );
+  // An ordinary folder (not a Git repository) is bound in place, always Local, without a branch.
+  const folderMode = workbenchFolderMode(branchInventory, activeWorkspace, repositoryRoot);
+  const location = workbenchExecutionLocation(
+    branchInventory,
+    activeWorkspace,
+    repositoryRoot,
+    selectedLocation,
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,
     location,
+    folderMode,
     activeInstance: activeWorkspace.activeInstance,
     branchLoading: branchInventory.loading,
     branchError: branchInventory.error !== null,

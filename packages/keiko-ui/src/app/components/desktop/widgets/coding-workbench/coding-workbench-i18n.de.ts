@@ -518,6 +518,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
+  "codingWorkbench.repository.folderModeHint":
+    "Dieser Ordner ist kein Git-Repository. Der Agent kann hier lesen, bearbeiten, Befehle ausführen und prüfen; Git-Funktionen wie Commits, Pushes und Pull Requests sind nicht verfügbar.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":
@@ -527,6 +529,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.title": "Code-Einrichtung",
   "codingWorkbench.setup.help":
     "Bereite einen gesteuerten Aufgabenarbeitsbereich für das ausgewählte Repository vor.",
+  "codingWorkbench.setup.folderHelp":
+    "Öffne den ausgewählten Ordner für den Agenten. Ein Branch ist nicht nötig: Der Agent arbeitet direkt in diesem Ordner.",
+  "codingWorkbench.setup.folderBindFailed":
+    "Der Ordner konnte nicht für den Workbench geöffnet werden. Prüfe, ob er noch verfügbar ist, und versuche es erneut.",
   "codingWorkbench.setup.repositoryNotConnected":
     "Dieses Repository ist in Git nicht verfügbar. Verbinde es dort erneut und wähle es dann aus.",
   "codingWorkbench.setup.repositoryCatalogUnavailable":

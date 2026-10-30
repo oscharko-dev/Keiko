@@ -494,6 +494,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
+  "codingWorkbench.repository.folderModeHint":
+    "This folder is not a Git repository. The agent can read, edit, run commands and verify here; Git features such as commits, pushes and pull requests are unavailable.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":
@@ -502,6 +504,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.manage": "Open Git",
   "codingWorkbench.setup.title": "Code setup",
   "codingWorkbench.setup.help": "Prepare a governed task workspace for the selected repository.",
+  "codingWorkbench.setup.folderHelp":
+    "Open the selected folder for the agent. No branch is needed: it works directly in this folder.",
+  "codingWorkbench.setup.folderBindFailed":
+    "The folder could not be opened for the Workbench. Check that it is still available, then try again.",
   "codingWorkbench.setup.repositoryNotConnected":
     "This repository is not available in Git. Reconnect it there, then choose it again.",
   "codingWorkbench.setup.repositoryCatalogUnavailable":

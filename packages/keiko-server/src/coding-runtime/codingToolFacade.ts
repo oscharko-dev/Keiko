@@ -145,6 +145,9 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "git-proposal-unknown",
   "git-execution-failed",
   "delivery-authority-revoked",
+  // The workspace is an ordinary folder, not a Git repository (owner decision 2026-10-30): every
+  // repository tool refuses with this one closed reason while edits, commands and verification work.
+  "repository-required",
   "connector-authority-revoked",
   "search-authority-revoked",
   // A read the port refused for the model's own request (#3615): named, so the model can act on it
@@ -782,6 +785,9 @@ function forwardsReasonCode(request: CodingToolActionRequest, reasonCode: string
 // retry the verifier or route around it (Coding Workbench run 8, 2026-09-10). Git: the two runtime
 // Git service refusals that are the model's to repair (runtimeGitService.ts) — a stale proposal id
 // and a thrown Git failure — which used to reach it as a revoked authority (run 13, 2026-09-10).
+const REPOSITORY_REQUIRED_GUIDANCE =
+  "This workspace is a plain folder, not a Git repository, so Git tools (status, diff, stage, commit, sync, push, pull request) are unavailable here. Keep working with file edits, commands and verification, and report the result; do not try to initialize a repository or run Git another way.";
+
 const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   verification: {
     WORKSPACE_TRUST_REQUIRED:
@@ -809,13 +815,14 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     "provider-unavailable":
       "The remote could not be reached or refused the request. Retry once; if it fails again, report the blocker instead of working around it.",
     "repository-required":
-      "This run has no verified Git repository context to deliver from. This is not a remote or network problem. Report the blocker.",
+      "This run has no verified Git repository context to deliver from; a plain folder that is not a Git repository has none. This is not a remote or network problem: keep editing and verifying, report the result, and do not initialize a repository or run Git another way.",
     "remote-required":
       "This repository has no 'origin' remote, so there is nowhere to push. Report this blocker to the operator; do not add a remote or push to any other URL.",
     "issue-binding-required":
       "A pull request can only be opened for a run that is bound to an issue, and this run has none. The branch push is the complete delivery here: report the pushed branch name and do not retry the pull request.",
   },
   git: {
+    "repository-required": REPOSITORY_REQUIRED_GUIDANCE,
     "git-proposal-unknown":
       "This proposal id cannot be redeemed: it was never proposed in this run, was already redeemed, or has expired. Propose the change again with the proposing tool and redeem the new id promptly.",
     "git-execution-failed":

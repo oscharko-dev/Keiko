@@ -1,9 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
 import { execFileSync } from "node:child_process";
-import { lstatSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, normalize, parse } from "node:path";
+import { realpathSync, statSync } from "node:fs";
 
 import { gitEnv, GIT_BASE_ARGS, resolveGitExecutable } from "@oscharko-dev/keiko-git";
 import {
@@ -23,10 +21,18 @@ import {
   logWorkspaceLifecycle,
   recordWorkspaceLifecycle,
   type WorkspaceActivityLogSeam,
+  type WorkspaceSelectionEvidenceDeps,
 } from "./activity-log.js";
 import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
 
 import { TaskWorkspaceError } from "./errors.js";
+import { isCanonicalLocalRoot } from "./canonical-root.js";
+import {
+  FOLDER_PREFIX,
+  folderView,
+  selectFolderWorkspace,
+  type FolderSelectionRequest,
+} from "./folder-workspace.js";
 import { deriveRepositoryId } from "./naming.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type {
@@ -35,11 +41,7 @@ import type {
   WorkspaceLifecycleService,
 } from "./types.js";
 
-export interface LocalCheckoutEvidenceDeps extends WorkspaceActivityLogSeam {
-  readonly evidenceStore: EvidenceStore;
-  readonly redactString: (value: string) => string;
-  readonly now: () => number;
-}
+export type LocalCheckoutEvidenceDeps = WorkspaceSelectionEvidenceDeps;
 
 const LOCAL_PREFIX = "local:";
 const GIT_TIMEOUT_MS = 5_000;
@@ -198,19 +200,6 @@ function localIdentity(root: string): string | undefined {
   return gitDirectoryIdentity(root, gitdir);
 }
 
-function isCanonicalLocalRoot(root: string): boolean {
-  if (!isAbsolute(root) || normalize(root) !== root) return false;
-  let current = parse(root).root;
-  for (const segment of root
-    .slice(current.length)
-    .split(/[\\/]+/u)
-    .filter(Boolean)) {
-    current = join(current, segment);
-    if (lstatSync(current).isSymbolicLink()) return false;
-  }
-  return statSync(root).isDirectory();
-}
-
 function sameDirectoryIdentity(left: string, right: string): boolean {
   const leftStats = statSync(left);
   const rightStats = statSync(right);
@@ -263,6 +252,7 @@ export interface LocalCheckoutLifecycle extends WorkspaceLifecycleService {
     readonly requestedBy: string;
     readonly correlationId?: string;
   }) => ActiveWorkspaceView;
+  readonly selectFolder: (request: FolderSelectionRequest) => ActiveWorkspaceView;
 }
 
 interface LocalSelectionRequest {
@@ -523,6 +513,22 @@ function setActiveWithLocal(
       "LOCK_CONTENTION",
       "Local checkouts do not acquire managed locks.",
     );
+  if (instance.workspaceKind === "folder") {
+    return Promise.resolve(
+      selectFolderWorkspace(
+        {
+          root: instance.repositoryRoot,
+          requestedBy: request.requestedBy,
+          ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
+        },
+        store,
+        instances,
+        pointerStore,
+        getActive,
+        activityLog,
+      ),
+    );
+  }
   return Promise.resolve(
     selectLocalCheckout(
       {
@@ -576,6 +582,20 @@ function createLocalInvalidationLogger(
   };
 }
 
+function isInPlacePointer(workspaceId: string): boolean {
+  return workspaceId.startsWith(LOCAL_PREFIX) || workspaceId.startsWith(FOLDER_PREFIX);
+}
+
+function inPlaceView(
+  store: UiStore,
+  instances: WorkspaceInstanceStore,
+  pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
+): ActiveWorkspaceView | undefined {
+  return pointer.workspaceId.startsWith(FOLDER_PREFIX)
+    ? folderView(store, instances, pointer)
+    : localView(store, instances, pointer);
+}
+
 export function withLocalCheckout(
   managed: WorkspaceLifecycleService,
   pointerStore: ActiveWorkspacePointerStore,
@@ -586,11 +606,11 @@ export function withLocalCheckout(
   const invalidationLogger = createLocalInvalidationLogger(activityLog);
   const getActive = (correlationId?: string): ActiveWorkspaceView | undefined => {
     const pointer = pointerStore.get();
-    if (pointer?.workspaceId.startsWith(LOCAL_PREFIX)) {
+    if (pointer !== undefined && isInPlacePointer(pointer.workspaceId)) {
       const startedAt = Date.now();
       let active: ActiveWorkspaceView | undefined;
       try {
-        active = localView(store, instances, pointer);
+        active = inPlaceView(store, instances, pointer);
       } catch (cause) {
         invalidationLogger.record(pointer, correlationId, startedAt, cause);
         return undefined;
@@ -613,5 +633,7 @@ export function withLocalCheckout(
       setActiveWithLocal(request, managed, store, instances, pointerStore, getActive, activityLog),
     selectLocal: (request): ActiveWorkspaceView =>
       selectLocalCheckout(request, store, instances, pointerStore, getActive, activityLog),
+    selectFolder: (request): ActiveWorkspaceView =>
+      selectFolderWorkspace(request, store, instances, pointerStore, getActive, activityLog),
   };
 }

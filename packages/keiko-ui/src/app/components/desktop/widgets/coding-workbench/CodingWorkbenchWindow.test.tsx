@@ -169,14 +169,23 @@ vi.mock("./useCodingTaskSession", () => ({
 
 // Binding and restoration are covered by the execution-location hook's focused suite. Keep this
 // presentation suite on an already verified checkout so a network-free fixture stays startable.
+const locationInputs = vi.hoisted(
+  () => [] as { readonly folderMode: boolean; readonly location: string }[],
+);
 vi.mock("./useWorkbenchExecutionLocation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./useWorkbenchExecutionLocation")>()),
-  useWorkbenchExecutionLocation: (): {
+  useWorkbenchExecutionLocation: (input: {
+    readonly folderMode: boolean;
+    readonly location: string;
+  }): {
     ready: boolean;
     pending: boolean;
     error: boolean;
     retry: () => void;
-  } => ({ ready: true, pending: false, error: false, retry: vi.fn() }),
+  } => {
+    locationInputs.push({ folderMode: input.folderMode, location: input.location });
+    return { ready: true, pending: false, error: false, retry: vi.fn() };
+  },
 }));
 
 function defaultTaskSession(): CodingTaskSession {
@@ -581,6 +590,7 @@ beforeEach(() => {
     denied: false,
     branches: [],
     currentBranch: root === null ? null : "dev",
+    ordinaryFolder: false,
     refresh: vi.fn(() => Promise.resolve()),
   }));
   editorBridgeHookMock.mockReturnValue({
@@ -6803,5 +6813,37 @@ describe("CodingWorkbenchWindow unpaired notice hold (#3880)", () => {
       expect(screen.getAllByText(notice).length).toBeGreaterThan(0);
     }
     expect(reports).toEqual([]);
+  });
+});
+
+// Owner decision 2026-10-30: the Workbench works in any folder. An ordinary folder (the branch read
+// answers `available: false`) is handed to the binding hook as a folder, always Local, and its
+// repository is no failure.
+describe("CodingWorkbenchWindow in an ordinary folder", () => {
+  it("hands an ordinary folder to the binding hook as a folder, always Local", async () => {
+    repositoryBranchHookMock.mockImplementation((root) => ({
+      root,
+      response: { available: false } as never,
+      loading: false,
+      error: null,
+      denied: false,
+      branches: [],
+      currentBranch: null,
+      ordinaryFolder: root !== null,
+      refresh: vi.fn(() => Promise.resolve()),
+    }));
+    locationInputs.length = 0;
+    renderWorkbench();
+    await screen.findByRole("button", { name: "Start coding run" });
+    const last = locationInputs.at(-1);
+    expect(last).toEqual({ folderMode: true, location: "local" });
+    expect(screen.queryByRole("button", { name: "Open Git" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a repository out of folder mode", async () => {
+    locationInputs.length = 0;
+    renderWorkbench();
+    await screen.findByRole("button", { name: "Start coding run" });
+    expect(locationInputs.at(-1)?.folderMode).toBe(false);
   });
 });

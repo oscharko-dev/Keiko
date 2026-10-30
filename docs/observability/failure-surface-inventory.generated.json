@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b75f72f5f9b1748d59e85302b5a4691305e8364ce29f622590cdef341afcb82d"
+    "catalogDigest": "62113080b4177c3f9bd6da337054f452c7de87f4523a51c1f22c3926179bf0e6"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1806,7 +1806,8 @@
     ],
     "coding-runtime.tool-result.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts",
-      "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.test.ts",
+      "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
     ],
     "coding-runtime.tool-result-rendered.emitted-line": [
       "packages/keiko-server/src/coding-runtime/governedToolModelContent.test.ts",
@@ -2948,6 +2949,7 @@
     ],
     "task-workspace.lifecycle.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts",
+      "packages/keiko-server/src/task-workspace/folder-workspace.test.ts",
       "packages/keiko-server/src/task-workspace/local-checkout.test.ts"
     ],
     "task-workspace.manifest.reconnected.trust-revoked": [

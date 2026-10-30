@@ -510,6 +510,12 @@ function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): 
 }
 
 export interface ProductionManagedWorktreeToolInput {
+  /**
+   * `"folder"` when the workspace is an ordinary directory without a repository: the Git and
+   * delivery tools stay registered and refuse with the closed `repository-required` reason
+   * (owner decision 2026-10-30). Absent for a repository workspace.
+   */
+  readonly workspaceKind?: "folder" | undefined;
   /** Inactive server-owned initial acquisition projection; absent in ordinary compositions. */
   readonly initializationAuthority?: CodingAcceptedInitializationAuthority | undefined;
   /** Server-captured catalog projection; legacy compositions retain direct tools. */
@@ -922,6 +928,27 @@ const GIT_REFUSAL_REASON_CODES: Readonly<Record<RuntimeGitRefusalReason, string>
   "execution-failed": "git-execution-failed",
 };
 
+// The workspace is a plain folder: the answer is the same closed reason for every repository tool,
+// recorded body-free on the run's Activity Log so the refusal can be reconstructed without the
+// folder (owner decision 2026-10-30).
+function repositoryRequired(
+  input: ProductionManagedWorktreeToolInput,
+  actionKind: "git" | "delivery",
+): GovernedCodingToolResult {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_RESULT_OPERATION,
+      {
+        correlationId: isValidCorrelationId(input.authorityRef.runId)
+          ? input.authorityRef.runId
+          : UNKNOWN_CORRELATION_ID,
+      },
+      { actionKind, state: "refused", reason: "repository-required" },
+    ),
+  );
+  return { status: "failed", reasonCode: "repository-required" };
+}
+
 function buildRuntimeGitPort(
   input: ProductionManagedWorktreeToolInput,
 ): GovernedCodingToolPort<"git"> {
@@ -933,6 +960,7 @@ function buildRuntimeGitPort(
     ): ReturnType<GovernedCodingToolPort<"git">["execute"]> => {
       if (signalAborted(signal) || !guard.check() || !live(input))
         return { status: "failed", reasonCode: "git-authority-revoked" };
+      if (input.workspaceKind === "folder") return repositoryRequired(input, "git");
       if (request.operation === "ci")
         return runCiObservation(input.ciObservationService, request.forceFresh);
       if (
@@ -1053,6 +1081,7 @@ function buildVerifiedCommitPort(
     ): ReturnType<GovernedCodingToolPort<"delivery">["execute"]> => {
       if (signalAborted(signal) || !guard.check() || !live(input))
         return { status: "failed", reasonCode: "delivery-authority-revoked" };
+      if (input.workspaceKind === "folder") return repositoryRequired(input, "delivery");
       return isDraftToolRequest(request)
         ? completeDraftDeliveryRequest(input, request, guard, signal)
         : completeVerifiedCommitRequest(input, request, guard, signal);

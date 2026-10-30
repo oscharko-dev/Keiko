@@ -13916,7 +13916,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["discarded", "proposal-ready", "approval-wait-settled", "approval-wait-failed"],
+        values: [
+          "discarded",
+          "refused",
+          "proposal-ready",
+          "approval-wait-settled",
+          "approval-wait-failed",
+        ],
       },
       reason: {
         type: "string",
@@ -13924,6 +13930,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "authority-denied",
+          "repository-required",
           "policy-authorized",
           "approved",
           "denied",
@@ -39094,6 +39101,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: false,
         maxLength: 64,
+      },
+      workspaceKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["folder"],
       },
       driftMarker: {
         type: "string",

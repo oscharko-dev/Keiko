@@ -8,6 +8,10 @@ import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  folderWorkspaceHead,
+  isFolderWorkspace,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { CODING_RUNTIME_PATCH_BUDGET_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
@@ -169,11 +173,24 @@ export function resolveProductionRuntimeContext(
     active.binding.activeRoot,
     active.instance,
   );
-  const head = input.readWorkspaceHead(workspaceRoot, active.instance.repositoryRoot);
+  const head = workspaceHeadOf(input, workspaceRoot, active.instance);
   if (head === undefined || active.instance.lastVerifiedHead !== head) {
     invalidWorkspace("verified-head");
   }
   return contextFromActive(input, { ...request, workspaceRoot }, active.instance, head);
+}
+
+// A folder has no commit: its head is the folder identity stand-in the contract defines, never a
+// Git read, so a plain directory is admitted on exactly the same containment, identity and
+// verified-head checks as a repository (owner decision 2026-10-30).
+function workspaceHeadOf(
+  input: ProductionWorkspaceAuthorityInput,
+  workspaceRoot: string,
+  instance: WorkspaceInstance,
+): string | undefined {
+  return isFolderWorkspace(instance)
+    ? folderWorkspaceHead(instance.gitdirIdentity)
+    : input.readWorkspaceHead(workspaceRoot, instance.repositoryRoot);
 }
 
 // eslint-disable-next-line max-lines-per-function -- Explicit authority fields form one auditable policy manifest.
@@ -209,6 +226,7 @@ function contextFromActive(
     projectDigest: digest(instance.repositoryRoot),
     workspaceId: instance.workspaceId,
     workspaceRoot: request.workspaceRoot,
+    ...(isFolderWorkspace(instance) ? { workspaceKind: "folder" as const } : {}),
     branchRef: branch,
     branchHeadDigest: digest(head),
     ...issueBindingFromRequest(request, instance),
@@ -392,7 +410,7 @@ export function productionWorkspaceMatches(
       active.binding.activeRoot,
       active.instance,
     );
-    const head = input.readWorkspaceHead(workspaceRoot, active.instance.repositoryRoot);
+    const head = workspaceHeadOf(input, workspaceRoot, active.instance);
     return (
       trustedIdentityMatches(active.instance, context) &&
       trustedBranchMatches(active.instance, context) &&

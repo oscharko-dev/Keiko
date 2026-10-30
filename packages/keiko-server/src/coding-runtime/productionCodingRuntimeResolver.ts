@@ -845,6 +845,17 @@ function commitServiceFor(
   });
 }
 
+function folderRuntimeServices(): RuntimeGitServices {
+  return {
+    ciRepairBudget: undefined,
+    draftDeliveryService: undefined,
+    ciObservationService: undefined,
+    verifiedCommitService: undefined,
+    runtimeGitService: undefined,
+    codingToolApprovals: createCodingToolApprovalBridge(),
+  };
+}
+
 interface RuntimeGitServices {
   readonly ciRepairBudget: CiRepairExecutionBudget | undefined;
   readonly draftDeliveryService: DraftDeliveryService | undefined;
@@ -853,7 +864,18 @@ interface RuntimeGitServices {
   readonly runtimeGitService: RuntimeGitService | undefined;
   readonly codingToolApprovals: CodingToolApprovalBridge;
 }
+// A folder has no repository: no commit, stage, push, pull-request or CI service exists for it.
+// The tool surface answers those calls with the closed `repository-required` reason instead
+// (owner decision 2026-10-30), so nothing here can run a Git command against a plain directory.
 function runtimeGitServices(
+  ...args: Parameters<typeof repositoryRuntimeServices>
+): RuntimeGitServices {
+  return args[1].workspaceKind === "folder"
+    ? folderRuntimeServices()
+    : repositoryRuntimeServices(...args);
+}
+
+function repositoryRuntimeServices(
   input: ProductionCodingRuntimeResolverInput,
   context: CodingRuntimeTrustedContext,
   minted: MintedRuntime,
@@ -1460,6 +1482,16 @@ function runtimeGitFacadeOptions({
   };
 }
 
+// The run's adapter and, for a plain folder, the workspace kind that makes repository tools refuse.
+function runIdentityOptions(
+  context: CodingRuntimeTrustedContext,
+): Pick<ProductionManagedWorktreeToolInput, "adapterKind" | "workspaceKind"> {
+  return {
+    adapterKind: adapterKind(context),
+    ...(context.workspaceKind === "folder" ? { workspaceKind: "folder" as const } : {}),
+  };
+}
+
 function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFacade {
   const {
     input,
@@ -1484,7 +1516,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
     // never the run's launch-profile identifier, which the gateway cannot resolve.
     ...childModel,
-    adapterKind: adapterKind(context),
+    ...runIdentityOptions(context),
     workspaceRoot: context.workspaceRoot,
     resolveWorkspaceRootAccess,
     ...(options.researchOptions ??

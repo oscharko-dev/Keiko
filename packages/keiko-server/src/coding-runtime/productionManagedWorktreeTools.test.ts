@@ -4906,6 +4906,21 @@ function verificationRunnerOptions(options: {
   };
 }
 
+function folderKindOption(kind: "folder" | undefined): { readonly workspaceKind?: "folder" } {
+  return kind === undefined ? {} : { workspaceKind: kind };
+}
+
+// The facts the verification fixture grants; `delivery` adds the delivery action classes and scopes.
+function deliveryFacts(delivery: boolean): Pick<typeof FACTS, "actionClasses" | "connectorScopes"> {
+  const base = ["workspace-read", "workspace-write", "verification", "command-execution"] as const;
+  return delivery
+    ? {
+        actionClasses: [...base, "delivery-substrate", "connector-access"],
+        connectorScopes: ["source-control.read", "source-control.write"],
+      }
+    : { actionClasses: [...base], connectorScopes: FACTS.connectorScopes };
+}
+
 function verificationFacade(options: {
   readonly verificationBlocked?: ProductionManagedWorktreeToolInput["verificationBlocked"];
   readonly verificationAdmitted?: ProductionManagedWorktreeToolInput["verificationAdmitted"];
@@ -4914,6 +4929,8 @@ function verificationFacade(options: {
   readonly approvalProofVerifier?: ReturnType<typeof createCodingToolApprovalBridge>;
   readonly verifiedCommitService?: VerifiedCommitService;
   readonly runtimeGitService?: RuntimeGitService;
+  readonly workspaceKind?: "folder";
+  readonly deliveryGranted?: boolean;
   readonly requestStageApproval?: (proposalId: string) => void;
   readonly log?: ServerLogEvent[];
   readonly events?: CodingWorkbenchRuntimeEvent[];
@@ -4931,6 +4948,7 @@ function verificationFacade(options: {
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
     toolProfile: options.toolProfile,
+    ...folderKindOption(options.workspaceKind),
     verificationRevision: options.verificationRevision,
     verificationBlocked: options.verificationBlocked,
     verificationAdmitted: options.verificationAdmitted,
@@ -4976,7 +4994,7 @@ function verificationFacade(options: {
     deploymentCeiling: "autonomous-delivery",
     liveFacts: () => ({
       ...FACTS,
-      actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+      ...deliveryFacts(options.deliveryGranted === true),
     }),
     secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
     editorAgentClient: {
@@ -6231,5 +6249,109 @@ describe("accepted initial instruction acquisition", () => {
         .filter((e) => e.op === "coding-runtime.workspace-read" && e.extra?.state === "completed")
         .at(-1)?.extra?.purpose,
     ).toBe("native-instructions");
+  });
+});
+
+describe("a plain folder workspace without a repository (owner decision 2026-10-30)", () => {
+  const folderGit = (operation: string, extra: Record<string, unknown> = {}): string =>
+    JSON.stringify({
+      action: "git",
+      operation,
+      actionId: `folder-${operation}`,
+      idempotencyKey: `folder-${operation}`,
+      ...extra,
+    });
+
+  it("answers every Git operation with the closed repository-required reason and never calls a service", async () => {
+    const log: ServerLogEvent[] = [];
+    const execute = vi.fn();
+    const observe = vi.fn();
+    const facade = verificationFacade({
+      records: [],
+      log,
+      workspaceKind: "folder",
+      runToReport: vi.fn(),
+      runtimeGitService: { execute } as unknown as RuntimeGitService,
+      ciObservationService: { observe },
+    });
+    for (const body of [
+      folderGit("stage", { phase: "propose", paths: ["notes.txt"] }),
+      folderGit("ci"),
+    ]) {
+      const result = await facade.execute({ capability: "runtime-capability", body });
+      expect(result).toMatchObject({
+        status: "failed",
+        reasonCode: "repository-required",
+        evidence: [{ kind: "governed-delegate", code: "repository-required" }],
+      });
+      expect(JSON.stringify(result)).toContain("plain folder");
+    }
+    expect(execute).not.toHaveBeenCalled();
+    expect(observe).not.toHaveBeenCalled();
+    const line = log.find(
+      (event) =>
+        event.op === "coding-runtime.tool-result" && event.extra?.reason === "repository-required",
+    );
+    expect(line).toMatchObject({
+      correlationId: "run-verification-3",
+      extra: { actionKind: "git", state: "refused", reason: "repository-required" },
+    });
+    expect(line?.errorKind).toBeUndefined();
+    expectActivityLogProof(
+      "coding-runtime.tool-result.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+  });
+
+  it("refuses commit and push delivery the same way, as a delivery action", async () => {
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      records: [],
+      log,
+      workspaceKind: "folder",
+      deliveryGranted: true,
+      runToReport: vi.fn(),
+    });
+    const result = await facade.execute({
+      capability: "runtime-capability",
+      body: JSON.stringify({
+        action: "delivery",
+        actionId: "folder-commit",
+        idempotencyKey: "folder-commit",
+        intent: "commit",
+        phase: "propose",
+        message: "feat: note",
+      }),
+    });
+    expect(result).toMatchObject({ status: "failed", reasonCode: "repository-required" });
+    const line = log.find(
+      (event) =>
+        event.op === "coding-runtime.tool-result" && event.extra?.reason === "repository-required",
+    );
+    expect(line?.extra).toMatchObject({ actionKind: "delivery", state: "refused" });
+  });
+
+  it("keeps the repository answer unchanged where a repository exists", async () => {
+    const facade = verificationFacade({ records: [], runToReport: vi.fn() });
+    expect(
+      await facade.execute({ capability: "runtime-capability", body: folderGit("ci") }),
+    ).toMatchObject({ status: "failed", reasonCode: "capability-backend-unavailable" });
+  });
+
+  it("still verifies the folder: verification is independent of any repository", async () => {
+    const runToReport = vi.fn(() => Promise.resolve(verificationReport("passed")));
+    const facade = verificationFacade({ records: [], workspaceKind: "folder", runToReport });
+    const result = await facade.execute({
+      capability: "runtime-capability",
+      body: JSON.stringify({
+        action: "verification",
+        verifierId: "test",
+        actionId: "folder-verify",
+        idempotencyKey: "folder-verify",
+      }),
+    });
+    expect(runToReport).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "completed" });
+    expect(JSON.stringify(result)).not.toContain("repository-required");
   });
 });

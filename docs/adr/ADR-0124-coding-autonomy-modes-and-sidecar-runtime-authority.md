@@ -104,6 +104,20 @@ This amendment is scoped to Coding. Memory retains the previous explicitly confi
 persisted Memory maintenance authority. Both surfaces continue to use the same canonical mode
 ordering and minimum calculation.
 
+**Owner amendment, 2026-10-30 (folder workspaces):** the Coding Workbench always works, also in a
+plain folder that is not a Git repository. Git delivery (stage, commit, push, pull request, sync, CI)
+is an optional capability of a workspace that has a repository, never a precondition for a run. For a
+folder workspace (ADR-0088 D1) the trusted context carries `workspaceKind: "folder"` with the
+contract's branch and head stand-ins; run admission uses the folder's identity instead of a Git HEAD,
+launch preparation reads no repository identity, and no commit, stage, draft-delivery or CI service
+exists for the run. File edits, vetted commands and `keiko_verification` are Git-independent and work
+as in a repository. Every Git and delivery tool stays registered (the plugin's fixed tool list is
+unchanged) and answers with the closed reason `repository-required`, recorded as
+`coding-runtime.tool-result` with `state: "refused"` and `reason: "repository-required"` under the
+run's correlation id; the model is told the workspace is a plain folder and not to initialize a
+repository or run Git another way. Containment, deny lists, sensitive-path denials and budgets are
+unchanged, and `worktree_create` answers `unavailable` because there is no branch to cut from.
+
 No caller may widen authority by passing a higher requested mode than the environment allows. Explicit composition options and environment ceilings are intersected: neither can widen or conceal an invalid value in the other. The retained legacy delivery-ceiling option can only narrow this same Coding/connector result (#4083). The
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime
 policy, and evidence.

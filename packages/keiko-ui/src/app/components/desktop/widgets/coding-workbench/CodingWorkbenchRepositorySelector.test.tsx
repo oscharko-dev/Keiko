@@ -150,9 +150,11 @@ describe("CodingWorkbenchRepositorySelector recovery notices", () => {
     expect(screen.getByRole("button", { name: "Open Git" })).toBeInTheDocument();
   });
 
-  // PR #3625 review: an ordinary folder does not make the branch read reject — the route answers
-  // HTTP 200 with `available: false` and `reason: "not-a-repository"`, which is the same signal.
-  it("#B shows the Git-unavailable notice when the branch read resolves unavailable", async () => {
+  // Owner decision 2026-10-30: the Workbench works in any folder. An ordinary folder still answers
+  // the branch read with HTTP 200 and `available: false` (PR #3625 review), but that is no longer a
+  // failure: it is folder mode, with a non-blocking hint, no alert, no Open Git escape and a Local
+  // location that cannot be changed. A rejected read (above) keeps its Git-unavailable notice.
+  it("treats an ordinary folder as folder mode: a hint, no alert and no Open Git", async () => {
     selectableRepositories.mockResolvedValue([project("/repos/plain-folder")]);
     listBranches.mockResolvedValue({
       ...(branchList([]) as object),
@@ -162,9 +164,17 @@ describe("CodingWorkbenchRepositorySelector recovery notices", () => {
     });
     renderSelector();
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Git status could not be read");
-    expect(screen.getByRole("button", { name: "Open Git" })).toBeInTheDocument();
+    expect(await screen.findByTestId("coding-workbench-folder-hint")).toHaveTextContent(
+      "This folder is not a Git repository",
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Git" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Work in" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Work in" })).toHaveTextContent("Local");
+    expect(
+      await axe(document.body, { rules: { region: { enabled: false } } }),
+    ).toHaveNoViolations();
   });
 
   it("does not show the Git-unavailable notice once the branch read succeeds", async () => {

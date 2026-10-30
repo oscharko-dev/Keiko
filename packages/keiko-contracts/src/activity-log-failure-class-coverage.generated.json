@@ -22813,6 +22813,12 @@
               "required": false
             },
             {
+              "name": "workspaceKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "worktreeCount",
               "type": "integer",
               "dataClass": "count",
@@ -43353,6 +43359,12 @@
               "name": "workspaceIdentity",
               "type": "string",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "workspaceKind",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
