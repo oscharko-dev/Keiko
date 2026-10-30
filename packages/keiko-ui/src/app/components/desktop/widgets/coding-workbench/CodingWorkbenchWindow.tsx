@@ -85,6 +85,7 @@ import {
   CodingWorkbenchNativeActionReview,
   nativeActionLabel,
   nativeActionNamesResource,
+  nativePermissionLabel,
 } from "./CodingWorkbenchNativeActionReview";
 import {
   useCodingWorkbenchTranslate,
@@ -2328,12 +2329,13 @@ function PermissionPrompt({
   );
   const evidenceBound = approvalEvidenceBound(request, approvalReview, research);
   const native = isNativeActionPermission(request);
+  // Less is more (#3907, owner): the card leads with what the agent wants to do and the decision.
+  // Every bounded policy fact stays one click away in the collapsed details, never off the card.
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
-      <PanelTitle eyebrow={t("codingWorkbench.approval.eyebrow")} id="permission-title" focusable>
-        {t("codingWorkbench.approval.title")}
+      <PanelTitle eyebrow={approvalEyebrow(request, t)} id="permission-title" focusable>
+        {approvalTitle(request, native ? approvalReview.review?.nativeAction : undefined, t)}
       </PanelTitle>
-      <ApprovalFacts request={request} t={t} />
       <ApprovalReviewContent
         kind={request.actionKind}
         native={native}
@@ -2343,7 +2345,6 @@ function PermissionPrompt({
       {request.kind === "network-egress" && !native ? (
         <ResearchDestination state={research} t={t} />
       ) : null}
-      {native ? null : <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>}
       <ApprovalDecisionControls
         busy={state.mutation.status === "pending"}
         evidenceBound={evidenceBound}
@@ -2351,8 +2352,49 @@ function PermissionPrompt({
         onDecision={onDecision}
         t={t}
       />
+      <ApprovalDetails request={request} native={native} t={t} />
     </section>
   );
+}
+
+/** The bounded policy facts and, for a governed action, its help: collapsed below the decision. */
+function ApprovalDetails({
+  request,
+  native,
+  t,
+}: {
+  readonly request: CodingWorkbenchRuntimePendingPermission;
+  readonly native: boolean;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <details className={styles.cmpApprovalDetails}>
+      <summary>{t("codingWorkbench.approval.details")}</summary>
+      {native ? null : <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>}
+      <ApprovalFacts request={request} t={t} />
+    </details>
+  );
+}
+
+/** A high or critical risk is named beside the eyebrow, so it is read before the decision. */
+function approvalEyebrow(
+  request: CodingWorkbenchRuntimePendingPermission,
+  t: CodingWorkbenchTranslate,
+): string {
+  const eyebrow = t("codingWorkbench.approval.eyebrow");
+  if (request.risk !== "high" && request.risk !== "critical") return eyebrow;
+  return `${eyebrow} · ${t("codingWorkbench.approval.risk")}: ${t(APPROVAL_RISK_MESSAGE_KEYS[request.risk])}`;
+}
+
+/** The card names the action itself: the native permission, else the supervised action kind. */
+function approvalTitle(
+  request: CodingWorkbenchRuntimePendingPermission,
+  nativeAction: Parameters<typeof CodingWorkbenchNativeActionReview>[0]["action"] | undefined,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (nativeAction !== undefined) return nativePermissionLabel(nativeAction.permission, t);
+  if (request.actionKind !== undefined) return t(ACTION_KIND_MESSAGE_KEYS[request.actionKind]);
+  return t(PERMISSION_KIND_MESSAGE_KEYS[request.kind]);
 }
 
 const APPROVAL_NATIVE_MESSAGE_KEYS = {

@@ -104,7 +104,6 @@ describe("Coding Workbench translations", () => {
 
   it.each([
     "codingWorkbench.activity.reasoning.title",
-    "codingWorkbench.activity.reasoning.note",
     "codingWorkbench.activity.exitCode",
     "codingWorkbench.activity.toolError",
     "codingWorkbench.activity.toolState.waiting-for-trust",
@@ -121,12 +120,6 @@ describe("Coding Workbench translations", () => {
     expect(en.length).toBeGreaterThan(0);
     expect(de.length).toBeGreaterThan(0);
     expect(de).not.toBe(en);
-  });
-
-  it("addresses the reader informally in the German reasoning note", () => {
-    const note = translateCodingWorkbench("de", "codingWorkbench.activity.reasoning.note");
-    expect(note).toMatch(/\bdich\b/u);
-    expect(note).not.toMatch(/\b(?:Ihnen|Ihre?)\b/u);
   });
 
   // ADR-0137 D10: the `/` command menu, the sentence that holds a send until the run's commands are
@@ -172,21 +165,21 @@ describe("Coding Workbench translations", () => {
     }
   });
 
-  it("interpolates runtime state and revision in both catalogs", () => {
-    expect(
-      translateCodingWorkbench("en", "codingWorkbench.announcement.runRevision", {
-        revision: 7,
-        state: "Running",
-      }),
-    ).toBe("Running. Revision 7.");
-    expect(
-      translateCodingWorkbench("de", "codingWorkbench.announcement.runRevision", {
-        revision: 7,
-        state: "Wird ausgeführt",
-      }),
-    ).toBe("Wird ausgeführt. Revision 7.");
+  // #3907 (owner: less is more): the approval card's native help is one short sentence about what
+  // Approve does, never a second sentence explaining Deny.
+  it.each([
+    "codingWorkbench.approval.native.help",
+    "codingWorkbench.approval.native.help.shell",
+    "codingWorkbench.approval.native.help.edit",
+    "codingWorkbench.approval.native.help.execute",
+    "codingWorkbench.approval.native.help.worktree",
+  ] as const)("keeps the native approval help %s to one short sentence", (key) => {
+    for (const locale of ["en", "de"] as const) {
+      const help = translateCodingWorkbench(locale, key);
+      expect(help.length).toBeLessThanOrEqual(90);
+      expect(help).not.toMatch(/\b(?:deny|Ablehnen)\b/iu);
+    }
   });
-
   it("falls back instead of crashing when a feature catalog is momentarily stale", () => {
     const key = "codingWorkbench.activity.toolCount";
     const messages = DE_CODING_WORKBENCH_MESSAGES as Partial<

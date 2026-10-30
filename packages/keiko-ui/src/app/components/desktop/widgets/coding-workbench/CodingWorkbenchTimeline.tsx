@@ -934,9 +934,10 @@ function MessageRow({
   );
 }
 
-// #3878: the model's own reasoning, apart from the answer and labelled as unverified inside the
-// block: its summary sits among tool rows whose badges are statuses, where a warning-coloured
-// "Unverified" read as a failed check on every step (#3897, owner). It is
+// #3878: the model's own reasoning, apart from the answer. It is shown as the model wrote it under a
+// plain "Thinking" summary: a warning-coloured "Unverified" read as a failed check on every step
+// (#3897, owner), and a note inside every block was text Keiko added around the model's own (#3907,
+// owner: less is more). The timeline's boundary sentence still says it is unverified. It is
 // collapsed until the reader opens it, also while its turn streams, and its text is excluded from
 // the log's live announcements: the session stream is a `role="log"`, whose additions a screen
 // reader reads out, and up to 8 KiB of unverified reasoning per message would crowd out the answer
@@ -958,7 +959,6 @@ function ModelReasoning({
       >
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
       </summary>
-      <p className={styles.cmpReasoningNote}>{t("codingWorkbench.activity.reasoning.note")}</p>
       <p className={styles.cmpReasoningText}>
         {reasoning.text}
         {reasoning.truncated ? <TruncationMark t={t} /> : null}

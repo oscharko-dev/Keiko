@@ -1162,7 +1162,7 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
 
   const THOUGHT = { text: "The quoted field splits on its comma.", truncated: false };
 
-  it("labels the reasoning as unverified model reasoning apart from the answer", () => {
+  it("shows the model's reasoning under a plain Thinking summary, apart from the answer", () => {
     const { container } = render(
       <Timeline
         active
@@ -1173,10 +1173,12 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
     );
     const block = reasoningBlock(container);
     // The summary sits among tool rows whose badges are statuses; a warning-coloured "Unverified"
-    // there read as a failed check on every step (#3897, owner). The label lives in the block.
-    expect(block.querySelector("summary")?.textContent).toBe("Model reasoning");
-    expect(block).toHaveTextContent("Unverified model reasoning");
-    expect(block).toHaveTextContent(THOUGHT.text);
+    // there read as a failed check on every step (#3897, owner). #3907 (owner: less is more): the
+    // block holds the model's own text and nothing Keiko adds to it; the timeline's boundary
+    // sentence states that reasoning is unverified.
+    expect(block.querySelector("summary")?.textContent).toBe("Thinking");
+    expect(block.textContent).toBe(`Thinking${THOUGHT.text}`);
+    expect(container).toHaveTextContent(/reasoning, which is unverified/u);
     const answer = container.querySelector(
       `[data-message-role="assistant"] .${styles.messageText}`,
     );

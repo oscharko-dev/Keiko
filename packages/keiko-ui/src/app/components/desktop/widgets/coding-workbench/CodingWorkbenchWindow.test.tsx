@@ -1904,9 +1904,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
-      /^Running\. Revision 4\.$/u,
-    );
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Running$/u);
     expect(screen.getByRole("timer")).toHaveTextContent(/^Elapsed /u);
     expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Running a verifier");
     const readiness = screen.getByTestId("coding-runtime-readiness");
@@ -2068,9 +2066,7 @@ describe("CodingWorkbenchWindow", () => {
 
       const announcement = screen.getByTestId("coding-runtime-announcement");
       expectPoliteAtomicStatus(announcement);
-      expect(announcement).toHaveTextContent(
-        /^Running\. Revision 4\. Model gateway unavailable, retrying\.$/u,
-      );
+      expect(announcement).toHaveTextContent(/^Running\. Model gateway unavailable, retrying\.$/u);
       expect(announcement).toBeVisible();
       expect(screen.queryByTestId("coding-runtime-phase")).toBeNull();
       expect(screen.getByTestId("coding-runtime-status")).not.toHaveTextContent(
@@ -2085,9 +2081,7 @@ describe("CodingWorkbenchWindow", () => {
       ]);
 
       expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
-        /^Running\. Revision 4\.$/u,
-      );
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Running$/u);
     });
 
     // A call the run cancelled while the gateway retried it ends with no answer; the status must
@@ -2501,7 +2495,10 @@ describe("CodingWorkbenchWindow", () => {
     });
     const liveActions = renderWorkbench(deliveryApprovalState("push"));
 
-    expect(screen.getByRole("heading", { name: "Review the bounded action" })).toBeInTheDocument();
+    // #3907 (owner: less is more): the card names the action itself and keeps the bounded policy
+    // facts in its collapsed details.
+    expect(screen.getByRole("heading", { name: "Push" })).toBeInTheDocument();
+    expect(screen.getByText("Details").closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText(/diff --git|Bearer|\/Users\//u)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Approve once" }));
     await user.click(screen.getByRole("button", { name: "Deny" }));
@@ -2562,8 +2559,8 @@ describe("CodingWorkbenchWindow", () => {
       retry: vi.fn(),
     });
     renderWorkbench(nativeEditApprovalState());
+    expect(screen.getByRole("heading", { name: "File change" })).toBeInTheDocument();
     const review = screen.getByRole("group", { name: "What the agent wants to do" });
-    expect(review).toHaveTextContent("File change");
     expect(review).toHaveTextContent("src/app.ts");
     expect(review).toHaveTextContent("src/app.test.ts");
     expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
@@ -2659,10 +2656,12 @@ describe("CodingWorkbenchWindow", () => {
     renderWorkbench(nativeAskState("shell"));
 
     const review = screen.getByRole("group", { name: "What the agent wants to do" });
-    expect(review).toHaveTextContent("Approve runs this command once in the task workspace");
+    expect(review).toHaveTextContent("Runs this command once in the task workspace.");
     expect(screen.queryByText(/remain hidden/u)).toBeNull();
     // One help line per ask, never the generic one beside the native one.
-    expect(screen.getAllByText(/Approve .* once/u)).toHaveLength(1);
+    expect(
+      screen.getAllByText(/Runs this command once|Allows exactly this action once/u),
+    ).toHaveLength(1);
     // The command keeps its line breaks (the block is pre-wrapped), not a whitespace-collapsed line.
     expect(
       screen.getByRole("list", { name: "Requested command, paths, or addresses" }).textContent,
@@ -2674,7 +2673,7 @@ describe("CodingWorkbenchWindow", () => {
     renderWorkbench(nativeAskState("webfetch"));
 
     const review = screen.getByRole("group", { name: "What the agent wants to do" });
-    expect(review).toHaveTextContent("Internet access is only available in Full access.");
+    expect(review).toHaveTextContent("Internet access exists only in Full access.");
     expect(review).not.toHaveTextContent("task workspace");
   });
 
@@ -2794,13 +2793,16 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.getByText("Network egress")).toBeInTheDocument();
-    expect(screen.getByText("Connector access")).toBeInTheDocument();
-    expect(screen.getByText("Critical")).toBeInTheDocument();
+    // #3907: the facts sit in the card's collapsed details; a critical risk also leads the card.
+    expect(screen.getByText("Approval required · Risk: Critical")).toBeInTheDocument();
+    const facts = within(screen.getByText("Details").closest("details") as HTMLElement);
+    expect(facts.getByText("Network egress")).toBeInTheDocument();
+    expect(facts.getByText("Connector access")).toBeInTheDocument();
+    expect(facts.getByText("Critical")).toBeInTheDocument();
     // The three remaining closed-union facts on the same screen (review of ec04288dc).
-    expect(screen.getByText("Push")).toBeInTheDocument();
-    expect(screen.getByText("File edit outside the task scope")).toBeInTheDocument();
-    expect(screen.getByText("Source control (write), Issue tracker (read)")).toBeInTheDocument();
+    expect(facts.getByText("Push")).toBeInTheDocument();
+    expect(facts.getByText("File edit outside the task scope")).toBeInTheDocument();
+    expect(facts.getByText("Source control (write), Issue tracker (read)")).toBeInTheDocument();
     expect(screen.queryByText("out-of-scope-file-edit")).not.toBeInTheDocument();
     expect(screen.queryByText("source-control.write")).not.toBeInTheDocument();
     expect(screen.queryByText("network-egress")).not.toBeInTheDocument();
@@ -2893,7 +2895,7 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: label })).toBeInTheDocument();
       // Neither maps to "network-egress", so no destination-review coupling applies and the
       // approve control is not blocked waiting on evidence it has no reader for (3941816393).
       expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
@@ -3001,7 +3003,7 @@ describe("CodingWorkbenchWindow", () => {
       retry: vi.fn(),
     });
     const actions = renderWorkbench(editApprovalState("git-stage"));
-    expect(screen.getByText("Stage changes")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Stage changes" })).toBeInTheDocument();
     expect(screen.getByText("src/stage-only.ts")).toBeInTheDocument();
     expect(warning).toHaveBeenCalledWith("[keiko] git stage review ready: files 1");
     expect(JSON.stringify(warning.mock.calls)).not.toContain("src/stage-only.ts");

@@ -1205,6 +1205,27 @@
   overflow-wrap: anywhere;
 }
 
+/* The approval card's bounded policy facts, one click away below the decision (#3907). */
+.cmpApprovalDetails {
+  margin-top: var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+.cmpApprovalDetails > summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.cmpApprovalDetails > summary:hover {
+  color: var(--text-primary);
+}
+
+.cmpApprovalDetails > summary:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .approvalResearch {
   min-width: 0;
   margin: var(--space-4) 0 0;
@@ -1379,13 +1400,6 @@
   border-left: 2px solid var(--border-subtle);
   padding-left: var(--space-3);
   color: var(--text-secondary);
-}
-
-.cmpReasoningNote {
-  margin: var(--space-1) 0 0;
-  color: var(--text-tertiary);
-  font-size: var(--text-caption);
-  line-height: var(--leading-normal);
 }
 
 .cmpReasoningText {

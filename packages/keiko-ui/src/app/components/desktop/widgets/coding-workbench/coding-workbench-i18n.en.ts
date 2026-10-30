@@ -665,10 +665,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.richContent.diagram.note":
     "The diagram could not be drawn, so its source is shown as written.",
   "codingWorkbench.activity.reasoningBoundary":
-    "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning. Model reasoning is unverified and is never kept in history or evidence.",
-  "codingWorkbench.activity.reasoning.title": "Model reasoning",
-  "codingWorkbench.activity.reasoning.note":
-    "Unverified model reasoning: how the model approached this step. It can be wrong; the answer and the changes are what count.",
+    "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning, which is unverified and never kept in history or evidence.",
+  "codingWorkbench.activity.reasoning.title": "Thinking",
   "codingWorkbench.activity.status.idle": "No run yet.",
   "codingWorkbench.activity.status.loading": "Connecting activity…",
   "codingWorkbench.activity.status.live": "Live.",
@@ -727,7 +725,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Keiko checked it automatically and could not confirm 32,000 tokens. Choose a larger model, or have the gateway declare this model's max_input_tokens.",
   "codingWorkbench.source.unavailableReason.model-verification-pending":
-    "Keiko is still verifying this model with the gateway (basic chat, a context window of at least 32,000 tokens, and tool calling). On a busy gateway this can take a few minutes; the Workbench refreshes by itself when the check settles.",
+    "Keiko is still checking this model with the gateway. The Workbench updates by itself when the check is done.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
     "The latest automatic chat check could not use this model. Keiko continues checking in the background; choose another ready model or wait for recovery.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
@@ -773,7 +771,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.resumeMode.help":
     "Resume with the server-confirmed current mode or a stricter mode. Widening is unavailable.",
   "codingWorkbench.approval.eyebrow": "Approval required",
-  "codingWorkbench.approval.title": "Review the bounded action",
+  "codingWorkbench.approval.details": "Details",
   "codingWorkbench.approval.facts": "Approval facts",
   "codingWorkbench.approval.permissionKind": "Permission kind",
   "codingWorkbench.approval.actionClass": "Action class",
@@ -1057,18 +1055,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.retry": "Retry loading the changed files",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
   "codingWorkbench.approval.native.title": "What the agent wants to do",
-  "codingWorkbench.approval.native.help":
-    "Approve allows exactly this action once; deny tells the agent to continue without it.",
-  "codingWorkbench.approval.native.help.shell":
-    "Approve runs this command once in the task workspace; deny tells the agent to continue without it.",
-  "codingWorkbench.approval.native.help.edit":
-    "Approve applies this change to the listed files once; deny tells the agent to continue without it.",
+  "codingWorkbench.approval.native.help": "Allows exactly this action once.",
+  "codingWorkbench.approval.native.help.shell": "Runs this command once in the task workspace.",
+  "codingWorkbench.approval.native.help.edit": "Applies this change to the listed files once.",
   "codingWorkbench.approval.native.help.internet":
-    "Approve lets the agent use the internet once for this request; deny tells the agent to continue without it. Internet access is only available in Full access.",
+    "Allows this one internet request. Internet access exists only in Full access.",
   "codingWorkbench.approval.native.help.execute":
-    "Approve runs this Code Mode program once in OpenCode's script sandbox: it can call OpenCode's management tools and, below Full access, reach only local addresses. Deny tells the agent to continue without it.",
+    "Runs this Code Mode program once in OpenCode's script sandbox.",
   "codingWorkbench.approval.native.help.worktree":
-    "Approve creates a new managed task workspace with this name, on its own branch from the current task branch; it opens as its own task, and this run keeps working here. Deny tells the agent to continue without it.",
+    "Creates a new task workspace on its own branch; this run keeps working here.",
   "codingWorkbench.approval.native.resources": "Requested command, paths, or addresses",
   "codingWorkbench.approval.native.noResources": "No command, path, or address was named.",
   "codingWorkbench.approval.native.nothingNamed":
@@ -1110,7 +1105,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":
-    "A previous action may already have changed files or an external system. Check its result before starting a fresh run. Keiko will not automatically repeat the action.",
+    "A previous action may already have changed files. Check its result before retrying; Keiko will not repeat it.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
   "codingWorkbench.header.notReady": "Not ready to start",
@@ -1144,7 +1139,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
   "codingWorkbench.announcement.runChecking": "Run status checking.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",
-  "codingWorkbench.announcement.runRevision": "{state}. Revision {revision}.",
   "codingWorkbench.announcement.recoveryComplete": "Recovery acknowledgement complete.",
   "codingWorkbench.announcement.setupReady": "Authentication setup plan ready.",
   "codingWorkbench.announcement.setupChecking": "Authentication setup plan checking.",
