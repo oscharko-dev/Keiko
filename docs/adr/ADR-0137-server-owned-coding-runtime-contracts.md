@@ -358,6 +358,20 @@ persist records while delivering nothing. Without evidence the run settles `fail
 `delivery-not-evidenced`. Ad-hoc runs are exempt, because one legitimately ends with no commit and
 inferring delivery intent from free text would turn honest successes into false failures.
 
+**A run with no issue binding delivers by pushing its own task branch (owner decision,
+2026-10-30).** The Coding Workbench works without any issue binding; the binding is a legacy
+leftover and is not a delivery precondition. The draft delivery context of such a run resolves like
+any other, and `keiko_git_push` proposes pushing the run's verified commit to its own task branch on
+`origin`, which may be any Git remote. The proposal is redeemed with `keiko_git_execute`
+(`kind: push`) under the existing delivery approval plane (ADR-0085 D1b); protected targets stay
+blocked, a force push is never constructed, and no pull request is opened (`keiko_pull_request`
+refuses with `issue-binding-required`, ADR-0086 D13). Every refusal of the delivery controller is
+now written as a `git.draft-delivery` line (`phase: refused`, a closed `reason`, `errorKind`,
+the run's correlation id), and the coding tool facade forwards the complete
+`CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS` vocabulary, including `repository-required`,
+`remote-required` and `issue-binding-required`, with guidance text for the delivery action, so the
+model learns the true cause instead of inventing one ("remote inaccessible", live lab 2026-10-30).
+
 **Under Full access, a run that stops one step short is given a bounded continuation first**
 (PR #3452, 2026-09-11). In `autonomous-delivery` the operator's accepted Authority Envelope
 authorizes delivery without a per-action approval (D4). When an issue-bound run's model ends a turn normally while no delivery is
@@ -1922,6 +1936,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`, `keiko_git_push`,
   `keiko_pull_request`, `keiko_git_execute`, `keiko_git_sync`, `keiko_ci_status` and
   `keiko_verification` (`opencodeNativeDeliveryTools.ts` holds the list once).
+  `keiko_git_push` proposes pushing the run's verified commit to its own task branch on `origin`,
+  any Git remote and no issue needed (ADR-0085 D1b); `keiko_pull_request` needs a run bound to an
+  issue and otherwise returns `issue-binding-required` (ADR-0086 D13).
   `keiko_git_sync` fetches the upstream or fast-forwards the run's branch to it through the Git
   sync owner, under the owner's own mode decision (ADR-0138 D3 item 5); the shell's own fetch and
   pull stay refused (#3902 AC2). The managed worktree's Git directory is

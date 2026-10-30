@@ -4,6 +4,7 @@ import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -755,6 +756,72 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "provider-unavailable" }],
       reasonCode: "provider-unavailable",
+      guidance: expect.stringContaining("Retry once") as string,
+    });
+  });
+
+  // Coding Workbench live lab, 2026-10-30: an issue-free run pushed six times and each refusal reached
+  // the model as a bare "failed", so it invented a "remote that is not accessible". Every reason in the
+  // contract's closed vocabulary is forwarded for the delivery action, with the true cause as guidance.
+  it.each(CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS)(
+    "forwards the delivery refusal %s to the model with its cause",
+    async (reasonCode) => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+      const subject = createCodingToolFacade(ports);
+
+      const result = await subject.execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "propose" }),
+        capability,
+      });
+
+      expect(result).toMatchObject({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: reasonCode }],
+        reasonCode,
+        guidance: expect.stringMatching(/^.{41,}$/su) as string,
+      });
+    },
+  );
+
+  it.each([
+    ["repository-required", "not a remote or network problem"],
+    ["remote-required", "no 'origin' remote"],
+    ["issue-binding-required", "bound to an issue"],
+  ])("tells the model why an issue-free delivery is refused: %s", async (reasonCode, cause) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({
+        action: "delivery",
+        intent: "pull-request",
+        phase: "propose",
+        title: "t",
+      }),
+      capability,
+    });
+
+    expect(result).toMatchObject({ guidance: expect.stringContaining(cause) as string });
+    expect(JSON.stringify(result)).not.toMatch(/inaccessible|not accessible/iu);
+  });
+
+  it("keeps the delivery vocabulary out of every other action", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "remote-required" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "command", commandId: "test" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
     });
   });
 

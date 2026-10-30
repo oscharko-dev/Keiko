@@ -25141,6 +25141,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "preflight-failed",
           "operation-in-flight",
           "policy-authorized",
+          "issue-unavailable",
+          "verified-commit-required",
+          "proposal-unavailable",
+          "payload-invalid",
+          "provider-unavailable",
+          "repository-required",
+          "remote-required",
+          "issue-binding-required",
         ],
       },
       revision: {
@@ -25588,7 +25596,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       issueBindingDigest: {
         type: "string",
         dataClass: "digest",
-        required: true,
+        required: false,
         maxLength: 64,
       },
       frames: {

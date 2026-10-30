@@ -30,7 +30,10 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isIssueBoundDraftDeliveryRecord,
+  type IssueBoundDraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitDeliveryObservationFailureReason } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
@@ -542,7 +545,7 @@ function logPostTransitionObservation(
 
 function postTransitionSubject(input: PostTransitionObservationInput):
   | {
-      readonly draft: DraftDeliveryRecord;
+      readonly draft: IssueBoundDraftDeliveryRecord;
       readonly store: NonNullable<
         NonNullable<UiHandlerDeps["codingRuntimeSnapshotStore"]>["ciReadiness"]
       >;
@@ -551,7 +554,11 @@ function postTransitionSubject(input: PostTransitionObservationInput):
   const snapshots = input.deps.codingRuntimeSnapshotStore;
   const draft = snapshots?.get(input.runId)?.draftDelivery;
   const store = snapshots?.ciReadiness;
-  return draft?.pullRequest === undefined || store === undefined ? undefined : { draft, store };
+  return draft?.pullRequest === undefined ||
+    store === undefined ||
+    !isIssueBoundDraftDeliveryRecord(draft)
+    ? undefined
+    : { draft, store };
 }
 
 async function refreshPostTransitionReadiness(

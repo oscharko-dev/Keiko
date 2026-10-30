@@ -920,6 +920,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.draftDelivery.remote.notDraft": "Kein Entwurf",
   "codingWorkbench.draftDelivery.details": "Gespeichertes Übermittlungsziel",
   "codingWorkbench.draftDelivery.repository": "Repository",
+  "codingWorkbench.draftDelivery.remoteName": "Remote-Ziel",
   "codingWorkbench.draftDelivery.issue": "Akzeptiertes Issue",
   "codingWorkbench.draftDelivery.headRef": "Feature-Branch",
   "codingWorkbench.draftDelivery.headSha": "Freigegebener Commit",

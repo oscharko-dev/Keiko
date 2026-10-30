@@ -1,4 +1,7 @@
-import { isCodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import {
+  CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS,
+  isCodingRuntimeDeliveryResult,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import {
   VERIFIED_COMMIT_BLOCKING_PATHS_MAX,
   type VerifiedCommitBlockingPaths,
@@ -124,6 +127,13 @@ const HTTP_ONLY_VERIFICATION_RUNNER_CODES: ReadonlySet<VerificationRunnerErrorCo
   VERIFICATION_RUNNER_ERROR_CODES.PAYLOAD_TOO_LARGE,
   VERIFICATION_RUNNER_ERROR_CODES.RUN_NOT_FOUND,
 ]);
+// Why a push or pull request proposal could not be recorded: the contract's own closed vocabulary,
+// sourced rather than restated. A delivery refusal used to reach the model as a bare "failed", so it
+// invented a cause (a "remote that is not accessible") for a run that simply had no issue
+// (Coding Workbench live lab, 2026-10-30). Forwarded for the delivery action only.
+const DELIVERY_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>(
+  CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS,
+);
 const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "ci-repair-budget-blocked",
   "ci-observation-required",
@@ -666,10 +676,15 @@ function projectRuntimeGit(
 // succeeded when it did not. Only `status: "recorded"` rides out as completed; `"unavailable"`
 // collapses to the facade's own closed "failed" reasonCode vocabulary, the same shape
 // `projectGovernedFailure` already uses for a governed refusal.
-function projectDraftDelivery(value: Record<string, unknown>): CodingToolResult {
+function projectDraftDelivery(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult {
   if (!isCodingRuntimeDeliveryResult(value.draftDelivery)) return projected("failed");
-  if (value.draftDelivery.status === "unavailable")
-    return projected("failed", value.draftDelivery.reason, true);
+  if (value.draftDelivery.status === "unavailable") {
+    const reason = value.draftDelivery.reason;
+    return { ...projected("failed", reason, true), ...governedFailureCoaching(request, reason) };
+  }
   const disposition = approvalDisposition(value);
   if (disposition === false) return projected("failed");
   return {
@@ -689,7 +704,7 @@ function projectVerifiedCommit(
   request: CodingToolActionRequest,
   value: Record<string, unknown>,
 ): CodingToolResult | undefined {
-  if (isDraftToolRequest(request)) return projectDraftDelivery(value);
+  if (isDraftToolRequest(request)) return projectDraftDelivery(request, value);
   if (request.action === "delivery" && request.intent === "commit") {
     const disposition = approvalDisposition(value);
     return isVerifiedCommitResult(value.verifiedCommit) && disposition !== false
@@ -732,7 +747,7 @@ function projectGovernedFailure(
   // The operator declined a server-raised ask (a Git stage, commit, push or pull-request proposal):
   // the same decision as a declined step, so the model reads why and goes on (ADR-0124 D6).
   if (reasonCode === GOVERNED_ASK_DECLINED_REASON_CODE) return humanDecisionToolResult("denied");
-  if (typeof reasonCode !== "string" || !GOVERNED_FAILURE_REASON_CODES.has(reasonCode)) {
+  if (typeof reasonCode !== "string" || !forwardsReasonCode(request, reasonCode)) {
     return projected("failed");
   }
   const result = {
@@ -754,6 +769,13 @@ function projectGovernedFailure(
       };
 }
 
+function forwardsReasonCode(request: CodingToolActionRequest, reasonCode: string): boolean {
+  return (
+    GOVERNED_FAILURE_REASON_CODES.has(reasonCode) ||
+    (isDraftToolRequest(request) && DELIVERY_FAILURE_REASON_CODES.has(reasonCode))
+  );
+}
+
 // What the model is told about a governed refusal it can act on, by action and closed reasonCode.
 // Verification: the runner refused for want of package-script trust (ADR-0147 D3) — only the
 // operator can change that state, in the Coding Workbench header; the bare code left the model to
@@ -769,6 +791,29 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // step still checked something, so the guidance claims no more than the named steps (PR #3452).
     VERIFICATION_NOT_RUN:
       "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+  },
+  // Push and pull request proposals (CodingRuntimeDeliveryResult, contracts). Each names the true
+  // cause and the one next step that is the model's to take; none suggests another remote or URL.
+  delivery: {
+    "authority-denied":
+      "The run's authority no longer covers this delivery step, or the approval it needed is gone. Report this blocker; do not retry or route around it.",
+    "issue-unavailable":
+      "The issue this run is bound to could not be read, so the delivery cannot be checked against it. Report this blocker.",
+    "verified-commit-required":
+      "There is no verified commit of this run to deliver yet. Commit the verified change with the commit tool first, then propose the push again.",
+    "proposal-unavailable":
+      "This delivery proposal is no longer valid: it expired, was replaced, or was already redeemed. Propose it again and redeem the new id promptly.",
+    "operation-in-flight":
+      "Another delivery step of this run is still running. Wait for it to settle, then retry once.",
+    "payload-invalid": "The delivery request was malformed. Correct the request and send it again.",
+    "provider-unavailable":
+      "The remote could not be reached or refused the request. Retry once; if it fails again, report the blocker instead of working around it.",
+    "repository-required":
+      "This run has no verified Git repository context to deliver from. This is not a remote or network problem. Report the blocker.",
+    "remote-required":
+      "This repository has no 'origin' remote, so there is nowhere to push. Report this blocker to the operator; do not add a remote or push to any other URL.",
+    "issue-binding-required":
+      "A pull request can only be opened for a run that is bound to an issue, and this run has none. The branch push is the complete delivery here: report the pushed branch name and do not retry the pull request.",
   },
   git: {
     "git-proposal-unknown":

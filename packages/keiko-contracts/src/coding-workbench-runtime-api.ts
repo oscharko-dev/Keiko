@@ -52,7 +52,13 @@ import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-bi
 export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
-import { isDraftDeliveryRecord, type DraftDeliveryRecord } from "./draft-delivery.js";
+import {
+  isDraftDeliveryIssueBinding,
+  isDraftDeliveryRecord,
+  isIssueBoundDraftDeliveryRecord,
+  type DraftDeliveryBinding,
+  type DraftDeliveryRecord,
+} from "./draft-delivery.js";
 import { isReadinessSnapshot, type ReadinessSnapshot } from "./git-ci-readiness.js";
 import {
   isWorkbenchDescriptionStatus,
@@ -1792,11 +1798,23 @@ function validateSnapshotDraftDelivery(snapshot: Record<string, unknown>, errors
     errors.push("draftDelivery must be a closed durable delivery record");
     return;
   }
+  if (!draftDeliveryMatchesSnapshot(snapshot, delivery.binding)) {
+    errors.push("draftDelivery must match the snapshot run and frozen issue binding");
+  }
+}
+
+// An issue-bound record must agree with the run's frozen issue on every fact. An issue-free branch
+// push (ADR-0085 D1b) is bound to a run that has no issue, so it agrees only with an absent one.
+function draftDeliveryMatchesSnapshot(
+  snapshot: Record<string, unknown>,
+  target: DraftDeliveryBinding,
+): boolean {
   const issue = snapshot.issueBinding;
-  const target = delivery.binding;
-  if (
-    !isRecord(issue) ||
-    ![
+  if (!isDraftDeliveryIssueBinding(target))
+    return target.runId === snapshot.runId && issue === undefined;
+  return (
+    isRecord(issue) &&
+    [
       target.runId === snapshot.runId,
       target.issueBindingDigest === issue.bindingDigest,
       target.remoteDigest === issue.remoteDigest,
@@ -1804,16 +1822,18 @@ function validateSnapshotDraftDelivery(snapshot: Record<string, unknown>, errors
       target.issueNumber === issue.issueNumber,
       target.baseRef === issue.defaultBaseRef,
     ].every(Boolean)
-  ) {
-    errors.push("draftDelivery must match the snapshot run and frozen issue binding");
-  }
+  );
 }
 
 function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: string[]): void {
   const readiness = snapshot.ciReadiness;
   if (readiness === undefined) return;
   const draft = snapshot.draftDelivery;
-  if (!isReadinessSnapshot(readiness) || !isDraftDeliveryRecord(draft)) {
+  if (
+    !isReadinessSnapshot(readiness) ||
+    !isDraftDeliveryRecord(draft) ||
+    !isIssueBoundDraftDeliveryRecord(draft)
+  ) {
     errors.push("ciReadiness must be a closed observation of a confirmed delivery");
     return;
   }

@@ -1,3 +1,4 @@
+import { isDraftDeliveryIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { ciReadinessSnapshot, CI_OBSERVED_AT } from "./_ciReadinessTestSupport";
@@ -14,6 +15,7 @@ export function journeyFixture(): {
     throw new Error("Expected a confirmed fixture PR and CI observation");
   const pr = draft.pullRequest;
   const source = draft.binding;
+  if (!isDraftDeliveryIssueBinding(source)) throw new Error("Expected an issue-bound fixture PR");
   return {
     snapshot,
     outcome: {

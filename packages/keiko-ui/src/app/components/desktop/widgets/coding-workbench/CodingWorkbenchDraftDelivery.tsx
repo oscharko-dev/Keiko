@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isDraftDeliveryIssueBinding,
+  type DraftDeliveryBinding,
+  type DraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type {
   WorkbenchDescriptionDraftReview,
   WorkbenchDescriptionStatus,
@@ -472,16 +476,7 @@ export function DeliveryBindingFacts({
   return (
     <DeliveryFacts
       facts={[
-        {
-          id: "repository",
-          label: t("codingWorkbench.draftDelivery.repository"),
-          value: target.repository,
-        },
-        {
-          id: "issueNumber",
-          label: t("codingWorkbench.draftDelivery.issue"),
-          value: `#${String(target.issueNumber)}`,
-        },
+        ...deliveryIdentityFacts(target, t),
         { id: "headRef", label: t("codingWorkbench.draftDelivery.headRef"), value: target.headRef },
         { id: "headSha", label: t("codingWorkbench.draftDelivery.headSha"), value: target.headSha },
         { id: "baseRef", label: t("codingWorkbench.draftDelivery.baseRef"), value: target.baseRef },
@@ -499,6 +494,34 @@ export function DeliveryBindingFacts({
       ]}
     />
   );
+}
+
+// An issue-bound delivery names its repository and accepted issue; an issue-free branch push has
+// neither, and names the remote it pushes to instead (ADR-0085 D1b).
+function deliveryIdentityFacts(
+  target: DraftDeliveryBinding,
+  t: CodingWorkbenchTranslate,
+): readonly DeliveryFact[] {
+  if (!isDraftDeliveryIssueBinding(target))
+    return [
+      {
+        id: "remote",
+        label: t("codingWorkbench.draftDelivery.remoteName"),
+        value: target.remoteAlias,
+      },
+    ];
+  return [
+    {
+      id: "repository",
+      label: t("codingWorkbench.draftDelivery.repository"),
+      value: target.repository,
+    },
+    {
+      id: "issueNumber",
+      label: t("codingWorkbench.draftDelivery.issue"),
+      value: `#${String(target.issueNumber)}`,
+    },
+  ];
 }
 
 // #3390: `id` is the fact's stable, locale-independent identity; `label` is what the operator

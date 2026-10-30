@@ -14,6 +14,7 @@ import {
   createNodeGitPublishAdapter,
   createNodeGitPullRequestAdapter,
   readGitPushRemoteUrls,
+  readGitRemoteAliases,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
   codingWorkbenchRemoteDigest,
@@ -30,10 +31,14 @@ import { redactEvidenceString } from "../deps.js";
 import { githubOwnerAndRepoFromRemoteUrl } from "../gitDelivery/branchProtectionPreflight.js";
 import {
   DraftDeliveryFailure,
+  isIssueBoundContext,
+  type DraftBranchTargetResolution,
   type DraftDeliveryDependencies,
   type DraftDeliveryRunContext,
   type DraftDeliveryTargetResolution,
+  type IssueBoundDraftDeliveryRunContext,
 } from "../gitDelivery/draftDeliveryTypes.js";
+import { readVerifiedRepositoryIdentity } from "../gitDelivery/verifiedRepositoryIdentity.js";
 import { logDraftRelatedIssues } from "../gitDelivery/draftRelatedIssuesActivity.js";
 import {
   gitDeliveryTerminationHandler,
@@ -152,10 +157,11 @@ const GIT_DRAFT_TARGET_RESOLVED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["completed", "issue-drift", "remote-drift", "provider-failed", "authority-denied"],
     },
+    // Absent on the line of an issue-free run, whose target is its `origin` and has no issue.
     issueBindingDigest: {
       type: "string",
       dataClass: "digest",
-      required: true,
+      required: false,
       maxLength: 64,
     },
     frames: {
@@ -216,6 +222,7 @@ export function createProductionDraftDeliveryDependencies(
     mutationDeps: verified.mutationDeps,
     ...(verified.execution === undefined ? {} : { execution: verified.execution }),
     resolveTarget: (context) => factory.resolveTarget(context),
+    resolveBranchTarget: (context) => factory.resolveBranchTarget(context),
     resolveRelatedIssues: (context) => factory.resolveRelatedIssues(context),
     ciReader: (context) => factory.ciReader(context),
     journeyReader: (context) => factory.journeyReader(context),
@@ -226,9 +233,10 @@ export function createProductionDraftDeliveryDependencies(
       beforeRemoteDispatch: () => factory.live(context),
       publishAdapterFactory: (workspace): ReturnType<typeof createNodeGitPublishAdapter> => {
         factory.assertWorkspace(context, workspace);
+        const verifiedRemoteUrl = factory.checkedPushUrl(context);
         return createNodeGitPublishAdapter({
           ...factory.adapterDeps(context),
-          verifiedRemoteUrl: factory.checkedPushUrl(context),
+          ...(verifiedRemoteUrl === undefined ? {} : { verifiedRemoteUrl }),
           beforeRemoteDispatch: () => factory.live(context),
           onPreparationFailure: (error: unknown): void => {
             factory.preparationFailure(context, error);
@@ -437,12 +445,23 @@ function activeMatches(active: ActiveWorkspaceView, context: DraftDeliveryRunCon
     instance.workspaceId === context.workspaceId &&
     binding.workspaceId === context.workspaceId &&
     pointer.workspaceId === context.workspaceId &&
-    instance.repositoryId === context.issueBinding.repositoryId &&
+    instance.repositoryId === expectedRepositoryId(active, context) &&
     instance.baseBranch === context.baseRef &&
     instance.taskBranch === context.headRef &&
     instance.lifecycleState === "active" &&
     rootsMatch(active, context.workspace.root)
   );
+}
+
+// An issue-bound run is keyed to the repository its issue was accepted in. An issue-free run has no
+// such record: its checkout must be the registered repository its own managed worktree was cut from.
+function expectedRepositoryId(
+  active: ActiveWorkspaceView,
+  context: DraftDeliveryRunContext,
+): string | undefined {
+  return context.issueBinding === undefined
+    ? githubIssueReaderRepositoryId(active.instance.repositoryRoot)
+    : context.issueBinding.repositoryId;
 }
 
 function rootsMatch(active: ActiveWorkspaceView, root: string): boolean {
@@ -471,10 +490,29 @@ function resolutionFailure(result: Extract<GitHubIssueResolution, { ok: false }>
   }
 }
 
+// The run's issue facts agree with its stored snapshot. An issue-free run agrees only when its
+// snapshot carries no issue either: an issue appearing on one side alone is a drifted run.
+function issueFactsMatch(
+  snapshot: NonNullable<ReturnType<CodingRuntimeSnapshotStore["get"]>>,
+  context: DraftDeliveryRunContext,
+): boolean {
+  const issue = context.issueBinding;
+  if (issue === undefined)
+    return snapshot.issueBinding === undefined && context.issueBindingDigest === undefined;
+  return (
+    context.repositoryDigest === issue.remoteDigest &&
+    context.issueBindingDigest === issue.bindingDigest &&
+    context.baseRef === issue.defaultBaseRef &&
+    canonicalise(snapshot.issueBinding ?? null) === canonicalise(issue)
+  );
+}
+
 class DraftDeliveryFactory {
   public readonly log: ServerLogSink;
   // One proof per transient controller effect context; no credential, transport or authority is persisted.
-  private readonly destinations = new WeakMap<DraftDeliveryRunContext, string>();
+  // An issue-free run records `undefined` for a push URL that is not canonical GitHub, which the
+  // pinned push dispatches through `origin` itself; a present key is the proof either way.
+  private readonly destinations = new WeakMap<DraftDeliveryRunContext, string | undefined>();
   public constructor(
     private readonly deps: DraftDeliveryCompositionDeps,
     private readonly snapshots: CodingRuntimeSnapshotStore,
@@ -527,15 +565,18 @@ class DraftDeliveryFactory {
   }
 
   private registeredRoot(root: string, context: DraftDeliveryRunContext): string | undefined {
+    const repositoryId = githubIssueReaderRepositoryId(root);
     const registered = this.deps.store.listProjects().some((project) => {
       const original = resolveProjectWorkspace(this.deps, project.path);
       return (
         original !== undefined &&
-        githubIssueReaderRepositoryId(original.root) === context.issueBinding.repositoryId
+        repositoryId !== undefined &&
+        githubIssueReaderRepositoryId(original.root) === repositoryId
       );
     });
-    if (!registered) return undefined;
-    if (githubIssueReaderRepositoryId(root) !== context.issueBinding.repositoryId) return undefined;
+    if (!registered || repositoryId === undefined) return undefined;
+    if (context.issueBinding === undefined) return root;
+    if (repositoryId !== context.issueBinding.repositoryId) return undefined;
     return isGitHubIssueReaderAuthorized(this.deps, root, {
       correlationId: context.correlationId,
       activityLog: this.log,
@@ -551,17 +592,16 @@ class DraftDeliveryFactory {
       snapshotIsDeliverable(snapshot.state) &&
       snapshot.workspaceDigest === context.workspaceDigest &&
       snapshot.authorityDigest === context.runtimeAuthorityDigest &&
-      context.repositoryDigest === context.issueBinding.remoteDigest &&
-      context.issueBindingDigest === context.issueBinding.bindingDigest &&
-      context.baseRef === context.issueBinding.defaultBaseRef &&
-      canonicalise(snapshot.issueBinding ?? null) === canonicalise(context.issueBinding)
+      issueFactsMatch(snapshot, context)
     );
   }
 
   // The epic's children for the pull request's related-issue line, read through the same authorized
   // root and reader as the accepted issue itself. The bound issue is re-read and must still be the
   // accepted binding; anything unavailable or drifted answers "no related issues", logged body-free.
-  public async resolveRelatedIssues(context: DraftDeliveryRunContext): Promise<readonly number[]> {
+  public async resolveRelatedIssues(
+    context: IssueBoundDraftDeliveryRunContext,
+  ): Promise<readonly number[]> {
     const root = this.originalRoot(context);
     if (root === undefined) return this.relatedIssues(context, "unavailable", []);
     try {
@@ -595,7 +635,7 @@ class DraftDeliveryFactory {
   }
 
   private relatedIssues(
-    context: DraftDeliveryRunContext,
+    context: IssueBoundDraftDeliveryRunContext,
     state: "resolved" | "unavailable",
     related: readonly number[],
   ): readonly number[] {
@@ -639,9 +679,8 @@ class DraftDeliveryFactory {
     );
   }
 
-  public checkedPushUrl(context: DraftDeliveryRunContext): string {
-    const url = this.destinations.get(context);
-    if (url !== undefined && this.live(context)) return url;
+  public checkedPushUrl(context: DraftDeliveryRunContext): string | undefined {
+    if (this.destinations.has(context) && this.live(context)) return this.destinations.get(context);
     this.destinations.delete(context);
     this.record(context, { ok: false, reason: "authority-denied" });
     throw new DraftDeliveryFailure("authority-denied");
@@ -653,8 +692,56 @@ class DraftDeliveryFactory {
     throw new DraftDeliveryFailure("authority-denied");
   }
 
-  public async resolveTarget(
+  // An issue-free run's `origin`, verified the way an issue-bound run's repository is: still the
+  // remote the run was admitted with (its identity digest unchanged) and still configured with a
+  // readable push destination. A canonical GitHub push URL naming that same repository is the one
+  // verified remote the publish adapter may dispatch to; anything else (a local path, ssh, a
+  // customer's Git server) is pushed through the pinned `origin` alias (ADR-0085 D1b).
+  public async resolveBranchTarget(
     context: DraftDeliveryRunContext,
+  ): Promise<DraftBranchTargetResolution> {
+    this.destinations.delete(context);
+    let result: DraftBranchTargetResolution;
+    try {
+      result =
+        this.originalRoot(context) === undefined
+          ? { ok: false, reason: "authority-denied" }
+          : await this.resolveBranchDestination(context);
+    } catch (error) {
+      result = { ok: false, reason: this.live(context) ? "provider-failed" : "authority-denied" };
+      recordTargetResolution(this, context, result, error);
+      return result;
+    }
+    this.record(context, result);
+    return result;
+  }
+
+  private async resolveBranchDestination(
+    context: DraftDeliveryRunContext,
+  ): Promise<DraftBranchTargetResolution> {
+    const deps = this.adapterDeps(context);
+    const aliases = await readGitRemoteAliases(deps);
+    if (!aliases.includes("origin")) return { ok: false, reason: "remote-drift" };
+    const identity = await readVerifiedRepositoryIdentity(deps, context.repositoryDigest, aliases);
+    if (identity.kind === "local" || identity.digest !== context.repositoryDigest)
+      return { ok: false, reason: "remote-drift" };
+    const pushUrls = await readGitPushRemoteUrls(deps, "origin");
+    if (!this.live(context)) return { ok: false, reason: "authority-denied" };
+    if (pushUrls.length === 0) return { ok: false, reason: "remote-drift" };
+    const url = pushUrls.length === 1 ? canonicalGitHubPushUrl(pushUrls[0]) : undefined;
+    if (url !== undefined && !this.remoteMatchesDigest(url, context.repositoryDigest))
+      return { ok: false, reason: "remote-drift" };
+    this.destinations.set(context, url);
+    return { ok: true };
+  }
+
+  private remoteMatchesDigest(url: string, repositoryDigest: string): boolean {
+    const remote = githubOwnerAndRepoFromRemoteUrl(url);
+    return remote !== undefined && codingWorkbenchRemoteDigest(remote) === repositoryDigest;
+  }
+
+  public async resolveTarget(
+    context: IssueBoundDraftDeliveryRunContext,
   ): Promise<DraftDeliveryTargetResolution> {
     this.destinations.delete(context);
     let result: DraftDeliveryTargetResolution;
@@ -674,7 +761,7 @@ class DraftDeliveryFactory {
   }
 
   private async resolveFresh(
-    context: DraftDeliveryRunContext,
+    context: IssueBoundDraftDeliveryRunContext,
     root: string,
   ): Promise<DraftDeliveryTargetResolution> {
     const before = await this.readDestination(context, root);
@@ -689,7 +776,7 @@ class DraftDeliveryFactory {
   }
 
   private async readDestination(
-    context: DraftDeliveryRunContext,
+    context: IssueBoundDraftDeliveryRunContext,
     root: string,
   ): Promise<{ ok: true; url: string } | TargetFailure> {
     // The REPOSITORY root the issue was read from, never the managed worktree: the worktree lives
@@ -715,7 +802,10 @@ class DraftDeliveryFactory {
     return { ok: true, url };
   }
 
-  private remoteMatches(remote: string | undefined, context: DraftDeliveryRunContext): boolean {
+  private remoteMatches(
+    remote: string | undefined,
+    context: IssueBoundDraftDeliveryRunContext,
+  ): boolean {
     return (
       remote !== undefined &&
       codingWorkbenchRemoteDigest(remote) === context.issueBinding.remoteDigest
@@ -723,7 +813,7 @@ class DraftDeliveryFactory {
   }
 
   private async resolveAcceptedIssue(
-    context: DraftDeliveryRunContext,
+    context: IssueBoundDraftDeliveryRunContext,
     root: string,
   ): Promise<DraftDeliveryTargetResolution> {
     const result = await resolveGitHubIssue(this.deps, {
@@ -741,9 +831,9 @@ class DraftDeliveryFactory {
     return { ok: true, repository: result.preview.provenance.ownerAndRepo };
   }
 
-  private record(
+  public record(
     context: DraftDeliveryRunContext,
-    result: DraftDeliveryTargetResolution,
+    result: DraftDeliveryTargetResolution | DraftBranchTargetResolution,
     error?: unknown,
   ): void {
     this.log.write(
@@ -763,7 +853,9 @@ class DraftDeliveryFactory {
           runId: context.runId,
           state: result.ok ? "ready" : "blocked",
           reason: result.ok ? "completed" : result.reason,
-          issueBindingDigest: context.issueBinding.bindingDigest,
+          ...(isIssueBoundContext(context)
+            ? { issueBindingDigest: context.issueBinding.bindingDigest }
+            : {}),
           ...(error === undefined
             ? {}
             : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
@@ -771,6 +863,17 @@ class DraftDeliveryFactory {
       ),
     );
   }
+}
+
+// The catch of a failed branch-target resolution writes its body-free line through the factory's
+// existing target-resolution record; a named function keeps that evidence call explicit at the catch.
+function recordTargetResolution(
+  factory: DraftDeliveryFactory,
+  context: DraftDeliveryRunContext,
+  result: DraftBranchTargetResolution,
+  error: unknown,
+): void {
+  factory.record(context, result, error);
 }
 
 // A closed `git-publish-*` slug from the publish view, or undefined for anything else — never free

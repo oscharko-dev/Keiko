@@ -890,6 +890,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.draftDelivery.remote.notDraft": "Not a draft",
   "codingWorkbench.draftDelivery.details": "Saved delivery target",
   "codingWorkbench.draftDelivery.repository": "Repository",
+  "codingWorkbench.draftDelivery.remoteName": "Remote",
   "codingWorkbench.draftDelivery.issue": "Accepted issue",
   "codingWorkbench.draftDelivery.headRef": "Feature branch",
   "codingWorkbench.draftDelivery.headSha": "Approved commit",

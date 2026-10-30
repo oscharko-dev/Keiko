@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "810166a8c5bd7e952d308ceef4118f7e0b250de12f30140587481c628085fa15"
+    "catalogDigest": "b75f72f5f9b1748d59e85302b5a4691305e8364ce29f622590cdef341afcb82d"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2308,6 +2308,7 @@
       "packages/keiko-server/src/gitDelivery/draftDeliveryChecks.test.ts"
     ],
     "git.draft-delivery.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/draftDeliveryBranchPush.test.ts",
       "packages/keiko-server/src/gitDelivery/draftDeliveryService.test.ts"
     ],
     "git.draft-delivery.repository-drift.emitted-line": [
