@@ -39,7 +39,12 @@ import {
 } from "../../coding-runtime/runtimeAuthorityService.js";
 import { defaultServerDiagnosticSink } from "../../diagnostics-log.js";
 import { createCanonicalCatalogFacadeBridge } from "../../tool-catalog/catalogToolFacadeBridge.js";
-import { registeredPluginToolNames } from "./selfCheck.js";
+import { reviewPluginSetIsExact } from "./selfCheck.js";
+
+/** The tool names a generated governed-tools plugin registers, in source order. */
+function registeredPluginToolNames(source: string): readonly string[] {
+  return [...source.matchAll(/register_(\w+)\(editor\);/gu)].map((match) => match[1] ?? "");
+}
 
 const GEOMETRY = { contextWindowTokens: 32_768, maxInputTokens: 28_672, maxOutputTokens: 4_096 };
 
@@ -122,6 +127,8 @@ describe("layer 2 -- the registered tool set is exactly the four review tools, p
 
   it("registers exactly the four review tools in the generated plugin", () => {
     const plugins = createGeneratedOpenCodeV2Plugins("review");
+    // The self-check admits these sources by their SHA-256 pins, and no other source.
+    expect(reviewPluginSetIsExact(plugins)).toBe(true);
     expect(Object.keys(plugins).sort()).toEqual(["keiko_governed_tools", "keiko_native_context"]);
     expect(registeredPluginToolNames(plugins.keiko_governed_tools ?? "")).toEqual([
       "keiko_workspace_discover",

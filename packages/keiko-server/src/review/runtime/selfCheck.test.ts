@@ -10,8 +10,8 @@ import type { OpenCodeToolProfile } from "../../coding-runtime/opencodeToolSchem
 import { reviewRuntimeAuthorityGrants } from "../../coding-runtime/runtimeAuthorityService.js";
 import {
   checkReviewRuntimeLayers,
-  registeredPluginToolNames,
   reviewConfigurationIsExact,
+  reviewPluginSetIsExact,
   type ReviewRuntimeLayers,
 } from "./selfCheck.js";
 
@@ -94,6 +94,65 @@ describe("checkReviewRuntimeLayers", () => {
     expect(checkReviewRuntimeLayers(layers({ configValue: undefined })).ok).toBe(false);
   });
 
+  // Security review of #4135, finding 1: a key the field-by-field check never read was admitted.
+  it("refuses every configuration key or value the canonical review configuration does not carry", () => {
+    const base = configFor("review");
+    const providers = base.providers as Readonly<Record<string, unknown>>;
+    const policies = base.policies as readonly unknown[];
+    const cases: readonly Readonly<Record<string, unknown>>[] = [
+      { ...base, plugins: [{ package: "x" }] },
+      { ...base, commands: { deploy: { template: "npm publish" } } },
+      { ...base, skills: { paths: ["/"] } },
+      { ...base, references: { r: { path: "/" } } },
+      { ...base, shell: "/bin/sh" },
+      { ...base, websearch: { enabled: true } },
+      { ...base, providers: { ...providers, foreign: { package: "x", models: {} } } },
+      {
+        ...base,
+        policies: [...policies, { action: "provider.use", resource: "foreign", effect: "allow" }],
+      },
+      { ...base, policies: [] },
+      { ...base, snapshots: true },
+      { ...base, tool_output: { max_bytes: 1 } },
+      { ...base, compaction: { auto: false } },
+    ];
+    for (const configValue of cases) {
+      expect(
+        reviewConfigurationIsExact(configValue),
+        JSON.stringify(Object.keys(configValue)),
+      ).toBe(false);
+      expect(checkReviewRuntimeLayers(layers({ configValue }))).toEqual({
+        ok: false,
+        reason: "review-profile-invalid",
+        layer: "configuration",
+      });
+    }
+  });
+
+  it("admits the canonical review configuration of any declared geometry, and no invalid geometry", () => {
+    const other = buildOpenCodeLaunchProfile({
+      executable: "/opt/keiko/opencode",
+      stateRoot: "/var/keiko/review-runtime/run-2",
+      contextGeometry: {
+        contextWindowTokens: 131_072,
+        maxInputTokens: 120_000,
+        maxOutputTokens: 8_192,
+      },
+      toolProfile: "review",
+    });
+    if (!other.ok) throw new Error("launch profile refused");
+    expect(reviewConfigurationIsExact(other.configValue)).toBe(true);
+    const base = configFor("review");
+    const providers = base.providers as Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+    expect(
+      reviewConfigurationIsExact({
+        ...base,
+        providers: { "keiko-runtime": { ...providers["keiko-runtime"], models: {} } },
+      }),
+    ).toBe(false);
+    expect(reviewConfigurationIsExact(null)).toBe(false);
+  });
+
   it("refuses a system prompt the server did not write", () => {
     const base = configFor("review");
     const agents = base.agents as Readonly<Record<string, Readonly<Record<string, unknown>>>>;
@@ -111,21 +170,39 @@ describe("checkReviewRuntimeLayers", () => {
       ...review,
       keiko_governed_tools: `${review.keiko_governed_tools ?? ""}\n      register_keiko_changeset_edit(editor);`,
     };
+    const governed = review.keiko_governed_tools ?? "";
+    // Security review of #4135, finding 1: a registration the old pattern did not match, or a
+    // tool defined without the registration helper, passed a regex count of registrations.
+    const spacedRegistration = {
+      ...review,
+      keiko_governed_tools: `${governed}\n      register_keiko_shell (editor);`,
+    };
+    const bareTool = {
+      ...review,
+      keiko_governed_tools: `${governed}\nexport const shell = tool({});`,
+    };
+    const changedContext = {
+      ...review,
+      keiko_native_context: `${review.keiko_native_context ?? ""} `,
+    };
     for (const pluginSources of [
       direct,
       extraTool,
+      spacedRegistration,
+      bareTool,
+      changedContext,
+      { keiko_governed_tools: governed },
       { ...review, keiko_native_policy: "export default {};" },
       undefined,
     ]) {
+      expect(reviewPluginSetIsExact(pluginSources)).toBe(false);
       expect(checkReviewRuntimeLayers(layers({ pluginSources }))).toEqual({
         ok: false,
         reason: "review-profile-invalid",
         layer: "tool-set",
       });
     }
-    expect(registeredPluginToolNames(extraTool.keiko_governed_tools)).toContain(
-      "keiko_changeset_edit",
-    );
+    expect(reviewPluginSetIsExact(review)).toBe(true);
   });
 
   it("refuses a missing or widened review authority (layer 3)", () => {

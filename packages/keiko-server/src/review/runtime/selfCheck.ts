@@ -2,17 +2,22 @@
 //
 // A Keiko for Quality review instance starts only when every one of its four read-only layers is
 // present and exact, and only on the governed review profile:
-//   1. the generated configuration denies `*` and allows exactly the four review tools, names the
-//      server-defined review agent and carries Keiko's system prompt, with no MCP server or
-//      instruction source;
-//   2. the generated plugin registers exactly the four review tools and no native policy plugin;
-//   3. the review authority grants `workspace-read` only, at `governed-assist`;
-//   4. the tool facade and catalog bridge are composed with the review purpose.
-// Any other state refuses the start with a closed reason; nothing is half-started.
+//   1. the generated configuration is, key for key and value for value, the canonical review
+//      configuration the server generates for the same context geometry: `*` denied, exactly the
+//      four review tools allowed, the server-defined review agent with Keiko's system prompt, no
+//      MCP server, reference, instruction source, plugin, command, skill or other key;
+//   2. the generated plugins are exactly the governed-tools and context plugins, each matching its
+//      SHA-256 pin, so the registered tool set is exactly the four review tools;
+//   3. the review authority grants `workspace-read` only, at `governed-assist`, for review;
+//   4. the composition hands its tool facade and catalog bridge the review purpose itself.
+// Any other state refuses the start with a closed reason; nothing is half-started. The launch
+// re-check (`launchPlugins`) applies the same layer 1 and layer 2 comparisons to the run's actual
+// configuration and plugins.
+
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
-  REVIEW_RUNTIME_AGENT_NAME,
-  REVIEW_RUNTIME_TOOL_NAMES,
   type CodingRuntimePurpose,
   type ReviewProfileRefusalReason,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
@@ -22,8 +27,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { OpenCodeToolProfile } from "../../coding-runtime/opencodeToolSchemas.js";
-import { openCodeReviewPermissionRules } from "../../coding-runtime/opencodeLaunchProfile.js";
-import { REVIEW_SYSTEM_PROMPT } from "./reviewPrompt.js";
+import {
+  createFixedOpenCodeV2Config,
+  OPENCODE_RUNTIME_MODEL_ALIAS,
+  OPENCODE_RUNTIME_PROVIDER_ID,
+  type OpenCodeContextGeometry,
+} from "../../coding-runtime/opencodeLaunchProfile.js";
 import type { ReviewProfileLayer } from "./activity-log.js";
 
 /** What the composition is about to launch, as the self-check reads it. */
@@ -53,14 +62,16 @@ export type ReviewRuntimeSelfCheck =
       readonly layer: ReviewProfileLayer;
     };
 
-const REVIEW_PLUGIN_FILES = ["keiko_governed_tools", "keiko_native_context"] as const;
-// A registration call (`register_<tool>(editor);`); the tool functions' own definitions carry no
-// semicolon after the parameter list, so only calls match.
-const REGISTRATION = /register_(\w+)\(editor\);/gu;
-
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
+/**
+ * The SHA-256 of each generated review plugin source (ADR-0182 D2 layer 2). The governed-tools
+ * plugin registers exactly `keiko_read`, `keiko_discover`, `keiko_search` and
+ * `keiko_review_report`; the context plugin only adds Keiko's guidance. A change to either source
+ * changes its digest and refuses the review start until the new source is reviewed and re-pinned.
+ */
+const REVIEW_PLUGIN_SOURCE_SHA256: Readonly<Record<string, string>> = Object.freeze({
+  keiko_governed_tools: "490081ff207b2e35c58d8830b015caa5fe5555d9d481ef32e0ac5c9dbcf32965",
+  keiko_native_context: "884d0fd4f1eda22f363a2f1e0709446b45d6e5e96b98fdb689977ec66dc53e89",
+});
 
 function sameSet(values: readonly string[], expected: readonly string[]): boolean {
   return values.length === expected.length && expected.every((value) => values.includes(value));
@@ -70,51 +81,59 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function reviewAgentIsExact(agents: unknown): boolean {
-  if (!isRecord(agents) || !sameSet(Object.keys(agents), [REVIEW_RUNTIME_AGENT_NAME])) return false;
-  const agent = agents[REVIEW_RUNTIME_AGENT_NAME];
-  return (
-    isRecord(agent) &&
-    agent.mode === "primary" &&
-    agent.system === REVIEW_SYSTEM_PROMPT &&
-    sameJson(agent.permissions, openCodeReviewPermissionRules())
-  );
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-function noRepositoryInputs(config: Readonly<Record<string, unknown>>): boolean {
-  const mcp = config.mcp;
-  return (
-    isRecord(mcp) &&
-    isRecord(mcp.servers) &&
-    Object.keys(mcp.servers).length === 0 &&
-    Array.isArray(config.instructions) &&
-    config.instructions.length === 0
-  );
+/**
+ * The context geometry a configuration declares for its one provider model: the only input the
+ * canonical review configuration depends on (its provider limits and compaction derive from it).
+ */
+function declaredGeometry(
+  config: Readonly<Record<string, unknown>>,
+): OpenCodeContextGeometry | undefined {
+  const providers = config.providers;
+  const provider = isRecord(providers) ? providers[OPENCODE_RUNTIME_PROVIDER_ID] : undefined;
+  const models = isRecord(provider) ? provider.models : undefined;
+  const model = isRecord(models) ? models[OPENCODE_RUNTIME_MODEL_ALIAS] : undefined;
+  const limit = isRecord(model) ? model.limit : undefined;
+  if (!isRecord(limit)) return undefined;
+  const { context, input, output } = limit;
+  if (!positiveInteger(context) || !positiveInteger(input) || !positiveInteger(output)) {
+    return undefined;
+  }
+  return { contextWindowTokens: context, maxInputTokens: input, maxOutputTokens: output };
 }
 
-/** Layer 1: the generated configuration is exactly the review profile's. */
+/**
+ * Layer 1: the generated configuration is exactly the canonical review configuration for its own
+ * context geometry. Every key is compared, so an added plugin, command, skill, reference, shell,
+ * web search, provider, policy or any other key refuses, as does any changed value.
+ */
 export function reviewConfigurationIsExact(config: unknown): boolean {
+  if (!isRecord(config)) return false;
+  const geometry = declaredGeometry(config);
   return (
-    isRecord(config) &&
-    sameJson(config.permissions, openCodeReviewPermissionRules()) &&
-    config.default_agent === REVIEW_RUNTIME_AGENT_NAME &&
-    reviewAgentIsExact(config.agents) &&
-    noRepositoryInputs(config)
+    geometry !== undefined &&
+    isDeepStrictEqual(config, createFixedOpenCodeV2Config(geometry, undefined, "review"))
   );
 }
 
-/** The tool names a generated governed-tools plugin registers, in source order. */
-export function registeredPluginToolNames(source: string): readonly string[] {
-  return [...source.matchAll(REGISTRATION)].map((match) => match[1] ?? "");
+function sha256(source: string): string {
+  return createHash("sha256").update(source, "utf8").digest("hex");
 }
 
-/** Layer 2: exactly the governed-tools and context plugins, registering exactly the four tools. */
+/** Layer 2: exactly the two review plugins, each source matching its SHA-256 pin. */
 export function reviewPluginSetIsExact(
   plugins: Readonly<Record<string, string>> | undefined,
 ): boolean {
-  if (plugins === undefined || !sameSet(Object.keys(plugins), REVIEW_PLUGIN_FILES)) return false;
-  const tools = registeredPluginToolNames(plugins.keiko_governed_tools ?? "");
-  return sameSet(tools, REVIEW_RUNTIME_TOOL_NAMES);
+  if (plugins === undefined) return false;
+  const files = Object.keys(plugins);
+  if (!sameSet(files, Object.keys(REVIEW_PLUGIN_SOURCE_SHA256))) return false;
+  return files.every((file) => {
+    const source = plugins[file];
+    return typeof source === "string" && sha256(source) === REVIEW_PLUGIN_SOURCE_SHA256[file];
+  });
 }
 
 /** Layer 3: the review authority grants reading only, at `governed-assist`. */
