@@ -63,7 +63,7 @@ export function resolveReviewRulesPath(path: string | undefined): string | undef
 
 /** A decoded rules text Keiko admits: no replacement character (invalid UTF-8) and no NUL. */
 function isAdmissibleText(text: string): boolean {
-  return !text.includes("�") && !text.includes("\u0000");
+  return !text.includes("\uFFFD") && !text.includes("\u0000");
 }
 
 /**
