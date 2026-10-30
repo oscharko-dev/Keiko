@@ -435,8 +435,9 @@ function verificationSpec(): OpenCodeToolSpec {
       "confirm which checks ran successfully. The optional verification.commit describes " +
       "commit eligibility separately: candidate-not-staged never means checks did not run. " +
       "Only when the accepted task requests a commit, stage the intended changes and rerun " +
-      'verification until verification.commit.commitProof is "recorded" (in Full access, ' +
-      "checks that ran and failed also admit it, recorded as failing). For that workflow, " +
+      'verification until verification.commit.commitProof is "recorded", or, in Full access ' +
+      "only, until its checks ran and failed: that also admits the commit, recorded as " +
+      "failing. For that workflow, " +
       "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
       "the intended paths or ignore generated output deliberately before verifying again.",
     inputSchema: managedObjectSchema(
@@ -632,9 +633,10 @@ function gitCommitSpec(): OpenCodeToolSpec {
     alias: "keiko_git_commit",
     description:
       "Create a commit proposal over the staged changes. This call does not " +
-      "create a commit. First complete staging and rerun verification until it reports " +
-      'verification: { status: "passed", commit: { commitProof: "recorded" } }; in Full ' +
-      "access, checks that ran and failed also admit the commit, recorded as failing." +
+      "create a commit. First complete staging, then verify until it reports " +
+      'verification: { status: "passed", commit: { commitProof: "recorded" } }, or, in Full ' +
+      "access only, until its checks ran and failed: that also admits the commit, recorded " +
+      "as failing." +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       { message: { type: "string", minLength: 1, maxLength: 8_192 } },

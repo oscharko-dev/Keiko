@@ -198,14 +198,13 @@ function redReport(
   overallStatus: VerificationStatus = "failed",
 ): VerificationReport {
   const red = report(false);
-  const results = red.results.map((result) => ({ ...result, ...end }));
-  const counts = Object.fromEntries(
-    Object.keys(red.counts).map((status) => [
-      status,
-      results.filter((result) => result.status === status).length,
-    ]),
-  ) as unknown as VerificationReport["counts"];
-  return { ...red, overallStatus, results, counts };
+  return {
+    ...red,
+    overallStatus,
+    results: red.results.map((result) => ({ ...result, ...end })),
+    // One result, so one count, stated directly rather than recomputed the way the code checks it.
+    counts: { ...red.counts, failed: 0, [end.status ?? "failed"]: 1 },
+  };
 }
 
 async function proposeAfter(verification: VerificationReport): Promise<string | undefined> {
@@ -726,6 +725,27 @@ describe("verified Code-task commit service", () => {
       correlationId: "verified-commit-test",
       extra: { state: "policy-authorized", passed: false, verificationEvidenceId },
     });
+  });
+  // A skipped step beside a red one is the shape a passing proof already admits beside a green one
+  // (successfulStep); the failing evidence mirrors it, while a run with no red step stays refused.
+  it("admits red checks beside a skipped one in Full access, as a pass admits green beside skipped", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => true,
+    });
+    const red = report(false);
+    const skipped = red.results.map((result): VerificationResult => ({
+      ...result,
+      kind: "lint",
+      status: "skipped",
+      exitCode: null,
+    }));
+    const mixed = {
+      ...red,
+      results: [...red.results, ...skipped],
+      counts: { ...red.counts, skipped: 1 },
+    };
+    expect(await proposeAfter(mixed)).toMatch(/^commit-/u);
   });
   it("keeps a red verification as the commit gate outside Full access", async () => {
     expect(await proposeAfter(report(false))).toBe("verification-failed");
