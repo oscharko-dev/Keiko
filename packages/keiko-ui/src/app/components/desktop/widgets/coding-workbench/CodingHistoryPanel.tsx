@@ -270,7 +270,7 @@ function HistoryFilters({
       {history.error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
       {history.loading ? <output>{t("codingWorkbench.history.loading")}</output> : null}
       <button
-        className={styles.cmpSecondary}
+        className={`${styles.cmpSecondary} ${styles.cmpRefresh}`}
         type="button"
         disabled={history.loading}
         onClick={() => void history.refresh()}
@@ -302,8 +302,10 @@ function HistoryItem({
           {new Date(task.updatedAt).toLocaleString()}
         </time>
       </button>
-      <RenameTask task={task} />
-      <ExportTask task={task} />
+      <div className={styles.cmpItemActions}>
+        <RenameTask task={task} />
+        <ExportTask task={task} />
+      </div>
     </li>
   );
 }

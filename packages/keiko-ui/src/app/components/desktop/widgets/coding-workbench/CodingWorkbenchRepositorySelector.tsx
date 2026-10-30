@@ -92,10 +92,6 @@ export function repositoryName(root: string): string {
 const FolderIcon = Icons.folder;
 const BranchIcon = Icons.branch;
 
-function controlWidth(label: string, maximum: number): string {
-  return `${Math.min(Math.max(label.length + 4, 13), maximum)}ch`;
-}
-
 type SelectorPlacement = "composer" | "setup";
 export type WorkbenchExecutionLocation = "local" | "worktree";
 
@@ -133,10 +129,11 @@ function repositoryOptions(
   ];
 }
 
-// The trigger of a chip: the setup form's field, or the composer's compact chip sized to its label.
+// The trigger of a chip: the setup form's field, or the composer's compact chip that hugs its
+// label up to a bound. A fixed 13ch floor left "keiko" and "main" floating in wide empty chips
+// with the caret at the far edge (#3897 UI review).
 function chipTrigger(
   placement: SelectorPlacement,
-  label: string,
   maximum: number,
 ): {
   readonly triggerClassName: string | undefined;
@@ -146,7 +143,7 @@ function chipTrigger(
     ? { triggerClassName: styles.cmpSetupSelectorTrigger, triggerStyle: undefined }
     : {
         triggerClassName: styles.cmpRepositorySelectorTrigger,
-        triggerStyle: { width: controlWidth(label, maximum) },
+        triggerStyle: { maxWidth: `${String(maximum)}ch` },
       };
 }
 
@@ -180,7 +177,7 @@ function RepositoryChip({
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.choose")}
       leadingVisual={<FolderIcon size={15} aria-hidden="true" />}
-      {...chipTrigger(placement, label, 22)}
+      {...chipTrigger(placement, 22)}
       showMenuHeader={false}
       menuPopoverMinWidth={280}
       menuPlacement="up"
@@ -257,7 +254,7 @@ function BranchChip({
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.chooseBranch")}
       leadingVisual={<BranchIcon size={15} aria-hidden="true" />}
-      {...chipTrigger(placement, label, 26)}
+      {...chipTrigger(placement, 26)}
       showMenuHeader={false}
       menuPopoverMinWidth={340}
       menuPopoverMaxHeight={280}
@@ -301,7 +298,7 @@ function LocationChip({
       disabled={locked}
       ariaLabel={t("codingWorkbench.repository.locationLabel")}
       leadingVisual={<LocationIcon size={15} aria-hidden="true" />}
-      {...chipTrigger(placement, label, 22)}
+      {...chipTrigger(placement, 22)}
       menuPopoverMinWidth={260}
       showMenuHeader={false}
       menuPlacement="up"

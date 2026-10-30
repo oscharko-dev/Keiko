@@ -631,7 +631,11 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
       <ComposerShell
         id="coding-workbench-task-intent"
         value={input.taskIntent}
-        placeholder={t("codingWorkbench.task.placeholder")}
+        placeholder={t(
+          input.runId === undefined
+            ? "codingWorkbench.task.placeholder"
+            : "codingWorkbench.task.placeholder.followUp",
+        )}
         textareaRef={controller.textareaRef}
         maxLength={CODING_WORKBENCH_TASK_INTENT_MAX_CHARS}
         disabled={input.mutationPending}
@@ -868,6 +872,7 @@ function ReasoningControl({ input, efforts, t }: ReasoningControlProps): ReactNo
   return (
     <div className={`cmp-model mono ${styles.reasoningControl}`}>
       <KeikoSelect
+        triggerClassName="cmp-model-select"
         value={input.reasoningEffort ?? ""}
         ariaLabel={t("codingWorkbench.composer.effort.label")}
         menuTitle={t("codingWorkbench.composer.effort.menu")}
@@ -900,6 +905,7 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         : {})}
     >
       <KeikoSelect
+        triggerClassName={`cmp-model-select ${styles.cmpAuthorityTrigger}`}
         value={shownMode}
         ariaLabel={t("codingWorkbench.composer.authority.label")}
         ariaDescribedBy={confirmed ? confirmedModeId : undefined}

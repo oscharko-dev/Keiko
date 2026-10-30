@@ -128,8 +128,9 @@ export function CodingWorkbenchAgentToggle({
   const offered = offeredAgents(agents, customAgents, t);
   if (offered.length < 2) return null;
   return (
-    <fieldset
+    <div
       className={styles.cmpAgentControl}
+      role="group"
       aria-label={t("codingWorkbench.composer.agent.label")}
       data-testid="coding-workbench-agent-toggle"
     >
@@ -143,6 +144,6 @@ export function CodingWorkbenchAgentToggle({
           onChange={onChange}
         />
       ))}
-    </fieldset>
+    </div>
   );
 }

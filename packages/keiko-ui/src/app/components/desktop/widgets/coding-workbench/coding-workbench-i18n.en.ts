@@ -317,7 +317,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.task.title": "Describe the bounded coding task",
   "codingWorkbench.task.instructions": "Task instructions",
   "codingWorkbench.task.placeholder":
-    "Ask Keiko to inspect, explain, implement, test, or repair something in this repository…",
+    "Ask Keiko to inspect, explain, implement, test, or repair something in this project…",
+  "codingWorkbench.task.placeholder.followUp": "Reply to Keiko, or ask for the next change…",
   "codingWorkbench.task.help":
     "Task text is transient intent. Start unlocks only after every readiness check is confirmed.",
   "codingWorkbench.task.starting": "Starting…",
@@ -1257,15 +1258,16 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.status.passed": "Passed",
   "codingWorkbench.verification.status.failed": "Failed",
   "codingWorkbench.verification.status.partial": "Partial",
+  "codingWorkbench.verification.status.notRun": "Not run",
   "codingWorkbench.verification.checks":
     "Checks: {passed} passed, {failed} unsuccessful, {skipped} skipped",
-  "codingWorkbench.verification.duration": "Duration: {duration} ms",
+  "codingWorkbench.verification.duration": "Duration: {duration}",
   "codingWorkbench.activity.readBytes": "Read: {bytes} bytes",
   "codingWorkbench.activity.readFacts": "Read: {bytes} bytes · Whole file: {lines} lines",
   "codingWorkbench.activity.returnedPaths": "Returned paths: {count}",
   "codingWorkbench.activity.editRefusal": "Edit refusal: {reason}",
   "codingWorkbench.activity.affectedFile": "Affected file: {path}",
-  "codingWorkbench.activity.serviceDuration": "Tool service: {duration} ms",
+  "codingWorkbench.activity.serviceDuration": "Duration: {duration}",
   "codingWorkbench.activity.exitCode": "The command exited with code {code}.",
   "codingWorkbench.activity.toolError": "The tool reported an error to the model.",
   "codingWorkbench.activity.verification.passed": "Every requested verification check passed.",

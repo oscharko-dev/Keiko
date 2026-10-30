@@ -1,17 +1,23 @@
-/* The composer's Build | Plan switch. It matches the height and border of the neighbouring model
-   and authority chips; the active option is marked by the accent tint the context chips use. */
+/* The composer's Build | Plan switch: the design system's segmented control (`.c-seg`,
+   design-system/components.css). An inset track the height of the neighbouring model and
+   authority chips holds the options; the selected option is a raised segment, so the choice reads
+   by shape and contrast, not by a tint alone. A grid track stretches every option to the full
+   inner height, which a fieldset's flex box did not (#3897 UI review: the selection was a 15px
+   strip at the top of a 34px box). */
 .cmpAgentControl {
-  display: inline-flex;
+  display: inline-grid;
   flex: 0 0 auto;
+  grid-auto-columns: minmax(0, auto);
+  grid-auto-flow: column;
   min-width: 0;
-  min-height: 34px;
+  height: 34px;
   box-sizing: border-box;
-  align-items: stretch;
   gap: 2px;
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   margin: 0;
-  padding: 2px;
+  padding: 3px;
+  background: var(--surface-inset);
   font-size: 12.5px;
 }
 
@@ -19,26 +25,33 @@
   appearance: none;
   display: inline-flex;
   min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 8px;
-  padding: 0 var(--space-3);
+  border-radius: 7px;
+  padding: 0 var(--space-5);
   color: var(--text-secondary);
   background: transparent;
   font: inherit;
+  line-height: 1;
   white-space: nowrap;
   cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
 }
 
-.cmpAgentOption:hover:not(:disabled) {
-  color: var(--button-secondary-text);
-  background: var(--button-secondary-surface-hover);
+.cmpAgentOption:hover:not(:disabled, [aria-pressed="true"]) {
+  color: var(--text-primary);
 }
 
 .cmpAgentOption[aria-pressed="true"] {
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--text-accent) 13%, var(--button-secondary-surface));
+  background: var(--surface-secondary);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+  font-weight: var(--weight-medium);
 }
 
 .cmpAgentOption:focus-visible {
@@ -48,5 +61,14 @@
 
 .cmpAgentOption:disabled {
   cursor: default;
+}
+
+.cmpAgentControl:has(.cmpAgentOption:disabled) {
   opacity: 0.72;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmpAgentOption {
+    transition: none;
+  }
 }

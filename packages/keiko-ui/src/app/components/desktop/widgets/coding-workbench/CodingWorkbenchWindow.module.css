@@ -668,8 +668,13 @@
   justify-self: start;
 }
 
+/* The trigger hugs its label: the shared select trigger stretches to its container and pushes the
+   caret to the far edge, which left a wide gap after a short name such as "main" (#3897 UI
+   review). */
 .cmpRepositorySelectorTrigger {
   flex: 0 1 auto;
+  width: auto;
+  gap: var(--space-1);
   max-width: min(100%, 19rem);
   min-width: 0;
   min-height: 1.75rem;
@@ -851,6 +856,18 @@
 .reasoningControl {
   flex: 0 1 8.5rem;
   max-width: 8.5rem;
+}
+
+/* The run authority is never cut to "Full a…": it is the one chip that states what Keiko may do.
+   The shared chip trigger is `width: 100%; max-width: 100%`, a cyclic percentage that sized this
+   content-sized chip below its own label; the trigger takes its content width here instead. */
+.authorityControl {
+  flex: 0 0 auto;
+}
+
+.authorityControl > .cmpAuthorityTrigger {
+  width: auto;
+  max-width: none;
 }
 
 .authorityControl[data-full-access="true"] :global(.ksel-trigger) {
@@ -1516,9 +1533,42 @@ details[open] > .cmpActivitySummary::after {
   font-size: var(--text-caption);
 }
 
-.toolCard[data-tool-state="failed"],
-.toolCard[data-tool-state="denied"] {
+.toolCard[data-tool-state="failed"] .toolIcon,
+.toolCard[data-tool-state="denied"] .toolIcon {
   color: var(--feedback-danger);
+}
+
+/* The facts an opened tool card states (bytes read, returned paths, the affected file, how long
+   the call took): secondary caption text under the outcome. They inherited the card's colour and
+   the browser's paragraph size before, so a failed call's duration read as a red heading
+   (#3897 UI review). */
+.cmpToolFacts {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-normal);
+}
+
+.cmpToolFacts > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A verification summary is one compact line of facts, not three paragraphs. */
+.cmpVerificationFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.cmpVerificationFacts > p {
+  margin: 0;
 }
 .planCard {
   color: var(--text-secondary);
@@ -1580,11 +1630,19 @@ details[open] > .cmpActivitySummary::after {
   font-size: var(--text-caption);
 }
 
+/* An event that needs attention reads as the design system's inline message (`.c-msg--warn`):
+   a quiet card whose severity is a marked edge and the summary's colour, not a tinted fill that
+   turned every verification summary brown (#3897 UI review). */
 .timelineItem[data-event-tone="attention"] .eventCard {
-  border: 1px solid color-mix(in oklch, var(--feedback-warning) 45%, var(--border-subtle));
+  border: 1px solid var(--border-subtle);
+  border-inline-start: 2px solid var(--feedback-warning);
   border-radius: var(--radius-control);
   padding: var(--space-2) var(--space-3);
-  background: var(--feedback-warning-surface);
+  background: var(--surface-primary);
+}
+
+.timelineItem[data-event-tone="attention"] .eventCard > .cmpActivitySummary {
+  color: var(--text-primary);
 }
 
 .timelineItem[data-event-tone="success"] .eventCard .timelineTitle {

@@ -339,7 +339,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.task.title": "Begrenzte Coding-Aufgabe beschreiben",
   "codingWorkbench.task.instructions": "Aufgabenanweisungen",
   "codingWorkbench.task.placeholder":
-    "Bitte Keiko, etwas in diesem Repository zu prüfen, zu erklären, umzusetzen, zu testen oder zu reparieren…",
+    "Bitte Keiko, etwas in diesem Projekt zu prüfen, zu erklären, umzusetzen, zu testen oder zu reparieren…",
+  "codingWorkbench.task.placeholder.followUp": "Antworte Keiko oder bitte um die nächste Änderung…",
   "codingWorkbench.task.help":
     "Aufgabentext ist eine flüchtige Absicht. Start wird erst freigeschaltet, wenn alle Bereitschaftsprüfungen bestätigt sind.",
   "codingWorkbench.task.starting": "Wird gestartet…",
@@ -1297,15 +1298,16 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.status.passed": "Bestanden",
   "codingWorkbench.verification.status.failed": "Fehlgeschlagen",
   "codingWorkbench.verification.status.partial": "Teilweise",
+  "codingWorkbench.verification.status.notRun": "Nicht gelaufen",
   "codingWorkbench.verification.checks":
     "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {skipped} übersprungen",
-  "codingWorkbench.verification.duration": "Dauer: {duration} ms",
+  "codingWorkbench.verification.duration": "Dauer: {duration}",
   "codingWorkbench.activity.readBytes": "Gelesen: {bytes} Bytes",
   "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
   "codingWorkbench.activity.returnedPaths": "Zurückgegebene Pfade: {count}",
   "codingWorkbench.activity.editRefusal": "Edit abgelehnt: {reason}",
   "codingWorkbench.activity.affectedFile": "Betroffene Datei: {path}",
-  "codingWorkbench.activity.serviceDuration": "Tool-Verarbeitung: {duration} ms",
+  "codingWorkbench.activity.serviceDuration": "Dauer: {duration}",
   "codingWorkbench.activity.exitCode": "Der Befehl wurde mit Code {code} beendet.",
   "codingWorkbench.activity.toolError": "Das Tool hat dem Modell einen Fehler gemeldet.",
   "codingWorkbench.activity.verification.passed":

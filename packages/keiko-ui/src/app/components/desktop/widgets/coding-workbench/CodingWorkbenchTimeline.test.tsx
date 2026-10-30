@@ -508,7 +508,7 @@ describe("CodingWorkbenchTimeline", () => {
     expect(screen.getByText("packages/ui/deep/Second.tsx")).toBeInTheDocument();
     expect(screen.getByText("Read: 120 bytes · Whole file: 800 lines")).toBeInTheDocument();
     expect(screen.getByText("Returned paths: 2")).toBeInTheDocument();
-    expect(screen.getByText("Tool service: 15 ms")).toBeInTheDocument();
+    expect(screen.getByText("Duration: 15 ms")).toBeInTheDocument();
     expect(screen.getByText("Edit refusal: CONTENT_HASH_MISMATCH")).toBeInTheDocument();
     expect(screen.getByText("Affected file: packages/ui/deep/Conflict.tsx")).toBeInTheDocument();
     expect(container.querySelectorAll('[data-timeline-kind="tool"]')).toHaveLength(4);
@@ -1544,7 +1544,7 @@ describe("verification detail and active turn failures", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run details" }));
     expect(container).toHaveTextContent("Targeted tests: Failed");
     expect(container).toHaveTextContent("Checks: 0 passed, 1 unsuccessful, 0 skipped");
-    expect(container).toHaveTextContent("Duration: 1,240 ms");
+    expect(container).toHaveTextContent("Duration: 1.2 s");
     expect(container).not.toHaveTextContent("1 test failed");
   });
 
@@ -1749,6 +1749,40 @@ describe("timeline facts remain scoped to their run", () => {
     expect(container).toHaveTextContent("Type check: Passed");
     expect(container).toHaveTextContent("Checks: 1 passed, 0 unsuccessful, 0 skipped");
     expect(container.querySelector('[data-event-tone="success"]')).not.toBeNull();
+  });
+
+  // #3897 UI review: a verifier that never ran a check (no passed, no unsuccessful count) used to
+  // read "Failed" with an attention card although nothing had failed. It now reads "Not run" and
+  // stays with the routine run details; a real failure keeps its attention tone.
+  it.each([
+    ["failed" as const, "Targeted tests: Not run"],
+    ["partial" as const, "Targeted tests: Not run"],
+  ])("reports a %s verifier without any check as not run, never as failed", (status, label) => {
+    const verified = {
+      ...event(1),
+      eventKind: "verification-summarized" as const,
+      verificationSummary: {
+        verifierId: "targeted-test" as const,
+        status,
+        passedCount: 0,
+        failedCount: 0,
+        skippedCount: 0,
+        durationMs: 3,
+      },
+    };
+    const { container } = render(
+      <Timeline
+        events={[verified]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).not.toHaveTextContent("Targeted tests");
+    expect(container.querySelector('[data-event-tone="attention"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Run details" }));
+    expect(container).toHaveTextContent(label);
+    expect(container).not.toHaveTextContent("Targeted tests: Failed");
+    expect(container).toHaveTextContent("Duration: 3 ms");
   });
 });
 

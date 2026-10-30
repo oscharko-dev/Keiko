@@ -28,7 +28,7 @@ import {
   reportCodingWorkbenchSummaryActivated,
   reportCodingWorkbenchInteraction,
 } from "@/lib/coding-workbench-interaction";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type Locale } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
@@ -918,7 +918,9 @@ function MessageRow({
       data-timeline-kind="message"
     >
       <article className={styles.timelineBody} data-message-role={item.message.role}>
-        <p className={styles.timelineTitle}>
+        {/* The agent's role is announced, not drawn above every step: repeated on each message
+            between tool rows it was the loudest text of the timeline (#3897 UI review). */}
+        <p className={item.message.role === "assistant" ? "sr-only" : styles.timelineTitle}>
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
         </p>
         {item.message.reasoning === undefined ? null : (
@@ -1168,10 +1170,11 @@ function ToolPresentationDetails({
   readonly tool: CodingSafeActivityTool;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const locale = useLocale();
   const facts = tool.presentation;
   if (facts === undefined) return null;
   return (
-    <div className={styles.toolMeta}>
+    <div className={styles.cmpToolFacts}>
       {facts.readByteCount === undefined ? null : (
         <p>
           {facts.totalFileLines === undefined
@@ -1192,7 +1195,11 @@ function ToolPresentationDetails({
         <p>{t("codingWorkbench.activity.affectedFile", { path: facts.affectedRelativePath })}</p>
       )}
       {facts.bridgeDurationMs === undefined ? null : (
-        <p>{t("codingWorkbench.activity.serviceDuration", { duration: facts.bridgeDurationMs })}</p>
+        <p>
+          {t("codingWorkbench.activity.serviceDuration", {
+            duration: formatDurationMs(facts.bridgeDurationMs, locale),
+          })}
+        </p>
       )}
     </div>
   );
@@ -1384,6 +1391,33 @@ function timelineEventDetail(
   return `${cause} ${progress}`;
 }
 
+type VerificationSummary = NonNullable<
+  Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }>["verificationSummary"]
+>;
+
+// A summary in which no check passed and none failed ran nothing: every step was skipped. It is
+// shown as not run rather than as a failure the counts beside it contradict (#3897 UI review:
+// "Tests: Failed · 0 passed, 0 unsuccessful, 1 skipped").
+function shownVerificationStatus(
+  summary: VerificationSummary,
+): VerificationSummary["status"] | "notRun" {
+  if (summary.status !== "passed" && summary.passedCount === 0 && summary.failedCount === 0) {
+    return "notRun";
+  }
+  return summary.status;
+}
+
+/** A duration as a reader takes it in: milliseconds below a second, seconds with one decimal above. */
+function formatDurationMs(durationMs: number, locale: Locale): string {
+  if (durationMs < 1000) {
+    return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(durationMs)} ms`;
+  }
+  const seconds = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(
+    durationMs / 1000,
+  );
+  return `${seconds} s`;
+}
+
 function VerificationDetail({
   event,
   t,
@@ -1399,11 +1433,11 @@ function VerificationDetail({
   const summary = event.kind === "runtime-event" ? event.verificationSummary : undefined;
   if (summary === undefined) return null;
   return (
-    <div className={styles.timelineDetail}>
+    <div className={`${styles.timelineDetail} ${styles.cmpVerificationFacts}`}>
       <p>
         {t("codingWorkbench.verification.result", {
           verifier: t(`codingWorkbench.verification.verifier.${summary.verifierId}`),
-          status: t(`codingWorkbench.verification.status.${summary.status}`),
+          status: t(`codingWorkbench.verification.status.${shownVerificationStatus(summary)}`),
         })}
       </p>
       <p>
@@ -1415,7 +1449,7 @@ function VerificationDetail({
       </p>
       <p>
         {t("codingWorkbench.verification.duration", {
-          duration: number.format(summary.durationMs),
+          duration: formatDurationMs(summary.durationMs, locale),
         })}
       </p>
     </div>
@@ -1426,7 +1460,9 @@ function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routin
   if (event.state === "failed" || event.failureCode !== undefined) return "attention";
   if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") return "attention";
   if (event.kind === "runtime-event" && event.verificationSummary !== undefined) {
-    return event.verificationSummary.status === "passed" ? "success" : "attention";
+    const shown = shownVerificationStatus(event.verificationSummary);
+    if (shown === "notRun") return "routine";
+    return shown === "passed" ? "success" : "attention";
   }
   if (event.state === "succeeded") return "success";
   return "routine";
