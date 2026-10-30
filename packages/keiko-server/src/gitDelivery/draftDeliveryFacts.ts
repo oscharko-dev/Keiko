@@ -153,15 +153,22 @@ function issueBoundDrift(
   return context.baseRef === context.issueBinding.defaultBaseRef ? undefined : "base-ref-mismatch";
 }
 
+function issueFreeDrift(
+  target: string,
+  context: DraftDeliveryRunContext,
+): DraftRepositoryDrift | undefined {
+  return codingWorkbenchRemoteDigest(target) === context.repositoryDigest
+    ? undefined
+    : "target-repository-mismatch";
+}
+
 function draftRepositoryDrift(
   target: string,
   context: DraftDeliveryRunContext,
 ): DraftRepositoryDrift | undefined {
   const drift = isIssueBoundContext(context)
     ? issueBoundDrift(target, context)
-    : codingWorkbenchRemoteDigest(target) === context.repositoryDigest
-      ? undefined
-      : "target-repository-mismatch";
+    : issueFreeDrift(target, context);
   if (drift !== undefined) return drift;
   return context.headRef === context.baseRef ? "head-equals-base" : undefined;
 }
