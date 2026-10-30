@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aea767852db181888f1f9c42d72d6399027ab7700f944937b932de42b980c529",
+    "catalogDigest": "bd81bd700d0d1d433fe05c41c88ab49fa39376aa7116f94b27d513ed0147d96f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -28743,8 +28743,8 @@
         "failureClasses": ["git-verified-commit"],
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:112",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1097"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:115",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1138"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -107459,7 +107459,7 @@
     {
       "op": "git.verified-commit",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:115",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:118",
       "package": "keiko-server"
     },
     {

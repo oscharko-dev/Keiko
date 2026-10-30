@@ -43,7 +43,10 @@ import {
   verifiedCommitMessageDigest,
 } from "./verifiedCommitFacts.js";
 import { reconcileVerifiedCommit } from "./verifiedCommitRecovery.js";
-import { commitVerificationReportPassed } from "./verifiedCommitVerification.js";
+import {
+  commitVerificationReportFailed,
+  commitVerificationReportPassed,
+} from "./verifiedCommitVerification.js";
 import {
   appendVerificationCheck,
   EMPTY_VERIFICATION_CHECK_HISTORY,
@@ -284,6 +287,8 @@ interface VerificationTicket {
 interface VerificationProof extends VerificationTicket {
   readonly evidenceId: string;
   readonly passed: boolean;
+  /** The checks ran on this unchanged candidate and at least one failed: evidence, not proof. */
+  readonly failed: boolean;
 }
 
 // Why a completed verification cannot prove the candidate, or undefined when it does. The cause is
@@ -303,6 +308,21 @@ function verificationRejection(
   if (!sameVerifiedCommitFacts(before.facts, after)) return "candidate-drift";
   if (now - before.startedAtMs >= TTL_MS) return "verification-stale";
   return undefined;
+}
+
+// A completed verification of this exact, unchanged candidate whose checks ran and failed (#3907).
+function failingEvidence(
+  before: VerificationTicket,
+  after: VerifiedCommitFacts,
+  report: VerificationReport,
+  now: number,
+): boolean {
+  return (
+    report.workspaceRoot === before.context.workspace.root &&
+    commitVerificationReportFailed(report, before.startedAtMs, now) &&
+    sameVerifiedCommitFacts(before.facts, after) &&
+    now - before.startedAtMs < TTL_MS
+  );
 }
 
 function blockingCounts(
@@ -539,11 +559,13 @@ class VerifiedCommitController implements VerifiedCommitService {
       throw error;
     }
     if (!this.verificationGuardLive(context, guard)) return false;
-    const rejection = verificationRejection(before, after, report, this.now());
+    const now = this.now();
+    const rejection = verificationRejection(before, after, report, now);
     const passed = rejection === undefined;
+    const failed = !passed && failingEvidence(before, after, report, now);
     const history = this.recordCheck(context.runId, report, before.facts.stagedTreeDigest);
     const evidenceId = this.recordVerificationEvidence(context, before.facts, report, history);
-    this.proof = { ...before, passed, evidenceId };
+    this.proof = { ...before, passed, failed, evidenceId };
     this.log(context, "verification", {
       passed,
       ...(rejection === undefined ? {} : { reason: rejection }),
@@ -634,7 +656,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     // model read "verification-missing" after a verification it had just watched succeed and gave
     // the delivery up; the proof it lacked was a PASSING latest verification.
     if (verification === undefined) return this.recordMissingProof(context, binding, facts);
-    if (!verification.passed)
+    if (!verification.passed && !this.admitsFailedVerification(verification))
       return this.record(context, binding, "verification-failed", "verification-failed");
     if (
       !contextMatches(context, verification.context) ||
@@ -654,7 +676,14 @@ class VerifiedCommitController implements VerifiedCommitService {
       );
     if (hasIssueClosingDirective(message))
       return this.record(context, binding, "blocked", "issue-directive");
-    return this.prepareProposal(context, facts, binding, message);
+    return this.prepareProposal(context, facts, binding, message, !verification.passed);
+  }
+
+  // Full access commits what the human asked for even when the candidate's checks ran red (owner
+  // decision 2026-10-30, #3907): the failing evidence stays bound to the commit and its log lines,
+  // never presented as a pass. Every other mode keeps a passing verification as the gate.
+  private admitsFailedVerification(verification: VerificationProof): boolean {
+    return verification.failed && this.options.policyAllowsWithoutApproval?.("commit") === true;
   }
 
   private async prepareProposal(
@@ -662,6 +691,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     facts: VerifiedCommitFacts,
     binding: VerifiedCommitBinding,
     message: string,
+    verificationFailed: boolean,
   ): Promise<VerifiedCommitResult> {
     const awaiting = this.result(binding, "approval-required", "approval-required");
     const review = await readVerifiedCommitReview(
@@ -679,6 +709,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       review,
       context,
       expiresAtMs: this.now() + TTL_MS,
+      ...(verificationFailed ? { verificationFailed: true as const } : {}),
       command: {
         kind: "commit",
         message,
@@ -875,6 +906,9 @@ class VerifiedCommitController implements VerifiedCommitService {
       this.log(context, "approval", {
         proposalId: binding.proposalId,
         state: "policy-authorized",
+        ...(proposal.verificationFailed === true
+          ? { passed: false, verificationEvidenceId: binding.verificationEvidenceId }
+          : {}),
       });
       return this.executeConsumed(proposal, { required: false });
     }
@@ -897,6 +931,13 @@ class VerifiedCommitController implements VerifiedCommitService {
     if (blocked !== undefined) return blocked;
     if (!claim.required && this.options.policyAllowsWithoutApproval?.("commit") !== true)
       return this.record(context, binding, "blocked", "approval-invalid");
+    // Only Full access admits a failed verification, so a mode lowered after the proposal turns the
+    // red checks back into the gate, whatever approval reached this point.
+    if (
+      proposal.verificationFailed === true &&
+      this.options.policyAllowsWithoutApproval?.("commit") !== true
+    )
+      return this.record(context, binding, "verification-failed", "verification-failed");
     this.proposals.delete(binding.proposalId);
     this.proof = undefined;
     // Review finding (comment 3941793530, #3384 audit): the write-ahead recovery-required marker
