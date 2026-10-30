@@ -842,6 +842,43 @@ describe("verified Code-task commit service", () => {
       extra: { state: "policy-authorized", passed: false },
     });
   });
+  // #3907 AC3, lab lane T19: the verification passed on a clean tree, the model's next pytest run
+  // left an untracked cache, and every commit after it was refused although the staged candidate
+  // was the verified one. Full access commits it; the passing proof still describes that tree.
+  it("commits a passed candidate after a test run left an untracked file in Full access", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => true,
+    });
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report())).toBe(true);
+    writeFileSync(join(root, "cache.pyc"), "cache\n");
+
+    const proposal = await service.propose("feat: commit after the test run");
+    if (proposal?.status !== "approval-required")
+      throw new Error(`proposal unavailable: ${String(proposal?.status)}`);
+    expect(service.unprovenAdmission?.()).toBeUndefined();
+    const result = await service.execute(proposal.proposalId, undefined, { check: () => true });
+
+    expect(result?.status, JSON.stringify(events)).toBe("succeeded");
+    expect(git(["ls-files", "cache.pyc"])).toBe("");
+    expect(git(["status", "--porcelain"])).toBe("?? cache.pyc");
+    const approvalLine = events.filter((event) => event.extra?.phase === "approval").at(-1);
+    expect(approvalLine).toMatchObject({ extra: { state: "policy-authorized" } });
+    expect(approvalLine?.extra).not.toHaveProperty("passed");
+  });
+  it("keeps a later untracked file as drift for a passed candidate outside Full access", async () => {
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report())).toBe(true);
+    writeFileSync(join(root, "cache.pyc"), "cache\n");
+
+    expect(await service.propose("feat: commit after the test run")).toMatchObject({
+      status: "drift",
+    });
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
+  });
   it("keeps an untracked file as the commit gate outside Full access", async () => {
     writeFileSync(join(root, "package-lock.json"), "{}\n");
     expect(await service.beginVerification()).toMatchObject({

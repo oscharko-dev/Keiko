@@ -2058,7 +2058,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `commitProof: "admitted"` with the untracked paths, and the commit carries only the staged tree.
   The proposal, its review and the execution recheck the same staged candidate and leave the
   untracked files out of the comparison; any other mode, an unstaged change, or Full access ending
-  before execution still refuses.
+  before execution still refuses. The same comparison covers untracked files that appear after a
+  verification passed on a clean tree (lab lane T19: the model's next pytest run left its cache):
+  in Full access the passing proof still describes the unchanged staged tree and the commit
+  proceeds; in any other mode the later untracked file remains drift.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

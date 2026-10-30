@@ -743,7 +743,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       return this.record(context, binding, "verification-failed", "verification-failed");
     if (
       !contextMatches(context, verification.context) ||
-      !this.candidateCurrent(verification.unproven, context, verification.facts, facts) ||
+      !this.candidateCurrent(context, verification.facts, facts) ||
       this.now() - verification.startedAtMs >= TTL_MS
     )
       return this.record(context, binding, "drift", "verification-stale");
@@ -777,16 +777,19 @@ class VerifiedCommitController implements VerifiedCommitService {
     return this.fullAccess() && untrackedOutsideCandidate(context, facts);
   }
 
-  // An unproven verification stays bound to its staged candidate, with untracked files beside it.
+  // The verified staged candidate, unchanged. Full access also admits untracked files beside it,
+  // whether they lay there while the verification ran (unproven) or a test run left them after it
+  // passed (T19's pytest cache): the commit holds the staged tree alone (#3907).
   private candidateCurrent(
-    unproven: boolean,
     context: VerifiedCommitRunContext,
     verified: VerifiedCommitFacts,
     facts: VerifiedCommitFacts,
   ): boolean {
-    if (!unproven) return sameVerifiedCommitFacts(verified, facts);
+    if (sameVerifiedCommitFacts(verified, facts)) return true;
     return (
-      sameCommitCandidate(verified, facts) && (facts.clean || this.admitsUntracked(context, facts))
+      sameCommitCandidate(verified, facts) &&
+      (verified.clean || untrackedOutsideCandidate(context, verified)) &&
+      (facts.clean || this.admitsUntracked(context, facts))
     );
   }
 
@@ -813,7 +816,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     );
     if (review === undefined) return this.record(context, binding, "blocked", "review-incomplete");
     const afterReview = await this.facts(context);
-    if (!this.candidateCurrent(verificationFailed, context, facts, afterReview))
+    if (!this.candidateCurrent(context, facts, afterReview))
       return this.record(context, binding, "drift", "candidate-drift");
     const proposal: VerifiedCommitProposal = {
       binding,
@@ -945,8 +948,7 @@ class VerifiedCommitController implements VerifiedCommitService {
   private async current(proposal: VerifiedCommitProposal): Promise<boolean> {
     const facts = await this.facts(proposal.context);
     return (
-      (facts.clean ||
-        (proposal.verificationFailed === true && this.admitsUntracked(proposal.context, facts))) &&
+      (facts.clean || this.admitsUntracked(proposal.context, facts)) &&
       facts.headSha === proposal.binding.parentSha &&
       facts.baseSha === proposal.binding.baseSha &&
       facts.stagedTreeDigest === proposal.binding.stagedTreeDigest &&
