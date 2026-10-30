@@ -387,7 +387,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["not-applicable", "recorded", "unavailable"],
+      values: ["not-applicable", "recorded", "unavailable", "admitted"],
     },
     commitProofReason: {
       type: "string",
@@ -2338,9 +2338,12 @@ async function recordCandidateVerification(
     check: guard.check,
     signal,
   });
-  return recorded
-    ? { commitProof: "recorded" }
-    : { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" };
+  if (recorded) return { commitProof: "recorded" };
+  // Full access: the staged candidate may be committed beside untracked files, unproven (#3907).
+  const outside = service.unprovenAdmission?.();
+  return outside === undefined
+    ? { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" }
+    : { commitProof: "admitted", blocking: outside };
 }
 // Unsaved editor buffers are saved, not staged (#3612); every other refusal names the paths the
 // model has to stage (run 16, 2026-09-10), and a vanished run context has none.

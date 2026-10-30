@@ -636,6 +636,7 @@ function fakeSafeActivityProjection(): CodingSafeActivityProjection {
     purge: vi.fn(),
     purgeAll: vi.fn(),
     markUnavailable: vi.fn(),
+    interrupt: vi.fn(),
     currentContent: vi.fn(() => null),
     subscribeContent: vi.fn(() => ({ admitted: true, detach: vi.fn() })),
   };
@@ -4643,12 +4644,15 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(
       successfulSnapshot(await g.orchestrator.takeover("run-1", { requestId: "run-1" })).state,
     ).toBe("taken-over");
-    expect(g.safeActivityProjection.purge).toHaveBeenCalledWith("run-1", "takeover");
+    // Owner decision 2026-10-30 (#3907): an ended run keeps its tool rows, as OpenCode does; only
+    // its open calls are settled as cancelled. Nothing purges the feed of a run that was stopped.
+    expect(g.safeActivityProjection.interrupt).toHaveBeenCalledWith("run-1", "takeover");
     await g.orchestrator.start(start);
     expect(
       successfulSnapshot(await g.orchestrator.stop("run-2", { requestId: "run-2" })).state,
     ).toBe("cancelled");
-    expect(g.safeActivityProjection.purge).toHaveBeenCalledWith("run-2", "stop");
+    expect(g.safeActivityProjection.interrupt).toHaveBeenCalledWith("run-2", "stop");
+    expect(g.safeActivityProjection.purge).not.toHaveBeenCalled();
     expect(g.evidence.settle).toHaveBeenCalled();
   });
 

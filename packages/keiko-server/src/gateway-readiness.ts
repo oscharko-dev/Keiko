@@ -2079,6 +2079,33 @@ function retainBusyConversationReadiness(
   return true;
 }
 
+/**
+ * #3907 AC3: a model answer a coding run accepted renews the model's same-generation basic-chat
+ * success, as an answered busy probe does (#4115): the answer is stronger evidence than the probe
+ * the run would otherwise need, and a probe queued between the run's turns would only compete with
+ * them. It never establishes readiness, never repairs a failed observation and never crosses a
+ * configuration change: the answer must come from the configuration the holder still serves.
+ */
+export function renewConversationReadinessFromAnswer(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+  answeredConfig: GatewayConfig,
+): "renewed" | "not-renewable" {
+  const holder = deps.gatewayConfig;
+  if (holder?.current() !== answeredConfig) return "not-renewable";
+  const generation = holder.generation();
+  const previous = holder.verifiedCapability(modelId);
+  if (!renewableConversationProof(previous, generation)) return "not-renewable";
+  holder.recordVerifiedCapability(
+    modelId,
+    previous.fields,
+    previous.checkedAt,
+    generation,
+    new Date().toISOString(),
+  );
+  return "renewed";
+}
+
 // A same-generation success with a valid proof time. A future or malformed time is unknown and
 // never renewable; an expired but valid proof is (#4115).
 function renewableConversationProof(

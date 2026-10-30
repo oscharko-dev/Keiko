@@ -2709,6 +2709,50 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  // #3907 AC3 (lab lane T17): in Full access a staged candidate beside untracked files is admitted,
+  // never proven; the model reads the paths that stay outside the commit instead of "verify again".
+  it("reports a Full-access commit admitted beside untracked files", async () => {
+    const blocking = {
+      unstagedCount: 0,
+      untrackedCount: 1,
+      unstaged: [],
+      untracked: ["package-lock.json"],
+    };
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      log,
+      runToReport: () => Promise.resolve(verificationReport("passed")),
+      records: [],
+      verifiedCommitService: {
+        ...verificationService(),
+        beginVerification: () => Promise.resolve({ kind: "ticket", ticket: {} }),
+        completeVerification: () => Promise.resolve(false),
+        unprovenAdmission: () => blocking,
+      },
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-admitted",
+          idempotencyKey: "verification-admitted-key",
+          verifierId: "test",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      verification: { status: "passed", commit: { commitProof: "admitted", blocking } },
+    });
+    const line = expectActivityLogProof(
+      "coding-runtime.verification.emitted-line",
+      formatActivityLogProofLine(log.find((event) => event.extra?.state === "passed") ?? {}),
+    );
+    expect(line).toMatchObject({ commitProof: "admitted" });
+    expect(line).not.toHaveProperty("commitProofReason");
+  });
+
   it.each(["begin", "complete", "observe"] as const)(
     "preserves executed checks when optional commit proof %s throws",
     async (stage) => {

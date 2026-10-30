@@ -1059,7 +1059,9 @@ run's messages from the newest end and only as far as the feed can still hold th
 older is named for the transcript by position and never examined. `cutCount` counts timeline
 messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
-truncated.". Counts only — never a message, path or run name.
+truncated.". Counts only — never a message, path or run name. An explicit Stop or takeover keeps the
+run's live tool rows, as OpenCode does: `coding-runtime.safe-activity` records `event=interrupted`
+with the closed `reason` and the number of open calls it settled as `cancelled` (#3907).
 
 `coding-runtime.history.export` records the human's local export of a Coding History task (Export
 JSON or Export Markdown; the browser saves the file, nothing is uploaded): `requested`, then
@@ -1139,7 +1141,10 @@ recording model names, requests or answers. An uninvoked model port consumes no 
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
 accounting. A chat probe that only times out or meets a transient overload status keeps and renews
 a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
-diagnostic), so a busy single-slot model stays selectable (#4115). A verified model nobody asked for in
+diagnostic), so a busy single-slot model stays selectable (#4115). An accepted coding-sidecar answer
+that finished serving renews that same-generation success too (`readinessRenewal` on
+`coding-sidecar.gateway.outcome`), and a Workbench profile read that finds it expired starts the
+on-demand check (#3907). A verified model nobody asked for in
 15 minutes is neither renewed nor recovered in the background; `gateway.readiness.renewal.paused`
 records that pause (`paused`: `renewal`, `recovery`; optional `idleMs`), and the model's next
 conversation request verifies it on demand (#4103). See
