@@ -77,11 +77,21 @@ export function extractApprovedFiles(
 ) {
   // bsdtar (macOS, Windows System32) reads both formats; GNU tar reads the tar.gz archives that are
   // the only ones a Linux host is ever offered. Only the two approved members are named, so
-  // nothing else in the archive is extracted.
+  // nothing else in the archive is extracted. `--no-same-owner` keeps the archive's recorded owner
+  // (uid 1001 upstream) off the extracted files when run as root, which would otherwise carry into
+  // the installed copies and fail the current-uid ownership check; both tars accept it.
   const extract = approval.archiveKind === "zip" ? "-xf" : "-xzf";
   execute(
     systemBinary("tar", binaries, { exists }),
-    [extract, archive, "-C", staging, approval.binaryMember, approval.licenseMember],
+    [
+      extract,
+      archive,
+      "--no-same-owner",
+      "-C",
+      staging,
+      approval.binaryMember,
+      approval.licenseMember,
+    ],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
 }

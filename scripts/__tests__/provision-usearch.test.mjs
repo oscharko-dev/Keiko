@@ -258,6 +258,15 @@ describe("provisioned USearch runtime trust", () => {
       "/tmp/runtime.tgz",
       "https://example.test/runtime.tgz",
     ]);
+    expect(calls[1]?.[1]).toEqual([
+      "-xzf",
+      "/tmp/runtime.tgz",
+      "--no-same-owner",
+      "-C",
+      "/tmp/staging",
+      "package/prebuilds/linux-x64/usearch.node",
+      "package/LICENSE",
+    ]);
   });
 
   it("deletes and rejects a downloaded archive that exceeds the hard byte limit", () => {

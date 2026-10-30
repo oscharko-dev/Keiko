@@ -33,6 +33,11 @@ import {
 const roots = [];
 const POSIX = process.platform !== "win32";
 const SYSTEM_TAR = "/usr/bin/tar";
+// GNU tar (Linux) and bsdtar (macOS) spell an archived owner override differently.
+const FOREIGN_OWNER_ARGS =
+  process.platform === "linux"
+    ? ["--owner=1001", "--group=1001", "--numeric-owner"]
+    : ["--uid", "1001", "--gid", "1001"];
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -318,7 +323,15 @@ describe("extractApprovedFiles", () => {
     expect(calls).toEqual([
       [
         "/approved/tar",
-        [flag, "/tmp/archive", "-C", "/tmp/staging", target.binaryMember, target.licenseMember],
+        [
+          flag,
+          "/tmp/archive",
+          "--no-same-owner",
+          "-C",
+          "/tmp/staging",
+          target.binaryMember,
+          target.licenseMember,
+        ],
         { stdio: ["ignore", "ignore", "inherit"] },
       ],
     ]);
@@ -345,7 +358,17 @@ describe("extractApprovedFiles", () => {
       writeFileSync(join(top, "README.md"), "decoy");
       writeFileSync(join(top, "doc", "CHANGELOG.md"), "decoy");
       const archive = join(temporaryRoot("keiko-ripgrep-archive-"), "ripgrep.tar.gz");
-      execFileSync(SYSTEM_TAR, ["-czf", archive, "-C", source, "ripgrep-test"]);
+      // The upstream release records a foreign owner (uid 1001). GNU tar run as root restores an
+      // archived owner unless told not to, and the provisioned files would then fail the
+      // current-uid ownership check; the archive here carries a foreign owner the same way.
+      execFileSync(SYSTEM_TAR, [
+        "-czf",
+        archive,
+        ...FOREIGN_OWNER_ARGS,
+        "-C",
+        source,
+        "ripgrep-test",
+      ]);
       const staging = temporaryRoot("keiko-ripgrep-staging-");
       const { options } = provisionOptions(provision, {
         downloadFile: (destination) => writeFileSync(destination, readFileSync(archive)),
@@ -361,6 +384,8 @@ describe("extractApprovedFiles", () => {
 
       const installed = provisionRipgrep(options);
       expect(readFileSync(installed)).toEqual(provision.binary);
+      expect(statSync(installed).uid).toBe(process.getuid());
+      expect(statSync(join(dirname(installed), "LICENSE-MIT")).uid).toBe(process.getuid());
     },
   );
 });

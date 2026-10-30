@@ -165,9 +165,11 @@ export function extractApprovedFiles(
   archivePath,
   { binaries = SYSTEM_BINARIES, execute = execFileSync, exists = existsSync } = {},
 ) {
+  // Ownership comes from this process, never from the archive: run as root, tar would otherwise
+  // restore the tarball's recorded owner and the copies would inherit it.
   execute(
     systemBinary("tar", binaries, { exists }),
-    ["-xzf", tarball, "-C", staging, archivePath, LICENSE_ARCHIVE_PATH],
+    ["-xzf", tarball, "--no-same-owner", "-C", staging, archivePath, LICENSE_ARCHIVE_PATH],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
 }
