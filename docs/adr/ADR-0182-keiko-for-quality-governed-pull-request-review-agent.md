@@ -165,6 +165,11 @@ counters are the only sources for quality claims in UI, documentation and releas
 scoring is one pure function, `scoreReviewSeedRun`, shared by the development seed gate in
 `keiko-evaluations` and the shipped pair qualification in the server.
 
+The holdout boundary is the constant `holdoutFromPullRequest` of the review evaluation manifest:
+pull request #3066, fixed by Issue #4132 from the recorded baseline
+(`docs/qa/review-agent-baseline-2026-10-30.md`); the replay refuses a run that tunes on the holdout.
+Definitions and labeling rules are in `docs/qa/review-agent-measurement.md`.
+
 ### D10 — Publication boundary
 
 Nothing leaves Keiko without an explicit human action. Publication arrives only in phase 3, after

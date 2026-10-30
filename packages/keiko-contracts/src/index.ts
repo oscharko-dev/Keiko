@@ -43,7 +43,7 @@ export type { clampUnit } from "./numeric.js";
 // evaluation harness — folded suites under `keiko-evaluations`, the gate script in `scripts/`,
 // and the server retrieval eval — imports these so the ADR-0152 D5 gate floors stay calibrated
 // against one math. `tests/architecture/eval-metrics-single-owner.test.ts` proves the invariant.
-export type { binaryNdcgAtK, mean } from "./eval-metrics.js";
+export type { binaryNdcgAtK, mean, wilsonInterval, WilsonInterval } from "./eval-metrics.js";
 
 // ─── Shared stable ordering helpers ─────────────────────────────────────────────
 export type { sortedStrings } from "./stable-order.js";
@@ -5347,6 +5347,7 @@ export type {
   ReviewRunPhase,
   ReviewRunSettlement,
   ReviewSeedCase,
+  ReviewSeedFixture,
   ReviewSeedRunResult,
   ReviewSeedScore,
   ReviewSettlementKind,
