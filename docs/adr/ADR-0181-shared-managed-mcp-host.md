@@ -156,6 +156,11 @@ app-session ownership, a five-minute expiry and configuration-generation cancell
 issuers are validated before code exchange. SDK credentials live in a separate namespace of the
 existing MCP vault, bound to server, exact resource, issuer, client and requested scope. Opaque
 legacy runtime credentials are never interpreted as SDK tokens; those installations sign in again.
+Restored SDK grants require a finite, non-negative stored expiry. Zero explicitly represents a
+token without a server-provided lifetime; missing or malformed expiry requires sign-in again.
+Refused expiry metadata does not discard a known token from the bounded credential-redaction
+floor. Malformed or oversized historical credential floors refuse restored authority before any
+network effect.
 Refreshes are coalesced per current server generation and occur before dispatch. Authentication
 failures never replay an MCP tool call. Native production runs consume OAuth servers through the
 same run-bound relay as other configured servers; external tokens never enter their configuration

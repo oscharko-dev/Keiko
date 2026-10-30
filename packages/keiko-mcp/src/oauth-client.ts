@@ -128,9 +128,13 @@ class OAuthSession implements OAuthClientProvider {
   constructor(private readonly options: McpOAuthClientOptions) {
     const saved = options.persistence.read();
     this.#tokens = restoredTokens(saved?.tokens, options.oauth.issuer);
-    if (typeof saved?.expiresAt === "number" && Number.isFinite(saved.expiresAt))
-      this.#expiresAt = saved.expiresAt;
+    const expiresAt = saved?.expiresAt;
+    const validExpiry =
+      typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt >= 0;
+    if (validExpiry) this.#expiresAt = expiresAt;
     this.restoreFloor(saved?.credentialFloor);
+    // Refused authority still retains the known token in the bounded redaction floor.
+    if (!validExpiry) this.#tokens = undefined;
     const client = saved?.client;
     if (
       object(client) &&

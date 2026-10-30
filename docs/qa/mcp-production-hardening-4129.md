@@ -211,3 +211,36 @@ The current staged browser build also passed supervised MCP write denial with ze
 Ask-mode cancellation while native MCP approval was pending with zero effects, and two independent
 writes that each returned isError after exactly one effect. Both write-error tasks required recovery;
 the second recovery state survived a complete app reload without replay.
+
+## Final qualification checkpoint and restored-expiry defect
+
+The complete package run passed 2,774 suites and 62,841 tests (21 suites and 299 existing tests
+skipped). The package/UI/script coverage ratchets, strict release line targets and all 73 governed
+file floors passed. The first changed-code check measured 84.6% against the unchanged 85% floor;
+additional adversarial restoration cases are being qualified, rather than relaxing that gate.
+
+Those cases reproduced five invalid persisted expiry shapes that were incorrectly interpreted
+as a token without a lifetime. Restoration now requires a finite, non-negative expiry; explicit
+zero remains supported. Rejected authority retains its known access token in the bounded
+redaction floor and performs no token request or persistence write. Missing, null, string,
+non-finite and negative expiry, malformed token fields and malformed/oversized credential history
+have targeted regressions. A new complete package coverage run is required after this runtime fix.
+
+The built App Browser also confirmed one successful Full-access write, central disable killing
+both the live stdio provider and its SIGTERM-resistant child, and one lost response after an
+independently counted effect. The unknown outcome remained recovery-required after a complete
+document reload; the counter stayed at one. A pending Ask-mode write was cancelled across central
+configuration changes with zero effects; overlapping windows caused additional enable/disable
+changes, so that case does not isolate argument editing as the sole cancellation cause.
+
+CI identified a missing standard stdio declaration in the Windows probe, now corrected with
+`<stdio.h>`, and the missing direct-use decision row for the SDK's already shipped cross-spawn
+dependency. The exact supply-chain gate now passes locally. The Windows compiler/execution result
+remains pending. An unrelated existing finalization test raced a real 10 ms timer against its
+injected clock; only that test's clock handling changed, and all 25 tests in its suite pass.
+
+CodeQL alerts 96 and 97 concern public configuration identity digests, not password storage.
+Their heuristic classification was reproduced with the actual CodeQL analyzer. No suppression,
+query or digest change was made; explicit owner disposition is pending. Release version selection,
+final built-source browser qualification, remaining failure journeys and exact-head required CI
+also remain open. This checkpoint is not a production-readiness certificate.

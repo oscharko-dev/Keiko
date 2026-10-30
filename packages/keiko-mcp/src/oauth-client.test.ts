@@ -83,6 +83,127 @@ function fixture(
   };
 }
 describe("central MCP OAuth SDK adapter", () => {
+  it.each([
+    { label: "wrong issuer", patch: { issuer: "https://other.example.test" } },
+    { label: "non-string access token", patch: { access_token: 7 } },
+    { label: "empty access token", patch: { access_token: "" } },
+    { label: "oversized access token", patch: { access_token: "x".repeat(8193) } },
+    { label: "unsupported token type", patch: { token_type: "Basic" } },
+    { label: "non-string refresh token", patch: { refresh_token: 7 } },
+  ])("rejects a malformed restored token before network activity: $label", async ({ patch }) => {
+    const network = vi.fn();
+    const write = vi.fn();
+    const client = createMcpOAuthClient({
+      url,
+      oauth: { issuer, clientId: "synthetic-public-client", scope: "tools.read" },
+      persistence: {
+        read: () => ({
+          tokens: {
+            issuer,
+            access_token: "synthetic-access-token",
+            token_type: "Bearer",
+            ...patch,
+          },
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        }),
+        write,
+      },
+      beforeEffect: () => true,
+      fetch: network,
+    });
+    expect(client.authorized()).toBe(false);
+    await expect(client.token()).rejects.toMatchObject({ reason: "not-admitted" });
+    expect(network).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("preserves the explicit zero expiry used for tokens without a server-provided lifetime", async () => {
+    const network = vi.fn();
+    const client = createMcpOAuthClient({
+      url,
+      oauth: { issuer, clientId: "synthetic-public-client", scope: "tools.read" },
+      persistence: {
+        read: () => ({
+          tokens: { issuer, access_token: "synthetic-access-token", token_type: "Bearer" },
+          expiresAt: 0,
+        }),
+        write: vi.fn(),
+      },
+      beforeEffect: () => true,
+      fetch: network,
+    });
+    expect(client.authorized()).toBe(true);
+    await expect(client.token()).resolves.toBe("synthetic-access-token");
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, "0", Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    "refuses persisted authority with an invalid expiry (%s) while retaining redaction custody",
+    async (expiresAt) => {
+      const network = vi.fn();
+      const write = vi.fn();
+      const client = createMcpOAuthClient({
+        url,
+        oauth: { issuer, clientId: "synthetic-public-client", scope: "tools.read" },
+        persistence: {
+          read: () => ({
+            tokens: { issuer, access_token: "synthetic-access-token", token_type: "Bearer" },
+            expiresAt,
+          }),
+          write,
+        },
+        beforeEffect: () => true,
+        fetch: network,
+      });
+      expect(client.authorized()).toBe(false);
+      expect(client.credentials()).toContain("synthetic-access-token");
+      await expect(client.token()).rejects.toMatchObject({ reason: "not-admitted" });
+      expect(network).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { label: "non-array", floor: {} },
+    { label: "too many entries", floor: Array.from({ length: 257 }, () => ({})) },
+    { label: "non-object entry", floor: [null] },
+    { label: "non-string credential", floor: [{ value: 7, expiresAt: 0 }] },
+    { label: "empty credential", floor: [{ value: "", expiresAt: 0 }] },
+    { label: "oversized credential", floor: [{ value: "x".repeat(8193), expiresAt: 0 }] },
+    { label: "non-number expiry", floor: [{ value: "synthetic", expiresAt: "0" }] },
+    { label: "non-finite expiry", floor: [{ value: "synthetic", expiresAt: Number.NaN }] },
+    { label: "negative expiry", floor: [{ value: "synthetic", expiresAt: -1 }] },
+    {
+      label: "UTF-8 byte budget exceeded",
+      floor: Array.from({ length: 5 }, () => ({
+        value: "ø".repeat(8192),
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      })),
+    },
+  ])("refuses restored authority with a malformed credential floor: $label", async ({ floor }) => {
+    const network = vi.fn();
+    const write = vi.fn();
+    const client = createMcpOAuthClient({
+      url,
+      oauth: { issuer, clientId: "synthetic-public-client", scope: "tools.read" },
+      persistence: {
+        read: () => ({
+          tokens: { issuer, access_token: "synthetic-access-token", token_type: "Bearer" },
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          credentialFloor: floor,
+        }),
+        write,
+      },
+      beforeEffect: () => true,
+      fetch: network,
+    });
+    expect(client.authorized()).toBe(false);
+    expect(client.credentials()).toEqual([]);
+    await expect(client.token()).rejects.toMatchObject({ reason: "not-admitted" });
+    expect(network).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it.each(["invalid_client", "unauthorized_client"] as const)(
     "retains refresh custody after a client configuration rejection: %s",
     async (failure) => {
