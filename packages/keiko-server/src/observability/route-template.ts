@@ -225,7 +225,6 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "prompt-enhancement",
   "pull-requests",
   "proposals",
-  "pull-requests",
   "propose",
   "prove",
   "pull",
