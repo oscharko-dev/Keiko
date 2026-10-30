@@ -3,6 +3,30 @@ import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { continuityCorpusManifest } from "./chat-continuity-corpus.mjs";
 
+export function installContinuityCancellation(target = process) {
+  const controller = new globalThis.AbortController();
+  let reason;
+  const stop = (signal) => {
+    if (controller.signal.aborted) return;
+    reason = signal;
+    controller.abort();
+  };
+  const interrupt = () => stop("SIGINT"),
+    terminate = () => stop("SIGTERM");
+  target.once("SIGINT", interrupt);
+  target.once("SIGTERM", terminate);
+  return {
+    signal: controller.signal,
+    get reason() {
+      return reason;
+    },
+    dispose: () => {
+      target.off("SIGINT", interrupt);
+      target.off("SIGTERM", terminate);
+    },
+  };
+}
+
 export async function driveContinuityCampaigns(states, bounds, operation, now = Date.now) {
   const pending = (state) =>
     state.failures < 3 &&

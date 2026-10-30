@@ -79,9 +79,14 @@ produce a nonzero exit status. Ledger replacement uses a private temporary file 
 a failed replacement preserves the last complete snapshot. Provider observations retain only
 nonnegative integer input/output/total token counters and closed finish categories.
 
+The HTTP observation deadline is derived from the answering provider's existing buffered/streamed
+Gateway budgets, with a transport grace, and recorded per model. It must not silently cut a native
+model attempt short. SIGINT/SIGTERM cancel requests and drain waits, retain a terminated ledger and
+close the owned private BFF. Final success is persisted only after runtime cleanup succeeds.
+
 Oracle revision `chat-continuity-v2` rejects mixed obsolete/current amounts or dates and numeric
 substrings. Its manifest hashes positive and forbidden patterns including flags. The model-facing
-prompts are unchanged. Scores from the ongoing `v1` run need re-evaluation from matching private
+prompts are unchanged. Scores from the legacy `v1` run need re-evaluation from matching private
 probe answers under this oracle before comparison; they are not silently treated as `v2` results.
 
 For the candidate, rerun with `--phase candidate`, the same corpus and equivalent configuration,
@@ -102,12 +107,20 @@ The initial runtime smoke used an earlier laboratory revision. It is retained as
 attempt, not promoted into the frozen baseline. It observed slow startup/readiness and real model
 calls; those costs must remain distinguishable from compaction cost in the final report.
 
-The ongoing legacy productive-API campaign recovered all nine declared fields in each of the four
+The legacy productive-API campaign recovered all nine declared fields in each of the four
 before-pressure controls (Gemma/Qwen, plain/grounded) under its original oracle. After the first
 manual compaction, both Gemma modes and Qwen plain scored 9/9; Qwen grounded scored 8/9, explicitly
 reporting the rejected alternative as unknown. This is an observed score difference, not yet a
 causal separation of model variability from compaction loss. The positive results also show why a
 large reduction in occupancy alone does not establish forgetting.
+
+The first nine completed probes were independently re-scored under oracle v2 after matching each
+private SQLite answer to its recorded hash. Their scores were unchanged. The legacy run was then
+stopped as a preliminary attempt: its fixed six-minute client deadline was shorter than the native
+Gateway's ten-minute buffered-attempt floor and caused client cancellations. Its complete available
+ledger, private probe databases, termination observation and uncertain in-flight call remain retained.
+It is not a completed long-run qualification. Root verification also overlapped this preliminary
+run; its timings cannot be presented as isolated compaction cost.
 
 There is **no completed multi-hour baseline, repeated-compaction acceptance, candidate comparison,
 MCP live qualification or production-readiness claim yet**. Update this section only from actual

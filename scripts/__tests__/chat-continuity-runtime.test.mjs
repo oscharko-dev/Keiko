@@ -8,8 +8,11 @@ import {
   snapshotContinuityState,
   startContinuityRuntime,
   continuityResponseObservation,
+  continuityRequestTimeouts,
+  drainRequests,
 } from "../testing/coding-workbench-lab/chat-continuity-runtime.mjs";
 import { REPO_ROOT } from "../testing/coding-workbench-lab/lab-common.mjs";
+import { importBuilt } from "../testing/coding-workbench-lab/lab-common.mjs";
 
 const roots = [];
 afterEach(() => {
@@ -22,6 +25,36 @@ function temporary() {
 }
 
 describe("private continuity qualification state", () => {
+  it("honors cancellation while waiting for a physical request", async () => {
+    const controller = new globalThis.AbortController();
+    const draining = drainRequests([{ startedAt: 1 }], 60000, controller.signal);
+    controller.abort();
+    await expect(draining).rejects.toMatchObject({ name: "AbortError" });
+    await expect(drainRequests([], 60000, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+  it("drains completed observations and reports exhausted diagnostic bounds", async () => {
+    await expect(drainRequests([{ startedAt: 1, status: 200 }], 0)).resolves.toBeUndefined();
+    await expect(drainRequests([{ startedAt: 1 }], 0)).rejects.toThrow(
+      "continuity-provider-drain-timeout",
+    );
+  });
+  it("does not truncate a model call before the native Gateway's own budgets", async () => {
+    const { bufferedCallBudgetMs, streamedCallBudgetMs } = await importBuilt(
+      "keiko-model-gateway",
+      "resilience.js",
+    );
+    const provider = {
+      modelId: "synthetic",
+      timeoutMs: 30000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    };
+    const deadlines = await continuityRequestTimeouts([provider]);
+    expect(deadlines.synthetic).toBeGreaterThan(bufferedCallBudgetMs(provider, 0));
+    expect(deadlines.synthetic).toBeGreaterThan(streamedCallBudgetMs(provider, 0));
+  });
   it("retains only finite numeric provider counters and closed finish categories", () => {
     const observed = continuityResponseObservation(
       JSON.stringify({

@@ -24,6 +24,7 @@ import {
   driveContinuityCampaigns,
   continuityCampaignQualified,
   writeContinuityJson,
+  installContinuityCancellation,
 } from "./chat-continuity-campaign.mjs";
 import { readContinuityBuildIdentity } from "./chat-continuity-build.mjs";
 
@@ -77,6 +78,9 @@ const metadata = {
 };
 writeFileSync(join(output, "predeclared.json"), JSON.stringify(metadata, null, 2), { mode: 0o600 });
 let runtime, campaign;
+let finalStatus = "failed",
+  finalQualification;
+const cancellation = installContinuityCancellation();
 const save = (status, qualification) =>
   writeContinuityJson(join(output, "ledger.json"), {
     ...metadata,
@@ -106,7 +110,8 @@ function record(row) {
   );
 }
 async function checked(method, path, body) {
-  const result = await runtime.request(method, path, body, { timeoutMs: 360000 });
+  cancellation.signal.throwIfAborted();
+  const result = await runtime.request(method, path, body);
   if (result.status < 200 || result.status >= 300) {
     const error = new Error("qualification-request-refused");
     error.status = result.status;
@@ -242,12 +247,14 @@ async function probe(state, id) {
   const original = runtime,
     dir = join(output, `probe-${ledger.length}`);
   await original.drain();
+  cancellation.signal.throwIfAborted();
   await snapshotContinuityState(original.dir, dir);
   let isolated;
   try {
     isolated = await startContinuityRuntime(dir, original.env.KEIKO_CONFIG_FILE, physical, {
       env: original.env,
       port: original.proxyPort,
+      signal: cancellation.signal,
     });
     isolated.project = original.project;
     isolated.setActive = original.setActive;
@@ -313,6 +320,7 @@ async function runGuarded(state, operation) {
   try {
     return await operation();
   } catch (error) {
+    if (cancellation.signal.aborted) throw error;
     state.failures++;
     record({
       id: `${state.model}:${state.kind}:failed-${state.failures}`,
@@ -337,6 +345,7 @@ async function runCampaigns() {
   await driveContinuityCampaigns(states, { requiredCycles, requiredDuration }, (state) =>
     runGuarded(state, () => pressureCycle(state)),
   );
+  cancellation.signal.throwIfAborted();
   await runtime.restart();
   for (const state of states)
     await runGuarded(state, () => probe(state, `${state.model}:${state.kind}:restart-recall`));
@@ -379,17 +388,40 @@ async function runRepetitions() {
   return passed;
 }
 try {
-  runtime = await startContinuityRuntime(join(output, "runtime"), values.config, physical);
+  runtime = await startContinuityRuntime(join(output, "runtime"), values.config, physical, {
+    signal: cancellation.signal,
+  });
   metadata.models = runtime.models;
+  metadata.requestTimeoutByModel = runtime.requestTimeoutByModel;
   record({ id: "runtime-ready", models: runtime.models });
   const qualification = await runCampaigns();
   const passed = qualification.campaignsPassed && qualification.repetitionsPassed;
-  save(passed ? "completed" : "incomplete", qualification);
+  finalStatus = passed ? "completed" : "incomplete";
+  finalQualification = qualification;
   if (!passed) process.exitCode = 1;
 } catch (error) {
-  record({ id: "campaign-failed", errorClass: error.name, code: error.code ?? "operation-failed" });
-  save("failed");
-  process.exitCode = 1;
+  const interrupted = cancellation.signal.aborted;
+  record({
+    id: interrupted ? "campaign-terminated" : "campaign-failed",
+    errorClass: error.name,
+    code: interrupted ? "operator-interrupted" : (error.code ?? "operation-failed"),
+  });
+  metadata.terminationSignal = cancellation.reason;
+  finalStatus = interrupted ? "terminated" : "failed";
+  process.exitCode = interrupted ? (cancellation.reason === "SIGTERM" ? 143 : 130) : 1;
 } finally {
-  await runtime?.close();
+  try {
+    await runtime?.close();
+  } catch (error) {
+    record({
+      id: "campaign-cleanup-failed",
+      errorClass: error.name,
+      code: "runtime-cleanup-failed",
+    });
+    finalStatus = "failed";
+    process.exitCode = 1;
+  } finally {
+    cancellation.dispose();
+  }
+  save(finalStatus, finalQualification);
 }

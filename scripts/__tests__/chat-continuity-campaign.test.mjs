@@ -1,12 +1,14 @@
 import { afterEach, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   driveContinuityCampaigns,
   continuityCampaignQualified,
   writeContinuityJson,
+  installContinuityCancellation,
 } from "../testing/coding-workbench-lab/chat-continuity-campaign.mjs";
 
 const roots = [];
@@ -14,6 +16,17 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 const BOUNDS = { requiredCycles: 2, requiredDuration: 100 };
+it("turns operator signals into one cancellation and removes its listeners", () => {
+  const target = new EventEmitter(),
+    cancellation = installContinuityCancellation(target);
+  expect(cancellation.signal.aborted).toBe(false);
+  target.emit("SIGTERM");
+  target.emit("SIGINT");
+  expect(cancellation.signal.aborted).toBe(true);
+  expect(cancellation.reason).toBe("SIGTERM");
+  cancellation.dispose();
+  expect(target.eventNames()).toEqual([]);
+});
 function state() {
   return {
     cycles: 2,

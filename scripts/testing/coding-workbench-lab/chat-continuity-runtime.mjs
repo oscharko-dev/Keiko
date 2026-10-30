@@ -39,6 +39,22 @@ export function continuityResponseObservation(raw) {
   };
 }
 
+export async function continuityRequestTimeouts(providers) {
+  const { bufferedCallBudgetMs, streamedCallBudgetMs } = await importBuilt(
+    "keiko-model-gateway",
+    "resilience.js",
+  );
+  return Object.fromEntries(
+    providers.map((provider) => [
+      provider.modelId,
+      Math.min(
+        Math.max(bufferedCallBudgetMs(provider, 0), streamedCallBudgetMs(provider, 0)) + 1000,
+        2147483647,
+      ),
+    ]),
+  );
+}
+
 export function privateContinuityOutput(path) {
   const resolved = resolve(path);
   const candidate = join(realpathSync(dirname(resolved)), basename(resolved));
@@ -148,6 +164,9 @@ export async function startContinuityRuntime(dir, configPath, physical, options 
   const inherited = options.env ?? process.env;
   const providers = await configuredContinuityModels(configPath, inherited);
   if (providers.length === 0) throw new Error("no-configured-chat-models");
+  options.signal?.throwIfAborted();
+  const requestTimeoutByModel = await continuityRequestTimeouts(providers);
+  const requestTimeoutMs = Math.max(...Object.values(requestTimeoutByModel));
   const upstream = new URL(providers[0].baseUrl);
   if (
     upstream.protocol !== "http:" ||
@@ -172,17 +191,45 @@ export async function startContinuityRuntime(dir, configPath, physical, options 
       inherited,
     ),
   );
+  if (options.signal?.aborted) {
+    await runtime.close();
+    options.signal.throwIfAborted();
+  }
+  return continuityRuntimeView(runtime, {
+    dir,
+    providers,
+    physical,
+    observed,
+    options,
+    requestTimeoutByModel,
+    requestTimeoutMs,
+  });
+}
+
+function continuityRuntimeView(
+  runtime,
+  { dir, providers, physical, observed, options, requestTimeoutByModel, requestTimeoutMs },
+) {
+  const { proxy } = observed;
   return {
     ...runtime,
     dir,
     proxyPort: options.port ?? proxy.address().port,
     models: providers.map((entry) => entry.modelId),
     physical,
-    request: (...args) => runtime.bff.request(...args),
+    requestTimeoutByModel,
+    request: (method, path, body, requestOptions = {}) =>
+      runtime.bff.request(method, path, body, {
+        timeoutMs: requestTimeoutByModel[body?.modelId] ?? requestTimeoutMs,
+        signal: options.signal,
+        ...requestOptions,
+      }),
     setActive: observed.setActive,
-    drain: () => drainRequests(physical),
+    drain: () => drainRequests(physical, requestTimeoutMs, options.signal),
     restart: async () => {
+      options.signal?.throwIfAborted();
       await runtime.bff.stop();
+      options.signal?.throwIfAborted();
       await runtime.bff.start();
     },
   };
@@ -210,10 +257,12 @@ function observedProxy(upstream, physical) {
   };
 }
 
-async function drainRequests(physical) {
-  const deadline = Date.now() + 360000;
+export async function drainRequests(physical, budgetMs, signal) {
+  signal?.throwIfAborted();
+  const deadline = globalThis.performance.now() + budgetMs;
   while (physical.some((row) => row.startedAt && row.status === undefined)) {
-    if (Date.now() >= deadline) throw new Error("continuity-provider-drain-timeout");
-    await delay(100);
+    if (globalThis.performance.now() >= deadline)
+      throw new Error("continuity-provider-drain-timeout");
+    await delay(100, undefined, { signal });
   }
 }
