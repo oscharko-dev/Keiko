@@ -167,9 +167,15 @@ function isCallableSignature(trimmed: string, words: readonly string[]): boolean
   if (paren <= 0 || !trimmed.endsWith("{") || trimmed.includes(";")) return false;
   const before = trimmed.slice(0, paren).trim();
   if (before.includes("=") || before.length === 0) return false;
-  const name = before.split(/\s+/u).at(-1)?.replace(/<.*$/u, "") ?? "";
+  const name = beforeFirst(before.split(/\s/u).at(-1) ?? "", "<");
   if (!IDENTIFIER.test(name)) return false;
-  return !words.some((word) => CONTROL_KEYWORDS.has(word.replace(/\(.*$/u, "")));
+  return !words.some((word) => CONTROL_KEYWORDS.has(beforeFirst(word, "(")));
+}
+
+/** The part of `value` before the first `marker`, or all of it. */
+function beforeFirst(value: string, marker: string): string {
+  const index = value.indexOf(marker);
+  return index < 0 ? value : value.slice(0, index);
 }
 
 // `const name = (...) =>`, `const name = function`, `const name = async (...) =>`.

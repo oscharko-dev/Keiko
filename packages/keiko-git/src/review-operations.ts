@@ -625,7 +625,7 @@ function unquoteBody(body: string): Uint8Array {
     }
     if (char === '"' || NOT_PRINTABLE_ASCII.test(char))
       throw new GitReviewOutputError("path quote");
-    bytes.push(char.charCodeAt(0));
+    bytes.push(char.codePointAt(0) ?? 0);
     index += 1;
   }
   return Uint8Array.from(bytes);

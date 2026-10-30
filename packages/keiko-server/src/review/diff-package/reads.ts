@@ -78,17 +78,27 @@ export async function resolveSizedFiles(
   const sizes = await readGitReviewObjectSizes(read.ctx, { cwd: read.cwd, oids });
   if (!sizes.ok) throw reviewDiffStepFailure(sizes.result, read.abort, "listing-bytes");
   for (const file of files) {
-    const large: string[] = [];
-    for (const oid of presentOids(file.change)) {
-      const info = sizes.value.get(oid);
-      if (info?.type !== "blob") throw gitFailed();
-      if (info.size > blobLimitBytes) large.push(oid);
-    }
-    let binary = large.length === 0;
-    for (const oid of large) if (!binary) binary = await hasNulPrefix(read, oid);
-    verdicts.set(file, binary ? "binary" : "too-large");
+    verdicts.set(file, await sizedFileVerdict(read, file, sizes.value, blobLimitBytes));
   }
   return verdicts;
+}
+
+/** One file's verdict: `binary` unless a blob above the limit shows no NUL byte up front. */
+async function sizedFileVerdict(
+  read: ReviewDiffReadContext,
+  file: ReviewDiffChangedFile,
+  sizes: ReadonlyMap<string, { readonly type: string; readonly size: number }>,
+  blobLimitBytes: number,
+): Promise<"binary" | "too-large"> {
+  const large: string[] = [];
+  for (const oid of presentOids(file.change)) {
+    const info = sizes.get(oid);
+    if (info?.type !== "blob") throw gitFailed();
+    if (info.size > blobLimitBytes) large.push(oid);
+  }
+  let binary = large.length === 0;
+  for (const oid of large) if (!binary) binary = await hasNulPrefix(read, oid);
+  return binary ? "binary" : "too-large";
 }
 
 /**

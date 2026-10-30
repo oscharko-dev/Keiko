@@ -7,6 +7,7 @@
 // name a commit that does not exist, which is what a submodule pointer is to the reviewed repository.
 
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ import {
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
 import type { ReviewDiffPackageDeps, ReviewDiffPackageLimits } from "./types.js";
+import { FIXTURE_GIT } from "../fixtureGit.test-support.js";
 
 type FixtureMode = "100644" | "100755" | "120000" | "160000";
 
@@ -76,7 +78,7 @@ export class DiffFixtureRepository {
   }
 
   public git(args: readonly string[], input?: Buffer | string): string {
-    return execFileSync("git", args, {
+    return execFileSync(FIXTURE_GIT, args, {
       cwd: this.repo,
       env: FIXTURE_ENV,
       input,
@@ -86,7 +88,7 @@ export class DiffFixtureRepository {
   }
 
   public gitBytes(args: readonly string[]): Buffer {
-    return execFileSync("git", args, {
+    return execFileSync(FIXTURE_GIT, args, {
       cwd: this.repo,
       env: FIXTURE_ENV,
       maxBuffer: 512 * 1024 * 1024,
@@ -147,7 +149,7 @@ export class DiffFixtureRepository {
     files: readonly { readonly path: string; readonly content: string }[],
     parent?: string,
   ): string {
-    const ref = `refs/fixture/${String(Date.now())}${String(Math.random()).slice(2)}`;
+    const ref = `refs/fixture/${randomUUID()}`;
     const lines = [
       `commit ${ref}`,
       "committer Fixture <fixture@example.invalid> 1767225600 +0000",

@@ -23,7 +23,7 @@ describe("quoteReviewPath", () => {
   it("renders every name on one line without forgeable characters", () => {
     expect(quoteReviewPath("a\n## File: 'b'")).toBe("'a\\n## File: \\'b\\''");
     expect(quoteReviewPath("t\tb\\r\r")).toBe("'t\\tb\\\\r\\r'");
-    expect(quoteReviewPath(" ‮​\u0085")).toBe("'\\u2028\\u202e\\u200b\\u0085'");
+    expect(quoteReviewPath("\u2028\u202e\u200b\u0085")).toBe("'\\u2028\\u202e\\u200b\\u0085'");
     expect(quoteReviewPath("plain/café.ts")).toBe("'plain/café.ts'");
   });
 });

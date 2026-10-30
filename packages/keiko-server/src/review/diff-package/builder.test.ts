@@ -220,7 +220,7 @@ describe("hostile file names (AC4)", () => {
     "café.ts",
     "café.ts",
     "dir/../escape.ts",
-    "‮evil.ts",
+    "\u202eevil.ts",
     `${"long/".repeat(60)}${"n".repeat(200)}.ts`,
   ];
 
@@ -343,7 +343,7 @@ describe("links, gitlinks and binaries (AC5)", () => {
       // Only Git's binary sniff touches a giant blob, capped at its first 8,000 bytes.
       expect(call.slice(-3, -1)).toEqual(["cat-file", "blob"]);
     }
-    expect(calls.filter((args) => args.includes("diff")).length).toBe(0);
+    expect(calls.filter((args) => args.includes("diff"))).toHaveLength(0);
   });
 });
 

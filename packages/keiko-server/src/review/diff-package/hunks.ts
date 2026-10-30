@@ -18,7 +18,7 @@ export interface ReviewDiffContextOptions {
   readonly dynamicMax: number;
 }
 
-const NO_NEWLINE_MARKER = "\\ No newline at end of file";
+const NO_NEWLINE_MARKER = String.raw`\ No newline at end of file`;
 
 interface BodyLine {
   readonly marker: " " | "+" | "-";

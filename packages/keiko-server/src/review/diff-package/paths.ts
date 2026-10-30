@@ -42,14 +42,16 @@ const UNSAFE_PATH_CHARACTER =
   /[\u0000-\u001f\u007f-\u009f'\\\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/gu;
 /* eslint-enable no-control-regex */
 
+const BACKSLASH = String.fromCodePoint(0x5c);
+
 function escapeCharacter(character: string): string {
-  if (character === "'") return "\\'";
-  if (character === "\\") return "\\\\";
-  if (character === "\n") return "\\n";
-  if (character === "\t") return "\\t";
-  if (character === "\r") return "\\r";
+  if (character === "'") return String.raw`\'`;
+  if (character === "\\") return String.raw`\\`;
+  if (character === "\n") return String.raw`\n`;
+  if (character === "\t") return String.raw`\t`;
+  if (character === "\r") return String.raw`\r`;
   const code = character.codePointAt(0) ?? 0;
-  return `\\u${code.toString(16).padStart(4, "0")}`;
+  return `${BACKSLASH}u${code.toString(16).padStart(4, "0")}`;
 }
 
 /** A single-quoted, single-line rendering of a path for the reviewer prompt. */
