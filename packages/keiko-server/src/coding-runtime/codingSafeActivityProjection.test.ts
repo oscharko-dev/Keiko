@@ -71,6 +71,13 @@ function populateBoundedTurns(
   }
 }
 
+function firstTurnToolStates(
+  projection: ReturnType<typeof createCodingSafeActivityProjection>,
+): (readonly [string, string])[] {
+  const feed = projection.currentContent()?.feed;
+  if (feed?.availability !== "available") return [];
+  return (feed.turns[0]?.tools ?? []).map(({ callId, state }) => [callId, state] as const);
+}
 describe("bounded coding safe-activity projection", () => {
   it("owns canonical tool facts across native restatement and replay without logging paths", () => {
     const log = createBufferedServerLogSink();
@@ -1447,12 +1454,7 @@ describe("bounded coding safe-activity projection", () => {
       // that already settled is still recorded.
       expect(projection.ingest(RUN_ID, tool("call_late", "running"))).toBe(false);
       expect(projection.ingest(RUN_ID, tool("call_late_done", "succeeded"))).toBe(true);
-      const late = projection.currentContent()?.feed;
-      expect(
-        late?.availability === "available"
-          ? late.turns[0]?.tools.map(({ callId, state }) => [callId, state])
-          : [],
-      ).toEqual([
+      expect(firstTurnToolStates(projection)).toEqual([
         ["call_done", "succeeded"],
         ["call_open", "cancelled"],
         ["call_queued", "cancelled"],
