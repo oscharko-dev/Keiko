@@ -29,6 +29,23 @@ function authorizationUrl(
 }
 
 describe("the authorization URL the runtime hands back (#3903 AC3)", () => {
+  it.each(["state", "client_id", "redirect_uri", "resource", "code_challenge"])(
+    "refuses duplicate %s parameters",
+    (parameter) => {
+      const url = new URL(authorizationUrl());
+      url.searchParams.append(parameter, "synthetic-second-value");
+      expect(mcpOAuthAuthorizationRefusal(url.href, EXPECTED)).toBe("malformed");
+    },
+  );
+  it.each([
+    "http://user:password@127.0.0.1:65374/callback",
+    "http://127.0.0.1:65374/callback?extra=1",
+    "http://127.0.0.1:65374/callback#fragment",
+  ])("refuses an ambiguous callback %s", (redirect_uri) => {
+    expect(mcpOAuthAuthorizationRefusal(authorizationUrl({ redirect_uri }), EXPECTED)).toBe(
+      "redirect-not-loopback",
+    );
+  });
   it("accepts the runtime's own PKCE request to the validated endpoint", () => {
     expect(mcpOAuthAuthorizationRefusal(authorizationUrl(), EXPECTED)).toBeUndefined();
     expect(

@@ -2615,7 +2615,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
           },
         });
 
-        expect(lastRun.status).toBe(0);
+        expect(lastRun.status, lastRun.stderr).toBe(0);
         expect(lastRun.stdout).toContain("TAG pending");
         expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
         expect(lastRun.calls.filter(isVersionEndpointCurl).length).toBeGreaterThan(
