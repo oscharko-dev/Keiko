@@ -913,12 +913,34 @@ describe("verified Code-task commit service", () => {
     });
     writeFileSync(join(root, "package-lock.json"), "{}\n");
     const proposalId = await proposeAfter(report());
-    if (proposalId === undefined) throw new Error("proposal unavailable");
+    if (proposalId?.startsWith("commit-") !== true)
+      throw new Error(`proposal unavailable: ${String(proposalId)}`);
     fullAccess = false;
 
     expect(await service.approve(proposalId)).toBeUndefined();
-    expect((await service.execute(proposalId, undefined))?.status).not.toBe("succeeded");
+    expect(await service.execute(proposalId, undefined)).toMatchObject({
+      status: "drift",
+      reason: "candidate-drift",
+    });
     expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
+  });
+  it("names the drift of an untracked ticket's candidate in Full access", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => true,
+    });
+    writeFileSync(join(root, "package-lock.json"), "{}\n");
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    writeFileSync(join(root, "code.js"), "export const value = 4;\n");
+    git(["add", "code.js"]);
+
+    expect(await service.completeVerification(ticket, report())).toBe(false);
+
+    expect(service.unprovenAdmission?.()).toBeUndefined();
+    expect(events.find((event) => event.extra?.phase === "verification")).toMatchObject({
+      extra: { passed: false, reason: "candidate-drift", untrackedCount: 1 },
+    });
   });
   // #3610: a commit proposed while part of the change is still unstaged used to be refused as
   // "verification-missing"; the model re-ran the verification, which reported candidate-not-staged,

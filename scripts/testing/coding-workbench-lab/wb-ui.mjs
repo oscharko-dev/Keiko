@@ -123,17 +123,20 @@ async function reopenWorkbench(page) {
   return waitForWorkbench(page);
 }
 
-// An option's accessible name is its label, optionally followed by its description (the autonomy
-// options describe each mode), so the label must start the name rather than equal it.
-async function chooseOption(page, comboName, optionName) {
+export async function chooseOption(page, comboName, optionLabel) {
   await page.getByRole("combobox", { name: comboName }).click();
-  const label = optionName.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  // An option's accessible name is its label followed directly by its description, so the
-  // label is matched as a prefix; the offered labels are distinct.
-  await page
-    .getByRole("option", { name: new RegExp(`^${label}`, "u") })
-    .first()
-    .click();
+  // An option's accessible name is its label followed directly by its description, so the label
+  // element is compared on its own and only an exact label is chosen: an offered near-match (a
+  // longer Jira Pod name) never stands in for the requested one, and the run is not started.
+  const options = page.getByRole("option");
+  const labels = await Promise.all(
+    Array.from({ length: await options.count() }, (_, index) =>
+      options.nth(index).locator(".ksel-option-label").allTextContents(),
+    ),
+  );
+  const index = labels.findIndex((texts) => texts.length === 1 && texts[0].trim() === optionLabel);
+  if (index < 0) throw new Error(`${comboName}: no option is labelled "${optionLabel}"`);
+  await options.nth(index).click();
 }
 
 async function startRun(page, workbench, { model, mode, text, jiraPod }) {

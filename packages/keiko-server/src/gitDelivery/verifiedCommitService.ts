@@ -395,7 +395,11 @@ function verificationVerdict(
 ): VerificationVerdict {
   if (before.untracked) {
     const unproven = untrackedEvidence(context, before, after, report, now);
-    return { rejection: "candidate-not-staged", passed: false, failed: false, unproven };
+    // Evidence that cannot be admitted names its own cause (a failed report, drift, expiry).
+    const rejection = unproven
+      ? "candidate-not-staged"
+      : (verificationRejection(before, after, report, now) ?? "candidate-not-staged");
+    return { rejection, passed: false, failed: false, unproven };
   }
   const rejection = verificationRejection(before, after, report, now);
   const passed = rejection === undefined;

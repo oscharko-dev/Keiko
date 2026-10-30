@@ -343,6 +343,8 @@ interface ProjectionEntry {
   readonly signalIds: Set<string>;
   readonly messageTurns: Map<string, string>;
   feed: StoredFeed;
+  /** An explicit Stop or takeover settled the open calls; no new open call is admitted after it. */
+  interrupted: boolean;
 }
 
 type StoredFeed = MutableFeed | UnavailableCodingSafeActivityFeed;
@@ -425,6 +427,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       signalIds: new Set(),
       messageTurns: new Map(),
       feed: emptyFeed(input.runId, instant(now)),
+      interrupted: false,
     };
     if (this.subscribers.size > 0) this.subscriberRunId = input.runId;
     if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent();
@@ -566,6 +569,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       signalIds: new Set(),
       messageTurns: new Map(),
       feed,
+      interrupted: false,
     };
     if (this.subscribers.size > 0) this.subscriberRunId = runId;
     this.scheduleExpiry(this.entry);
@@ -581,6 +585,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const entry = this.liveEntry(runId);
     if (entry?.feed.availability !== "available") return;
     const occurredAt = instant(this.now());
+    entry.interrupted = true;
     const cancelled = cancelOpenTools(entry.feed.turns, occurredAt);
     if (cancelled > 0) {
       entry.feed.updatedAt = occurredAt;
@@ -1102,7 +1107,19 @@ function applyTool(
     return "accepted";
   }
   if (signal.tool === undefined) return "tool-name-missing";
+  if (opensAfterInterrupt(entry, signal)) return "tool-transition-refused";
   return insertTool(located.turn, signal, signal.tool, limits);
+}
+
+/**
+ * A delayed tool signal that arrives after Stop or takeover cannot add an open call to the retained
+ * feed: the run ended, so nothing it shows may still look pending or running (#3907).
+ */
+function opensAfterInterrupt(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): boolean {
+  return entry.interrupted && (signal.state === "pending" || signal.state === "running");
 }
 
 function insertTool(

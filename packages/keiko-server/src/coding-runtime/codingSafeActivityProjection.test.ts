@@ -1443,6 +1443,21 @@ describe("bounded coding safe-activity projection", () => {
       expect(after?.availability === "available" ? after.turns[0]?.tools[1]?.state : "none").toBe(
         "cancelled",
       );
+      // A delayed signal of a call the feed never saw cannot reopen the interrupted run; a call
+      // that already settled is still recorded.
+      expect(projection.ingest(RUN_ID, tool("call_late", "running"))).toBe(false);
+      expect(projection.ingest(RUN_ID, tool("call_late_done", "succeeded"))).toBe(true);
+      const late = projection.currentContent()?.feed;
+      expect(
+        late?.availability === "available"
+          ? late.turns[0]?.tools.map(({ callId, state }) => [callId, state])
+          : [],
+      ).toEqual([
+        ["call_done", "succeeded"],
+        ["call_open", "cancelled"],
+        ["call_queued", "cancelled"],
+        ["call_late_done", "succeeded"],
+      ]);
     },
   );
 

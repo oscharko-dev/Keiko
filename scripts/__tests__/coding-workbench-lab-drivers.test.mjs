@@ -44,6 +44,7 @@ import {
 } from "../testing/coding-workbench-lab/wb-run.mjs";
 import {
   answerGates,
+  chooseOption,
   operateRun as operateUiRun,
   selectCheckout as selectUiCheckout,
 } from "../testing/coding-workbench-lab/wb-ui.mjs";
@@ -335,6 +336,41 @@ describe("wb-ui.mjs: the gates of a run in the Workbench", () => {
     await answerGates(page, "run-1", awaiting("permission-1"), state);
     await answerGates(page, "run-1", awaiting("permission-1", 3), state);
     expect(page.clicks).toEqual([APPROVE]);
+  });
+});
+
+describe("wb-ui.mjs: choosing an option of a Workbench select", () => {
+  // A KeikoSelect option renders its label and its description in separate elements; the accessible
+  // name joins them, so a prefix match on the name could choose a longer near-match.
+  function selectPage(labels) {
+    const clicked = [];
+    const option = (label) => ({
+      locator: () => ({ allTextContents: async () => [label] }),
+      click: async () => {
+        clicked.push(label);
+      },
+    });
+    const page = {
+      getByRole: (role) =>
+        role === "combobox"
+          ? { click: async () => undefined }
+          : { count: async () => labels.length, nth: (index) => option(labels[index]) },
+    };
+    return { page, clicked };
+  }
+
+  it("chooses the option whose label is exactly the requested one", async () => {
+    const { page, clicked } = selectPage(["Jira: none", "Jira: Lab Pod 2", "Jira: Lab Pod"]);
+    await chooseOption(page, "Jira Pod for this run", "Jira: Lab Pod");
+    expect(clicked).toEqual(["Jira: Lab Pod"]);
+  });
+
+  it("refuses a Pod that is offered only as a longer near-match, and clicks nothing", async () => {
+    const { page, clicked } = selectPage(["Jira: none", "Jira: Lab Podcast"]);
+    await expect(chooseOption(page, "Jira Pod for this run", "Jira: Lab Pod")).rejects.toThrow(
+      /no option is labelled "Jira: Lab Pod"/u,
+    );
+    expect(clicked).toEqual([]);
   });
 });
 
