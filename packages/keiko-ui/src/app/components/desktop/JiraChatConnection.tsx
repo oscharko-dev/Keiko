@@ -25,6 +25,7 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import { useConnectorRefresh } from "./useConnectorRefresh";
 import { AutonomyModeSelect } from "./AutonomyModeSelect";
 import styles from "./JiraChatConnection.module.css";
+import { McpServerAvailability } from "./widgets/panels/McpServerAvailability";
 
 interface PodChoice {
   readonly id: string;
@@ -522,6 +523,7 @@ export function JiraChatConnection(props: ConnectionProps): ReactNode {
             {t(props.chat.jiraPodBinding === undefined ? "chat.jira.unbound" : "chat.jira.bound")}
           </output>
           {state.refreshFailed ? <p role="alert">{t("chat.jira.connectionFailed")}</p> : null}
+          <McpServerAvailability />
           <ConnectionForm
             chat={props.chat}
             draft={state.draft}

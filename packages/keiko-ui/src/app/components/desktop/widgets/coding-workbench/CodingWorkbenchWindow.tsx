@@ -85,6 +85,7 @@ import {
   CodingWorkbenchNativeActionReview,
   nativeActionLabel,
   nativeActionNamesResource,
+  nativePermissionLabel,
 } from "./CodingWorkbenchNativeActionReview";
 import {
   useCodingWorkbenchTranslate,
@@ -171,6 +172,7 @@ import {
   type CodingWorkbenchRunWorkspaceBinding,
 } from "./useCodingWorkbenchRunWorkspace";
 import { ApprovedSkillsDisclosure } from "./CodingWorkbenchApprovedSkills";
+import { CodingWorkbenchPairingHold, useHeldNotice } from "./codingWorkbenchPairingHold";
 import { CodingWorkbenchMcpServers } from "./CodingWorkbenchMcpServers";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
@@ -568,6 +570,37 @@ function runIsActiveFrom(state: CodingWorkbenchRuntimeState): boolean {
   return activeRunState(state.run.value?.state);
 }
 
+// The root is an ordinary folder when its branch read says so, and stays one while that read is
+// not being made (during a run) or has not resolved yet, as long as the bound workspace for this
+// root is a folder workspace: a run must not lose its binding because the branch read paused. A
+// read that resolved as a repository always wins (the folder became one).
+function workbenchFolderMode(
+  branchInventory: Pick<RepositoryBranchState, "ordinaryFolder" | "response">,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+): boolean {
+  if (branchInventory.ordinaryFolder) return true;
+  if (branchInventory.response?.available === true) return false;
+  const instance = activeWorkspace.activeInstance;
+  return (
+    repositoryRoot !== null &&
+    instance?.workspaceKind === "folder" &&
+    instance.repositoryRoot === repositoryRoot
+  );
+}
+
+// A folder is always Local: there is no repository to put a worktree in.
+function workbenchExecutionLocation(
+  branchInventory: Pick<RepositoryBranchState, "ordinaryFolder" | "response">,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+  selected: WorkbenchExecutionLocation | undefined,
+): WorkbenchExecutionLocation {
+  return workbenchFolderMode(branchInventory, activeWorkspace, repositoryRoot)
+    ? "local"
+    : activeExecutionLocation(activeWorkspace.activeInstance, repositoryRoot, selected);
+}
+
 function repositoryBranchReadRoot(
   runIsActive: boolean,
   repositoryRoot: string | null,
@@ -885,6 +918,7 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
+  onOpenMcpSettings,
 }: {
   readonly selectedRoot?: string | undefined;
   readonly selectedBranch?: string | undefined;
@@ -892,6 +926,7 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
+  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
@@ -953,19 +988,23 @@ export function CodingWorkbenchWindow({
     activeWorkspace,
     selectedRoot,
   );
-  const location = activeExecutionLocation(
-    activeWorkspace.activeInstance,
-    repositoryRoot,
-    selectedLocation,
-  );
   const branchInventory = useRepositoryBranchState(
     repositoryBranchReadRoot(runIsActive, repositoryRoot),
+  );
+  // An ordinary folder (not a Git repository) is bound in place, always Local, without a branch.
+  const folderMode = workbenchFolderMode(branchInventory, activeWorkspace, repositoryRoot);
+  const location = workbenchExecutionLocation(
+    branchInventory,
+    activeWorkspace,
+    repositoryRoot,
+    selectedLocation,
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,
     location,
+    folderMode,
     activeInstance: activeWorkspace.activeInstance,
     branchLoading: branchInventory.loading,
     branchError: branchInventory.error !== null,
@@ -995,6 +1034,7 @@ export function CodingWorkbenchWindow({
     <WorkbenchContent
       history={history}
       onOpenHistory={onOpenHistory}
+      onOpenMcpSettings={onOpenMcpSettings}
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
@@ -1265,6 +1305,7 @@ function useWorkbenchCatalogEvidence(
 }
 
 interface WorkbenchContentProps {
+  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly history: CodingTaskSession;
   readonly onOpenHistory: () => void;
   readonly state: CodingWorkbenchRuntimeState;
@@ -1390,7 +1431,9 @@ function DeploymentCeilingNotice({
  */
 function EditorBridgeUnavailableNotice({ visible }: { readonly visible: boolean }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  if (!visible) return null;
+  // #3880: an unpaired window cannot register its bridge; the run status sentence says why.
+  const held = useHeldNotice("editor-bridge", visible);
+  if (!visible || held) return null;
   return (
     <output className={styles.alert}>
       <span aria-hidden="true">!</span> {t("codingWorkbench.editorBridge.reconnecting")}
@@ -1409,12 +1452,14 @@ function WorkbenchContent({ alert, workbenchLabel, ...columns }: WorkbenchConten
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <WorkbenchHeader columns={columns} />
-      <div className={styles.body}>
-        <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
-        <WorkbenchStatusNotice state={state} />
-        <WorkbenchColumns {...columns} />
-      </div>
+      <CodingWorkbenchPairingHold unpaired={state.pairing === "unpaired"}>
+        <WorkbenchHeader columns={columns} />
+        <div className={styles.body}>
+          <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
+          <WorkbenchStatusNotice state={state} />
+          <WorkbenchColumns {...columns} />
+        </div>
+      </CodingWorkbenchPairingHold>
     </section>
   );
 }
@@ -1425,6 +1470,7 @@ function WorkbenchHeader({
   readonly columns: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">;
 }): ReactNode {
   const { repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
+  const t = useCodingWorkbenchTranslate();
   return (
     <header className={styles["cmp-workbench-header"]}>
       <div className={styles.cmpHeaderRow}>
@@ -1439,6 +1485,11 @@ function WorkbenchHeader({
           active={runIsActive}
           onHistory={columns.onOpenHistory}
         />
+        {columns.onOpenMcpSettings !== undefined && (
+          <button type="button" onClick={columns.onOpenMcpSettings}>
+            {t("codingWorkbench.mcp.manage")}
+          </button>
+        )}
       </div>
       <CodingWorkbenchTrustAffordance
         binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
@@ -1548,7 +1599,7 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   runIsActive,
-}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
+}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel" | "onOpenMcpSettings">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
   const issueIntake = useCodingWorkbenchIssueIntake(
@@ -1678,6 +1729,7 @@ function WorkbenchColumns({
       runState={state.run.value?.state}
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
       mutationPending={issuePending || state.mutation.status === "pending"}
+      stopPending={state.mutation.kind === "stop" && state.mutation.status === "pending"}
       startBusy={
         issuePending || (state.mutation.kind === "start" && state.mutation.status === "pending")
       }
@@ -2322,12 +2374,13 @@ function PermissionPrompt({
   );
   const evidenceBound = approvalEvidenceBound(request, approvalReview, research);
   const native = isNativeActionPermission(request);
+  // Less is more (#3907, owner): the card leads with what the agent wants to do and the decision.
+  // Every bounded policy fact stays one click away in the collapsed details, never off the card.
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
-      <PanelTitle eyebrow={t("codingWorkbench.approval.eyebrow")} id="permission-title" focusable>
-        {t("codingWorkbench.approval.title")}
+      <PanelTitle eyebrow={approvalEyebrow(request, t)} id="permission-title" focusable>
+        {approvalTitle(request, native ? approvalReview.review?.nativeAction : undefined, t)}
       </PanelTitle>
-      <ApprovalFacts request={request} t={t} />
       <ApprovalReviewContent
         kind={request.actionKind}
         native={native}
@@ -2337,7 +2390,6 @@ function PermissionPrompt({
       {request.kind === "network-egress" && !native ? (
         <ResearchDestination state={research} t={t} />
       ) : null}
-      {native ? null : <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>}
       <ApprovalDecisionControls
         busy={state.mutation.status === "pending"}
         evidenceBound={evidenceBound}
@@ -2345,8 +2397,49 @@ function PermissionPrompt({
         onDecision={onDecision}
         t={t}
       />
+      <ApprovalDetails request={request} native={native} t={t} />
     </section>
   );
+}
+
+/** The bounded policy facts and, for a governed action, its help: collapsed below the decision. */
+function ApprovalDetails({
+  request,
+  native,
+  t,
+}: {
+  readonly request: CodingWorkbenchRuntimePendingPermission;
+  readonly native: boolean;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <details className={styles.cmpApprovalDetails}>
+      <summary>{t("codingWorkbench.approval.details")}</summary>
+      {native ? null : <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>}
+      <ApprovalFacts request={request} t={t} />
+    </details>
+  );
+}
+
+/** A high or critical risk is named beside the eyebrow, so it is read before the decision. */
+function approvalEyebrow(
+  request: CodingWorkbenchRuntimePendingPermission,
+  t: CodingWorkbenchTranslate,
+): string {
+  const eyebrow = t("codingWorkbench.approval.eyebrow");
+  if (request.risk !== "high" && request.risk !== "critical") return eyebrow;
+  return `${eyebrow} · ${t("codingWorkbench.approval.risk")}: ${t(APPROVAL_RISK_MESSAGE_KEYS[request.risk])}`;
+}
+
+/** The card names the action itself: the native permission, else the supervised action kind. */
+function approvalTitle(
+  request: CodingWorkbenchRuntimePendingPermission,
+  nativeAction: Parameters<typeof CodingWorkbenchNativeActionReview>[0]["action"] | undefined,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (nativeAction !== undefined) return nativePermissionLabel(nativeAction.permission, t);
+  if (request.actionKind !== undefined) return t(ACTION_KIND_MESSAGE_KEYS[request.actionKind]);
+  return t(PERMISSION_KIND_MESSAGE_KEYS[request.kind]);
 }
 
 const APPROVAL_NATIVE_MESSAGE_KEYS = {

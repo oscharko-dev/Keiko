@@ -358,6 +358,20 @@ persist records while delivering nothing. Without evidence the run settles `fail
 `delivery-not-evidenced`. Ad-hoc runs are exempt, because one legitimately ends with no commit and
 inferring delivery intent from free text would turn honest successes into false failures.
 
+**A run with no issue binding delivers by pushing its own task branch (owner decision,
+2026-10-30).** The Coding Workbench works without any issue binding; the binding is a legacy
+leftover and is not a delivery precondition. The draft delivery context of such a run resolves like
+any other, and `keiko_git_push` proposes pushing the run's verified commit to its own task branch on
+`origin`, which may be any Git remote. The proposal is redeemed with `keiko_git_execute`
+(`kind: push`) under the existing delivery approval plane (ADR-0085 D1b); protected targets stay
+blocked, a force push is never constructed, and no pull request is opened (`keiko_pull_request`
+refuses with `issue-binding-required`, ADR-0086 D13). Every refusal of the delivery controller is
+now written as a `git.draft-delivery` line (`phase: refused`, a closed `reason`, `errorKind`,
+the run's correlation id), and the coding tool facade forwards the complete
+`CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS` vocabulary, including `repository-required`,
+`remote-required` and `issue-binding-required`, with guidance text for the delivery action, so the
+model learns the true cause instead of inventing one ("remote inaccessible", live lab 2026-10-30).
+
 **Under Full access, a run that stops one step short is given a bounded continuation first**
 (PR #3452, 2026-09-11). In `autonomous-delivery` the operator's accepted Authority Envelope
 authorizes delivery without a per-action approval (D4). When an issue-bound run's model ends a turn normally while no delivery is
@@ -645,12 +659,22 @@ closed states/codes, and safe labels.
 The authenticated live safe-activity tool projection also carries canonical per-call facts
 (#3874): a completed read's workspace-relative path, returned-window bytes and whole-file line
 count; the actual number of discovery entries returned; a closed edit refusal and the affected
-relative path only when materialization identified it; and elapsed bridge service time. Service
-time includes governed waits and excludes model generation. These facts come from the governed
-producer, remain bounded by the existing aggregate feed limits, and survive native restatement
-and immutable replay. Raw arguments/results, unknown refusal strings and unsafe paths are rejected.
+relative path only when materialization identified it; a governed verification's closed outcome
+(`passed`, `failed-check`, `waiting-for-trust`, `no-runnable-steps`, `not-run`, #3579); and elapsed
+bridge service time. Service time includes governed waits and excludes model generation. These
+facts come from the governed producer, remain bounded by the existing aggregate feed limits, and
+survive native restatement and immutable replay. Raw arguments/results, unknown refusal strings,
+unknown outcomes and unsafe paths are rejected. The verification outcome is derived from the closed
+result code the model received (`codingToolVerificationPresentation`), so the timeline shows a
+package-script decision still waiting on the operator, a repository with nothing the verifier can
+run and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
+check; only a check that ran and went red keeps the failed badge, and a timeout, a resource ceiling
+or a refusal before the runner claim nothing beyond the generic failure.
 Paths never enter Activity Log evidence, model-facing edit refusal replies or Coding History;
-the existing tool-result operation records service duration through its standard duration field.
+the existing tool-result operation records service duration through its standard duration field,
+and the existing `coding-runtime.tool-result-rendered` operation records the closed verification
+outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
+report keeps a verification that did not pass.
 
 The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
 in the existing local UI conversation store. Native V2 history is validated and captured continuously
@@ -1289,40 +1313,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   request/response bytes, the count of replaced credential occurrences (`redactedCount`), duration,
   outcome `relayed`/`cancelled`/`refused`/`failed` with a closed reason and frames on failure);
   never a credential, capability, URL or server name.
-- **A remote MCP server authorizes through the runtime's own OAuth, bound to the operator's expected
-  issuer (#3903 AC3).** A remote registry entry may carry `oauth: { issuer, clientId?, scope? }`:
-  the issuer identifier the operator expects (RFC 8414 §2, https, no query or fragment, compared as
-  written) and an optional public client. No client secret or token belongs in the registry. Before
-  each native launch Keiko reads that issuer's metadata from the RFC 8414 and OpenID Connect
-  well-known locations through its own egress configuration, without redirects and with loopback
-  and private targets refused (`mcpOAuthIssuer.ts`), and admits the server only when the document
-  names exactly that issuer, its endpoints are https, PKCE S256 is offered and a client can be had
-  (the operator's id, or dynamic registration). Each location read is one
-  `mcp.oauth.issuer.checked` line. The binding then sets `oauth.auth_server_metadata_url` to the
-  validated location (with `client_id` and `scope` from the registry), so the runtime never follows
-  the MCP server's protected-resource metadata to another authorization server; a server whose
-  issuer did not validate is left out with its tools. The authorization itself is the runtime's:
-  `integration.oauth.connect` registers a client if needed, prepares PKCE and listens on its own
-  loopback callback. Keiko starts it only for an admitted server of a live native run, at the
-  human's request in the Workbench, and hands out the authorization URL only when it addresses the
-  validated authorization endpoint with the code flow, an S256 challenge, a state, the server as the
-  RFC 8707 resource, a `127.0.0.1` callback and the operator's client (`mcpOAuthAuthorizationUrl.ts`);
-  any other attempt is cancelled at once (`url-refused`). The human opens the page in a new tab; the
-  runtime's callback completes the attempt (`coding-runtime.mcp-authorization`). A completed
-  credential is kept in Keiko's AES-256-GCM vault under the state directory
-  (`mcpOAuthCredentialStore.ts`, keyed through `KEIKO_MCP_OAUTH_CREDENTIALS_KEY`, the keychain or a
-  keyfile, opened on first use), bound to the server's name, URL, issuer and client, and only when
-  the runtime recorded exactly that server URL and issuer for it. A later native run is seeded with
-  it once it is ready (`credential.create`; the runtime connects without a prompt), and when a run
-  ends its reaped runtime's credentials are kept again (a refresh may have rotated them) and removed
-  from its database before retention, so a retained session never carries a token and the
-  retention audit's `credential-present` refusal stays a hard guard (`coding-runtime.mcp-credentials`).
-  Keiko never lists or reads credentials through the runtime's API. The staged 2.1.4 executable
-  proves it under the real native Seatbelt wrapper (`opencodeNativeRepositoryItems.real.test.ts`):
-  the server lists as needing authorization, the validated page completes through the runtime's
-  callback and the server connects, the sealed credential seeds the next run without a second
-  authorization, the reaped database holds no credential afterwards, and a page for another
-  endpoint is withheld.
+- **Production MCP OAuth is centrally owned and relayed.** The shared Settings/connection
+  composition described in ADR-0181 owns discovery, sign-in, refresh and encrypted custody for
+  both Chat and Coding Workbench. Native runs receive only a run/server-bound relay capability;
+  their `mcp.servers` configuration disables native OAuth. Successful sign-in and sign-out rotate
+  a durable server credential epoch, invalidating old relays, catalogs and disclosure authority.
+  The Workbench opens the central MCP settings to manage sign-in. No external OAuth credential
+  is seeded into or harvested from a managed production run.
+  The standalone native OAuth adapter and its real-executable proofs remain for explicit legacy
+  compatibility without the shared composition. That adapter validates the operator's expected
+  issuer, PKCE, resource, public client, unique request parameters and a plain loopback callback;
+  its separate credential-seeding/scrubbing and retention guards still apply. These legacy
+  proofs do not establish acceptance of the central OAuth browser workflow.
 - **The plan tool is on (#3897, parity row T19, owner decision of 2026-10-24).** The pinned 2.1.4
   producer registers its plan tool `todowrite` only under `experimental.todo` (off by default in
   standalone), so a native run used to show no plan card. `createNativeOpenCodeV2Config` sets the
@@ -1912,6 +1914,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`, `keiko_git_push`,
   `keiko_pull_request`, `keiko_git_execute`, `keiko_git_sync`, `keiko_ci_status` and
   `keiko_verification` (`opencodeNativeDeliveryTools.ts` holds the list once).
+  `keiko_git_push` proposes pushing the run's verified commit to its own task branch on `origin`,
+  any Git remote and no issue needed (ADR-0085 D1b); `keiko_pull_request` needs a run bound to an
+  issue and otherwise returns `issue-binding-required` (ADR-0086 D13).
   `keiko_git_sync` fetches the upstream or fast-forwards the run's branch to it through the Git
   sync owner, under the owner's own mode decision (ADR-0138 D3 item 5); the shell's own fetch and
   pull stay refused (#3902 AC2). The managed worktree's Git directory is
@@ -1995,6 +2000,27 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   credited check publishes its own `verification-summarized` event at the admitted edit revision,
   and `coding-runtime.verification` records it (`state: "credited"`, `verifierId`, `creditedBy`)
   or why the scripts could not be read (`credit-unavailable`, warn, frames and causes).
+  The same line also proves the staged commit candidate (#3907 AC3). The ledger credit alone
+  never reached the verified commit, so on macOS, where every governed check is
+  `native-shell-required`, no native run could commit: each `keiko_git_commit` of the Keiko T6
+  parity run settled `verification-failed` with zero failed checks. Admission now opens the
+  verified-commit ticket the governed verifier opens before its run, and settlement completes it
+  with the line's own result (its checks, exit code and duration; no output) through the same
+  service. The ticket opens only for a fully staged, clean candidate and completes only when the
+  staged tree is unchanged, so the proof covers exactly the content the check read; a failing line
+  records a failed proof, and a line whose status another command decided completes nothing.
+  `coding-runtime.verification` records the outcome (`state: "native-proof"`, `verifierId`,
+  `stepCount`, `commitProof`, `commitProofReason`). A governed verification run that executed no
+  step (each one skipped, denied or `native-shell-required`) says nothing about the candidate: it
+  is kept for the run's check list, but no longer completes the ticket as a failed proof, which had
+  replaced the passing native proof for the same staged tree and refused every later commit.
+  The same parity run then showed a proven, approved commit settling `recovery-required` after
+  its signed object already existed: a human who checks out the task branch locally gives the run
+  that branch as its own base, and Git refuses a ref transaction that both verifies and updates one
+  ref. The governed commit now guards such a branch by the update's own expected old value alone,
+  which is equivalent only while the verified base and head agree; when they differ it fails closed
+  before any ref update. A distinct base keeps its separate `verify` line in the same atomic
+  transaction.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

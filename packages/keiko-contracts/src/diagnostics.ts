@@ -577,10 +577,21 @@ export interface ClientDiagnosticIngestRequest {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  // A Git-client operation (add-repository dialog discard, or manual retry) settling after the
+  // surface that asked for it is already gone (PR #3625 review): which operation, and how it
+  // settled — never the repository, path or URL involved.
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
+  // An open `KeikoSelect` menu dismissed by Escape (PR #3625 review): the closed reason and which
+  // focus location — trigger, search or option — Escape acted from, never a label or option text.
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  // The chat's Knowledge Pod picker offered no usable pod (PR #3678 review): counts only, sent as
+  // structured evidence rather than folded into the message the server reduces to a digest.
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
+  // A chat answer copy (PR #3678 review): its outcome and the marker groups removed and kept,
+  // never the copied text.
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
+  // An answer prepared for the voice dialogue (PR #3678 review): the marker groups removed and kept,
+  // under the correlation its synthesis request carries, never the spoken text.
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
   readonly scopeNotice?: ClientDiagnosticScopeNotice | undefined;
@@ -589,9 +600,19 @@ export interface ClientDiagnosticIngestRequest {
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly updateNotice?: ClientUpdateNotice | undefined;
+  // The Editor's model adopted the line ending of text Keiko wrote into it (#4123).
   readonly editorLineEnding?: ClientEditorLineEnding | undefined;
+  // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
+  // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
+  // and how many were cut, never a message, path or run name.
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
+  // What the human did on the Coding Workbench page (#3897): closed values, a trust binding's two
+  // body-free ids and a changeset's file count — routine evidence, never a failure.
   readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
+  // A runtime request the Workbench gave up on at its own deadline (#4109): the call kind and the
+  // deadline in milliseconds, under the failed request's correlation id — a failure report, never
+  // a preemption.
+  readonly codingRequestTimeout?: ClientDiagnosticCodingRequestTimeout | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
@@ -797,6 +818,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "editorLineEnding",
   "codingRunRestore",
   "codingWorkbenchInteraction",
+  "codingRequestTimeout",
 ] as const;
 const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "message",
@@ -831,11 +853,13 @@ function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolea
   );
 }
 
-// The Coding Workbench's closed reports: a restored run's counts and the human's interactions.
+// The Coding Workbench's closed reports: a restored run's counts, the human's interactions and a
+// runtime request that hit its own deadline.
 function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
-    isOptional(value.codingWorkbenchInteraction, isClientDiagnosticCodingWorkbenchInteraction)
+    isOptional(value.codingWorkbenchInteraction, isClientDiagnosticCodingWorkbenchInteraction) &&
+    isOptional(value.codingRequestTimeout, isClientDiagnosticCodingRequestTimeout)
   );
 }
 
@@ -2089,6 +2113,10 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // A diff above the window threshold switched to the windowed view: one file and one page of its
   // lines at a time. Counts and the closed surface only, never a path or diff text (#4108).
   "diff-windowed",
+  // An unpaired window held one of its secondary notices: the run status sentence names the
+  // missing pairing once instead of every surface reporting its own failure. Closed notice only
+  // (#3880).
+  "notice-held",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2136,6 +2164,17 @@ export const CLIENT_CODING_WORKBENCH_DIFF_SURFACES = [
 export type ClientCodingWorkbenchDiffSurface =
   (typeof CLIENT_CODING_WORKBENCH_DIFF_SURFACES)[number];
 
+/** The secondary notice an unpaired window held behind its one pairing state (#3880). */
+export const CLIENT_CODING_WORKBENCH_HELD_NOTICES = [
+  "task-session",
+  "skills",
+  "mcp",
+  "activity",
+  "questions",
+  "editor-bridge",
+] as const;
+export type ClientCodingWorkbenchHeldNotice = (typeof CLIENT_CODING_WORKBENCH_HELD_NOTICES)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2173,7 +2212,8 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly fileCount: number;
       readonly totalLineCount: number;
       readonly totalByteCount: number;
-    };
+    }
+  | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
@@ -2192,6 +2232,9 @@ const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+);
+const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_HELD_NOTICES,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2240,6 +2283,7 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
     totalByteCount: (value) =>
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
   },
+  "notice-held": { notice: (value) => isSetMember(value, CODING_WORKBENCH_HELD_NOTICE_SET) },
 };
 
 /** True for one closed interaction with exactly its own valid fields. */
@@ -2252,6 +2296,64 @@ function isClientDiagnosticCodingWorkbenchInteraction(
   return (
     keys.length === Object.keys(fields).length &&
     keys.every((key) => fields[key]?.(value[key]) === true)
+  );
+}
+
+// ─── Coding Workbench request timeout (#4109) ──────────────────────────────────
+//
+// A runtime request the Workbench gave up on at its own client-side deadline: the BFF accepted it and
+// never answered in time, so no server line can describe it. The report names which call it was and
+// the deadline it ran out of — closed values and one bound, never a run id, a path or a body. The
+// failed request's correlation id rides the report envelope when the transport carried one. A
+// preempted request (Stop took its place) is not a timeout and is never reported as one.
+
+/**
+ * The runtime calls the Workbench bounds with a deadline: the two reads and every mutation. The
+ * mutation names are the ones the Workbench's queue uses for its pending state; `question-answer`
+ * and `question-reject` answer a required question outside that queue.
+ */
+export const CLIENT_CODING_RUNTIME_CALLS = [
+  "status",
+  "snapshot",
+  "start",
+  "approval",
+  "stop",
+  "takeover",
+  "retry",
+  "recovery-ack",
+  "pause",
+  "resume",
+  "follow-up",
+  "revert",
+  "inbox",
+  "research-revoke",
+  "question-answer",
+  "question-reject",
+] as const;
+export type ClientCodingRuntimeCall = (typeof CLIENT_CODING_RUNTIME_CALLS)[number];
+
+/** Bounds a reported deadline: one hour, far above any deadline the Workbench sets. */
+export const CLIENT_CODING_REQUEST_DEADLINE_MS_MAX = 3_600_000;
+
+export interface ClientDiagnosticCodingRequestTimeout {
+  readonly call: ClientCodingRuntimeCall;
+  readonly deadlineMs: number;
+}
+
+const CODING_RUNTIME_CALL_SET: ReadonlySet<string> = new Set(CLIENT_CODING_RUNTIME_CALLS);
+const CODING_REQUEST_TIMEOUT_KEYS: ReadonlySet<string> = new Set(["call", "deadlineMs"]);
+
+/** True for exactly one closed call kind and a positive, bounded deadline in milliseconds. */
+function isClientDiagnosticCodingRequestTimeout(
+  value: unknown,
+): value is ClientDiagnosticCodingRequestTimeout {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === CODING_REQUEST_TIMEOUT_KEYS.size &&
+    keys.every((key) => CODING_REQUEST_TIMEOUT_KEYS.has(key)) &&
+    isSetMember(value.call, CODING_RUNTIME_CALL_SET) &&
+    isBoundedPositiveInteger(value.deadlineMs, CLIENT_CODING_REQUEST_DEADLINE_MS_MAX)
   );
 }
 

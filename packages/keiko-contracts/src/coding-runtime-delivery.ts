@@ -9,6 +9,12 @@ export const CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS = [
   "operation-in-flight",
   "payload-invalid",
   "provider-unavailable",
+  // An issue-free run delivers by pushing its own task branch (ADR-0085 D1b): these name why it
+  // cannot. No verified repository context, no `origin` remote to push to, and a pull request —
+  // which only an issue-bound run opens — asked for by a run that has no issue.
+  "repository-required",
+  "remote-required",
+  "issue-binding-required",
 ] as const;
 
 export type CodingRuntimeDeliveryResult =

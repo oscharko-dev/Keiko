@@ -85,6 +85,12 @@ import {
   handleConnectMcpServer,
 } from "./mcp/mcpSettingsRoutes.js";
 import {
+  handleStartMcpAuthorization,
+  handleMcpAuthorizationStatus,
+  handleCancelMcpAuthorization,
+  handleRevokeMcpAuthorization,
+} from "./mcp/mcpAuthorizationRoutes.js";
+import {
   handleDeleteConversationAttachment,
   handleUploadConversationAttachment,
 } from "./conversation-attachment-routes.js";
@@ -200,6 +206,7 @@ import {
   handleResumeTaskWorkspace,
   handleSetActiveTaskWorkspace,
   handleSelectLocalCheckout,
+  handleSelectFolderWorkspace,
 } from "./task-workspace/routes.js";
 import {
   handleContainerCapability,
@@ -526,6 +533,26 @@ function dispatchGitChangeApplyDescription(
 // two desktop chat routes, desktop terminal JSON routes, and read-only Files widget routes.
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization",
+    handler: handleStartMcpAuthorization,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/status",
+    handler: handleMcpAuthorizationStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/cancel",
+    handler: handleCancelMcpAuthorization,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/revoke",
+    handler: handleRevokeMcpAuthorization,
+  },
   { method: "GET", pattern: "/api/mcp/servers", handler: handleGetMcpSettings },
   { method: "PUT", pattern: "/api/mcp/servers", handler: handlePutMcpSettings },
   {
@@ -804,6 +831,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/task-workspaces/active", handler: handleGetActiveTaskWorkspace },
   { method: "POST", pattern: "/api/task-workspaces/active", handler: handleSetActiveTaskWorkspace },
   { method: "POST", pattern: "/api/task-workspaces/local", handler: handleSelectLocalCheckout },
+  { method: "POST", pattern: "/api/task-workspaces/folder", handler: handleSelectFolderWorkspace },
   {
     method: "DELETE",
     pattern: "/api/task-workspaces/active",

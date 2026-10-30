@@ -32,7 +32,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isIssueBoundDraftDeliveryRecord,
+  type IssueBoundDraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitCiProviderReader } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -769,8 +772,8 @@ function recordJourneyOutcome(
 
 // ─── Handler ────────────────────────────────────────────────────────────────────────────────────
 
-type ConfirmedDraftDeliveryRecord = Omit<DraftDeliveryRecord, "pullRequest"> & {
-  readonly pullRequest: NonNullable<DraftDeliveryRecord["pullRequest"]>;
+type ConfirmedDraftDeliveryRecord = IssueBoundDraftDeliveryRecord & {
+  readonly pullRequest: NonNullable<IssueBoundDraftDeliveryRecord["pullRequest"]>;
 };
 
 function journeyContext(
@@ -844,7 +847,12 @@ function confirmedJourneySubject(
   const snapshot = deps.codingRuntimeSnapshotStore?.get(runId);
   const draft = snapshot?.draftDelivery;
   const issueBinding = snapshot?.issueBinding;
-  if (snapshot === undefined || draft?.pullRequest === undefined || issueBinding === undefined) {
+  if (
+    snapshot === undefined ||
+    draft?.pullRequest === undefined ||
+    issueBinding === undefined ||
+    !isIssueBoundDraftDeliveryRecord(draft)
+  ) {
     return undefined;
   }
   return {

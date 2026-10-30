@@ -10,7 +10,11 @@ import {
   type GitDeliveryObservationFailure,
   type ReadinessSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isIssueBoundDraftDeliveryRecord,
+  type DraftDeliveryRecord,
+  type IssueBoundDraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type {
   GitCiProviderReader,
   GitCiFactsResult,
@@ -26,8 +30,10 @@ import { draftDeliveryLineageRecord } from "../coding-runtime/codingRuntimeDraft
 import { resolveDraftRepository } from "./draftDeliveryFacts.js";
 import {
   DraftDeliveryFailure,
+  isIssueBoundContext,
   type DraftDeliveryDependencies,
   type DraftDeliveryRunContext,
+  type IssueBoundDraftDeliveryRunContext,
 } from "./draftDeliveryTypes.js";
 import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
 
@@ -227,8 +233,8 @@ export interface CiObservationOptions extends DraftDeliveryDependencies {
   readonly repairBudgetExhausted?: () => boolean;
 }
 interface Observation {
-  readonly context: DraftDeliveryRunContext;
-  readonly draft: DraftDeliveryRecord;
+  readonly context: IssueBoundDraftDeliveryRunContext;
+  readonly draft: IssueBoundDraftDeliveryRecord;
   readonly ticket: CiObservationTicket;
   readonly startedAt: number;
 }
@@ -322,8 +328,13 @@ export class CiObservationController implements CiObservationService {
     context: DraftDeliveryRunContext,
     forceFresh: boolean,
   ): Promise<CodingRuntimeCiResult> {
-    const draft = await this.observationDraft(context);
-    if (draft?.pullRequest === undefined)
+    // A confirmed pull request, and so a CI observation, belongs to an issue-bound run only.
+    const draft = isIssueBoundContext(context) ? await this.observationDraft(context) : undefined;
+    if (
+      !isIssueBoundContext(context) ||
+      draft?.pullRequest === undefined ||
+      !isIssueBoundDraftDeliveryRecord(draft)
+    )
       return this.record(context, unavailable("draft-unavailable"));
     const startedAt = this.now();
     const backoff = this.backoff(context.runId, startedAt, forceFresh);

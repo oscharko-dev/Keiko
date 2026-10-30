@@ -17,7 +17,7 @@ import { resolveDraftRepository } from "./draftDeliveryFacts.js";
 import {
   DraftDeliveryFailure,
   type DraftDeliveryDependencies,
-  type DraftDeliveryRunContext,
+  type IssueBoundDraftDeliveryRunContext,
   type DraftDeliveryTargetResolution,
 } from "./draftDeliveryTypes.js";
 import {
@@ -44,7 +44,7 @@ function makeIssueBinding(): CodingWorkbenchIssueBinding {
   return { ...fields, bindingDigest: codingWorkbenchIssueBindingDigest(fields) };
 }
 
-function makeContext(issueBinding: CodingWorkbenchIssueBinding): DraftDeliveryRunContext {
+function makeContext(issueBinding: CodingWorkbenchIssueBinding): IssueBoundDraftDeliveryRunContext {
   return {
     runId: "run-1",
     taskId: "task-1",
@@ -124,7 +124,9 @@ interface DriftCase {
     | "base-ref-mismatch"
     | "head-equals-base";
   readonly repository: string;
-  readonly deriveContext: (base: DraftDeliveryRunContext) => DraftDeliveryRunContext;
+  readonly deriveContext: (
+    base: IssueBoundDraftDeliveryRunContext,
+  ) => IssueBoundDraftDeliveryRunContext;
 }
 
 const DRIFT_CASES: readonly DriftCase[] = [

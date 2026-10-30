@@ -159,7 +159,11 @@ import type {
   PromptInputsRequest,
 } from "./opencodePromptInputs.js";
 import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
-import { CODING_TOOL_MAX_BODY_BYTES, CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./codingToolIpc.js";
+import {
+  CODING_TOOL_MAX_BODY_BYTES,
+  CODING_TOOL_MAX_REQUEST_BODY_BYTES,
+  type CodingToolResult,
+} from "./codingToolIpc.js";
 import {
   OPENCODE_PROMPT_FILE_MAX_BYTES,
   openCodeV2PromptFileData,
@@ -6063,6 +6067,141 @@ describe("private OpenCode tool bridge", () => {
           textBlockCount: 0,
           resultStatus: "completed",
         });
+      } finally {
+        await fixture.stop();
+      }
+    });
+  });
+
+  // #3579: the Workbench card showed a verification the operator had not yet allowed to run, and a
+  // repository with nothing for the verifier to run, as a red "Failed". The bridge settles the call
+  // with the closed outcome the server derived from the result the model received, and the same word
+  // reaches the activity log on the existing rendering record, so the log reads back as the card did.
+  describe("a verification call's closed outcome", () => {
+    const RENDER_OP = "coding-runtime.tool-result-rendered";
+    const verificationBody = (callId: string): string =>
+      JSON.stringify({
+        action: "verification",
+        actionId: `tool:${callId}`,
+        idempotencyKey: `idempotency-${callId}`,
+        verifierId: "test",
+        targetPath: "",
+      });
+    const refused = (reasonCode: string): CodingToolResult => ({
+      status: "failed",
+      reasonCode,
+      evidence: [{ kind: "governed-delegate", code: reasonCode }],
+    });
+
+    it.each([
+      ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+      ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+      ["VERIFICATION_NOT_RUN", "not-run"],
+    ] as const)(
+      "settles the refusal %s as %s and records the word body-free",
+      async (reasonCode, verificationOutcome) => {
+        const activity = activityRecorder();
+        const log = createBufferedServerLogSink();
+        const facade: CodingToolFacade = {
+          execute: vi.fn(() => Promise.resolve(refused(reasonCode))),
+        };
+        const fixture = await startBridgeFixture(facade, undefined, {
+          safeActivity: activity.safeActivity,
+          activityLog: log,
+          toolResultCorrelationId: FIXTURE_RUN_ID,
+        });
+        try {
+          await expect(
+            fixture.runtime.toolBridge.handle({
+              method: "POST",
+              headers: new Headers(authorized),
+              body: verificationBody("call_verification_refused"),
+            }),
+          ).resolves.toMatchObject({ status: 200 });
+
+          expect(activity.settlements).toEqual([
+            expect.objectContaining({
+              actionId: "tool:call_verification_refused",
+              state: "failed",
+              presentation: { verificationOutcome, bridgeDurationMs: expect.any(Number) as number },
+            }),
+          ]);
+          const rendered = log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.resultStatus === "failed",
+          );
+          expect(rendered).toHaveLength(1);
+          const line = formatActivityLogProofLine(rendered[0] ?? {});
+          expect(
+            expectActivityLogProof("coding-runtime.tool-result-rendered.emitted-line", line),
+          ).toMatchObject({
+            correlationId: FIXTURE_RUN_ID,
+            resultStatus: "failed",
+            verificationOutcome,
+          });
+          expect(line).not.toContain(reasonCode);
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
+
+    it("settles a passed verification as succeeded with the passed outcome", async () => {
+      const activity = activityRecorder();
+      const log = createBufferedServerLogSink();
+      const passed: CodingToolResult = {
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        verification: { status: "passed", completed: ["test"] },
+      };
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(passed)) };
+      const fixture = await startBridgeFixture(facade, undefined, {
+        safeActivity: activity.safeActivity,
+        activityLog: log,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+      });
+      try {
+        await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: verificationBody("call_verification_passed"),
+        });
+        expect(activity.settlements).toEqual([
+          expect.objectContaining({
+            state: "succeeded",
+            presentation: expect.objectContaining({ verificationOutcome: "passed" }) as unknown,
+          }),
+        ]);
+        expect(
+          log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.verificationOutcome === "passed",
+          ),
+        ).toHaveLength(1);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("adds no outcome to a tool that is not a verification", async () => {
+      const activity = activityRecorder();
+      const log = createBufferedServerLogSink();
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+      const fixture = await startBridgeFixture(facade, undefined, {
+        safeActivity: activity.safeActivity,
+        activityLog: log,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+      });
+      try {
+        await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: toolBody("call_read_no_outcome"),
+        });
+        expect(JSON.stringify(activity.settlements)).not.toContain("verificationOutcome");
+        expect(
+          log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.verificationOutcome !== undefined,
+          ),
+        ).toHaveLength(0);
       } finally {
         await fixture.stop();
       }

@@ -11,6 +11,7 @@ import type { CodingTaskForkSource } from "./useCodingTaskSession";
 import type { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import type { CodingWorkbenchRunWorkspaceBinding } from "./useCodingWorkbenchRunWorkspace";
 import type { PromptDeliveryNoticeController } from "./usePromptDeliveryNotice";
+import { reportTaskSubmission } from "./codingWorkbenchTaskSubmission";
 
 export interface TaskActionsInput {
   readonly actions: CodingWorkbenchRuntimeActions;
@@ -116,6 +117,9 @@ export function useTaskComposerActions(input: TaskActionsInput): TaskActions {
   const retryStart = (): void => {
     const last = lastStart.current;
     const unchanged = last !== null && last.draft.trim() === taskIntent.trim();
+    // #3877: a retried start submits the task the composer shows, like a typed start, so it records
+    // the same digests of the shown and the submitted text on the Activity Log.
+    reportTaskSubmission(taskIntent, taskIntent, "start");
     if (unchanged) startTask(last.draft, last.inputs);
     else startTask(taskIntent);
   };

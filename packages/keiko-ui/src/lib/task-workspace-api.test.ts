@@ -14,6 +14,7 @@ import {
   reconcileTaskWorkspaces,
   repairTaskWorkspace,
   resumeTaskWorkspace,
+  selectFolderWorkspace,
   setActiveTaskWorkspace,
 } from "./task-workspace-api";
 
@@ -302,5 +303,25 @@ describe("provisionTaskWorkspace — error envelopes", () => {
     expect(failure).toBeInstanceOf(ApiError);
     expect(failure).toMatchObject({ code: "INTERNAL", status: 500 });
     expect(Reflect.get(failure as object, "failureClass")).toBeUndefined();
+  });
+});
+
+describe("selectFolderWorkspace", () => {
+  it("posts the root and requester to the folder route and returns the active view", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonOk({ active: { instance: { x: 1 } } })));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      selectFolderWorkspace({
+        root: "/plain",
+        requestedBy: "u",
+        correlationId: "folder-corr-0001",
+      }),
+    ).resolves.toEqual({ instance: { x: 1 } });
+    expect(lastUrl(fetchMock)).toBe("/api/task-workspaces/folder");
+    expect(lastInit(fetchMock).method).toBe("POST");
+    expect(JSON.parse(String(lastInit(fetchMock).body))).toEqual({
+      root: "/plain",
+      requestedBy: "u",
+    });
   });
 });

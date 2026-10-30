@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isDraftDeliveryIssueBinding,
+  type DraftDeliveryBinding,
+  type DraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type {
   WorkbenchDescriptionDraftReview,
   WorkbenchDescriptionStatus,
@@ -464,41 +468,75 @@ function DeliveryBinding({
 export function DeliveryBindingFacts({
   delivery,
   t,
+  includeRecord = true,
 }: {
   readonly delivery: DraftDeliveryRecord;
   readonly t: CodingWorkbenchTranslate;
+  /**
+   * The approval card shows the exact target the human approves and leaves out the record's own
+   * proposal id and time (#3907, owner: less is more); the status card keeps them for observation.
+   */
+  readonly includeRecord?: boolean;
 }): ReactNode {
   const target = delivery.binding;
   return (
     <DeliveryFacts
       facts={[
-        {
-          id: "repository",
-          label: t("codingWorkbench.draftDelivery.repository"),
-          value: target.repository,
-        },
-        {
-          id: "issueNumber",
-          label: t("codingWorkbench.draftDelivery.issue"),
-          value: `#${String(target.issueNumber)}`,
-        },
+        ...deliveryIdentityFacts(target, t),
         { id: "headRef", label: t("codingWorkbench.draftDelivery.headRef"), value: target.headRef },
         { id: "headSha", label: t("codingWorkbench.draftDelivery.headSha"), value: target.headSha },
         { id: "baseRef", label: t("codingWorkbench.draftDelivery.baseRef"), value: target.baseRef },
         { id: "baseSha", label: t("codingWorkbench.draftDelivery.baseSha"), value: target.baseSha },
-        {
-          id: "proposalId",
-          label: t("codingWorkbench.draftDelivery.proposal"),
-          value: delivery.proposalId,
-        },
-        {
-          id: "recordedAt",
-          label: t("codingWorkbench.draftDelivery.recordedAt"),
-          value: delivery.recordedAt,
-        },
+        ...(includeRecord ? deliveryRecordFacts(delivery, t) : []),
       ]}
     />
   );
+}
+
+function deliveryRecordFacts(
+  delivery: DraftDeliveryRecord,
+  t: CodingWorkbenchTranslate,
+): readonly DeliveryFact[] {
+  return [
+    {
+      id: "proposalId",
+      label: t("codingWorkbench.draftDelivery.proposal"),
+      value: delivery.proposalId,
+    },
+    {
+      id: "recordedAt",
+      label: t("codingWorkbench.draftDelivery.recordedAt"),
+      value: delivery.recordedAt,
+    },
+  ];
+}
+
+// An issue-bound delivery names its repository and accepted issue; an issue-free branch push has
+// neither, and names the remote it pushes to instead (ADR-0085 D1b).
+function deliveryIdentityFacts(
+  target: DraftDeliveryBinding,
+  t: CodingWorkbenchTranslate,
+): readonly DeliveryFact[] {
+  if (!isDraftDeliveryIssueBinding(target))
+    return [
+      {
+        id: "remote",
+        label: t("codingWorkbench.draftDelivery.remoteName"),
+        value: target.remoteAlias,
+      },
+    ];
+  return [
+    {
+      id: "repository",
+      label: t("codingWorkbench.draftDelivery.repository"),
+      value: target.repository,
+    },
+    {
+      id: "issueNumber",
+      label: t("codingWorkbench.draftDelivery.issue"),
+      value: `#${String(target.issueNumber)}`,
+    },
+  ];
 }
 
 // #3390: `id` is the fact's stable, locale-independent identity; `label` is what the operator

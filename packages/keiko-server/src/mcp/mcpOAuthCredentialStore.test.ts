@@ -55,6 +55,7 @@ describe("keeping an MCP server's OAuth credential between runs (#3903 AC3)", ()
       { ...BINDING, url: "https://other.example.test/mcp" },
       { ...BINDING, oauth: { issuer: "https://evil.example.test" } },
       { ...BINDING, oauth: { ...BINDING.oauth, clientId: "keiko" } },
+      { ...BINDING, oauth: { ...BINDING.oauth, scope: "restricted.read" } },
       { ...BINDING, server: "tracker" },
     ])
       expect(credentials.load(changed)).toBeUndefined();

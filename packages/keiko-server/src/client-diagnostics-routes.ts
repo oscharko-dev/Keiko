@@ -71,10 +71,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_CODING_RUNTIME_CALLS,
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
   CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
   CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
   CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+  CLIENT_CODING_WORKBENCH_HELD_NOTICES,
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
   CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
   CLIENT_BROWSER_APPROVAL_OPERATIONS,
@@ -1449,6 +1451,12 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
     },
     totalLineCount: { type: "integer", dataClass: "count", required: false },
     totalByteCount: { type: "integer", dataClass: "count", required: false },
+    notice: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1457,6 +1465,36 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
   analyzerProjection: "timeline",
   failureClasses: ["client-coding-workbench-interaction"],
   proofIds: ["client.coding-workbench.interaction.line"],
+  releaseImpact: "patch",
+});
+
+// #4109: a runtime request the Workbench gave up on at its own client-side deadline. The BFF accepted
+// it and never answered in time, so no server line can describe it; this one names the call kind and
+// the deadline it ran out of, under the failed request's correlation id. A request that Stop took the
+// place of is not a timeout and is never reported here. Closed values and one duration only.
+const CLIENT_CODING_WORKBENCH_REQUEST_TIMED_OUT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.coding-workbench.request-timed-out",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logCodingRequestTimeout",
+  fields: {
+    call: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_CODING_RUNTIME_CALLS,
+    },
+    deadlineMs: { type: "integer", dataClass: "duration", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-coding-workbench-request-timeout"],
+  proofIds: ["client.coding-workbench.request-timed-out.line"],
   releaseImpact: "patch",
 });
 
@@ -2469,11 +2507,34 @@ function logClientEvidenceInspection(
   return true;
 }
 
-// The two closed Coding Workbench reports: a restored run, else a routine page interaction.
+function logCodingRequestTimeout(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const timeout = request.codingRequestTimeout;
+  if (timeout === undefined) return false;
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_CODING_WORKBENCH_REQUEST_TIMED_OUT_OPERATION,
+      { ...clientDiagnosticCorrelation(request, correlationId), errorKind: "timeout" },
+      {
+        call: timeout.call,
+        deadlineMs: timeout.deadlineMs,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
+// The closed Coding Workbench reports: a request that hit its deadline, else a restored run, else a
+// routine page interaction.
 function logCodingClientReport(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
+  if (logCodingRequestTimeout(request, correlationId)) return true;
   const { codingRunRestore: restore, codingWorkbenchInteraction: interaction } = request;
   const envelope = clientDiagnosticCorrelation(request, correlationId);
   const closed = { completeness: "complete", loss: "none" } as const;

@@ -15,6 +15,7 @@ import type {
   CodingToolNativeEffectAdmission,
   CodingToolNativeEffectFacet,
   CodingToolNativeEffectInput,
+  CodingToolNativeCommitProof,
   CodingToolNativeInvocation,
   CodingToolNativeSettlement,
   CodingToolNativeSettlementFacet,
@@ -272,6 +273,7 @@ interface PendingNativeVerification {
   readonly editRevision: number | undefined;
   readonly executed: CodingVerificationExecutedObserver | undefined;
   readonly admittedAtMs: number;
+  readonly commitProof: CodingToolNativeCommitProof | undefined;
 }
 
 /**
@@ -302,6 +304,7 @@ function nativeVerificationTracker(hooks: CodingToolNativeVerificationHooks | un
         editRevision: hooks.revision?.(),
         executed: hooks.admitted?.(),
         admittedAtMs: Date.now(),
+        commitProof: hooks.commitProof?.(),
       });
     },
     settled: (key, input, refusedByPolicy): void => {
@@ -316,8 +319,14 @@ function nativeVerificationTracker(hooks: CodingToolNativeVerificationHooks | un
       const durationMs = Math.max(0, Date.now() - entry.admittedAtMs);
       const result = { passed, editRevision: entry.editRevision, durationMs };
       hooks.publish({ ...result, kind: entry.kind, executed: entry.executed });
-      if (!passed) return;
-      for (const kind of creditedKinds(hooks, entry, input.ownWorkdir === true)) {
+      const credited = passed ? creditedKinds(hooks, entry, input.ownWorkdir === true) : [];
+      entry.commitProof?.settle({
+        passed,
+        kinds: [entry.kind, ...credited],
+        exitCode: input.exitCode,
+        durationMs,
+      });
+      for (const kind of credited) {
         hooks.publish({ ...result, kind, executed: entry.executed, creditedBy: entry.kind });
       }
     },

@@ -10,6 +10,8 @@ export const MANAGED_MCP_PROTOCOL_VERSION = "2026-07-28";
 
 /** Resolved by server composition; never serialized into MCP arguments or metadata. */
 export interface ManagedMcpInvocationContext {
+  /** Server-private credential floor for tokens materialized during this invocation; never serialized. */
+  readonly observeCredential?: (value: string) => void;
   /** Private durable mutation admission, supplied by the composing consumer. */
   readonly beginMutation?:
     | ((input: {

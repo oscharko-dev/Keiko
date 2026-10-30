@@ -24,6 +24,10 @@
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
+  CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
+  type CodingSafeActivityVerificationOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -63,10 +67,27 @@ const CODING_RUNTIME_TOOL_RESULT_RENDERED_OPERATION = defineActivityLogOperation
       required: true,
       values: GOVERNED_TOOL_RESULT_STATUSES,
     },
+    // #3579: why a `keiko_verification` call ended as it did, the closed word the Workbench card
+    // shows instead of a bare failure. Absent on every other tool and on a verification refusal
+    // that names no more than a failure (a timeout, a resource ceiling, a refusal before the runner).
+    verificationOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
+    },
   },
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
+  // A verification that was refused, skipped or went red is a failure fact a report must keep even
+  // though this line is informational; a passed one stays optional context.
+  diagnosticWhen: [
+    {
+      field: "verificationOutcome",
+      values: ["failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"],
+    },
+  ],
   failureClasses: ["coding-runtime-tool-result"],
   proofIds: ["coding-runtime.tool-result-rendered.emitted-line"],
   releaseImpact: "patch",
@@ -121,13 +142,16 @@ export function governedToolModelContentFacts(result: unknown): GovernedToolMode
 /**
  * Records, body-free, how the shim renders one governed tool result for the model, under the run's
  * correlation: a run whose edits fail after a read can then be told apart in the log from one whose
- * model received a block rendering, and how many blocks it held.
+ * model received a block rendering, and how many blocks it held. A verification call also records the
+ * closed outcome its Workbench card shows (#3579), so a trust wait and a repository without a runnable
+ * step read back as what they were and not as a failed check.
  */
 export function recordGovernedToolModelContent(
   sink: ServerLogSink,
   correlationId: string,
   result: unknown,
   bridgeDurationMs?: number,
+  verificationOutcome?: CodingSafeActivityVerificationOutcome,
 ): void {
   const status =
     typeof result === "object" && result !== null && "status" in result ? result.status : undefined;
@@ -141,7 +165,12 @@ export function recordGovernedToolModelContent(
         correlationId,
         ...(bridgeDurationMs === undefined ? {} : { durationMs: bridgeDurationMs }),
       },
-      { framing: facts.framing, textBlockCount: facts.textBlockCount, resultStatus },
+      {
+        framing: facts.framing,
+        textBlockCount: facts.textBlockCount,
+        resultStatus,
+        ...(verificationOutcome === undefined ? {} : { verificationOutcome }),
+      },
     ),
   );
 }

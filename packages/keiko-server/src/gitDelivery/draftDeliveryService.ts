@@ -2,9 +2,13 @@ import type {
   CodingRuntimeDeliveryResult,
   CodingRuntimeDeliveryReview,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
-import type {
-  DraftDeliveryBinding,
-  DraftDeliveryRecord,
+import {
+  isDraftDeliveryBranchBinding,
+  isDraftDeliveryIssueBinding,
+  type DraftDeliveryBinding,
+  type DraftDeliveryBranchBinding,
+  type DraftDeliveryIssueBinding,
+  type DraftDeliveryRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
 import type { GitPrCreateCommand, GitPushCommand } from "@oscharko-dev/keiko-tools";
@@ -15,6 +19,8 @@ import {
 } from "./approvalStore.js";
 import {
   DraftDeliveryFailure,
+  isIssueBoundContext,
+  type IssueBoundDraftDeliveryRunContext,
   type PreparedDraftDelivery,
   type DraftDeliveryRunContext,
   type DraftDeliveryService,
@@ -22,8 +28,10 @@ import {
 } from "./draftDeliveryTypes.js";
 import {
   assertDraftAuthority,
+  assertDraftBranchTarget,
   assertDraftLocalCandidate,
   assertKnownDraftIdentity,
+  initialBranchBinding,
   initialDraftBinding,
   readDraftRemoteState,
   resolveDraftRepository,
@@ -48,6 +56,12 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 import { gitDeliveryActivityErrorKind } from "./execution.js";
 import { logDraftRelatedIssues } from "./draftRelatedIssuesActivity.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+
+type DeliveryUnavailableReason = Extract<
+  CodingRuntimeDeliveryResult,
+  { status: "unavailable" }
+>["reason"];
 
 interface DeliveryGuard {
   readonly check: () => boolean;
@@ -57,10 +71,18 @@ interface DeliveryGuard {
 function recorded(record: DraftDeliveryRecord): CodingRuntimeDeliveryResult {
   return { status: "recorded", record };
 }
-function unavailable(
-  reason: Extract<CodingRuntimeDeliveryResult, { status: "unavailable" }>["reason"],
-): CodingRuntimeDeliveryResult {
+function unavailable(reason: DeliveryUnavailableReason): CodingRuntimeDeliveryResult {
   return { status: "unavailable", reason };
+}
+// A binding of the other delivery kind than the run's own never carries over: an issue-free run
+// pushes its branch, an issue-bound run opens a pull request, and a record cannot be both.
+function issueBindingOf(binding: DraftDeliveryBinding): DraftDeliveryIssueBinding {
+  if (!isDraftDeliveryIssueBinding(binding)) throw new DraftDeliveryFailure("remote-drift");
+  return binding;
+}
+function branchBindingOf(binding: DraftDeliveryBinding): DraftDeliveryBranchBinding {
+  if (!isDraftDeliveryBranchBinding(binding)) throw new DraftDeliveryFailure("remote-drift");
+  return binding;
 }
 function deliveryAction(proposal: PreparedDraftDelivery): "push" | "pull-request" {
   return proposal.command.kind === "push" ? "push" : "pull-request";
@@ -163,17 +185,50 @@ export class DraftDeliveryController implements DraftDeliveryService {
     guard?: DeliveryGuard,
   ): Promise<CodingRuntimeDeliveryResult> {
     const context = this.context(guard);
-    if (context === undefined) return unavailable("authority-denied");
+    if (context === undefined) return this.contextRefusal();
     if (this.busy) return this.busyRefusal(context);
     this.busy = true;
     try {
       assertDraftAuthority(context);
-      return await work(context);
+      return this.loggedRefusal(context, await work(context));
     } catch (error) {
       return this.failure(context, error);
     } finally {
       this.busy = false;
     }
+  }
+  // The run has no verified delivery context (`repository-required`), or the caller's guard no
+  // longer holds (`authority-denied`). Both used to answer one bare refusal with no log line, so the
+  // model saw no cause and invented one (Coding Workbench live lab, 2026-10-30).
+  private contextRefusal(): CodingRuntimeDeliveryResult {
+    const live = this.options.context();
+    const reason = live === undefined ? "repository-required" : "authority-denied";
+    this.logRefusal(
+      live?.correlationId ?? correlationIdOrUnknown(this.options.runId),
+      live?.runId ?? this.options.runId ?? UNKNOWN_CORRELATION_ID,
+      reason,
+    );
+    return unavailable(reason);
+  }
+  private loggedRefusal(
+    context: DraftDeliveryRunContext,
+    result: CodingRuntimeDeliveryResult,
+  ): CodingRuntimeDeliveryResult {
+    if (result.status === "unavailable")
+      this.logRefusal(context.correlationId, context.runId, result.reason);
+    return result;
+  }
+  private logRefusal(
+    correlationId: string,
+    runId: string,
+    reason: DeliveryUnavailableReason,
+  ): void {
+    logDraftDeliveryActivity(
+      this.options,
+      correlationId,
+      { runId, phase: "refused", reason },
+      { errorKind: reason === "authority-denied" ? "authority-denied" : "unavailable" },
+    );
   }
   private busyRefusal(context: DraftDeliveryRunContext): CodingRuntimeDeliveryResult {
     logDraftDeliveryActivity(
@@ -217,8 +272,13 @@ export class DraftDeliveryController implements DraftDeliveryService {
   private getOrAdopt(context: DraftDeliveryRunContext): DraftDeliveryRecord | undefined {
     return currentDraft(this.options, context) ?? adoptDraftPredecessor(this.options, context);
   }
-  private async preparePush(
-    context: DraftDeliveryRunContext,
+  private preparePush(context: DraftDeliveryRunContext): Promise<CodingRuntimeDeliveryResult> {
+    return isIssueBoundContext(context)
+      ? this.prepareIssuePush(context)
+      : this.prepareBranchPush(context);
+  }
+  private async prepareIssuePush(
+    context: IssueBoundDraftDeliveryRunContext,
   ): Promise<CodingRuntimeDeliveryResult> {
     const repository = await resolveDraftRepository(this.options, context);
     const prior = this.getOrAdopt(context);
@@ -226,8 +286,29 @@ export class DraftDeliveryController implements DraftDeliveryService {
       return this.reconcileCurrent(context);
     const source = initialDraftBinding(this.options, context, repository) ?? prior?.binding;
     if (source === undefined) return unavailable("verified-commit-required");
-    const binding =
-      prior === undefined ? source : { ...source, recoveryId: prior.binding.recoveryId };
+    const binding = issueBindingOf(
+      prior === undefined ? source : { ...source, recoveryId: prior.binding.recoveryId },
+    );
+    await assertDraftLocalCandidate(this.options, context, binding);
+    const retained = this.retainedPushProposal(context, binding, prior);
+    if (retained !== undefined) return retained;
+    return this.pushProposal(context, binding, prior);
+  }
+  // An issue-free run pushes its verified commit to its own task branch on `origin`, which may be
+  // any Git remote (ADR-0085 D1b). No GitHub fact exists to read, so the only remote evidence is the
+  // non-force push itself; `origin` is re-verified here and again right before the effect.
+  private async prepareBranchPush(
+    context: DraftDeliveryRunContext,
+  ): Promise<CodingRuntimeDeliveryResult> {
+    if (context.repositoryKind === "local") return unavailable("remote-required");
+    await assertDraftBranchTarget(this.options, context);
+    const prior = this.getOrAdopt(context);
+    if (prior?.phase === "pushing") return this.reconcileCurrent(context);
+    const source = initialBranchBinding(this.options, context) ?? prior?.binding;
+    if (source === undefined) return unavailable("verified-commit-required");
+    const binding = branchBindingOf(
+      prior === undefined ? source : { ...source, recoveryId: prior.binding.recoveryId },
+    );
     await assertDraftLocalCandidate(this.options, context, binding);
     const retained = this.retainedPushProposal(context, binding, prior);
     if (retained !== undefined) return retained;
@@ -260,6 +341,8 @@ export class DraftDeliveryController implements DraftDeliveryService {
     };
     const record = proposalRecord(this.options, binding, command, prior);
     storeDraft(this.options, context, record, prior?.revision ?? null);
+    if (isDraftDeliveryBranchBinding(binding))
+      return this.acceptProposal(context, record, command, { record }, undefined);
     const remote = await readDraftRemoteState(this.options, context, binding);
     assertKnownDraftIdentity(record, remote);
     if (
@@ -274,25 +357,29 @@ export class DraftDeliveryController implements DraftDeliveryService {
     context: DraftDeliveryRunContext,
     title: string,
   ): Promise<CodingRuntimeDeliveryResult> {
+    // A pull request is issue-bound by construction: its head, base, repository and closing line
+    // all come from the accepted issue (ADR-0086). An issue-free run delivers its branch only.
+    if (!isIssueBoundContext(context)) return unavailable("issue-binding-required");
     await resolveDraftRepository(this.options, context);
     const current = this.getOrAdopt(context);
     if (current === undefined) return unavailable("verified-commit-required");
-    await assertDraftLocalCandidate(this.options, context, current.binding);
+    const binding = issueBindingOf(current.binding);
+    await assertDraftLocalCandidate(this.options, context, binding);
     if (this.samePrProposal(current, title)) return recorded(current);
     if (current.phase !== "pushed") return this.reconcileCurrent(context);
-    const remote = await readDraftRemoteState(this.options, context, current.binding);
+    const remote = await readDraftRemoteState(this.options, context, binding);
     assertKnownDraftIdentity(current, remote);
-    if (remote.headSha !== current.binding.headSha) throw new DraftDeliveryFailure("remote-drift");
+    if (remote.headSha !== binding.headSha) throw new DraftDeliveryFailure("remote-drift");
     if (remote.pullRequest !== undefined) return this.reconcileCurrent(context);
     const template = await this.composeTemplate(context, current, title);
     if (template.status !== "ready") throw new DraftDeliveryFailure("payload-changed");
-    return this.pullRequestProposal(context, current, template.title, template.body);
+    return this.pullRequestProposal(context, current, binding, template.title, template.body);
   }
   // The server-owned body: the authored template, the closing line for the bound issue, the epic's
   // resolved children as a non-closing related-issue line (run 19, 2026-09-10) and the checks the
   // run's verification evidence records for the committed change (F57, run 28).
   private async composeTemplate(
-    context: DraftDeliveryRunContext,
+    context: IssueBoundDraftDeliveryRunContext,
     record: DraftDeliveryRecord,
     title: string,
   ): Promise<ReturnType<typeof resolveDraftDeliveryTemplate>> {
@@ -318,7 +405,9 @@ export class DraftDeliveryController implements DraftDeliveryService {
   // Best effort by the port's contract: a resolver that rejects omits the related-issue line and
   // never refuses the delivery. Enforced here, at the one boundary every composition passes
   // (CodeRabbit review on PR #3452); the failure is logged body-free under the resolver's own op.
-  private async relatedIssues(context: DraftDeliveryRunContext): Promise<readonly number[]> {
+  private async relatedIssues(
+    context: IssueBoundDraftDeliveryRunContext,
+  ): Promise<readonly number[]> {
     try {
       return (await this.options.resolveRelatedIssues?.(context)) ?? [];
     } catch (error) {
@@ -349,14 +438,15 @@ export class DraftDeliveryController implements DraftDeliveryService {
   private pullRequestProposal(
     context: DraftDeliveryRunContext,
     current: DraftDeliveryRecord,
+    binding: DraftDeliveryIssueBinding,
     title: string,
     body: string,
   ): CodingRuntimeDeliveryResult {
     const command: GitPrCreateCommand = {
       kind: "pr-create",
-      ownerAndRepo: current.binding.repository,
-      headBranchName: current.binding.headRef,
-      baseBranchName: current.binding.baseRef,
+      ownerAndRepo: binding.repository,
+      headBranchName: binding.headRef,
+      baseBranchName: binding.baseRef,
       title,
       body,
       isDraft: true,
@@ -366,9 +456,9 @@ export class DraftDeliveryController implements DraftDeliveryService {
       // and `remote.headSha === current.binding.headSha` (throwing `DraftDeliveryFailure` otherwise a
       // few lines above), so `current.binding.headSha` is already the live, drift-checked head of the
       // branch this PR proposes to open — safe and correct to pin here.
-      verifiedCommitSha: current.binding.headSha,
+      verifiedCommitSha: binding.headSha,
     };
-    const record = proposalRecord(this.options, current.binding, command, current);
+    const record = proposalRecord(this.options, binding, command, current);
     storeDraft(this.options, context, record, current.revision);
     return this.acceptProposal(
       context,
@@ -464,14 +554,31 @@ export class DraftDeliveryController implements DraftDeliveryService {
   private async reconcileCurrent(
     context: DraftDeliveryRunContext,
   ): Promise<CodingRuntimeDeliveryResult> {
+    if (!isIssueBoundContext(context)) return this.reconcileBranch(context);
     await resolveDraftRepository(this.options, context);
     const adopted = this.getOrAdopt(context);
     if (adopted === undefined) return unavailable("verified-commit-required");
     return this.reconcileRecord(context, adopted);
   }
+  // A branch push has no remote record to read back: the pinned, non-force push is the only effect
+  // and it either exited 0 or did not. An attempt that was interrupted is settled as recovery, and a
+  // fresh proposal re-pushes the same exact commit, which Git answers as already up to date.
+  private reconcileBranch(context: DraftDeliveryRunContext): CodingRuntimeDeliveryResult {
+    const adopted = this.getOrAdopt(context);
+    if (adopted === undefined) return unavailable("verified-commit-required");
+    branchBindingOf(adopted.binding);
+    this.proposal = undefined;
+    if (adopted.phase === "pushed" || adopted.phase === "recovery-required")
+      return recorded(adopted);
+    return recorded(
+      advanceDraft(this.options, context, adopted, "recovery-required", "restart-reconciliation"),
+    );
+  }
   private async reconcileObservationCurrent(
     context: DraftDeliveryRunContext,
   ): Promise<CodingRuntimeDeliveryResult> {
+    // Observation follows a delivered pull request, which only an issue-bound run has.
+    if (!isIssueBoundContext(context)) return unavailable("issue-binding-required");
     const existing = currentDraft(this.options, context);
     if (existing !== undefined && existing.phase !== "recovery-required")
       return unavailable("proposal-unavailable");
@@ -496,7 +603,11 @@ export class DraftDeliveryController implements DraftDeliveryService {
     let current = adopted;
     // Reconciliation observes an already bound remote effect. Local repairs may be ahead or
     // uncommitted; proposal and execution paths still verify their exact local candidate.
-    const remote = await readDraftRemoteState(this.options, context, current.binding);
+    const remote = await readDraftRemoteState(
+      this.options,
+      context,
+      issueBindingOf(current.binding),
+    );
     if (!stillCurrent()) return unavailable("proposal-unavailable");
     assertKnownDraftIdentity(current, remote);
     this.proposal = undefined;

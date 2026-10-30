@@ -8,13 +8,17 @@ import { useWorkbenchExecutionLocation } from "./useWorkbenchExecutionLocation";
 const mocks = vi.hoisted(() => ({
   fetchGitStatus: vi.fn(),
   selectLocalCheckout: vi.fn(),
+  selectFolderWorkspace: vi.fn(),
   bindVerifiedTaskWorkspace: vi.fn(),
 }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   fetchGitStatus: mocks.fetchGitStatus,
 }));
-vi.mock("@/lib/task-workspace-api", () => ({ selectLocalCheckout: mocks.selectLocalCheckout }));
+vi.mock("@/lib/task-workspace-api", () => ({
+  selectLocalCheckout: mocks.selectLocalCheckout,
+  selectFolderWorkspace: mocks.selectFolderWorkspace,
+}));
 vi.mock("@/lib/verified-task-workspace-binding", () => ({
   bindVerifiedTaskWorkspace: mocks.bindVerifiedTaskWorkspace,
 }));
@@ -47,6 +51,7 @@ describe("workbench execution location restoration", () => {
       branchLoading: false,
       branchError: false,
       runIsActive: false,
+      folderMode: false,
       refresh,
     };
     const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
@@ -77,6 +82,7 @@ describe("workbench execution location restoration", () => {
       branchLoading: status === "loading",
       branchError: status === "failed",
       runIsActive: false,
+      folderMode: false,
       refresh,
     };
     const { rerender } = renderHook(useWorkbenchExecutionLocation, { initialProps: initial });
@@ -99,6 +105,7 @@ describe("workbench execution location restoration", () => {
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
+        folderMode: false,
         refresh,
       },
     });
@@ -120,6 +127,7 @@ describe("workbench execution location restoration", () => {
       branchLoading: false,
       branchError: false,
       runIsActive: false,
+      folderMode: false,
       refresh,
     };
     const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
@@ -145,6 +153,7 @@ describe("workbench execution location restoration", () => {
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
+        folderMode: false,
         refresh,
       },
     });
@@ -172,6 +181,7 @@ describe("workbench execution location restoration", () => {
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
+        folderMode: false,
         refresh,
       },
     });
@@ -197,6 +207,7 @@ describe("workbench execution location restoration", () => {
       workspaceLoading: true,
       workspaceError: false,
       runIsActive: false,
+      folderMode: false,
       refresh,
     };
     const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
@@ -233,6 +244,7 @@ describe("workbench execution location restoration", () => {
       workspaceLoading: false,
       workspaceError: false,
       runIsActive: false,
+      folderMode: false,
       refresh,
     };
     const { rerender } = renderHook(useWorkbenchExecutionLocation, { initialProps: initial });
@@ -255,5 +267,82 @@ describe("workbench execution location restoration", () => {
         gitClientOperation: { operation: "checkout-selection", outcome: "discarded-succeeded" },
       }),
     );
+  });
+});
+
+// Owner decision 2026-10-30: an ordinary folder is bound in place as a folder workspace, with no
+// branch to resolve and no worktree.
+describe("workbench execution location in an ordinary folder", () => {
+  const folderInstance = {
+    repositoryRoot: "/folder",
+    executionLocation: "local",
+    workspaceKind: "folder",
+  } as WorkspaceInstance;
+  const initial = {
+    root: "/folder",
+    branch: undefined,
+    location: "local" as const,
+    folderMode: true,
+    activeInstance: null as WorkspaceInstance | null,
+    workspaceLoading: false,
+    workspaceError: false,
+    branchLoading: false,
+    branchError: false,
+    runIsActive: false,
+    refresh,
+  };
+
+  it("binds the folder in place without reading a branch, then is ready", async () => {
+    mocks.selectFolderWorkspace.mockResolvedValue({});
+    const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: initial,
+    });
+    await waitFor(() => expect(mocks.selectFolderWorkspace).toHaveBeenCalledOnce());
+    expect(mocks.selectFolderWorkspace).toHaveBeenCalledWith({
+      root: "/folder",
+      requestedBy: "studio-operator",
+      correlationId: expect.any(String),
+    });
+    expect(mocks.fetchGitStatus).not.toHaveBeenCalled();
+    expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+    expect(mocks.bindVerifiedTaskWorkspace).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalled();
+    rerender({ ...initial, activeInstance: folderInstance });
+    expect(result.current.ready).toBe(true);
+  });
+
+  it("is not ready through a repository binding of the same root, and binds the folder", async () => {
+    mocks.selectFolderWorkspace.mockResolvedValue({});
+    const repository = {
+      repositoryRoot: "/folder",
+      executionLocation: "local",
+      taskBranch: "main",
+    } as WorkspaceInstance;
+    const { result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: { ...initial, activeInstance: repository },
+    });
+    expect(result.current.ready).toBe(false);
+    await waitFor(() => expect(mocks.selectFolderWorkspace).toHaveBeenCalledOnce());
+  });
+
+  it("never treats a folder binding as the checkout of a repository root", async () => {
+    mocks.selectLocalCheckout.mockResolvedValue({});
+    const { result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: { ...initial, folderMode: false, activeInstance: folderInstance },
+    });
+    expect(result.current.ready).toBe(false);
+    await waitFor(() => expect(mocks.fetchGitStatus).toHaveBeenCalled());
+  });
+
+  it("reports a refused folder binding as an error with a retry, never as ready", async () => {
+    mocks.selectFolderWorkspace.mockRejectedValue(new Error("refused"));
+    const { result } = renderHook(useWorkbenchExecutionLocation, { initialProps: initial });
+    await waitFor(() => expect(result.current.error).toBe(true));
+    expect(result.current.ready).toBe(false);
+    mocks.selectFolderWorkspace.mockResolvedValue({});
+    await act(async () => {
+      result.current.retry();
+    });
+    await waitFor(() => expect(mocks.selectFolderWorkspace).toHaveBeenCalledTimes(2));
   });
 });

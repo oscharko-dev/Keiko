@@ -171,6 +171,17 @@ notes before and buried the rare real browser failures. `gateway.setup.target.ac
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
 
+`client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
+request the Coding Workbench gave up on at its own client-side deadline (#4109): the closed `call`
+(`status`, `snapshot`, `start`, `approval`, `stop`, `takeover`, `retry`, `recovery-ack`, `pause`,
+`resume`, `follow-up`, `revert`, `inbox`, `research-revoke`, `question-answer`,
+`question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
+Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
+status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
+every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
+while another mutation is pending. Closed values and one duration only.
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
@@ -178,7 +189,10 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. A verified model nobody asked for in 15 minutes is neither renewed nor recovered in
+the background; `gateway.readiness.renewal.paused` records that pause (`paused`: `renewal`,
+`recovery`; optional `idleMs`), and the model's next conversation request verifies it on demand
+(#4103). See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -898,3 +912,10 @@ and security only. Provider and log ports come from server composition; catalog/
 admission remains mandatory. Verify modern protocol metadata, request-local context, schema
 and drift refusal, cancellation, registered Activity Log evidence and the architecture
 negative fixtures. Preserve the operator MCP registry and OpenCode compatibility.
+
+Central external MCP OAuth belongs to the shared Settings/connection owner. Chat and native
+Workbench runs use the same server definition and encrypted custody; the native production
+binding receives only a run-bound relay capability. Preserve issuer/resource/scope binding,
+one-use app-session-bound callbacks, credential-generation revocation and no-replay semantics.
+Changes to tool metadata must be refused before dispatch even without notifications. Include
+real SDK, restart/revocation and browser proofs; legacy native OAuth tests do not replace them.

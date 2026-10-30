@@ -31,7 +31,10 @@ import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/r
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
-import { isDeliveredDraftDeliveryPhase } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isDeliveredDraftDeliveryPhase,
+  isIssueBoundDraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeResumeRequest,
@@ -1039,7 +1042,10 @@ function descriptionApplicationTarget(
 ): WorkbenchDescriptionScope["applicationTarget"] {
   const delivery = snapshot.draftDelivery;
   const pullRequest = delivery?.pullRequest;
-  const repository = delivery?.binding.repository;
+  const repository =
+    delivery !== undefined && isIssueBoundDraftDeliveryRecord(delivery)
+      ? delivery.binding.repository
+      : undefined;
   if (
     workspace === undefined ||
     pullRequest?.state !== "open" ||

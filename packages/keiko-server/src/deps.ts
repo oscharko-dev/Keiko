@@ -5,6 +5,8 @@ import {
   type McpChatCatalogRuntime,
 } from "./mcp/mcpChatCatalogRuntime.js";
 import { createMcpSettingsStore, type McpSettingsStore } from "./mcp/mcpSettingsStore.js";
+import { createMcpAuthorization, type McpAuthorization } from "./mcp/mcpAuthorization.js";
+import { discoverMcpNativeProcessOwner } from "./mcpNativeProcessOwner.js";
 import {
   createConfiguredMcpConnections,
   type ConfiguredMcpConnections,
@@ -794,6 +796,7 @@ interface AgentAuthorityRegistryDependency {
 
 export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly mcpSettings?: McpSettingsStore;
+  readonly mcpAuthorization?: McpAuthorization;
   readonly mcpConnections?: ConfiguredMcpConnections;
   /** Server-only, request-scoped revalidation of the paired session using a private skill. */
   readonly markdownSkillAuthority?: (() => boolean) | undefined;
@@ -4796,6 +4799,19 @@ function safeActivityContentSource(
       };
 }
 
+// A selection (Local checkout, folder) ends the previous workspace's safe activity like any switch.
+function purgingSelection<Request, Result>(
+  select: ((request: Request) => Result) | undefined,
+  purge: () => void,
+): ((request: Request) => Result) | undefined {
+  return select === undefined
+    ? undefined
+    : (request): Result => {
+        purge();
+        return select(request);
+      };
+}
+
 function activityAwareWorkspaceLifecycle(
   lifecycle: WorkspaceLifecycleService | undefined,
   projection: CodingSafeActivityProjection | undefined,
@@ -4804,21 +4820,12 @@ function activityAwareWorkspaceLifecycle(
   const purge = (): void => {
     projection.purgeAll("workspace-switch");
   };
-  const selectLocal = lifecycle.selectLocal;
   return {
     list: lifecycle.list,
     listAll: lifecycle.listAll,
     getActive: lifecycle.getActive,
-    ...(selectLocal === undefined
-      ? {}
-      : {
-          selectLocal: (
-            request: Parameters<typeof selectLocal>[0],
-          ): ReturnType<typeof selectLocal> => {
-            purge();
-            return selectLocal(request);
-          },
-        }),
+    selectLocal: purgingSelection(lifecycle.selectLocal, purge),
+    selectFolder: purgingSelection(lifecycle.selectFolder, purge),
     setActive: (request): ReturnType<WorkspaceLifecycleService["setActive"]> => {
       purge();
       return lifecycle.setActive(request);
@@ -4882,19 +4889,33 @@ function buildMcpSettings(args: UiHandlerDepsAssemblyArgs): McpSettingsStore {
 function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
   mcpSettings: McpSettingsStore;
   mcpConnections: ConfiguredMcpConnections;
+  mcpAuthorization: McpAuthorization;
 } {
   const mcpSettings = buildMcpSettings(args);
+  const mcpAuthorization = createMcpAuthorization({
+    stateDir: dirname(args.resolvedUiDbPath),
+    env: args.options.env,
+    settings: mcpSettings,
+    log: args.options.activityLog ?? processServerLogSink(),
+    egress: () => resolveOutboundHttpEgressConfig(undefined, args.options.env),
+  });
   const mcpConnections = createConfiguredMcpConnections({
+    authorization: mcpAuthorization,
+    nativeOwner: discoverMcpNativeProcessOwner(
+      args.options.env,
+      process.platform,
+      args.options.diagnostics,
+    ),
     settings: mcpSettings,
     stateDir: dirname(args.resolvedUiDbPath),
     log: args.options.activityLog ?? processServerLogSink(),
     egress: () => resolveOutboundHttpEgressConfig(undefined, args.options.env),
   });
-  return { mcpSettings, mcpConnections };
+  return { mcpSettings, mcpConnections, mcpAuthorization };
 }
 
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
-  const { mcpSettings, mcpConnections } = buildMcpServices(args);
+  const { mcpSettings, mcpConnections, mcpAuthorization } = buildMcpServices(args);
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices({ ...args, mcpConnections }, dapRuntime);
   // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
@@ -4918,6 +4939,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
   const deps: UiHandlerDeps = {
     mcpSettings,
+    mcpAuthorization,
     mcpConnections,
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),

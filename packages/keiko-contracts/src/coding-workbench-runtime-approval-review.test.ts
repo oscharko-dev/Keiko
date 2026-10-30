@@ -308,7 +308,7 @@ describe("native action review boundaries (#3897)", () => {
   });
 
   it("keeps the complete bounded MCP tool identity in the private action review", () => {
-    const permission = mcpToolAction("s".repeat(64), "t".repeat(64));
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(128));
     expect(errorsFor(nativeReview(shellAction({ permission })))).toEqual([]);
     expect(errorsFor(nativeReview(shellAction({ permission: `${permission}x` })))).toEqual([
       NATIVE_PERMISSION_ERROR,

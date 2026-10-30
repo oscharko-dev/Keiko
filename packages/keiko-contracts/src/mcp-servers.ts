@@ -18,8 +18,8 @@ export const MCP_SERVER_REGISTRY_SCHEMA_VERSION = 1;
 export const MCP_SERVER_MAX = 16;
 export const MCP_SERVER_TOOL_MAX = 64;
 const MCP_SERVER_NAME = /^[a-z][a-z0-9_-]{0,63}$/u;
-const MCP_TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
-const MCP_NATIVE_TOOL_ACTION = /^[a-z][a-z0-9_-]{0,63}_[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
+const MCP_TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/u;
+const MCP_NATIVE_TOOL_ACTION = /^[a-z][a-z0-9_-]{0,63}_[A-Za-z0-9_-]{1,128}$/u;
 const MCP_ENVIRONMENT_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;
 const MCP_ARGUMENT_MAX = 32;
 const MCP_TEXT_MAX = 1024;
@@ -107,6 +107,8 @@ export interface McpRemoteTransport {
 }
 
 export interface McpServerDefinition {
+  /** Durable credential epoch; changes revoke this server without disrupting unrelated servers. */
+  readonly credentialGeneration?: string;
   readonly name: string;
   readonly description: string | undefined;
   readonly enabled: boolean;
@@ -152,6 +154,15 @@ function literal(value: string): boolean {
   return noControl(value) && !value.includes("{env:") && !value.includes("{file:");
 }
 
+/** Portable local paths; UNC shares and Windows device namespaces remain denied. */
+export function isMcpLocalAbsolutePath(value: unknown): value is string {
+  return (
+    boundedText(value) &&
+    literal(value) &&
+    ((value.startsWith("/") && !value.startsWith("//")) || /^[A-Za-z]:[\\/]/u.test(value))
+  );
+}
+
 function localTransport(value: Json): McpLocalTransport | undefined {
   if (!hasOnlyKeys(value, ["kind", "command", "environment", "secretEnvironment"]))
     return undefined;
@@ -186,8 +197,7 @@ function capturedLocalCommand(
     captured.push(member);
   }
   const [executable, ...args] = captured;
-  if (!boundedText(executable) || !literal(executable) || !executable.startsWith("/"))
-    return undefined;
+  if (!isMcpLocalAbsolutePath(executable)) return undefined;
   if (!args.every((part): part is string => boundedText(part) && literal(part))) return undefined;
   return [executable, ...args];
 }
@@ -378,8 +388,20 @@ function serverHeader(
 function serverOf(value: unknown): McpServerDefinition | undefined {
   const server = record(value);
   if (server === undefined) return undefined;
-  if (!hasOnlyKeys(server, ["name", "description", "enabled", "transport", "tools", "discovery"]))
+  if (
+    !hasOnlyKeys(server, [
+      "name",
+      "description",
+      "enabled",
+      "transport",
+      "tools",
+      "discovery",
+      "credentialGeneration",
+    ])
+  )
     return undefined;
+  const epoch = registryGeneration(server.credentialGeneration);
+  if (epoch === undefined) return undefined;
   const header = serverHeader(server);
   const transport = transportOf(server.transport);
   if (server.discovery !== undefined && server.discovery !== "automatic") return undefined;
@@ -387,10 +409,17 @@ function serverOf(value: unknown): McpServerDefinition | undefined {
   if (header === undefined || transport === undefined || tools === undefined) return undefined;
   return {
     ...header,
+    ...credentialEpochFields(epoch.generation),
     transport,
     tools,
     ...(server.discovery === "automatic" ? { discovery: "automatic" as const } : {}),
   };
+}
+
+function credentialEpochFields(
+  value: string | undefined,
+): Pick<McpServerDefinition, "credentialGeneration"> {
+  return value === undefined ? {} : { credentialGeneration: value };
 }
 
 function registryDocument(value: unknown): Json | undefined {
@@ -458,7 +487,7 @@ export function mcpToolAction(server: string, tool: string): string {
 
 /** A private native identity may contain both bounded names; admission still requires its exact grant. */
 export function isMcpToolActionName(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 129 && MCP_NATIVE_TOOL_ACTION.test(value);
+  return typeof value === "string" && value.length <= 193 && MCP_NATIVE_TOOL_ACTION.test(value);
 }
 
 /** The admitted actions of the enabled servers, each with its declared risk and transport. */
@@ -666,8 +695,9 @@ export function parseCodingWorkbenchMcpAuthorizationRequest(
 }
 
 export interface McpServerConnectionView {
+  readonly authentication?: "none" | "required" | "authorized";
   readonly name: string;
-  readonly state: "disabled" | "idle" | "connecting" | "connected" | "failed";
+  readonly state: "disabled" | "idle" | "connecting" | "connected" | "failed" | "unsupported";
   /** Discovered tools of this live generation, absent when no connection is usable. */
   readonly toolCount: number | null;
 }

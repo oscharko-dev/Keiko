@@ -90,6 +90,7 @@ function composerProps(
     canResume: true,
     runState,
     mutationPending: false,
+    stopPending: false,
     startBusy: false,
     startBlockedReason: null,
     projectMemoryEnabled: true,
@@ -231,6 +232,45 @@ describe("Coding Workbench composer", () => {
     expect(actions.onPause).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Stop run" }));
     expect(actions.onStop).toHaveBeenCalledOnce();
+  });
+
+  // #4109: Stop is the one control a pending mutation must not lock; it preempts that mutation.
+  it.each(["starting", "ready", "awaiting-approval", "running"] as const)(
+    "keeps Stop enabled and clickable while another action is pending in a %s run",
+    async (runState) => {
+      const user = userEvent.setup();
+      const actions = composerActions();
+      render(
+        <TaskStartSection
+          {...composerProps(runState, actions)}
+          mutationPending
+          stopPending={false}
+        />,
+      );
+      const stop = screen.getByRole("button", { name: "Stop run" });
+      expect(stop).toBeEnabled();
+      await user.click(stop);
+      expect(actions.onStop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["starting", "ready", "awaiting-approval", "running"] as const)(
+    "disables Stop only while a Stop is itself pending in a %s run",
+    (runState) => {
+      render(
+        <TaskStartSection
+          {...composerProps(runState, composerActions())}
+          mutationPending
+          stopPending
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Stop run" })).toBeDisabled();
+    },
+  );
+
+  it("disables Stop once the run is stopping", () => {
+    renderComposer("stopping", composerActions());
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeDisabled();
   });
 
   it("admits a follow-up only while paused and offers a resume control", async () => {

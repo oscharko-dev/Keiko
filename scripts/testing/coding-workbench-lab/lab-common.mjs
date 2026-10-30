@@ -213,11 +213,25 @@ export function gateActions(snapshot, approve, decided) {
   return actions;
 }
 
+/** The marker file of a lab fixture that is not the ledger-lab copy (a Python project, an empty or a plain folder). */
+export const LAB_FIXTURE_MARKER = ".keiko-lab-fixture";
+const LAB_FIXTURE_MARKER_TEXT = "keiko-lab-fixture";
+
+function hasLabFixtureMarker(root, readText) {
+  try {
+    return readText(join(root, LAB_FIXTURE_MARKER), "utf8").trim() === LAB_FIXTURE_MARKER_TEXT;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Fails closed unless `root` is a lab repository: the drivers approve edits and run commands on
- * the repository they are given, so they only accept a copy of the ledger-lab fixture.
+ * the repository they are given, so they only accept a copy of the ledger-lab fixture or a folder
+ * that carries the explicit lab fixture marker (#3907 AC3: other languages, empty and plain folders).
  */
 export function assertLabRepository(root, readText = readFileSync) {
+  if (hasLabFixtureMarker(root, readText)) return;
   const { name, failure } = packageName(root, readText);
   if (name === LAB_REPOSITORY_NAME) return;
   const reason = failure ?? `its package.json names ${JSON.stringify(name ?? null)}`;
@@ -436,6 +450,20 @@ export function describeSnapshot(snapshot) {
 export function exitCodeForState(state) {
   if (state === "succeeded") return 0;
   return TERMINAL_STATES.includes(state) ? 1 : 3;
+}
+
+/**
+ * Stops a run the driver started when its deadline passed before the run ended. An active run keeps
+ * holding the dev server's checkout, so the next task would be refused with LOCK_CONTENTION.
+ * `post(path, body)` resolves to `{ status }`. Returns the stop's status, or null for an ended run.
+ */
+export async function stopUnfinishedRun(post, runId, snapshot) {
+  if (TERMINAL_STATES.includes(snapshot?.state)) return null;
+  const { status } = await post(`/api/coding-workbench/runtime/runs/${runId}/stop`, {
+    requestId: runId,
+  });
+  log(`deadline passed while ${String(snapshot?.state)}; stopped the run (${String(status)})`);
+  return status;
 }
 
 export function loadTasks() {

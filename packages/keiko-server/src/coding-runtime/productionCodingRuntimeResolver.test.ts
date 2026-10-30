@@ -29,6 +29,10 @@ import {
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  FOLDER_WORKSPACE_BRANCH,
+  folderWorkspaceHead,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
@@ -1828,3 +1832,179 @@ describe("accepted initialization STARTING projection", () => {
     expect(guard?.check()).toBe(false);
   });
 });
+
+// Owner decision 2026-10-30: the Workbench works in any folder. This drives a launch through the
+// real composition (authority context, launch preparation, run services and the governed tool
+// facade) over a folder that is not a repository, with every repository dependency a spy that must
+// never be touched.
+describe("a run in a plain folder through the real composition (owner decision 2026-10-30)", () => {
+  function folderRunFixture() {
+    const fixture = workspaceFixture();
+    const identity = "f".repeat(64);
+    const instance = {
+      workspaceId: "workspace-private",
+      repositoryId: "repository-private",
+      repositoryRoot: fixture.workspace,
+      managedWorktreePath: fixture.workspace,
+      taskId: "task-private",
+      taskBranch: FOLDER_WORKSPACE_BRANCH,
+      baseBranch: FOLDER_WORKSPACE_BRANCH,
+      executionLocation: "local" as const,
+      workspaceKind: "folder" as const,
+      gitdirIdentity: identity,
+      lastVerifiedHead: folderWorkspaceHead(identity),
+      lifecycleState: "active",
+      health: "healthy",
+      driftMarkers: [],
+    };
+    const readWorkspaceHead = vi.fn((): string | undefined => {
+      throw new Error("a folder run must never read a repository head");
+    });
+    const authority = {
+      ...fixture.authority,
+      deploymentCeiling: "autonomous-delivery" as const,
+      readWorkspaceHead,
+      workspaceLifecycle: {
+        getActive: () => ({ instance, binding: { activeRoot: fixture.workspace } }),
+      } as never,
+    };
+    const verifiedCommit = {
+      resolveWorkspace: vi.fn(),
+      buffersClean: vi.fn(),
+      snapshots: { get: vi.fn() },
+      execution: {},
+    };
+    return { fixture, authority, readWorkspaceHead, verifiedCommit };
+  }
+
+  let sequence = 0;
+  function toolBody(action: Record<string, unknown>): string {
+    sequence += 1;
+    const id = `folder-run-${String(sequence)}`;
+    return JSON.stringify({ actionId: id, idempotencyKey: id, ...action });
+  }
+
+  it("prepares, mints and runs governed tools without any repository, refusing only delivery", async () => {
+    const log = createBufferedServerLogSink();
+    const originalSink = processLog.processServerLogSink();
+    vi.spyOn(processLog, "processServerLogSink").mockReturnValue({
+      ...originalSink,
+      write: log.write,
+    });
+    const { fixture, authority, readWorkspaceHead, verifiedCommit } = folderRunFixture();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(fixture.nowMs());
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const runToReport = vi.fn(() =>
+      Promise.resolve({
+        report: folderVerificationReport(fixture.workspace),
+        failureOutput: [] as never[],
+      }),
+    );
+    const resolver = resolverFor(
+      { ...fixture, authority: authority as unknown as typeof fixture.authority },
+      createRun,
+      confirmations.consumer,
+      undefined,
+      {
+        verifiedCommit: verifiedCommit as never,
+        verificationRunner: { runToReport },
+      },
+    );
+    const host = createProductionCodingRuntimeHost(resolver);
+    if (host === undefined) throw new Error("expected qualified composition");
+    const runId = "run-12345678";
+    const request = {
+      ...launchRequest(fixture.workspace),
+      runId,
+      requestedMode: "autonomous-delivery",
+    };
+
+    await host.launchResolver.prepare?.(request as never);
+    confirmations.issue(
+      resolveProductionRuntimeStartConfirmationClaim(authority, request as never),
+    );
+    const launch = host.launchResolver.resolve(request as never);
+    const composed = createRun.mock.calls[0]?.[0];
+    if (composed === undefined) throw new Error("expected minted composition");
+    await expect(
+      host.createManager(vi.fn()).start({
+        ...launch,
+        runId,
+        workspaceRoot: fixture.workspace,
+        requestedMode: "autonomous-delivery",
+      }),
+    ).resolves.toMatchObject({ ok: true, runId });
+
+    // Verification is independent of any repository and runs in the folder.
+    const verification = await composed.toolFacade.execute({
+      capability: composed.minted.toolFacadeCapability,
+      body: toolBody({ action: "verification", verifierId: "test" }),
+    });
+    expect(verification).toMatchObject({ status: "completed" });
+    expect(runToReport).toHaveBeenCalledTimes(1);
+
+    // Every repository tool stays registered and refuses with the one closed reason.
+    for (const action of [
+      { action: "git", operation: "stage", phase: "propose", paths: ["notes.txt"] },
+      { action: "git", operation: "ci" },
+      { action: "delivery", intent: "commit", phase: "propose", message: "feat: note" },
+    ]) {
+      await expect(
+        composed.toolFacade.execute({
+          capability: composed.minted.toolFacadeCapability,
+          body: toolBody(action),
+        }),
+      ).resolves.toMatchObject({ status: "failed", reasonCode: "repository-required" });
+    }
+    const refusals = log.events.filter(
+      (event) =>
+        event.op === "coding-runtime.tool-result" && event.extra?.reason === "repository-required",
+    );
+    expect(refusals.map((event) => event.extra?.actionKind)).toEqual(["git", "git", "delivery"]);
+    for (const event of refusals) expect(event.correlationId).toBe(runId);
+
+    // No repository dependency was consulted at any point.
+    expect(readWorkspaceHead).not.toHaveBeenCalled();
+    expect(verifiedCommit.resolveWorkspace).not.toHaveBeenCalled();
+    expect(verifiedCommit.snapshots.get).not.toHaveBeenCalled();
+    expect(verifiedCommit.buffersClean).not.toHaveBeenCalled();
+  });
+});
+
+function folderVerificationReport(workspaceRoot: string) {
+  return {
+    workspaceRoot,
+    results: [
+      {
+        kind: "test" as const,
+        scriptName: "test",
+        command: "npm",
+        args: ["test"],
+        status: "passed" as const,
+        exitCode: 0,
+        signal: null,
+        durationMs: 2,
+        truncated: false,
+        redacted: true,
+        outputSummary: "command completed",
+        appliedLimits: [],
+      },
+    ],
+    overallStatus: "passed" as const,
+    startedAtMs: 1,
+    durationMs: 2,
+    counts: {
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      denied: 0,
+      "timed-out": 0,
+      cancelled: 0,
+      "resource-exceeded": 0,
+    },
+  };
+}

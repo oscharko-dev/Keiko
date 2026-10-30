@@ -12,6 +12,8 @@ import {
   CODING_SAFE_ACTIVITY_MAX_TURNS,
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   CODING_SAFE_ACTIVITY_TOOL_STATES,
+  CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
+  isCodingSafeActivityToolPresentation,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
   type CodingSafeActivityFeed,
@@ -118,6 +120,61 @@ describe("coding safe-activity contract", () => {
     ]) {
       expect(validateCodingSafeActivityFeed(withPresentation(invalid)).ok).toBe(false);
     }
+  });
+
+  // #3579: a verification that could not check anything must not read as a failed one, so the card
+  // gets its reason as a closed word. Nothing outside the vocabulary may reach it.
+  it("admits only the closed verification outcome vocabulary on a tool presentation", () => {
+    expect([...CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES]).toEqual([
+      "passed",
+      "failed-check",
+      "waiting-for-trust",
+      "no-runnable-steps",
+      "not-run",
+    ]);
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new Error("expected available fixture");
+    const turn = feed.turns[0];
+    const tool = turn?.tools[0];
+    if (turn === undefined || tool === undefined) throw new Error("expected tool fixture");
+    const withPresentation = (value: unknown): unknown => ({
+      ...feed,
+      turns: [{ ...turn, tools: [{ ...tool, presentation: value }] }],
+    });
+    for (const verificationOutcome of CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES) {
+      expect(isCodingSafeActivityToolPresentation({ verificationOutcome })).toBe(true);
+      expect(
+        validateCodingSafeActivityFeed(
+          withPresentation({ bridgeDurationMs: 4, verificationOutcome }),
+        ).ok,
+      ).toBe(true);
+    }
+    for (const verificationOutcome of [
+      "arbitrary provider text",
+      "WAITING-FOR-TRUST",
+      "failed",
+      "succeeded",
+      "",
+      null,
+      1,
+      true,
+      ["passed"],
+      { outcome: "passed" },
+    ]) {
+      expect(isCodingSafeActivityToolPresentation({ verificationOutcome })).toBe(false);
+      expect(
+        validateCodingSafeActivityFeed(
+          withPresentation({ bridgeDurationMs: 4, verificationOutcome }),
+        ).ok,
+      ).toBe(false);
+    }
+    // The outcome joins the closed key set; it opens no door for any other key.
+    expect(
+      isCodingSafeActivityToolPresentation({
+        verificationOutcome: "passed",
+        stdout: "RAW_OUTPUT_SENTINEL",
+      }),
+    ).toBe(false);
   });
 
   it("accepts typed turns and the complete closed tool-state vocabulary", () => {

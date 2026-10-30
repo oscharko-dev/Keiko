@@ -107,6 +107,7 @@ export function CodingWorkbenchWindowHost({
       historySelection={historySelection}
       onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
       onOpenHistory={() => context.openWindow("codingHistory")}
+      onOpenMcpSettings={() => context.openWindow("settings", { initialTab: "mcp" })}
       selectedRoot={root ?? undefined}
       selectedBranch={targetBranch}
       selectedLocation={selectedLocation}

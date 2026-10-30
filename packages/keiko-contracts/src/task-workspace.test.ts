@@ -29,6 +29,9 @@ import {
   isWorkspaceEventType,
   validateWorkspaceEvent,
   validateWorkspaceInstance,
+  FOLDER_WORKSPACE_BRANCH,
+  folderWorkspaceHead,
+  isFolderWorkspace,
   validateWorkspaceBinding,
   validateWorkspaceBoundRootV2,
   validateWorkspaceBindingV2,
@@ -533,6 +536,68 @@ describe("validateWorkspaceEvent (content-free, SC3)", () => {
         "lockId",
       ].sort(),
     );
+  });
+});
+
+function folderInstance(): WorkspaceInstance {
+  return {
+    ...validInstance(),
+    baseBranch: FOLDER_WORKSPACE_BRANCH,
+    taskBranch: FOLDER_WORKSPACE_BRANCH,
+    executionLocation: "local",
+    workspaceKind: "folder",
+    managedWorktreePath: "/repos/keiko",
+    lock: null,
+    driftMarkers: [],
+    recoveryHints: [],
+    lastVerifiedHead: folderWorkspaceHead("gitdir-hash-1"),
+  };
+}
+
+describe("validateWorkspaceInstance folder workspaces (owner decision 2026-10-30)", () => {
+  it("accepts a folder workspace bound in place without a branch or HEAD", () => {
+    expect(validateWorkspaceInstance(folderInstance())).toEqual({ ok: true });
+    expect(isFolderWorkspace(folderInstance())).toBe(true);
+  });
+
+  it("keeps every existing repository workspace valid and not a folder", () => {
+    expect(validateWorkspaceInstance({ ...validInstance(), workspaceKind: "git" })).toEqual({
+      ok: true,
+    });
+    expect(isFolderWorkspace(validInstance())).toBe(false);
+    expect(isFolderWorkspace(undefined)).toBe(false);
+  });
+
+  it("rejects an unknown workspace kind", () => {
+    const result = validateWorkspaceInstance({ ...validInstance(), workspaceKind: "bare" });
+    expect(result).toEqual({ ok: false, reasons: ["workspaceKind invalid"] });
+  });
+
+  it("rejects a folder workspace that carries a real branch, a worktree location or a Git head", () => {
+    const real = validateWorkspaceInstance({
+      ...folderInstance(),
+      executionLocation: "worktree",
+      taskBranch: "task/feat-1",
+      lastVerifiedHead: "a".repeat(40),
+    });
+    expect(real).toEqual({
+      ok: false,
+      reasons: [
+        "folder workspace must be local",
+        "folder workspace taskBranch invalid",
+        "folder workspace lastVerifiedHead invalid",
+      ],
+    });
+  });
+
+  it("reserves the folder branch spelling: a repository workspace cannot carry it", () => {
+    expect(
+      validateWorkspaceInstance({ ...validInstance(), taskBranch: FOLDER_WORKSPACE_BRANCH }),
+    ).toEqual({ ok: false, reasons: ["taskBranch uses a reserved name"] });
+  });
+
+  it("uses a branch spelling that no ref name can have", () => {
+    expect(FOLDER_WORKSPACE_BRANCH).toMatch(/\s/u);
   });
 });
 
