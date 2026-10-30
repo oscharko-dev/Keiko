@@ -2,7 +2,7 @@
 import { sha256 as continuityDigest } from "../../lib/digest.mjs";
 export { continuityDigest };
 
-export const CONTINUITY_CORPUS_VERSION = "chat-continuity-v2";
+export const CONTINUITY_CORPUS_VERSION = "chat-continuity-v3";
 export const INITIAL_CONTEXT = [
   "Wir bearbeiten das Projekt Kestrel. Zuständig ist Mira Seidel.",
   "Die kurze Vorgangskennung lautet Q7-42. Das ursprüngliche Budget beträgt 7300 EUR.",
@@ -31,7 +31,7 @@ const EXPECTED = Object.freeze({
   projekt: /kestrel/iu,
   verantwortlich: /mira\s+seidel/iu,
   kennung: /Q7[-‐‑– ]?42/iu,
-  budget: /^\s*8[.,\s]?100(?:[.,]00)?\s*(?:EUR|€)?\s*$/iu,
+  budget: /^\s*(?:(?:EUR|€)\s*)?8[.,\s]?100(?:[.,]00)?\s*(?:EUR|Euros?|€)?\s*$/iu,
   termin: /^\s*(?:2027-04-09|0?9[./]0?4[./](?:2027|27)|0?9\.?\s*april\s*2027)\s*$/iu,
   ersteEntscheidung: /lokal.{0,35}(?:warteschlange|queue)/iu,
   verworfeneAlternative: /extern.{0,35}volltext/iu,

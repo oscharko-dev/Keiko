@@ -81,6 +81,8 @@ it.each([
   "request-error",
   "too-few-cycles",
   "too-short",
+  "invalid-json",
+  "shrunken-oracle",
 ])("rejects an incomplete qualification: %s", (failure) => {
   const current = state();
   let now = 101;
@@ -90,7 +92,19 @@ it.each([
   if (failure === "request-error") current.failures = 1;
   if (failure === "too-few-cycles") current.cycles = 1;
   if (failure === "too-short") now = 99;
+  if (failure === "invalid-json") current.probes[0].score.validJson = false;
+  if (failure === "shrunken-oracle")
+    current.probes[0].score = { validJson: true, correct: 0, total: 0 };
   expect(continuityCampaignQualified(current, BOUNDS, now)).toBe(false);
+});
+it("accepts the exact duration boundary and requires an explicit restart exemption", () => {
+  const current = state();
+  expect(continuityCampaignQualified(current, BOUNDS, 100)).toBe(true);
+  current.probes.pop();
+  expect(continuityCampaignQualified(current, BOUNDS, 100)).toBe(false);
+  expect(continuityCampaignQualified(current, { ...BOUNDS, requireRestart: false }, 100)).toBe(
+    true,
+  );
 });
 it("retains the previous parseable ledger when a replacement write fails partway", () => {
   const root = mkdtempSync(join(tmpdir(), "keiko-continuity-ledger-"));

@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -77,4 +77,60 @@ it("rejects output that changed independently of the recorded build", () => {
   const root = fixture();
   write(root, "packages/example/dist/index.js", "export const value = 999;\n");
   expect(() => readContinuityBuildIdentity(root)).toThrow("continuity-build-provenance-stale");
+});
+const provenancePath = (root) =>
+  join(root, "node_modules", ".cache", "keiko-chat-continuity-build.json");
+
+it.each(["missing", "malformed", "unreadable"])(
+  "rejects %s provenance even when the current product identity is valid",
+  (failure) => {
+    const root = fixture();
+    const path = provenancePath(root);
+    rmSync(path);
+    if (failure === "malformed") writeFileSync(path, "{");
+    if (failure === "unreadable") mkdirSync(path);
+    expect(() => readContinuityBuildIdentity(root)).toThrow("continuity-build-provenance-required");
+  },
+);
+it.each([
+  ["producer", "unverified-build"],
+  ["schemaVersion", 0],
+  ["sourceHead", "not-a-commit"],
+  ["compilerDigest", "different-compiler"],
+  ["nodeVersion", "different-node"],
+  ["productDigestMethod", "different-method"],
+])("rejects stale provenance with changed %s", (field, value) => {
+  const root = fixture();
+  const path = provenancePath(root);
+  const record = JSON.parse(readFileSync(path, "utf8"));
+  writeFileSync(path, JSON.stringify({ ...record, [field]: value }));
+  expect(() => readContinuityBuildIdentity(root)).toThrow("continuity-build-provenance-stale");
+});
+it("rejects an existing but empty distribution", () => {
+  const root = fixture();
+  rmSync(join(root, "packages/example/dist/index.js"));
+  expect(() => readContinuityBuildIdentity(root)).toThrow("continuity-build-output-missing");
+});
+it("rejects non-regular distribution entries", () => {
+  const root = fixture();
+  symlinkSync(
+    join(root, "node_modules"),
+    join(root, "packages/example/dist/linked-output"),
+    "junction",
+  );
+  expect(() => readContinuityBuildIdentity(root)).toThrow(
+    "continuity-build-output-must-be-regular",
+  );
+});
+it("rejects a source change committed during the build and preserves the previous record", () => {
+  const root = fixture();
+  const previous = readFileSync(provenancePath(root), "utf8");
+  expect(() =>
+    recordContinuityBuild(root, () => {
+      write(root, "packages/example/src/index.ts", "export const value = 2;\n");
+      commit(root);
+      write(root, "packages/example/dist/index.js", "export const value = 2;\n");
+    }),
+  ).toThrow("continuity-product-source-changed-during-build");
+  expect(readFileSync(provenancePath(root), "utf8")).toBe(previous);
 });

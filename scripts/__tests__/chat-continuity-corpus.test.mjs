@@ -25,6 +25,14 @@ describe("predeclared chat continuity corpus", () => {
       total: 9,
     });
   });
+  it.each(["8100 Euro", "8.100 Euro", "€ 8.100", "EUR 8 100,00", "8.100,00 €"])(
+    "accepts an unambiguous equivalent euro amount: %s",
+    (budget) => {
+      expect(
+        evaluateContinuityAnswer(JSON.stringify({ ...ANSWER, budget })).fields.budget.correct,
+      ).toBe(true);
+    },
+  );
   it("rejects obsolete budget and deadline values", () => {
     const scored = evaluateContinuityAnswer(
       JSON.stringify({ ...ANSWER, budget: "7300 EUR", termin: "2027-03-18" }),

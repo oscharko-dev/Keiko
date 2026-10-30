@@ -194,16 +194,23 @@ async function summarySourceCoverage(store, chatId, messages) {
   const delivered = messages.filter((message) =>
     prompt.includes(message.content.split(".")[0]),
   ).length;
-  const runId = `chat-${sha256Hex(chatId).slice(0, 16)}-t${messages.length}`;
-  const summary = loadEvidence(evidence, runId)?.compaction?.[0]?.modelSummary;
+  const summary = observedSummary(evidence);
   return {
     availableMessages: messages.length,
     modelCalls: requests.length,
     witnessesDelivered: delivered,
     coveredFraction: delivered / messages.length,
     declaredCoveredItems: summary?.coveredItems ?? null,
-    summaryStatus: summary?.status ?? "absent",
+    summaryStatus: summary.status,
   };
+}
+
+function observedSummary(evidence) {
+  const runIds = evidence.list();
+  if (runIds.length !== 1) throw new Error("continuity-summary-evidence-not-found");
+  const summary = loadEvidence(evidence, runIds[0])?.compaction?.[0]?.modelSummary;
+  if (summary?.status !== "valid") throw new Error("continuity-summary-evidence-not-valid");
+  return summary;
 }
 
 async function shortIdentifierRecall(store, project) {

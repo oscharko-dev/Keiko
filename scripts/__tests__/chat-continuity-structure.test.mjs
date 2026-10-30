@@ -8,6 +8,8 @@ describe("production-path continuity measurements", () => {
     expect(report.summarySourceCoverage.modelCalls).toBeGreaterThan(0);
     expect(report.summarySourceCoverage.witnessesDelivered).toBeGreaterThan(0);
     expect(report.summarySourceCoverage.witnessesDelivered).toBeLessThanOrEqual(40);
+    expect(report.summarySourceCoverage.summaryStatus).toBe("valid");
+    expect(report.summarySourceCoverage.declaredCoveredItems).not.toBeNull();
     expect(report.canonicalMessagesAfter).toBe(40);
     expect(report.shortIdentifierRecall.originalExists).toBe(true);
     expect(report.identifierRecallBenchmark).toMatchObject({

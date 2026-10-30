@@ -116,6 +116,14 @@ substrings. Its manifest hashes positive and forbidden patterns including flags.
 prompts are unchanged. Scores from the legacy `v1` run need re-evaluation from matching private
 probe answers under this oracle before comparison; they are not silently treated as `v2` results.
 
+Oracle revision `chat-continuity-v3` additionally accepts equivalent euro spellings such as
+`8100 Euro` and `€ 8.100`. Four failure-first cases reproduce the earlier false negatives,
+alongside a previously accepted formatting control;
+ambiguity and obsolete-value rejection remain enforced. Model-facing prompts are unchanged.
+The isolated ongoing baseline retains its frozen `v2` oracle. Before comparison with a `v3`
+candidate, re-score matching private baseline answers under `v3`, retain both scores and their
+answer hashes, and report this oracle-only change separately from product improvements.
+
 For the candidate, rerun with `--phase candidate`, the same corpus and equivalent configuration,
 hardware and workload. Keep the original baseline artifacts immutable. Compare individual models
 and modes separately; report changes of model, configuration or environment explicitly.
@@ -193,6 +201,11 @@ An independently repeated observation after forced-build attestation produced id
 results. Its source/distribution/compiler hashes use the new canonical digest method and are retained
 in [`structural-baseline-attested.json`](evidence/4155/structural-baseline-attested.json). The original
 artifact remains immutable; its older commit-tree digest is a different measurement method.
+The original predates build attestation: no distribution, compiler, Node or build-provenance fields
+were removed from it. It cannot establish a forced-build distribution identity. The attested
+companion supplies that independent proof; current reproduction commands emit the complete new
+shape. Tests additionally require the summary to exist and discover its evidence through the
+store inventory rather than duplicating the productive run-id formula.
 
 ## Remaining code-grounded audit hypotheses
 
