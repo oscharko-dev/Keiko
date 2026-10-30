@@ -1194,7 +1194,6 @@ const CHAT_READ_VIEW_KEYS = [
   "requestedAt",
   "expiresAt",
 ];
-const CHAT_READ_VIEW_STATES: ReadonlySet<unknown> = new Set(CHAT_TOOL_READ_GRANT_STATES);
 function validReadGrantSubject(value: Record<string, unknown>): boolean {
   if (value.kind === "mcp-chat-read")
     return (
@@ -1229,7 +1228,8 @@ export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGr
     ) &&
     [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
     Number(value.expiresAt) > Number(value.requestedAt) &&
-    CHAT_READ_VIEW_STATES.has(value.state)
+    // chat-tool-authority imports this module, so its exports are read at call time, never at load.
+    CHAT_TOOL_READ_GRANT_STATES.some((state) => state === value.state)
   );
 }
 

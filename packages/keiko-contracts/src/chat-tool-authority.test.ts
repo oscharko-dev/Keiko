@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { CODING_WORKBENCH_MODES, resolveEffectiveCodingWorkbenchMode } from "./coding-workbench.js";
 import { validateCodingWorkbenchAuthorityEnvelope } from "./coding-workbench-validation.js";
@@ -456,5 +457,39 @@ describe("concrete Chat authority admission", () => {
       expect(caught).toBe(failure);
       expect(attempts).toBe(2);
     }
+  });
+});
+
+// REVIEW-3918-013: this module and bff-wire import each other. A process whose first contracts
+// import is this public subpath must still load, and bff-wire must then read the grant states at
+// call time; a load-time read either throws a TDZ ReferenceError or rejects every read grant.
+const FIRST_IMPORT_CONTROL = `
+import { strict as assert } from "node:assert";
+const authority = await import("@oscharko-dev/keiko-contracts/runtime/chat-tool-authority");
+const wire = await import("@oscharko-dev/keiko-contracts/runtime/bff-wire");
+const view = (state) => ({
+  kind: "jira-chat-read", grantId: "grant-1", chatId: "chat-1", state,
+  disclosureVersion: authority.CHAT_TOOL_READ_DISCLOSURE_VERSION, requestedAt: 1, expiresAt: 2,
+  podId: "pod-1", bindingGeneration: 1, authenticationGeneration: 1,
+});
+for (const state of authority.CHAT_TOOL_READ_GRANT_STATES)
+  assert.equal(wire.isChatToolReadGrantView(view(state)), true, state);
+assert.equal(wire.isChatToolReadGrantView(view("approved")), false);
+`;
+
+describe("chat tool authority module graph (REVIEW-3918-013)", () => {
+  it("loads as the first contracts import and validates read-grant views afterwards", () => {
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", FIRST_IMPORT_CONTROL],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+        maxBuffer: 16 * 1024,
+      },
+    );
+    expect(child.error).toBeUndefined();
+    expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: "" });
   });
 });
