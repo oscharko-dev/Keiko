@@ -4564,7 +4564,6 @@ export class CodingRuntimeOrchestrator {
     if (!current) return this.stopSettledRun(kind, runId);
     if (current.state === "recovery-required") return this.fail("recovery-required");
     this.captureHistory(runId);
-    this.deps.safeActivityProjection?.purge(runId, kind === "stop" ? "stop" : "takeover");
     const stopping = this.createEndStoppingTransition(kind, current);
     if (!stopping.ok) return stopping;
     const settleInterruptedStart = this.interruptStartup(runId);
@@ -4754,7 +4753,7 @@ export class CodingRuntimeOrchestrator {
     } else if (!TERMINAL_STATES.has(state)) {
       return;
     } else {
-      this.purgeExplicitlyEndedActivity(next.runId, state);
+      this.interruptExplicitlyEndedActivity(next.runId, state);
     }
     recordRuntimeRunSettled(
       this.deps.activityLog,
@@ -5067,12 +5066,17 @@ export class CodingRuntimeOrchestrator {
     );
   }
 
-  private purgeExplicitlyEndedActivity(
+  // A stopped or taken-over run keeps its tool rows, as OpenCode keeps an aborted session's steps;
+  // only the calls still open are settled as cancelled (owner decision 2026-10-30, #3907).
+  private interruptExplicitlyEndedActivity(
     runId: string,
     state: CodingWorkbenchRuntimeStateName,
   ): void {
     if (state !== "cancelled" && state !== "taken-over") return;
-    this.deps.safeActivityProjection?.purge(runId, state === "taken-over" ? "takeover" : "stop");
+    this.deps.safeActivityProjection?.interrupt(
+      runId,
+      state === "taken-over" ? "takeover" : "stop",
+    );
   }
 
   private publishSettlement(

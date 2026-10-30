@@ -57,9 +57,14 @@ import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contrac
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { buildRedactor, CONVERSATION_READINESS_MAX_AGE_MS, type UiHandlerDeps } from "./deps.js";
+import {
+  buildRedactor,
+  CONVERSATION_READINESS_MAX_AGE_MS,
+  currentConversationReadinessObservation,
+  type UiHandlerDeps,
+} from "./deps.js";
 import type { VerifiedModelCapabilityObservation } from "./deps.js";
-import { runGatewayReadiness } from "./gateway-readiness.js";
+import { runGatewayReadiness, stopConfiguredConversationReadiness } from "./gateway-readiness.js";
 import { handleModels } from "./read-handlers.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -2105,6 +2110,102 @@ describe("coding-sidecar gateway", () => {
     );
   });
 
+  // #3907 AC3: a coding run pauses the chat model's background renewal, so without this an expired
+  // success left the Workbench reading "still checking this model" after every long run.
+  it("renews the model's expired chat readiness from an accepted answer, and nothing else", async () => {
+    const sink = captureServerLog("info");
+    const answer = (deps: UiHandlerDeps): Promise<unknown> =>
+      handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            stream: true,
+            messages: [{ role: "user", content: "answer" }],
+            tools: modelVisibleTools(),
+          }),
+          res: mockResponse({ captureBody: true }).res,
+        },
+        { ...deps, codingSidecarGatewayEvidenceAggregator: { record: vi.fn() } },
+      );
+    const base = (
+      runId: string,
+      finishReason: NormalizedResponse["finishReason"] = "stop",
+    ): UiHandlerDeps =>
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse({
+            ...assistantResponse("azure-coding-model"),
+            content: "Done.",
+            finishReason,
+          }),
+      );
+    const expired = new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString();
+    const withObservation = (
+      runId: string,
+      conversationReady: boolean,
+      finishReason: NormalizedResponse["finishReason"] = "stop",
+    ): {
+      readonly deps: UiHandlerDeps;
+      readonly holder: ReturnType<typeof probeVerifiedGatewayConfig>;
+    } => {
+      const deps = base(runId, finishReason);
+      if (deps.config === undefined) throw new TypeError("the fixture has a gateway config");
+      const holder = probeVerifiedGatewayConfig(deps.config);
+      holder.recordVerifiedCapability(
+        "azure-coding-model",
+        { conversationReady },
+        expired,
+        holder.generation(),
+      );
+      return { deps: { ...deps, gatewayConfig: holder }, holder };
+    };
+    const renewal = (runId: string): unknown =>
+      sink.events.find(
+        (event) => event.op === "coding-sidecar.gateway.outcome" && event.extra?.runId === runId,
+      )?.extra?.readinessRenewal;
+
+    const expiredSuccess = withObservation("run-renews", true);
+    expect(
+      currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model"),
+    ).toBeUndefined();
+    expect(await answer(expiredSuccess.deps)).toBe(STREAMING);
+    expect(currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model")).toBe(
+      true,
+    );
+    expect(renewal("run-renews")).toBe("renewed");
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(
+        sink.events.find(
+          (event) =>
+            event.extra?.runId === "run-renews" && event.op === "coding-sidecar.gateway.outcome",
+        ) ?? {},
+      ),
+    );
+
+    // A failed observation is never repaired by an answer: only a probe can clear it.
+    const failed = withObservation("run-failed-proof", false);
+    await answer(failed.deps);
+    expect(currentConversationReadinessObservation(failed.deps, "azure-coding-model")).toBe(false);
+    expect(renewal("run-failed-proof")).toBe("not-renewable");
+
+    // A filtered answer reached the runtime but does not prove the model served the turn.
+    const filtered = withObservation("run-filtered", true, "content_filter");
+    await answer(filtered.deps);
+    expect(
+      currentConversationReadinessObservation(filtered.deps, "azure-coding-model"),
+    ).toBeUndefined();
+    expect(renewal("run-filtered")).toBe("not-renewable");
+
+    // Without a success to renew, an answer establishes nothing.
+    const holderless = base("run-no-holder");
+    await answer(holderless);
+    expect(renewal("run-no-holder")).toBe("not-renewable");
+  });
+
   it("preserves a smaller positive provider token count over the stream byte estimate", async () => {
     const sink = captureServerLog("info");
     const response = mockResponse({ captureBody: true });
@@ -3908,6 +4009,47 @@ describe("coding-sidecar gateway", () => {
     });
 
     expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
+  });
+
+  // #3907 AC3: an expired success read as `model-verification-pending` while nothing checked the
+  // model, so the Workbench polled a promise no probe kept until another surface asked for models.
+  it("starts the one on-demand check when a profile read finds the chat success expired", async () => {
+    const context = {
+      req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+      res: mockResponse().res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      correlationId: "corr-profile-expired",
+    } satisfies RouteContext;
+    const config = configValue(provider(), capability());
+    const holder = probeVerifiedGatewayConfig(config);
+    holder.recordVerifiedCapability(
+      "azure-coding-model",
+      { conversationReady: true },
+      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      holder.generation(),
+    );
+    const fetch = vi.fn(() =>
+      Promise.resolve(
+        Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      ),
+    );
+    const deps: UiHandlerDeps = {
+      ...depsValue(config),
+      gatewayConfig: holder,
+      gatewayReadinessFetch: fetch,
+    };
+    try {
+      const result = await handleCodingSidecarGatewayProfile(context, deps);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(result.body).toMatchObject({ status: "available", modelAlias: "azure-coding-model" });
+
+      // A fresh success adds nothing: a polling Workbench never probes on its own.
+      await handleCodingSidecarGatewayProfile(context, deps);
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      await stopConfiguredConversationReadiness(deps);
+    }
   });
 
   // #3591 (1.1.7): the browser reads this profile with a 15 s deadline. While the automatic probe

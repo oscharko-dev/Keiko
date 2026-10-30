@@ -1639,6 +1639,8 @@ describe("CodingToolFacade", () => {
     },
     { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "save-then-verify" },
     { commitProof: "unavailable", reasonCode: "unknown-reason", nextAction: "verify-again" },
+    { commitProof: "admitted" },
+    { commitProof: "admitted", blocking: { unstagedCount: 0, untrackedCount: 1 } },
   ])("strips a malformed verification proof payload", async (commit) => {
     const verification = { status: "passed", completed: ["test"], commit };
     const ports = facade();
@@ -1693,6 +1695,14 @@ describe("CodingToolFacade", () => {
       },
     },
     { status: "passed", completed: ["test"], commit: { commitProof: "recorded" } },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "admitted",
+        blocking: { unstagedCount: 0, untrackedCount: 1, unstaged: [], untracked: ["a.json"] },
+      },
+    },
     {
       status: "passed",
       completed: ["test"],

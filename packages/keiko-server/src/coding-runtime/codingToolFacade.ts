@@ -566,7 +566,12 @@ const COMMIT_PROOF_NEXT_ACTIONS: ReadonlyMap<unknown, string> = new Map([
 function isCodingToolCommitProofResult(value: unknown): value is CodingToolCommitProofResult {
   if (!isRecord(value)) return false;
   if (value.commitProof === "recorded") return Object.keys(value).length === 1;
-  if (value.commitProof !== "unavailable") return false;
+  if (value.commitProof === "admitted")
+    return Object.keys(value).length === 2 && isVerifiedCommitBlockingPaths(value.blocking);
+  return value.commitProof === "unavailable" && isUnavailableCommitProof(value);
+}
+
+function isUnavailableCommitProof(value: Record<string, unknown>): boolean {
   const nextAction = COMMIT_PROOF_NEXT_ACTIONS.get(value.reasonCode);
   if (nextAction === undefined || value.nextAction !== nextAction) return false;
   if (value.reasonCode !== "candidate-not-staged" || value.blocking === undefined) {

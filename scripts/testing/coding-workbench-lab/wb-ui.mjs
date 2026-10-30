@@ -38,7 +38,7 @@ const USAGE = [
   "usage: node wb-ui.mjs (--task-id <id> | --task <text>) --approve all|none|ask",
   "                      (--repo <path> | KEIKO_LAB_REPO) [--mode <label|id>] [--model <id>]",
   "                      [--timeout-min 40] [--branch main] [--base-url <origin>] [--shots <dir>]",
-  "                      [--text-out <file>] [--headed] [--list-tasks]",
+  "                      [--text-out <file>] [--jira-pod <name>] [--headed] [--list-tasks]",
   "",
   "  --approve    required, no default: all approves every permission ask once, applies the change",
   "               reviews of Ask for approval and allows package scripts; none denies the asks and",
@@ -49,6 +49,7 @@ const USAGE = [
   "  --mode       Ask for approval | Supervised workspace | Full access; default: the task's mode",
   "  --shots      directory for one screenshot per run state change",
   "  --text-out   file for the final Workbench text (the answer, so it stays outside the repo)",
+  "  --jira-pod   the name of a ready Jira Pod the run may use; default: Jira: none",
   "",
   "Environment: KEIKO_LAB_REPO (the repository, unless --repo), KEIKO_LAB_BASE_URL (default",
   "http://127.0.0.1:1983), KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET (required). A Chromium build",
@@ -68,6 +69,7 @@ const OPTIONS = {
   "base-url": { type: "string" },
   shots: { type: "string" },
   "text-out": { type: "string" },
+  "jira-pod": { type: "string" },
   headed: { type: "boolean" },
   "list-tasks": { type: "boolean" },
 };
@@ -121,20 +123,23 @@ async function reopenWorkbench(page) {
   return waitForWorkbench(page);
 }
 
-// An option's accessible name is its label, optionally followed by its description (the autonomy
-// options describe each mode), so the label must start the name rather than equal it.
-async function chooseOption(page, comboName, optionName) {
+export async function chooseOption(page, comboName, optionLabel) {
   await page.getByRole("combobox", { name: comboName }).click();
-  const label = optionName.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  // An option's accessible name is its label followed directly by its description, so the
-  // label is matched as a prefix; the offered labels are distinct.
-  await page
-    .getByRole("option", { name: new RegExp(`^${label}`, "u") })
-    .first()
-    .click();
+  // An option's accessible name is its label followed directly by its description, so the label
+  // element is compared on its own and only an exact label is chosen: an offered near-match (a
+  // longer Jira Pod name) never stands in for the requested one, and the run is not started.
+  const options = page.getByRole("option");
+  const labels = await Promise.all(
+    Array.from({ length: await options.count() }, (_, index) =>
+      options.nth(index).locator(".ksel-option-label").allTextContents(),
+    ),
+  );
+  const index = labels.findIndex((texts) => texts.length === 1 && texts[0].trim() === optionLabel);
+  if (index < 0) throw new Error(`${comboName}: no option is labelled "${optionLabel}"`);
+  await options.nth(index).click();
 }
 
-async function startRun(page, workbench, { model, mode, text }) {
+async function startRun(page, workbench, { model, mode, text, jiraPod }) {
   const newTask = page.getByRole("button", { name: "New task", exact: true });
   if (await newTask.isVisible().catch(() => false)) {
     await newTask.click();
@@ -142,6 +147,7 @@ async function startRun(page, workbench, { model, mode, text }) {
   }
   await chooseOption(page, "Coding model", model);
   await chooseOption(page, "Run authority", mode.label);
+  if (jiraPod !== undefined) await chooseOption(page, "Jira Pod for this run", `Jira: ${jiraPod}`);
   const composer = workbench.locator("textarea").first();
   await composer.fill(text);
   if ((await composer.inputValue()) !== text) {
@@ -347,7 +353,7 @@ async function main() {
     textOut: cli.values["text-out"],
     approve,
     timeoutMs: minutesToMs(cli.values["timeout-min"]),
-    task: { text, mode, model: cli.values.model },
+    task: { text, mode, model: cli.values.model, jiraPod: cli.values["jira-pod"] },
   };
   if (options.shots) mkdirSync(options.shots, { recursive: true });
   const browser = await chromium.launch({ headless: cli.values.headed !== true });
