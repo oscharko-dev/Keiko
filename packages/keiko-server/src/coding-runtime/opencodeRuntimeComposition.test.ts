@@ -1,4 +1,5 @@
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 
 import { type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createHash } from "node:crypto";
@@ -361,7 +362,7 @@ interface OpenCodeRuntimeCompositionModule {
   createOpenCodeRuntimeComposition(input: {
     readonly activityLog?: ServerLogSink;
     readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
-    readonly toolProfile?: "direct" | "code-mode" | "native" | undefined;
+    readonly toolProfile?: OpenCodeToolProfile | undefined;
     readonly ripgrepVerified?: boolean | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly portable: {
@@ -689,7 +690,7 @@ interface StartBridgeControl {
     readonly afterCreated?: () => void;
   };
   readonly toolFacadeCapability?: string;
-  readonly readToolProfile?: () => "direct" | "code-mode" | "native";
+  readonly readToolProfile?: () => OpenCodeToolProfile;
   /** The media the run's model declares (#3906 AC1); absent declares text only. */
   readonly media?: { readonly imageInput?: boolean; readonly documentInput?: boolean };
   /** What `plugin.list` reports; absent reports Keiko's generated plugins active. */
@@ -1477,7 +1478,7 @@ async function startBridgeFixture(
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
-    get toolProfile(): "direct" | "code-mode" | "native" | undefined {
+    get toolProfile(): OpenCodeToolProfile | undefined {
       return control?.readToolProfile?.();
     },
     // #3897: the host environment is offered to every profile; only the native profile's
@@ -3415,6 +3416,83 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     execute: vi.fn(() => Promise.resolve(completed)),
     ...(admit === undefined ? {} : { nativeEffect: { admit } }),
     ...(nativeSettlement === undefined ? {} : { nativeSettlement }),
+  });
+
+  // Security review of #4135, finding 3: the bridge dispatched its own native transports before
+  // the facade's review guard saw a request, so a review run could still ask a human for a
+  // permission, reach the native policy owner, start a native read or run a native web search.
+  it("refuses every native transport of a review runtime at the bridge, before dispatch", async () => {
+    const transports = [
+      ["native-read", { action: "native-read-invocation", runId: FIXTURE_RUN_ID, phase: "begin" }],
+      ["permission-request", { action: "permission-request", runId: FIXTURE_RUN_ID, id: "per_1" }],
+      ["native-policy", JSON.parse(nativeAsk("ses_tool", "edit")) as unknown],
+      ["native-web-search", { action: "web-search", runId: FIXTURE_RUN_ID, query: "q" }],
+    ] as const;
+    const send = (
+      fixture: Awaited<ReturnType<typeof startBridgeFixture>>,
+      body: unknown,
+    ): ReturnType<typeof fixture.runtime.toolBridge.handle> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify(body),
+      });
+    const admit = admitWith(CHARGED);
+    const facade = facadeWith(admit);
+    const activityLog = createBufferedServerLogSink();
+    const review = await startBridgeFixture(facade, undefined, {
+      mode: "governed-assist",
+      readToolProfile: () => "review",
+      activityLog,
+    });
+    try {
+      for (const [, body] of transports) {
+        await expect(send(review, body)).resolves.toEqual({
+          status: 403,
+          body: "",
+          rejection: "approval-unavailable",
+        });
+      }
+      expect(admit).not.toHaveBeenCalled();
+      expect(facade.execute).not.toHaveBeenCalled();
+      const refused = activityLog.events.filter(
+        (event) => event.op === "review.run.action-refused",
+      );
+      expect(
+        refused.map((event) => ({ layer: event.extra?.layer, action: event.extra?.action })),
+      ).toEqual(transports.map(([action]) => ({ layer: "tool-bridge", action })));
+      expect(refused[0]).toMatchObject({ level: "warn", correlationId: FIXTURE_RUN_ID });
+      expectActivityLogProof(
+        "review.run.action-refused.line",
+        formatActivityLogProofLine(refused[0] ?? {}),
+      );
+      // An ordinary governed read still reaches the facade.
+      const read = await send(review, {
+        action: "read",
+        actionId: "read-1",
+        idempotencyKey: "read-1",
+        relativePath: "src/index.ts",
+      });
+      expect(read.status).toBe(200);
+      expect(facade.execute).toHaveBeenCalledOnce();
+    } finally {
+      await review.stop();
+    }
+    // Failure-first control: the Coding Workbench's bridge dispatches the same native policy ask.
+    const codingLog = createBufferedServerLogSink();
+    const coding = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      activityLog: codingLog,
+    });
+    try {
+      const answer = await send(coding, JSON.parse(nativeAsk("ses_tool")) as unknown);
+      expect(answer).toMatchObject({ status: 200 });
+      expect(codingLog.events.some((event) => event.op === "review.run.action-refused")).toBe(
+        false,
+      );
+    } finally {
+      await coding.stop();
+    }
   });
 
   it("releases an allowed effect only after the facade's live authority owner admits it", async () => {

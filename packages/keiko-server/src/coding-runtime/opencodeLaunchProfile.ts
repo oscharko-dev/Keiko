@@ -8,6 +8,12 @@ import {
   EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 
+import {
+  REVIEW_RUNTIME_AGENT_NAME,
+  REVIEW_RUNTIME_TOOL_NAMES,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+
+import { REVIEW_SYSTEM_PROMPT } from "../review/runtime/reviewPrompt.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import {
   openCodeNativeFormatterDisposition,
@@ -276,7 +282,9 @@ function launchEnvironment(
     // private discovery directory (`codingRuntimeRepositoryItems.ts`), which this switch does
     // not touch.
     OPENCODE_DISABLE_PROJECT_CONFIG: "true",
-    ...(input.toolProfile === "native"
+    // The native and review profiles pin the fields no layer below Keiko may change (the review
+    // agent and its system prompt among them, ADR-0182 D2) as the runtime's last configuration word.
+    ...(input.toolProfile === "native" || input.toolProfile === "review"
       ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(nativeServerOwnedBinding(configValue)) }
       : {}),
     ...packageManagerEnvironment(input, formatter),
@@ -521,13 +529,69 @@ export function createFixedOpenCodeV2Config(
       { disposition: formatter, documents: formatterDocuments },
       agentModels,
     );
+  if (profile === "review") return createReviewOpenCodeV2Config(contextGeometry);
   return createGovernedOpenCodeV2Config(contextGeometry, unavailableOptionalTools, profile);
+}
+
+/**
+ * The review instance's permission rules (ADR-0182 D2 layer 1): everything denied, then exactly the
+ * three read tools and `keiko_review_report` allowed. No `question`, no `execute`; last match wins.
+ */
+export function openCodeReviewPermissionRules(): readonly Readonly<Record<string, string>>[] {
+  return [
+    { action: "*", resource: "*", effect: "deny" },
+    ...REVIEW_RUNTIME_TOOL_NAMES.map((action) => ({ action, resource: "*", effect: "allow" })),
+  ];
+}
+
+/**
+ * The governed configuration of a Keiko for Quality review instance (ADR-0182 D1/D2, #4135). It is
+ * the governed profile reduced to the review tools, on every platform, with one server-defined
+ * primary agent whose system prompt is Keiko's: `default_agent` names it, `agents` defines it, and
+ * the launch environment pins both as server-owned. No MCP server, configured instruction source or
+ * reference is admitted, and the project configuration layer stays off as for every profile.
+ */
+function createReviewOpenCodeV2Config(
+  contextGeometry: OpenCodeContextGeometry,
+): Readonly<Record<string, unknown>> {
+  const reserved = Math.min(
+    OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
+    contextGeometry.maxOutputTokens,
+  );
+  const recent = Math.min(
+    OPENCODE_COMPACTION_MAX_RECENT_TOKENS,
+    Math.max(OPENCODE_COMPACTION_MIN_RECENT_TOKENS, contextGeometry.maxInputTokens - reserved),
+  );
+  const permissions = openCodeReviewPermissionRules();
+  return {
+    update: "disable",
+    share: "disabled",
+    snapshots: false,
+    model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
+    default_agent: REVIEW_RUNTIME_AGENT_NAME,
+    agents: {
+      [REVIEW_RUNTIME_AGENT_NAME]: {
+        description: "Keiko for Quality Reviewer (server-defined, read-only).",
+        mode: "primary",
+        system: REVIEW_SYSTEM_PROMPT,
+        permissions,
+      },
+    },
+    providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
+    policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
+    tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    mcp: NO_MCP_SERVERS,
+    references: {},
+    instructions: [],
+    permissions,
+  };
 }
 
 function createGovernedOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
   unavailableOptionalTools: ReadonlySet<OpenCodeOptionalToolName> | undefined,
-  profile: Exclude<OpenCodeToolProfile, "native">,
+  profile: Exclude<OpenCodeToolProfile, "native" | "review">,
 ): Readonly<Record<string, unknown>> {
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(

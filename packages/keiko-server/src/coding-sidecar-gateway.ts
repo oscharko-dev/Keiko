@@ -111,6 +111,11 @@ import {
 import { startSseHeartbeat } from "./sse.js";
 import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogToolFacadeBridge.js";
 import {
+  SIDECAR_RUNTIME_PURPOSE_FIELDS,
+  sidecarGatewayRouteTemplate,
+  sidecarPurposeField,
+} from "./review/runtime/sidecarSurface.js";
+import {
   CODING_SIDECAR_IMAGE_REJECTION_MESSAGES,
   CODING_SIDECAR_IMAGE_REJECTIONS,
   CODING_SIDECAR_MAX_IMAGE_PARTS,
@@ -283,7 +288,6 @@ function applyPromptTokenSettlement(
 }
 
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
-const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
 const CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID = "coding-safe-openai-compatible";
 const SIDECAR_SSE_HEARTBEAT_MS = 5_000;
 // Bytes per token the sidecar ESTIMATES with (usage reporting, the reasoning allowance). It never
@@ -564,6 +568,8 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
     admissiblePromptTokens: { type: "integer", dataClass: "count", required: false },
     inputMessageCount: { type: "integer", dataClass: "count", required: false },
     maxInputMessages: { type: "integer", dataClass: "count", required: false },
+    // ADR-0182 D1 (#4135): `runtimePurpose: "review"` on its review sidecar twin.
+    ...SIDECAR_RUNTIME_PURPOSE_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -936,6 +942,7 @@ function logGatewayRejection(
         reason,
         ...(runId === undefined ? {} : { runId }),
         ...evidence,
+        ...sidecarPurposeField(ctx),
         completeness: "complete",
         loss: "none",
       },
@@ -1865,11 +1872,15 @@ function evidenceAggregator(
   return deps.codingSidecarGatewayEvidenceAggregator;
 }
 
-function emitGatewayEvidenceAggregationDiagnostic(deps: UiHandlerDeps, runId: string): void {
+function emitGatewayEvidenceAggregationDiagnostic(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+): void {
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: runId,
     timestamp: new Date(Date.now()).toISOString(),
-    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    operation: sidecarGatewayRouteTemplate(ctx),
     source: "coding-sidecar-gateway.evidence-aggregation",
     errorClass: "CodingSidecarGatewayEvidenceAggregationFailure",
     message: "sidecar-gateway-evidence-aggregation-failed",
@@ -1978,10 +1989,10 @@ function recordGatewayOutcome(
     void Promise.resolve(
       evidenceAggregator(deps)?.record({ runId, outcome, completionTokens, outputBytes }),
     ).catch(() => {
-      emitGatewayEvidenceAggregationDiagnostic(deps, runId);
+      emitGatewayEvidenceAggregationDiagnostic(ctx, deps, runId);
     });
   } catch {
-    emitGatewayEvidenceAggregationDiagnostic(deps, runId);
+    emitGatewayEvidenceAggregationDiagnostic(ctx, deps, runId);
   }
 }
 
@@ -2268,7 +2279,7 @@ function emitGatewayFailureDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
       ...gatewayDiagnosticCorrelation(ctx, runId),
-      operation: CODING_SIDECAR_GATEWAY_ROUTE,
+      operation: sidecarGatewayRouteTemplate(ctx),
       source: "coding-sidecar-gateway.chat",
       error,
       redact: (message) => String(deps.redactor(message)),
@@ -2428,7 +2439,7 @@ function runRetryTraceStep(
       deps.diagnostics,
       serverDiagnosticFromError({
         ...gatewayDiagnosticCorrelation(ctx, runId),
-        operation: CODING_SIDECAR_GATEWAY_ROUTE,
+        operation: sidecarGatewayRouteTemplate(ctx),
         source: "coding-sidecar-gateway.retry-observer",
         error,
         redact: (message) => String(deps.redactor(message)),
@@ -2747,7 +2758,7 @@ function emitGatewayStreamFailureDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
       ...gatewayDiagnosticCorrelation(ctx, runId),
-      operation: CODING_SIDECAR_GATEWAY_ROUTE,
+      operation: sidecarGatewayRouteTemplate(ctx),
       source: "coding-sidecar-gateway.stream",
       error,
       summary: "The coding sidecar gateway stream failed mid-response.",
@@ -2938,7 +2949,7 @@ function refuseGatewayToolContract(
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     parentCorrelationId: runId,
     timestamp: new Date(Date.now()).toISOString(),
-    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    operation: sidecarGatewayRouteTemplate(ctx),
     source: "coding-sidecar-gateway.tool-contract",
     errorClass: "CodingSidecarGatewayToolContractRejection",
     message: "coding-sidecar-gateway-tool-contract-rejected",
@@ -3004,7 +3015,7 @@ function noteToolAdoptionGap(
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date(Date.now()).toISOString(),
-    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    operation: sidecarGatewayRouteTemplate(ctx),
     source: "coding-sidecar-gateway.tool-adoption",
     errorClass: "CodingSidecarGatewayToolAdoptionGap",
     message: "coding-sidecar-gateway-tool-adoption-gap",
@@ -3156,7 +3167,7 @@ function unavailableGatewayProfile(
       ? authentication.runId
       : (ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
     timestamp: new Date(Date.now()).toISOString(),
-    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    operation: sidecarGatewayRouteTemplate(ctx),
     source: "coding-sidecar-gateway.chat",
     errorClass: "CodingSidecarGatewayUnavailable",
     message: "coding-sidecar-gateway-profile-unavailable",

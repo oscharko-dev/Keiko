@@ -21,6 +21,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { CodingRuntimeLaunchResolver } from "./codingRuntimeOrchestrator.js";
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import {
@@ -30,6 +31,8 @@ import {
   codingRuntimeConnectorScopesForMode,
   codingRuntimeFactDigest,
   codingRuntimeNetworkPolicyForMode,
+  REVIEW_RUNTIME_EFFECTIVE_MODE,
+  reviewRuntimeAuthorityGrants,
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
@@ -121,6 +124,13 @@ export interface ProductionWorkspaceAuthorityInput {
   // the CLASS; a specific fetch still requires a live research grant in the registry AND passes the
   // human-approval gate, so no grant means no outbound request (fail closed).
   readonly researchEgressEnabled?: boolean | undefined;
+  /**
+   * ADR-0182 D1/D2 (#4135): `review` composes the Keiko for Quality review instance. Every context it
+   * mints then carries the review authority's grants (`workspace-read` only, no command, connector
+   * or network) at `governed-assist`, whatever the request asked for, and is marked `review` so the
+   * run's tool facade and catalog bridge refuse every non-read action. Absent is `coding`.
+   */
+  readonly runtimePurpose?: CodingRuntimePurpose | undefined;
   readonly resolveManagedModelProfile?:
     | ((
         modelId: string | undefined,
@@ -201,7 +211,7 @@ function contextFromActive(
     request.requestedMode,
     input.deploymentCeiling,
   );
-  return {
+  const context: CodingRuntimeTrustedContext = {
     runId: request.runId,
     operatorId: request.serverPrincipal,
     taskId: instance.taskId,
@@ -244,6 +254,22 @@ function contextFromActive(
       maxPatchBytes: CODING_RUNTIME_PATCH_BUDGET_BYTES,
     },
     expiresAt: new Date(now.getTime() + maxRuntimeMs).toISOString(),
+  };
+  return input.runtimePurpose === "review" ? reviewContext(context) : context;
+}
+
+/**
+ * The review instance's narrowing of a minted context (ADR-0182 D2 layer 3): the grants are the
+ * review authority's, never the mode's, the deployment ceiling is `governed-assist`, and the
+ * context is marked so the run's facade refuses every non-read action. Budgets stay the review
+ * composition's own envelope bounds (`promptTokenBudget`, `maxDurationMinutes`).
+ */
+function reviewContext(context: CodingRuntimeTrustedContext): CodingRuntimeTrustedContext {
+  return {
+    ...context,
+    ...reviewRuntimeAuthorityGrants(),
+    deploymentCeiling: REVIEW_RUNTIME_EFFECTIVE_MODE,
+    runtimePurpose: "review",
   };
 }
 

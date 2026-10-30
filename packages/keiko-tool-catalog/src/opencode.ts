@@ -22,6 +22,7 @@ import { VERIFICATION_TOOL_MAX_DURATION_MS } from "@oscharko-dev/keiko-contracts
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type {
   CatalogEffect,
   CatalogIdempotency,
@@ -43,9 +44,16 @@ const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
  * Server-selected fixed tool contract only; this value is never a model or module selector.
  * `native` is the standalone-equivalent profile (#3897): the pinned OpenCode service runs its own
  * tools, agents and commands, and Keiko binds the autonomy mode through the supported permission
- * and tool hooks instead of substituting mapped tools.
+ * and tool hooks instead of substituting mapped tools. `review` is the server-owned Keiko for
+ * Quality review instance's governed profile (ADR-0182 D2, #4135): the three read tools and
+ * `keiko_review_report`, and nothing else -- no `question`, no edit, command, web or Git tool.
  */
-export const OPENCODE_TOOL_PROFILES = Object.freeze(["native", "direct", "code-mode"] as const);
+export const OPENCODE_TOOL_PROFILES = Object.freeze([
+  "native",
+  "direct",
+  "code-mode",
+  "review",
+] as const);
 export type OpenCodeToolProfile = (typeof OPENCODE_TOOL_PROFILES)[number];
 const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
@@ -734,6 +742,39 @@ function ciStatusSpec(): OpenCodeToolSpec {
   };
 }
 
+// ADR-0182 D4 (#4135): the one way a finding leaves the Reviewer. It changes nothing in the
+// workspace; the server validates the report against the reviewed commit and appends it to the
+// run's intake, so the only effect class it needs is the read the validation performs.
+function reviewReportSpec(): OpenCodeToolSpec {
+  const schemas = REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS as CatalogJsonObject;
+  return {
+    canonicalId: "keiko.review.report",
+    alias: "keiko_review_report",
+    description:
+      "Report one candidate finding of this review: a defect the change introduces or exposes, " +
+      "with code evidence in the reviewed commit. Call it once per finding; text outside this " +
+      "tool is ignored.",
+    inputSchema: managedObjectSchema(schemas, Object.keys(schemas)),
+    effects: ["workspace-read"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-review-report-port",
+  };
+}
+
+function reviewRegistrationSet(): CatalogRegistrationSet {
+  return {
+    profile: { id: "opencode-review", version: 1 },
+    adapterDialect: OPENCODE_DIALECT,
+    adapterRuntime: OPENCODE_RUNTIME,
+    // No native extension: an unattended review cannot ask a question.
+    nativeExtensions: [],
+    compatibility: [],
+    entries: [discoverSpec(), readSpec(), repositorySearchSpec(), reviewReportSpec()].map((spec) =>
+      entryFor(spec),
+    ),
+  };
+}
+
 /**
  * Default direct registrations remain unchanged. The explicit Code Mode profile retains every
  * managed descriptor, bound and effect while advertising native question/execute separately.
@@ -743,6 +784,7 @@ export function opencodeRegistrationSet(
   profile: OpenCodeToolProfile = "direct",
 ): CatalogRegistrationSet {
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
+  if (profile === "review") return reviewRegistrationSet();
   return {
     profile: profile === "direct" ? OPENCODE_PROFILE : { id: "opencode-code-mode", version: 1 },
     adapterDialect: OPENCODE_DIALECT,

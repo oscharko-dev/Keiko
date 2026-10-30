@@ -716,17 +716,21 @@ describe("unknown API routes", () => {
     expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
   });
 
-  it("KEIKO-0885/#3390: CSRF-exempt POST route list is pinned to exactly its two entries", async () => {
-    // Pin the CSRF-exempt state-changing route allowlist to exactly these two entries so a
-    // future maintainer cannot silently add a THIRD route without a compensating auth (see the
-    // comment on isCsrfExemptStateChange in server.ts). Every other POST to state-changing
-    // routes must continue to fail closed at 403 FORBIDDEN_CSRF. Uses the beforeEach-bound
-    // server. Each exempt route's own compensating per-request authenticator is proven in its
-    // own coverage: authenticateGatewayRequest (coding-sidecar-gateway.test.ts) and the tool
-    // bridge's bearer check (coding-sidecar-tool-facade.test.ts).
+  it("KEIKO-0885/#3390/#4135: CSRF-exempt POST route list is pinned to exactly its four entries", async () => {
+    // Pin the CSRF-exempt state-changing route allowlist to exactly these entries so a future
+    // maintainer cannot silently add another route without a compensating auth (see the comment
+    // on isCsrfExemptStateChange in server.ts). Every other POST to state-changing routes must
+    // continue to fail closed at 403 FORBIDDEN_CSRF. Uses the beforeEach-bound server. Each exempt
+    // route's own compensating per-request authenticator is proven in its own coverage:
+    // authenticateGatewayRequest (coding-sidecar-gateway.test.ts), the tool bridge's bearer check
+    // (coding-sidecar-tool-facade.test.ts), and for the two review twins the same handlers served
+    // with the owning review instance's authenticator or no runtime at all
+    // (review/runtime/routes.test.ts).
     const exemptRoutes: readonly string[] = [
       "/api/coding-sidecar/gateway/chat/completions",
       "/api/coding-sidecar/tool",
+      "/api/review-sidecar/gateway/chat/completions",
+      "/api/review-sidecar/tool",
     ];
     // Second-place candidates that reviewers might reach for; each is a known state-changing
     // POST route that MUST still require CSRF (proven by the pre-existing tests above).

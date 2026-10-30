@@ -31,6 +31,7 @@ import type {
   VerificationNotRunStep,
 } from "./codingToolIpc.js";
 import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
+import type { ReviewReportAcknowledgement } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 export type CodingToolActionOf<Kind extends CodingToolActionRequest["action"]> = Extract<
   CodingToolActionRequest,
@@ -58,6 +59,8 @@ export type GovernedCodingToolResult =
       readonly search?: CodingRepositoryResult;
       readonly verification?: CodingToolVerificationResult;
       readonly skills?: SkillDiscoveryResultV1 | undefined;
+      /** The review report port's closed, model-facing acknowledgement (ADR-0182 D4). */
+      readonly reviewReport?: ReviewReportAcknowledgement | undefined;
       /** Fresh server-only approval-store observation; the immutable domain receipt is unchanged. */
       readonly approvalDisposition?: "ready" | undefined;
     }
@@ -92,6 +95,8 @@ export interface CodingToolGovernedPorts {
   readonly skillAuthority?: GovernedCodingToolPort<"skill"> | undefined;
   readonly skillDiscovery?: GovernedCodingToolPort<"skill-discover"> | undefined;
   readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
+  /** Present only on a Keiko for Quality review run (ADR-0182 D4); absent refuses every report. */
+  readonly reviewReport?: GovernedCodingToolPort<"review-report"> | undefined;
 }
 
 function repairBudgetRefusalReason(budget: CiRepairExecutionBudget): string {
@@ -247,8 +252,18 @@ function gitOutcome(
     deliveryOutcome(action, result) ??
     searchOutcome(action, result) ??
     verificationOutcome(action, result) ??
-    skillsOutcome(action, result)
+    skillsOutcome(action, result) ??
+    reviewReportOutcome(action, result)
   );
+}
+
+function reviewReportOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  return action === "review-report" && result.reviewReport !== undefined
+    ? { outcome: "completed", reviewReport: result.reviewReport }
+    : undefined;
 }
 
 function verificationOutcome(
@@ -342,6 +357,8 @@ function dispatch(
       return ports.skillDiscovery?.execute(request, signal, mutationGuard) ?? failed();
     case "child-agent":
       return ports.childAgentAuthority?.execute(request, signal, mutationGuard) ?? failed();
+    case "review-report":
+      return ports.reviewReport?.execute(request, signal, mutationGuard) ?? failed();
   }
 }
 

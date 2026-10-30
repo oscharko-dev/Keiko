@@ -546,6 +546,11 @@ export function productionOpenCodeToolProfile(
   return platform === "darwin" ? "native" : "direct";
 }
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
+import {
+  configuredReviewRunBudget,
+  createProductionReviewRuntimeService,
+} from "./review/runtime/production.js";
+import type { ReviewRuntimeService } from "./review/runtime/instance.js";
 import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -1193,6 +1198,9 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Issue #4133 (ADR-0182 D3): pull request reads, review target resolution and the server-owned
   // review worktrees. Composed once per graph over `<state>/review-worktrees`.
   readonly reviewServices?: ReviewServices | undefined;
+  // Issue #4135 (ADR-0182 D1/D2): the dedicated, server-owned Keiko for Quality review runtime
+  // instances, composed from the same activated OpenCode runtime as the Coding Workbench's.
+  readonly reviewRuntime?: ReviewRuntimeService | undefined;
   // Epic #1941 — native OS file/folder dialog seam. Tests inject a fake adapter, platform, or
   // single-flight state; production leaves this undefined so the route lazily selects the real
   // platform adapter and the module-level single-flight instance.
@@ -4944,7 +4952,6 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // no configured model profile — is the ONE closed reason prDescriptionRoutes.ts's "unavailable"
   // fallback exists for.
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
-  const reviewServices = composeReviewServices(args);
   const deps: UiHandlerDeps = {
     mcpSettings,
     mcpAuthorization,
@@ -4967,7 +4974,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...(args.options.gatewayReadinessFetch === undefined
       ? {}
       : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),
-    ...(reviewServices === undefined ? {} : { reviewServices }),
+    ...composeReviewDeps(args, services),
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -4994,6 +5001,19 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
  * A composition failure leaves the review routes unavailable (503) and records a diagnostic; it
  * never fails server start.
  */
+/** Issue #4133/#4135: the review services and the read-only Reviewer runtime composed over them. */
+function composeReviewDeps(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+): Pick<UiHandlerDeps, "reviewServices" | "reviewRuntime"> {
+  const reviewServices = composeReviewServices(args);
+  const reviewRuntime = composeReviewRuntimeService(args, services, reviewServices);
+  return {
+    ...(reviewServices === undefined ? {} : { reviewServices }),
+    ...(reviewRuntime === undefined ? {} : { reviewRuntime }),
+  };
+}
+
 function composeReviewServices(args: UiHandlerDepsAssemblyArgs): ReviewServices | undefined {
   if (args.options.reviewServices !== undefined) return args.options.reviewServices;
   // An injected store (tests, embedded graphs) owns no server state directory to place it in.
@@ -5048,10 +5068,90 @@ function attachReviewServicesLifecycle(args: UiHandlerDepsAssemblyArgs, deps: Ui
   const disposeGraph = deps.dispose;
   Object.assign(deps, {
     dispose: async (): Promise<void> => {
+      await deps.reviewRuntime?.dispose();
       await reviewServices.dispose();
       await disposeGraph?.();
     },
   });
+}
+
+/**
+ * Issue #4135 (ADR-0182 D1): the review runtime service, composed only beside production review
+ * services and an activated coding runtime. Each review instance is the same OpenCode composition
+ * the Coding Workbench runs on, with its own state root, orchestrator and run slot. A composition
+ * failure leaves reviews unavailable and records a diagnostic; it never fails server start.
+ */
+function composeReviewRuntimeService(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+  reviewServices: ReviewServices | undefined,
+): ReviewRuntimeService | undefined {
+  if (reviewServices === undefined || args.options.codingRuntimeProductionPorts !== undefined) {
+    return undefined;
+  }
+  try {
+    return createProductionReviewRuntimeService({
+      ...reviewRuntimeActivation(args),
+      stateDir: dirname(args.resolvedUiDbPath),
+      reviewWorktreeRoot: reviewServices.reviewRoot,
+      budget: configuredReviewRunBudget(
+        args.options.env,
+        configuredRuntimeEnvelopeBounds(args.options.env),
+      ),
+      verificationRunner: services.peripherals.verificationRunner,
+      readWorkspaceHead: readProductionWorkspaceHead,
+      resolveManagedModelProfile: (modelId, reasoningEffort) =>
+        admitCodingRunModel(
+          args.runtimeConfig.current(),
+          modelId,
+          reasoningEffort,
+          args.runtimeConfig,
+        ),
+      gatewayEvidenceRecorder: (controlPlane, evidence) =>
+        codingSidecarGatewayEvidenceRecorder(evidence, controlPlane.eventHub),
+      runner: () => reviewServices.reviewRunner(),
+      serverPrincipal: serverOperatorPrincipal(args.options),
+      activityLog: args.options.activityLog ?? processServerLogSink(),
+      diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
+    });
+  } catch (error) {
+    emitServerDiagnostic(
+      args.options.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: args.bootstrapCorrelationId,
+        operation: "review.runtime.compose",
+        source: "review.bootstrap",
+        error,
+        summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+        redact: (message): string => message,
+      }),
+    );
+    return undefined;
+  }
+}
+
+/** Activates the OpenCode runtime for one review instance under the review sidecar routes. */
+function reviewRuntimeActivation(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<Parameters<typeof createProductionReviewRuntimeService>[0], "activate"> {
+  return {
+    activate: (request) =>
+      resolveProductionOpenCodeActivation({
+        env: args.options.env,
+        runtimeStateDir: request.runtimeStateDir,
+        runtimeEvidence: request.runtimeEvidence,
+        gatewayReadiness: request.gatewayReadiness,
+        resolveWorkspaceRoot: request.resolveWorkspaceRoot,
+        sidecarRoutePrefix: "/api/review-sidecar",
+        resolveGatewayRunMetadata: (modelId) => {
+          const result = resolveCodingSafeSidecarGatewayProfile(args.runtimeConfig.current(), {
+            modelId,
+          });
+          return result.status === "available" ? result.runMetadata : undefined;
+        },
+        activityLog: processServerLogSink(),
+      }).ports,
+  };
 }
 
 function installChatToolCatalogs(

@@ -591,3 +591,57 @@ it("compiles an inactive original-read lifetime without advertising another mode
       opencodeRegistrationSet(profile).entries.some((entry) => entry.alias === tool.alias),
     ).toBe(false);
 });
+
+describe("review profile (ADR-0182 D2, #4135)", () => {
+  it("registers exactly the three read tools and keiko_review_report, with no native extension", () => {
+    const set = opencodeRegistrationSet("review");
+    expect(set.profile).toEqual({ id: "opencode-review", version: 1 });
+    expect(set.nativeExtensions).toEqual([]);
+    expect(set.entries.map((entry) => entry.alias)).toEqual([
+      "keiko_workspace_discover",
+      "keiko_workspace_read",
+      "keiko_repository_search",
+      "keiko_review_report",
+    ]);
+    for (const entry of set.entries) expect(entry.descriptor.effects).toEqual(["workspace-read"]);
+  });
+
+  it("compiles into its own projection and validates a report against the contract bounds", () => {
+    const set = opencodeRegistrationSet("review");
+    const projection = compileToolProjection(createKeikoToolCatalog([set]), set.profile);
+    const report = projection.tools.find(
+      (tool) => tool.toolRef.canonicalId === ("keiko.review.report" as CanonicalToolId),
+    );
+    expect(report).toBeDefined();
+    const descriptor = set.entries.find(
+      (entry) => entry.alias === "keiko_review_report",
+    )?.descriptor;
+    const valid = {
+      file: "src/a.ts",
+      startLine: 1,
+      endLine: 1,
+      title: "t",
+      condition: "c",
+      mechanism: "m",
+      consequence: "q",
+      remedy: "r",
+      category: "correctness",
+      severity: "low",
+      evidence: [{ file: "src/a.ts", startLine: 1, endLine: 1, role: "defect" }],
+      failureMode: { trigger: "x", detection: "nothing", coveredByChange: false },
+    };
+    expect(descriptor && matchesCatalogSchema(descriptor.inputSchema, valid)).toBe(true);
+    expect(
+      descriptor && matchesCatalogSchema(descriptor.inputSchema, { ...valid, severity: "fatal" }),
+    ).toBe(false);
+    expect(
+      descriptor && matchesCatalogSchema(descriptor.inputSchema, { ...valid, evidence: [] }),
+    ).toBe(false);
+  });
+
+  it("leaves the default direct profile without the review tool", () => {
+    expect(opencodeRegistrationSet().entries.map((entry) => entry.alias)).not.toContain(
+      "keiko_review_report",
+    );
+  });
+});

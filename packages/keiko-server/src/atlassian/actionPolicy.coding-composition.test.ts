@@ -25,6 +25,7 @@ vi.mock("../coding-runtime/productionCodingRuntimeResolver.js", async (importOri
     ): ReturnType<typeof actual.createProductionCodingRuntimeResolver> => {
       const resolver = actual.createProductionCodingRuntimeResolver(...args);
       return {
+        facadePurpose: resolver.facadePurpose,
         resolve: (): QualifiedProductionCodingRuntime | undefined => {
           captured.runtime = resolver.resolve();
           return captured.runtime;

@@ -1,5 +1,6 @@
 import { ACTIVITY_LOG_DIAGNOSTIC_FIELDS } from "@oscharko-dev/keiko-contracts/runtime/activity-log-diagnostic-fields";
 import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { createHash } from "node:crypto";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
@@ -507,6 +508,13 @@ function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): 
 }
 
 export interface ProductionManagedWorktreeToolInput {
+  /**
+   * ADR-0182 D2 layer 4: `review` for a run that carries review authority; the facade and the
+   * catalog bridge then refuse every non-read action. Absent is an ordinary coding run.
+   */
+  readonly runtimePurpose?: CodingRuntimePurpose | undefined;
+  /** ADR-0182 D4: the run's `keiko_review_report` port; present only on a review run. */
+  readonly reviewReport?: GovernedCodingToolPort<"review-report"> | undefined;
   /** Inactive server-owned initial acquisition projection; absent in ordinary compositions. */
   readonly initializationAuthority?: CodingAcceptedInitializationAuthority | undefined;
   /** Server-captured catalog projection; legacy compositions retain direct tools. */
@@ -752,6 +760,7 @@ export function createProductionManagedWorktreeToolFacade(
     governedPorts(input, readEdit),
     {
       toolProfile: input.toolProfile,
+      ...(input.runtimePurpose === undefined ? {} : { runtimePurpose: input.runtimePurpose }),
       nativeTextRead: readEdit.nativeTextRead,
       nativeFileIO: readEdit.nativeFileIO,
       invocationRegistry: input.invocationRegistry,
@@ -876,6 +885,7 @@ function governedPorts(
       "connector-authority-revoked",
     ),
     egressAuthority: buildEgressAuthority(input, failed),
+    ...(input.reviewReport === undefined ? {} : { reviewReport: input.reviewReport }),
   };
 }
 

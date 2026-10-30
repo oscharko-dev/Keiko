@@ -213,9 +213,16 @@ function isStateChangingMethod(method: string): boolean {
 // check inside `handle()` (packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts
 // `preflightToolRequest`), reached through coding-sidecar-tool-facade.ts, upstream of the same
 // unconditional loopback Host/Origin check.
+//
+// ADR-0182 D1 (#4135): the Keiko for Quality review instance's sidecar posts to the two
+// `/api/review-sidecar/*` twins for the same reason. They are served by the SAME handlers, whose
+// per-request authenticators are the review instance's own (review/runtime/routes.ts); a request
+// whose capability no review instance owns reaches those handlers with no runtime and is refused.
 const CSRF_EXEMPT_STATE_CHANGE_ROUTES: ReadonlySet<string> = new Set([
   "/api/coding-sidecar/gateway/chat/completions",
   "/api/coding-sidecar/tool",
+  "/api/review-sidecar/gateway/chat/completions",
+  "/api/review-sidecar/tool",
 ]);
 
 function isCsrfExemptStateChange(method: string, pathname: string): boolean {

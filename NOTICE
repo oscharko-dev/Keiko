@@ -19,6 +19,11 @@ decoupled "__new hunk__"/"__old hunk__" hunk presentation, language
 prioritization, file-type filtering and budget packing with the clip policy
 (pr_agent/algo/pr_processing.py, pr_agent/algo/language_handler.py,
 pr_agent/algo/file_filter.py, pr_agent/settings/configuration.toml).
+The Reviewer's system prompt in
+packages/keiko-server/src/review/runtime/reviewPrompt.ts adapts the reviewer
+prompt structure and several of its instructions
+(pr_agent/settings/pr_reviewer_prompts.toml): the untrusted-data framing, the
+rules for what to flag and how to phrase an issue, and the failure-mode fields.
 PR-Agent is distributed under the following license:
 
 MIT License

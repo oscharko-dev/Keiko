@@ -1,3 +1,4 @@
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { randomBytes } from "node:crypto";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -271,6 +272,14 @@ const CODING_RUNTIME_AUTHORITY_MINTED_OPERATION = defineActivityLogOperation({
     // and a missing REQUIRED field would read as an incomplete record; every line written since
     // carries it.
     maxRuntimeMs: { type: "integer", dataClass: "duration", required: false },
+    // ADR-0173 / ADR-0182 D1 (#4135): which runtime instance minted the authority. The Keiko for
+    // Quality review instance always sets `review`; absent on lines written before the field.
+    runtimePurpose: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["coding", "review"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -483,6 +492,31 @@ export function codingRuntimeActionClassesForMode(
   return actionClasses;
 }
 
+/**
+ * The Keiko for Quality review authority's grants (ADR-0182 D2 layer 3, #4135): the `workspace-read`
+ * action class only, no command, no connector scope and no network, whatever any mode would grant.
+ * Its mode is `governed-assist`, which the envelope schema requires.
+ */
+export const REVIEW_RUNTIME_EFFECTIVE_MODE: CodingWorkbenchMode = "governed-assist";
+
+export function reviewRuntimeAuthorityGrants(): Pick<
+  CodingRuntimeTrustedContext,
+  "actionClasses" | "connectorScopes" | "commandPolicy" | "networkPolicy"
+> {
+  return {
+    actionClasses: ["workspace-read"],
+    connectorScopes: [],
+    commandPolicy: {
+      mode: "deny",
+      allow: [],
+      deny: [],
+      maxCommandTimeoutMs: 120_000,
+      requirePerCommandApproval: true,
+    },
+    networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+  };
+}
+
 export function codingRuntimeConnectorScopesForMode(
   mode: CodingWorkbenchMode,
 ): readonly CodingWorkbenchConnectorScope[] {
@@ -582,6 +616,35 @@ export interface CodingRuntimeTrustedContext {
   readonly gates: readonly CodingWorkbenchGate[];
   readonly budget: CodingWorkbenchBudget;
   readonly expiresAt: string;
+  /**
+   * ADR-0182 D1/D2 (#4135): `review` for the Keiko for Quality review instance, whose context grants
+   * `workspace-read` only and whose tool facade refuses every other action. Absent is `coding`.
+   */
+  readonly runtimePurpose?: CodingRuntimePurpose | undefined;
+}
+
+function recordAuthorityMinted(
+  activityLog: ServerLogSink,
+  runId: string,
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  context: CodingRuntimeTrustedContext,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_AUTHORITY_MINTED_OPERATION,
+      { correlationId: runId, level: "info" },
+      {
+        runId,
+        effectiveMode: envelope.authority.effectiveMode,
+        actionClasses: envelope.authority.actionClasses,
+        connectorScopes: envelope.authority.connectorScopes,
+        networkPolicyMode: envelope.authority.networkPolicy.mode,
+        maxPromptTokens: envelope.authority.budget.maxPromptTokens,
+        maxRuntimeMs: envelope.authority.budget.maxRuntimeMs,
+        ...(context.runtimePurpose === undefined ? {} : { runtimePurpose: context.runtimePurpose }),
+      },
+    ),
+  );
 }
 
 export interface CodingRuntimeAuthorityRef {
@@ -883,21 +946,7 @@ export class CodingRuntimeAuthorityService {
     this.activeTreeBindingId = treeBindingId;
     this.activeEffectiveMode = envelope.authority.effectiveMode;
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
-    (this.activityLog ?? processServerLogSink()).write(
-      activityLogEvent(
-        CODING_RUNTIME_AUTHORITY_MINTED_OPERATION,
-        { correlationId: runId, level: "info" },
-        {
-          runId,
-          effectiveMode: envelope.authority.effectiveMode,
-          actionClasses: envelope.authority.actionClasses,
-          connectorScopes: envelope.authority.connectorScopes,
-          networkPolicyMode: envelope.authority.networkPolicy.mode,
-          maxPromptTokens: envelope.authority.budget.maxPromptTokens,
-          maxRuntimeMs: envelope.authority.budget.maxRuntimeMs,
-        },
-      ),
-    );
+    recordAuthorityMinted(this.activityLog ?? processServerLogSink(), runId, envelope, context);
     return {
       ok: true,
       authorityRef,

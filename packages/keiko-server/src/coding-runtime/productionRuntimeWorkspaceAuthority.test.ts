@@ -828,3 +828,39 @@ function liveFixture() {
     },
   };
 }
+
+describe("review runtime purpose (ADR-0182 D2 layer 3, #4135)", () => {
+  it("mints the review authority's grants whatever the request and the coding ceiling ask", () => {
+    const fixture = liveFixture();
+    const input: ProductionWorkspaceAuthorityInput = {
+      ...fixture.input,
+      deploymentCeiling: "autonomous-delivery",
+      researchEgressEnabled: true,
+      runtimePurpose: "review",
+    };
+    const context = resolveProductionRuntimeContext(input, {
+      ...fixture.request,
+      requestedMode: "autonomous-delivery",
+    });
+    expect(context).toMatchObject({
+      actionClasses: ["workspace-read"],
+      connectorScopes: [],
+      commandPolicy: { mode: "deny" },
+      networkPolicy: { mode: "deny-all", connectorScopes: [] },
+      deploymentCeiling: "governed-assist",
+      runtimePurpose: "review",
+    });
+  });
+
+  it("failure-first: the same request without the review purpose carries write, command and network", () => {
+    const fixture = liveFixture();
+    const context = resolveProductionRuntimeContext(
+      { ...fixture.input, deploymentCeiling: "autonomous-delivery" },
+      { ...fixture.request, requestedMode: "autonomous-delivery" },
+    );
+    expect(context.actionClasses).toEqual(
+      expect.arrayContaining(["workspace-write", "command-execution", "network-egress"]),
+    );
+    expect(context.runtimePurpose).toBeUndefined();
+  });
+});

@@ -52,6 +52,7 @@ import type { OpenCodeLiveControl } from "./opencodeProtocol.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS,
+  OPENCODE_REVIEW_TOOL_SOURCE_DEFINITIONS,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
   openCodeVisibleToolNames,
   type OpenCodeToolProfile,
@@ -1471,14 +1472,18 @@ export function createGeneratedOpenCodeV2Plugins(
         }
       : {
           keiko_governed_tools: sharedV2ToolPluginSource(profile),
-          keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
+          keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(
+            profile === "review" ? "review" : "mapped",
+          ),
         };
   const sources = Object.freeze(plugins);
   cachedV2PluginSources.set(profile, sources);
   return sources;
 }
 
-type OpenCodeToolSourceDefinition = (typeof OPENCODE_TOOL_SOURCE_DEFINITIONS)[number];
+type OpenCodeToolSourceDefinition =
+  | (typeof OPENCODE_TOOL_SOURCE_DEFINITIONS)[number]
+  | (typeof OPENCODE_REVIEW_TOOL_SOURCE_DEFINITIONS)[number];
 
 /**
  * The tools a profile's generated plugin registers: the full governed set for the mapped profiles,
@@ -1486,9 +1491,10 @@ type OpenCodeToolSourceDefinition = (typeof OPENCODE_TOOL_SOURCE_DEFINITIONS)[nu
  * tools for everything else).
  */
 function v2ToolDefinitions(profile: OpenCodeToolProfile): readonly OpenCodeToolSourceDefinition[] {
-  return profile === "native"
-    ? OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS
-    : OPENCODE_TOOL_SOURCE_DEFINITIONS;
+  if (profile === "native") return OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS;
+  // ADR-0182 D2 layer 2: a review instance registers the three read tools and the report, only.
+  if (profile === "review") return OPENCODE_REVIEW_TOOL_SOURCE_DEFINITIONS;
+  return OPENCODE_TOOL_SOURCE_DEFINITIONS;
 }
 
 function sharedV2ToolPluginSource(profile: OpenCodeToolProfile): string {
@@ -1652,7 +1658,8 @@ type GeneratedToolAction =
   | "git-pull-request"
   | "git-ci"
   | "git-sync"
-  | "git-execute";
+  | "git-execute"
+  | "review-report";
 
 /**
  * The fixed wire `action` and literal (non-model-supplied) fields for every git/delivery action.
@@ -1696,13 +1703,19 @@ function wireRequestFor(
 // descriptors twice per tool for every bundle: the scripted transcripts generate a bundle per tool
 // call, and doing so turned their CI runs into timeouts (PR #3452).
 const CATALOG_DESCRIPTORS_BY_ALIAS: ReadonlyMap<string, ToolDescriptor> = new Map(
-  opencodeRegistrationSet().entries.map((entry) => [entry.alias, entry.descriptor]),
+  [...opencodeRegistrationSet().entries, ...opencodeRegistrationSet("review").entries].map(
+    (entry) => [entry.alias, entry.descriptor],
+  ),
 );
+const GENERATED_TOOL_DEFINITIONS: readonly OpenCodeToolSourceDefinition[] = [
+  ...OPENCODE_TOOL_SOURCE_DEFINITIONS,
+  ...OPENCODE_REVIEW_TOOL_SOURCE_DEFINITIONS,
+];
 
 // The native plugin and actual provider use one description owner. Otherwise richer native
 // read/edit guidance is replaced by a generic catalog description at the gateway boundary.
 function toolCatalogDescriptor(action: GeneratedToolAction): ToolDescriptor {
-  const definition = OPENCODE_TOOL_SOURCE_DEFINITIONS.find((tool) => tool.action === action);
+  const definition = GENERATED_TOOL_DEFINITIONS.find((tool) => tool.action === action);
   const descriptor =
     definition === undefined ? undefined : CATALOG_DESCRIPTORS_BY_ALIAS.get(definition.name);
   if (descriptor === undefined) throw new TypeError("OpenCode tool is missing from the catalog");
@@ -1953,6 +1966,12 @@ function toolSource(
     // `["action","actionId","idempotencyKey","repositoryRequest"]`, so the flat fields the loop
     // above just set are moved under `repositoryRequest` (with the fixed `kind: "search"`) and
     // removed from the top level rather than left alongside it.
+    // keiko_review_report (ADR-0182 D4): the report travels as one `report` object, so the wire
+    // parser's exact keys stay closed and the server validates the whole report as one value.
+    '    if (action === "review-report") {',
+    "      request.report = {};",
+    "      for (const name of argumentNames) { request.report[name] = args[name]; delete request[name]; }",
+    "    }",
     '    if (action === "repository-search") {',
     '      request.repositoryRequest = { kind: "search", mode: args.mode, query: args.query, caseSensitive: args.caseSensitive, includeGlobs: args.includeGlobs, excludeGlobs: args.excludeGlobs, maxResults: args.maxResults };',
     "      for (const name of argumentNames) delete request[name];",

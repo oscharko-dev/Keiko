@@ -1,3 +1,4 @@
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import type {
@@ -94,6 +95,11 @@ export interface CodingRuntimeApprovalAuthority {
 }
 
 export interface CodingRuntimeOrchestratorDeps {
+  /**
+   * ADR-0182 D1 (#4135): `review` for the Keiko for Quality review instance's own orchestrator, so
+   * its run lifecycle lines carry `runtimePurpose: "review"`. Absent is the Coding Workbench's.
+   */
+  readonly runtimePurpose?: CodingRuntimePurpose | undefined;
   readonly history?: CodingRuntimeHistory | undefined;
   /**
    * Native session continuity (S02/S03, #3904): how the orchestrator asks a run to resume a task's

@@ -30,6 +30,10 @@ import { errorBody, type RouteContext, type RouteResult, type HandlerOutcome } f
 import { STREAMING } from "./route-outcome.js";
 import { SECURE_WORKSPACE_NATIVE_MAX_RESPONSE_BYTES } from "./coding-runtime/secureWorkspaceTextReadProtocol.js";
 import { emitServerDiagnostic, contentFreeErrorClass } from "./diagnostics-log.js";
+import {
+  SIDECAR_RUNTIME_PURPOSE_FIELDS,
+  sidecarPurposeField,
+} from "./review/runtime/sidecarSurface.js";
 
 // Closed vocabulary (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // warn line naming WHY, never a raw message. A status the bridge can return that is not in this
@@ -83,6 +87,8 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
     // approval.waiting and approval.decided lines (PR #3617 review).
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // ADR-0182 D1 (#4135): `runtimePurpose: "review"` on its review sidecar twin.
+    ...SIDECAR_RUNTIME_PURPOSE_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -200,6 +206,7 @@ function logToolFacadeRejection(
       {
         reason,
         ...(approval === undefined ? {} : { runId: approval.runId, requestId: approval.requestId }),
+        ...sidecarPurposeField(ctx),
         completeness: "complete",
         loss: "none",
       },

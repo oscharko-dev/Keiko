@@ -308,6 +308,51 @@ export async function showGitReviewFile(
   return succeeded(result) ? { ok: true, value: result.stdout } : { ok: false, result };
 }
 
+export interface GitReviewPathObject {
+  readonly oid: string;
+  readonly type: "blob" | "tree" | "commit" | "tag";
+  readonly size: number;
+}
+
+const PATH_OBJECT_RECORD = /^([a-f0-9]{40}|[a-f0-9]{64}) (blob|tree|commit|tag) (\d+)$/u;
+// A gitlink resolves to the commit it names, which the superproject does not hold.
+const PATH_SUBMODULE_RECORD = /^(?:[a-f0-9]{40}|[a-f0-9]{64}) submodule$/u;
+
+function pathObjectRecord(line: string): GitReviewPathObject | undefined | "malformed" {
+  if (line.endsWith(" missing") || PATH_SUBMODULE_RECORD.test(line)) return undefined;
+  const match = PATH_OBJECT_RECORD.exec(line);
+  if (match === null) return "malformed";
+  const [, oid = "", type, size = "0"] = match;
+  return { oid, type: type as GitReviewPathObject["type"], size: Number(size) };
+}
+
+/**
+ * The object one path names in one commit's tree, without reading its content: `cat-file
+ * --batch-check` resolves `<sha>:<path>` (a tree lookup, never a pathspec, so no magic applies).
+ * `undefined` when the commit exists and has no such path (or names a submodule there); a commit
+ * the repository does not hold fails the read. A path with a control character is refused before a
+ * spawn, so it cannot split the batch line.
+ */
+export async function readGitReviewPathObject(
+  ctx: GitReviewOperationContext,
+  request: { readonly cwd: string; readonly sha: string; readonly path: string },
+): Promise<GitReviewOperationResult<GitReviewPathObject | undefined>> {
+  const sha = assertObjectId(request.sha, "sha");
+  const path = assertTreePath(request.path);
+  if (CONTROL_CHARACTER.test(path)) throw new GitReviewOperandError("tree-path");
+  const format = "--batch-check=%(objectname) %(objecttype) %(objectsize)";
+  const input = `${sha}\n${sha}:${path}\n`;
+  const result = await run(ctx, request.cwd, ["cat-file", format], [], input);
+  if (!succeeded(result)) return { ok: false, result };
+  const [commitLine = "", pathLine = ""] = result.stdout.split("\n");
+  const commit = pathObjectRecord(commitLine);
+  if (commit === undefined || commit === "malformed" || commit.type !== "commit") {
+    return { ok: false, result };
+  }
+  const object = pathObjectRecord(pathLine);
+  return object === "malformed" ? { ok: false, result } : { ok: true, value: object };
+}
+
 export interface GitReviewTreeEntry {
   readonly mode: string;
   readonly type: "blob" | "tree" | "commit";

@@ -153,6 +153,10 @@ import {
 import { handleCodingSidecarMcpRelay } from "./coding-sidecar-mcp-relay.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import {
+  handleReviewSidecarGatewayChatCompletions,
+  handleReviewSidecarToolFacade,
+} from "./review/runtime/routes.js";
+import {
   handleCodingCodexSubscriptionProfile,
   handleCodingCodexSubscriptionSetup,
 } from "./coding-codex-subscription.js";
@@ -625,6 +629,18 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-sidecar/tool",
     handler: handleCodingSidecarToolFacade,
+  },
+  // ADR-0182 D1 (#4135): the Keiko for Quality review instance's sidecar, served by the same
+  // handlers with the review instance's runtime capabilities (review/runtime/routes.ts).
+  {
+    method: "POST",
+    pattern: "/api/review-sidecar/gateway/chat/completions",
+    handler: handleReviewSidecarGatewayChatCompletions,
+  },
+  {
+    method: "POST",
+    pattern: "/api/review-sidecar/tool",
+    handler: handleReviewSidecarToolFacade,
   },
   // #3903 AC3: the MCP Streamable HTTP transport of a relayed remote server, per method.
   {

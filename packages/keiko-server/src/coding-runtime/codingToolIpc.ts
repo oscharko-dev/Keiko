@@ -1,3 +1,4 @@
+import type { ReviewReportAcknowledgement } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type { CodingToolReplacementChangeset } from "./codingToolReplacementEdits.js";
 import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitTypes.js";
@@ -84,7 +85,8 @@ export type CodingToolAction =
   | "egress"
   | "skill"
   | "skill-discover"
-  | "child-agent";
+  | "child-agent"
+  | "review-report";
 
 // Every wire action, so a request the facade cannot parse can still be counted under the action it
 // names (#3873). Checked for completeness by `satisfies`; read only as a Set, never as an object
@@ -103,6 +105,7 @@ const CODING_TOOL_ACTION_NAMES = {
   skill: true,
   "skill-discover": true,
   "child-agent": true,
+  "review-report": true,
 } as const satisfies Readonly<Record<CodingToolAction, true>>;
 const CODING_TOOL_ACTIONS: ReadonlySet<string> = new Set(Object.keys(CODING_TOOL_ACTION_NAMES));
 
@@ -248,6 +251,15 @@ export type CodingToolActionRequest =
       readonly action: "child-agent";
       readonly objective: string;
       readonly maxToolCalls: number;
+    })
+  | (CodingToolRequestIdentity & {
+      readonly action: "review-report";
+      /**
+       * The Reviewer's candidate finding, untrusted and unvalidated here: the review report port
+       * validates it with `validateReviewFindingReport` and answers a closed acknowledgement, so a
+       * malformed report is the model's to correct, never a transport failure (ADR-0182 D4).
+       */
+      readonly report: Readonly<Record<string, unknown>>;
     });
 
 type RuntimeActionClass =
@@ -268,6 +280,8 @@ const STATIC_REQUIRED_CLASSES: Readonly<
   skill: ["workspace-read"],
   "skill-discover": ["workspace-read"],
   "child-agent": ["workspace-read"],
+  // ADR-0182 D4: a report changes nothing; its validation reads the reviewed commit.
+  "review-report": ["workspace-read"],
 };
 
 /** Exact authority effects required by one parsed coding-tool action. */
@@ -336,6 +350,12 @@ export type CodingToolResult =
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly read: CodingToolReadResult | CodingToolEgressReadResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      /** ADR-0182 D4: the report's closed acknowledgement, so the model can correct it once. */
+      readonly reviewReport: ReviewReportAcknowledgement;
     }
   | { readonly status: "completed"; readonly evidence: readonly CodingToolEvidence[] }
   | {
@@ -497,6 +517,8 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
       return skillDiscoverRequest(value);
     case "child-agent":
       return childAgentRequest(value);
+    case "review-report":
+      return reviewReportRequest(value);
     default:
       return undefined;
   }
@@ -603,6 +625,38 @@ function childAgentRequest(value: Record<string, unknown>): CodingToolActionRequ
         objective: value.objective,
         maxToolCalls: value.maxToolCalls,
       }
+    : undefined;
+}
+
+/**
+ * The wire bound of one `keiko_review_report` argument (ADR-0182 D4): far above the largest report
+ * `ReviewFindingReport` admits, and inside the catalog's generic argument and string bounds, so an
+ * admitted report is always catalog JSON. Its content is validated by the report port.
+ */
+export const REVIEW_REPORT_MAX_BYTES = 32 * 1024;
+const REVIEW_REPORT_MAX_DEPTH = 4;
+
+function jsonDepthWithin(value: unknown, depth: number): boolean {
+  if (typeof value !== "object" || value === null) return true;
+  if (depth <= 0) return false;
+  const children: readonly unknown[] = Array.isArray(value) ? value : Object.values(value);
+  return children.every((child) => jsonDepthWithin(child, depth - 1));
+}
+
+function boundedReport(value: unknown): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    Buffer.byteLength(JSON.stringify(value), "utf8") <= REVIEW_REPORT_MAX_BYTES &&
+    jsonDepthWithin(value, REVIEW_REPORT_MAX_DEPTH)
+  );
+}
+
+function reviewReportRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  return identity !== undefined &&
+    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "report"]) &&
+    boundedReport(value.report)
+    ? { ...identity, action: "review-report", report: value.report }
     : undefined;
 }
 

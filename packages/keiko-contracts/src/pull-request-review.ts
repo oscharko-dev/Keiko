@@ -6,6 +6,8 @@
 // scoring live in `pull-request-review-rules.ts`. Every text field is untrusted data written by a
 // model or a person, never an instruction to Keiko.
 
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "./workspace-contract-primitives.js";
+
 /** Version of the `keiko_review_report` argument shape and the records derived from it. */
 export const REVIEW_CONTRACT_VERSION = 1 as const;
 
@@ -650,3 +652,139 @@ export type ReviewDiffPackageFailure =
 export type ReviewDiffSettlementInput =
   | { readonly kind: "reviewable" }
   | Extract<ReviewRunSettlement, { readonly kind: "incomplete" | "skipped" | "abandoned" }>;
+
+// ─── Review runtime (Issue #4135) ────────────────────────────────────────────
+
+/**
+ * What a coding-runtime instance serves (ADR-0173 `runtimePurpose`, ADR-0182 D1). The user's
+ * Coding Workbench instance is `coding`; the server-owned review instance is `review`.
+ */
+export const CODING_RUNTIME_PURPOSES = ["coding", "review"] as const;
+export type CodingRuntimePurpose = (typeof CODING_RUNTIME_PURPOSES)[number];
+
+/** The only tools a review run's model can see and call (ADR-0182 D2), in registration order. */
+export const REVIEW_RUNTIME_TOOL_NAMES = [
+  "keiko_workspace_discover",
+  "keiko_workspace_read",
+  "keiko_repository_search",
+  "keiko_review_report",
+] as const;
+export type ReviewRuntimeToolName = (typeof REVIEW_RUNTIME_TOOL_NAMES)[number];
+
+/**
+ * The review instance's one server-defined primary agent. It is never user-selectable and never
+ * one of the Coding Workbench agents; `review` itself is reserved and a built-in OpenCode command.
+ */
+export const REVIEW_RUNTIME_AGENT_NAME = "keiko-reviewer";
+
+/** Candidate reports one Reviewer run may file; further calls answer `limit-reached`. */
+export const REVIEW_RUN_MAX_CANDIDATE_REPORTS = 8;
+
+/** Why `keiko_review_report` refused one report (closed, body-free). */
+export const REVIEW_REPORT_REJECTION_REASONS = [
+  "schema-invalid",
+  "path-outside-worktree",
+  "range-invalid",
+  "evidence-mismatch",
+  "limit-reached",
+] as const;
+export type ReviewReportRejectionReason = (typeof REVIEW_REPORT_REJECTION_REASONS)[number];
+
+/** The model-facing acknowledgement of one `keiko_review_report` call. */
+export type ReviewReportAcknowledgement =
+  | { readonly status: "accepted"; readonly accepted: number; readonly remaining: number }
+  | {
+      readonly status: "rejected";
+      readonly reason: Exclude<ReviewReportRejectionReason, "limit-reached">;
+    }
+  | { readonly status: "limit-reached" };
+
+/** Why a review instance refused to start (ADR-0182 D2 startup self-check). */
+export const REVIEW_PROFILE_REFUSAL_REASONS = [
+  "review-profile-invalid",
+  "native-profile",
+  "authority-missing",
+] as const;
+export type ReviewProfileRefusalReason = (typeof REVIEW_PROFILE_REFUSAL_REASONS)[number];
+
+/**
+ * The review-rules file read from the base commit (ADR-0182 D4). `absent` reviews without rules;
+ * `too-large`, `not-utf8` and `path-invalid` (a configured path that cannot name a file in the tree)
+ * settle the run `skipped/rules-file-invalid`.
+ */
+export const REVIEW_RULES_FILE_OUTCOMES = [
+  "loaded",
+  "absent",
+  "too-large",
+  "not-utf8",
+  "path-invalid",
+] as const;
+export type ReviewRulesFileOutcome = (typeof REVIEW_RULES_FILE_OUTCOMES)[number];
+export const REVIEW_RULES_FILE_MAX_BYTES = 16 * 1024;
+/** The default repository path of the review-rules file; repositories may configure another. */
+export const REVIEW_RULES_FILE_DEFAULT_PATH = ".keiko/review-rules.md";
+
+/** Reviewer run budgets: defaults, never above the coding envelope maxima (ADR-0182 D1). */
+export const REVIEW_RUN_DEFAULT_PROMPT_TOKENS = 600_000;
+export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
+/** The review instance stops after this long without a run. */
+export const REVIEW_RUNTIME_DEFAULT_IDLE_MS = 5 * 60 * 1000;
+
+function reviewTextSchema(maxLength: number): Readonly<Record<string, unknown>> {
+  return { type: "string", minLength: 1, maxLength };
+}
+
+function reviewLineSchema(): Readonly<Record<string, unknown>> {
+  return { type: "integer", minimum: 1, maximum: REVIEW_LINE_MAX };
+}
+
+function reviewLocationProperties(): Readonly<Record<string, Readonly<Record<string, unknown>>>> {
+  return {
+    file: { type: "string", minLength: 1, maxLength: WORKSPACE_PORTABLE_PATH_MAX_BYTES },
+    startLine: reviewLineSchema(),
+    endLine: reviewLineSchema(),
+  };
+}
+
+/**
+ * The model-facing JSON schema of the `keiko_review_report` arguments, derived from the bounds of
+ * `ReviewFindingReport` so the schema can never admit what `validateReviewFindingReport` refuses by
+ * size or vocabulary. Every argument is required at the tool boundary, `failureMode` included;
+ * the server still validates every call with `validateReviewFindingReport`.
+ */
+export const REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS: Readonly<
+  Record<string, Readonly<Record<string, unknown>>>
+> = Object.freeze({
+  ...reviewLocationProperties(),
+  title: reviewTextSchema(REVIEW_FINDING_TITLE_MAX_CHARS),
+  condition: reviewTextSchema(REVIEW_FINDING_TEXT_MAX_CHARS),
+  mechanism: reviewTextSchema(REVIEW_FINDING_TEXT_MAX_CHARS),
+  consequence: reviewTextSchema(REVIEW_FINDING_TEXT_MAX_CHARS),
+  remedy: reviewTextSchema(REVIEW_FINDING_TEXT_MAX_CHARS),
+  category: { type: "string", enum: [...REVIEW_FINDING_CATEGORIES] },
+  severity: { type: "string", enum: [...REVIEW_FINDING_SEVERITIES] },
+  evidence: {
+    type: "array",
+    minItems: REVIEW_EVIDENCE_MIN_ENTRIES,
+    maxItems: REVIEW_EVIDENCE_MAX_ENTRIES,
+    items: {
+      type: "object",
+      properties: {
+        ...reviewLocationProperties(),
+        role: { type: "string", enum: [...REVIEW_EVIDENCE_ROLES] },
+      },
+      required: ["endLine", "file", "role", "startLine"],
+      additionalProperties: false,
+    },
+  },
+  failureMode: {
+    type: "object",
+    properties: {
+      trigger: reviewTextSchema(REVIEW_FAILURE_MODE_TEXT_MAX_CHARS),
+      detection: reviewTextSchema(REVIEW_FAILURE_MODE_TEXT_MAX_CHARS),
+      coveredByChange: { type: "boolean" },
+    },
+    required: ["coveredByChange", "detection", "trigger"],
+    additionalProperties: false,
+  },
+});

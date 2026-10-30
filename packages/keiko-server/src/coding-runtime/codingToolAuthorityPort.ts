@@ -126,6 +126,7 @@ const CODING_RUNTIME_TOOL_AUTHORITY_DENIED_OPERATION = defineActivityLogOperatio
         "skill",
         "skill-discover",
         "child-agent",
+        "review-report",
       ],
     },
     effectiveMode: {
@@ -620,6 +621,7 @@ export function createRuntimeCodingToolFacade(
       ...configuration,
       requireInvocationRegistryForEdits: true,
       catalogBridge,
+      runtimePurposeLog: { sink: activityLog, correlationId: () => context().runId },
     },
   );
   const nativeTextRead = nativeTextReadFacet(
@@ -718,6 +720,7 @@ function catalogFacadeBridgeFor(
     ...(options.unavailableOptionalTools === undefined
       ? {}
       : { unavailableOptionalTools: options.unavailableOptionalTools }),
+    ...(options.runtimePurpose === undefined ? {} : { runtimePurpose: options.runtimePurpose }),
   });
 }
 
@@ -827,7 +830,7 @@ function actionClassesAllowed(
   approved: boolean,
 ): boolean {
   if (request.action === "git" && gitClassesDecidedElsewhere(request, approved))
-    return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
+    return hasClasses(envelope.authority.actionClasses, PLANNING_CLASSES);
   // Propose/reconcile plan a delivery without performing one yet, so they need only
   // workspace-read -- but a matched per-action approval on the EXECUTE phase is not a substitute
   // for the envelope actually carrying delivery authority (KfQ-confirmed: this used to also
@@ -838,10 +841,18 @@ function actionClassesAllowed(
     deliveryHasScopedApproval(request) &&
     (request.phase === "propose" || request.phase === "reconcile")
   ) {
-    return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
+    return hasClasses(envelope.authority.actionClasses, PLANNING_CLASSES);
   }
   return hasClasses(envelope.authority.actionClasses, codingToolRequiredActionClasses(request));
 }
+
+// What the relaxed delivery and Git planning paths above still require. Planning, staging or
+// syncing a change is meaningful only for an authority that may change the workspace at all, so a
+// read-only authority -- the Keiko for Quality review authority, `workspace-read` alone (ADR-0182
+// D2) -- is refused here instead of being asked about it. Every coding authority carries
+// `workspace-write` (`codingRuntimeActionClassesForMode`), so this tightens nothing for it.
+const PLANNING_CLASSES: readonly CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number][] =
+  ["workspace-read", "workspace-write"];
 
 // An approved stage or unstage redemption carries its own approval; a fetch's or pull's delivery
 // and network gate is the Git sync owner's decision (runtimeGitPolicyAllowed below), which defers
@@ -897,6 +908,7 @@ function additionalPolicyAllowed(
     case "skill":
     case "skill-discover":
     case "child-agent":
+    case "review-report":
       return true;
   }
 }
