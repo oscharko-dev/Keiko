@@ -142,6 +142,9 @@ export interface ChatRehydrationEvidence {
   readonly candidateCount: number;
   readonly excerptCount: number;
   readonly rehydratedTokens: number;
+  readonly tokenBudget?: number;
+  readonly tokenCounterSource?: "local-estimate";
+  readonly budgetDroppedExcerpts?: number;
   readonly scanDisposition:
     "complete" | "unit-limit" | "character-limit" | "best-matches" | "no-query-terms";
 }
@@ -167,6 +170,14 @@ const CHAT_CONTINUITY_REHYDRATION = defineActivityLogOperation({
     candidateCount: { type: "integer", dataClass: "count", required: true },
     excerptCount: { type: "integer", dataClass: "count", required: true },
     rehydratedTokens: { type: "integer", dataClass: "count", required: true },
+    tokenBudget: { type: "integer", dataClass: "count", required: false },
+    tokenCounterSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["local-estimate"],
+    },
+    budgetDroppedExcerpts: { type: "integer", dataClass: "count", required: false },
     scanDisposition: {
       type: "string",
       dataClass: "closed-enum",

@@ -1813,6 +1813,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      tokenBudget: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      tokenCounterSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["local-estimate"],
+      },
+      budgetDroppedExcerpts: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       scanDisposition: {
         type: "string",
         dataClass: "closed-enum",

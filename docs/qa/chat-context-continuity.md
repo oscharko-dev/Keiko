@@ -92,6 +92,20 @@ grounded faithfulness and ADR-index gates also pass. Delivery gates are recorded
 they finish. Full-prefix summary coverage, manual summary generation and native recall improvement
 remain separate work; this repair does not establish them.
 
+### Iteration 4: enforce the rendered recall budget
+
+A failure-first test on `972f30e5ba0a07926a2e88648f857a7474a7e112` reproduces **854 locally
+estimated tokens against an 800-token limit** with eight eligible candidate messages. The one-
+and three-candidate controls already pass. The estimator changes its density floor for multiline
+text, so adding estimates for individual lines undercounts the final block.
+
+The candidate checks the complete chronological rendering, including its header and source
+labels, before accepting each additional excerpt. All three cases pass, alongside 104 additional
+checkpoint/summary/history tests. Recall evidence now explicitly reports the local-estimate
+measurement source, configured budget and excerpts omitted by that budget. This verifies the
+bounded excerpt renderer; provider token accuracy, historical discovery coverage and model
+recall quality remain separate measurements.
+
 ### Unchanged native baseline: interim recall loss
 
 The first hash-matched v4 re-score covers 23 recorded probe answers from the unchanged frozen

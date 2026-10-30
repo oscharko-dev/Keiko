@@ -2656,6 +2656,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "budgetDroppedExcerpts",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "candidateCount",
               "type": "integer",
               "dataClass": "count",
@@ -2702,6 +2708,18 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "tokenBudget",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "tokenCounterSource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "unitsVisited",

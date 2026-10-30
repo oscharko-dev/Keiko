@@ -241,6 +241,9 @@ export function rehydrateChatHistory(
       candidateCount: state.candidates.length,
       excerptCount: rendered.count,
       rehydratedTokens: countContextTokens(rendered.content ?? ""),
+      tokenBudget: MAX_REHYDRATED_TOKENS,
+      tokenCounterSource: "local-estimate",
+      budgetDroppedExcerpts: state.candidates.length - rendered.count,
       scanDisposition: state.scanDisposition,
       queryTermCount: terms.length,
       identifierTermCount: terms.filter((term) => term.kind === "identifier").length,
@@ -341,22 +344,25 @@ function selectCandidate(
   if (candidates.length > MAX_REHYDRATED_MESSAGES) candidates.pop();
 }
 
+function renderRecallBlock(candidates: readonly RehydrationCandidate[]): string {
+  const ordered = [...candidates].sort((left, right) => right.order - left.order);
+  return [REHYDRATION_HEADER, ...ordered.map((candidate) => candidate.line)].join("\n");
+}
+
 function renderCandidates(candidates: readonly RehydrationCandidate[]): {
   readonly content: string | undefined;
   readonly count: number;
 } {
   const retained: RehydrationCandidate[] = [];
-  let tokens = countContextTokens(REHYDRATION_HEADER);
   for (const candidate of candidates) {
-    const cost = countContextTokens(`\n${candidate.line}`);
-    if (tokens + cost > MAX_REHYDRATED_TOKENS) continue;
+    // The shared estimator changes its density floor for multiline blocks; line costs do not add.
+    if (countContextTokens(renderRecallBlock([...retained, candidate])) > MAX_REHYDRATED_TOKENS)
+      continue;
     retained.push(candidate);
-    tokens += cost;
   }
   if (retained.length === 0) return { content: undefined, count: 0 };
-  retained.sort((left, right) => right.order - left.order);
   return {
     count: retained.length,
-    content: [REHYDRATION_HEADER, ...retained.map((candidate) => candidate.line)].join("\n"),
+    content: renderRecallBlock(retained),
   };
 }

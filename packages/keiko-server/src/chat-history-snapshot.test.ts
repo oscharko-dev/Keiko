@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  countContextTokens,
   deriveContextProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createInMemoryUiStore, type ChatMessage, type UiStore } from "./store/index.js";
@@ -743,3 +744,39 @@ it("keeps multi-section recall within the original privacy and scope boundaries"
   expect(result).not.toContain("hostile instruction");
   expect(result).not.toContain("/private/synthetic");
 });
+
+it.each([1, 3, 8])(
+  "budgets the complete rendered recall block for %i candidate messages",
+  (count) => {
+    const { store, chatId, add } = fixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    for (let index = 0; index < count; index++) {
+      add(
+        "user",
+        (`Checkpoint ${String(index)}. ` + "Reviewed ordinary planning details. ".repeat(20)).slice(
+          0,
+          360,
+        ),
+      );
+      add("assistant", "Acknowledged.");
+    }
+    const result = rehydrateChatHistory(store, chatId, "checkpoint", new Set(), []);
+    if (result === undefined) throw new TypeError("Missing recall fixture result");
+    expect(result).toContain("Checkpoint");
+    expect(countContextTokens(result)).toBeLessThanOrEqual(800);
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.rehydration");
+    const excerptCount = result.split("\n").length - 1;
+    expect(event?.extra).toMatchObject({
+      tokenBudget: 800,
+      tokenCounterSource: "local-estimate",
+      rehydratedTokens: countContextTokens(result),
+      excerptCount,
+      budgetDroppedExcerpts: count - excerptCount,
+    });
+    expectActivityLogProof(
+      "chat.continuity.rehydration.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  },
+);

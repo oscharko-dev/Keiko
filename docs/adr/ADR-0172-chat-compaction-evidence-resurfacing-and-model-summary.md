@@ -109,6 +109,13 @@ Unicode-safe matching, and unsafe-path/role checks apply before excerpts reach p
 role checks precede whitespace folding. Existing body-free continuity evidence reports the
 resulting candidate/excerpt counts and budget disposition.
 
+The 800-token excerpt budget uses the shared local estimator on the complete rendered block,
+including the header, source labels and separators. Adding separately estimated line costs does
+not enforce this bound: the estimator applies a different density floor to multiline text.
+Body-free recall evidence names the local-estimate measurement source, budget and number of
+otherwise eligible excerpts dropped by that rendering budget. These are estimates rather than
+provider-reported token counts.
+
 Recall retains literal short identifiers, versions and abbreviations alongside the existing
 five-code-point word prefixes (#4155). Identifier punctuation is escaped and numeric/code identifiers
 are not shortened. Complete boundaries on both sides reject identifier suffixes after a dot or colon,

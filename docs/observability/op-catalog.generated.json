@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "69ec4ed826a4517b696c631ed7cf6a3e2cc61d8404195899abc83108ab717e14",
+    "catalogDigest": "0579eda4def35f8b488b069572c2f2c2b7c93489b4cce5602d985783af10f9a3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1267,8 +1267,8 @@
         "failureClasses": ["chat-context-management"],
         "proofIds": ["chat.compaction.summary.work.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:223",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:257"]
+        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:234",
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:268"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1734,7 +1734,7 @@
         "proofIds": ["chat.continuity.capture.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:95",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:270"]
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:281"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1831,8 +1831,8 @@
         "failureClasses": ["chat-context-management"],
         "proofIds": ["chat.continuity.degraded.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:187",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:309"]
+        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:198",
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:320"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1893,6 +1893,22 @@
             "dataClass": "count",
             "required": true
           },
+          "tokenBudget": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "tokenCounterSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["local-estimate"]
+          },
+          "budgetDroppedExcerpts": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "scanDisposition": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -1912,8 +1928,8 @@
         "failureClasses": ["chat-context-management"],
         "proofIds": ["chat.continuity.rehydration.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:149",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:287"]
+        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:152",
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:298"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -57232,6 +57248,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "budgetDroppedExcerpts",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "candidateCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -57278,6 +57300,18 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "tokenBudget",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "tokenCounterSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "unitsVisited",
@@ -105345,7 +105379,7 @@
     {
       "op": "chat.compaction.summary.work",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-continuity-log.ts:226",
+      "site": "packages/keiko-server/src/chat-continuity-log.ts:237",
       "package": "keiko-server"
     },
     {
@@ -105387,13 +105421,13 @@
     {
       "op": "chat.continuity.degraded",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-continuity-log.ts:190",
+      "site": "packages/keiko-server/src/chat-continuity-log.ts:201",
       "package": "keiko-server"
     },
     {
       "op": "chat.continuity.rehydration",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-continuity-log.ts:152",
+      "site": "packages/keiko-server/src/chat-continuity-log.ts:155",
       "package": "keiko-server"
     },
     {
