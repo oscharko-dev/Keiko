@@ -737,6 +737,29 @@ describe("readiness attention facts", () => {
     );
   });
 
+  // #3907 AC3: after every long run the status read "Stopped. Model source unavailable." under a
+  // red alert while the server was only checking the model again. A running check is no failure.
+  it("narrates a pending model check as checking, with no alert and no status fact", () => {
+    const state = runningState({
+      ...healthy(),
+      source: ready({
+        runtimePreference: "managed-gateway" as const,
+        modelSource: "keiko-model-gateway" as const,
+        runtimeSource: "keiko-sidecar" as const,
+        available: false,
+        unavailableReason: "model-verification-pending" as const,
+        verification: "verified" as const,
+      }),
+    });
+    expect(runStatusAnnouncement(state, t)).toBe(RUN_SENTENCE);
+    expect(readinessAttentionFacts(state, t)).toBe("");
+    expect(visibleAlert(state, t, false)).toBeNull();
+    expect(readinessFacts(state, t)).toContain("codingWorkbench.announcement.modelSource.checking");
+    expect(readinessFacts(state, t)).toContain(
+      "codingWorkbench.source.unavailableReason.model-verification-pending",
+    );
+  });
+
   // F-01: an evaluation runtime is a standing fact the details state plainly; it is no attention
   // fact, and no "Runtime ready." replaces it in the status.
   it("keeps the unverified evaluation runtime in the details and out of the status", () => {

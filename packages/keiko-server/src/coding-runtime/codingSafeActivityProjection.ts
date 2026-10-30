@@ -88,7 +88,9 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["purged", "dropped", "superseded"],
+      // `interrupted`: an explicit Stop or takeover settled the calls still open as cancelled and kept
+      // the feed, as OpenCode keeps an aborted session's tool steps (owner decision 2026-10-30, #3907).
+      values: ["purged", "dropped", "superseded", "interrupted"],
     },
     reason: {
       type: "string",
@@ -285,6 +287,7 @@ export interface CodingSafeActivityProjection {
   // `correlationId` is the calling operation (a server shutdown); see the implementation.
   readonly purgeAll: (reason: CodingSafeActivityPurgeReason, correlationId?: string) => void;
   readonly markUnavailable: (runId: string) => void;
+  readonly interrupt: (runId: string, reason: "stop" | "takeover") => void;
   readonly currentContent: () => CodingSafeActivityContent | null;
   readonly subscribeContent: (
     listener: (content: CodingSafeActivityContent | null) => void,
@@ -567,6 +570,29 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.subscribers.size > 0) this.subscriberRunId = runId;
     this.scheduleExpiry(this.entry);
     this.notify();
+  }
+
+  /**
+   * An explicit Stop or takeover ends the run the way OpenCode aborts a session: the feed and its
+   * tool rows stay, and every call that had not settled is shown as cancelled. The calls the run
+   * made remain readable after it ended (owner decision 2026-10-30, #3907).
+   */
+  public interrupt(runId: string, reason: "stop" | "takeover"): void {
+    const entry = this.liveEntry(runId);
+    if (entry?.feed.availability !== "available") return;
+    const occurredAt = instant(this.now());
+    const cancelled = cancelOpenTools(entry.feed.turns, occurredAt);
+    if (cancelled > 0) {
+      entry.feed.updatedAt = occurredAt;
+      this.notify();
+    }
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
+        { correlationId: correlationIdOrUnknown(runId) },
+        { event: "interrupted", reason, occurrenceCount: cancelled },
+      ),
+    );
   }
 
   public currentContent(): CodingSafeActivityContent | null {
@@ -1111,6 +1137,19 @@ function insertTool(
  * displacement is a capacity drop, so the feed's bounded loss counter keeps advancing; a call that
  * has not settled is never displaced.
  */
+/** Settles every call still pending or running as cancelled; returns how many it settled. */
+function cancelOpenTools(turns: readonly MutableTurn[], occurredAt: string): number {
+  let cancelled = 0;
+  for (const turn of turns) {
+    turn.tools = turn.tools.map((tool) => {
+      if (tool.state !== "pending" && tool.state !== "running") return tool;
+      cancelled += 1;
+      return { ...tool, state: "cancelled", occurredAt };
+    });
+  }
+  return cancelled;
+}
+
 function evictOldestSettledTool(turn: MutableTurn): boolean {
   const index = turn.tools.findIndex(({ state }) => state !== "pending" && state !== "running");
   if (index < 0) return false;

@@ -97,6 +97,17 @@ it. The gateway verification state is left unchanged, the probe diagnostic is a 
 instead of an error, and `gateway.readiness.busy-retained` records the closed busy signal and model
 digest. An unreachable provider, a model never proved ready and a replaced configuration keep the
 ordinary not-ready recording.
+A coding run's accepted answer is serving evidence for its model (#3907 AC3, 2026-10-30). The coding
+sidecar route renews a same-generation positive basic-chat observation at the answer's completion
+when the answer finished with `stop`, `tool_calls` or `length` and came from the configuration the
+holder still serves. It never establishes readiness, repairs a failed observation or crosses a
+replaced configuration. A long run therefore no longer lets the model's success expire while
+background renewal is paused, and no probe competes with the run's turns.
+`coding-sidecar.gateway.outcome` records `readinessRenewal` (`renewed`, `not-renewable`) on accepted
+answers. A Workbench profile read that finds the elected model's success expired joins the running
+check or starts the one on-demand check, as a Chat request does; a fresh success adds no probe. The
+Workbench narrates `model-verification-pending` as a check in progress, never as an unavailable
+source or an alert.
 A conversation's first provider dispatch still requires fresh readiness. A completed successful
 call gives only that turn's existing model-port wrapper a continuation witness, valid for the same
 five-minute interval from completion. A bounded follow-up or citation repair can use it when the

@@ -8,6 +8,7 @@
 // talks to a dev server: its two checkout routes are modelled by `devServer` below.
 
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -425,12 +426,15 @@ describe("wb-ui.mjs: the change review of Ask for approval", () => {
 });
 
 /** A lab copy and a symlink to it: the dev server only knows a repository by its real path. */
-function labRepository() {
+// A lab copy is a Git checkout unless `git: false`: the drivers bind a copy without `.git` as an
+// ordinary folder, as the UI does (T14-T16).
+function labRepository({ git = true } = {}) {
   const real = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lab-drivers-")));
   const alias = `${real}-alias`;
   symlinkSync(real, alias);
   TEMP_PATHS.push(real, alias);
   writeFileSync(join(real, "package.json"), JSON.stringify({ name: LAB_REPOSITORY_NAME }));
+  if (git) mkdirSync(join(real, ".git"));
   return { real, alias };
 }
 
@@ -468,6 +472,9 @@ function devServer({ refuse, registration } = {}) {
         if (registration !== undefined) return registration;
         projects.add(body.path);
         return { status: 201, json: { project: { path: body.path } } };
+      }
+      if (path === "/api/task-workspaces/folder") {
+        return projects.has(body.root) ? { status: 200, json: { active: {} } } : MISSING_REPOSITORY;
       }
       if (path !== "/api/task-workspaces/local") return undefined;
       if (refuse !== undefined) return refuse;
@@ -531,6 +538,21 @@ describe("wb-run.mjs: the lab copy is registered and selected before a run start
         method: "POST",
         path: "/api/task-workspaces/local",
         body: { root: real, branch: "main", requestedBy: "studio-operator" },
+      },
+    ]);
+  });
+
+  it("binds a copy without .git as a folder workspace, with no branch", async () => {
+    silent();
+    const { real, alias } = labRepository({ git: false });
+    const session = runSession(devServer());
+    await selectApiCheckout(session, alias, "main");
+    expect(session.calls).toEqual([
+      { method: "POST", path: "/api/projects", body: { path: real } },
+      {
+        method: "POST",
+        path: "/api/task-workspaces/folder",
+        body: { root: real, requestedBy: "studio-operator" },
       },
     ]);
   });

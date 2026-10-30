@@ -679,6 +679,17 @@ and the existing `coding-runtime.tool-result-rendered` operation records the clo
 outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
 report keeps a verification that did not pass.
 
+An explicit Stop or takeover keeps the run's live safe-activity feed, as standalone OpenCode keeps
+the tool steps of an aborted session (owner decision 2026-10-30, #3907 F3). Until then both ends
+purged the feed, so a stopped run lost every tool row the human had just watched while the
+transcript kept only text. Now the calls that had not settled are shown as `cancelled`, every
+settled call keeps its verdict, and a later native restatement of an aborted call cannot replace
+that verdict. The feed then expires like any settled run's feed, by its TTL, a workspace switch,
+a new run or server shutdown; a recovery retry and the dismissal of an already settled run still
+purge. The existing `coding-runtime.safe-activity` operation records the settlement as
+`event=interrupted` with the closed `reason` (`stop`, `takeover`) and the number of calls it
+settled as `occurrenceCount`; no tool name, argument or path enters the line.
+
 The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
 in the existing local UI conversation store. Native V2 history is validated and captured continuously
 through the armed runtime's capture port, independently of the live display projection's TTL, turn

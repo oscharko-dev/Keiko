@@ -13417,7 +13417,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["purged", "dropped", "superseded"],
+        values: ["purged", "dropped", "superseded", "interrupted"],
       },
       reason: {
         type: "string",
@@ -14892,6 +14892,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["recovered", "exhausted-again", "empty-again", "failed"],
+      },
+      readinessRenewal: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["renewed", "not-renewable"],
       },
     },
     causal: "correlation",
