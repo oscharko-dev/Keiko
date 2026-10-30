@@ -25155,6 +25155,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "provider-unavailable",
           "repository-required",
           "remote-required",
+          "github-origin-required",
           "issue-binding-required",
         ],
       },

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "351b3e8b3103e243c615de96babad2b599d97dde1a17635a66d78e900a5f3666",
+    "catalogDigest": "2403cf685b3b10fbe74475fa1fd3ab305d837ab8cf4b1f88c9cd6d5748f49248",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -26256,6 +26256,7 @@
               "provider-unavailable",
               "repository-required",
               "remote-required",
+              "github-origin-required",
               "issue-binding-required"
             ]
           },
@@ -26381,7 +26382,7 @@
         "proofIds": ["git.draft-delivery.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:28",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:171"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:172"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26425,8 +26426,8 @@
         "failureClasses": ["git-draft-repository-drift"],
         "proofIds": ["git.draft-delivery.repository-drift.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:35",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:162"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:38",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:180"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26497,9 +26498,9 @@
         "failureClasses": ["git-draft-push-preparation"],
         "proofIds": ["git.draft-push.preparation.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:86",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:89",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:668"
+          "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:671"
         ]
       },
       {
@@ -26674,8 +26675,8 @@
         "failureClasses": ["git-draft-remote-observation"],
         "proofIds": ["git.draft-remote.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:64",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:311"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:67",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:338"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26746,9 +26747,9 @@
         "failureClasses": ["git-draft-target-resolution"],
         "proofIds": ["git.draft-target.resolved.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:139",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:142",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:840"
+          "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:876"
         ]
       },
       {
@@ -26866,8 +26867,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:40",
         "emitterSites": [
-          "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:346",
-          "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:366"
+          "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:359",
+          "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:379"
         ]
       },
       {
@@ -107044,13 +107045,13 @@
     {
       "op": "git.draft-delivery.repository-drift",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:38",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:41",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-push.preparation",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:89",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:92",
       "package": "keiko-server"
     },
     {
@@ -107062,13 +107063,13 @@
     {
       "op": "git.draft-remote.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:67",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:70",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-target.resolved",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:142",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:145",
       "package": "keiko-server"
     },
     {

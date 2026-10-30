@@ -38,7 +38,10 @@ import {
   type DraftDeliveryTargetResolution,
   type IssueBoundDraftDeliveryRunContext,
 } from "../gitDelivery/draftDeliveryTypes.js";
-import { readVerifiedRepositoryIdentity } from "../gitDelivery/verifiedRepositoryIdentity.js";
+import {
+  readVerifiedGitHubOwnerAndRepo,
+  readVerifiedRepositoryIdentity,
+} from "../gitDelivery/verifiedRepositoryIdentity.js";
 import { logDraftRelatedIssues } from "../gitDelivery/draftRelatedIssuesActivity.js";
 import {
   gitDeliveryTerminationHandler,
@@ -731,8 +734,24 @@ class DraftDeliveryFactory {
     const url = pushUrls.length === 1 ? canonicalGitHubPushUrl(pushUrls[0]) : undefined;
     if (url !== undefined && !this.remoteMatchesDigest(url, context.repositoryDigest))
       return { ok: false, reason: "remote-drift" };
-    this.destinations.set(context, url);
-    return { ok: true };
+    const target = await this.verifiedOrigin(deps, identity.kind, context.repositoryDigest);
+    if (target.ok) this.destinations.set(context, url);
+    return target;
+  }
+
+  // A verified github.com origin also answers its live `owner/repository`, which the run's
+  // repository-bound record names (ADR-0086 D13); any other remote answers none. A github.com origin
+  // that no longer resolves to the identity the run was admitted with is drift.
+  private async verifiedOrigin(
+    deps: ReturnType<DraftDeliveryFactory["adapterDeps"]>,
+    kind: "github-origin" | "foreign-origin",
+    repositoryDigest: string,
+  ): Promise<DraftBranchTargetResolution> {
+    if (kind !== "github-origin") return { ok: true };
+    const repository = await readVerifiedGitHubOwnerAndRepo(deps);
+    return repository !== undefined && codingWorkbenchRemoteDigest(repository) === repositoryDigest
+      ? { ok: true, repository: repository.toLowerCase() }
+      : { ok: false, reason: "remote-drift" };
   }
 
   private remoteMatchesDigest(url: string, repositoryDigest: string): boolean {
@@ -741,7 +760,7 @@ class DraftDeliveryFactory {
   }
 
   public async resolveTarget(
-    context: IssueBoundDraftDeliveryRunContext,
+    context: DraftDeliveryRunContext,
   ): Promise<DraftDeliveryTargetResolution> {
     this.destinations.delete(context);
     let result: DraftDeliveryTargetResolution;
@@ -760,13 +779,32 @@ class DraftDeliveryFactory {
     return result;
   }
 
+  // An issue-free run on a github.com origin has no issue to read; it is held to the repository it
+  // was admitted with and to the checkout's GitHub grant, which its pull request needs as an
+  // issue-bound run's does (ADR-0086 D13). Its push needs neither and never comes through here.
+  private issueFreeTarget(
+    context: DraftDeliveryRunContext,
+    root: string,
+    url: string,
+  ): DraftDeliveryTargetResolution {
+    const grant = { correlationId: context.correlationId, activityLog: this.log };
+    if (!isGitHubIssueReaderAuthorized(this.deps, root, grant))
+      return { ok: false, reason: "authority-denied" };
+    const repository = githubOwnerAndRepoFromRemoteUrl(url);
+    return repository === undefined
+      ? { ok: false, reason: "remote-drift" }
+      : { ok: true, repository };
+  }
+
   private async resolveFresh(
-    context: IssueBoundDraftDeliveryRunContext,
+    context: DraftDeliveryRunContext,
     root: string,
   ): Promise<DraftDeliveryTargetResolution> {
     const before = await this.readDestination(context, root);
     if (!before.ok) return before;
-    const issue = await this.resolveAcceptedIssue(context, root);
+    const issue = isIssueBoundContext(context)
+      ? await this.resolveAcceptedIssue(context, root)
+      : this.issueFreeTarget(context, root, before.url);
     if (!issue.ok) return issue;
     const after = await this.readDestination(context, root);
     if (!after.ok) return after;
@@ -776,7 +814,7 @@ class DraftDeliveryFactory {
   }
 
   private async readDestination(
-    context: IssueBoundDraftDeliveryRunContext,
+    context: DraftDeliveryRunContext,
     root: string,
   ): Promise<{ ok: true; url: string } | TargetFailure> {
     // The REPOSITORY root the issue was read from, never the managed worktree: the worktree lives
@@ -802,13 +840,11 @@ class DraftDeliveryFactory {
     return { ok: true, url };
   }
 
-  private remoteMatches(
-    remote: string | undefined,
-    context: IssueBoundDraftDeliveryRunContext,
-  ): boolean {
+  private remoteMatches(remote: string | undefined, context: DraftDeliveryRunContext): boolean {
     return (
       remote !== undefined &&
-      codingWorkbenchRemoteDigest(remote) === context.issueBinding.remoteDigest
+      codingWorkbenchRemoteDigest(remote) ===
+        (context.issueBinding?.remoteDigest ?? context.repositoryDigest)
     );
   }
 
