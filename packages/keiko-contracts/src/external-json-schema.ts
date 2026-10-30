@@ -41,6 +41,8 @@ const FORBIDDEN = new Set([
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const ENCODER = new TextEncoder();
 
+/** Admitted schema objects and their direct child schemas, keyed by identity. */
+type SchemaGraph = Map<Record<string, unknown>, readonly unknown[]>;
 interface Budget {
   bytes: number;
   nodes: number;
@@ -49,7 +51,7 @@ interface Budget {
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function boundedEntries(value: object): readonly [string, unknown][] | undefined {
+function boundedEntries(value: Record<string, unknown>): readonly [string, unknown][] | undefined {
   if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
     return undefined;
   const keys = Reflect.ownKeys(value);
@@ -60,7 +62,8 @@ function boundedEntries(value: object): readonly [string, unknown][] | undefined
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor))
       return undefined;
-    entries.push([key, descriptor.value as unknown]);
+    const child: unknown = descriptor.value;
+    entries.push([key, child]);
   }
   return entries;
 }
@@ -121,7 +124,7 @@ function boundedJson(value: unknown, depth: number, budget: Budget): boolean {
   budget.bytes += 2;
   const valid = Array.isArray(value)
     ? boundedArray(value, depth, budget)
-    : boundedObject(value, depth, budget);
+    : object(value) && boundedObject(value, depth, budget);
   budget.ancestors.delete(value);
   return valid;
 }
@@ -141,7 +144,7 @@ function boundedArray(value: unknown[], depth: number, budget: Budget): boolean 
   }
   return budget.bytes <= 65_536;
 }
-function boundedObject(value: object, depth: number, budget: Budget): boolean {
+function boundedObject(value: Record<string, unknown>, depth: number, budget: Budget): boolean {
   const entries = boundedEntries(value);
   if (entries === undefined) return false;
   for (const [key, child] of entries) {
@@ -174,8 +177,8 @@ function childrenOf(schema: Record<string, unknown>): readonly unknown[] | undef
 }
 function collectSchemas(
   schema: unknown,
-  root: object,
-  graph: Map<object, readonly unknown[]>,
+  root: Record<string, unknown>,
+  graph: SchemaGraph,
 ): boolean {
   if (typeof schema === "boolean") return true;
   if (!object(schema) || graph.size >= 256 || (schema !== root && schema.$schema !== undefined))
@@ -188,25 +191,40 @@ function collectSchemas(
   graph.set(schema, children);
   return children.every((child) => collectSchemas(child, root, graph));
 }
-function resolveReference(root: unknown, reference: unknown): unknown {
-  if (reference === "#") return root;
-  if (typeof reference !== "string" || !reference.startsWith("#/")) return undefined;
-  let current: unknown = root;
-  for (const encoded of decodeURIComponent(reference.slice(2)).split("/")) {
-    if (/~(?:[^01]|$)/u.test(encoded)) return undefined;
-    const key = encoded.replaceAll("~1", "/").replaceAll("~0", "~");
-    if (current === null || typeof current !== "object" || !Object.hasOwn(current, key))
-      return undefined;
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
+/**
+ * Decodes a same-document RFC 6901 reference into its property keys: `#` is the root, `#/a/b` its
+ * path. Any other form or an escape other than `~0`/`~1` is invalid. A malformed percent-encoding
+ * still throws to the admission boundary.
+ */
+function pointerKeys(reference: string): readonly string[] | undefined {
+  if (reference === "#") return [];
+  if (!reference.startsWith("#/")) return undefined;
+  const encoded = decodeURIComponent(reference.slice(2)).split("/");
+  if (encoded.some((token) => /~(?:[^01]|$)/u.test(token))) return undefined;
+  return encoded.map((token) => token.replaceAll("~1", "/").replaceAll("~0", "~"));
 }
-function finiteSchemaGraph(root: object, graph: Map<object, readonly unknown[]>): boolean {
+function resolveReference(
+  root: Record<string, unknown>,
+  reference: unknown,
+): boolean | Record<string, unknown> | undefined {
+  if (typeof reference !== "string") return undefined;
+  const keys = pointerKeys(reference);
+  if (keys === undefined) return undefined;
+  let current: unknown = root;
+  for (const key of keys) {
+    if (current === null || typeof current !== "object") return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    if (descriptor === undefined) return undefined;
+    current = descriptor.value;
+  }
+  return typeof current === "boolean" || object(current) ? current : undefined;
+}
+function finiteSchemaGraph(root: Record<string, unknown>, graph: SchemaGraph): boolean {
   for (const [schema, children] of graph) {
-    const reference = (schema as Record<string, unknown>).$ref;
+    const reference = schema.$ref;
     if (reference === undefined) continue;
     const target = resolveReference(root, reference);
-    if (typeof target !== "boolean" && (!object(target) || !graph.has(target))) return false;
+    if (typeof target !== "boolean" && (target === undefined || !graph.has(target))) return false;
     graph.set(schema, [...children, target]);
   }
   const seen = new Set<object>();
@@ -240,7 +258,7 @@ export function isBoundedExternalJsonSchema(value: unknown): value is CatalogJso
       (typeof value.$schema !== "string" || !DIALECTS.has(value.$schema))
     )
       return false;
-    const graph = new Map<object, readonly unknown[]>();
+    const graph: SchemaGraph = new Map();
     return collectSchemas(value, value, graph) && finiteSchemaGraph(value, graph);
   } catch {
     // Pure contracts cannot log. Propagate unexpected JS/URI failures to the consumer's

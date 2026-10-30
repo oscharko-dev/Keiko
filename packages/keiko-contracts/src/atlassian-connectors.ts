@@ -570,6 +570,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  // SAFETY: the entries map every member of the closed JIRA_MANAGED_READ_TOOLS tuple to itself, so
+  // the string-keyed result has exactly the JiraManagedReadToolName keys and values.
   ...(Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, name])) as Record<
     JiraManagedReadToolName,
     JiraManagedReadToolName
@@ -583,6 +585,8 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
 function jiraReadActionValues<Value extends string>(
   value: Value,
 ): Record<JiraManagedReadToolName, Value> {
+  // SAFETY: the entries cover every member of the closed JIRA_MANAGED_READ_TOOLS tuple exactly once,
+  // so the string-keyed result has exactly the JiraManagedReadToolName keys.
   return Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, value])) as Record<
     JiraManagedReadToolName,
     Value

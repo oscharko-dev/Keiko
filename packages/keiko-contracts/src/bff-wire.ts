@@ -1194,6 +1194,7 @@ const CHAT_READ_VIEW_KEYS = [
   "requestedAt",
   "expiresAt",
 ];
+const CHAT_READ_VIEW_STATES: ReadonlySet<unknown> = new Set(CHAT_TOOL_READ_GRANT_STATES);
 function validReadGrantSubject(value: Record<string, unknown>): boolean {
   if (value.kind === "mcp-chat-read")
     return (
@@ -1228,8 +1229,7 @@ export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGr
     ) &&
     [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
     Number(value.expiresAt) > Number(value.requestedAt) &&
-    typeof value.state === "string" &&
-    (CHAT_TOOL_READ_GRANT_STATES as readonly string[]).includes(value.state)
+    CHAT_READ_VIEW_STATES.has(value.state)
   );
 }
 
