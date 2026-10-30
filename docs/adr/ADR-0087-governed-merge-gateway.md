@@ -111,6 +111,13 @@ body-free activity-log lifecycle as local mutations and publish.
 
 Contract tests prove the pure readiness/strategy/rejection derivations. keiko-tools tests inject a deterministic fake `GitMergeAdapter` (no `gh`, no network) and prove: the readiness gate blocks a not-mergeable PR before `mergePullRequest` is called; the policy/approval gate blocks without a token; the argv builders map strategies correctly and reject malformed operands; the classifier's ordering invariant holds; and the gateway never calls anything but the narrow adapter (no-bypass). The Node executor test uses a scripted spawn to prove `mergeable_state` mapping and the guarded non-fatal branch delete. Server integration tests inject the seam and prove policy/approval/readiness blocking, content-free evidence append, and rejection→recovery projection. These run in the required `ci` job with no live GitHub credentials. A non-gating Playwright e2e (`tests/e2e/config/playwright.issue-478-merge-governance.config.ts`) drives the packaged app for the read-only preview and blocked-merge state.
 
+### Amendment (2026-10-29, ADR-0182) — review results are advisory
+
+A Keiko for Quality review ([ADR-0182](ADR-0182-keiko-for-quality-governed-pull-request-review-agent.md))
+is advisory. Its findings, decisions and settlement never gate, approve or block a merge, and they
+are not a merge-readiness blocker. This gateway remains the only merge path and is unchanged by that
+decision.
+
 ## Consequences
 
 ### Positive
@@ -171,6 +178,7 @@ Contract tests prove the pure readiness/strategy/rejection derivations. keiko-to
 - ADR-0043: Enforced Execution Isolation (sandbox network policy; `gh api` uses `inherit` network, same as push/PR)
 - Issue #478: Merge governance, protected-branch enforcement, and guided recovery flows (this ADR)
 - Issue #470: Epic — governed end-to-end Git delivery
+- ADR-0182: Keiko for Quality review agent (advisory only; never a merge gate)
 
 ## Date
 

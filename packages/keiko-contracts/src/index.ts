@@ -5316,3 +5316,45 @@ export type {
   ManagedMcpLogPort,
   ManagedMcpFailure,
 } from "./managed-mcp.js";
+
+// Keiko for Quality review contracts (ADR-0182, Issue #4131). Runtime values ship through the
+// `./runtime/pull-request-review*` subpaths.
+export type {
+  CounterCheckReasonCode,
+  CounterCheckVerdict,
+  CounterCheckVerdictValue,
+  FindingDecision,
+  FindingDecisionValue,
+  FindingDismissalReason,
+  LocalRangeReviewTarget,
+  PullRequestReviewTarget,
+  ReviewAbandonedReason,
+  ReviewCodeLocation,
+  ReviewEvidence,
+  ReviewEvidenceRole,
+  ReviewFailureMode,
+  ReviewFindingCategory,
+  ReviewFindingRecord,
+  ReviewFindingReport,
+  ReviewFindingSeverity,
+  ReviewIncompleteReason,
+  ReviewModelPolicy,
+  ReviewModelRole,
+  ReviewPairStatus,
+  ReviewRoleBudget,
+  ReviewRoleEligibility,
+  ReviewRoleIneligibilityReason,
+  ReviewRunPhase,
+  ReviewRunSettlement,
+  ReviewSeedCase,
+  ReviewSeedRunResult,
+  ReviewSeedScore,
+  ReviewSettlementKind,
+  ReviewSkippedReason,
+  ReviewTarget,
+} from "./pull-request-review.js";
+export type {
+  ReviewContractIssue,
+  ReviewContractIssueCode,
+  ReviewContractValidation,
+} from "./pull-request-review-validation.js";
