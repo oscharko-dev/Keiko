@@ -154,6 +154,9 @@ import type {
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
 import type { CanonicalCatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { refuseReviewRunAction } from "./reviewRuntimeGuard.js";
+import type { ReviewReportAcknowledgement } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 // F8 (#3413): an optional, additive extension of CodingToolFacadeOptions. `codingToolFacadePorts.ts`
 // stays the single owner of the base shape; this widens only the LOCAL parameter type accepted by
@@ -179,6 +182,11 @@ export function createCodingToolFacade(
     catalogBridge: options.catalogBridge,
     onToolSettled: options.onToolSettled,
     observeEditOutcome: options.observeEditOutcome,
+    runtimePurpose: options.runtimePurpose,
+    runtimePurposeLog: options.runtimePurposeLog ?? {
+      sink: processServerLogSink(),
+      correlationId: () => undefined,
+    },
     inFlight: { count: 0 },
   };
   return {
@@ -195,6 +203,8 @@ interface ExecutionContext {
   readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
   readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
   readonly observeEditOutcome: ((outcome: CodingToolEditOutcome) => void) | undefined;
+  readonly runtimePurpose: CodingToolFacadeOptions["runtimePurpose"];
+  readonly runtimePurposeLog: NonNullable<CodingToolFacadeOptions["runtimePurposeLog"]>;
   readonly inFlight: { count: number };
 }
 
@@ -258,6 +268,12 @@ async function executeParsed(
   request: CodingToolActionRequest,
 ): Promise<CodingToolResult> {
   if (input.signal?.aborted === true) return empty("cancelled");
+  // ADR-0182 D2 layer 4: a review run refuses every non-read action before any admission.
+  if (
+    refuseReviewRunAction(context.runtimePurpose, request, "tool-facade", context.runtimePurposeLog)
+  ) {
+    return empty("denied");
+  }
   if (context.inFlight.count >= context.maxInFlight) return empty("busy");
   context.inFlight.count += 1;
   try {
@@ -569,8 +585,33 @@ function projectDomainResult(
     projectVerifiedCommit(request, value) ??
     projectSearch(request, value) ??
     projectVerification(request, value) ??
-    projectSkillDiscovery(request, value)
+    projectSkillDiscovery(request, value) ??
+    projectReviewReport(request, value)
   );
+}
+
+const REVIEW_REPORT_STATUSES: ReadonlySet<unknown> = new Set([
+  "accepted",
+  "rejected",
+  "limit-reached",
+]);
+
+// ADR-0182 D4: a report answers with its closed acknowledgement only; any other shape the port
+// returned collapses to a failure rather than reaching the model.
+function projectReviewReport(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action !== "review-report") return undefined;
+  const acknowledgement = value.reviewReport;
+  if (!isRecord(acknowledgement) || !REVIEW_REPORT_STATUSES.has(acknowledgement.status)) {
+    return projected("failed");
+  }
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    reviewReport: acknowledgement as unknown as ReviewReportAcknowledgement,
+  };
 }
 
 function projectVerification(

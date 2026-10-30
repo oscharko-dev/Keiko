@@ -47,6 +47,8 @@ import {
 } from "../coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import { refuseReviewRunAction } from "../coding-runtime/reviewRuntimeGuard.js";
 import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
 import {
   createCatalogToolBinderFromPreparation,
@@ -74,8 +76,17 @@ const OPENCODE_CATALOG_DESCRIPTORS = OPENCODE_CATALOG_ADVERTISEMENT.projection.t
   },
 );
 
+// ADR-0182 D2: the review profile's own projection (the three reads and `keiko_review_report`).
+const OPENCODE_REVIEW_CATALOG_ADVERTISEMENT = openCodeGatewayCatalogProjection("review");
+const OPENCODE_REVIEW_CATALOG_DESCRIPTORS = projectedDescriptors(
+  OPENCODE_REVIEW_CATALOG_ADVERTISEMENT,
+);
+
 const OPENCODE_DESCRIPTOR_BY_ID: ReadonlyMap<string, ToolDescriptor> = new Map(
-  OPENCODE_CATALOG_DESCRIPTORS.map((descriptor) => [descriptor.toolRef.canonicalId, descriptor]),
+  [...OPENCODE_CATALOG_DESCRIPTORS, ...OPENCODE_REVIEW_CATALOG_DESCRIPTORS].map((descriptor) => [
+    descriptor.toolRef.canonicalId,
+    descriptor,
+  ]),
 );
 
 const TOOL_CATALOG_DISPATCH_UNBOUND_OPERATION = defineActivityLogOperation({
@@ -104,6 +115,7 @@ const TOOL_CATALOG_DISPATCH_UNBOUND_OPERATION = defineActivityLogOperation({
         "skill",
         "skill-discover",
         "child-agent",
+        "review-report",
       ],
     },
   },
@@ -144,6 +156,12 @@ export interface CanonicalCatalogFacadeBridgeInput {
   readonly unavailableOptionalTools?: () => ReadonlySet<OpenCodeOptionalToolName>;
   /** Monotonic elapsed-time source; settlement must never re-enter the live authority context. */
   readonly elapsedNow?: (() => number) | undefined;
+  /**
+   * ADR-0182 D2 layer 4: `review` marks a run that carries review authority. The bridge then refuses
+   * every action other than the three reads and `review-report` before any binding, independently of
+   * the facade's own check and the authority port. Trusted constructor input, never request data.
+   */
+  readonly runtimePurpose?: CodingRuntimePurpose | undefined;
 }
 
 export interface CanonicalCatalogFacadeBridge {
@@ -262,6 +280,10 @@ function catalogActionFor(request: CodingToolActionRequest): CatalogAction | und
         toolId: "keiko.child.run",
         arguments: { objective: request.objective, maxToolCalls: request.maxToolCalls },
       };
+    case "review-report":
+      // The wire parser bounded the report's size and depth (`codingToolIpc.ts`), so it is catalog
+      // JSON within the generic bounds; the descriptor validates its shape.
+      return { toolId: "keiko.review.report", arguments: captureCatalogJson(request.report) };
     case "git":
       return gitCatalogAction(request);
     case "delivery":
@@ -378,6 +400,8 @@ function auxiliaryRepresentative(
   if (canonicalId === "keiko.skill.discover") return { ...base, action: "skill-discover" };
   if (canonicalId === "keiko.child.run")
     return { ...base, action: "child-agent", objective: "inspect", maxToolCalls: 1 };
+  if (canonicalId === "keiko.review.report")
+    return { ...base, action: "review-report", report: {} };
   return undefined;
 }
 
@@ -729,7 +753,8 @@ export function createCanonicalOpenCodeHandlerCoverage(
   profile: OpenCodeToolProfile = "direct",
 ): OpenCodeGatewayHandlerCoverage {
   const advertisement = catalogAdvertisementForProfile(profile);
-  const descriptors = OPENCODE_CATALOG_DESCRIPTORS;
+  const descriptors =
+    profile === "review" ? OPENCODE_REVIEW_CATALOG_DESCRIPTORS : OPENCODE_CATALOG_DESCRIPTORS;
   const fallback = representative("keiko.workspace.discover", {
     actionId: "coverage",
     idempotencyKey: "coverage",
@@ -879,6 +904,7 @@ async function executeCanonical(
   action: CatalogAction | undefined = catalogActionFor(request),
 ): Promise<CodingToolResult> {
   const current = bridgeInput.context();
+  if (reviewRunRefused(bridgeInput, request, current)) return { status: "denied", evidence: [] };
   if (action === undefined || current === undefined) return { status: "denied", evidence: [] };
   if (trustedContext(current, facadeInput) === undefined) return { status: "denied", evidence: [] };
   if (Date.parse(current.authorityExpiresAt) <= current.now) {
@@ -913,6 +939,18 @@ async function executeCanonical(
     { actionId: request.actionId, idempotencyKey: request.idempotencyKey },
   );
   return resultFor(outcome, executed);
+}
+
+// ADR-0182 D2 layer 4: refused before any context, descriptor or binding is consulted.
+function reviewRunRefused(
+  bridgeInput: CanonicalCatalogFacadeBridgeInput,
+  request: CodingToolActionRequest,
+  current: CanonicalCatalogContext | undefined,
+): boolean {
+  return refuseReviewRunAction(bridgeInput.runtimePurpose, request, "catalog-bridge", {
+    sink: bridgeInput.logPort.primary,
+    correlationId: (): string | undefined => current?.correlationId,
+  });
 }
 
 function recordUnbound(

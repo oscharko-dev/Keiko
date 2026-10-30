@@ -18,6 +18,8 @@ import type {
   GovernedNativeFileRequest,
 } from "./codingToolReadEditPorts.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import type { ServerLogSink } from "../observability/index.js";
 
 export interface CodingToolProducerBinding {
   readonly runId: string;
@@ -213,6 +215,15 @@ export interface CodingToolFacadeOptions {
    * can bound consecutive refusals instead of letting the model resend an edit that cannot apply.
    */
   readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
+  /**
+   * ADR-0182 D2 layer 4: `review` marks a run that carries review authority. The facade then refuses
+   * every action other than the three reads and `review-report` before any admission, whatever the
+   * authority port would answer. Absent or `coding` changes nothing.
+   */
+  readonly runtimePurpose?: CodingRuntimePurpose | undefined;
+  /** Where a layer-4 refusal is recorded, and under which correlation; the process sink otherwise. */
+  readonly runtimePurposeLog?:
+    { readonly sink: ServerLogSink; readonly correlationId: () => string | undefined } | undefined;
 }
 
 export interface CodingToolFacadeInput {

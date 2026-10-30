@@ -49,6 +49,7 @@ import {
   readGitReviewTreeIntoIndex,
   removeGitReviewWorktree,
   resolveGitReviewCommit,
+  readGitReviewPathObject,
   showGitReviewFile,
   skipGitReviewWorktreePaths,
   unlockGitReviewWorktree,
@@ -319,6 +320,30 @@ describe("review operations", () => {
     expect(blob.ok && blob.value).toBe("alpha\n");
     const shown = await showGitReviewFile(ctx, { cwd: repo, sha, path: "a.txt" });
     expect(shown.ok && shown.value).toBe("alpha\n");
+  });
+
+  it("resolves one path of a commit to its object without reading it (#4135)", async () => {
+    const sha = plainRepository();
+    const ctx = context(createGitReviewProcessRunner());
+    const found = await readGitReviewPathObject(ctx, { cwd: repo, sha, path: "a.txt" });
+    expect(found.ok && found.value).toMatchObject({ type: "blob", size: 6 });
+    expect(await readGitReviewPathObject(ctx, { cwd: repo, sha, path: "missing.md" })).toEqual({
+      ok: true,
+      value: undefined,
+    });
+    // A path naming nothing in a commit the repository does not hold is a failed read, not absent.
+    const unknown = await readGitReviewPathObject(ctx, {
+      cwd: repo,
+      sha: "f".repeat(40),
+      path: "a.txt",
+    });
+    expect(unknown.ok).toBe(false);
+    await expect(
+      readGitReviewPathObject(ctx, { cwd: repo, sha, path: "a\nb.txt" }),
+    ).rejects.toThrow(GitReviewOperandError);
+    await expect(
+      readGitReviewPathObject(ctx, { cwd: repo, sha: "HEAD", path: "a.txt" }),
+    ).rejects.toThrow(GitReviewOperandError);
   });
 
   it("resolves commits, rejects option-shaped refs and creates, lists and deletes private refs only", async () => {

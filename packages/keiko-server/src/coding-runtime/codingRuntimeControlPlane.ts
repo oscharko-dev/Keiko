@@ -1,3 +1,4 @@
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import type { UiStore } from "../store/types.js";
@@ -208,6 +209,12 @@ export interface CodingRuntimeToolFacadeBridge {
 }
 
 export interface CodingRuntimeControlPlaneInput {
+  /**
+   * ADR-0182 D1 (#4135): `review` composes the Keiko for Quality review instance's own control
+   * plane (never with a history store, so its runs are not listed in Coding History). Absent is the
+   * Coding Workbench's.
+   */
+  readonly runtimePurpose?: CodingRuntimePurpose | undefined;
   readonly historyStore?: UiStore | undefined;
   /** The server's native session continuity service, shared with the runtime host. */
   readonly sessionContinuity?: CodingSessionContinuity | undefined;
@@ -318,6 +325,7 @@ function createControlPlaneOrchestrator(
   launchResolver: CodingRuntimeLaunchResolver,
 ): CodingRuntimeOrchestrator {
   return createCodingRuntimeOrchestrator({
+    ...(input.runtimePurpose === undefined ? {} : { runtimePurpose: input.runtimePurpose }),
     history: controlPlaneHistory(input),
     sessionContinuity: input.sessionContinuity,
     issueIntake: input.issueIntake,

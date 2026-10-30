@@ -2189,6 +2189,28 @@ bounds peak memory and proves that manifest-pruned segment bodies are never open
 requires recorded measurements that manifests are insufficient and an explicit re-scope of epic
 #3527.
 
+### D17 — The `runtimePurpose` discriminator of coding-runtime lines (2026-10-30, #4135)
+
+The coding runtime composition now runs in two server-owned instances (ADR-0182 D1): the Coding
+Workbench's (`coding`) and the Keiko for Quality review instance (`review`). Support analysis must
+separate their lines without reading any body, so the run lifecycle and authority lines carry an
+optional closed field `runtimePurpose` (`coding` | `review`):
+
+- `coding-runtime.run.started` and `coding-runtime.run.settled` (the shared run field set), emitted
+  by the instance's own orchestrator, and `coding-runtime.authority.minted`, emitted by the
+  instance's own authority service when the minted context carries a purpose.
+- The review instance ALWAYS sets `review` on those lines. The Coding Workbench instance leaves the
+  field absent, which reads as `coding`; lines written before the field existed read the same way.
+- Every other line of a review run joins those through the ordinary correlation of D5: the run id
+  is the correlation id of the run's own lines, and the review instance's own `review.run.*` and
+  `review.finding.reported` lines carry a digest of the review run id.
+
+The field is a closed vocabulary with no body, so D4 is unchanged. The review instance's own
+operations (`review.run.runtime-started`, `review.run.runtime-stopped`, `review.run.profile-refused`,
+`review.run.rules-file`, `review.run.action-refused`, `review.finding.reported`) are registered by
+their owner per D6 and carry counts, closed outcomes, durations, opaque ids and digests only -- never
+code, a prompt, model output, a path, the rules text or finding prose.
+
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract

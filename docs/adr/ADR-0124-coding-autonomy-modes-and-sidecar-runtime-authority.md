@@ -405,3 +405,36 @@ same typed, content-free permission request of D6, carrying a closed `native-*` 
 own command, paths or address ride the authenticated approval-review channel only. A denied or
 expired ask answers the native call with the D6 guidance so the native loop continues without it.
 
+
+## Amendment — the Keiko for Quality review instance and its review authority (2026-10-30, #4135)
+
+ADR-0182 D1/D2 adds a second, server-owned instance of the same sidecar runtime composition: the
+Keiko for Quality review instance. It changes no Coding Workbench mode and adds none.
+
+- **Runtime purpose.** A composition is either `coding` (the Coding Workbench's, unchanged) or
+  `review`. The review instance is the same production resolver, backend, composition, host and
+  control plane composed a second time, with its own orchestrator and run slot, its own authority
+  service, its own private in-memory run snapshots and no Coding History store. Its sidecar reaches
+  the server under `/api/review-sidecar/*`, which serves the same gateway and tool-facade handlers
+  with the review instance's own authenticator, readiness, bridge and orchestrator; a capability no
+  review instance owns reaches those handlers with no runtime at all.
+- **Review authority (D3, D4).** A review run's Authority Envelope is minted by the same
+  `CodingRuntimeAuthorityService` from a context the review workspace authority resolves
+  (`runtimePurpose: "review"` on `ProductionWorkspaceAuthorityInput`): the workspace is the hardened
+  review worktree of ADR-0182 D3 at its head commit, the action classes are `workspace-read` alone,
+  the command policy is `deny`, the network policy `deny-all` with no connector scope, the
+  deployment ceiling and therefore the effective mode `governed-assist` (the envelope schema requires
+  a mode), and the budgets are the review run's own (600,000 prompt tokens and 20 minutes by
+  default, operator-configurable through `KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS` and
+  `KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES`, never above the coding envelope; out of range fails
+  closed). The envelope's validation is unchanged and admits these grants.
+- **Planning needs a writable authority.** The tool authority port's two relaxed paths -- a
+  delivery `propose`/`reconcile` and an approved stage or a Git sync decided elsewhere -- now require
+  `workspace-write` beside `workspace-read`. Planning, staging or syncing is meaningful only for an
+  authority that may change the workspace; every coding authority carries `workspace-write`, so
+  nothing changes for coding runs, and the read-only review authority is refused instead of asked.
+- **Refusal instead of ask (D4).** No autonomy mode denies an effect today; Ask for approval asks.
+  A run that carries review authority therefore never reaches an ask: its tool facade and catalog
+  bridge refuse every action other than `read`, `discover`, `search` and `review-report` before any
+  admission (ADR-0182 D2 layer 4, `reviewRuntimeGuard.ts`), each refusal leaving one body-free
+  `review.run.action-refused` line.

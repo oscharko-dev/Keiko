@@ -279,6 +279,7 @@ import {
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
+import { reviewConfigurationIsExact, reviewPluginSetIsExact } from "../review/runtime/selfCheck.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
@@ -425,7 +426,7 @@ const PROVIDER_POLICY_BOUND_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["native", "direct", "code-mode"],
+      values: ["native", "direct", "code-mode", "review"],
     },
   },
   causal: "correlation",
@@ -1946,7 +1947,7 @@ async function materializePrepare(
     agentModels,
   });
   const config = profile.config;
-  materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
+  materialize(runRoot, config, launchPlugins(input.toolProfile, profile.configValue));
   await admitRepositoryItems(input, request, runRoot);
   await admitOperatorPlugins(input, request, runRoot);
   await admitRemoteSkills(input, request, runRoot);
@@ -1973,6 +1974,23 @@ async function materializePrepare(
   recordAgentModelsBound(input.activityLog, request, agentModels);
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return result;
+}
+
+/**
+ * ADR-0182 D2: a review run's materialized configuration and plugin set are re-checked against the
+ * review profile right before they are written, so no run of a review instance can launch with an
+ * extra tool, permission or agent even if the startup self-check was passed earlier.
+ */
+function launchPlugins(
+  profile: OpenCodeToolProfile | undefined,
+  config: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, string>> {
+  const plugins = createGeneratedOpenCodeV2Plugins(profile);
+  if (profile !== "review") return plugins;
+  if (!reviewConfigurationIsExact(config) || !reviewPluginSetIsExact(plugins)) {
+    throw new Error("review-profile-invalid");
+  }
+  return plugins;
 }
 
 /** The run's launch profile, with the MCP servers the operator's registry admits for it. */
@@ -2685,7 +2703,7 @@ function readinessV2Ports(
       version: run.verification.summary.upstreamVersion,
     },
     configDigest: run.configDigest,
-    nativeContextProfile: input.toolProfile === "native" ? "native" : "mapped",
+    nativeContextProfile: nativeContextProfileFor(input.toolProfile),
     verifyTargetAttestation: (): Promise<boolean> => Promise.resolve(true),
     materialize: (): Promise<boolean> => Promise.resolve(configMaterialized(run.runRoot)),
     startupLine: (): Promise<string> => {
@@ -5716,4 +5734,12 @@ function nativeFileIOResultBytes(
   if ("bytes" in result) return result.bytes;
   if ("entries" in result) return encodeSecureWorkspaceNativeDirectory(result.entries);
   return new Uint8Array();
+}
+
+/** The generated guidance a profile's context plugin materializes (`opencodeNativeContext.ts`). */
+function nativeContextProfileFor(
+  profile: OpenCodeToolProfile | undefined,
+): "native" | "mapped" | "review" {
+  if (profile === "native") return "native";
+  return profile === "review" ? "review" : "mapped";
 }

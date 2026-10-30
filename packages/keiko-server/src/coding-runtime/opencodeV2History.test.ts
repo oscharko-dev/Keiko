@@ -2845,3 +2845,33 @@ describe("OpenCode V2 history window", () => {
     expect(captureMessages).toHaveBeenCalledOnce();
   });
 });
+
+it("admits exactly the four review tools in a review run's history (ADR-0182 D2, #4135)", () => {
+  const review = (): ReturnType<typeof createOpenCodeV2HistoryProjection> =>
+    createOpenCodeV2HistoryProjection({
+      runId: "review-history",
+      activityLog: undefined,
+      toolProfile: "review",
+    });
+  for (const tool of [
+    "keiko_workspace_read",
+    "keiko_workspace_discover",
+    "keiko_repository_search",
+    "keiko_review_report",
+  ]) {
+    expect(review().project("ses_review", toolHistory(tool), undefined)).not.toEqual([]);
+  }
+  for (const tool of ["keiko_changeset_edit", "question", "execute", "bash"]) {
+    expect(() => review().project("ses_review", toolHistory(tool), undefined)).toThrow(
+      "opencode-v2-tool-invalid",
+    );
+  }
+  // The Coding Workbench's governed history never admits the review tool.
+  expect(() =>
+    createOpenCodeV2HistoryProjection().project(
+      "ses_direct",
+      toolHistory("keiko_review_report"),
+      undefined,
+    ),
+  ).toThrow("opencode-v2-tool-invalid");
+});

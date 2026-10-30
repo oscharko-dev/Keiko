@@ -1,3 +1,4 @@
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { ForkBoundary } from "./codingSessionContinuity.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
@@ -202,6 +203,14 @@ const CODING_RUNTIME_RUN_FIELDS = {
       "openai-api-key-through-gateway",
       "chatgpt-codex-subscription-profile",
     ],
+  },
+  // ADR-0173 / ADR-0182 D1 (#4135): the runtime instance that ran it. The Keiko for Quality review
+  // instance always sets `review`; the Coding Workbench instance leaves it absent (`coding`).
+  runtimePurpose: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["coding", "review"],
   },
 } as const;
 
@@ -1311,6 +1320,7 @@ function recordRuntimeRunStarted(
   effectiveMode: CodingWorkbenchMode,
   predecessorSelectionReason: PredecessorSelectionReason,
   taskIntent: string,
+  runtimePurpose: CodingRuntimePurpose | undefined,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1330,6 +1340,7 @@ function recordRuntimeRunStarted(
         ...(snapshot.predecessorRunId === undefined
           ? {}
           : { predecessorRunId: snapshot.predecessorRunId }),
+        ...(runtimePurpose === undefined ? {} : { runtimePurpose }),
       },
     ),
   );
@@ -1615,6 +1626,7 @@ function recordRuntimeRunSettled(
   effort: CodingRuntimeRunEffortRollUp | { readonly wallDurationMs: number },
   failureCode?: CodingWorkbenchRuntimeFailureCode,
   cause?: RunSettlementCause,
+  runtimePurpose?: CodingRuntimePurpose,
 ): void {
   const errorKind = settlementErrorKind(state, cause);
   activityLog?.write(
@@ -1636,6 +1648,7 @@ function recordRuntimeRunSettled(
         ...settlementCauseLogFields(cause),
         ...runtimeResultLogFields(snapshot.result),
         ...effort,
+        ...(runtimePurpose === undefined ? {} : { runtimePurpose }),
       },
     ),
   );
@@ -3964,6 +3977,7 @@ export class CodingRuntimeOrchestrator {
       launch.effectiveMode,
       selection.reason,
       taskIntent,
+      this.deps.runtimePurpose,
     );
   }
 
@@ -4751,6 +4765,7 @@ export class CodingRuntimeOrchestrator {
       this.effort.rollUp(next, this.deps.runEffort?.(next.runId)),
       failureCode,
       cause,
+      this.deps.runtimePurpose,
     );
     if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
     this.publishSettlement(next, state, failureCode);

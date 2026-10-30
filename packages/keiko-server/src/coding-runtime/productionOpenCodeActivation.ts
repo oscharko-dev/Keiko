@@ -202,7 +202,16 @@ export interface ProductionOpenCodeActivationInput {
   readonly nativeWorktrees?: ProductionOpenCodeBackendInput["nativeWorktrees"];
   /** The web search integration the operator admitted for native runs (#3903 AC3). */
   readonly nativeWebSearch?: ProductionOpenCodeBackendInput["nativeWebSearch"];
+  /**
+   * The path prefix the sidecar's gateway and tool calls reach the server under: the Coding
+   * Workbench's `/api/coding-sidecar` (the default), or `/api/review-sidecar` for the Keiko for
+   * Quality review instance (ADR-0182 D1), whose routes serve the same handlers with its own
+   * runtime capabilities.
+   */
+  readonly sidecarRoutePrefix?: SidecarRoutePrefix | undefined;
 }
+
+export type SidecarRoutePrefix = "/api/coding-sidecar" | "/api/review-sidecar";
 
 export type ProductionOpenCodeActivationResult =
   | {
@@ -228,13 +237,14 @@ export interface ProductionOpenCodeLoopbackEndpoints {
 /** Derives both sidecar endpoints from the one attested BFF loopback origin. */
 export function productionOpenCodeLoopbackEndpoints(
   env: NodeJS.ProcessEnv,
+  prefix: SidecarRoutePrefix = "/api/coding-sidecar",
 ): ProductionOpenCodeLoopbackEndpoints | undefined {
   const loopback = loopbackBaseUrl(env);
   return loopback === undefined
     ? undefined
     : {
-        gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
-        toolFacadeUrl: `${loopback}/api/coding-sidecar/tool`,
+        gatewayUrl: `${loopback}${prefix}/gateway`,
+        toolFacadeUrl: `${loopback}${prefix}/tool`,
       };
 }
 
@@ -399,7 +409,7 @@ export function resolveProductionOpenCodeActivation(
   if (runtime.unavailableReason !== undefined) {
     return { unavailableReason: runtime.unavailableReason };
   }
-  const endpoints = productionOpenCodeLoopbackEndpoints(input.env);
+  const endpoints = productionOpenCodeLoopbackEndpoints(input.env, input.sidecarRoutePrefix);
   if (endpoints === undefined) return { unavailableReason: "loopback-unavailable" };
   const secureWorkspaceTextRead = resolveSecureRead(input, runtime.portable);
   if (secureWorkspaceTextRead === undefined) {

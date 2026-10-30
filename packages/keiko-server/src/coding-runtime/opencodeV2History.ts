@@ -1,3 +1,4 @@
+import { REVIEW_RUNTIME_TOOL_NAMES } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import { createHash } from "node:crypto";
 
@@ -42,10 +43,13 @@ import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 import { ConversationLedger } from "./opencodeV2HistoryConversation.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+const REVIEW_HISTORY_TOOLS: ReadonlySet<string> = new Set(REVIEW_RUNTIME_TOOL_NAMES);
 
 /** The native profile (#3897) reports OpenCode's own tool ids, bounded by shape, not by list. */
 function historyToolAdmitted(name: string, profile: OpenCodeToolProfile): boolean {
   if (profile === "native") return isAdmissibleOpenCodeToolName(name);
+  // ADR-0182 D2: a review run's history holds exactly the four review tools.
+  if (profile === "review") return REVIEW_HISTORY_TOOLS.has(name);
   return HISTORY_TOOLS.has(name) || (profile === "code-mode" && name === "execute");
 }
 const NATIVE_RETRY_FIELDS: ReadonlySet<string> = new Set(["attempt", "at", "error"]);

@@ -322,6 +322,17 @@ ADR-0124, ADR-0125, ADR-0128, and ADR-0129, following the existing supersession-
 established in ADR-0124. No other text in those records is edited; their unaffected decisions
 remain in force as enumerated in the Amends section above.
 
+### D6 — Amendment: server-owned review runs are outside the user-selectable modes (2026-10-30, #4135)
+
+ADR-0182's Keiko for Quality review run is not a Code task and not a fourth mode. Its authority is
+minted at `governed-assist` only because the Authority Envelope requires a mode; its grants are the
+review authority's (`workspace-read` alone, no command, connector or network), not the D2 matrix
+column. The monotonic matrix of D2 is unchanged and still governs every user-selectable surface. A
+review run refuses (never asks about) every non-read action, so it adds no `approval-required` cell
+and no approval request. The canonical term is **review run** (runtime purpose `review`), distinct
+from a **Code task** (runtime purpose `coding`); review runs never appear in Coding Workbench or
+Coding History.
+
 ## Consequences
 
 - Raising the autonomy mode can only relax or preserve, never tighten, the disposition of a fixed

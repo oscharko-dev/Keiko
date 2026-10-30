@@ -1,5 +1,9 @@
 import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import {
+  REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS,
+  REVIEW_RUNTIME_TOOL_NAMES,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -40,6 +44,11 @@ import {
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 export { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
+
+interface OpenCodeToolInput {
+  readonly name: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+}
 
 /**
  * The native extension's exact pinned wire schema lives in
@@ -518,6 +527,27 @@ export const OPENCODE_MODEL_VISIBLE_TOOL_NAMES = OPENCODE_MODEL_VISIBLE_TOOLS.ma
   ({ name }) => name,
 );
 
+// ADR-0182 D4 (#4135): the Reviewer's one output channel. Every argument is required at the tool
+// boundary, as for every other generated tool; the server validates each call again with the
+// contract's `validateReviewFindingReport`.
+const REVIEW_REPORT_SCHEMA = {
+  type: "object",
+  properties: REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS,
+  required: Object.keys(REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS),
+} as const;
+
+/**
+ * The review profile's whole model-visible contract (ADR-0182 D2): the three read tools and
+ * `keiko_review_report`, in the contract's order. There is no `question`: an unattended review
+ * cannot ask. Pinned by `hasExactOpenCodeVisibleToolContract(tools, "review")`.
+ */
+export const OPENCODE_REVIEW_VISIBLE_TOOLS: readonly OpenCodeToolInput[] = [
+  { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
+  { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
+  { name: "keiko_repository_search", parameters: REPOSITORY_SEARCH_SCHEMA },
+  { name: "keiko_review_report", parameters: REVIEW_REPORT_SCHEMA },
+];
+
 export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   {
     name: "keiko_workspace_discover",
@@ -628,6 +658,21 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
 ] as const;
 
 /**
+ * The generated-tool definitions the review profile registers (ADR-0182 D2): exactly the three
+ * read tools of the governed set and `keiko_review_report`, nothing else.
+ */
+export const OPENCODE_REVIEW_TOOL_SOURCE_DEFINITIONS = [
+  ...OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(({ name }) =>
+    (REVIEW_RUNTIME_TOOL_NAMES as readonly string[]).includes(name),
+  ),
+  {
+    name: "keiko_review_report",
+    action: "review-report",
+    arguments: REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS,
+  },
+] as const;
+
+/**
  * The generated-tool definitions the native profile registers (#3897): Keiko's Git delivery tools
  * and nothing else (`opencodeNativeDeliveryTools.ts` names them and says why). Filtered from the
  * one definition list the mapped profiles generate from, so a native run calls the identical tool
@@ -656,11 +701,6 @@ export const OPENCODE_PINNED_BUILT_IN_TOOLS = [
   "git",
   "todowrite",
 ] as const;
-
-interface OpenCodeToolInput {
-  readonly name: string;
-  readonly parameters: Readonly<Record<string, unknown>>;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -706,6 +746,13 @@ const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   ]),
 );
 
+const REVIEW_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
+  OPENCODE_REVIEW_VISIBLE_TOOLS.map(({ name, parameters }) => [
+    name,
+    schemaDigest(projectedGatewaySchema(name, parameters)),
+  ]),
+);
+
 const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const CODE_MODE_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map(({ alias, inputSchema }) => [
@@ -720,6 +767,7 @@ export function openCodeVisibleToolNames(
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
   if (profile === "native") return OPENCODE_NATIVE_TOOL_NAMES;
   if (profile === "direct") return OPENCODE_MODEL_VISIBLE_TOOL_NAMES;
+  if (profile === "review") return REVIEW_RUNTIME_TOOL_NAMES;
   return [...CODE_MODE_GATEWAY_SCHEMA_DIGESTS.keys()];
 }
 
@@ -735,14 +783,28 @@ export function hasExactOpenCodeVisibleToolContract(
 ): boolean {
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) return false;
   if (profile === "native") return isAdmittedOpenCodeNativeToolContract(tools);
-  const expected =
-    profile === "direct" ? EXPECTED_GATEWAY_SCHEMA_DIGESTS : CODE_MODE_GATEWAY_SCHEMA_DIGESTS;
+  const expected = expectedGatewaySchemaDigests(profile);
   if (tools?.length !== expected.size) return false;
   const names = new Set(tools.map(({ name }) => name));
   return (
     names.size === expected.size &&
     tools.every(({ name, parameters }) => expected.get(name) === schemaDigest(parameters))
   );
+}
+
+function expectedGatewaySchemaDigests(
+  profile: Exclude<OpenCodeToolProfile, "native">,
+): ReadonlyMap<string, string> {
+  if (profile === "direct") return EXPECTED_GATEWAY_SCHEMA_DIGESTS;
+  if (profile === "review") return REVIEW_GATEWAY_SCHEMA_DIGESTS;
+  return CODE_MODE_GATEWAY_SCHEMA_DIGESTS;
+}
+
+/** SHA-256 over the review profile's exact model-visible contract, pinned by a test (ADR-0182 D2). */
+export function openCodeReviewToolContractDigest(): string {
+  return createHash("sha256")
+    .update(stableJson([...REVIEW_GATEWAY_SCHEMA_DIGESTS.entries()]), "utf8")
+    .digest("hex");
 }
 
 const OPENCODE_GATEWAY_PROFILE = { id: "opencode", version: 1 } as const;
@@ -802,6 +864,23 @@ function qualifiedCodeModeProjection(): Pick<
     projection: compileToolProjection(catalog, set.profile),
   });
   return codeModeCatalogProjection;
+}
+
+// The review variant is compiled only when a review instance asks for it, once per process.
+let reviewCatalogProjection:
+  Pick<GatewayToolCatalogAdvertisement, "catalog" | "projection"> | undefined;
+function qualifiedReviewProjection(): Pick<
+  GatewayToolCatalogAdvertisement,
+  "catalog" | "projection"
+> {
+  if (reviewCatalogProjection !== undefined) return reviewCatalogProjection;
+  const set = opencodeRegistrationSet("review");
+  const catalog = createKeikoToolCatalog([set]);
+  reviewCatalogProjection = Object.freeze({
+    catalog,
+    projection: compileToolProjection(catalog, set.profile),
+  });
+  return reviewCatalogProjection;
 }
 
 /**
@@ -919,6 +998,7 @@ export function openCodeGatewayCatalogProjection(
 ): Pick<GatewayToolCatalogAdvertisement, "catalog" | "projection"> {
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
   if (profile === "code-mode") return qualifiedCodeModeProjection();
+  if (profile === "review") return qualifiedReviewProjection();
   return { catalog: OPENCODE_GATEWAY_CATALOG, projection: OPENCODE_GATEWAY_PROJECTION };
 }
 

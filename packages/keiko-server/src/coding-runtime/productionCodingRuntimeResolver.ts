@@ -260,6 +260,12 @@ export interface ProductionCodingRuntimeResolverInput {
    */
   readonly workspaceScriptTrust?:
     Pick<WorkspaceScriptTrustService, "admitRunManifest" | "revokeRunAdmissions"> | undefined;
+  /**
+   * ADR-0182 D4 (#4135): the `keiko_review_report` port of one run, supplied only by the Keiko for
+   * Quality review composition. A coding composition supplies none, so a report is refused there.
+   */
+  readonly reviewReportPort?:
+    ((runId: string) => ProductionManagedWorktreeToolInput["reviewReport"]) | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
@@ -1476,7 +1482,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     childModel,
   } = options;
   return createProductionManagedWorktreeToolFacade({
-    toolProfile: options.toolProfile,
+    ...reviewRunFacadeOptions(options),
     authority,
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
     authorityRef: minted.authorityRef,
@@ -1511,6 +1517,25 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     ...runObservers(options),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
+}
+
+// ADR-0182 D2/D4 (#4135): a review run's facade carries its purpose (layer 4) and its report port;
+// an ordinary coding run carries neither.
+function reviewRunFacadeOptions({
+  input,
+  context,
+  minted,
+  toolProfile,
+}: ManagedToolFacadeInput): Pick<
+  ProductionManagedWorktreeToolInput,
+  "toolProfile" | "runtimePurpose" | "reviewReport"
+> {
+  const reviewReport = input.reviewReportPort?.(minted.authorityRef.runId);
+  return {
+    toolProfile,
+    ...(context.runtimePurpose === undefined ? {} : { runtimePurpose: context.runtimePurpose }),
+    ...(reviewReport === undefined ? {} : { reviewReport }),
+  };
 }
 
 // The edit port's two mutation-side ports: this run's lease coordinator, and the server-wide record

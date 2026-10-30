@@ -91,6 +91,8 @@ export interface ReviewServices {
     input: ReviewDiffPackageInput & { readonly correlationId?: string | undefined },
   ): Promise<ReviewDiffPackageResult>;
   sweepRefs(trigger: ReviewRefSweepTrigger, correlationId?: string): Promise<ReviewRefSweepResult>;
+  /** The observed hardened local review runner (rules file and finding evidence reads, #4135). */
+  reviewRunner(correlationId?: string): GitProcessRunner;
   startup(correlationId?: string): Promise<void>;
   dispose(correlationId?: string): Promise<void>;
 }
@@ -285,6 +287,10 @@ class ReviewServicesImpl implements ReviewServices {
       trigger,
       correlationId,
     );
+  }
+
+  public reviewRunner(correlationId?: string): GitProcessRunner {
+    return this.localRunner({}, correlationId);
   }
 
   public startup(correlationId?: string): Promise<void> {
