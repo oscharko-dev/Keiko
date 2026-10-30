@@ -149,14 +149,13 @@ Conversation readiness `false` makes it temporarily unavailable; a busy model st
 Operators may set defaults and restrict the choice; invalid explicit configuration fails closed.
 Each pair has a status (`unmeasured`, `seed-qualified`, `seed-failed`, `collecting`,
 `measured-passed`, `measured-failed`); a pair that was never measured is shown as unmeasured, never
-as qualified. Keiko's lab default is `qwen3.6-35b-a3b-4bit` (MLX 4-bit, mixture-of-experts, about
-19 GB) as Reviewer and `gemma-4-31b-it-4bit` (MLX 4-bit, dense, about 17 GB) as Counter-checker
-through the local LiteLLM gateway. Both stay resident together on a 64 GB developer machine, so no
-model is reloaded between the Reviewer and Counter-checker passes; the faster mixture-of-experts
-model takes the tool-call-heavy Reviewer role and a model of a different family checks it. This
-pair replaced an 8-bit pair of the same families (epic #4130 decision, 2026-10-30) because the two
-8-bit models (about 69 GB) did not fit together. The lab default is a starting pair, not a
-qualification: measurement results belong to the exact pair measured. Proven by Issue #4137.
+as qualified. Keiko prescribes no pair. Keiko's reference lab (Apple M4 Max, 128 GB) runs
+`gemma-4-31b-it` as Reviewer and `qwen3.6-35b-a3b-8bit` as Counter-checker through the local
+LiteLLM gateway; together they need about 69 GB. On a 64 GB machine this delivery measures
+`qwen3.6-35b-a3b-4bit` (MLX 4-bit mixture-of-experts, about 19 GB) as Reviewer and
+`gemma-4-31b-it-4bit` (MLX 4-bit dense, about 17 GB) as Counter-checker, which stay resident
+together: the faster model takes the tool-call-heavy Reviewer role and a model of a different
+family checks it. Results belong to the exact pair measured. Proven by Issue #4137.
 
 ### D9 — Measurement gates
 
