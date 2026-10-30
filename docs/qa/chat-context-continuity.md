@@ -76,11 +76,52 @@ The initial runtime smoke used an earlier laboratory revision. It is retained as
 attempt, not promoted into the frozen baseline. It observed slow startup/readiness and real model
 calls; those costs must remain distinguishable from compaction cost in the final report.
 
-There is **no completed multi-hour baseline, post-compaction recall result, candidate comparison,
+The ongoing productive-API campaign has now recovered all nine declared fields in each of the four
+before-pressure controls (Gemma/Qwen, plain/grounded). Its first Gemma plain-chat manual-compaction
+probe also recovered 9/9 fields. This establishes a positive one-cycle result for that fixture;
+a large reduction in occupancy alone therefore does not establish forgetting.
+
+There is **no completed multi-hour baseline, repeated-compaction acceptance, candidate comparison,
 MCP live qualification or production-readiness claim yet**. Update this section only from actual
 recorded runs.
 
-## Code-grounded audit hypotheses
+## Reproducible structural baseline
+
+The existing producer functions can also be observed without contacting a provider:
+
+```sh
+node scripts/testing/coding-workbench-lab/chat-continuity-structure.mjs \
+  --output /absolute/private/new-structural-baseline.json
+```
+
+The model port in this structural probe returns a fixed synthetic result. It measures which source
+messages reach that port and what the real checkpoint producer records, not model comprehension.
+Original source messages are created through the native UiStore and remain present after the probe.
+
+Measured on the unchanged product tree, with 40 eligible source messages:
+
+| Observation                                                        | Result                                                               |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| Pure short-identifier recall                                       | No excerpt returned for `Q7-42?`, although the original exists       |
+| Source-message witness markers delivered to the summary model port | 12/40 (30%)                                                          |
+| Persisted model-summary `coveredItems`                             | 40, with status `valid`                                              |
+| Explicit all-history projection                                    | 40 originals become 1 gateway summary; 0 originals retained verbatim |
+| Projection token counts                                            | 30,480 before; 946 summary tokens after                              |
+| Canonical originals after measurement                              | All 40 still present                                                 |
+
+The 40-item declaration must not be interpreted as 40 source messages actually supplied to the
+summary model. The marker observation demonstrates a coverage distinction that the existing record
+does not express. The all-history reduction demonstrates compression size and source availability,
+not semantic loss by itself. These observations are independent of live-model answer quality.
+
+The retained body-free artifact is
+[`evidence/4155/structural-baseline.json`](evidence/4155/structural-baseline.json). Its product-tree
+digest identifies the unchanged production subject even though its source head includes laboratory
+tooling. Measurement tests check actual model-port input, canonical-message preservation, body-free
+output and repeatability; they deliberately do not pin today's missing recall or partial coverage
+as behavior that future repairs must preserve.
+
+## Remaining code-grounded audit hypotheses
 
 These are targets for controlled reproduction, not established causes of a reported customer loss:
 
