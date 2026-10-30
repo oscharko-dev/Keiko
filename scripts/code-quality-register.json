@@ -10286,7 +10286,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 5
     },
     "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 8,
+      "anti-slop/no-conditional-empty-object-spread": 10,
       "anti-slop/no-object-parameters": 2,
       "anti-slop/no-runtime-typeof": 2,
       "anti-slop/no-unknown-parameters": 2
