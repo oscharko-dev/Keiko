@@ -7,6 +7,7 @@
 // (`workspace-read`); a denial or a tool the session was not offered stops the session. The verdict
 // tool records the first valid verdict and then ends the session.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { CounterCheckVerdict } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { validateCounterCheckVerdict } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
@@ -162,7 +163,7 @@ class CounterCheckTools {
 
   private async discover(request: ToolCallRequest): Promise<ToolCallResult> {
     const raw = request.arguments.directory;
-    const directory = typeof raw === "string" ? raw.replace(/\/+$/u, "") : "";
+    const directory = typeof raw === "string" ? withoutTrailingSlashes(raw) : "";
     if (directory !== "" && !admissibleCounterCheckPath(directory)) {
       return status(request, "denied");
     }
@@ -233,7 +234,13 @@ function directoryChildren(entries: readonly GitReviewTreeEntry[], directory: st
     const slash = rest.indexOf("/");
     children.add(slash === -1 ? rest : `${rest.slice(0, slash)}/`);
   }
-  return [...children].sort();
+  return [...children].sort(compareStrings);
+}
+
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.codePointAt(end - 1) === 47) end -= 1;
+  return value.slice(0, end);
 }
 
 /** Builds the session's tool port; `state` collects the verdict and the call count. */

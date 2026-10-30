@@ -250,7 +250,10 @@ export async function prepareReviewRun(
   state: ReviewRunState,
 ): Promise<ReviewDiffPackage | undefined> {
   const models = validateReviewRoleModels(deps.models, ctx, deps.now());
-  if (!models.ok) return void stopWith(state, { kind: "skipped", reason: models.reason });
+  if (!models.ok) {
+    stopWith(state, { kind: "skipped", reason: models.reason });
+    return undefined;
+  }
   if (cancelled(ctx, state) || !(await resolveTarget(deps, ctx, state))) return undefined;
   const target = state.target;
   if (target === undefined) return undefined;

@@ -28,6 +28,7 @@ export function reviewRunView(
 ): ReviewRunView {
   const settled = row.phase === "settled";
   const findings = settled ? store.findings(row.runId).filter((finding) => finding.presented) : [];
+  findings.sort((left, right) => (left.presentationRank ?? 0) - (right.presentationRank ?? 0));
   return {
     schemaVersion: REVIEW_CONTRACT_VERSION,
     runId: row.runId,
@@ -44,9 +45,7 @@ export function reviewRunView(
     settledAt: row.settledAt === null ? null : new Date(row.settledAt).toISOString(),
     coverage: row.coverage,
     coverageEntries: store.coverageEntries(row.runId),
-    presentedFindings: findings
-      .sort((left, right) => (left.presentationRank ?? 0) - (right.presentationRank ?? 0))
-      .map(presentedFinding),
+    presentedFindings: findings.map(presentedFinding),
     candidateCount: row.candidateCount,
     totals: { reviewer: row.reviewer, counterChecker: row.counterChecker },
     stale,

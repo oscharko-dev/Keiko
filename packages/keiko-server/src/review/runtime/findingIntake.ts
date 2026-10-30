@@ -62,7 +62,7 @@ export interface ReviewFindingIntake {
   rejections(): Readonly<Record<ReviewReportRejectionReason, number>>;
 }
 
-export type HeadFile =
+type HeadFile =
   | { readonly kind: "lines"; readonly lines: readonly string[] }
   | { readonly kind: "refused"; readonly reason: "path-outside-worktree" | "range-invalid" };
 
@@ -91,7 +91,7 @@ function admissiblePath(path: string): boolean {
   return !isDenied(path);
 }
 
-export class HeadFileReader {
+class HeadFileReader {
   private readonly files = new Map<string, Promise<HeadFile>>();
 
   public constructor(private readonly input: ReviewHeadReadInput) {}

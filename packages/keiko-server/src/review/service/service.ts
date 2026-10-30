@@ -28,10 +28,11 @@ import {
 
 import type { ServerLogSink } from "../../observability/index.js";
 import { deriveRepositoryId } from "../../task-workspace/naming.js";
-import type { CounterCheckInput, CounterCheckOutcome } from "../counter-check/counterCheck.js";
 import {
   DEFAULT_COUNTER_CHECK_LIMITS,
+  type CounterCheckInput,
   type CounterCheckLimits,
+  type CounterCheckOutcome,
 } from "../counter-check/counterCheck.js";
 import { reportReviewFailure } from "../diagnostics.js";
 import type { ReviewRuntimeService } from "../runtime/instance.js";
