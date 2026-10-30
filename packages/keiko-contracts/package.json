@@ -439,6 +439,18 @@
       "types": "./dist/git-repository.d.ts",
       "import": "./dist/git-repository.js"
     },
+    "./runtime/pull-request-review": {
+      "types": "./dist/pull-request-review.d.ts",
+      "import": "./dist/pull-request-review.js"
+    },
+    "./runtime/pull-request-review-validation": {
+      "types": "./dist/pull-request-review-validation.d.ts",
+      "import": "./dist/pull-request-review-validation.js"
+    },
+    "./runtime/pull-request-review-rules": {
+      "types": "./dist/pull-request-review-rules.d.ts",
+      "import": "./dist/pull-request-review-rules.js"
+    },
     "./runtime/git-repository-agent": {
       "types": "./dist/git-repository-agent.d.ts",
       "import": "./dist/git-repository-agent.js"

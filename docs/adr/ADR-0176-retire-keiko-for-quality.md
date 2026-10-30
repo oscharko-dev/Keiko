@@ -86,6 +86,11 @@ invisible to duplicate suppression and the finding simply returns on the next pu
   to ADR-0135 additionally reserves `dev` auto-merge arming to `oscharko`; technical readiness uses the
   required checks being green on the exact head and every review conversation being resolved.
 - Reintroduction requires a new ADR, a new credential grant, and a fresh trust analysis.
+- [ADR-0182](ADR-0182-keiko-for-quality-governed-pull-request-review-agent.md) (2026-10-29) reuses the
+  name Keiko for Quality for a read-only review agent inside the product that a person starts on
+  their own pull requests. It is not a reintroduction in the sense above: it adds no reviewer to
+  `oscharko-dev/Keiko`, no credential and no required or blocking context, and this decision stays
+  in force for the repository's review settlement.
 
 ## References
 
@@ -94,3 +99,4 @@ invisible to duplicate suppression and the finding simply returns on the next pu
 - [ADR-0168](ADR-0168-quota-tolerant-review-settlement.md)
 - [ADR-0169](ADR-0169-retire-codspeed-and-greptile.md)
 - [ADR-0170](ADR-0170-keiko-for-quality-as-an-external-reviewer.md)
+- [ADR-0182](ADR-0182-keiko-for-quality-governed-pull-request-review-agent.md)
