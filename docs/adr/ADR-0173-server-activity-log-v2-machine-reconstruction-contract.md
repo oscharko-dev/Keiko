@@ -1162,9 +1162,12 @@ only through that line's parent edge; when it is not retained, the analysis is i
 (`evidence-not-retained`). A child declared without its root, which no producer emits, is refused.
 Another request's failure of the same operation, the root's own included, neither completes the
 incident nor refuses it. A contradiction is `unsafe-report`. Every closure member, each incident
-correlation and every parent a retained line names, needs a directly recorded line: a timeline
+correlation and every parent named by registered causal evidence needs a directly recorded line: a timeline
 derived only through a child never proves its parent (`parent-correlation-missing`,
-`evidence-not-retained`). The selection accounts for exactly the process lifetimes the evidence
+`evidence-not-retained`). The report uses its trusted recorded registry's causal declarations, like
+the query's registered closure (D20): optional non-causal context may borrow a parent identifier
+without requiring that unrelated correlation to be retained. Incident members remain mandatory.
+The selection accounts for exactly the process lifetimes the evidence
 shows, and the evidence must carry that account: a `selected` start missing from it, a start beside
 a `lost` or `absent` one, or a heartbeat (written only after a start) beside an `absent` one is
 `unsafe-report`, so dropping a start never reads as a lifetime that had none; a `lost` start, or an

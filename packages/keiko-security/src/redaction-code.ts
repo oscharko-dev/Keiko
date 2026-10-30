@@ -610,11 +610,22 @@ function classifiedSourcePrefix(
   return mayStartYaml(text) ? inferredYamlPrefix(text, ports) : inferredTypedPrefix(text);
 }
 
+/**
+ * A Markdown list item starts with its marker, exactly one space and, for a task item, a checkbox;
+ * a diff line's marker is followed directly by its text. The item's own text is classified on its
+ * own as the next candidate, so `- [x](link)` or `- Run tests (see below)` is never judged as a
+ * diff fragment whose evidence is everything that follows it, while `- const key = ...` still gets
+ * the source parser. A marker with no space, or with more than one, keeps the diff treatment.
+ */
+const MARKDOWN_LIST_MARKER = /^[-+] (?:\[[ xX]\] )?(?=\S)/u;
+
 function markedSourcePrefix(
   text: string,
   ports: ProjectionPorts,
 ): InferredSourcePrefix | undefined {
   if (!mayStartMarkedSource(text)) return undefined;
+  const bullet = MARKDOWN_LIST_MARKER.exec(text);
+  if (bullet !== null) return { language: undefined, end: bullet[0].length };
   const end = firstUnifiedDiffHeader(text);
   if (end === 0) return undefined;
   return unsafeMalformedSource(text.slice(0, end), ports)

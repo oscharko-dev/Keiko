@@ -5,14 +5,24 @@ import { render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it } from "vitest";
 import { VerifyConnectionStatus } from "./VerifyConnectionStatus";
-import { ATLASSIAN_CONNECTOR_VERIFY_STATUSES } from "@/lib/atlassian-connectors-api";
+import {
+  ATLASSIAN_CONNECTOR_VERIFY_STATUSES,
+  type AtlassianConnectorVerifyStatus,
+} from "@/lib/atlassian-connectors-api";
 
-const EXPECTED: Record<string, { readonly label: string; readonly tone: string }> = {
+const EXPECTED: Record<
+  AtlassianConnectorVerifyStatus,
+  { readonly label: string; readonly tone: string }
+> = {
   ok: { label: "Connection verified", tone: "ok" },
   "auth-failed": { label: "Authentication failed", tone: "danger" },
   forbidden: { label: "Access forbidden", tone: "danger" },
   unreachable: { label: "Site unreachable", tone: "warning" },
   timeout: { label: "Connection timed out", tone: "warning" },
+  "redirect-refused": { label: "Redirect refused", tone: "danger" },
+  "invalid-response": { label: "Invalid Atlassian response", tone: "danger" },
+  "unsupported-version": { label: "Unsupported Jira version", tone: "danger" },
+  "tls-failed": { label: "Certificate verification failed", tone: "danger" },
 };
 
 describe("VerifyConnectionStatus", () => {

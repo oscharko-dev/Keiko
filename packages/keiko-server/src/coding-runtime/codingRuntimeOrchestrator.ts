@@ -98,7 +98,12 @@ import {
   describeError,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import {
+  causeChain,
+  errorKindOf,
+  keikoStackFrames,
+  type ServerLogSink,
+} from "@oscharko-dev/keiko-activity-log";
 import type {
   CodingRuntimeLaunchResolver,
   CodingRuntimeOrchestratorDeps,
@@ -143,6 +148,7 @@ import {
   type WorkbenchDescriptionGenerationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
@@ -554,9 +560,26 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["no-live-run", "run-mismatch", "challenge-invalid"],
+      values: ["no-live-run", "run-mismatch", "challenge-invalid", "ingest-rejected"],
     },
     liveRunId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // #4105: set only on `ingest-rejected`, an event the orchestrator accepted but whose handling
+    // threw (a stale-snapshot store write racing an operator stop). Keiko frames and error kinds,
+    // never the message.
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -1234,6 +1257,7 @@ function recordRuntimeLifecycleFailure(
   runId: string,
   reason: RuntimeLifecycleFailureReason,
   error?: unknown,
+  event?: CodingWorkbenchRuntimeEvent,
 ): void {
   emitServerDiagnostic(diagnostics, {
     correlationId: runtimeDiagnosticCorrelationId(runId),
@@ -1244,8 +1268,24 @@ function recordRuntimeLifecycleFailure(
       ? { errorClass: "CodingRuntimeLifecycleFailure" }
       : describeError(error)),
     message: "runtime-lifecycle-failed",
-    code: `stage=lifecycle:reason=${reason}`,
+    code: `stage=lifecycle:reason=${reason}${runtimeLifecycleDetail(event)}`,
   });
+}
+
+const RUNTIME_LIFECYCLE_DETAILS = new Set([
+  "runtime-event-failed",
+  "sidecar-event-denied",
+  "network-denied",
+  "operator-stopped",
+  "connector-access-denied",
+  "delivery-denied",
+  "approval-proof-stale",
+]);
+function runtimeLifecycleDetail(event: CodingWorkbenchRuntimeEvent | undefined): string {
+  const detail = event?.failureSummary;
+  return typeof detail === "string" && RUNTIME_LIFECYCLE_DETAILS.has(detail)
+    ? `:detail=${detail}`
+    : "";
 }
 
 function recordApprovalExpiryFailure(
@@ -1469,21 +1509,24 @@ function recordRuntimeEventDropped(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
   current: CodingRuntimeSnapshot | undefined,
-  reason?: "challenge-invalid",
+  reason?: "challenge-invalid" | "ingest-rejected",
+  error?: unknown,
 ): void {
+  const rejected = reason === "ingest-rejected";
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_EVENT_DROPPED_OPERATION,
       {
         level: "warn",
         correlationId: runtimeDiagnosticCorrelationId(event.runId),
-        errorKind: "conflict",
+        errorKind: rejected ? activityLogErrorKindOr(errorKindOf(error), "internal") : "conflict",
       },
       {
         eventKind: event.kind,
         eventRunId: event.runId,
         reason: reason ?? (current === undefined ? "no-live-run" : "run-mismatch"),
         ...(current === undefined ? {} : { liveRunId: current.runId }),
+        ...(rejected ? { frames: keikoStackFrames(error), causeChain: causeChain(error) } : {}),
       },
     ),
   );
@@ -2764,6 +2807,23 @@ export class CodingRuntimeOrchestrator {
     });
   }
 
+  /**
+   * The runtime manager's event callback, which has no caller to receive a rejection: a handling
+   * failure (a stale-snapshot store write racing an operator stop) is logged on the run's own
+   * correlation instead of vanishing behind the serial queue's swallowing tail (#4105).
+   */
+  receiveRuntimeEvent(event: CodingWorkbenchRuntimeEvent): void {
+    this.ingest(event).catch((error: unknown) => {
+      recordRuntimeEventDropped(
+        this.deps.activityLog,
+        event,
+        this.current(),
+        "ingest-rejected",
+        error,
+      );
+    });
+  }
+
   /** Accepts only manager events for the current slot and projects no event content into durable state. */
   ingest(event: CodingWorkbenchRuntimeEvent): Promise<CodingRuntimeOrchestratorResult> {
     return this.serial(() => this.ingestCurrent(event));
@@ -2788,13 +2848,34 @@ export class CodingRuntimeOrchestrator {
       recordRuntimeEventDropped(this.deps.activityLog, event, current);
       return this.fail("invalid-intent");
     }
+    const recovery = await this.ingestRecoveryEvent(current, event);
+    if (recovery !== undefined) return recovery;
     if (event.kind === "failure-redacted") {
-      recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "failure-redacted");
+      recordRuntimeLifecycleFailure(
+        this.deps.diagnostics,
+        current.runId,
+        "failure-redacted",
+        undefined,
+        event,
+      );
       return this.stopAfterIssueFailure(current, "runtime-failed");
     }
     this.observeVerificationSummary(current, event);
     const paused = await this.ingestPausedEvent(current, event);
     return paused ?? this.ingestActiveEvent(current, event);
+  }
+
+  private async ingestRecoveryEvent(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
+    if (current.state === "recovery-required")
+      return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+    if (event.kind !== "failure-redacted" || event.failureCode !== "recovery-required")
+      return undefined;
+    const recovery = this.transition(current, "recovery-required", "recovery-required");
+    await this.stopForSettlement(current.runId, "failed");
+    return recovery;
   }
 
   private async ingestPausedEvent(

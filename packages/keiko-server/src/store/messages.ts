@@ -1,3 +1,5 @@
+import { projectChatToolMutationHistory } from "./chatToolMutationProjection.js";
+import { decodeChatToolTranscript } from "./chatToolTranscript.js";
 // ADR-0013 — chat_messages CRUD. shortResult is redacted+truncated to ≤ MAX_SHORT_RESULT before persist.
 // Issue #66 adds:
 //   - `cancelled` to the accepted workflow status set (parity with src/ui/runs.ts RunStatus).
@@ -55,6 +57,7 @@ interface MessageRow {
   readonly client_turn_state: string | null;
   readonly client_turn_content_digest: string | null;
   readonly assistant_response_versions_json: string | null;
+  readonly tool_transcript_json: string | null;
 }
 
 const MAX_ASSISTANT_RESPONSE_VERSIONS = 50;
@@ -150,12 +153,12 @@ function parseGroundedPreviewCitations(
   }
 }
 
-function rowToMessage(row: MessageRow): ChatMessage {
+function rowToMessage(db: DatabaseSync, row: MessageRow): ChatMessage {
   const groundedAnswer = parseGroundedAnswer(row.grounded_answer_json);
   const turnState = parseClientTurnState(row.client_turn_state);
   const responseVersions = parseAssistantResponseVersions(row);
   const currentResponse = responseVersions?.at(-1);
-  return {
+  const message: ChatMessage = {
     id: row.id,
     chatId: row.chat_id,
     role: row.role as ChatRole,
@@ -172,11 +175,16 @@ function rowToMessage(row: MessageRow): ChatMessage {
     shortResult: row.short_result ?? undefined,
     taskType: row.task_type ?? undefined,
     groundedAnswer,
+    toolTranscript: decodeChatToolTranscript(row.tool_transcript_json, {
+      messageId: row.id,
+      chatId: row.chat_id,
+    }),
   };
+  return projectChatToolMutationHistory(db, message);
 }
 
 const COLUMNS =
-  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest, assistant_response_versions_json";
+  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest, assistant_response_versions_json, tool_transcript_json";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
 const SQL_LIST_LIMITED = `
@@ -308,7 +316,7 @@ export function findClientTurnOwner(
   return {
     clientTurnId: row.client_turn_id,
     state: parseClientTurnState(row.client_turn_state),
-    userMessage: rowToMessage(row),
+    userMessage: rowToMessage(db, row),
   };
 }
 
@@ -369,7 +377,9 @@ function processGroundedPreviewCitations(
 }
 
 export function listMessages(db: DatabaseSync, chatId: string): readonly ChatMessage[] {
-  return (db.prepare(SQL_LIST).all(chatId) as unknown as MessageRow[]).map(rowToMessage);
+  return (db.prepare(SQL_LIST).all(chatId) as unknown as MessageRow[]).map((row) =>
+    rowToMessage(db, row),
+  );
 }
 
 export function listMessagesLimited(
@@ -380,8 +390,8 @@ export function listMessagesLimited(
   if (!Number.isInteger(limit) || limit <= 0) {
     throw invalidRequest("limit must be a positive integer.");
   }
-  return (db.prepare(SQL_LIST_LIMITED).all(chatId, limit) as unknown as MessageRow[]).map(
-    rowToMessage,
+  return (db.prepare(SQL_LIST_LIMITED).all(chatId, limit) as unknown as MessageRow[]).map((row) =>
+    rowToMessage(db, row),
   );
 }
 
@@ -394,7 +404,7 @@ export function listMessagesPrefixLimited(
     throw invalidRequest("limit must be a positive integer.");
   }
   return (db.prepare(SQL_LIST_PREFIX_LIMITED).all(chatId, limit) as unknown as MessageRow[]).map(
-    rowToMessage,
+    (row) => rowToMessage(db, row),
   );
 }
 
@@ -405,7 +415,7 @@ export function countMessages(db: DatabaseSync, chatId: string): number {
 
 export function findMessageById(db: DatabaseSync, id: string): ChatMessage | undefined {
   const row = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as MessageRow | undefined;
-  return row === undefined ? undefined : rowToMessage(row);
+  return row === undefined ? undefined : rowToMessage(db, row);
 }
 
 export interface ClientTurnRecord {
@@ -434,8 +444,8 @@ export function findClientTurn(
   const userRow = rows.find((row) => row.role === "user");
   const assistantRow = rows.find((row) => row.role === "assistant");
   return {
-    ...(userRow === undefined ? {} : { userMessage: rowToMessage(userRow) }),
-    ...(assistantRow === undefined ? {} : { assistantMessage: rowToMessage(assistantRow) }),
+    ...(userRow === undefined ? {} : { userMessage: rowToMessage(db, userRow) }),
+    ...(assistantRow === undefined ? {} : { assistantMessage: rowToMessage(db, assistantRow) }),
     ...(userRow === undefined ? {} : { state: parseClientTurnState(userRow.client_turn_state) }),
     ...(userRow?.client_turn_content_digest === null || userRow === undefined
       ? {}
@@ -650,7 +660,9 @@ export function listGatewayMessagesLimited(
   if (!Number.isInteger(limit) || limit <= 0) {
     throw invalidRequest("limit must be a positive integer.");
   }
-  return collectGatewayRows(db, chatId, currentUserMessageId, limit).map(rowToMessage);
+  return collectGatewayRows(db, chatId, currentUserMessageId, limit).map((row) =>
+    rowToMessage(db, row),
+  );
 }
 
 export function visitGatewayMessageUnits(
@@ -659,7 +671,9 @@ export function visitGatewayMessageUnits(
   currentUserMessageId: string,
   visit: (messages: readonly ChatMessage[]) => boolean | undefined,
 ): void {
-  visitGatewayRows(db, chatId, currentUserMessageId, (unit) => visit(unit.map(rowToMessage)));
+  visitGatewayRows(db, chatId, currentUserMessageId, (unit) =>
+    visit(unit.map((row) => rowToMessage(db, row))),
+  );
 }
 
 export function chatHistoryRevision(db: DatabaseSync, chatId: string): number {
@@ -712,7 +726,7 @@ export function insertMessage(
       clientTurnState ?? null,
       clientTurnContentDigest ?? null,
     ) as unknown as MessageRow;
-  return rowToMessage(row);
+  return rowToMessage(db, row);
 }
 
 export function attachGroundedAnswer(
@@ -735,7 +749,7 @@ export function attachGroundedAnswer(
     )
     .get(groundedAnswer, groundedPreviewCitations, id) as unknown as MessageRow | undefined;
   if (row === undefined) throw notFound("Message");
-  return rowToMessage(row);
+  return rowToMessage(db, row);
 }
 
 export function findGroundedPreviewCitations(
@@ -826,7 +840,7 @@ export function updateMessage(
   `;
   const row = db.prepare(sql).get(...args, id) as unknown as MessageRow | undefined;
   if (row === undefined) throw notFound("Message");
-  return rowToMessage(row);
+  return rowToMessage(db, row);
 }
 
 function initialAssistantResponseVersion(row: MessageRow): ChatAssistantResponseVersion {
@@ -866,5 +880,5 @@ export function createAssistantResponseVersion(
     .prepare(SQL_VERSION_ASSISTANT_CONTENT)
     .get(content, timestamp, JSON.stringify(versions), id) as unknown as MessageRow | undefined;
   if (updated === undefined) throw notFound("Message");
-  return rowToMessage(updated);
+  return rowToMessage(db, updated);
 }

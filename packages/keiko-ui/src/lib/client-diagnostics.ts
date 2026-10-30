@@ -53,6 +53,7 @@ import {
   type ClientSupportReportPreparation,
   type ClientFilesScopeDecision,
   type ClientUpdateNotice,
+  type ClientEditorLineEnding,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -122,6 +123,9 @@ export interface ClientDiagnosticBindingReport {
   readonly relatedCorrelationIds?: readonly string[] | undefined;
   // How many list loads decided the outcome in total, named or not.
   readonly decidingLoadCount?: number | undefined;
+  // How many times the window opened the chat's project before it held, when more than once: an
+  // attempt another update overtook is repeated (#4123).
+  readonly projectOpenAttemptCount?: number | undefined;
   // `candidates-offered` only: how many chats the window offered the person, zero included.
   readonly candidateCount?: number | undefined;
   // `candidates-offered` only: how many of those offers read alike and show a fingerprint reference.
@@ -197,6 +201,8 @@ export interface ClientDiagnosticMeta {
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly updateNotice?: ClientUpdateNotice | undefined;
+  // The Editor's model adopted the line ending of text Keiko wrote into it (#4123).
+  readonly editorLineEnding?: ClientEditorLineEnding | undefined;
   // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
   // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
   // and how many were cut, never a message, path or run name.

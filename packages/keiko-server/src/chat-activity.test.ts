@@ -17,6 +17,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 import {
+  logGroundedToolRound,
   logChatCreationRejectionEvent,
   logChatRejectionEvent,
   logChatTurnStartedEvent,
@@ -414,5 +415,31 @@ describe("chat rejection readiness evidence (#3557)", () => {
 
     const [event] = sink.events;
     expect(event?.extra?.modelIdDigest).toBe("a".repeat(16));
+  });
+});
+
+it("reconstructs mixed tool rounds and the shared remaining synthesis ceiling without payloads", () => {
+  const sink = captureServerLog();
+  logGroundedToolRound("mixed-schedule-proof", 1, 2);
+  logGroundedToolRound("mixed-schedule-proof", 0, 1);
+  const lines = sink.events.map((entry) => formatActivityLogProofLine(entry));
+  expect(lines).toHaveLength(2);
+  const first = expectActivityLogProof(
+    "chat.grounded-tool-round.completed.schedule",
+    lines[0] ?? "",
+  );
+  const second = expectActivityLogProof(
+    "chat.grounded-tool-round.completed.schedule",
+    lines[1] ?? "",
+  );
+  expect(first).toMatchObject({
+    phase: "orchestration",
+    toolCallCount: 1,
+    remainingSynthesisCalls: 2,
+  });
+  expect(second).toMatchObject({
+    phase: "synthesis",
+    toolCallCount: 0,
+    remainingSynthesisCalls: 1,
   });
 });

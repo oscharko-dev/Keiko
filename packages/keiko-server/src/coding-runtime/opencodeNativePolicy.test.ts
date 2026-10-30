@@ -26,6 +26,7 @@ import {
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
+import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -69,6 +70,20 @@ function effectOf(mode: string, permission: string, resources: readonly string[]
 }
 
 describe("native policy request parsing", () => {
+  it("accepts the complete bounded MCP permission identity without allowing arbitrary long names", () => {
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(64));
+    const body = {
+      action: "native-policy",
+      ...request(permission, ["*"]),
+      source: { type: "tool", messageID: "msg_1", id: "call_1" },
+    };
+    expect(
+      parseOpenCodeNativePolicyRequest({ ...body, permission: "notes_probe" })?.permission,
+    ).toBe("notes_probe");
+    expect(parseOpenCodeNativePolicyRequest(body)?.permission).toBe(permission);
+    for (const invalid of ["x".repeat(65), `${permission}x`, `${"s".repeat(65)}_tool`])
+      expect(parseOpenCodeNativePolicyRequest({ ...body, permission: invalid })).toBeUndefined();
+  });
   it("accepts the plugin's bounded ask and refuses every other shape", () => {
     const body = {
       action: "native-policy",
@@ -1218,4 +1233,52 @@ describe("accepted external references (#3900 AC5)", () => {
       rmSync(paths.root, { recursive: true, force: true });
     }
   });
+});
+
+it("asks before managed MCP effects in either restricted mode while retaining direct-network denial", () => {
+  const admission = openCodeNativeMcpAdmission({
+    servers: [
+      {
+        name: "managed",
+        enabled: true,
+        description: undefined,
+        transport: { kind: "local", command: ["/synthetic/server"], environment: {} },
+        tools: { read: "read", write: "write" },
+      },
+    ],
+    mode: "governed-assist",
+    home: "/synthetic/home",
+    managed: true,
+    relays: new Map([
+      ["managed", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
+    ]),
+  });
+  for (const permission of ["managed_read", "managed_write"]) {
+    const decisions = ["governed-assist", "supervised-coding", "autonomous-delivery"].map((mode) =>
+      decideOpenCodeNativePolicy({
+        mode,
+        workspaceRoot: WORKSPACE,
+        request: request(permission, ["*"]),
+        nowMs: NOW,
+        mcp: admission.grants,
+      }),
+    );
+    expect(decisions.map((decision) => decision.effect)).toEqual(["ask", "ask", "allow"]);
+    expect(decisions[0]).toMatchObject({
+      classification: { scope: "internet", label: "native-mcp" },
+    });
+  }
+  const direct = {
+    actions: new Map([["direct_read", { risk: "read" as const, remote: true }]]),
+    servers: new Map(),
+  };
+  expect(
+    decideOpenCodeNativePolicy({
+      mode: "governed-assist",
+      workspaceRoot: WORKSPACE,
+      request: request("direct_read", ["*"]),
+      nowMs: NOW,
+      mcp: direct,
+    }),
+  ).toMatchObject({ effect: "deny", reason: "mode-denied" });
 });

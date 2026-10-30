@@ -1036,6 +1036,12 @@
   margin-top: var(--space-4);
 }
 
+.cmpDiffPages {
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+}
+
 .setupStatus {
   margin: var(--space-3) 0 0;
   color: var(--text-primary);

@@ -8761,7 +8761,10 @@ select.dlg-input {
   max-height: inherit;
   margin: 3px 0 0;
   padding: 4px 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
   list-style: none;
 }
 .chat-question-map-item {
@@ -8769,7 +8772,8 @@ select.dlg-input {
   display: flex;
   align-items: center;
   width: 48px;
-  height: 6px;
+  height: 24px;
+  flex-shrink: 0;
 }
 .chat-question-map-button {
   position: relative;
@@ -8777,7 +8781,7 @@ select.dlg-input {
   align-items: center;
   justify-content: flex-start;
   width: 48px;
-  height: 6px;
+  height: 24px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -8795,7 +8799,8 @@ select.dlg-input {
   transition: width 0.12s ease;
 }
 .chat-question-map-button:focus-visible {
-  outline: none;
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: -2px;
 }
 .chat-question-map-button:focus-visible .chat-question-map-mark {
   width: 24px;

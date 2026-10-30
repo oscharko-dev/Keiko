@@ -171,6 +171,82 @@ function identityMatches(root: WorkspaceRootDescriptor, row: WorkspaceManifestRe
   }
 }
 
+/** What a refreshed manifest identity changed: counts only, never a path or a digest. */
+export interface ReplacedRootRefresh {
+  readonly previousRevision: number;
+  readonly revision: number;
+}
+
+function liveIdentityDiffers(
+  descriptor: WorkspaceRootDescriptor,
+  storedObjectIdentity: string | null | undefined,
+): boolean {
+  // The strict inspector denies an alias and a non-directory, so a symlink swapped in for the
+  // folder throws and refreshes nothing; a root without a durable object identity cannot be proven.
+  const live = inspectWorkspaceRootIdentity(descriptor.canonicalRoot);
+  if (live.rootRef !== descriptor.rootRef || live.objectIdentityDigest === undefined) return false;
+  return (
+    live.identityDigest !== descriptor.identityDigest ||
+    live.objectIdentityDigest !== (storedObjectIdentity ?? undefined)
+  );
+}
+
+function replacedRootDescriptor(
+  snapshot: EditorAgentSessionSnapshot,
+  row: WorkspaceManifestRecordRow,
+  correlationId: string | undefined,
+): WorkspaceRootDescriptor | undefined {
+  const manifest = row.rootProjects.length === 1 ? parsedManifest(row) : null;
+  const descriptor = manifest?.roots[0];
+  if (descriptor === undefined) return undefined;
+  try {
+    // The same canonical path must still be the registered root: a retargeted alias or a path that
+    // now resolves elsewhere is not a replaced folder.
+    if (realpathSync.native(snapshot.workspaceRoot) !== descriptor.canonicalRoot) return undefined;
+    return liveIdentityDiffers(descriptor, row.rootProjects[0]?.objectIdentityDigest)
+      ? descriptor
+      : undefined;
+  } catch (error) {
+    // A missing, unreadable or aliased root cannot be proven replaced; the caller keeps refusing.
+    // A missing folder is an ordinary answer; any other failure is named on the diagnostic sink.
+    if (securityErrorKind(error) !== "ENOENT") {
+      recordContainmentPortFailure(error, correlationId, "identity-refresh");
+    }
+    return undefined;
+  }
+}
+
+/**
+ * #4117 (owner decision 2026-10-29): a project folder deleted and recreated at the SAME canonical
+ * path carries a stale root identity in its workspace manifest, which refuses every registration
+ * forever. The next Coding Workbench bridge registration adopts the live object through the store's
+ * one reconnect writer, so the new manifest revision and the revocation of the former root's trust
+ * come from the code the explicit reconnect already uses (ADR-0147). Only a single-root project
+ * registered at exactly this path, whose canonical path is unchanged and whose strict live
+ * inspection succeeds with a different identity, is refreshed. Bindings minted against the former
+ * identity stay invalid: the caller re-resolves and the old binding no longer matches.
+ */
+export function refreshReplacedProjectRoot(
+  snapshot: EditorAgentSessionSnapshot,
+  store: UiStore,
+  correlationId?: string,
+): ReplacedRootRefresh | undefined {
+  if (typeof store.findWorkspaceManifestRecordByProject !== "function") return undefined;
+  const row = store.findWorkspaceManifestRecordByProject(snapshot.workspaceRoot);
+  if (row === undefined || replacedRootDescriptor(snapshot, row, correlationId) === undefined)
+    return undefined;
+  try {
+    store.reconnectProject(snapshot.workspaceRoot);
+  } catch (error) {
+    recordContainmentPortFailure(error, correlationId, "identity-refresh");
+    return undefined;
+  }
+  const refreshed = store.findWorkspaceManifestRecordByProject(snapshot.workspaceRoot);
+  return refreshed === undefined || refreshed.revision === row.revision
+    ? undefined
+    : { previousRevision: row.revision, revision: refreshed.revision };
+}
+
 function bindingMismatchReason(
   supplied: EditorAgentRootBinding,
   expected: EditorAgentRootBinding,
@@ -426,16 +502,14 @@ export function resolveEditorAgentContainmentPort(
 function recordContainmentPortFailure(
   error: unknown,
   correlationId: string | undefined,
-  stage?: "snapshot-location",
+  stage?: "snapshot-location" | "identity-refresh",
 ): void {
   emitServerDiagnostic(undefined, {
     correlationId: correlationIdOrUnknown(correlationId),
     timestamp: new Date().toISOString(),
     operation: "editor.agent.root-containment",
     source:
-      stage === undefined
-        ? "editor.agent-root-boundary"
-        : "editor.agent-root-boundary.snapshot-location",
+      stage === undefined ? "editor.agent-root-boundary" : `editor.agent-root-boundary.${stage}`,
     errorClass: contentFreeErrorClass(error),
     message:
       stage === undefined

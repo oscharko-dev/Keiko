@@ -1,3 +1,16 @@
+import type { ModelCapability, NormalizedToolCall } from "./gateway.js";
+import type { ToolResultEnvelope } from "./governed-tool-catalog.js";
+import { exactKeys } from "./contract-validation-primitives.js";
+import { parseSafely } from "./managed-lsp-parse-safely.js";
+import {
+  CHAT_TOOL_READ_DISCLOSURE_VERSION,
+  MCP_CHAT_READ_DISCLOSURE_VERSION,
+  CHAT_TOOL_READ_GRANT_STATES,
+  type ChatToolReadGrantView,
+  type ChatToolWriteApprovalView,
+  validateChatToolWriteApprovalView,
+} from "./chat-tool-authority.js";
+import type { JiraMutationOutcome } from "./jira-tool-execution.js";
 // Wire-safe entity types for the BFF (Back-For-Frontend) layer (ADR-0013 D4). These types
 // travel over the HTTP wire between the BFF and the React UI. The DI port interfaces
 // (UiStore, UiStoreFactoryOptions) remain in src/ui/store/types.ts to avoid a contracts→ui
@@ -12,7 +25,6 @@ import type { EditorDocumentSession, EditorDocumentVersion } from "./editor-sess
 // ModelCapability is the credential-free capability registry shape; SafeGatewayConfig surfaces
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
-import type { ModelCapability } from "./gateway.js";
 // GroundedAnswerContextPackSummary projects the connected-context pack into a counts-only,
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
@@ -222,6 +234,15 @@ export type ChatLocalKnowledgeScope =
       readonly connectedAtMs: number;
     };
 
+/** A workspace connector selection is a request, never persisted Chat authority. */
+export type ChatConnectorSelection =
+  | ChatLocalKnowledgeScope
+  | {
+      readonly kind: "jira-live";
+      readonly podId: string;
+      readonly connectedAtMs: number;
+    };
+
 // Issue #3400 (epic #3384) — the FROZEN description-status vocabulary (contract correction 3).
 // `current`: the artifact is complete/partial/fallback AND the snapshot re-check found no drift.
 // `stale`: the re-check found the repository has moved (a different base, head, merge base or
@@ -289,6 +310,21 @@ export interface ChatGitChangeScope {
   readonly connectedAtMs: number;
 }
 
+/** Opaque Pod identity only; credential references and endpoints stay in private custody. */
+export interface ChatJiraPodBinding {
+  readonly podId: string;
+  readonly bindingGeneration: number;
+  readonly authenticationGeneration: number;
+  readonly connectedAtMs: number;
+}
+
+export function isChatJiraPodId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+  );
+}
+
 export interface Chat {
   readonly id: string;
   readonly projectPath: string;
@@ -316,6 +352,15 @@ export interface Chat {
   // facts (contract correction 2). Unlike `connectedScopes`/`localKnowledgeScopes` there is no
   // single-source legacy field: this scope kind was never overloaded onto an earlier shape.
   readonly gitChangeScopes?: readonly ChatGitChangeScope[];
+  readonly jiraPodBinding?: ChatJiraPodBinding | undefined;
+  /** Retained after disconnect so a later connection cannot reuse an earlier generation. */
+  readonly jiraBindingGeneration?: number;
+  /** Absent legacy selections mean Ask for approval. */
+  readonly toolMode?: CodingWorkbenchMode;
+  /** Server projection of the current deployment ceiling; never persisted as a selection. */
+  readonly toolModeCeiling?: CodingWorkbenchMode;
+  /** Current selected mode clamped by the server deployment ceiling. */
+  readonly effectiveToolMode?: CodingWorkbenchMode;
   // Path-free server-issued concurrency token for the canonical retrieval-semantic grounding
   // scope. Voice queues echo it back so a final captured under one source set cannot later
   // retrieve under another; lifecycle metadata does not alter the token.
@@ -473,7 +518,25 @@ export interface ChatAssistantResponseVersion {
   readonly supersedesVersion?: number | undefined;
 }
 
+/** A call/result pair stays attached to its canonical human turn during history selection. */
+export interface ChatToolExchange {
+  readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments">;
+  readonly result?: ToolResultEnvelope | undefined;
+  readonly approval?: ChatToolWriteApprovalView | undefined;
+  /** Durable remote-effect knowledge is independent from transport cancellation or denial. */
+  readonly mutationOutcome?: JiraMutationOutcome | undefined;
+}
+export interface ChatToolTranscript {
+  readonly schemaVersion: 1;
+  readonly exchanges: readonly ChatToolExchange[];
+  /** Latest update retained for older clients and the existing consent event. */
+  readonly readGrant?: ChatToolReadGrantView | undefined;
+  /** At most one current disclosure per source kind; older transcripts contain only readGrant. */
+  readonly readGrants?: readonly ChatToolReadGrantView[] | undefined;
+}
+
 export interface ChatMessage {
+  readonly toolTranscript?: ChatToolTranscript | undefined;
   readonly id: string;
   readonly chatId: string;
   readonly role: ChatRole;
@@ -524,6 +587,9 @@ export interface UpdateProjectPatch {
 // leaves it untouched. The BFF PATCH handler is responsible for validating each scopePath via
 // isValidScopePath; this shape carries the post-validation values across the wire.
 export interface UpdateChatPatch {
+  /** Selection intent only; the server resolves and validates the current Pod generation. */
+  readonly jiraPodId?: string | null;
+  readonly toolMode?: CodingWorkbenchMode;
   /**
    * When supplied, reject any patch if its scope identity is stale, including title-only,
    * status-only and precondition-only updates. This precondition never grants source access.
@@ -983,7 +1049,14 @@ export interface DesktopChatSendResponse {
   readonly attachmentDeliveries?: readonly ConversationImageDeliveryWire[];
 }
 
-export const DESKTOP_CHAT_STREAM_EVENT_TYPES = ["token", "done", "error", "cancelled"] as const;
+export const DESKTOP_CHAT_STREAM_EVENT_TYPES = [
+  "token",
+  "done",
+  "error",
+  "cancelled",
+  "tool-read-consent",
+  "tool-write-approval",
+] as const;
 export type DesktopChatStreamEventType = (typeof DESKTOP_CHAT_STREAM_EVENT_TYPES)[number];
 
 export const DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES = ["done", "error", "cancelled"] as const;
@@ -1019,11 +1092,27 @@ export interface DesktopChatStreamCancelledEvent {
   readonly data: Readonly<Record<string, never>>;
 }
 
+export interface DesktopChatStreamReadConsentEvent {
+  readonly event: "tool-read-consent";
+  readonly data: { readonly messageId: string; readonly grant: ChatToolReadGrantView };
+}
+
+export interface DesktopChatStreamWriteApprovalEvent {
+  readonly event: "tool-write-approval";
+  readonly data: {
+    readonly messageId: string;
+    readonly call: ChatToolExchange["call"];
+    readonly approval: ChatToolWriteApprovalView;
+  };
+}
+
 export type DesktopChatStreamEvent =
   | DesktopChatStreamTokenEvent
   | DesktopChatStreamDoneEvent
   | DesktopChatStreamErrorEvent
-  | DesktopChatStreamCancelledEvent;
+  | DesktopChatStreamCancelledEvent
+  | DesktopChatStreamReadConsentEvent
+  | DesktopChatStreamWriteApprovalEvent;
 
 export type DesktopChatStreamTerminalEvent = Extract<
   DesktopChatStreamEvent,
@@ -1058,10 +1147,116 @@ function isDesktopChatDoneData(data: unknown): boolean {
   return isWireRecord(data) && isWireRecord(data.chat) && Array.isArray(data.messages);
 }
 
+export function isChatToolWriteApprovalView(value: unknown): value is ChatToolWriteApprovalView {
+  return validateChatToolWriteApprovalView(value).ok;
+}
+
+function isChatToolCallView(value: unknown): value is ChatToolExchange["call"] {
+  const parsed = parseSafely(() => {
+    if (
+      !isWireRecord(value) ||
+      exactKeys(value, ["id", "name", "arguments"], "call").length > 0 ||
+      typeof value.id !== "string" ||
+      !/^[\w-]{1,128}$/u.test(value.id) ||
+      typeof value.name !== "string" ||
+      !/^[\w.-]{1,128}$/u.test(value.name) ||
+      !isWireRecord(value.arguments)
+    )
+      return { ok: true, value: false };
+    const serialized = JSON.stringify(value.arguments);
+    return {
+      ok: true,
+      value:
+        typeof serialized === "string" && new TextEncoder().encode(serialized).length <= 262144,
+    };
+  });
+  return parsed.ok && parsed.value;
+}
+
+function isDesktopChatWriteApprovalData(data: unknown): boolean {
+  return (
+    isWireRecord(data) &&
+    exactKeys(data, ["messageId", "call", "approval"], "data").length === 0 &&
+    typeof data.messageId === "string" &&
+    /^[\w-]{1,128}$/u.test(data.messageId) &&
+    isChatToolCallView(data.call) &&
+    isChatToolWriteApprovalView(data.approval) &&
+    data.call.name === data.approval.operation.replaceAll(".", "_")
+  );
+}
+
+const CHAT_READ_VIEW_KEYS = [
+  "kind",
+  "grantId",
+  "chatId",
+  "state",
+  "disclosureVersion",
+  "requestedAt",
+  "expiresAt",
+];
+function validReadGrantSubject(value: Record<string, unknown>): boolean {
+  if (value.kind === "mcp-chat-read")
+    return (
+      value.disclosureVersion === MCP_CHAT_READ_DISCLOSURE_VERSION &&
+      typeof value.configurationDigest === "string" &&
+      /^[a-f0-9]{64}$/u.test(value.configurationDigest)
+    );
+  return (
+    value.kind === "jira-chat-read" &&
+    value.disclosureVersion === CHAT_TOOL_READ_DISCLOSURE_VERSION &&
+    typeof value.podId === "string" &&
+    /^[\w-]{1,128}$/u.test(value.podId) &&
+    [value.bindingGeneration, value.authenticationGeneration].every(
+      (n) => Number.isSafeInteger(n) && Number(n) > 0,
+    )
+  );
+}
+export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGrantView {
+  if (!isWireRecord(value)) return false;
+  const keys = [
+    ...CHAT_READ_VIEW_KEYS,
+    ...(value.kind === "mcp-chat-read"
+      ? ["configurationDigest"]
+      : ["podId", "bindingGeneration", "authenticationGeneration"]),
+  ];
+  return (
+    exactKeys(value, keys, "readGrant").length === 0 &&
+    keys.every((key) => Object.hasOwn(value, key)) &&
+    validReadGrantSubject(value) &&
+    [value.grantId, value.chatId].every(
+      (id) => typeof id === "string" && /^[\w-]{1,128}$/u.test(id),
+    ) &&
+    [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
+    Number(value.expiresAt) > Number(value.requestedAt) &&
+    typeof value.state === "string" &&
+    (CHAT_TOOL_READ_GRANT_STATES as readonly string[]).includes(value.state)
+  );
+}
+
+function isDesktopChatReadConsentData(data: unknown): boolean {
+  return (
+    isWireRecord(data) &&
+    exactKeys(data, ["messageId", "grant"], "data").length === 0 &&
+    typeof data.messageId === "string" &&
+    /^[\w-]{1,128}$/u.test(data.messageId) &&
+    isChatToolReadGrantView(data.grant)
+  );
+}
+
 export function isDesktopChatStreamEvent(value: unknown): value is DesktopChatStreamEvent {
   if (!isWireRecord(value)) return false;
   const { event, data } = value;
   switch (event) {
+    case "tool-write-approval":
+      return (
+        exactKeys(value, ["event", "data"], "event").length === 0 &&
+        isDesktopChatWriteApprovalData(data)
+      );
+    case "tool-read-consent":
+      return (
+        exactKeys(value, ["event", "data"], "event").length === 0 &&
+        isDesktopChatReadConsentData(data)
+      );
     case "token":
       return isDesktopChatTokenData(data);
     case "error":
@@ -1206,8 +1401,8 @@ export function classifyAttachmentMime(mimeType: string): "image" | "document" |
   // SVG is denied (script-carrying vector) even though it is image/*. The structured-suffix form
   // is already refused by the intentionally narrower normalizer above.
   if (normalized === "image/svg") return "unsupported";
-  if (ALLOWED_IMAGE_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return "image";
-  if (ALLOWED_DOCUMENT_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+  if (normalized.startsWith(ALLOWED_IMAGE_MIME_PREFIXES[0])) return "image";
+  if (normalized.startsWith(ALLOWED_DOCUMENT_MIME_PREFIXES[0])) {
     return "document";
   }
   if (ALLOWED_DOCUMENT_MIME_LITERALS.has(normalized)) return "document";

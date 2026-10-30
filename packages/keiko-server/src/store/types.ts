@@ -1,3 +1,6 @@
+import type { ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
+import type { ChatToolMutationStore } from "./chatToolMutationTypes.js";
+import type { ChatReadGrantStore } from "../atlassian/chatReadGrantState.js";
 // ADR-0013 D4 — UiStore port and entity types. The port is the seam for testing; the concrete
 // `createNodeUiStore` adapter and the `createInMemoryUiStore` test adapter both implement it.
 //
@@ -122,6 +125,8 @@ export type ChatTurnCompletion =
   | { readonly kind: "conflict" };
 
 export interface UiStore {
+  readonly chatToolReadGrants?: ChatReadGrantStore;
+  readonly chatToolMutations?: ChatToolMutationStore;
   readonly markdownSkills: MarkdownSkillStore;
   readonly browserApprovals?: BrowserApprovalStore | undefined;
   readonly codingHistory?: CodingHistoryStore | undefined;
@@ -143,6 +148,11 @@ export interface UiStore {
     opts?: StoreCreateChatOptions,
   ) => Chat;
   readonly updateChat: (id: string, patch: UpdateChatPatch, options?: UpdateChatOptions) => Chat;
+  readonly invalidateJiraPod: (
+    podId: string,
+    authenticationGeneration: number | null,
+    correlationId?: string,
+  ) => readonly { readonly previous: Chat; readonly current: Chat }[];
   /**
    * Atomic git-change scope mutation: the callback receives the CURRENT list, read inside the same
    * transaction as the write. The only safe way to append or replace an entry across an await
@@ -170,6 +180,11 @@ export interface UiStore {
   readonly chatHistoryRevision: (chatId: string) => number;
   readonly countMessages: (chatId: string) => number;
   readonly findMessageById: (id: string) => ChatMessage | undefined;
+  readonly updateChatToolTranscript: (
+    messageId: string,
+    update: ChatToolTranscriptUpdate,
+    correlationId: string,
+  ) => void;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
   readonly createTurnAssistant: (
@@ -313,6 +328,12 @@ export interface WorkspaceManifestRootProject {
 }
 
 export interface UpdateChatOptions {
+  readonly correlationId?: string | undefined;
+  /** Trusted, freshly resolved target; never copied from the PATCH body. */
+  readonly verifiedJiraPod?: {
+    readonly podId: string;
+    readonly authenticationGeneration: number;
+  };
   readonly maxConnectedSources?: number;
   readonly maxLocalKnowledgeSources?: number;
 }

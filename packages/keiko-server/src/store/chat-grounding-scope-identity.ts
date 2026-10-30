@@ -103,6 +103,16 @@ function canonicalGroundingScope(chat: Chat): string {
     connected: canonicalConnectedScopes(chat),
     local: deduplicateAndSort(localKnowledgeScopes(chat).map(canonicalLocalKnowledgeScope)),
     gitChange: deduplicateAndSort(gitChangeScopes(chat).map(canonicalGitChangeScope)),
+    ...((chat.jiraBindingGeneration ?? 0) === 0 && chat.jiraPodBinding === undefined
+      ? {}
+      : {
+          jira: {
+            podId: chat.jiraPodBinding?.podId ?? null,
+            authenticationGeneration: chat.jiraPodBinding?.authenticationGeneration ?? null,
+            bindingGeneration: chat.jiraBindingGeneration ?? 0,
+            mode: chat.toolMode ?? "governed-assist",
+          },
+        }),
   });
 }
 

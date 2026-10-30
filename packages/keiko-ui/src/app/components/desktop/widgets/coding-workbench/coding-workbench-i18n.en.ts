@@ -1,4 +1,6 @@
+import { EN_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 export const EN_CODING_WORKBENCH_MESSAGES = {
+  ...EN_AUTONOMY_MODE_LABELS,
   "codingWorkbench.progress.working": "Working",
   "codingWorkbench.progress.approval": "Waiting for your approval",
   "codingWorkbench.progress.question": "Your answer is needed",
@@ -299,17 +301,14 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.none": "None",
   "codingWorkbench.mode.eyebrow": "Autonomy",
   "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
-  "codingWorkbench.mode.governed-assist.label": "Ask for approval",
   "codingWorkbench.mode.governed-assist.short":
     "Reads freely; asks before every file change and command",
   "codingWorkbench.mode.governed-assist.description":
     "Reads and searches run freely; every file change and every command asks for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
-  "codingWorkbench.mode.supervised-coding.label": "Supervised workspace",
   "codingWorkbench.mode.supervised-coding.short":
     "Routine edits and vetted project commands run; other commands ask",
   "codingWorkbench.mode.supervised-coding.description":
     "Routine workspace edits and vetted project commands run; other commands ask for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
-  "codingWorkbench.mode.autonomous-delivery.label": "Full access",
   "codingWorkbench.mode.autonomous-delivery.short":
     "Works without asking within the task's authority; internet only here",
   "codingWorkbench.mode.autonomous-delivery.description":
@@ -634,6 +633,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.retry": "Retry diff",
   "codingWorkbench.changes.diff.truncated":
     "This bounded file diff is incomplete because it reached the server limit.",
+  "codingWorkbench.diffWindow.notice":
+    "This diff is large: {rows} lines in {files} files, {size} in total. Only one file and up to {page} of its lines are shown at a time, and nothing is left out. Choose a file or a page to read the rest.",
+  "codingWorkbench.diffWindow.files": "Files in this diff",
+  "codingWorkbench.diffWindow.fileMeta": "+{added} −{removed} · {size} · {rows} lines",
+  "codingWorkbench.diffWindow.fileMetaBinary": "Binary file",
+  "codingWorkbench.diffWindow.position": "File {file} of {files}, lines {from} to {to} of {rows}",
+  "codingWorkbench.diffWindow.positionEmpty": "File {file} of {files}, no text lines",
+  "codingWorkbench.diffWindow.pages": "Pages of this file",
+  "codingWorkbench.diffWindow.previous": "Previous lines",
+  "codingWorkbench.diffWindow.next": "Next lines",
+  "codingWorkbench.diffWindow.pageOf": "Page {page} of {pages}",
   "codingWorkbench.changes.diff.addedLine": "Added line",
   "codingWorkbench.changes.diff.deletedLine": "Deleted line",
   "codingWorkbench.changes.diff.contextLine": "Context line",
@@ -1096,7 +1106,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":
-    "Keiko will start a fresh run. It will not replay prior mutations.",
+    "A previous action may already have changed files or an external system. Check its result before starting a fresh run. Keiko will not automatically repeat the action.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
   "codingWorkbench.header.notReady": "Not ready to start",

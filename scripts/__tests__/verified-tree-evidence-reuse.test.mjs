@@ -503,6 +503,9 @@ describe("complete Node 26 qualification shards", () => {
       execFileSync(process.execPath, ["--input-type=module", "-e", code], {
         cwd: repoRoot,
         encoding: "utf8",
+        // Every spec path is listed three times (full inventory plus both shards), so the output
+        // grows with the checkout path: a deep worktree path exceeds the 1 MiB default.
+        maxBuffer: 64 * 1024 * 1024,
         timeout: 10_000,
         killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],

@@ -278,3 +278,27 @@ export function boundGatewayToolCatalog(
 ): GatewayToolCatalogAdvertisement | undefined {
   return advertisement?.kind === "bound" ? advertisement : undefined;
 }
+
+/** Trusted execution scope supplied by the consumer owner, never by model arguments. */
+export interface ToolConsumerContext {
+  readonly runId: string;
+  readonly correlationId: string;
+  readonly parentCorrelationId?: string;
+  readonly authority: string;
+  readonly authorityExpiresAt: string;
+  readonly deadlineAt: string;
+  readonly signal: AbortSignal;
+}
+export interface ToolConsumerActionIdentity {
+  readonly actionId: string;
+  readonly idempotencyKey: string;
+}
+export interface ToolEffectGuard {
+  /** Actual catalog invocation clock/deadline, supplied only by server admission. */
+  readonly executionBudget?:
+    { readonly nowMs: () => number; readonly deadlineAtMs: number } | undefined;
+  /** Must be called immediately before the governed effect. */
+  readonly check: () => boolean;
+}
+export type ToolAuthorityAvailability =
+  { readonly ok: true } | { readonly ok: false; readonly reason: string };

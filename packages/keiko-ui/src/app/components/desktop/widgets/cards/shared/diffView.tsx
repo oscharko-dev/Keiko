@@ -171,6 +171,13 @@ interface DiffFileSectionProps {
   readonly translate?: I18nTranslate;
   readonly labels?: DiffViewLabels;
   readonly idPrefix?: string;
+  /**
+   * The hunks to show when only a window of the file is on screen (#4108); the whole file otherwise.
+   * The caller states the window beside it, so no hunk is dropped without a visible notice.
+   */
+  readonly windowHunks?: readonly DiffHunk[];
+  /** False while a window that does not reach the end of the file is shown. Default true. */
+  readonly showFileTruncated?: boolean;
 }
 
 function useTranslate(translate: I18nTranslate | undefined): string {
@@ -185,7 +192,10 @@ export function DiffFileSection({
   translate,
   labels,
   idPrefix = "rv-file",
+  windowHunks,
+  showFileTruncated = true,
 }: DiffFileSectionProps): ReactNode {
+  const hunks = windowHunks ?? file.hunks;
   const fileLabel = useTranslate(translate);
   const cf = changedFiles.find((c) => c.path === file.path);
   const ext = file.path.includes(".") ? (file.path.split(".").pop() ?? "code") : "code";
@@ -230,11 +240,16 @@ export function DiffFileSection({
             {labels?.binaryFile ?? "Binary file — no text diff to display."}
           </p>
         ) : (
-          file.hunks.map((hunk) => (
-            <DiffHunkView key={hunk.header} hunk={hunk} lang={ext} viewLabels={labels} />
+          hunks.map((hunk, hunkIndex) => (
+            <DiffHunkView
+              key={windowHunks === undefined ? hunk.header : `${hunk.header}:${String(hunkIndex)}`}
+              hunk={hunk}
+              lang={ext}
+              viewLabels={labels}
+            />
           ))
         )}
-        {file.truncated && !file.hunks.some((hunk) => hunk.truncated) ? (
+        {showFileTruncated && file.truncated && !file.hunks.some((hunk) => hunk.truncated) ? (
           <output className="rv-truncated" style={NATIVE_BLOCK_STYLE}>
             {labels?.fileTruncated ??
               "This file diff is incomplete because the bounded diff was truncated."}

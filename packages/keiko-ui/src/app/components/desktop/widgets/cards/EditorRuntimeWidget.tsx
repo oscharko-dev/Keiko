@@ -3067,6 +3067,17 @@ function EditorRuntimeWidget({
     reportClientDiagnostic(`Keiko editor runtime notice: ${message}`);
   }, []);
 
+  // #4123: body-free evidence that the model kept the line ending of text Keiko wrote into it.
+  const onLineEndingAdopted = useCallback(
+    (lineEnding: "lf" | "crlf", source: "buffer-sync" | "host-edit"): void => {
+      reportClientDiagnostic("Keiko editor model adopted a line ending.", {
+        correlationId: newClientCorrelationId(),
+        editorLineEnding: { lineEnding, source },
+      });
+    },
+    [],
+  );
+
   const restoreRecovery = useCallback((): void => {
     if (recoverySnapshot === null || fileModel === null) return;
     setContent(recoverySnapshot.content);
@@ -4679,6 +4690,7 @@ function EditorRuntimeWidget({
             onContentChange={onContentChange}
             onSaveRequested={onSaveRequested}
             onRuntimeError={onRuntimeError}
+            onLineEndingAdopted={onLineEndingAdopted}
             provideCompletions={whenEnabled(completionEnabled, provideCompletions)}
             completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
             provideInlineCompletions={whenEnabled(completionEnabled, provideInlineCompletions)}

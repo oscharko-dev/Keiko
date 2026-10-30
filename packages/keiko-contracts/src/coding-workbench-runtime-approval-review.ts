@@ -14,6 +14,7 @@ import {
 } from "./coding-workbench-runtime-api-validation.js";
 import { CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS } from "./coding-workbench-runtime-api.js";
 import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
+import { isMcpToolActionName } from "./mcp-servers.js";
 
 /**
  * The governed edit changeset cap (ADR-0125 D3, `EDITOR_AGENT_CHANGESET_MAX_FILES`). The runtime
@@ -193,7 +194,8 @@ function validateNativeActionReview(pending: Record<string, unknown>, errors: st
     return false;
   }
   errors.push(...exactKeys(value, ["permission", "resources"], "nativeAction"));
-  validateSafeId(value.permission, "nativeAction.permission", errors, 64);
+  if (!isMcpToolActionName(value.permission))
+    validateSafeId(value.permission, "nativeAction.permission", errors, 64);
   if (
     !Array.isArray(value.resources) ||
     value.resources.length > CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES ||

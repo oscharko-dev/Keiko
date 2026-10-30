@@ -11,7 +11,7 @@ import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-cont
 import { setImmediate } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -119,6 +119,37 @@ import {
 
 const NOW = 1_700_000_000_000;
 
+const dataOnlyDifferential = vi.hoisted(() => ({
+  enabled: false,
+  serial: 0,
+  packs: [] as unknown[],
+}));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomUUID: (
+      ...args: Parameters<typeof actual.randomUUID>
+    ): ReturnType<typeof actual.randomUUID> =>
+      dataOnlyDifferential.enabled
+        ? `00000000-0000-4000-8000-abcdef${String(++dataOnlyDifferential.serial).padStart(6, "0")}`
+        : actual.randomUUID(...args),
+  };
+});
+vi.mock("@oscharko-dev/keiko-local-knowledge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-local-knowledge")>();
+  return {
+    ...actual,
+    runGroundedAnswer: async (
+      ...args: Parameters<typeof actual.runGroundedAnswer>
+    ): ReturnType<typeof actual.runGroundedAnswer> => {
+      const result = await actual.runGroundedAnswer(...args);
+      if (dataOnlyDifferential.enabled) dataOnlyDifferential.packs.push(result.pack);
+      return result;
+    },
+  };
+});
+
 // `expect.any` is typed `any`; pinning it to the field type keeps the full-object diagnostics
 // literals below type-safe while tolerating real elapsed time on provider-backed paths.
 const ANY_LATENCY_MS = expect.any(Number) as unknown as number;
@@ -185,6 +216,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  dataOnlyDifferential.enabled = false;
+  vi.useRealTimers();
   resetServerLogger();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
@@ -3880,16 +3913,32 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
   // model.call site this dispatch path reaches (no seam bypasses it here, unlike the hybrid tests
   // above) — it must stamp the request's correlation id into GatewayCallRequest.logContext.
   it("threads the request correlation id into the local-knowledge answerer's model gateway call", async () => {
+    // The same fixture runs unchanged on clean dev and the candidate: only IDs, time and the
+    // external embedding/model ports are deterministic; retrieval/assembly/generation stay real.
+    const outputPath = process.env.KEIKO_DATA_ONLY_DIFFERENTIAL_PATH;
+    if (outputPath !== undefined) {
+      // Paired exports run sequentially; ordinary parallel test runs keep their unique temp root.
+      const fixedRoot = join(tmpdir(), "keiko-data-only-4084-differential");
+      mkdirSync(fixedRoot);
+      rmSync(tmp, { recursive: true, force: true });
+      tmp = fixedRoot;
+    }
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    vi.setSystemTime(NOW);
+    dataOnlyDifferential.enabled = true;
+    dataOnlyDifferential.serial = 0;
+    dataOnlyDifferential.packs = [];
     const { capsuleId: capId } = await seedReadyCapsule("Solo Docs Correlation");
     const chatId = makeHybridChat([], [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }]);
     const hybrid: HybridSeam = { answer: throwingHybridAnswerer() };
     const embeddingModelId = "text-embedding-3-small";
     const adapter = scriptedAdapter();
     const seenRequests: GatewayCallRequest[] = [];
+    const seenResponses: NormalizedResponse[] = [];
     const recordingModelPort: ModelPort = {
       call: (request): Promise<NormalizedResponse> => {
         seenRequests.push(request);
-        return Promise.resolve({
+        const response: NormalizedResponse = {
           modelId: CHAT_MODEL,
           content: "Local knowledge answer [1].",
           finishReason: "stop" as const,
@@ -3902,7 +3951,9 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
             latencyMs: 5,
             costClass: "medium" as const,
           },
-        });
+        };
+        seenResponses.push(response);
+        return Promise.resolve(response);
       },
     };
     const configuredDeps: UiHandlerDeps = {
@@ -3968,6 +4019,31 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     for (const request of seenRequests) {
       expect(request.logContext?.correlationId).toBe("cid-local-knowledge-000001");
     }
+    expect(dataOnlyDifferential.packs).toHaveLength(1);
+    const answer = asLocalKnowledge(result.body as GroundedAnswer);
+    expect(answer.citations).toHaveLength(1);
+    expect(seenResponses.map((response) => response.usage)).toEqual([
+      {
+        requestId: "lk-logcontext-test",
+        promptTokens: 10,
+        completionTokens: 5,
+        latencyMs: 5,
+        costClass: "medium",
+      },
+    ]);
+    const observation =
+      JSON.stringify({
+        packs: dataOnlyDifferential.packs,
+        modelRequests: seenRequests,
+        modelResponses: seenResponses,
+        output: result,
+        history: store.listMessages(chatId),
+      }) + "\n";
+    if (outputPath !== undefined)
+      writeFileSync(outputPath, observation, { mode: 0o600, flag: "wx" });
+    const baselineDigest = process.env.KEIKO_DATA_ONLY_DIFFERENTIAL_BASELINE_SHA256;
+    if (baselineDigest !== undefined)
+      expect(createHash("sha256").update(observation).digest("hex")).toBe(baselineDigest);
   });
 });
 

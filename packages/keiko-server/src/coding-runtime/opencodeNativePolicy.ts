@@ -1,3 +1,4 @@
+import { parseNativeMcpAction } from "./opencodeNativeMcpActionIdentity.js";
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, realpathSync, statSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -15,6 +16,7 @@ import {
   isCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { isMcpToolActionName } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -46,6 +48,10 @@ import { projectOpenCodePermissionRequestId } from "./opencodeProtocol.js";
  * disposition the same action class already had.
  */
 export interface OpenCodeNativePolicyRequest {
+  /** Private MCP arguments, captured for exact approval/dispatch identity; never evidence. */
+  readonly mcpInput?: Readonly<Record<string, unknown>> | undefined;
+  /** Server-minted per-request budget identity, never accepted from transport. */
+  readonly mcpActionDigest?: string | undefined;
   readonly runId: string;
   readonly sessionID: string;
   readonly agent?: string | undefined;
@@ -736,6 +742,11 @@ export function parseOpenCodeNativePolicyRequest(
     ...identity,
     resources: bounded,
     ...optional,
+    ...parseNativeMcpAction(
+      identity.permission,
+      record.mcpInput ??
+        (MCP_RESOURCE_ACTIONS.has(identity.permission) ? { resources: bounded } : undefined),
+    ),
     ...(target === undefined ? {} : { targetSessionID: target }),
   };
 }
@@ -789,7 +800,11 @@ function parseIdentity(
   const { runId, sessionID, permission } = record;
   if (typeof runId !== "string" || !RUN_ID.test(runId)) return undefined;
   if (typeof sessionID !== "string" || !SESSION_ID.test(sessionID)) return undefined;
-  if (typeof permission !== "string" || permission.length === 0 || permission.length > 64)
+  if (
+    typeof permission !== "string" ||
+    permission.length === 0 ||
+    (permission.length > 64 && !isMcpToolActionName(permission))
+  )
     return undefined;
   return { runId, sessionID, permission };
 }
@@ -856,8 +871,16 @@ export interface OpenCodeNativePolicyInput {
 }
 
 export interface OpenCodeNativeMcpGrants {
-  readonly actions: ReadonlyMap<string, { readonly risk: McpToolRisk; readonly remote: boolean }>;
-  readonly servers: ReadonlyMap<string, { readonly remote: boolean }>;
+  readonly actions: ReadonlyMap<
+    string,
+    {
+      readonly risk: McpToolRisk;
+      readonly remote: boolean;
+      readonly managed?: boolean;
+      readonly mutation?: import("./opencodeNativeMcpMutationJournal.js").NativeMcpMutationSource;
+    }
+  >;
+  readonly servers: ReadonlyMap<string, { readonly remote: boolean; readonly managed?: boolean }>;
 }
 
 export function decideOpenCodeNativePolicy(
@@ -873,8 +896,9 @@ export function decideOpenCodeNativePolicy(
   if (alwaysAllowedRead(classification)) return { effect: "allow", classification };
   // Below Full access the sandbox has no route beyond this machine, and customer networks are often
   // firewalled anyway: refuse at once with a clear reason instead of an approval the kernel would
-  // then block (#3897), so the agent continues with local files and tools.
-  if (classification.scope === "internet" && input.mode !== "autonomous-delivery")
+  // then block (#3897), so the agent continues with local files and tools. Managed MCP uses the
+  // existing loopback gateway route and can execute after the ordinary action approval.
+  if (classification.scope === "internet" && nativeInternetUnavailable(input))
     return deny(
       "mode-denied",
       "Keiko refused this action: internet access is only available in Full access, and this run has no route outside the machine. Continue with the local files and tools.",
@@ -899,6 +923,22 @@ export function decideOpenCodeNativePolicy(
     actionId:
       request.source === undefined ? undefined : `${request.sessionID}:${request.source.id}`,
   };
+}
+
+function nativeInternetUnavailable(input: OpenCodeNativePolicyInput): boolean {
+  return input.mode !== "autonomous-delivery" && !managedMcpRequest(input.request, input.mcp);
+}
+
+/** The managed MCP relay shares the admitted gateway route; its effects still use the mode matrix. */
+function managedMcpRequest(
+  request: OpenCodeNativePolicyRequest,
+  mcp: OpenCodeNativeMcpGrants | undefined,
+): boolean {
+  if (mcp?.actions.get(request.permission)?.managed === true) return true;
+  if (!MCP_RESOURCE_ACTIONS.has(request.permission) || request.resources.length === 0) return false;
+  return request.resources.every(
+    (resource) => mcp?.servers.get(resource.split(":")[0] ?? "")?.managed === true,
+  );
 }
 
 function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
@@ -1463,7 +1503,9 @@ function askEvent(
     scopeLabel: classification.scope === "internet" ? "network-egress" : "workspace-scope",
     risk: classification.risk,
     policyReason: "approval-required",
-    ...(classification.kind === "command-execution" ? { commandLabel: classification.label } : {}),
+    ...(classification.kind === "command-execution" || classification.label === "native-mcp"
+      ? { commandLabel: classification.label }
+      : {}),
     nativeAction: { permission: request.permission, resources: request.resources },
   };
 }

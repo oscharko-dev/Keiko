@@ -54,6 +54,9 @@ function surfaceRulesForOwner(owner, surfaces) {
 // Group the closed mapping by its owner and surface; expand its shared row shape once.
 // Selection depends on the longest matching prefix, never on the order of these unique keys.
 export const ACTIVITY_LOG_SURFACE_RULES = [
+  ...surfaceRulesForOwner("keiko-mcp", {
+    "tools-workflows": [""],
+  }),
   ...surfaceRulesForOwner("keiko-cli", {
     "runtime-packages": [
       "audit",
@@ -109,6 +112,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
       "chat-continuity-log",
       "reference-id",
       "run-handlers",
+      "run-patch-refusal-log",
       "server",
       "sse-write",
       "store",
@@ -185,6 +189,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
 // the CLI write through the process-wide server logger; every domain package receives its own
 // port from the server (AGENTS.md §8).
 export const ACTIVITY_LOG_OWNER_PORTS = {
+  "keiko-mcp": { port: "ManagedMcpLogPort", declaredIn: "keiko-contracts" },
   "keiko-activity-log": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
   "keiko-cli": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
   "keiko-local-knowledge": { port: "KnowledgeLogSink", declaredIn: "keiko-local-knowledge" },

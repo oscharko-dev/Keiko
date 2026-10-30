@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { MIGRATIONS, runMigrations } from "./schema.js";
+import { MIGRATIONS, SCHEMA_VERSION, runMigrations } from "./schema.js";
 
 // KEIKO-0573: runMigrations filters and applies pending migrations in declaration order (no
 // .sort()), so the array's order-of-declaration is trusted to equal ascending version order. This
@@ -536,3 +536,33 @@ describe("v40 migration — terminal run causes (F9, #3873)", () => {
     db.close();
   });
 });
+
+it.each([46, 47, 48, 49, 50])(
+  "upgrades the actual v%i schema to current Jira storage without collisions",
+  (version) => {
+    const db = openWithForeignKeys();
+    try {
+      applyMigrationsUpTo(db, version);
+      runMigrations(db);
+      runMigrations(db);
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+      for (const [table, column] of [
+        ["chats", "jira_state_json"],
+        ["chat_messages", "tool_transcript_json"],
+      ] as const) {
+        expect(
+          db
+            .prepare(`PRAGMA table_info(${table})`)
+            .all()
+            .filter((row) => row.name === column),
+        ).toHaveLength(1);
+      }
+      expect(db.prepare("SELECT COUNT(*) AS count FROM chat_tool_read_grants").get()).toEqual({
+        count: 0,
+      });
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  },
+);

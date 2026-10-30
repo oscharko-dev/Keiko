@@ -104,7 +104,7 @@ This amendment is scoped to Coding. Memory retains the previous explicitly confi
 persisted Memory maintenance authority. Both surfaces continue to use the same canonical mode
 ordering and minimum calculation.
 
-No caller may widen authority by passing a higher requested mode than the environment allows. The
+No caller may widen authority by passing a higher requested mode than the environment allows. Explicit composition options and environment ceilings are intersected: neither can widen or conceal an invalid value in the other. The retained legacy delivery-ceiling option can only narrow this same Coding/connector result (#4083). The
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime
 policy, and evidence.
 

@@ -1,5 +1,138 @@
+import { DE_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  ...DE_AUTONOMY_MODE_LABELS,
+  "atlassianConnectors.live.rename": "Pod umbenennen",
+  "atlassianConnectors.live.renameTitle": "Jira-Pod umbenennen",
+  "atlassianConnectors.live.rotateTitle": "Jira-Token ersetzen",
+  "atlassianConnectors.live.replaceToken": "Token ersetzen",
+  "atlassianConnectors.live.newToken": "Neues API-Token",
+  "atlassianConnectors.live.saveName": "Namen speichern",
+  "atlassianConnectors.live.saveToken": "Token speichern",
+  "atlassianConnectors.live.saving": "Änderungen werden gespeichert…",
+  "atlassianConnectors.live.rotateHint":
+    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen. Prüfe die Verbindung erneut und erteile eine neue Lesefreigabe im Chat.",
+  "atlassianConnectors.live.operationFailed":
+    "Die Aktion konnte nicht bestätigt werden. Aktualisiere den Pod-Status, bevor du weitere Änderungen vornimmst.",
+  "atlassianConnectors.live.refresh": "Status aktualisieren",
+  "atlassianConnectors.live.refreshRequired":
+    "Der aktuelle Verbindungsstatus ist unbekannt. Aktualisiere ihn, bevor du diesen Pod verwendest.",
+  "atlassianConnectors.live.verifyRequired":
+    "Prüfe diese Verbindung, bevor du sie im Chat verwendest.",
+  "atlassianConnectors.live.remove": "Pod entfernen",
+  "atlassianConnectors.live.keep": "Pod behalten",
+  "atlassianConnectors.live.removeConfirm":
+    "Diesen Jira-Pod und sein gespeichertes Token entfernen? Alle verbundenen Chats werden getrennt und ihre ausstehenden Freigaben aufgehoben.",
+  "atlassianConnectors.live.capabilities":
+    "Im Chat kannst du Jira-Vorgänge und Metadaten suchen und lesen sowie Vorgänge erstellen, bearbeiten, zuweisen, kommentieren oder ihren Status ändern. Jira-Berechtigungen und Chat-Freigaben gelten für jede Aktion.",
+  "atlassianConnectors.live.readCapabilities":
+    "Nach deiner Lesefreigabe kann der Chat Jira-Vorgänge und Metadaten suchen und lesen. Der Zugriff hängt weiterhin von den Jira-Berechtigungen ab.",
+  "atlassianConnectors.live.patHint":
+    "Erstelle ein persönliches Zugriffstoken in deinem Jira-Profil. Keiko speichert es für den Jira-Zugriff. Gespeicherte Tokens werden nicht erneut angezeigt.",
+
+  "chat.jira.writeApproval.unavailable": "Aktionsfreigabe derzeit nicht verfügbar",
+  "chat.jira.writeApproval.title": "Jira-Aktion prüfen",
+  "chat.jira.writeApproval.pending": "Deine Entscheidung steht aus",
+  "chat.jira.writeApproval.approved": "Für diese Aktion genehmigt",
+  "chat.jira.writeApproval.claimed": "Freigabe für diese Aktion verwendet",
+  "chat.jira.writeApproval.rejected": "Aktion abgelehnt",
+  "chat.jira.writeApproval.expired": "Aktionsfreigabe abgelaufen",
+  "chat.jira.writeApproval.revoked": "Aktionsfreigabe widerrufen",
+  "chat.jira.writeApproval.disclosure":
+    "Prüfe die vorgeschlagene Aktion und ihre genauen Details unten. Die Freigabe gilt nur für diese Aktion. Sie bestätigt keine Änderung in Jira.",
+  "chat.jira.writeApproval.preview": "Details der vorgeschlagenen Aktion",
+  "chat.jira.writeApproval.working": "Aktion wird geprüft…",
+  "chat.jira.writeApproval.failed":
+    "Der aktuelle Aktionsstatus konnte nicht bestätigt werden. Aktualisiere ihn, bevor du entscheidest.",
+  "chat.jira.writeApproval.allow": "Diese Aktion genehmigen",
+  "chat.jira.writeApproval.deny": "Diese Aktion ablehnen",
+  "chat.jira.writeApproval.refresh": "Aktionsstatus aktualisieren",
+
+  "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
+  "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+  "chat.jira.write.notDispatched": "Nicht an Jira gesendet",
+  "chat.jira.write.rejected": "Jira-Aktion abgelehnt",
+  "chat.jira.write.succeeded": "Jira-Änderung bestätigt",
+  "chat.jira.write.unconfirmed": "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+  "chat.jira.write.unknown": "Ausgang der Jira-Aktion unbekannt",
+  "chat.jira.write.pending": "Bestätigtes Jira-Ergebnis steht aus",
+  "chat.jira.write.unconfirmedHelp":
+    "Prüfe den aktuellen Stand in Jira, bevor du eine weitere Änderung anforderst. Diese Aktion wird nicht automatisch wiederholt.",
+  "chat.jira.write.unknownHelp":
+    "Die Änderung wurde möglicherweise ausgeführt. Prüfe Jira, bevor du eine weitere Änderung anforderst. Diese Aktion wird nicht automatisch wiederholt.",
+  "chat.jira.write.pendingHelp":
+    "Es liegt kein abschließendes Ergebnis vor. Das bestätigt keine laufende Ausführung. Die Aktion wird nicht automatisch wiederholt.",
+
+  "atlassianConnectors.live.empty":
+    "Noch keine Jira-Pods. Erstelle einen Pod, um Jira mit einem Chat zu verbinden.",
+  "chat.jira.connection": "Jira-Verbindung",
+  "chat.jira.podLabel": "Jira-Pod",
+  "chat.jira.noPod": "Kein Jira-Pod",
+  "chat.jira.podUnavailable": "Aktueller Pod nicht verfügbar",
+  "chat.jira.verifyRequired": "Verifikation erforderlich",
+  "chat.jira.addToWorkspace": "Zum Workspace hinzufügen",
+  "chat.jira.workspaceHint":
+    "Ziehe diesen Jira-Pod auf den Workspace oder füge ihn mit dieser Schaltfläche hinzu. Verbinde seinen Port mit einem Chat.",
+  "chat.jira.liveTools": "Live-Jira-Werkzeuge",
+  "chat.jira.liveReady": "Verifizierter Jira-Pod",
+  "chat.jira.liveUnavailable":
+    "Jira-Pod nicht verfügbar; öffne Knowledge Pods, um ihn zu prüfen oder neu zu verbinden.",
+  "chat.jira.effectiveMode": "Wirksamer Modus: {mode}",
+  "chat.jira.modeLabel": "Autonomiemodus des Chats",
+  "chat.jira.modeHelp":
+    "Der erste Jira-Lesezugriff benötigt immer eine Freigabe. Installationsgrenzen und die aktuellen Chat-Berechtigungen gelten weiterhin.",
+  "chat.jira.replaceConfirm":
+    "Den bisherigen Jira-Pod ersetzen und seine ausstehenden Freigaben widerrufen.",
+  "chat.jira.apply": "Jira-Einstellungen übernehmen",
+  "chat.jira.connectionFailed":
+    "Jira-Einstellungen konnten nicht geladen oder gespeichert werden. Für eine erneute Prüfung und Wiederholung dieses Menü neu öffnen.",
+  "chat.jira.bound": "Jira-Pod vom Server verbunden",
+  "chat.jira.unbound": "Kein Jira-Pod verbunden",
+  "atlassianConnectors.live.title": "Jira Live-Pods",
+  "atlassianConnectors.live.subtitle":
+    "Aktuelle Jira-Daten im verbundenen Chat nach ausdrücklicher Lesefreigabe lesen. Der Live-Zugriff erstellt keinen Index und keine Dokumentensammlung.",
+  "atlassianConnectors.live.add": "Jira-Pod erstellen",
+  "chat.tools.connection": "Tool-Zugriff",
+  "chat.tools.modeHelp":
+    "Der gewählte Modus gilt für Tools in diesem Chat. Lesen über MCP oder Jira erfordert eine Freigabe; Schreibzugriffe folgen dem Modus und den Bereitstellungsgrenzen. MCP-Server konfigurierst du in den Einstellungen.",
+  "chat.tools.apply": "Tool-Einstellungen anwenden",
+  "chat.mcp.title": "MCP-Daten in diesem Chat lesen",
+  "chat.mcp.disclosure":
+    "Über konfigurierte MCP-Server abgerufene Inhalte werden an das ausgewählte Modell gesendet und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder bis sich Konfiguration oder Berechtigung ändern. Sie erlaubt keine Schreibzugriffe.",
+  "chat.mcp.tool": "MCP-Aktion",
+  "chat.mcp.details": "MCP-Ergebnis anzeigen",
+  "chat.mcp.writeApproval.title": "MCP-Aktion freigeben",
+  "chat.mcp.writeApproval.disclosure":
+    "Prüfe das Tool und seine Argumente. Die Freigabe erlaubt diese Aktion einmal innerhalb der aktuellen Verbindung und Berechtigung.",
+  "chat.mcp.write.notDispatched": "Nicht an den MCP-Server gesendet",
+  "chat.mcp.write.rejected": "MCP-Aktion abgelehnt",
+  "chat.mcp.write.succeeded": "Aktion bestätigt",
+  "chat.mcp.write.unconfirmed": "Der Server hat die Änderung angenommen; Bestätigung unvollständig",
+  "chat.mcp.write.unknown": "Ergebnis der MCP-Aktion unbekannt",
+  "chat.mcp.write.pending": "Warten auf ein bestätigtes MCP-Ergebnis",
+  "chat.mcp.write.unconfirmedHelp":
+    "Der Server hat Erfolg gemeldet, aber das endgültige Ergebnis konnte nicht bestätigt werden. Prüfe den entfernten Zustand vor einem weiteren Schreibzugriff.",
+  "chat.mcp.write.unknownHelp":
+    "Die Änderung wurde möglicherweise ausgeführt. Sie wird nicht automatisch wiederholt. Prüfe den entfernten Zustand vor einem weiteren Schreibzugriff.",
+  "chat.mcp.write.pendingHelp":
+    "Die Aktion hat begonnen. Warte auf ihr Ergebnis, bevor du einen weiteren Schreibzugriff startest.",
+  "chat.jira.title": "Jira in diesem Chat lesen",
+  "chat.jira.disclosure":
+    "Jira-Inhalte werden an das ausgewählte Modell übermittelt und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder einer Änderung der Verbindung oder Berechtigungen. Sie erlaubt keine Schreibaktionen.",
+  "chat.jira.approve": "Lesen erlauben",
+  "chat.jira.reject": "Nicht erlauben",
+  "chat.jira.working": "Entscheidung wird gespeichert…",
+  "chat.jira.failed": "Die Entscheidung konnte nicht gespeichert werden. Bitte erneut versuchen.",
+  "chat.jira.pending": "Wartet auf deine Freigabe",
+  "chat.jira.granted": "Lesen erlaubt",
+  "chat.jira.rejected": "Lesen abgelehnt",
+  "chat.jira.expired": "Freigabe abgelaufen",
+  "chat.jira.revoked": "Freigabe widerrufen",
+  "chat.jira.tool": "Jira-Aktion",
+  "chat.jira.complete": "Abgeschlossen",
+  "chat.jira.running": "Wird ausgeführt",
+  "chat.jira.unavailable": "Konnte nicht abgeschlossen werden",
+  "chat.jira.details": "Jira-Ergebnis ansehen",
   "browserApproval.title": "Diesen Browser verbinden",
   "browserApproval.close": "Schließen",
   "browserApproval.notice":
@@ -1857,6 +1990,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
+  "chat.grounding.dataLabel": "Datenquellen",
+  "chat.grounding.noDataSources": "Keine Datenquellen",
+  "chat.grounding.dataCatalogEmpty": "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
   "chat.grounding.label": "Wissensquellen",
   "chat.grounding.mode": "Grounding-Modus",
   "chat.grounding.strategy": "Strategie",
@@ -2667,16 +2803,28 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.verify.ok.copy": "Die Anmeldeinformation wurde erfolgreich authentifiziert.",
   "atlassianConnectors.verify.auth-failed.label": "Authentifizierung fehlgeschlagen",
   "atlassianConnectors.verify.auth-failed.copy":
-    "Prüfen Sie Konto-E-Mail und API-Token und versuchen Sie es erneut.",
+    "Prüfe das Konto und das Token. Prüfe die Verbindung danach erneut.",
   "atlassianConnectors.verify.forbidden.label": "Zugriff verweigert",
   "atlassianConnectors.verify.forbidden.copy":
-    "Das Konto wurde authentifiziert, hat aber keine Berechtigung. Erteilen Sie den Zugriff in Atlassian und prüfen Sie erneut.",
+    "Atlassian hat den Zugriff verweigert. Prüfe die Kontoberechtigungen sowie Einschränkungen der Website oder Lizenz. Prüfe die Verbindung danach erneut.",
   "atlassianConnectors.verify.unreachable.label": "Website nicht erreichbar",
   "atlassianConnectors.verify.unreachable.copy":
     "Die Basis-URL konnte nicht erreicht werden. Prüfen Sie URL und Netzwerk und versuchen Sie es erneut.",
   "atlassianConnectors.verify.timeout.label": "Zeitüberschreitung der Verbindung",
   "atlassianConnectors.verify.timeout.copy":
     "Die Website hat nicht rechtzeitig geantwortet. Versuchen Sie es gleich erneut.",
+  "atlassianConnectors.verify.redirect-refused.label": "Weiterleitung abgelehnt",
+  "atlassianConnectors.verify.redirect-refused.copy":
+    "Die Adresse leitet weiter. Gib die endgültige HTTPS-Adresse der Atlassian-Website ein.",
+  "atlassianConnectors.verify.invalid-response.label": "Ungültige Atlassian-Antwort",
+  "atlassianConnectors.verify.invalid-response.copy":
+    "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
+  "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
+  "atlassianConnectors.verify.unsupported-version.copy":
+    "Diese Verbindung unterstützt Jira Data Center 10.3.26. Prüfe Bereitstellung und Version.",
+  "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
+  "atlassianConnectors.verify.tls-failed.copy":
+    "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence-Bereichsschlüssel",
   "atlassianConnectors.scope.confluencePlaceholder": "z. B. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira-Projektschlüssel",
@@ -2752,6 +2900,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.approvals.rejecting": "Wird abgelehnt…",
   "atlassianConnectors.approvals.rejected": "Abgelehnt. Die Aktion wurde nicht ausgeführt.",
   "atlassianConnectors.action.sync-space": "Confluence-Bereich synchronisieren",
+  "atlassianConnectors.action.jira.projects": "Jira-Projekte lesen",
+  "atlassianConnectors.action.jira.issue-types": "Jira-Vorgangstypen lesen",
+  "atlassianConnectors.action.jira.create-fields": "Jira-Erstellungsfelder lesen",
+  "atlassianConnectors.action.jira.edit-fields": "Jira-Bearbeitungsfelder lesen",
+  "atlassianConnectors.action.jira.search": "Jira-Vorgänge suchen",
+  "atlassianConnectors.action.jira.issue": "Jira-Vorgang lesen",
+  "atlassianConnectors.action.jira.comments": "Jira-Kommentare lesen",
+  "atlassianConnectors.action.jira.transitions": "Jira-Statusübergänge lesen",
+  "atlassianConnectors.action.jira.assignable-users": "Zuweisbare Jira-Benutzer suchen",
+  "atlassianConnectors.action.assign-issue": "Jira-Vorgang zuweisen",
   "atlassianConnectors.action.sync-project": "Jira-Projekt synchronisieren",
   "atlassianConnectors.action.search-issues-live": "Jira-Livesuche",
   "atlassianConnectors.action.create-issue": "Jira-Vorgang erstellen",

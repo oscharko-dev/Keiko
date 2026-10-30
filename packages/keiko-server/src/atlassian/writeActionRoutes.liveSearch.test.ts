@@ -1,3 +1,9 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  formatActivityLogProofLine,
+  expectActivityLogProof,
+} from "../../../../tests/support/activity-log-proof.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 // Issue #2248 — route-level governance tests for the live JQL read action on the shared actions
 // route (#2244 wiring). Hermetic: the transport is the in-memory Jira fixture wrapped in a
 // counting port (no network), envelopes register far-future, singleton registries reset around
@@ -134,6 +140,12 @@ function guardWith(
     return fixture(request);
   };
   const custody = {
+    updateLivePod: (): never => {
+      throw new Error("Unexpected Live Pod update");
+    },
+    beginVerification: (): undefined => undefined,
+    finishVerification: (): boolean => false,
+    observeAuthenticationFailure: (): boolean => false,
     create: (): never => {
       throw new Error("create not exercised");
     },
@@ -754,4 +766,38 @@ describe("live-search route — bounds and degradation (AC6)", () => {
     expect(result.body.disposition).toBe("allowed");
     expect((result.body.result as { status: string }).status).toBe("succeeded");
   });
+});
+
+it("reconstructs malformed live-search JSON through the existing action outcome", async () => {
+  const logs = createBufferedServerLogSink();
+  const counter: FetchCounter = { count: 0, requests: [] };
+  const guard = {
+    ...guardWith(counter, () => ({
+      kind: "response",
+      status: 200,
+      bodyText: "{",
+      bodyBytes: 1,
+      truncated: false,
+    })),
+    activityLog: logs,
+  };
+  const authority = registerEnvelope("autonomous-delivery", READ_SCOPE);
+  const result = await postLiveSearch(
+    { type: "search-issues-live", jql: FREE_JQL },
+    authority,
+    deps(guard, "autonomous-delivery"),
+  );
+  expect(result.body.result).toMatchObject({ status: "failed", reason: "malformed-payload" });
+  expect(counter.count).toBe(1);
+  const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
+  expect(events).toHaveLength(1);
+  const event = events[0];
+  if (event === undefined) throw new Error("Missing live-search outcome");
+  const line = formatActivityLogProofLine(event);
+  expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
+    actionType: "search-issues-live",
+    outcome: "failed",
+    failureReason: "malformed-payload",
+  });
+  expect(analyzeLogText(line).timelines).toHaveLength(1);
 });

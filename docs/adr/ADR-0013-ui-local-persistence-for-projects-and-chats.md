@@ -326,6 +326,54 @@ response, derived from that check. Missing paths remain listed as `available: fa
 can see and explicitly delete a stale project. This preserves the history and makes the system
 fail-open (show the record) rather than silently destructive (delete the record).
 
+#### Durable Chat tool mutation intents (schemas 47–48, epic #4081)
+
+The existing UiStore owns `chat_tool_mutations`, initially for the five Jira write operations.
+It stores canonical user-turn references, actor/Pod identity, binding and authentication generation
+counters, authority/action digests and closed lifecycle/outcome metadata. `authentication_generation`
+is an integer invalidation counter; credential material remains exclusively in the existing vault.
+No request, response body, private endpoint or token is copied into this journal.
+
+A standalone `BEGIN IMMEDIATE` transaction with SQLite FULL-or-stronger synchronization records
+possible dispatch before the caller may send HTTP. Nested transactions are refused because a
+released savepoint is not a durable commit. A synchronous final guard may redeem existing approval
+state in the same transaction; a denied guard rolls its changes back. One action digest per canonical
+turn prevents a new model call ID from repeating that action. Writes within a turn are serialized,
+with at most 32 retained intents. Unknown effects and acknowledged-but-unconfirmed outcomes block
+further writes in that turn, including already prepared actions. A new explicitly admitted user turn
+has its own scope.
+
+Response acknowledgement is stored separately from body parsing and later confirmation. Known
+local rejection before dispatch, success, success without confirmation, unknown effect and no
+dispatch are distinct. Every non-2xx response after possible dispatch remains unknown: a status code
+alone cannot prove that no mutation occurred, including 400/401/403/429 and proxy-generated replies.
+The transport's diagnostic reason (such as permission denied or rate limited) remains separate
+from this effect classification. Schema 48 repairs the earlier journal's retained post-dispatch
+rejections to unknown before work resumes. An observed 2xx cannot be downgraded to unknown/rejected;
+normal terminal settlement is immutable.
+The server mutation composer connects this journal to the final Atlassian HTTP admission and
+response-observation callbacks. Only the creator of a new intent executes provider code; replaying
+prepared, in-flight or completed records never takes over execution. An unsettled replay reports
+`pending`, a non-terminal result state distinct from stored terminal outcomes. It does not assert an
+active executor or permit takeover: the same state covers orphaned records after restart. If current
+admission or journal access prevents qualifying prior state, the composer also reports `pending`;
+it cannot infer that a possibly earlier attempt had no effect. Only a retained settlement is replayed
+as a terminal outcome. Metadata GET responses do not
+acknowledge a mutation. Final dispatch repeats the composing owner's synchronous admission inside
+the durable transaction, and a provider invocation may dispatch at most one mutation request.
+Confirmed results require the operation's validated receipt identities. Failed terminal persistence
+retains the journal barrier and returns an uncertain result rather than inventing completion.
+Removing a message preserves its mutation tombstone; deleting its owning Chat removes the journal.
+Registered body-free state events follow committed state. A pre-effect log failure prevents the
+caller from proceeding, preserving the durable tombstone; terminal log failure cannot overwrite
+an observed result. The existing loss ledger records failures of the logging sink.
+
+This persistence primitive grants no execution authority. Consumer composition must supply current
+binding, mode, grants/approvals and budgets, use the returned dispatch admission exactly once and
+record the actual HTTP observation. Jira HTTP wiring and ordinary Chat integration are separate
+acceptance requirements. This is local duplicate-dispatch suppression, not a universal exactly-once
+or lost-update guarantee for Jira operations without atomic remote preconditions.
+
 #### Durable chat creation intents (schema 46, issues #4040/#4043)
 
 The existing private UiStore retains `chat_creation_intents` in the same transactional database.
@@ -790,3 +838,14 @@ process so that DB operations do not block the main event loop.
 ## Date
 
 2026-05-30
+
+### Ordinary Chat tool transcripts (#4091 / #4081)
+
+Migration 50 adds a nullable `tool_transcript_json` column to existing user-message rows. The
+canonical human message owns a bounded ordered list of structured call/result pairs and an optional
+public read-consent card. The server-only store method atomically starts or settles a call, rejects
+conflicting duplicate identities/results, applies the existing redactor and increments the existing
+history revision. Terminal canonical turns cannot be updated. Legacy null rows retain their shape;
+corrupt non-null transcripts fail closed. Coding History isolation also applies to this method.
+This storage does not authorize or replay execution; authority, approvals and the mutation journal
+retain those decisions. The registered Activity Log records only identity digests, phase and counts.

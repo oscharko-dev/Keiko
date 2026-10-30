@@ -1,3 +1,4 @@
+import { recordAtlassianActionOutcome } from "./actionOutcomeActivity.js";
 // Atlassian connector sync service (Issues #2242/#2243, Epic #2238, ADR-0128 D1/D5).
 //
 // keiko-server is the sole composition root for the sync lane: this service resolves the
@@ -662,7 +663,7 @@ function recordSyncActivity(
   const recordedReason = syncActivityReasonCode(context, outcome, reasonCode);
   // KEIKO-0565: resolve context.deps's OWN registry, not the process-wide singleton (PR #3289
   // review) — context.deps is the same UiHandlerDeps the run started under (see startAtlassianSyncJob).
-  resolveAtlassianSyncJobRegistry(context.deps).recordActivity({
+  const record: AtlassianConnectorActivityRecord = {
     schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
     activityId: randomUUID(),
     occurredAt: completedAt,
@@ -676,7 +677,14 @@ function recordSyncActivity(
     correlationId: context.job.jobId,
     durationMs: Math.max(0, completedAt - (context.job.startedAt ?? context.job.queuedAt)),
     syncSummary: summary,
-  });
+  };
+  resolveAtlassianSyncJobRegistry(context.deps).recordActivity(record);
+  // The global projection reports the actual execution failure; the UI ring retains its governance reason.
+  recordAtlassianActionOutcome(
+    context.deps.atlassianConnectorCredentials ?? {},
+    reasonCode === undefined ? record : { ...record, reasonCode },
+    context.deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
+  );
 }
 
 function progressWithIndexing(

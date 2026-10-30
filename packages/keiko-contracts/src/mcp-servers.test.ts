@@ -8,6 +8,7 @@ import {
   parseCodingWorkbenchRuntimeMcpChannelPayload,
   parseCodingWorkbenchMcpAuthorizationStart,
   parseCodingWorkbenchMcpAuthorizationStatus,
+  parseMcpSettingsUpdate,
   type McpServerDefinition,
 } from "./mcp-servers.js";
 
@@ -192,7 +193,6 @@ describe("the MCP server registry (#3903)", () => {
   });
 
   it.each([
-    ["a name with an underscore", { ...LOCAL, name: "my_docs" }],
     ["an uppercase name", { ...LOCAL, name: "Docs" }],
     ["an unknown key", { ...LOCAL, secret: "x" }],
     ["no tools", { ...LOCAL, tools: {} }],
@@ -539,4 +539,149 @@ it("preserves a command iterator failure after an in-budget yielded member", ():
   }
   expect(caught).toBe(failure);
   expect(yielded).toBe(1);
+});
+
+describe("private MCP registry generation", () => {
+  const generation = "751aee5d-e2b8-4e60-a609-2995005266a5";
+  it("reads legacy documents and preserves a committed opaque generation", () => {
+    expect(parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL] })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL], generation }),
+    ).toMatchObject({ ok: true, generation });
+  });
+  it.each([null, 1, "", "stale", "a".repeat(1024)])("refuses malformed generation %s", (value) => {
+    expect(
+      parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL], generation: value }),
+    ).toEqual({ ok: false, reason: "malformed" });
+  });
+  it("never accepts a client-selected Settings generation", () => {
+    expect(
+      parseMcpSettingsUpdate({
+        expectedRevision: "a".repeat(64),
+        servers: [LOCAL],
+        secrets: {},
+        generation,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+function settingsEnvironmentInput(environmentFiles: unknown): unknown {
+  return {
+    expectedRevision: "a".repeat(64),
+    servers: [LOCAL, REMOTE],
+    secrets: {},
+    environmentFiles,
+  };
+}
+
+describe("MCP Settings environment file admission", () => {
+  it("retains the original environment file object and its getter observations", () => {
+    const reads: string[] = [];
+    const receivers: unknown[] = [];
+    const files = {
+      get docs(): string {
+        reads.push("docs");
+        receivers.push(this);
+        return "DOCS_INDEX=/srv/docs";
+      },
+    };
+    const parsed = parseMcpSettingsUpdate(settingsEnvironmentInput(files));
+    expect(parsed?.environmentFiles).toBe(files);
+    expect(reads).toEqual(["docs"]);
+    expect(receivers).toHaveLength(1);
+    expect(receivers[0]).toBe(files);
+    expect(parsed?.environmentFiles?.docs).toBe("DOCS_INDEX=/srv/docs");
+    expect(reads).toEqual(["docs", "docs"]);
+    expect(receivers).toHaveLength(2);
+    expect(receivers[1]).toBe(files);
+  });
+
+  it("preserves native proxy observation order without copying admitted values", () => {
+    const observations: string[] = [];
+    const receivers: unknown[] = [];
+    const files = new Proxy(
+      { docs: "DOCS_INDEX=/srv/docs" },
+      {
+        ownKeys(target): (string | symbol)[] {
+          observations.push("keys");
+          return Reflect.ownKeys(target);
+        },
+        getOwnPropertyDescriptor(target, property): PropertyDescriptor | undefined {
+          observations.push("descriptor");
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        },
+        get(target, property, receiver): unknown {
+          observations.push("value");
+          receivers.push(receiver);
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const parsed = parseMcpSettingsUpdate(settingsEnvironmentInput(files));
+    expect(parsed?.environmentFiles).toBe(files);
+    expect(observations).toEqual(["keys", "descriptor", "value", "keys", "descriptor"]);
+    expect(receivers).toHaveLength(1);
+    expect(receivers[0]).toBe(files);
+  });
+
+  it.each(["keys", "descriptor", "value"])(
+    "preserves the exact environment file proxy failure at %s",
+    (phase): void => {
+      const failure: TypeError = Object.freeze(
+        new TypeError("environment file observation failed"),
+      );
+      const files = new Proxy(
+        { docs: "DOCS_INDEX=/srv/docs" },
+        {
+          ownKeys(target): (string | symbol)[] {
+            if (phase === "keys") throw failure;
+            return Reflect.ownKeys(target);
+          },
+          getOwnPropertyDescriptor(target, property): PropertyDescriptor | undefined {
+            if (phase === "descriptor") throw failure;
+            return Reflect.getOwnPropertyDescriptor(target, property);
+          },
+          get(target, property, receiver): unknown {
+            if (phase === "value") throw failure;
+            return Reflect.get(target, property, receiver);
+          },
+        },
+      );
+      let caught: unknown;
+      try {
+        parseMcpSettingsUpdate(settingsEnvironmentInput(files));
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(failure);
+    },
+  );
+
+  it.each([
+    ["a nonstring value", { docs: 42 }],
+    ["an oversized value", { docs: "x".repeat(64 * 1024 + 1) }],
+    ["a NUL value", { docs: "DOCS_INDEX=\0" }],
+    ["a remote server", { tracker: "DOCS_INDEX=/srv/docs" }],
+    ["an unknown server", { missing: "DOCS_INDEX=/srv/docs" }],
+    ["an array", []],
+    ["null", null],
+  ])("refuses environment files with %s", (_name, files): void => {
+    expect(parseMcpSettingsUpdate(settingsEnvironmentInput(files))).toBeUndefined();
+  });
+
+  it("omits absent and empty environment files from the admitted update", () => {
+    const absent = parseMcpSettingsUpdate({
+      expectedRevision: "a".repeat(64),
+      servers: [LOCAL],
+      secrets: {},
+    });
+    const empty = parseMcpSettingsUpdate(settingsEnvironmentInput({}));
+    expect(absent).toBeDefined();
+    expect(empty).toBeDefined();
+    expect(absent).not.toHaveProperty("environmentFiles");
+    expect(empty).not.toHaveProperty("environmentFiles");
+  });
 });

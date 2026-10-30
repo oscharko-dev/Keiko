@@ -632,7 +632,15 @@ prepared for the timeline. OpenCode persists a streamed text or reasoning part o
 complete, so the timeline grows from the runtime's delta events: the same line counts, since its
 previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
-(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). A sync
+reads and projects only a bounded tail of the newest messages once the earlier pass is committed and
+caught up (#4104): the projection plans an anchor message, the read ends there, and the older messages
+are carried over unchanged. The runtime completes a streamed part in place, so every message from the
+anchor on is projected again; a complete read replaces the tail when the anchor is gone (a revert or
+compaction), every 256 tail reads, after a pass cut at the event cap, and while an older message still
+holds live text. The same line records how: `readMode` (`tail`, `full`, `verify`, `anchor-lost`),
+`readMessageCount` (messages handed to the projection) and `retainedMessageCount` (older messages
+carried over). The continuation's complete read stays strict (`history-oversized`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
 Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
 #4009) reach the tool byte for byte: the gateway removes only the configured provider literals
@@ -882,3 +890,11 @@ Safety-state publication does not grant an agent a live bridge or an executable 
 Chat repository search and the separate Coding Workbench keep their own existing behavior; shared
 runtime code still used by those consumers is not part of this retirement. See
 [ADR-0061](docs/adr/ADR-0061-browser-editor-agent-bridge.md).
+
+### Managed MCP provider changes (ADR-0181)
+
+Keep official MCP SDK imports inside `keiko-mcp`, whose internal dependencies are contracts
+and security only. Provider and log ports come from server composition; catalog/binder
+admission remains mandatory. Verify modern protocol metadata, request-local context, schema
+and drift refusal, cancellation, registered Activity Log evidence and the architecture
+negative fixtures. Preserve the operator MCP registry and OpenCode compatibility.

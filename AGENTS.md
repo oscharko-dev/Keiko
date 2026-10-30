@@ -121,9 +121,11 @@ This shapes the product _and_ how you work on it:
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
   use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
-  leaf and separate native old/new images; unsupported fragments fail closed. Only the raw Git
-  diff view of the user's own repository keeps syntax-refused hunks readable under the credential
-  floor (owner decision 2026-10-28, #4114; ADR-0022). Streaming retains unresolved credential/source context until it can
+  leaf and separate native old/new images; unsupported fragments fail closed. Plain prose is not
+  inferred as source: error recovery counts a declaration only at a statement boundary with a header
+  its grammar allows, and a Markdown list item is judged on its own text (ADR-0022, #3900). Only the
+  raw Git diff view of the user's own repository keeps syntax-refused hunks readable under the
+  credential floor (owner decision 2026-10-28, #4114; ADR-0022). Streaming retains unresolved credential/source context until it can
   publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
   not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
 - Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
@@ -317,6 +319,9 @@ The shape (ADR-0019):
 - **`keiko-activity-log`** owns the writer, segmented store, and reader engine. It depends only on
   contracts + security; server and CLI compose it, while domain packages keep injected log ports
   and UI never imports it (ADR-0179).
+- **`keiko-mcp`** owns the shared managed MCP protocol host (ADR-0181). Its only internal
+  dependencies are contracts and security; official MCP SDK imports are confined to this package.
+  Server composition supplies provider/log ports and retains catalog/binder admission.
 - **`keiko-model-gateway`** is the _only_ place provider SDKs (`openai`, `@anthropic-ai/*`,
   `*-ai-sdk`) may be imported. This isolation is a hard gate — do not import a model SDK anywhere
   else (ADR-0019 trust-1).
@@ -1105,10 +1110,38 @@ title or path ever enters the line (ADR-0137 D4).
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
 agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
-and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
-notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
+and a changeset received for review (`fileCount`). It also records a history task of another
+repository or workspace that was not activated (`history-repository-switched`,
+`history-workspace-switched`; #4118) and a refused editor bridge registration
+(`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
+refused request's correlation and the run as parent; #4117) and a diff that switched to the
+windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `run-changes` or
+`answer-diff`, and `fileCount`, `totalLineCount`, `totalByteCount`; once per diff, not per page turn;
+never a path or diff text; #4108). These were warn/unknown
+`client.diagnostic` notes before and buried the rare real browser failures. The server side of
+that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
+`refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
+`capability-held`). A root-boundary refusal holds until the run or its root changes; only a held
+lease is retried with backoff. The editor action queue is bounded by count, by serialized bytes per
+session (64 MiB) and by serialized bytes for the process (256 MiB); every `QUEUE_FULL` refusal is
+recorded on `editor.agent.action-queue` with the closed `reason` (`queue-count`, `session-bytes`,
+`process-bytes`) and the action, session and process counts and bytes (#4107). `gateway.setup.target.accepted` records,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
+
+`client.editor.line-ending.adopted` records, at info and on the routine budget, that the Editor's
+Monaco model adopted the line ending of text Keiko wrote into it (#4123): `lineEnding` (`lf`,
+`crlf`) and `source` (`buffer-sync` for a controlled sync such as a reload from disk, `host-edit`).
+Monaco gives a model created without a line break the platform default, so a Windows browser would
+otherwise normalize a reloaded LF file to CRLF and report the unchanged buffer as an unsaved human
+edit. The adoption shares the write's undo step. `client.binding.resolved` carries the optional
+`projectOpenAttemptCount` when a Chat's project open had to be repeated because a competing
+workspace update overtook it; the repeat is bounded to three attempts per routing episode, and an
+episode that ends (the project held, the window no longer needs one, or the open failed) frees the
+budget for the next one. When every attempt was overtaken, the window stops waiting, shows that the
+Chat could not be opened and records `client.binding.project-open-exhausted` at warn (`conflict`,
+failure budget) with the required `projectOpenAttemptCount`. Closed values and counts only, never
+text or paths.
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
@@ -1226,7 +1259,15 @@ prepared for the timeline. OpenCode persists a streamed text or reasoning part o
 complete, so the timeline grows from the runtime's delta events: the same line counts, since its
 previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
-(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). A sync
+reads and projects only a bounded tail of the newest messages once the earlier pass is committed and
+caught up (#4104): the projection plans an anchor message, the read ends there, and the older messages
+are carried over unchanged. The runtime completes a streamed part in place, so every message from the
+anchor on is projected again; a complete read replaces the tail when the anchor is gone (a revert or
+compaction), every 256 tail reads, after a pass cut at the event cap, and while an older message still
+holds live text. The same line records how: `readMode` (`tail`, `full`, `verify`, `anchor-lost`),
+`readMessageCount` (messages handed to the projection) and `retainedMessageCount` (older messages
+carried over). The continuation's complete read stays strict (`history-oversized`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
 Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
 #4009) reach the tool byte for byte: the gateway removes only the configured provider literals

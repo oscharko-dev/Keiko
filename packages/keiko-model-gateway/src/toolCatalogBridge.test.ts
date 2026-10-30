@@ -1605,6 +1605,28 @@ describe("file content in a model tool call", () => {
     );
   });
 
+  // #4110: the legacy patch tools carry a unified diff and follow the shared patch cap.
+  it.each(["propose_patch", "apply_patch"])(
+    "binds a %s diff above the generic ceilings, up to exactly the cap",
+    (name) => {
+      const bridge = createGatewayToolCatalogBridge(
+        { ...request(), toolCatalog: advertisement() },
+        (): number => NOW,
+      );
+      const call = (diff: string): NormalizedToolCall => ({
+        id: "call-patch",
+        name,
+        arguments: { diff },
+      });
+      const cap = "z".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes);
+      expect(
+        bridge.bindCalls([call("y".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1))]),
+      ).toHaveLength(1);
+      expect(bridge.bindCalls([call(cap)])).toHaveLength(1);
+      expect(() => bridge.bindCalls([call(`${cap}z`)])).toThrow(GatewayToolCatalogError);
+    },
+  );
+
   it("does not widen any other mapped tool", () => {
     const call = {
       id: "call-question",

@@ -1,3 +1,9 @@
+import { hasMixedToolGroundingScope } from "./chat-grounding.js";
+import {
+  createChatToolTurn,
+  scopeChatToolTurn,
+  type ChatToolTurnPort,
+} from "./chat-tool-runtime.js";
 import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { setImmediate as yieldHttpWrites } from "node:timers/promises";
 import { createStreamingRedactor } from "@oscharko-dev/keiko-security/redaction";
@@ -233,9 +239,8 @@ async function streamConversation(
       await whenSseWritable(ctx.res, controller.signal);
       if (streamIsStopped(ctx, controller.signal)) return undefined;
       const next = await iterator.next();
-      if (next.done === true) return undefined;
+      if (next.done === true || controller.signal.aborted) return undefined;
       const chunk = next.value;
-      if (controller.signal.aborted) return undefined;
       // #3878: the gateway hands reasoning only to the Coding Workbench; a conversation answer
       // never shows it, so a reasoning chunk (none reaches this surface today) is passed over.
       if (chunk.type === "reasoning") continue;
@@ -660,6 +665,15 @@ async function prepareDesktopChatStream(
 ): Promise<DesktopChatStreamPreparation> {
   const parsed = await parseDesktopChatSend(ctx, deps, signal);
   if ("status" in parsed) return { kind: "outcome", outcome: parsed };
+  if (
+    hasMixedToolGroundingScope(
+      parsed.chat,
+      deps.mcpSettings
+        ?.read(ctx.correlationId ?? "unknown")
+        .servers.some((server) => server.enabled) ?? false,
+    )
+  )
+    return { kind: "outcome", outcome: streamingUnsupportedOutcome(ctx.correlationId) };
   const prepared = validateDesktopChatSend(parsed, deps);
   if ("status" in prepared) return { kind: "outcome", outcome: prepared };
   // Same fast-fail gate as the buffered /api/desktop/chat path (handleSendDesktopChat): a
@@ -707,6 +721,7 @@ function resolveDesktopChatStreamCall(
 }
 
 interface AdmittedDesktopChatStream {
+  readonly toolTurn?: ChatToolTurnPort | undefined;
   readonly admitted: AdmittedTurnHandle;
   readonly prepared: PreparedDesktopChatSend;
   readonly callStream: StreamCall;
@@ -733,6 +748,44 @@ function writeStreamFailure(
   writeTerminalFrame(ctx, sseMessage(event));
 }
 
+function toolTranscriptEvents(message: ChatMessage): readonly DesktopChatStreamEvent[] {
+  const transcript = message.toolTranscript;
+  const events: DesktopChatStreamEvent[] = [];
+  if (transcript?.readGrant !== undefined)
+    events.push({
+      event: "tool-read-consent",
+      data: { messageId: message.id, grant: transcript.readGrant },
+    });
+  for (const exchange of transcript?.exchanges ?? [])
+    if (exchange.approval !== undefined)
+      events.push({
+        event: "tool-write-approval",
+        data: { messageId: message.id, call: exchange.call, approval: exchange.approval },
+      });
+  return events;
+}
+
+function registerReadConsentStream(
+  ctx: RouteContext,
+  turn: AdmittedDesktopChatStream,
+  controller: AbortController,
+): void {
+  const sent = new Set<string>();
+  turn.toolTurn?.onTranscript((message): void => {
+    if (controller.signal.aborted) return;
+    for (const event of toolTranscriptEvents(message)) {
+      let identity: string | undefined;
+      if (event.event === "tool-read-consent")
+        identity = `read:${event.data.grant.grantId}:${event.data.grant.state}`;
+      else if (event.event === "tool-write-approval")
+        identity = `write:${event.data.approval.approvalId}:${event.data.approval.state}`;
+      if (identity === undefined || sent.has(identity)) continue;
+      sent.add(identity);
+      writeSseFrame(ctx.res, sseMessage(event), controller, undefined, ctx.correlationId);
+    }
+  });
+}
+
 async function executeAdmittedDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -753,6 +806,7 @@ async function executeAdmittedDesktopChatStream(
       controller,
       ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
     });
+    registerReadConsentStream(ctx, turn, controller);
     await streamAndPersist(ctx, deps, turn, controller);
   } catch (error) {
     writeStreamFailure(ctx, deps, turn, controller, error);
@@ -802,6 +856,25 @@ function preflightDesktopChatStreamExecution(
   };
 }
 
+type PreparedStreamProvider = Pick<
+  AdmittedDesktopChatStream,
+  "callStream" | "memory" | "toolTurn"
+> & { readonly deps: UiHandlerDeps };
+function rejectPreparedStream(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admitted: AdmittedTurnHandle,
+  signal: AbortSignal,
+  error: unknown,
+  correlationId: string | undefined,
+): RouteResult {
+  const cancelled = requestIsAborted(signal);
+  settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");
+  return cancelled
+    ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+    : desktopChatErrorResult(error, deps, correlationId);
+}
+
 async function prepareDesktopChatProviderStream(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -810,24 +883,24 @@ async function prepareDesktopChatProviderStream(
   controller: AbortController,
   admitted: AdmittedTurnHandle,
   correlationId: string | undefined,
-): Promise<Pick<AdmittedDesktopChatStream, "callStream" | "memory"> | RouteResult> {
+): Promise<PreparedStreamProvider | RouteResult> {
   let memory: AdmittedDesktopChatStream["memory"];
+  let toolTurn: ChatToolTurnPort | undefined;
   try {
+    toolTurn = await createChatToolTurn(
+      deps,
+      prepared.modelId,
+      admitted.userMessage,
+      controller.signal,
+      correlationId,
+    );
+    deps = scopeChatToolTurn(deps, toolTurn);
     memory =
       deps.gatewayConfig === undefined
         ? undefined
         : await resolveMemory(deps, prepared.request, prepared.memoryContext);
   } catch (error) {
-    // The turn is already admitted: a memory failure here MUST settle it, or the
-    // clientTurnId stays "pending" forever and every retry gets CHAT_TURN_IN_PROGRESS
-    // (the buffered path settles the same class in its catch). For a legacy request the
-    // settle discards the just-admitted user row instead — nothing ran yet.
-    const cancelled = requestIsAborted(controller.signal);
-    settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");
-    if (cancelled) {
-      return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
-    }
-    return desktopChatErrorResult(error, deps, correlationId);
+    return rejectPreparedStream(deps, prepared, admitted, controller.signal, error, correlationId);
   }
   if (requestIsAborted(controller.signal)) {
     settleRejectedDesktopChatTurn(deps, prepared, admitted, "cancelled");
@@ -835,7 +908,17 @@ async function prepareDesktopChatProviderStream(
   }
   const callStream =
     legacyCall ?? resolveDesktopChatStreamCall(prepared, executionAdmission, deps, correlationId);
-  if (typeof callStream === "function") return { callStream, memory };
+  if (typeof callStream === "function")
+    return {
+      callStream:
+        toolTurn === undefined
+          ? callStream
+          : (request, signal): ReturnType<StreamCall> =>
+              toolTurn.stream(callStream, request, signal),
+      memory,
+      toolTurn,
+      deps,
+    };
   settleRejectedDesktopChatTurn(deps, prepared, admitted);
   return callStream;
 }
@@ -909,21 +992,42 @@ async function runAdmittedDesktopChatStream(
     ctx.correlationId,
   );
   if ("status" in provider) return provider;
-  const { signal } = controller;
-  const { correlationId } = ctx;
-  const gatewayTurn = captureAdmittedSnapshot(deps, prepared, admission, signal, correlationId);
+  return dispatchPreparedProviderStream(
+    ctx,
+    provider,
+    { admitted: admission, prepared, executionAdmission, messageCountBeforeTurn },
+    controller,
+    markStreamStarted,
+  );
+}
+
+function dispatchPreparedProviderStream(
+  ctx: RouteContext,
+  provider: PreparedStreamProvider,
+  admission: Pick<
+    AdmittedDesktopChatStream,
+    "admitted" | "prepared" | "executionAdmission" | "messageCountBeforeTurn"
+  >,
+  controller: AbortController,
+  markStreamStarted: () => void,
+): Promise<HandlerOutcome> {
+  const gatewayTurn = captureAdmittedSnapshot(
+    provider.deps,
+    admission.prepared,
+    admission.admitted,
+    controller.signal,
+    ctx.correlationId,
+  );
   return executeAdmittedDesktopChatStream(
     ctx,
-    deps,
+    provider.deps,
     {
-      admitted: admission,
-      prepared,
+      ...admission,
       callStream: provider.callStream,
-      executionAdmission,
       memory: provider.memory,
-      userMessage: admission.userMessage,
+      toolTurn: provider.toolTurn,
+      userMessage: admission.admitted.userMessage,
       gatewayTurn,
-      messageCountBeforeTurn,
     },
     controller,
     markStreamStarted,

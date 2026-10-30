@@ -8,6 +8,10 @@ import type { CatalogToolPort } from "./governed-tool-bridge.js";
 import type { ToolDefinition } from "./gateway.js";
 import type { ContextToolObservation } from "./context-observations.js";
 import { deepFreeze } from "./deep-freeze.js";
+import { GOVERNED_PATCH_MAX_BYTES } from "./patch-limits.js";
+
+// The one shared per-patch byte bound, re-exported next to `PatchLimits` for its consumers (#4110).
+export { GOVERNED_PATCH_MAX_BYTES };
 
 // ─── Sandbox policy (the 5 documented, inspectable dimensions) ───────────────────
 
@@ -601,7 +605,7 @@ export interface PatchLimits {
 }
 
 export const DEFAULT_PATCH_LIMITS: PatchLimits = {
-  maxPatchBytes: 65_536,
+  maxPatchBytes: GOVERNED_PATCH_MAX_BYTES,
   maxChangedLines: 2_000,
   maxFilesChanged: 50,
 } as const;

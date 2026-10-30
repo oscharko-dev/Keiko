@@ -174,7 +174,10 @@ export type ToolLifecycleBound = ToolLifecycleIdentity & {
 export type ToolLifecycleUnavailable = ToolLifecycleIdentity & {
   readonly op: (typeof TOOL_LIFECYCLE_OPERATIONS)["bind-unavailable"];
   readonly readiness: Exclude<ToolHandlerReadiness, "ready">;
-  readonly reason: ToolResultReason<"failed" | "invalid" | "denied">;
+  readonly reason: Exclude<
+    ToolResultReason<"failed" | "invalid" | "denied">,
+    "provider-reported-error"
+  >;
 };
 export type ToolLifecycleStarted = ToolLifecycleIdentity & {
   readonly op: (typeof TOOL_LIFECYCLE_OPERATIONS)["invocation-started"];

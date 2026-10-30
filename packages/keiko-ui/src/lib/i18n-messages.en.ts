@@ -501,6 +501,11 @@ export const EN_MESSAGES = {
   // broken gateway, and neither text blames the size of the request.
   "chat.modelSelectionUnavailable":
     "The selected model is temporarily unavailable. Choose another available model or wait for it to recover.",
+  "chat.error.capabilityUnavailable.title": "Model capability unavailable",
+  "chat.error.capabilityUnavailable.message":
+    "The selected model cannot currently run the required Chat capabilities.",
+  "chat.error.capabilityUnavailable.remediation":
+    "Select a ready Chat model. For Jira access, run the tool-calling check in Settings > Models or disconnect the Jira Pod.",
   "chat.error.scopeChanged.title": "Connected sources changed",
   "chat.error.scopeChanged.message":
     "The connected sources changed in the meantime. The request was not run with an outdated source list.",

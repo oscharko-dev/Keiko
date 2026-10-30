@@ -160,9 +160,11 @@ dependency for the connector's own domain logic, which never imports it.
 
 **Auth scheme is a closed enum, not a fork:** `AtlassianConnectorAuthScheme = "basic-api-token" |
 "bearer-pat"`. Cloud connectors use `basic-api-token`
-(`Authorization: Basic base64(email:api_token)`); `bearer-pat` is reserved for the Data Center
-follow-up (`Authorization: Bearer <PAT>`, D7) and is declared now so the credential shape never
-needs a breaking change when that follow-up lands. No implementation ships for `bearer-pat` in v1.
+(`Authorization: Basic base64(email:api_token)`). The additive Jira Data Center variant
+uses `Authorization: Bearer <PAT>` and requires explicit `deployment: data-center` with
+`provider: jira`; it has no account-email field. Absent deployment on legacy metadata
+continues to mean Cloud. Both variants use the same custody, encrypted vault and execution-only
+resolver. Data Center metadata starts at credential generation 1 (#4082).
 
 **Storage construction (fixed, no alternative left open for the implementing child):** a new,
 dedicated instance of the existing `@oscharko-dev/keiko-security/secret-vault` primitives —
@@ -202,6 +204,17 @@ connector descriptor returns only the non-secret projection (`id`, `provider`, `
 accepts the raw secret in the request body exactly once, calls `vault.set(authRef, secret)`, and
 discards the request-body value after that call returns.
 
+Both concrete HTTP ports materialize that header through the gateway's final preparation callback,
+after pinned DNS/body preparation and, when proxied, CONNECT/TLS. A server-owned synchronous
+admission callback runs before credential resolution against the immutable request snapshot. Only
+an explicit `true` admits; custody/admission exceptions retain their identity instead of becoming
+retriable network failures. POST and PUT use the gateway's single-attempt transport with configured
+CA trust from the first attempt. An optional synchronous response observer records the HTTP status
+before body consumption, so truncated or failed body reads cannot erase an observed acknowledgement.
+Observer failures release the unread body, emit a content-free server diagnostic and propagate.
+These callbacks do not themselves grant authority: the composing owner must supply the current
+binding, mode, approval, budget and durable mutation checks before exposing a write operation.
+
 **Deletion:** removing a connector calls `vault.delete(authRef)` and deletes the descriptor row in
 the same server-side operation; `LocalSecretVault.delete` is already atomic and crash-safe.
 
@@ -222,18 +235,28 @@ requests may only target that host; there is no cross-connector or wildcard allo
 enforced twice: once at connector-creation validation, and again at request-construction time in
 the `AtlassianHttpPort` adapter (defense in depth, mirroring the existing
 `outboundTargetBlockedReason` literal hostname/address-shape re-check in
-`keiko-model-gateway/src/http.ts`, applied via `classifyOutboundHost` — see `httpPort.ts`'s
-`isBlockedLoopbackTarget`). That literal-shape check runs unconditionally, proxied or not; the
+`keiko-model-gateway/src/http.ts`, applied by the connector adapter before credential resolution). That literal-shape check runs unconditionally, proxied or not; the
 gateway's *DNS-resolved* address re-check (`enforceOutboundTargetPolicy` with `resolveDns: true`)
 additionally requires `egress.pinProxiedConnectTarget` when this connector's traffic is proxied
 (ADR-0038 D6) — proxied deployments are first-class for this lane (below).
 
+**Exact Data Center admission (#4082, 2026-10-26).** The file-owned
+`atlassian.privateTargets` block may admit at most 64 canonical HTTPS base URLs, including
+port and context path, with an explicit `private` or `loopback` address class. It applies only
+to explicitly selected Jira Data Center connections. Setup request bodies, environment variables
+and global permissive egress flags cannot create this admission; setup saves preserve the
+operator block. Every request rechecks the current entry. DNS results must all match the declared
+class, and direct/proxied connects retain address pinning. Metadata/link-local targets and the
+active BFF listener port stay denied. Request paths must remain inside the configured context
+path; noncanonical paths, encoded traversal/separators and fragments fail before credentials
+are resolved. Safe configuration projections omit private target addresses.
+
 **Correction (#3156, 2026-08-15).** The platform-level default for `pinProxiedConnectTarget` stays
 off for a generic `gatewayFetch` caller (ADR-0038 D6: a caller must construct it explicitly, exactly
 like `denyLoopback`) — nothing about that default changes here. This connector is one such caller,
-and it opts in on every call: `connectorEgressConfig` in `httpPort.ts` unconditionally sets both
-`pinProxiedConnectTarget` and `denyLoopback` to `true` in the config this connector passes to
-`gatewayFetch`, so a proxied connector's DNS-resolved address is independently re-validated after
+and it opts in on every call: `connectorEgressConfig` in `httpPort.ts` unconditionally sets
+`pinProxiedConnectTarget` to `true`. `denyLoopback` is also true except for the exact operator-owned
+Data Center admission described below, so a proxied connector's DNS-resolved address is independently re-validated after
 resolution against the same loopback/private/link-local/metadata policy as the direct path, not
 merely covered by the literal-shape check. This text previously said the connector left that
 opt-in off in v1, covering a proxied deployment's resolved address by the literal check alone; two
@@ -271,6 +294,17 @@ intentional (fail-closed defense in depth, not redundant complexity to remove).
 any derived request URL containing `username`/`password` userinfo is rejected at validation time
 and, as defense in depth, at request-construction time.
 
+**Connection identity verification (#4082).** Cloud verification reads at most 64 KiB of
+JSON from the authenticated current-user endpoint within one 30-second deadline. Jira Cloud
+requires a nonempty account ID and an active user; Confluence Cloud requires a nonempty
+account ID and a known user. HTML/SSO pages, malformed or truncated JSON and anonymous
+identities fail closed. Data Center uses the same bounded parser for REST-v2 `serverInfo`
+and `myself` within a shared deadline. Remote identities and bodies are neither logged nor
+returned; only the closed verification outcome enters the existing Activity Log.
+The endpoint contracts are the official
+[Jira Cloud current-user API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/)
+and [Confluence Cloud current-user API](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-users/).
+
 **Bounded timeouts:** 30 000 ms per request for interactive write/read actions (issue and page
 CRUD, transitions, comments); 60 000 ms per paginated fetch for bulk sync requests (matching
 `FigmaHttpPort`'s existing `DEFAULT_TIMEOUT_MS`); 15 000 ms for the live JQL search action (#2248),
@@ -278,14 +312,175 @@ matching the existing per-page timeout convention in
 `DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs`. Sync-run timeouts are additionally bounded
 by the overall `maxDurationMs` run budget (D5).
 
-**Bounded backoff for 429/5xx:** exponential backoff starting at 500 ms, factor 2, capped at 8 000
+**Bounded read backoff for 429/5xx:** GET requests use exponential backoff starting at 500 ms, factor 2, capped at 8 000
 ms per attempt, maximum 5 attempts, honoring a `Retry-After` response header when present (itself
 capped at the same 8 000 ms ceiling so a hostile or misconfigured upstream cannot stall a run past
 its budget). 4xx responses other than 429 are not retried; they fail immediately as typed,
 content-free errors (`auth-failed`, `permission-denied`, `malformed-payload`, per the #2240 job
 failure-reason vocabulary).
+POST and PUT mutations are dispatched at most once, including responses carrying
+`Retry-After`. HTTP method idempotency does not establish that no effect occurred:
+a committed mutation may lose its response, and a repeated PUT may overwrite an
+intervening actor's change. The invocation owner retains the original intent and
+reconciles observed remote state; uncertain effects never trigger an automatic resend
+(#4081/#4083). A transport failure reason does not prove absence of a mutation. The durable Chat
+journal treats every post-dispatch non-2xx response, including 400/401/403/429, as an unknown effect;
+a known local rejection is recorded only before dispatch. A proxy may replace a response after
+an upstream commit, so status-only classification cannot remove the turn's uncertainty barrier.
+The shared HTTP transport and existing action Activity Log remain the
+owners of per-request and terminal evidence. The managed catalog envelope retains its own
+cancellation/denial and settlement status; a matching journal outcome is projected separately as
+`exchange.mutationOutcome`, with exact actor, Chat, binding, credential, canonical-turn, action and
+argument identity checks. Transcript reload and model-history projection keep that outcome paired
+with the original call/result IDs. A later abort or authority loss cannot erase an already observed
+remote effect or imply rollback, and an orphaned pending record never authorizes takeover/replay.
+
+
+**Bounded Jira field validation (#4083).** The connector owns one metadata-driven field matrix
+for its managed Jira provider. It admits standard text, finite numbers, calendar dates,
+millisecond datetime values, user/option references and explicit bounded list types. Core Jira
+custom-field types are named explicitly; an unknown plugin type is unsupported even if its base
+schema looks familiar. A choice list above 500 entries makes only that field unsupported; other
+fields remain usable, and a required unsupported field without a server default still blocks
+creation. Unsupported plugin choice structures are not interpreted. Known-field structural errors
+remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
+unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
+Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
+Create may leave a Jira-declared default omitted without copying or fabricating it. Add/remove is
+limited to labels; replacement and additive changes cannot target the same field in one action.
+Cloud rich text uses the existing ADF composer; Data Center uses plain text, and user references
+respect each deployment's identity scheme. Fresh metadata, authority and dispatch remain separate
+provider obligations; the pure validator grants no execution authority.
+
+Issue reads may select at most 20 additional field IDs. Their `names`/`schema` expansion is
+interpreted by the same field matrix and value validator; no edit permission is inferred from
+readable values. Missing values or schemas remain unavailable, null/empty values remain empty,
+and unknown plugin values remain unsupported without exposing their content. User/option
+references retain only the deployment identity and bounded display label; email addresses and
+self links are omitted. Datetimes accept both ISO offsets and Jira's compact offset representation.
+The expanded `jira.issue` input/result contract is version 3; its ordinary unexpanded read remains
+compatible. The transport's overall byte bound still applies to the selected result.
+
+
+The Data Center mutation executor refreshes create metadata through the post-9.0 paginated
+endpoint (at most ten pages and 500 fields), edit metadata through `editmeta`, and transition fields
+through `transitions.fields`. Duplicate or inconsistent pages fail closed. A selected transition and
+its validated fields are sent together. Creation binds numeric project/issue-type identities;
+editing those routing fields or adding undeclared compound effects is unsupported. Assignment of a
+named active user checks the current issue-scoped assignable-user endpoint without requiring edit
+permission; unassignment additionally requires metadata that permits clearing. Comments remain
+Data Center plain text. The executor snapshots inputs before metadata I/O, shares one aggregate
+deadline across phases, and rechecks admission for every request. The HTTP response observer
+records a successful status in the durable journal before response-body consumption. Only the
+operation's documented 201/204 response, required identity and successful bounded direct readback
+establish a confirmed result. Confirmation checks the affected resource: returned creation/comment identity and
+requested content, edited field values, assignment identity, or the transition's current target
+status and requested fields. Edit/assignment/transition capture the relevant state before dispatch.
+A state that already matched before dispatch does not establish a new effect; a self-transition
+therefore remains unconfirmed. Label updates compare only the requested membership changes, while
+replacement sets ignore ordering and reference labels never substitute for identities. Failed or
+contradictory readback remains acknowledged-but-unconfirmed in the server composer and never permits
+automatic mutation replay. These checks observe the requested result; they do not promise exclusive
+causation or atomic protection against concurrent Jira updates. Managed-provider defaults expose
+reads. Write declarations require an explicitly injected server executor that composes the durable
+journal, current admission and final HTTP port; the connector cannot dispatch through its read
+connection instead. Arguments and connection selection are captured before asynchronous execution.
+The five canonical write descriptors use closed top-level arguments and result states. Dynamic
+field values are additionally validated against fresh Jira metadata, while additive updates are
+restricted to implemented label verbs. Assignment clearing is explicit (`clearAssignee: true`),
+mutually exclusive with `assigneeName`; absence never means clearing. This composition does not
+confer normal Chat binding, read-consent or approval authority on its own.
+
+Authorized tool results include instance-qualified issue links derived from the private selected
+connection and validated issue keys, preserving the context path. Jira-supplied `self` URLs are never
+used for them. Links are added after journal composition and stay out of receipts, journal rows and
+Activity Log evidence. A replay of a create without a retained issue identity does not fabricate a
+link. Read and mutation descriptors carry the additive result field in their new contract versions
+(reads v2, issue read and mutations v3). Mutation schemas share the connector validator's
+50-update bound. Complete read-page byte accounting includes the links and
+reserves the existing catalog envelope budget. When a page exceeds that budget, a fitting prefix
+is returned with `nextStartAt` pointing to its first unreturned item; an item that cannot fit alone
+produces the existing bounded failure instead of a misleading empty page.
+
+The existing private credential metadata owner also holds optional Jira Live-Pod identity:
+an independent Pod UUID, server-supplied owner digest, creation-request UUID and bounded verification
+revision/status. The creation intent is unique within its owner and is checked before another vault
+write; reuse returns an explicit conflict, never a claim that a different submitted token was applied.
+No Pod identity or verification status confers Chat authority. Verification completion is single-use
+and checks the current credential generation and latest probe revision against the retained record;
+it cannot recreate deleted metadata. Failed verification advances the authorization generation.
+Starting a new check retains previously observed readiness until that check has a result.
+
+Authenticated credential creation obtains the existing local operator identity from the server;
+the request cannot select an owner. List, verify and delete enforce that owner for Live Pods.
+The legacy credential GET/Create responses use an explicit public field projection and exclude
+the entire private Live-Pod block, including owner and creation-intent digests. Listing emits
+only the visible count; unavailable or foreign records share the existing not-found rejection.
+The ordinary Chat consumer needs no Coding session to establish this server-owned actor identity.
+
+The existing Verify route starts a generation-checked ticket and completes only that current
+revision. A successful check retains its generation; failed checks and internally aborted probes
+advance it. Aborted probes return to unverified readiness. Late answers after a newer check or
+deletion return conflict and cannot overwrite current state. The existing connection-check event
+distinguishes applied and stale observations without response content. This verification state
+does not itself grant Chat read or mutation authority.
+
+The custody owner notifies server composition when a current failed/aborted probe advances the
+credential generation, or after retaining a durable deletion intent and before removing ciphertext.
+This also covers the direct credential-management routes. The existing UI store atomically advances every matching Chat's
+binding generation, retaining its Pod association on credential invalidation and disconnecting on
+removal. Older/repeated generation notifications are harmless. The existing Chat turn serializer
+then interrupts affected generations; other Pods' Chats remain untouched. Applied scope changes
+and requested cancellation use the registered `chat.scope.update` event. Request correlation passes
+through custody and invalidation, linking the HTTP result, binding effects and cancellation; only
+operations outside a request mint a fresh server correlation. Cleanup failure cannot restore access: incomplete token replacement
+and deletion are retained in private metadata, with a new generation and unverified readiness, before ciphertext changes.
+Execution and verification refuse these pending records before reading the vault. Token replacement
+settles only after the new sealed value and metadata are both written; a failed replacement requires
+an explicit replacement at the current generation. Deletion may retry its retained intent. Rename
+keeps authorization stable. These custody primitives preserve Pod identity and reject stale updates.
+The authenticated credential resource accepts PATCH with `expectedGeneration` and `displayName`,
+`apiToken`, or both. The existing CSRF and owner checks apply before custody mutation; the response
+uses the same public metadata allowlist and cannot expose the private lifecycle block or token.
+Applied rename/replacement events record only action and generation on the existing Activity Log.
+A logging fault after commit produces a diagnostic without converting success into a retryable
+mutation failure. The Knowledge Pods hub's rename, token replacement, reverify and removal controls
+use these same authenticated owners. Public metadata is refetched after a lifecycle request settles
+(including an uncertain failure) and on window focus; a browser notification carries no credential,
+readiness or authority. Matching Chat bindings and grants/approvals are invalidated by the same
+lifecycle owner, including mutations through the direct credential routes. The current qualification
+coverage, including restart cases, remains explicit in the epic evidence matrix.
+
+Both outbound HTTP factories forward the private dispatch/response hooks so the same current
+policy guard can run after transport preparation and before credential materialization. A
+response observer captures the selected Live Pod generation and verification revision by value.
+An observed 401 invalidates only that still-current verified credential, advances its generation
+and notifies the existing dependent-Chat lifecycle owner. A newer/pending verification, rotation,
+deletion or 403 permission denial cannot revoke another/current credential. Response acknowledgement
+runs before invalidation and body consumption; the existing Activity Log distinguishes observed
+request status from an explicit verification probe. Probe construction marks its server-owned
+purpose explicitly and omits the observed-request handler; its existing verification owner records
+the result once. This classification does not depend on a possibly stale metadata snapshot.
+This does not introduce credential polling.
+
+Both outbound HTTP factories capture the selected credential generation by value. The custody
+resolver checks it against current private metadata before reading ciphertext, so an old transport
+cannot silently materialize a replacement credential. The existing typed rejection event and 409
+mapping cover creation conflicts and changed credentials. The authenticated Pod lifecycle routes
+compose these primitives with owner checks and invalidation; the ordinary Chat consumer separately
+admits its current binding, read grant and exact mutation approval before execution. The metadata
+and transport primitives alone confer none of that authority.
 
 ### D4 — Action-class mapping table
+
+**Shared deployment ceiling (#4083).** Production composition resolves one ceiling for Coding and
+connector consumers: absent configuration permits `autonomous-delivery`; the selected human mode
+still defaults to Ask for approval. Explicit configuration and the retained compatibility option
+can narrow the ceiling; invalid values fail closed. Connector calls use that same resolved value
+for authority admission and budget reservation, and include it in the content-free action outcome.
+Memory retains its separate explicit-or-`governed-assist` default. This availability change does not
+itself grant a Chat read consent, mutation approval, connector scope or authority envelope.
+
 
 This is the normative mapping for every v1 governed connector operation. Rows are derived from
 `CODING_WORKBENCH_MODE_POLICIES`'s `internet` resource-scope row (all connector actions reach an
@@ -303,18 +498,29 @@ Authority Envelope.** The `Action class / kind` column below records both identi
 uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 `CodingWorkbenchSupervisedActionKind`.
 
-| # | Action | Provider | Action class / kind | Connector scope | Approval risk | Ask for approval | Approve for me | Full access |
+| # | Action | Provider | Action class / kind | Connector scope | Approval risk | Ask for approval | Supervised workspace | Full access |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `sync-space` | Confluence | `connector-access` | `knowledge-base.read` | low | review-required | allowed | allowed |
-| 2 | `sync-project` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | allowed | allowed |
-| 3 | `search-issues-live` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | allowed | allowed |
+| 1 | `sync-space` | Confluence | `connector-access` | `knowledge-base.read` | low | review-required | review-required | allowed |
+| 2 | `sync-project` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 3 | `search-issues-live` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 4 | `create-issue` | Jira | `connector-write` | `issue-tracker.write` | high | review-required | review-required | allowed |
-| 5 | `update-issue-fields` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | allowed | allowed |
+| 5 | `update-issue-fields` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | review-required | allowed |
 | 6 | `transition-issue` | Jira | `connector-write` | `issue-tracker.write` | high | review-required | review-required | allowed |
-| 7 | `add-issue-comment` | Jira | `connector-write` | `issue-tracker.write` | low | review-required | allowed | allowed |
+| 7 | `add-issue-comment` | Jira | `connector-write` | `issue-tracker.write` | low | review-required | review-required | allowed |
 | 8 | `create-page` | Confluence | `connector-write` | `knowledge-base.write` | high | review-required | review-required | allowed |
-| 9 | `update-page` | Confluence | `connector-write` | `knowledge-base.write` | medium | review-required | allowed | allowed |
-| 10 | `add-page-comment` | Confluence | `connector-write` | `knowledge-base.write` | low | review-required | allowed | allowed |
+| 9 | `update-page` | Confluence | `connector-write` | `knowledge-base.write` | medium | review-required | review-required | allowed |
+| 10 | `add-page-comment` | Confluence | `connector-write` | `knowledge-base.write` | low | review-required | review-required | allowed |
+| 11 | `jira.projects` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 12–14 | `jira.issue-types`, `jira.create-fields`, `jira.edit-fields` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 15–17 | `jira.search`, `jira.issue`, `jira.comments` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 18–19 | `jira.transitions`, `jira.assignable-users` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 20 | `assign-issue` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | review-required | allowed |
+
+The shared action vocabulary and registered outcome event include all twenty rows. The managed
+tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → `update-issue-fields`,
+`jira.assign` → `assign-issue`, `jira.comment` → `add-issue-comment`, and `jira.transition` →
+`transition-issue`. The nine read tools retain their names. Assignment has the same medium risk
+as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
 
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
@@ -329,19 +535,15 @@ Jira automations/webhooks and is not guaranteed reversible) are `high`. No v1 ac
 `critical`; that tier is reserved by the shared vocabulary for classes of action this lane does not
 have (e.g. destructive/delete actions, explicitly out of scope — D7).
 
-**Disposition derivation, spelled out once:** `governed-assist` (Ask for approval) makes every
-`internet` risk tier `approval-required`, so every row is `review-required` regardless of risk —
-this matches #2248's explicit acceptance criterion for `search-issues-live` and generalizes to
-every other row without a special case. `supervised-coding` (Approve for me) allows `low`/`medium`
-and requires approval for `high`/`critical`, which is exactly why the risk tiers above were chosen
-to split the write set: comments and field edits proceed without interruption, while
-issue/page creation and status transitions are reviewed. `autonomous-delivery` (Full access) allows
-every `internet` risk tier, so every row is `allowed`, **conditioned on the connector scope being
-present** — an envelope missing `issue-tracker.write` (or `knowledge-base.write`) is `denied` with
-`connector-write-denied` in Full access exactly as in every other mode, per the #2240 acceptance
-criterion that write actions without the write scope are denied "in every mode, including Full
-access." No connector action ever reaches `delivery` resource scope; git commit/push/PR/merge stay
-governed exclusively by the existing delivery-substrate path and are untouched by this lane.
+**Disposition derivation, spelled out once:** both `governed-assist` (Ask for approval) and
+`supervised-coding` (Supervised workspace) require review for every connector action's `internet`
+resource scope, regardless of risk tier (ADR-0138). Risk tiers describe the action and inform its
+review; they do not exempt comments or field edits from approval. `autonomous-delivery` (Full
+access) allows these actions only within a valid authority envelope, the required connector scopes
+and the resolved deployment ceiling. A missing read/write scope is denied in every mode, including
+Full access. Invalid explicit ceilings fail closed; narrower configured ceilings still apply.
+Connector authority never grants repository delivery authority; commit/push/PR/merge remain on
+the existing delivery path.
 
 **Contract extension decided here, implemented in #2240:** `CodingWorkbenchConnectorScope` gains
 two new closed values, `"knowledge-base.read"` and `"knowledge-base.write"`, added to
@@ -355,6 +557,33 @@ identifiers themselves are unchanged: `connector-access` already exists as a
 `connector-write` already exists as a `CodingWorkbenchSupervisedActionKind` whose `actionKindToPerm`
 mapping resolves back to `connector-access`, carrying the additional approval-risk signal on the
 supervised-action path. Only the scope enum grows.
+
+Managed Jira catalog operations use the same `connector-access` effect class. The current
+project, issue-type, create/edit metadata, search, issue, comment, transition-metadata and assignable-user read capabilities map to `issue-tracker.read` (low risk). In ordinary Chat, every mode
+requires the current binding's first-read grant before HTTP; a valid grant permits subsequent
+read-class calls only within the current authority, binding and credential generation. That bounded
+read grant supplies the standing approval for read-class calls; it never approves writes. Missing or
+expired authority is denied. The ordinary buffered and streaming Chat paths compose this admission
+under #4084/#4091 through the shared catalog binder and managed host described in
+[ADR-0181](ADR-0181-shared-managed-mcp-host.md). The provider factory and SDK host never confer
+consumer authority themselves. The descriptor keeps the catalog's conservative server-generated
+invocation key requirement for external connector effects.
+
+The authenticated Chat PATCH and serializer own the single Jira binding and saved human mode.
+Responses add the server-resolved ceiling and effective mode without replacing the saved selection.
+The existing Chat settings, Knowledge Pods hub and workspace ports use that same PATCH; a
+presentation edge appears only after confirmation for the exact requested Chat and Pod. Replacing
+a binding requires explicit confirmation. Cancelled/superseded UI requests and late replies cannot
+create an edge for a different selection. A workspace node, drag payload or display of a verified
+Pod never grants authority. The existing shared mode selector disables options above the ceiling.
+
+Ask for approval and Supervised workspace require a concrete write approval. Full access omits
+per-action write approval only inside current validated authority. Approvals bind the canonical turn,
+action digest, arguments and current subject generations; the mutation journal claims an approval
+once at actual mutation dispatch, after metadata reads. Every mode still needs first-read consent,
+including the metadata reads required to prepare a mutation. Mixed Data-Pod/Jira turns preserve
+existing grounding citations and attribute Jira results separately; their orchestration phases share
+the original turn budgets.
 
 ### D5 — Sync bounds and lifecycle
 
@@ -408,6 +637,17 @@ and queryable throughout.
 
 ### D6 — Evidence and audit shape
 
+The existing server action owner also projects SyncRun completion through the registered
+`atlassian.action.outcome` Activity Log operation. The connector activity ring remains the UI
+projection; it is not the sole audit store. A partial sync is explicitly `partial` in the global
+log, with a warning level and the actual closed failure reason rather than a governance rationale.
+Partial sync-only failure reasons remain classified as failures in the global projection; governance approval reasons are not reclassified as execution failures.
+
+Malformed list/metadata JSON, individual Jira/Confluence item bodies and live-search responses
+are covered through the real routes and the existing log reader. Managed Jira tools use the shared
+`mcp.managed.lifecycle` producer; HTTP/provider failures are refused through that owner. No response
+body, URL, credential reference or token is copied into these registered projections.
+
 Every connector action attempt — allowed, review-required, denied, and failed — produces exactly
 one content-free audit record: action type, connector id, provider, target key/id (an issue key or
 page id — an identifier, not a body), disposition, reason code, correlation id, duration, and
@@ -435,15 +675,17 @@ that leaks synced bodies); this record keeps them structurally separate, mirrori
 `editor-agent-governance.ts`'s bounded audit record is content-free while the actual file content it
 describes is not redacted at the workspace layer.
 
-### D7 — v1 platform: Atlassian Cloud REST, with named follow-ups
+### D7 — Qualified platforms and named follow-ups
 
-v1 targets Atlassian Cloud REST APIs only, against a configurable, per-connector base URL validated
-per D3. The following are explicitly deferred, each with the reason it is not v1:
+Cloud REST behavior remains supported. Epic #4081 adds a bounded Jira Data Center 10.3.26
+REST-v2/PAT connection path. Version and active identity are verified with bounded `serverInfo`
+and `myself` JSON reads under one deadline; HTML, redirects, authentication, permission, version,
+TLS and network failures have closed outcomes. Context paths are preserved. This implementation
+is not a qualification claim: real lab and model acceptance is recorded in
+[the epic evidence matrix](../qa/jira-chat-pods-4081.md). Other Data Center versions and
+Confluence Data Center remain unsupported. The existing sync lane remains Cloud-only.
 
-- **Data Center compatibility.** Different base-path conventions, more commonly self-signed/private
-  CAs (already covered by D3's CA composition, but unverified against a real Data Center instance),
-  and the `bearer-pat` auth scheme (declared in D2, unimplemented). Deferred because it requires
-  access to a Data Center instance to verify, which this issue does not have.
+The following capabilities remain deferred:
 - **OAuth 2.0 (3LO).** API-token Basic auth is sufficient for a single local user's own credential
   and requires no redirect-based consent flow, browser round-trip, or refresh-token custody. OAuth
   is deferred until multi-user or app-marketplace distribution creates an actual need for it.
@@ -467,18 +709,19 @@ per D3. The following are explicitly deferred, each with the reason it is not v1
 
 A synced pod, and every live read or write action, reflects the visibility and permissions of the
 **token identity at the moment of the call** — a point-in-time snapshot, not a live or continuously
-re-evaluated permission set. Keiko applies no additional per-user or per-team access control on top
-of what the connected Atlassian token can already see; it does not replicate Confluence space
-permissions or Jira project/issue-level security schemes into a local ACL model. This is a
-deliberate v1 scope limitation, not an oversight, and must be documented as such wherever a
-connector is configured or a synced pod is presented to a user.
+re-evaluated permission set. Keiko does not replicate Confluence space permissions or Jira
+project/issue-level security schemes into a local ACL over synced content. Ordinary Chat calls
+additionally require the current Keiko actor-owned binding, authority, read consent and any concrete
+write approval; those checks never widen the Atlassian identity's permissions. The synced-content
+limitation must be documented wherever a connector or its persisted knowledge is presented.
 
 **Guidance for regulated deployments:** use a dedicated service-account API token scoped to only
 the projects/spaces the deployment intends to expose, rather than a broad personal token — the
 local pod inherits that token's full read scope for every local user of the workspace the pod is
-part of. Rotate the token on the organization's existing credential-rotation cadence (D2's
-`authRef` indirection makes rotation a `vault.set` on the same reference, with no descriptor or
-pod-metadata change required). Treat a synced pod as equivalent, from an access-control perspective,
+part of. Rotate the token on the organization's existing credential-rotation cadence. The `authRef`
+and Live-Pod identity stay stable, while custody and matching Chat bindings advance their
+generations and access remains unavailable until verification and fresh consent. Treat a synced
+pod as equivalent, from an access-control perspective,
 to a local export of everything that token could read at sync time, and govern its local retention
 and distribution accordingly.
 
@@ -495,9 +738,9 @@ and distribution accordingly.
   the Figma connector and the Local Knowledge intranet-manual fetcher.
 - `keiko-connectors` stays a small, independently testable leaf (fixture-injected transport port),
   matching the dependency shape of every other domain leaf package in the repository.
-- The mapping table's risk-tier split (low reads/comments, medium field edits, high
-  creates/transitions) gives "Approve for me" a real, defensible distinction between writes that
-  proceed unattended and writes that pause for review, rather than treating all writes identically.
+- The mapping table retains concrete risk descriptions for reads/comments, field edits and
+  creates/transitions. Under ADR-0138, Ask for approval and Supervised workspace require approval
+  for connector writes at every tier; Full access still requires current bounded authority.
 
 ### Negative
 
@@ -519,9 +762,8 @@ and distribution accordingly.
   additive table row under this same ADR's D4 pattern, not a new ADR, unless it also changes the
   credential, egress, or package-boundary decisions (D1-D3), in which case it would need its own
   record referencing this one.
-- `bearer-pat` exists in the auth-scheme enum today with no implementation, matching the standard
-  "declare the shape, implement the follow-up separately" pattern already used for
-  `CodingWorkbenchModelSource`'s subscription-profile values before their runtimes shipped.
+- `bearer-pat` is implemented for explicitly selected Jira Data Center connections; existing
+  Cloud credential envelopes and metadata remain readable without rewriting their stored shape.
 
 ## Alternatives Considered
 

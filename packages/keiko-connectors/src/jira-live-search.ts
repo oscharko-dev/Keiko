@@ -1,3 +1,4 @@
+import { jiraBrowseBaseFor } from "./jira-browse-url.js";
 // Governed live Jira JQL search executor (Issue #2248, Epic #2238, ADR-0128 D3/D4/D5/D6).
 //
 // A THIN orchestration over the SAME lane internals the #2243 sync adapter runs on — no second
@@ -178,15 +179,6 @@ function boundedLiveSummary(value: unknown): string {
     : flattened;
 }
 
-// Site-root browse base (origin plus any Data Center context path) — the same click-through
-// shape the synced `webuiPath` resolves to against the connector base URL.
-function browseBaseFor(endpoints: AtlassianApiEndpoints): string {
-  const basePath = endpoints.base.pathname.endsWith("/")
-    ? endpoints.base.pathname.slice(0, -1)
-    : endpoints.base.pathname;
-  return `${endpoints.base.origin}${basePath}`;
-}
-
 // One search entry → one live hit. Hostile entries (missing or unsafe key) are dropped exactly
 // as the sync enumeration drops them, and the citation metadata is built by the SAME #2243
 // builder the sync lane uses — the parity acceptance criterion holds by construction.
@@ -256,7 +248,7 @@ async function walkLiveSearchPages(
   maxResults: number,
   remainingTimeoutMs: () => number,
 ): Promise<LiveWalkOutcome> {
-  const browseBase = browseBaseFor(endpoints);
+  const browseBase = jiraBrowseBaseFor(endpoints);
   const issues: JiraLiveIssue[] = [];
   const seenKeys = new Set<string>();
   let token: string | undefined;

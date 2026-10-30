@@ -152,11 +152,12 @@ A run reads the task workspace's own `AGENTS.md` (workspace root only, exact nam
 through the secure read helper only while the run's own workspace is the active one (a workspace
 switch while the run starts records `refused`, `workspace-unavailable`). The text first passes the
 canonical model-safe projection of workspace text, so credentials in the file never reach the model
-(a file that projection cannot handle is `refused`, `redaction-unavailable`). It is then bounded to
-the first 800 lines and 16,384 bytes, with one explicit truncation line when cut, and labelled as
-repository-authored and untrusted: it grants no authority (ADR-0137 D1).
+(a file that projection cannot handle is `refused`, `redaction-unavailable`). It is then labelled as
+repository-authored and untrusted: it grants no authority (ADR-0137 D1). The mapped profiles bound
+it to the first 800 lines and 16,384 bytes, with one explicit truncation line when cut; a native run
+carries the whole masked file, up to the helper's 1 MiB ceiling and half the model's input window.
 
-- **Native profile.** The bounded copy is written to the run's private configuration as the pinned
+- **Native profile.** The copy is written to the run's private configuration as the pinned
   2.1.4 producer's global instruction file, which its own instruction plugin loads and watches.
   Keiko refreshes the copy before every turn, so an edit, a file `init` creates and a removal reach
   the next model call. The producer's `read` still loads nested `AGENTS.md` files.

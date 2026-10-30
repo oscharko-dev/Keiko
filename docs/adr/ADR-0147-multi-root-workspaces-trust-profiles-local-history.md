@@ -253,6 +253,15 @@ returns `PROJECT_EXISTS` before any identity write, with the enclosing transacti
 project timestamps as well. Multi-root reconnect semantics and the strict identity inspector's
 global alias denial remain unchanged. The existing registered reconnect event records the actual
 availability outcome without paths, names or source bodies.
+A Coding Workbench bridge registration (#4117, owner decision 2026-10-29) performs the same
+reconnect, through the same store writer, for a single-root project registered at exactly the
+requested path whose canonical path is unchanged and whose strict live inspection succeeds with a
+different identity (a folder deleted and recreated in place). A missing folder, a path that now
+resolves elsewhere or through an alias, and a multi-root workspace refresh nothing and keep the
+`root-binding-invalid` refusal. The former root's trust is revoked as above, and a binding minted
+against the former identity stays invalid: only a registration after the refresh holds the new one.
+The registration's Activity Log operation records `identity-refreshed` with the previous and new
+manifest revision counts only.
 A project
 selection explicitly attested by a trusted launcher remains a local-human selection path through
 the same trust service. An ambient process working directory may

@@ -22,6 +22,7 @@ import {
   createCodingRuntimeRepositoryInstructionsPort,
   KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV,
   renderRepositoryInstructions,
+  repositoryInstructionsCopyBudget,
   REPOSITORY_INSTRUCTIONS_FILE_NAME,
   REPOSITORY_INSTRUCTIONS_MAX_BYTES,
   REPOSITORY_INSTRUCTIONS_MAX_LINES,
@@ -715,20 +716,168 @@ describe("native delivery through the runtime's own instruction plugin", () => {
     expect(existsSync(targetPath)).toBe(false);
   });
 
-  it("keeps the loader's bounds: a long file is copied truncated, with its marker", async () => {
-    const long = Array.from(
-      { length: REPOSITORY_INSTRUCTIONS_MAX_LINES + 5 },
-      (_, index) => `line ${String(index)}`,
-    ).join("\n");
-    const { port } = nativePort(sourceAnswering({ ok: true, text: long }).source);
+  // The copy's bound used to be the initial-turn block's 16 KiB and 800 lines, so a standalone run
+  // saw an AGENTS.md that a Keiko run did not (#3900 parity). The invariant that remains is that the
+  // copy is bounded and says so: by the helper's ceiling, and by the run's prompt budget below.
+  it("copies the whole file a standalone run loads, past the block's 16 KiB and 800 lines", async () => {
+    const long = `${lines(2_000, "A line of the repository's working instructions,")}\n`;
+    expect(Buffer.byteLength(long, "utf8")).toBeGreaterThan(REPOSITORY_INSTRUCTIONS_MAX_BYTES * 4);
+    const { port, records } = nativePort(sourceAnswering({ ok: true, text: long }).source);
     const targetPath = copyTarget();
 
     await port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
 
     const copy = readFileSync(targetPath, "utf8");
-    expect(Buffer.byteLength(copy, "utf8")).toBeLessThan(REPOSITORY_INSTRUCTIONS_MAX_BYTES + 1_024);
-    expect(copy).toContain("[AGENTS.md truncated:");
-    expect(copy).not.toContain(`line ${String(REPOSITORY_INSTRUCTIONS_MAX_LINES + 4)}`);
+    expect(copy).toContain("working instructions, 2000\n");
+    expect(copy).not.toContain("truncated");
+    const { persisted } = expectInstructionsLine(records);
+    expect(persisted).toMatchObject({
+      state: "attached",
+      byteCount: Buffer.byteLength(long, "utf8"),
+      lineCount: 2_000,
+      limitByteCount: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+      estimatedTokens: estimateTokens(copy),
+    });
+    expect(persisted).not.toHaveProperty("omittedByteCount");
+    expect(persisted).not.toHaveProperty("totalByteCount");
+  });
+
+  it("cuts the copy to the run's prompt budget at a line boundary, with the marker and the counts", async () => {
+    const long = lines(2_000);
+    const budget = 4_096;
+    const { port, records } = nativePort(sourceAnswering({ ok: true, text: long }).source);
+    const targetPath = copyTarget();
+
+    await port.materializeForRun({
+      runId: RUN_ID,
+      isRunWorkspace: RUN_WORKSPACE,
+      targetPath,
+      contentByteBudget: budget,
+    });
+
+    const copy = readFileSync(targetPath, "utf8");
+    const shown = /the first (\d+) of 2000 lines are shown/u.exec(copy)?.[1];
+    expect(Number(shown)).toBeGreaterThan(0);
+    expect(Number(shown)).toBeLessThan(2_000);
+    expect(copy).toContain(`line ${String(shown)}\n[AGENTS.md truncated:`);
+    expect(copy).not.toContain(`line ${String(Number(shown) + 1)}\n`);
+    const { persisted } = expectInstructionsLine(records);
+    const total = Buffer.byteLength(long, "utf8");
+    expect(persisted).toMatchObject({
+      state: "truncated",
+      lineCount: Number(shown),
+      totalLineCount: 2_000,
+      totalByteCount: total,
+      limitByteCount: budget,
+    });
+    expect(persisted.byteCount).toBeLessThanOrEqual(budget);
+    expect(persisted.omittedByteCount).toBe(total - Number(persisted.byteCount));
+  });
+
+  it("never grants a budget above the helper's ceiling, and refuses one that is negative", async () => {
+    const { port, records } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    const targetPath = copyTarget();
+    await port.materializeForRun({
+      runId: RUN_ID,
+      isRunWorkspace: RUN_WORKSPACE,
+      targetPath,
+      contentByteBudget: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES * 4,
+    });
+    expect(expectInstructionsLine(records).persisted).toMatchObject({
+      limitByteCount: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+    });
+
+    const refusing = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    await refusing.port.materializeForRun({
+      runId: RUN_ID,
+      isRunWorkspace: RUN_WORKSPACE,
+      targetPath,
+      contentByteBudget: -1,
+    });
+    expect(existsSync(targetPath)).toBe(false);
+    expect(refusing.records.filter((record) => record.op === OP)).toMatchObject([
+      { level: "warn", extra: { state: "refused", reason: "prompt-budget-exhausted" } },
+    ]);
+  });
+
+  it("derives the run's budget from half the model's input window at three bytes per token", () => {
+    expect(repositoryInstructionsCopyBudget(0)).toBe(0);
+    expect(repositoryInstructionsCopyBudget(32_768)).toBe(49_152);
+    // A 131,072-token window less its 16,384 output reserve holds about 168 KiB, so this
+    // repository's own 120 KiB AGENTS.md travels whole on the lab model.
+    expect(repositoryInstructionsCopyBudget(131_072 - 16_384)).toBe(172_032);
+    expect(repositoryInstructionsCopyBudget(131_072 - 16_384)).toBeGreaterThan(125_313);
+  });
+});
+
+// #3900: every Coding Workbench run on this repository logged `redaction-unavailable` and the model
+// got no repository instructions at all, because the canonical projection read plain English prose
+// in AGENTS.md as source code and then refused the whole file. This window of CONTRIBUTING.md (lines
+// 638-641) failed the same way; it is copied here so the proof does not depend on the live file.
+describe("instruction files whose prose once failed the code projection", () => {
+  const CONTRIBUTING_PROSE_WINDOW =
+    [
+      "healthy controls; ordinary file eligibility exclusions and budget limits are not failures.",
+      "",
+      "All repository-add lifecycle join ids, including discarded settlements, must pass the canonical Activity Log correlation guard. Browser delivery-loss counts enter the shared ledger once after rate admission and before routine diversion. Rate-limited reports carrying loss return 429 so the browser restores their counters for later admission; their server-owned drop must not be counted again as a failed POST. Final pagehide loss reports have their own bounded server budget, independent of routine/failure traffic. Gateway streams settle circuit/spend state, close provider iterators and emit completion before yielding done, since production consumers need not advance again. Commit-draft refusals retain measured prompt bounds and generated/reused outcomes share a body-free key digest.",
+      "Repository-add dialogs report the attempt and its live or discarded settlement using the request's",
+    ].join("\n") + "\n";
+
+  async function deliveries(text: string): Promise<{
+    readonly copy: string | undefined;
+    readonly block: string | undefined;
+    readonly lines: readonly Record<string, unknown>[];
+  }> {
+    const captured = captureActivityLog();
+    const source = sourceAnswering({ ok: true, text }).source;
+    const native = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source,
+      activityLog: captured.activityLog,
+    });
+    const mapped = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      source,
+      activityLog: captured.activityLog,
+    });
+    const targetPath = join(mkdtempSync(join(tmpdir(), "keiko-instructions-prose-")), "AGENTS.md");
+    await native.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
+    const block = await mapped.loadForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE });
+    return {
+      copy: existsSync(targetPath) ? readFileSync(targetPath, "utf8") : undefined,
+      block,
+      lines: captured.records
+        .filter((record) => record.op === OP)
+        .map((record) => ({ ...record.extra })),
+    };
+  }
+
+  it("delivers the prose to a native run and to the mapped initial turn, unrefused", async () => {
+    const text = `# Rules\n\n${CONTRIBUTING_PROSE_WINDOW}`;
+
+    const { copy, block, lines: recorded } = await deliveries(text);
+
+    expect(copy).toContain(CONTRIBUTING_PROSE_WINDOW.trimEnd());
+    expect(block).toContain(CONTRIBUTING_PROSE_WINDOW.trimEnd());
+    expect(recorded).toHaveLength(2);
+    for (const line of recorded) {
+      expect(line).toMatchObject({ state: "attached", contentSha256: sha256(text) });
+      expect(line).not.toHaveProperty("reason");
+    }
+  });
+
+  it("still refuses an instruction file that holds source which does not parse", async () => {
+    const text = `# Rules\n\nconst password = foo(bar baz, "synthetic-unparsable-value");\n`;
+
+    const { copy, block, lines: recorded } = await deliveries(text);
+
+    expect(copy).toBeUndefined();
+    expect(block).toBeUndefined();
+    expect(recorded).toMatchObject([
+      { state: "refused", reason: "redaction-unavailable" },
+      { state: "refused", reason: "redaction-unavailable" },
+    ]);
   });
 });
 

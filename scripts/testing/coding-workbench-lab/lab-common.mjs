@@ -44,8 +44,33 @@ const MIN_RUN_SUFFIX_LENGTH = 6;
 /** A mistake in how the operator invoked a script: reported as usage, exit code 2. */
 export class UsageError extends Error {}
 
+// Playwright's request errors embed their call log, request headers included (#4120).
+const SECRET_HEADER = /\b((?:set-)?cookie|(?:proxy-)?authorization)(\s*[:=]\s*)[^\r\n]*/giu;
+// A header serialized as JSON quotes its name, so the separator follows a quote; only its value, a
+// whole array of values included, is replaced and the rest of the document stays readable (#4126
+// review). A bare array element never starts with a quote, so every element has one parse and an
+// unterminated array cannot backtrack exponentially.
+const QUOTED_SECRET_HEADER =
+  /(["'])((?:set-)?cookie|(?:proxy-)?authorization)\1(\s*:\s*)(?:\[(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\]"'\r\n])*\]|(["'])(?:\\.|(?!\4)[^\\\r\n])*\4|[^,}\r\n]*)/giu;
+const UNREACHABLE = /\b(ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|ETIMEDOUT)\b/u;
+
+/** Replaces the value of every cookie and authorization header line in `text`. */
+export function redactSecretHeaders(text) {
+  return text
+    .replace(QUOTED_SECRET_HEADER, "$1$2$1$3$4[redacted]$4")
+    .replace(SECRET_HEADER, "$1$2[redacted]");
+}
+
 export function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
+  return redactSecretHeaders(error instanceof Error ? error.message : String(error));
+}
+
+/** The one line a script prints for the error that ended it. */
+export function labErrorLine(error) {
+  if (error instanceof UsageError) return error.message;
+  const message = errorMessage(error);
+  const unreachable = UNREACHABLE.exec(message);
+  return unreachable === null ? `lab: ${message}` : `lab: server unreachable (${unreachable[1]})`;
 }
 
 /** Runs a script's async main(); its return value is the process exit code. */
@@ -55,7 +80,7 @@ export function runMain(main) {
       process.exitCode = code ?? 0;
     },
     (error) => {
-      console.error(error instanceof UsageError ? error.message : `lab: ${errorMessage(error)}`);
+      console.error(labErrorLine(error));
       process.exitCode = error instanceof UsageError ? 2 : 1;
     },
   );

@@ -1,4 +1,133 @@
+import { EN_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  ...EN_AUTONOMY_MODE_LABELS,
+  "atlassianConnectors.live.rename": "Rename Pod",
+  "atlassianConnectors.live.renameTitle": "Rename Jira Pod",
+  "atlassianConnectors.live.rotateTitle": "Replace Jira token",
+  "atlassianConnectors.live.replaceToken": "Replace token",
+  "atlassianConnectors.live.newToken": "New API token",
+  "atlassianConnectors.live.saveName": "Save name",
+  "atlassianConnectors.live.saveToken": "Save token",
+  "atlassianConnectors.live.saving": "Saving changes…",
+  "atlassianConnectors.live.rotateHint":
+    "The Pod and its Chat connections stay in place. Replacing the token stops current access and pending work. Verify the connection again and grant new Chat consent before continuing.",
+  "atlassianConnectors.live.operationFailed":
+    "The operation could not be confirmed. Refresh the Pod status before making another change.",
+  "atlassianConnectors.live.refresh": "Refresh status",
+  "atlassianConnectors.live.refreshRequired":
+    "The current connection status is unknown. Refresh it before using this Pod.",
+  "atlassianConnectors.live.verifyRequired": "Verify this connection before using it in Chat.",
+  "atlassianConnectors.live.remove": "Remove Pod",
+  "atlassianConnectors.live.keep": "Keep Pod",
+  "atlassianConnectors.live.removeConfirm":
+    "Remove this Jira Pod and its saved token? This disconnects all connected Chats and cancels their pending permissions.",
+  "atlassianConnectors.live.capabilities":
+    "Chat can search and read Jira issues and metadata, and create, edit, assign, comment on or change the status of issues. Jira permissions and Chat approvals govern each action.",
+  "atlassianConnectors.live.readCapabilities":
+    "Chat can search and read Jira issues and metadata after your consent. Access still depends on the Jira account permissions.",
+  "atlassianConnectors.live.patHint":
+    "Create a personal access token in your Jira profile. It is used only to save this connection and is never shown again.",
+
+  "chat.jira.writeApproval.unavailable": "Action approval is currently unavailable",
+  "chat.jira.writeApproval.title": "Review Jira action",
+  "chat.jira.writeApproval.pending": "Waiting for your decision",
+  "chat.jira.writeApproval.approved": "Approved for this action",
+  "chat.jira.writeApproval.claimed": "Approval used for this action",
+  "chat.jira.writeApproval.rejected": "Action declined",
+  "chat.jira.writeApproval.expired": "Action approval expired",
+  "chat.jira.writeApproval.revoked": "Action approval revoked",
+  "chat.jira.writeApproval.disclosure":
+    "Review the proposed action and its exact details below. Approval applies only to this action. An approval is not confirmation that Jira was changed.",
+  "chat.jira.writeApproval.preview": "Proposed action details",
+  "chat.jira.writeApproval.working": "Checking this action…",
+  "chat.jira.writeApproval.failed":
+    "The current action state could not be confirmed. Refresh it before making a decision.",
+  "chat.jira.writeApproval.allow": "Approve this action",
+  "chat.jira.writeApproval.deny": "Decline this action",
+  "chat.jira.writeApproval.refresh": "Refresh action state",
+
+  "chat.jira.resultUnavailable": "Result unavailable",
+  "chat.jira.partial": "Partial Jira result. Some available data is not included.",
+  "chat.jira.write.notDispatched": "Not sent to Jira",
+  "chat.jira.write.rejected": "Jira action rejected",
+  "chat.jira.write.succeeded": "Jira change confirmed",
+  "chat.jira.write.unconfirmed": "Jira accepted the change; confirmation incomplete",
+  "chat.jira.write.unknown": "Jira outcome unknown",
+  "chat.jira.write.pending": "Awaiting a confirmed Jira outcome",
+  "chat.jira.write.unconfirmedHelp":
+    "Check the current Jira state before requesting another change. This action is not retried automatically.",
+  "chat.jira.write.unknownHelp":
+    "The change may have been applied. Check Jira before requesting another change. This action is not retried automatically.",
+  "chat.jira.write.pendingHelp":
+    "No final outcome is available. This does not confirm an active execution, and the action is not retried automatically.",
+
+  "atlassianConnectors.live.empty": "No Jira Pods yet. Create one to connect Jira to a Chat.",
+  "chat.jira.connection": "Jira connection",
+  "chat.jira.podLabel": "Jira Pod",
+  "chat.jira.noPod": "No Jira Pod",
+  "chat.jira.podUnavailable": "Current Pod unavailable",
+  "chat.jira.verifyRequired": "Verification required",
+  "chat.jira.addToWorkspace": "Add to workspace",
+  "chat.jira.workspaceHint":
+    "Drag this Jira Pod onto the workspace, or add it with this button. Connect its port to a Chat.",
+  "chat.jira.liveTools": "Live Jira tools",
+  "chat.jira.liveReady": "Verified Jira Pod",
+  "chat.jira.liveUnavailable": "Jira Pod unavailable; open Knowledge Pods to verify or reconnect.",
+  "chat.jira.effectiveMode": "Effective mode: {mode}",
+  "chat.jira.modeLabel": "Chat autonomy mode",
+  "chat.jira.modeHelp":
+    "The first Jira read always requires consent. Deployment limits and the current Chat permissions continue to apply.",
+  "chat.jira.replaceConfirm": "Replace the current Jira Pod and revoke its pending permissions.",
+  "chat.jira.apply": "Apply Jira settings",
+  "chat.jira.connectionFailed":
+    "Jira settings could not be loaded or saved. Reopen this control to refresh and retry.",
+  "chat.jira.bound": "Jira Pod connected by the server",
+  "chat.jira.unbound": "No Jira Pod connected",
+  "atlassianConnectors.live.title": "Jira Live Pods",
+  "atlassianConnectors.live.subtitle":
+    "Read current Jira data in a connected Chat with explicit read consent. Live access does not create an index or stored document collection.",
+  "atlassianConnectors.live.add": "Create Jira Pod",
+  "chat.tools.connection": "Tool access",
+  "chat.tools.modeHelp":
+    "The selected mode applies to tools in this chat. Reading through MCP or Jira requires consent; writes follow the mode and deployment limits. Configure MCP servers in Settings.",
+  "chat.tools.apply": "Apply tool settings",
+  "chat.mcp.title": "Read MCP data in this chat",
+  "chat.mcp.disclosure":
+    "Content retrieved through configured MCP servers will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the configuration or authority changes. It does not grant permission to write.",
+  "chat.mcp.tool": "MCP action",
+  "chat.mcp.details": "View MCP result",
+  "chat.mcp.writeApproval.title": "Approve MCP action",
+  "chat.mcp.writeApproval.disclosure":
+    "Review this tool and its arguments. Approval permits this action once within the current connection and authority.",
+  "chat.mcp.write.notDispatched": "Not sent to the MCP server",
+  "chat.mcp.write.rejected": "MCP action rejected",
+  "chat.mcp.write.succeeded": "Action confirmed",
+  "chat.mcp.write.unconfirmed": "The server accepted the change; confirmation incomplete",
+  "chat.mcp.write.unknown": "MCP action outcome unknown",
+  "chat.mcp.write.pending": "Awaiting a confirmed MCP outcome",
+  "chat.mcp.write.unconfirmedHelp":
+    "The server reported success, but the final result could not be confirmed. Check the remote state before starting another write.",
+  "chat.mcp.write.unknownHelp":
+    "The change may have been applied. It will not be repeated automatically. Check the remote state before starting another write.",
+  "chat.mcp.write.pendingHelp":
+    "The action has started. Wait for its outcome before starting another write.",
+  "chat.jira.title": "Read Jira in this chat",
+  "chat.jira.disclosure":
+    "Jira content will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the connection or authority changes. It does not grant permission to write.",
+  "chat.jira.approve": "Allow reading",
+  "chat.jira.reject": "Do not allow",
+  "chat.jira.working": "Saving your decision…",
+  "chat.jira.failed": "Your decision could not be saved. Try again.",
+  "chat.jira.pending": "Waiting for your permission",
+  "chat.jira.granted": "Reading allowed",
+  "chat.jira.rejected": "Reading declined",
+  "chat.jira.expired": "Permission expired",
+  "chat.jira.revoked": "Permission revoked",
+  "chat.jira.tool": "Jira action",
+  "chat.jira.complete": "Completed",
+  "chat.jira.running": "Running",
+  "chat.jira.unavailable": "Could not complete",
+  "chat.jira.details": "View Jira result",
   "browserApproval.title": "Connect this browser",
   "browserApproval.close": "Close",
   "browserApproval.notice":
@@ -1790,6 +1919,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.error.send": "Could not send message.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
+  "chat.grounding.dataLabel": "Data sources",
+  "chat.grounding.noDataSources": "No Data sources",
+  "chat.grounding.dataCatalogEmpty": "No ready Data Pods or Pod Sets are available.",
   "chat.grounding.label": "Sources",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",
@@ -2575,17 +2707,28 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.verify.ok.label": "Connection verified",
   "atlassianConnectors.verify.ok.copy": "The credential authenticated successfully.",
   "atlassianConnectors.verify.auth-failed.label": "Authentication failed",
-  "atlassianConnectors.verify.auth-failed.copy":
-    "Check the account email and API token, then verify again.",
+  "atlassianConnectors.verify.auth-failed.copy": "Check the account and token, then verify again.",
   "atlassianConnectors.verify.forbidden.label": "Access forbidden",
   "atlassianConnectors.verify.forbidden.copy":
-    "The account authenticated but lacks permission. Grant access in Atlassian, then verify again.",
+    "Atlassian denied access. Check the account permissions and any site or license restrictions, then verify again.",
   "atlassianConnectors.verify.unreachable.label": "Site unreachable",
   "atlassianConnectors.verify.unreachable.copy":
     "The base URL could not be reached. Check the URL and your network, then verify again.",
   "atlassianConnectors.verify.timeout.label": "Connection timed out",
   "atlassianConnectors.verify.timeout.copy":
     "The site did not respond in time. Try verifying again in a moment.",
+  "atlassianConnectors.verify.redirect-refused.label": "Redirect refused",
+  "atlassianConnectors.verify.redirect-refused.copy":
+    "The address redirects elsewhere. Enter the final HTTPS address of the Atlassian site.",
+  "atlassianConnectors.verify.invalid-response.label": "Invalid Atlassian response",
+  "atlassianConnectors.verify.invalid-response.copy":
+    "The address returned no valid Atlassian JSON response. Check the address and login gateway.",
+  "atlassianConnectors.verify.unsupported-version.label": "Unsupported Jira version",
+  "atlassianConnectors.verify.unsupported-version.copy":
+    "This connection supports Jira Data Center 10.3.26. Verify the deployment and version.",
+  "atlassianConnectors.verify.tls-failed.label": "Certificate verification failed",
+  "atlassianConnectors.verify.tls-failed.copy":
+    "Check the certificate validity, hostname and trusted certificate authority.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence space keys",
   "atlassianConnectors.scope.confluencePlaceholder": "e.g. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira project keys",
@@ -2659,6 +2802,16 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.approvals.rejecting": "Rejecting…",
   "atlassianConnectors.approvals.rejected": "Rejected. The action was not executed.",
   "atlassianConnectors.action.sync-space": "Sync Confluence space",
+  "atlassianConnectors.action.jira.projects": "Read Jira projects",
+  "atlassianConnectors.action.jira.issue-types": "Read Jira issue types",
+  "atlassianConnectors.action.jira.create-fields": "Read Jira create fields",
+  "atlassianConnectors.action.jira.edit-fields": "Read Jira edit fields",
+  "atlassianConnectors.action.jira.search": "Search Jira issues",
+  "atlassianConnectors.action.jira.issue": "Read Jira issue",
+  "atlassianConnectors.action.jira.comments": "Read Jira comments",
+  "atlassianConnectors.action.jira.transitions": "Read Jira transitions",
+  "atlassianConnectors.action.jira.assignable-users": "Find assignable Jira users",
+  "atlassianConnectors.action.assign-issue": "Assign Jira issue",
   "atlassianConnectors.action.sync-project": "Sync Jira project",
   "atlassianConnectors.action.search-issues-live": "Live Jira search",
   "atlassianConnectors.action.create-issue": "Create Jira issue",

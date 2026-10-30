@@ -3,6 +3,7 @@
 // Epic #710 #718 — linkedConnectorCapsuleIds reader.
 
 import { afterEach, describe, expect, it } from "vitest";
+import type { ChatConnectorSelection } from "@/lib/types";
 import { reportConnectionUnbindFailure } from "./useWorkspace";
 import { ApiError } from "@/lib/api-shared-primitives";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -579,12 +580,12 @@ interface ConnectHarnessOverrides {
   ) => boolean | Promise<boolean>;
   readonly onConnectorBind?: (
     chatWindowId: string,
-    scope: ChatLocalKnowledgeScope,
+    scope: ChatConnectorSelection,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onConnectorUnbind?: (
     chatWindowId: string,
-    scope: ChatLocalKnowledgeScope,
+    scope: ChatConnectorSelection,
     target?: ChatUnbindTarget,
   ) => boolean | Promise<boolean>;
   readonly onGitChangeBind?: (
@@ -3158,6 +3159,79 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns).toHaveLength(1);
   });
 
+  it("waits for the exact Jira Pod acknowledgement and never creates an edge on refusal", async () => {
+    const store = { conns: [] as Connection[] };
+    let finish!: (accepted: boolean) => void;
+    const accepted = new Promise<boolean>((resolve) => {
+      finish = resolve;
+    });
+    const bind = vi.fn(() => accepted);
+    const harness = makeConnectHarness(
+      [
+        win("connector", { selectedKind: "jira-live", selectedId: "jira-one" }, "conn-1"),
+        win("chat", { chatId: "chat-a" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "conn-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onConnectorBind: bind,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(bind).toHaveBeenCalledWith(
+      "chat-1",
+      expect.objectContaining({ kind: "jira-live", podId: "jira-one" }),
+      expect.any(Object),
+    );
+    expect(store.conns).toHaveLength(0);
+    finish(false);
+    await accepted;
+    await flushAsyncBind();
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("rejects a late Jira acknowledgement after the source node selects a different Pod", async () => {
+    const store = { conns: [] as Connection[] };
+    const cfg = { selectedKind: "jira-live", selectedId: "jira-one" };
+    let finish!: (accepted: boolean) => void;
+    const acceptance = new Promise<boolean>((resolve) => {
+      finish = resolve;
+    });
+    const harness = makeConnectHarness(
+      [win("connector", cfg, "conn-1"), win("chat", { chatId: "chat-a" }, "chat-1")],
+      [],
+      {
+        connecting: { from: "conn-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onConnectorBind: () => acceptance,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    cfg.selectedId = "jira-two";
+    finish(true);
+    await acceptance;
+    await flushAsyncBind();
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("runs programmatic Jira connection through the same acknowledgement boundary", async () => {
+    const store = { conns: [] as Connection[] };
+    const bind = vi.fn(() => false);
+    const harness = makeConnectHarness(
+      [
+        win("connector", { selectedKind: "jira-live", selectedId: "jira-one" }, "conn-1"),
+        win("chat", {}, "chat-1"),
+      ],
+      [],
+      { setConns: collectingSetConns(store), onConnectorBind: bind },
+    );
+    harness.connect("conn-1", "chat-1");
+    await flushAsyncBind();
+    expect(bind).toHaveBeenCalledOnce();
+    expect(store.conns).toHaveLength(0);
+  });
+
   it("does not draw the edge when onConnectorBind vetoes the bind", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
@@ -3643,7 +3717,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
 
   it("can remove a reset edge without mutating the conversation it previously bound", (): void => {
     const unboundScopes: ChatConnectedScope[] = [];
-    const unboundConnectors: ChatLocalKnowledgeScope[] = [];
+    const unboundConnectors: ChatConnectorSelection[] = [];
     const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
     const chat = win("chat", {}, "chat-1");
     const edge: Connection = {
@@ -3676,7 +3750,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
   });
 
   it("unbinds the bound capsule even after the connector window selected another capsule", () => {
-    const unbound: ChatLocalKnowledgeScope[] = [];
+    const unbound: ChatConnectorSelection[] = [];
     const connector = win(
       "connector",
       // The window cfg has MOVED ON to cap-b since the bind.

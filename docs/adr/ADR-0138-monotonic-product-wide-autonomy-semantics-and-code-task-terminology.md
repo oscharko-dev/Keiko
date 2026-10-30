@@ -309,6 +309,12 @@ contracts, identifiers, or decision text. This register renames concepts, not ac
 ADR-0137's server-owned minting, delegation, confinement, and process-tree invariants apply
 unchanged to the runtime host and runtime adapter.
 
+The centrally managed MCP path (#4081, ADR-0181) supplies an executable external-effect path
+through Keiko's existing loopback relay. Both restricted modes use the existing action approval
+before a tool effect; Full access remains bounded by the accepted authority. This does not enable
+direct internet access in a restricted coding process or change the native OAuth transport's
+availability.
+
 ### D5 — Amendment stamping
 
 Amendment banners referencing this record are added at the top of the Status sections of

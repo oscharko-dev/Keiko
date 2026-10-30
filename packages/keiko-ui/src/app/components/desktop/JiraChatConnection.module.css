@@ -1,0 +1,30 @@
+.cmpRoot {
+  max-inline-size: 100%;
+}
+.cmpRoot > summary {
+  cursor: pointer;
+}
+.cmpPanel {
+  padding: 12px;
+  max-inline-size: 28rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.cmpFields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  min-inline-size: 0;
+}
+.cmpFields label {
+  display: grid;
+  gap: 4px;
+}
+.cmpFields select {
+  max-inline-size: 100%;
+}
+.cmpFields p {
+  margin: 0;
+}

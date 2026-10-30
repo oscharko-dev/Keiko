@@ -1,3 +1,5 @@
+import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
+import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -57,7 +59,10 @@ import {
   type OperatorPluginRegistry,
   type OperatorPluginsPort,
 } from "./opencodeOperatorPlugins.js";
-import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import {
+  createCodingRuntimeRepositoryInstructionsPort,
+  repositoryInstructionsCopyBudget,
+} from "./codingRuntimeRepositoryInstructions.js";
 import { globalOpenCodeConfigDirectory } from "./codingRuntimeInstructionSources.js";
 import {
   readGlobalConfigDocuments,
@@ -223,6 +228,7 @@ export interface ProductionOpenCodeBackendInput {
   /** The operator's raw `KEIKO_CODING_EXTERNAL_READ_ROOTS` (#3900 AC5); absent admits none. */
   readonly externalReadRoots?: string | undefined;
   /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
+  readonly mcpMutations?: NativeMcpMutationJournal | undefined;
   readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
   /** Validates a remote MCP server's expected OAuth issuer before a native launch (#3903 AC3). */
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
@@ -233,6 +239,7 @@ export interface ProductionOpenCodeBackendInput {
    * at the gateway's origin, with the credentials read from `processEnv`.
    */
   readonly mcpRelay?: McpCredentialRelay | undefined;
+  readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** Pulls the operator's remote skill sources for a Full access native run (#3903 AC3). */
   readonly remoteSkills?: RemoteSkillsPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -428,7 +435,7 @@ function composeOpenCodeRun(
     toolProfile,
     ripgrepVerified: input.ripgrep.outcome === "verified",
     ...(input.processEnv === undefined ? {} : { processEnv: input.processEnv }),
-    ...nativeRunInputs(input, run, toolProfile),
+    ...nativeRunInputs(input, run, toolProfile, contextGeometry),
     portable: compositionPortableInput(input),
     stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
@@ -496,6 +503,7 @@ function mcpRelayFor(input: LaunchInput): Pick<OpenCodeRuntimeCompositionInput, 
       relay: input.mcpRelay,
       origin: new URL(input.gatewayUrl).origin,
       secrets: input.processEnv ?? {},
+      managed: input.mcpConnections,
     },
   };
 }
@@ -506,11 +514,13 @@ function nativeRunInputs(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
 ): Pick<
   OpenCodeRuntimeCompositionInput,
   | "repositoryItems"
   | "operatorPlugins"
   | "repositoryInstructions"
+  | "mcpMutations"
   | "mcpServers"
   | "mcpOAuthIssuer"
   | "mcpCredentials"
@@ -530,7 +540,8 @@ function nativeRunInputs(
     ...(input.operatorPluginRegistry === undefined
       ? {}
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
-    repositoryInstructions: repositoryInstructionsFor(input, run),
+    repositoryInstructions: repositoryInstructionsFor(input, run, contextGeometry),
+    mcpMutations: input.mcpMutations,
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
     ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
@@ -637,9 +648,12 @@ function forkSourceOf(
 // The run's AGENTS.md and the further sources a standalone run loads, as the native runtime's own
 // instruction source (#3900 AC3), read only while its workspace is still the active one. Remote
 // sources are pulled only for a run launched in Full access, which cannot be narrowed in place.
+// The copy carries the whole file within half the model's input window: that window is this run's
+// prompt budget, and a file it could not hold is cut with a marker rather than failing every turn.
 function repositoryInstructionsFor(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
 ): NonNullable<OpenCodeRuntimeCompositionInput["repositoryInstructions"]> {
   const home = homedir();
   const egress = input.instructionSourceEgress;
@@ -657,9 +671,14 @@ function repositoryInstructionsFor(
         : {}),
     },
   });
+  const contentByteBudget = repositoryInstructionsCopyBudget(contextGeometry.maxInputTokens);
   return {
     materializeForRun: (request) =>
-      port.materializeForRun({ ...request, isRunWorkspace: run.workspaceIsCurrent }),
+      port.materializeForRun({
+        ...request,
+        isRunWorkspace: run.workspaceIsCurrent,
+        contentByteBudget,
+      }),
   };
 }
 

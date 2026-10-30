@@ -289,7 +289,7 @@ describe("eventDetail auxiliary outcome", () => {
         runtimeEvent({ eventKind: "failure-redacted", failureCode: "recovery-required" }),
         t,
       ),
-    ).toBe("codingWorkbench.event.failure.generic");
+    ).toBe("codingWorkbench.recovery.summary");
     expect(eventDetail(runtimeEvent({ eventKind: "child-run-completed" }), t)).toBe("");
     expect(eventDetail(runtimeEvent({ failureCode: "runtime-failed" }), t)).toBe(
       "codingWorkbench.event.failure.runtime",

@@ -119,422 +119,214 @@ function catchFunctionName(node) {
 // failure: every exception must identify one source file and one function, with its reason kept
 // beside the gate. Additions are review-visible and cannot accidentally exempt a same-named catch
 // elsewhere.
-const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
-  [
-    "packages/keiko-model-gateway/src/observability.ts:isModelOutputFailure",
-    "A rejected foreign prototype read declines the model-output class probe with the literal false. The guarded Security classifier still supplies the existing registered failure event's closed kind; no caught value is inspected and no fictitious loss is counted.",
-  ],
-  [
-    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateScorecard",
-    "Pure scorecard inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
-  ],
-  [
-    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateSelection",
-    "Pure selection inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
-  ],
-  [
-    "packages/keiko-contracts/src/command-runner.ts:parseCommandTaskRunRequest",
-    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
-  ],
-  [
-    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskCatalog",
-    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
-  ],
-  [
-    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskRunResult",
-    "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
-  ],
-  [
-    "packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass",
-    "Pure leaf error classification performs no I/O and returns a fixed unknown fallback without inspecting the caught inspection failure. The parser propagates its existing closed rejection to the consumer diagnostic boundary; no separate logged fact is emitted.",
-  ],
-  [
-    "packages/keiko-contracts/src/git-editor.ts:parserInspectionClass",
-    "Pure hostile error classification returns the fixed unknown-error refusal without reading private fields. The parser propagates a closed rejection; UI failBffResponse reports the existing correlated contract-validation diagnostic and server blame admission uses its fixed BAD_REQUEST refusal. The classifier does not emit a separate logged fact.",
-  ],
-  [
-    "packages/keiko-cli/src/ui.ts:prepareUiProcessScope",
-    "Native identity refusal precedes all durable writers. Fixed content-free CLI stderr reports the refusal and startup returns before constructing state; actual absent-port and SQLite controls verify this boundary.",
-  ],
-  [
-    "packages/keiko-security/src/native-process-scope.ts:retirePort",
-    "Best-effort close during initial admission refusal or after permanent port retirement. Failure grants no authority, does not assert successful closure and cannot reactivate a failed port.",
-  ],
-  [
-    "packages/keiko-security/src/native-process-scope.ts:exchange",
-    "A failed bounded lookup permanently retires the port. Existing process start/heartbeat exposes unavailable observation; guarded storage refusal uses existing writer-loss evidence. Metadata grants no ownership and liveness remains unknown. Logging through guarded I/O here would recurse.",
-  ],
-  [
-    "packages/keiko-security/src/process-scope.ts:localLiveness",
-    "This read-only kernel predicate distinguishes confirmed ESRCH from unknown. Unknown retains persistent ownership and cannot authorize reclamation; it is never converted to death.",
-  ],
-  [
-    "packages/keiko-security/src/process-scope.ts:observation",
-    "A failed observation callback returns the closed unavailable state emitted by the existing process start/heartbeat owner; it cannot restore a failed channel or grant authority.",
-  ],
-  [
-    "packages/keiko-security/src/process-scope.ts:liveness",
-    "A failed process probe returns unknown to the persistent-state owner. Existing locks and publication guards retain ownership rather than treating callback failure as process death.",
-  ],
-  [
-    "packages/keiko-security/src/process-scope.ts:createProcessScope",
-    "A failed file-owner callback returns no UID. The existing guarded-I/O owner refuses access and owns its failure evidence; logging from this lower-level ownership probe would recursively require the same authorization.",
-  ],
-  [
-    "packages/keiko-server/src/grounded-preselection-reranker.ts:rerankGroundedCandidates",
-    "The catch preserves the original error in PreselectionRerankerResult.failure. The connected-context owner persists failureKind, frames and causeChain on selection-details; cancellation is rethrown.",
-  ],
-  [
-    "packages/keiko-server/src/grounded-repo-semantic-search.ts:fingerprintPreflight",
-    "A failed metadata or containment probe returns unavailable and admits no fingerprint read. The existing semantic freshness observer records the resulting unavailableFileCount on the connected-context source/selection evidence.",
-  ],
-  [
-    "packages/keiko-server/src/grounded-worktree-recency.ts:admittedPath",
-    "A failed fresh containment or safe-file metadata probe is the fail-closed false result of this path eligibility predicate; it cannot admit a recency path or source read.",
-  ],
-  [
-    "packages/keiko-workflows/src/bug-investigation/failure-parse.ts:sourceFile",
-    "Pure pasted file-URL parsing maps malformed, unsupported or hostile locations to no frame; it performs no filesystem operation or source admission.",
-  ],
-  [
-    "packages/keiko-workspace/src/structuralAdapterRequestContext.ts:currentCandidateContentSnapshot",
-    "A failed fresh file snapshot cannot certify retained source reuse; the existing live reader revalidates it. Path-denial, workspace-escape and request-stop errors are rethrown before this fail-closed metadata predicate returns absent.",
-  ],
-  [
-    "packages/keiko-workspace/src/workspaceIndexStreaming.ts:StreamingWorkspaceIndex.loadSnapshot",
-    "The observed index adapter owns durable load-failure evidence. The request marks acceleration unavailable, returns no cached result and retains fresh live traversal; an expired request remains fenced by structural execution control.",
-  ],
-  [
-    "packages/keiko-workspace/src/workspaceIndexStreaming.ts:StreamingWorkspaceIndex.finalize",
-    "The observed index adapter owns durable save-failure evidence. The request marks acceleration unavailable and stops publication; already collected live source evidence and request cancellation remain authoritative.",
-  ],
-  [
-    "packages/keiko-activity-log/src/reader/support-analyze.ts:registeredRecordClassification",
-    "The catch deterministically classifies hostile persisted evidence as incomplete or corrupt.",
-  ],
-  [
-    "packages/keiko-sandbox/src/darwin-git.ts:chooseAttestedDarwinGit",
-    "A rejected selected Git retries only the fixed Command Line Tools candidate under identical attestation. The runtime.confinement.spawned line records the chosen closed source; a second refusal still throws.",
-  ],
-  [
-    "packages/keiko-cli/src/ui.ts:safeCliErrorKind",
-    "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
-  ],
-  [
-    "packages/keiko-cli/src/ui.ts:runShutdownHook",
-    "The caught hook failure returns as its closed kind, which the process.exiting line records.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-readiness.ts:activityLogCatalogCoherent",
-    "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-logger.ts:isMandatoryActivityLogEvent",
-    "A hostile registration accessor makes the event ordinary instead of failing the emitting call.",
-  ],
-  [
-    "packages/keiko-contracts/src/observability.ts:registrationMatchesCanonical",
-    "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
-  ],
-  [
-    "packages/keiko-contracts/src/observability.ts:completeRegistrationShape",
-    "Pure metadata validation refuses an unreadable attachment; raw metadata is preserved for the physical writer's registered rejection diagnostic.",
-  ],
-  [
-    "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind",
-    "An unreadable error kind becomes the closed registration-mismatch refusal carried by the rejection sentinel to the physical writer.",
-  ],
-  [
-    "packages/keiko-sandbox/src/seatbelt-execution-root.ts:copyRuntimeGatewayFilesystem",
-    "Pure filesystem capability validation returns absent data. The owning planner returns gateway-filesystem-isolation-unsupported or the confinement producer throws runtime-gateway-policy-invalid before execution.",
-  ],
-  [
-    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:decodeSnapshotHelperResponse",
-    "Malformed rich helper frames become the closed protocol-invalid result and transient bytes are wiped. The governed read owner persists the failed coding-runtime.workspace-read line with its purpose and path hash, never response content.",
-  ],
-  [
-    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:SecureWorkspaceTextReadPortImpl.nativeRun",
-    "The private one-shot process failure becomes the existing closed processRunFailure result. The guarded native primitive owner in codingToolReadEditPorts records that actual refusal on coding-runtime.workspace-read; the new path has no model-facing or native-host ingress.",
-  ],
-  [
-    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:decodeNativeHelperResponse",
-    "Pure KSS3 frame validation becomes protocol-invalid, and response bytes are wiped. The guarded native primitive owner records the closed refusal on the existing coding-runtime.workspace-read line before returning it.",
-  ],
-  [
-    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:nativeListResult",
-    "Pure directory payload validation becomes protocol-invalid with no partial entries, and bytes are wiped. The same guarded native primitive owner records the closed refusal through coding-runtime.workspace-read.",
-  ],
-  [
-    "packages/keiko-contracts/src/observability.ts:activityLogEvent",
-    "A validation failure becomes the rejection sentinel the sink drops with one bounded notice.",
-  ],
-  [
-    "packages/keiko-model-gateway/src/http.ts:logEndpointClass",
-    "The logging reducer drops an invalid endpoint instead of retaining raw URL content.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:closeDescriptorIgnoringErrors",
-    "Best-effort close after the primary filesystem result is already fixed.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:directoryGuardStillMatches",
-    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-server/src/coding-runtime/productionWorkspaceHeadReader.ts:hasNoSymbolicLinkComponents",
-    "A failed no-follow path probe is the fail-closed false result of this filesystem trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadAbsence.ts:probeComponent",
-    "A failed no-follow metadata probe is returned as the closed failed component and reported as the probe-failed verdict, which the secure read hands to the governed read's coding-runtime.workspace-read line as `absence`: only ENOENT below real directories is read as absent, the helper's own denial stays the answer for every other failure, and the log says which kind of probe failure left it standing without the path or the error text.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:closeDirectoryGuards",
-    "Individual close failures are aggregated and propagated as one closed safe-file error.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:samePathNode",
-    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:linkedArchiveMatches",
-    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:movedArchiveMatches",
-    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:pathHasIdentity",
-    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:directoryGuardStillOwnerOnly",
-    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:processIsAlive",
-    "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
-  ],
-  [
-    "packages/keiko-security/src/fs-hardening.ts:releasePublicationOwnerAfterFailure",
-    "Best-effort rollback after the owning publication failure is already emitted and propagated.",
-  ],
-  [
-    "packages/keiko-security/src/safe-artifact-directory-mutation-runtime.ts:parseExpectedIdentity",
-    "Invalid untrusted integer input is rejected by the helper protocol before mutation.",
-  ],
-  [
-    "packages/keiko-security/src/safe-artifact-directory-mutation-runtime.ts:runSafeArtifactDirectoryMutation",
-    "The isolated helper maps mutation failure to a closed process exit code returned to its owner.",
-  ],
-  [
-    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:directoryMatches",
-    "A failed identity read is the fail-closed false result of this isolated helper predicate.",
-  ],
-  [
-    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:entryMatches",
-    "A failed identity read refuses the unlink as an entry mismatch in this isolated helper.",
-  ],
-  [
-    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:readRequest",
-    "Malformed helper-protocol input is rejected before any filesystem mutation.",
-  ],
-  [
-    "packages/keiko-security/src/secret-vault.ts:safeErrorProperty",
-    "A hostile error accessor is reduced to absent data before the registered failure event.",
-  ],
-  [
-    "packages/keiko-server/src/grounded-orchestrator.ts:connectedContextFailureKind",
-    "A hostile error classifier is reduced to the closed unknown kind before the failure event.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:safeArtifactErrorKind",
-    "A hostile prototype trap is reduced to absent data inside the last-resort log sink.",
-  ],
-  // #3530 segmented Activity Log store: fail-closed probes, and failure outcomes that a registered
-  // storage event persists.
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:regularFileStat",
-    "A vanished or unreadable entry is classified as absent from the Activity Log listing.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:readPinRecord",
-    "An unreadable pin record protects nothing; the caller removes it and persists pin.expired invalid-record.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:processIsAlive",
-    "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:lastCompleteLineOp",
-    "An unparsable tail line is classified as carrying no seal line.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:lineSeq",
-    "An unparsable line is classified as carrying no sequence number.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:activityLogSegmentSeqSpan",
-    "An unreadable span is reported as unknown in the registered quota-exhaustion marker.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:activityLogFreeBytes",
-    "Free space that cannot be measured is reported as absent, never as plenty.",
-  ],
-  // #3554 store policy (review comment 4050604711 on PR #3554): every outcome below is one branch
-  // of resolveActivityLogStorePolicy's fail-safe fallback, and any branch that actually changes what
-  // governs the store is reported through the registered activity-log.policy.conflict line the very
-  // next time this process writes.
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:readActivityLogPolicyRecord",
-    "An unreadable or corrupt policy record is treated as absent; the caller republishes it, or " +
-      "adopts a live peer's record and persists activity-log.policy.conflict when it still differs.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:publishPolicy",
-    "A failed publish — including the expected exclusive-create race loss — is reported false; the " +
-      "caller re-reads the record and persists activity-log.policy.conflict when its own values differ.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:repairPolicy",
-    "A failed removal of an already-corrupt or already-gone record is not retried; the publish that " +
-      "follows, or a peer's own resolution, is what actually decides the store's governing policy.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:replacePolicy",
-    "A failed removal of the stale record does not block the replacement publish that follows; " +
-      "whether it lands or a racing peer's does, the outcome is what activity-log.policy.conflict reports.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-store.ts:resolveActivityLogStorePolicy",
-    "Any unexpected filesystem failure falls back to this process's own requested values, " +
-      "unpersisted — the same ungoverned behavior the store had before this policy existed.",
-  ],
-  // #3531 segment-manifest store: derived, rebuildable metadata. Every outcome below is counted in
-  // the registered support.manifest.rebuilt event, and nothing is ever trusted after a failure.
-  [
-    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:parseSegmentManifest",
-    "A stored manifest that is not JSON is invalid; it is rebuilt from its sealed segment, never trusted.",
-  ],
-  [
-    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:ensureSegmentManifestDirectory",
-    "A store that cannot be created keeps manifests in memory; support.manifest.rebuilt persists persisted=false.",
-  ],
-  [
-    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:readStoredSegmentManifest",
-    "An unreadable or invalid stored manifest is rebuilt from its segment; support.manifest.rebuilt counts it.",
-  ],
-  [
-    "packages/keiko-activity-log/src/reader/support-segment-scan.ts:persistManifest",
-    "A manifest that cannot be written serves the pass from memory; support.manifest.rebuilt counts the failure.",
-  ],
-  [
-    "packages/keiko-activity-log/src/reader/support-segment-scan.ts:removeOrphanManifests",
-    "An orphan manifest that cannot be removed is counted by support.manifest.rebuilt and retried next pass.",
-  ],
-  // #3533 SupportIncident store: the same fail-closed probes as the Activity Log pin records.
-  [
-    "packages/keiko-activity-log/src/support-incident-store.ts:regularFileState",
-    "A vanished or unreadable entry is classified as absent from the incident store listing.",
-  ],
-  [
-    "packages/keiko-activity-log/src/support-incident-store.ts:readRecord",
-    "An unreadable incident record describes nothing; the next sweep removes it and persists support.incident.expired invalid-record.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:activeLogKey",
-    "A directory that cannot be resolved is keyed by its lexical path; opening it still fails closed.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:closeQuietly",
-    "Best-effort close of a descriptor the writer has already stopped using.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:currentSegmentSize",
-    "A failed identity read makes the caller treat the segment as mutated and fail closed.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:sharesInode",
-    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:pathMissing",
-    "The catch classifies the closed ENOENT result of an existence probe.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:readSealedTail",
-    "An unreadable tail is persisted as tailState unknown in the registered recovery event.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:finishInterruptedSeal",
-    "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:settleOrphanDescriptor",
-    "Best-effort fsync and read-only mode on a recovered segment; the sealing rename still decides.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:recoverOrphanedSegment",
-    "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:removePinRecordQuietly",
-    "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
-  ],
-  [
-    "packages/keiko-activity-log/src/activity-log-readiness.ts:storageCheck",
-    "A throwing storage check becomes the closed storage-check-failed reason the readiness line persists.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:listingOrUndefined",
-    "An unlistable directory becomes a storage-unavailable outcome the registered pin events persist.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:tightenLegacyFile",
-    "A legacy file that cannot be narrowed stays in place; the retention event persists the failure.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:removeRetentionTarget",
-    "A failed deletion is persisted by the registered retention event and retried after a backoff.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:withdrawSegment",
-    "A segment left in place is this process's abandoned segment; maintenance seals it with evidence.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:restrictSealedMode",
-    "Best-effort read-only mode after a successful seal; the segment stays owner-private.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:descriptorAtPath",
-    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:persistPostWriteMutation",
-    "The mutation evidence stays queued; the caller reports the event whose location is unknown.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:createPin",
-    "The catch returns the closed storage-unavailable rejection the registered pin.created event persists.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:ownedDirectory",
-    "A failed ownership read is the fail-closed false result of this trust-boundary predicate.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:batchIsWritable",
-    "An unformattable batch is deferred to its caller before any line is written.",
-  ],
-  [
-    "packages/keiko-activity-log/src/server-log.ts:syncActiveSegment",
-    "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
-  ],
-  [
-    "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile",
-    "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
-  ],
-]);
+const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
+  Object.entries({
+    "packages/keiko-connectors/src/atlassian-sync-classify.ts:parseAtlassianJsonValue":
+      "Pure bounded JSON syntax validation returns unavailable data. Write transport, sync classification, and Jira/Confluence sync adapters propagate malformed-payload. Existing action/live-search and SyncRun owners project atlassian.action.outcome; real transition, live-search, both provider metadata and item-sync regressions reconstruct failures. Managed Jira arrays delegate to mcp.managed.lifecycle, proven through the real gateway/binder/SDK with malformed JSON. This replaces the retired legacy parseJsonRecord catch; no generic parser exemption.",
+    "packages/keiko-connectors/src/atlassian-verification-probe.ts:parseAtlassianVerificationProbe":
+      "Pure bounded remote-JSON validation returns the closed invalid-response outcome, never remote text or a parser diagnostic. The credential route owns atlassian.connection.checked; the real Cloud client/route integration asserts exactly one registered invalid-response event for Jira and Confluence HTML responses.",
+    "packages/keiko-cli/src/ui.ts:prepareUiProcessScope":
+      "Native identity refusal precedes all durable writers. Fixed content-free CLI stderr reports the refusal and startup returns before constructing state; actual absent-port and SQLite controls verify this boundary.",
+    "packages/keiko-security/src/native-process-scope.ts:retirePort":
+      "Best-effort close during initial admission refusal or after permanent port retirement. Failure grants no authority, does not assert successful closure and cannot reactivate a failed port.",
+    "packages/keiko-security/src/native-process-scope.ts:exchange":
+      "A failed bounded lookup permanently retires the port. Existing process start/heartbeat exposes unavailable observation; guarded storage refusal uses existing writer-loss evidence. Metadata grants no ownership and liveness remains unknown. Logging through guarded I/O here would recurse.",
+    "packages/keiko-security/src/process-scope.ts:localLiveness":
+      "This read-only kernel predicate distinguishes confirmed ESRCH from unknown. Unknown retains persistent ownership and cannot authorize reclamation; it is never converted to death.",
+    "packages/keiko-security/src/process-scope.ts:observation":
+      "A failed observation callback returns the closed unavailable state emitted by the existing process start/heartbeat owner; it cannot restore a failed channel or grant authority.",
+    "packages/keiko-security/src/process-scope.ts:liveness":
+      "A failed process probe returns unknown to the persistent-state owner. Existing locks and publication guards retain ownership rather than treating callback failure as process death.",
+    "packages/keiko-security/src/process-scope.ts:createProcessScope":
+      "A failed file-owner callback returns no UID. The existing guarded-I/O owner refuses access and owns its failure evidence; logging from this lower-level ownership probe would recursively require the same authorization.",
+    "packages/keiko-server/src/grounded-preselection-reranker.ts:rerankGroundedCandidates":
+      "The catch preserves the original error in PreselectionRerankerResult.failure. The connected-context owner persists failureKind, frames and causeChain on selection-details; cancellation is rethrown.",
+    "packages/keiko-server/src/grounded-repo-semantic-search.ts:fingerprintPreflight":
+      "A failed metadata or containment probe returns unavailable and admits no fingerprint read. The existing semantic freshness observer records the resulting unavailableFileCount on the connected-context source/selection evidence.",
+    "packages/keiko-server/src/grounded-worktree-recency.ts:admittedPath":
+      "A failed fresh containment or safe-file metadata probe is the fail-closed false result of this path eligibility predicate; it cannot admit a recency path or source read.",
+    "packages/keiko-workflows/src/bug-investigation/failure-parse.ts:sourceFile":
+      "Pure pasted file-URL parsing maps malformed, unsupported or hostile locations to no frame; it performs no filesystem operation or source admission.",
+    "packages/keiko-workspace/src/structuralAdapterRequestContext.ts:currentCandidateContentSnapshot":
+      "A failed fresh file snapshot cannot certify retained source reuse; the existing live reader revalidates it. Path-denial, workspace-escape and request-stop errors are rethrown before this fail-closed metadata predicate returns absent.",
+    "packages/keiko-workspace/src/workspaceIndexStreaming.ts:StreamingWorkspaceIndex.loadSnapshot":
+      "The observed index adapter owns durable load-failure evidence. The request marks acceleration unavailable, returns no cached result and retains fresh live traversal; an expired request remains fenced by structural execution control.",
+    "packages/keiko-workspace/src/workspaceIndexStreaming.ts:StreamingWorkspaceIndex.finalize":
+      "The observed index adapter owns durable save-failure evidence. The request marks acceleration unavailable and stops publication; already collected live source evidence and request cancellation remain authoritative.",
+    "packages/keiko-activity-log/src/reader/support-analyze.ts:registeredRecordClassification":
+      "The catch deterministically classifies hostile persisted evidence as incomplete or corrupt.",
+    "packages/keiko-sandbox/src/darwin-git.ts:chooseAttestedDarwinGit":
+      "A rejected selected Git retries only the fixed Command Line Tools candidate under identical attestation. The runtime.confinement.spawned line records the chosen closed source; a second refusal still throws.",
+    "packages/keiko-cli/src/ui.ts:safeCliErrorKind":
+      "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
+    "packages/keiko-cli/src/ui.ts:runShutdownHook":
+      "The caught hook failure returns as its closed kind, which the process.exiting line records.",
+    "packages/keiko-activity-log/src/activity-log-readiness.ts:activityLogCatalogCoherent":
+      "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
+    "packages/keiko-activity-log/src/server-logger.ts:isMandatoryActivityLogEvent":
+      "A hostile registration accessor makes the event ordinary instead of failing the emitting call.",
+    "packages/keiko-contracts/src/observability.ts:registrationMatchesCanonical":
+      "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
+    "packages/keiko-sandbox/src/seatbelt-execution-root.ts:copyRuntimeGatewayFilesystem":
+      "Pure filesystem capability validation returns absent data. The owning planner returns gateway-filesystem-isolation-unsupported or the confinement producer throws runtime-gateway-policy-invalid before execution.",
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:decodeSnapshotHelperResponse":
+      "Malformed rich helper frames become the closed protocol-invalid result and transient bytes are wiped. The governed read owner persists the failed coding-runtime.workspace-read line with its purpose and path hash, never response content.",
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:SecureWorkspaceTextReadPortImpl.nativeRun":
+      "The private one-shot process failure becomes the existing closed processRunFailure result. The guarded native primitive owner in codingToolReadEditPorts records that actual refusal on coding-runtime.workspace-read; the new path has no model-facing or native-host ingress.",
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:decodeNativeHelperResponse":
+      "Pure KSS3 frame validation becomes protocol-invalid, and response bytes are wiped. The guarded native primitive owner records the closed refusal on the existing coding-runtime.workspace-read line before returning it.",
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:nativeListResult":
+      "Pure directory payload validation becomes protocol-invalid with no partial entries, and bytes are wiped. The same guarded native primitive owner records the closed refusal through coding-runtime.workspace-read.",
+    "packages/keiko-contracts/src/observability.ts:activityLogEvent":
+      "A validation failure becomes the rejection sentinel the sink drops with one bounded notice.",
+    "packages/keiko-model-gateway/src/http.ts:logEndpointClass":
+      "The logging reducer drops an invalid endpoint instead of retaining raw URL content.",
+    "packages/keiko-security/src/fs-hardening.ts:closeDescriptorIgnoringErrors":
+      "Best-effort close after the primary filesystem result is already fixed.",
+    "packages/keiko-security/src/fs-hardening.ts:directoryGuardStillMatches":
+      "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-server/src/coding-runtime/productionWorkspaceHeadReader.ts:hasNoSymbolicLinkComponents":
+      "A failed no-follow path probe is the fail-closed false result of this filesystem trust-boundary predicate.",
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadAbsence.ts:probeComponent":
+      "A failed no-follow metadata probe is returned as the closed failed component and reported as the probe-failed verdict, which the secure read hands to the governed read's coding-runtime.workspace-read line as `absence`: only ENOENT below real directories is read as absent, the helper's own denial stays the answer for every other failure, and the log says which kind of probe failure left it standing without the path or the error text.",
+    "packages/keiko-security/src/fs-hardening.ts:closeDirectoryGuards":
+      "Individual close failures are aggregated and propagated as one closed safe-file error.",
+    "packages/keiko-security/src/fs-hardening.ts:samePathNode":
+      "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-security/src/fs-hardening.ts:linkedArchiveMatches":
+      "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-security/src/fs-hardening.ts:movedArchiveMatches":
+      "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-security/src/fs-hardening.ts:pathHasIdentity":
+      "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-security/src/fs-hardening.ts:directoryGuardStillOwnerOnly":
+      "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-security/src/fs-hardening.ts:processIsAlive":
+      "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
+    "packages/keiko-security/src/fs-hardening.ts:releasePublicationOwnerAfterFailure":
+      "Best-effort rollback after the owning publication failure is already emitted and propagated.",
+    "packages/keiko-security/src/safe-artifact-directory-mutation-runtime.ts:parseExpectedIdentity":
+      "Invalid untrusted integer input is rejected by the helper protocol before mutation.",
+    "packages/keiko-security/src/safe-artifact-directory-mutation-runtime.ts:runSafeArtifactDirectoryMutation":
+      "The isolated helper maps mutation failure to a closed process exit code returned to its owner.",
+    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:directoryMatches":
+      "A failed identity read is the fail-closed false result of this isolated helper predicate.",
+    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:entryMatches":
+      "A failed identity read refuses the unlink as an entry mismatch in this isolated helper.",
+    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:readRequest":
+      "Malformed helper-protocol input is rejected before any filesystem mutation.",
+    "packages/keiko-security/src/secret-vault.ts:safeErrorProperty":
+      "A hostile error accessor is reduced to absent data before the registered failure event.",
+    "packages/keiko-server/src/grounded-orchestrator.ts:connectedContextFailureKind":
+      "A hostile error classifier is reduced to the closed unknown kind before the failure event.",
+    "packages/keiko-activity-log/src/server-log.ts:safeArtifactErrorKind":
+      "A hostile prototype trap is reduced to absent data inside the last-resort log sink.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:regularFileStat":
+      "A vanished or unreadable entry is classified as absent from the Activity Log listing.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:readPinRecord":
+      "An unreadable pin record protects nothing; the caller removes it and persists pin.expired invalid-record.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:processIsAlive":
+      "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:lastCompleteLineOp":
+      "An unparsable tail line is classified as carrying no seal line.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:lineSeq":
+      "An unparsable line is classified as carrying no sequence number.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:activityLogSegmentSeqSpan":
+      "An unreadable span is reported as unknown in the registered quota-exhaustion marker.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:activityLogFreeBytes":
+      "Free space that cannot be measured is reported as absent, never as plenty.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:readActivityLogPolicyRecord":
+      "An unreadable or corrupt policy record is treated as absent; the caller republishes it, or adopts a live peer's record and persists activity-log.policy.conflict when it still differs.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:publishPolicy":
+      "A failed publish — including the expected exclusive-create race loss — is reported false; the caller re-reads the record and persists activity-log.policy.conflict when its own values differ.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:repairPolicy":
+      "A failed removal of an already-corrupt or already-gone record is not retried; the publish that follows, or a peer's own resolution, is what actually decides the store's governing policy.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:replacePolicy":
+      "A failed removal of the stale record does not block the replacement publish that follows; whether it lands or a racing peer's does, the outcome is what activity-log.policy.conflict reports.",
+    "packages/keiko-activity-log/src/activity-log-store.ts:resolveActivityLogStorePolicy":
+      "Any unexpected filesystem failure falls back to this process's own requested values, unpersisted — the same ungoverned behavior the store had before this policy existed.",
+    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:parseSegmentManifest":
+      "A stored manifest that is not JSON is invalid; it is rebuilt from its sealed segment, never trusted.",
+    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:ensureSegmentManifestDirectory":
+      "A store that cannot be created keeps manifests in memory; support.manifest.rebuilt persists persisted=false.",
+    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:readStoredSegmentManifest":
+      "An unreadable or invalid stored manifest is rebuilt from its segment; support.manifest.rebuilt counts it.",
+    "packages/keiko-activity-log/src/reader/support-segment-scan.ts:persistManifest":
+      "A manifest that cannot be written serves the pass from memory; support.manifest.rebuilt counts the failure.",
+    "packages/keiko-activity-log/src/reader/support-segment-scan.ts:removeOrphanManifests":
+      "An orphan manifest that cannot be removed is counted by support.manifest.rebuilt and retried next pass.",
+    "packages/keiko-activity-log/src/support-incident-store.ts:regularFileState":
+      "A vanished or unreadable entry is classified as absent from the incident store listing.",
+    "packages/keiko-activity-log/src/support-incident-store.ts:readRecord":
+      "An unreadable incident record describes nothing; the next sweep removes it and persists support.incident.expired invalid-record.",
+    "packages/keiko-activity-log/src/server-log.ts:activeLogKey":
+      "A directory that cannot be resolved is keyed by its lexical path; opening it still fails closed.",
+    "packages/keiko-activity-log/src/server-log.ts:closeQuietly":
+      "Best-effort close of a descriptor the writer has already stopped using.",
+    "packages/keiko-activity-log/src/server-log.ts:currentSegmentSize":
+      "A failed identity read makes the caller treat the segment as mutated and fail closed.",
+    "packages/keiko-activity-log/src/server-log.ts:sharesInode":
+      "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-activity-log/src/server-log.ts:pathMissing":
+      "The catch classifies the closed ENOENT result of an existence probe.",
+    "packages/keiko-activity-log/src/server-log.ts:readSealedTail":
+      "An unreadable tail is persisted as tailState unknown in the registered recovery event.",
+    "packages/keiko-activity-log/src/server-log.ts:finishInterruptedSeal":
+      "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
+    "packages/keiko-activity-log/src/server-log.ts:settleOrphanDescriptor":
+      "Best-effort fsync and read-only mode on a recovered segment; the sealing rename still decides.",
+    "packages/keiko-activity-log/src/server-log.ts:recoverOrphanedSegment":
+      "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
+    "packages/keiko-activity-log/src/server-log.ts:removePinRecordQuietly":
+      "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
+    "packages/keiko-activity-log/src/activity-log-readiness.ts:storageCheck":
+      "A throwing storage check becomes the closed storage-check-failed reason the readiness line persists.",
+    "packages/keiko-activity-log/src/server-log.ts:listingOrUndefined":
+      "An unlistable directory becomes a storage-unavailable outcome the registered pin events persist.",
+    "packages/keiko-activity-log/src/server-log.ts:tightenLegacyFile":
+      "A legacy file that cannot be narrowed stays in place; the retention event persists the failure.",
+    "packages/keiko-activity-log/src/server-log.ts:removeRetentionTarget":
+      "A failed deletion is persisted by the registered retention event and retried after a backoff.",
+    "packages/keiko-activity-log/src/server-log.ts:withdrawSegment":
+      "A segment left in place is this process's abandoned segment; maintenance seals it with evidence.",
+    "packages/keiko-activity-log/src/server-log.ts:restrictSealedMode":
+      "Best-effort read-only mode after a successful seal; the segment stays owner-private.",
+    "packages/keiko-activity-log/src/server-log.ts:descriptorAtPath":
+      "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-activity-log/src/server-log.ts:persistPostWriteMutation":
+      "The mutation evidence stays queued; the caller reports the event whose location is unknown.",
+    "packages/keiko-activity-log/src/server-log.ts:createPin":
+      "The catch returns the closed storage-unavailable rejection the registered pin.created event persists.",
+    "packages/keiko-activity-log/src/server-log.ts:ownedDirectory":
+      "A failed ownership read is the fail-closed false result of this trust-boundary predicate.",
+    "packages/keiko-activity-log/src/server-log.ts:batchIsWritable":
+      "An unformattable batch is deferred to its caller before any line is written.",
+    "packages/keiko-activity-log/src/server-log.ts:syncActiveSegment":
+      "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
+    "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile":
+      "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+    "packages/keiko-model-gateway/src/observability.ts:isModelOutputFailure":
+      "A rejected foreign prototype read declines the model-output class probe with the literal false. The guarded Security classifier still supplies the existing registered failure event's closed kind; no caught value is inspected and no fictitious loss is counted.",
+    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateScorecard":
+      "Pure scorecard inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
+    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateSelection":
+      "Pure selection inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
+    "packages/keiko-contracts/src/command-runner.ts:parseCommandTaskRunRequest":
+      "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskCatalog":
+      "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskRunResult":
+      "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+    "packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass":
+      "Pure leaf error classification performs no I/O and returns a fixed unknown fallback without inspecting the caught inspection failure. The parser propagates its existing closed rejection to the consumer diagnostic boundary; no separate logged fact is emitted.",
+    "packages/keiko-contracts/src/git-editor.ts:parserInspectionClass":
+      "Pure hostile error classification returns the fixed unknown-error refusal without reading private fields. The parser propagates a closed rejection; UI failBffResponse reports the existing correlated contract-validation diagnostic and server blame admission uses its fixed BAD_REQUEST refusal. The classifier does not emit a separate logged fact.",
+    "packages/keiko-contracts/src/observability.ts:completeRegistrationShape":
+      "Pure metadata validation refuses an unreadable attachment; raw metadata is preserved for the physical writer's registered rejection diagnostic.",
+    "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind":
+      "An unreadable error kind becomes the closed registration-mismatch refusal carried by the rejection sentinel to the physical writer.",
+  }),
+);
 
 const REVIEWED_FIXED_FAILURE_FALLBACKS = new Map([
   ["packages/keiko-contracts/src/git-editor.ts:parserInspectionClass", "unknown error"],

@@ -5,8 +5,11 @@ import type {
   EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { EDITOR_AGENT_ACTION_MAX_BODY_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   EDITOR_AGENT_ACTION_TIMEOUT_MS,
+  EDITOR_AGENT_MAX_QUEUED_BYTES_PER_SESSION,
+  EDITOR_AGENT_MAX_QUEUED_BYTES_TOTAL,
   EDITOR_AGENT_REVIEW_TIMEOUT_MS,
   createEditorAgentRegistry,
 } from "./agentSessionRegistry.js";
@@ -321,6 +324,129 @@ describe("editor agent session registry", () => {
     });
     const a4 = action({ actionId: "a4", idempotencyKey: "k4" });
     expect(registry.queueAction(a4, a4).kind).toBe("queued");
+  });
+
+  describe("queued byte bounds (#4107)", () => {
+    const BODY = 600;
+    const heavy = (n: string, sessionId = "session-1"): EditorAgentAction =>
+      action({ actionId: n, idempotencyKey: `k-${n}`, sessionId, patch: "x".repeat(BODY) });
+    const bridged = (
+      limits: { perSession?: number; total?: number },
+      sessions: readonly string[] = ["session-1"],
+    ): {
+      registry: ReturnType<typeof createEditorAgentRegistry>;
+      scheduler: ReturnType<typeof fakeScheduler>;
+    } => {
+      const scheduler = fakeScheduler();
+      const registry = createEditorAgentRegistry({
+        ...scheduler,
+        ...(limits.perSession === undefined ? {} : { maxQueuedBytesPerSession: limits.perSession }),
+        ...(limits.total === undefined ? {} : { maxQueuedBytesTotal: limits.total }),
+      });
+      for (const sessionId of sessions) {
+        registry.registerSnapshot(snapshot(sessionId), CAPABILITY_DIGEST);
+        registry.connect(sessionId, () => undefined);
+      }
+      return { registry, scheduler };
+    };
+
+    it("refuses bodies above the per-session byte bound while the count bound is far away", () => {
+      const { registry } = bridged({ perSession: 1_000 });
+      const first = heavy("a1");
+      const second = heavy("a2");
+      expect(registry.queueAction(first, first).kind).toBe("queued");
+
+      const refused = registry.queueAction(second, second);
+
+      expect(refused.kind).toBe("rejected");
+      expect(refused.result.failure?.code).toBe("QUEUE_FULL");
+      expect(refused.kind === "rejected" ? refused.queueRefusal?.reason : undefined).toBe(
+        "session-bytes",
+      );
+      expect(registry.pendingCount("session-1")).toBe(1);
+      expect(registry.queuedBytes("session-1")).toBeGreaterThan(BODY);
+      // Small actions still fit: the bound is on bytes, not a block on the session.
+      const small = action({ actionId: "small", idempotencyKey: "k-small" });
+      expect(registry.queueAction(small, small).kind).toBe("queued");
+    });
+
+    it("refuses across sessions at the process-wide byte bound", () => {
+      const { registry } = bridged({ perSession: 10_000, total: 1_000 }, [
+        "session-1",
+        "session-2",
+      ]);
+      const first = heavy("a1", "session-1");
+      const other = heavy("b1", "session-2");
+      expect(registry.queueAction(first, first).kind).toBe("queued");
+
+      const refused = registry.queueAction(other, other);
+
+      expect(refused.kind).toBe("rejected");
+      expect(refused.result.failure?.code).toBe("QUEUE_FULL");
+      expect(refused.kind === "rejected" ? refused.queueRefusal : undefined).toMatchObject({
+        reason: "process-bytes",
+        sessionQueuedCount: 0,
+        sessionQueuedBytes: 0,
+      });
+      expect(registry.pendingCount("session-2")).toBe(0);
+      expect(registry.queuedBytes()).toBe(registry.queuedBytes("session-1"));
+    });
+
+    it("names the count bound as queue-count and keeps its message", () => {
+      const scheduler = fakeScheduler();
+      const registry = createEditorAgentRegistry({ ...scheduler, maxQueuedPerSession: 1 });
+      registry.registerSnapshot(snapshot(), CAPABILITY_DIGEST);
+      const one = action({ actionId: "c1", idempotencyKey: "k-c1" });
+      const two = action({ actionId: "c2", idempotencyKey: "k-c2" });
+      registry.queueAction(one, one);
+
+      const refused = registry.queueAction(two, two);
+
+      expect(refused.kind === "rejected" ? refused.queueRefusal?.reason : undefined).toBe(
+        "queue-count",
+      );
+      expect(refused.result.failure?.message).toContain("is full");
+    });
+
+    it("releases bytes on take, timeout, runtime cancellation and reset (no leak)", () => {
+      const { registry, scheduler } = bridged({ perSession: 100_000 }, ["session-1", "session-2"]);
+      const taken = heavy("take", "session-1");
+      const timed = heavy("time", "session-2");
+      const runtime = {
+        ...heavy("run", "session-2"),
+        authorityRef: { runId: "run-1" },
+      } as unknown as EditorAgentAction;
+      registry.queueAction(taken, taken);
+      registry.queueAction(timed, timed);
+      registry.queueAction(runtime, runtime, { runtimeOwned: true });
+      expect(registry.queuedBytes()).toBeGreaterThan(3 * BODY);
+
+      registry.takePendingAction("session-1", "take", CAPABILITY_DIGEST);
+      expect(registry.queuedBytes("session-1")).toBe(0);
+
+      expect(registry.cancelPendingByAuthorityRun("run-1")).toBe(1);
+      const afterCancel = registry.queuedBytes("session-2");
+      expect(afterCancel).toBeGreaterThan(BODY);
+      expect(afterCancel).toBeLessThan(2 * (BODY + 400));
+
+      scheduler.fireAll();
+      expect(registry.queuedBytes()).toBe(0);
+
+      const again = heavy("again", "session-1");
+      registry.queueAction(again, again);
+      expect(registry.queuedBytes()).toBeGreaterThan(BODY);
+      registry.reset();
+      expect(registry.queuedBytes()).toBe(0);
+    });
+
+    it("bounds the defaults so one maximal action always fits an empty queue", () => {
+      expect(EDITOR_AGENT_MAX_QUEUED_BYTES_PER_SESSION).toBeGreaterThanOrEqual(
+        2 * EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
+      );
+      expect(EDITOR_AGENT_MAX_QUEUED_BYTES_TOTAL).toBeGreaterThanOrEqual(
+        EDITOR_AGENT_MAX_QUEUED_BYTES_PER_SESSION,
+      );
+    });
   });
 
   it("serializes mutating actions while retaining bounded nonmutating queueing", () => {

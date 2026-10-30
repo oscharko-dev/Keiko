@@ -1682,3 +1682,170 @@ it("does not coerce a coding task export format candidate", (): void => {
   expect(isCodingTaskExportFormat(value)).toBe(false);
   expect(coercions).toBe(0);
 });
+
+it("admits only the public Jira read-consent SSE projection", () => {
+  const grant = {
+    kind: "jira-chat-read",
+    grantId: "grant-1",
+    chatId: "chat-1",
+    podId: "pod-1",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    state: "pending",
+    disclosureVersion: "jira-chat-read-v1",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  };
+  const frame = { event: "tool-read-consent", data: { messageId: "message-1", grant } };
+  expect(isDesktopChatStreamEvent(frame)).toBe(true);
+  expect.soft(isDesktopChatStreamEvent({ ...frame, authorityId: "private" })).toBe(false);
+  expect
+    .soft(isDesktopChatStreamEvent({ ...frame, data: { ...frame.data, actorDigest: "private" } }))
+    .toBe(false);
+  expect(
+    isDesktopChatStreamEvent({
+      ...frame,
+      data: { ...frame.data, grant: { ...grant, actorDigest: "private" } },
+    }),
+  ).toBe(false);
+  expect(
+    isDesktopChatStreamEvent({
+      ...frame,
+      data: { ...frame.data, grant: { ...grant, disclosureVersion: "unknown" } },
+    }),
+  ).toBe(false);
+  expect(
+    isDesktopChatStreamEvent({
+      ...frame,
+      data: { ...frame.data, grant: { ...grant, expiresAt: 500 } },
+    }),
+  ).toBe(false);
+});
+
+it("admits closed write-approval SSE frames and rejects private or mismatched projections", () => {
+  const approval = {
+    kind: "jira-chat-write",
+    approvalId: "approval-1",
+    chatId: "chat-1",
+    podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: "invocation-1",
+    operation: "jira.comment",
+    actionDigest: "a".repeat(64),
+    requestedAt: 1000,
+    expiresAt: 2000,
+    state: "pending",
+  };
+  const call = {
+    id: "call-1",
+    name: "jira_comment",
+    arguments: { issueKey: "SYN-1", body: "text" },
+  };
+  const data = { messageId: "message-1", call, approval };
+  for (const state of ["pending", "approved", "claimed", "rejected", "expired", "revoked"])
+    expect(
+      isDesktopChatStreamEvent({
+        event: "tool-write-approval",
+        data: { ...data, approval: { ...approval, state } },
+      }),
+    ).toBe(true);
+  for (const frame of [
+    { event: "tool-write-approval", data, credential: "private" },
+    { event: "tool-write-approval", data: { ...data, claimId: "private" } },
+    {
+      event: "tool-write-approval",
+      data: { ...data, approval: { ...approval, actorDigest: "b".repeat(64) } },
+    },
+    {
+      event: "tool-write-approval",
+      data: { ...data, approval: { ...approval, state: "succeeded" } },
+    },
+    { event: "tool-write-approval", data: { ...data, call: { ...call, name: "jira_edit" } } },
+    { event: "tool-write-approval", data: { ...data, call: { ...call, authRef: "private" } } },
+    {
+      event: "tool-write-approval",
+      data: { ...data, call: { ...call, arguments: { toJSON: (): undefined => undefined } } },
+    },
+    {
+      event: "tool-write-approval",
+      data: { ...data, call: { ...call, arguments: { body: "x".repeat(262144) } } },
+    },
+  ])
+    expect(isDesktopChatStreamEvent(frame)).toBe(false);
+});
+
+it("refuses a write-call argument accessor without propagating its private exception", () => {
+  const call = { id: "call-1", name: "jira_comment" };
+  Object.defineProperty(call, "arguments", {
+    enumerable: true,
+    get: (): never => {
+      throw new TypeError("private-argument-canary");
+    },
+  });
+  expect(
+    isDesktopChatStreamEvent({
+      event: "tool-write-approval",
+      data: {
+        messageId: "message-1",
+        call,
+        approval: {},
+      },
+    }),
+  ).toBe(false);
+});
+
+it("admits MCP consent and write cards without accepting mixed identities or private data", () => {
+  const grant = {
+    kind: "mcp-chat-read",
+    grantId: "grant-1",
+    chatId: "chat-1",
+    configurationDigest: "a".repeat(64),
+    state: "pending",
+    disclosureVersion: "mcp-chat-read-v1",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  };
+  const read = (value: unknown): boolean =>
+    isDesktopChatStreamEvent({
+      event: "tool-read-consent",
+      data: { messageId: "message-1", grant: value },
+    });
+  expect(read(grant)).toBe(true);
+  for (const patch of [
+    { podId: "pod-1" },
+    { actorDigest: "f".repeat(64) },
+    { configurationDigest: "bad" },
+    { disclosureVersion: "jira-chat-read-v1" },
+    { kind: "jira-chat-read" },
+  ])
+    expect(read({ ...grant, ...patch })).toBe(false);
+  expect(read(Object.create(grant))).toBe(false);
+  const approval = {
+    kind: "mcp-chat-write",
+    approvalId: "approval-1",
+    chatId: "chat-1",
+    configurationDigest: "a".repeat(64),
+    invocationId: "invocation-1",
+    operation: "mcp_fixture_write_123",
+    actionDigest: "b".repeat(64),
+    requestedAt: 1000,
+    expiresAt: 2000,
+    state: "pending",
+  };
+  const call = { id: "call-1", name: approval.operation, arguments: { text: "Synthetic" } };
+  const write = (value: unknown): boolean =>
+    isDesktopChatStreamEvent({
+      event: "tool-write-approval",
+      data: { messageId: "message-1", call, approval: value },
+    });
+  expect(write(approval)).toBe(true);
+  for (const patch of [
+    { podId: "pod-1" },
+    { actorDigest: "f".repeat(64) },
+    { configurationDigest: "bad" },
+    { operation: "mcp_different_tool" },
+    { kind: "jira-chat-write" },
+  ])
+    expect(write({ ...approval, ...patch })).toBe(false);
+});

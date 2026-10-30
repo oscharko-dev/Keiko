@@ -42,6 +42,7 @@ import {
   type PatchRejection,
   type PatchValidation,
 } from "@oscharko-dev/keiko-tools";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { detectWorkspaceAt, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
@@ -71,8 +72,11 @@ import {
 import { editorAiStatusActive, resolveEditorAiAssistStatusForRoot } from "./aiAssistActivation.js";
 
 // A unified diff plus the apply envelope; bounded generously (validatePatch enforces the real patch
-// byte/line/file limits). 2 MiB of body accommodates a large multi-file candidate diff.
-const MAX_PATCH_APPLY_BODY_BYTES = 2 * 1_048_576;
+// byte/line/file limits). The diff is held to the shared governed patch cap, so the body must carry a
+// cap-sized diff after JSON escaping of its quotes and line breaks (at most doubling it) plus a
+// mebibyte of envelope; a smaller body bound would refuse at the transport what validation accepts
+// (#4110).
+const MAX_PATCH_APPLY_BODY_BYTES = 2 * GOVERNED_PATCH_MAX_BYTES + 1_048_576;
 
 // Gate A — deployment ceiling (default OFF: this mutating wave-2 feature remains unavailable unless
 // the operator explicitly permits it; M7 settings still provide the separate explicit opt-in).

@@ -13,6 +13,7 @@ import type {
   EditorPatchVerificationSummary,
   EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
@@ -518,6 +519,48 @@ describe("POST /api/editor/patch-apply — scope and conflict guardrails", () =>
     const response = wire(result);
     expect(response.status).toBe("conflict");
     expect(response.rejections?.some((r) => r.reason === "empty-patch")).toBe(true);
+  });
+});
+
+// #4110: the route applies under the tool host default, the one shared governed patch cap, so the
+// request body bound must let a patch of exactly that cap reach validation.
+describe("POST /api/editor/patch-apply — the governed patch cap (#4110)", () => {
+  // A create diff of exactly `bytes` UTF-8 bytes in 1,000 added lines.
+  function createDiffOfBytes(bytes: number): string {
+    const lineCount = 1_000;
+    const header = `--- /dev/null\n+++ b/src/big.txt\n@@ -0,0 +1,${String(lineCount)} @@\n`;
+    const payload = bytes - header.length - lineCount * 2;
+    const base = Math.floor(payload / lineCount);
+    const extra = payload - base * lineCount;
+    const lines = Array.from(
+      { length: lineCount },
+      (_, index) => `+${"x".repeat(base + (index === lineCount - 1 ? extra : 0))}\n`,
+    );
+    return `${header}${lines.join("")}`;
+  }
+
+  it("applies a reviewed patch of exactly the cap", async () => {
+    const result = await handleEditorPatchApply(
+      postContext(body({ diff: createDiffOfBytes(GOVERNED_PATCH_MAX_BYTES) })),
+      deps({ env: ENABLED_NO_VERIFY }),
+      options(),
+    );
+    expect(result.status).toBe(200);
+    expect(wire(result).status).toBe("applied");
+    expect((await stat(join(root, "src/big.txt"))).size).toBeGreaterThan(8_000_000);
+  });
+
+  it("refuses a patch one byte over the cap as an invalid patch, writing nothing", async () => {
+    const result = await handleEditorPatchApply(
+      postContext(body({ diff: createDiffOfBytes(GOVERNED_PATCH_MAX_BYTES + 1) })),
+      deps({ env: ENABLED_NO_VERIFY }),
+      options(),
+    );
+    expect(result.status).toBe(200);
+    const response = wire(result);
+    expect(response.status).toBe("conflict");
+    expect(response.rejections?.map((rejection) => rejection.reason)).toEqual(["invalid-patch"]);
+    expect(await exists("src/big.txt")).toBe(false);
   });
 });
 

@@ -1,3 +1,4 @@
+import { codingCatalogConsumer } from "../catalogCodingConsumer.js";
 import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
 
 import { vi } from "vitest";
@@ -89,6 +90,7 @@ export function catalogToolFixture(): {
   const context = fixtureContext();
   const handler = fixtureHandler(pure);
   const input: CatalogToolBinderInput = {
+    consumerPort: codingCatalogConsumer,
     projection: pure.projection,
     handlerBindings: [handler],
     authorityPort: { preview, admit: () => ({ ok: true, mutationGuard: { check: () => true } }) },
@@ -104,11 +106,10 @@ export function catalogToolFixture(): {
     approvalPort: { available: approvalAvailable, request: () => Promise.resolve(undefined) },
     logPort: { primary, diagnostics: { record: vi.fn() } },
   };
-  const options = fixtureOptions(pure, context, now);
   return {
     pure,
     input,
-    options,
+    options: fixtureOptions(pure, context, now),
     handler,
     preview,
     budgetAvailable,

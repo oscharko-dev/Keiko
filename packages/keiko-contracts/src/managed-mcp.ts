@@ -1,0 +1,109 @@
+import type { CatalogJsonObject, ToolDescriptor } from "./governed-tool-catalog.js";
+import type { ActivityLogEventEnvelope, RegisteredActivityLogEvent } from "./observability.js";
+export {
+  EXTERNAL_JSON_SCHEMA_DEFAULT,
+  isBoundedExternalJsonSchema,
+  isExternalJsonSchemaDialect,
+} from "./external-json-schema.js";
+
+export const MANAGED_MCP_PROTOCOL_VERSION = "2026-07-28";
+
+/** Resolved by server composition; never serialized into MCP arguments or metadata. */
+export interface ManagedMcpInvocationContext {
+  /** Private durable mutation admission, supplied by the composing consumer. */
+  readonly beginMutation?:
+    | ((input: {
+        readonly sessionId: string | undefined;
+        readonly toolName: string;
+        readonly argumentsValue: CatalogJsonObject;
+      }) => ManagedMcpMutationInvocation | undefined)
+    | undefined;
+  /** Server-private recovery fence; never supplied by model tool arguments. */
+  readonly onUncertainMutation?: (() => void | Promise<void>) | undefined;
+  readonly invocationId: string;
+  readonly correlationId: string;
+  readonly signal: AbortSignal;
+  readonly beforeEffect: () => boolean;
+}
+
+export interface ManagedMcpMutationInvocation {
+  readonly invocationId: string;
+  /** The upstream replied successfully; the consumer has not acknowledged receipt yet. */
+  readonly acknowledge: () => void;
+  /** Conservatively retain the observed outcome if delivery cannot be confirmed. */
+  readonly fail: () => void;
+}
+
+export interface ManagedMcpToolResult {
+  readonly data: CatalogJsonObject;
+  readonly isError?: boolean;
+}
+
+export interface ManagedMcpToolDeclaration {
+  readonly name: string;
+  /** Descriptive protocol hint; the server-owned action/authority port remains authoritative. */
+  readonly risk: "read" | "write";
+  readonly descriptor: ToolDescriptor;
+}
+
+export interface ManagedMcpTool<
+  Context extends ManagedMcpInvocationContext,
+> extends ManagedMcpToolDeclaration {
+  readonly execute: (
+    argumentsValue: CatalogJsonObject,
+    context: Context,
+  ) => Promise<ManagedMcpToolResult>;
+}
+
+export interface ManagedMcpProvider<Context extends ManagedMcpInvocationContext> {
+  readonly id: string;
+  /** Return stable handler references. Changed metadata or handlers require a new host/admission. */
+  readonly tools: () => readonly ManagedMcpTool<Context>[];
+}
+
+export interface ManagedMcpLogPort {
+  readonly write: (event: RegisteredActivityLogEvent & ActivityLogEventEnvelope) => void;
+}
+
+export type ManagedMcpFailure =
+  | "not-admitted"
+  | "invalid-arguments"
+  | "descriptor-drift"
+  | "protocol-error"
+  | "tool-error"
+  | "log-unavailable"
+  | "deadline-exceeded"
+  | "aborted"
+  | "closed";
+
+export interface ManagedMcpHost<Context extends ManagedMcpInvocationContext> {
+  readonly admit: (correlationId: string) => Promise<void>;
+  /** Verified metadata only; no handlers, credentials or consumer context. */
+  readonly catalog: () => readonly ManagedMcpToolDeclaration[];
+  readonly protocolEra: () => "modern" | undefined;
+  readonly call: (
+    name: string,
+    argumentsValue: CatalogJsonObject,
+    context: Context,
+  ) => Promise<CatalogJsonObject>;
+  readonly close: () => Promise<void>;
+}
+/** External protocol metadata is untrusted; catalog admission supplies execution authority. */
+export interface ExternalMcpTool {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputSchema: CatalogJsonObject;
+  readonly outputSchema?: CatalogJsonObject;
+  readonly annotations?: CatalogJsonObject;
+}
+export interface ExternalMcpConnection {
+  /** Aborts on connection closure or schema drift; it never authorizes reconnect/replay. */
+  readonly signal: AbortSignal;
+  readonly tools: readonly ExternalMcpTool[];
+  readonly call: (
+    name: string,
+    argumentsValue: CatalogJsonObject,
+    context: ManagedMcpInvocationContext,
+  ) => Promise<CatalogJsonObject>;
+  readonly close: () => Promise<void>;
+}

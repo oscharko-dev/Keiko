@@ -18,7 +18,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { crc32, deflateRawSync, inflateRawSync } from "node:zlib";
 
 const LOCAL_FILE_HEADER = 0x04034b50;
 const CENTRAL_DIRECTORY_HEADER = 0x02014b50;
@@ -29,20 +29,6 @@ const ZIP_VERSION = 20;
 const UNIX_VERSION = (3 << 8) | ZIP_VERSION;
 const MAX_ZIP32 = 0xffffffff;
 const DOS_EPOCH_DATE = 0x0021;
-
-const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, index) => {
-  let value = index;
-  for (let bit = 0; bit < 8; bit += 1) {
-    value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0);
-  }
-  return value >>> 0;
-});
-
-function crc32(bytes) {
-  let value = 0xffffffff;
-  for (const byte of bytes) value = (value >>> 8) ^ CRC32_TABLE[(value ^ byte) & 0xff];
-  return (value ^ 0xffffffff) >>> 0;
-}
 
 function normalizedEntryName(name, allowUnsafeEntryNames) {
   const normalized = name.replaceAll("\\", "/").replace(/^\.\//u, "");

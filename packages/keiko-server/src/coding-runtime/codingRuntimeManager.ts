@@ -3909,7 +3909,10 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
     ...(event.nativeAction === undefined
       ? {}
-      : { nativePermission: event.nativeAction.permission }),
+      : {
+          nativePermission:
+            event.commandLabel === "native-mcp" ? "mcp" : event.nativeAction.permission,
+        }),
   };
 }
 

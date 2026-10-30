@@ -272,7 +272,7 @@ their existing `limits` override seam:
 export const DEFAULT_BUG_PATCH_LIMITS: PatchLimits = {
   maxFilesChanged: 10,
   maxChangedLines: 300,
-  maxPatchBytes: 65_536,
+  maxPatchBytes: GOVERNED_PATCH_MAX_BYTES, // 8 MiB since 2026-10-29 (#4110, ADR-0125 D3); was 65_536
 } as const;
 ```
 
@@ -483,12 +483,12 @@ export interface BugWorkflowLimits {
   // The tighter bug-fix change budget (D6). Passed to validatePatch/applyPatch limits.
   readonly maxFilesChanged: number;    // 10
   readonly maxChangedLines: number;    // 300
-  readonly maxPatchBytes: number;      // 65_536
+  readonly maxPatchBytes: number;      // GOVERNED_PATCH_MAX_BYTES (8 MiB; was 65_536)
 }
 
 export const DEFAULT_BUG_WORKFLOW_LIMITS: BugWorkflowLimits = {
   maxModelCalls: 3, maxRetries: 2, contextBudgetBytes: 65_536, maxBytesPerFile: 8_192,
-  maxFilesChanged: 10, maxChangedLines: 300, maxPatchBytes: 65_536,
+  maxFilesChanged: 10, maxChangedLines: 300, maxPatchBytes: GOVERNED_PATCH_MAX_BYTES,
 } as const;
 ```
 

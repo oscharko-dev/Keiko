@@ -30,7 +30,7 @@ export interface NativeCatalogHandlerAction {
 export interface NativeCatalogToolPortInput {
   readonly host: WorkspaceToolHost;
   readonly actions: readonly NativeCatalogHandlerAction[];
-  readonly binder: Omit<CatalogToolBinderInput, "handlerBindings" | "projection">;
+  readonly binder: Omit<CatalogToolBinderInput, "handlerBindings" | "projection" | "consumerPort">;
   readonly options: CatalogToolBinderOptions;
   /** Existing server action owner supplies identity; provider toolCallId is correlation only. */
   readonly nextIdentity: (toolCallId: string) => CatalogActionIdentity;
@@ -93,6 +93,7 @@ export function createNativeCatalogToolPort(input: NativeCatalogToolPortInput): 
   const binder = createCatalogToolBinder(
     {
       ...input.binder,
+      consumerPort: codingCatalogConsumer,
       projection,
       handlerBindings: input.actions.map((action) => handler(input, action, observer)),
     },
@@ -121,3 +122,4 @@ export function createNativeCatalogToolPort(input: NativeCatalogToolPortInput): 
     },
   };
 }
+import { codingCatalogConsumer } from "./catalogCodingConsumer.js";

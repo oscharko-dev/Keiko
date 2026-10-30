@@ -1,6 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
+const McpSettingsPanel = dynamic(() =>
+  import("./McpSettingsPanel").then((module) => module.McpSettingsPanel),
+);
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
@@ -1423,7 +1426,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
   );
 }
 
-type Tab = "models" | "general" | "editor" | "languages" | "debugging" | "security";
+type Tab = "mcp" | "models" | "general" | "editor" | "languages" | "debugging" | "security";
 
 // uiux-fix C287: raw transport strings ("HTTP 500", "Failed to fetch") are
 // codes, not explanations — map them to a human-readable message. Messages
@@ -1965,7 +1968,15 @@ export function SettingsPanel({
     <div className="set">
       <div className="set-tabs">
         {(
-          ["models", "general", "editor", "languages", "debugging", "security"] as readonly Tab[]
+          [
+            "models",
+            "mcp",
+            "general",
+            "editor",
+            "languages",
+            "debugging",
+            "security",
+          ] as readonly Tab[]
         ).map((id) => (
           <button
             type="button"
@@ -1987,6 +1998,7 @@ export function SettingsPanel({
         ))}
       </div>
       <div className="set-body">
+        {tab === "mcp" && <McpSettingsPanel />}
         {tab === "models" && (
           <ModelsTabContent
             gatewayConfigured={gatewayConfigured}
@@ -2051,6 +2063,7 @@ export function SettingsPanel({
 }
 
 function settingsTabLabel(tab: Tab, t: I18nTranslate): string {
+  if (tab === "mcp") return t("settings.tabs.mcp");
   if (tab === "models") return t("settings.tabs.models");
   if (tab === "general") return t("settings.tabs.general");
   if (tab === "editor") return t("settings.tabs.editor");

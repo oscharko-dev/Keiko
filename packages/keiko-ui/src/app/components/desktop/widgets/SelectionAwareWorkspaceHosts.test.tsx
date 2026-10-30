@@ -363,6 +363,7 @@ afterEach(() => {
   chatSessionState.loading = false;
   chatSessionState.error = undefined;
   chatSessionState.clearError.mockReset();
+  chatSessionState.openProject.mockImplementation(async (): Promise<void> => undefined);
   chatSessionState.memoryEnabled = true;
   useChatSessionMock.mockReset();
   useChatSessionMock.mockImplementation(() => chatSessionState);
@@ -2969,6 +2970,198 @@ describe("ChatWindowSessionHost target missing", () => {
     );
     expect(chatSessionState.openProject).toHaveBeenCalledWith(projectA);
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
+  });
+
+  // #4123 (Firefox smoke): a late session update put another project back while the window's
+  // `openProject` was still loading, so the call settled without activating the chat's project and
+  // the window waited for it forever, never rendering its scope pill.
+  it("opens the chat's project again when a competing update overtook the first attempt", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const chatA = { ...chatFixture("chat-a", "Legacy chat", 1), projectPath: projectA.path };
+    const chatB = { ...chatFixture("chat-b", "Current chat", 2), projectPath: projectB.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.activeChat = chatB;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [chatB];
+    fetchChatsMock.mockImplementation(async (path): Promise<{ readonly chats: readonly Chat[] }> =>
+      path === projectA.path ? { chats: [chatA] } : { chats: [chatB] },
+    );
+    let attempts = 0;
+    chatSessionState.openProject.mockImplementation(async (project) => {
+      attempts += 1;
+      // The first attempt is overtaken: project B stays active. The retry activates project A.
+      if (attempts === 1) return;
+      chatSessionState.activeProject = project;
+      chatSessionState.chats = [chatA];
+    });
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: chatA.id, title: chatA.title, projectPath: projectA.path }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(chatSessionState.openChat).toHaveBeenCalledWith(chatA));
+    expect(chatSessionState.openProject).toHaveBeenCalledTimes(2);
+  });
+
+  it("names the repeated project open on the resolved binding report", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const chatA = { ...chatFixture("chat-a", "Legacy chat", 1), projectPath: projectA.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [];
+    let attempts = 0;
+    chatSessionState.openProject.mockImplementation(async (project) => {
+      attempts += 1;
+      if (attempts === 1) return;
+      chatSessionState.activeProject = project;
+      chatSessionState.chats = [chatA];
+      chatSessionState.activeChat = chatA;
+    });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: chatA.id, title: chatA.title, projectPath: projectA.path }}
+          ctx={context()}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          bindingReport: expect.objectContaining({
+            outcome: "resolved",
+            projectOpenAttemptCount: 2,
+          }) as unknown,
+        }),
+      ),
+    );
+  });
+
+  it("bounds the attempts when every open is overtaken", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const chatB = { ...chatFixture("chat-b", "Current chat", 2), projectPath: projectB.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.activeChat = chatB;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [chatB];
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: "chat-a", title: "Legacy chat", projectPath: projectA.path }}
+          ctx={context()}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(chatSessionState.openProject).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(chatSessionState.openProject).toHaveBeenCalledTimes(3);
+    // #4126 review: the exhausted window stops waiting, shows that the chat could not be opened and
+    // records the closed failure outcome with the attempts it made.
+    expect(await screen.findByText("Could not open chat.")).toBeInTheDocument();
+    expect(screen.queryByText("Opening chat...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
+    expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        bindingReport: expect.objectContaining({
+          outcome: "project-open-exhausted",
+          projectOpenAttemptCount: 3,
+        }) as unknown,
+      }),
+    );
+  });
+
+  // #4126 review: a routing episode that ended (the project held) must not leave its attempts
+  // counted against the next one, or a later overtaken open would never be repeated.
+  it("starts a new routing episode with a fresh attempt budget", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const chatA = { ...chatFixture("chat-a", "Legacy chat", 1), projectPath: projectA.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [];
+    let attempts = 0;
+    chatSessionState.openProject.mockImplementation(async (project) => {
+      attempts += 1;
+      // The first attempt of each episode is overtaken; the second one holds.
+      if (attempts === 1 || attempts === 3) return;
+      chatSessionState.activeProject = project;
+      chatSessionState.chats = [chatA];
+      chatSessionState.activeChat = chatA;
+    });
+    const cfg = { chatId: chatA.id, title: chatA.title, projectPath: projectA.path };
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={cfg} ctx={ctx} />
+      </I18nProvider>,
+    );
+    await waitFor((): void => expect(chatSessionState.openProject).toHaveBeenCalledTimes(2));
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          bindingReport: expect.objectContaining({ outcome: "resolved" }) as unknown,
+        }),
+      ),
+    );
+
+    // Another update makes project B active again: the window needs its project once more.
+    chatSessionState.activeProject = projectB;
+    chatSessionState.chats = [];
+    chatSessionState.activeChat = undefined;
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ ...cfg }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(chatSessionState.openProject).toHaveBeenCalledTimes(4));
+    expect(screen.queryByText("Could not open chat.")).not.toBeInTheDocument();
   });
 
   it("shares concurrent legacy project scans across restored chat windows", async () => {

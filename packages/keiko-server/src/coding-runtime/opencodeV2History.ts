@@ -39,6 +39,7 @@ import {
 import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
 import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
 import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
+import { ConversationLedger } from "./opencodeV2HistoryConversation.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
 
@@ -83,6 +84,22 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     // The idle messages of this pass that did not end the run's work because a subagent launched in
     // the background had not yet reported back (`backgroundChildren`); a count, absent when none.
     heldIdleCount: { type: "integer", dataClass: "count", required: false },
+    // #4104: how the pass obtained the session's messages. `tail` read only the messages from the
+    // last checkpoint's anchor on and carried the older ones over unchanged; `full` read the whole
+    // window (the first pass, a catch-up after an event cap, a retry that holds an uncommitted page);
+    // `verify` is the scheduled complete read that catches an edit older than the tail; `anchor-lost`
+    // asked for a tail but the session no longer held the anchor (a revert or compaction), so it was
+    // read whole. `readMessageCount` is the messages the pass handed to the projection and
+    // `retainedMessageCount` the older ones it carried over without reading. Counts and a closed
+    // word only; `required: false` because a line written before these fields existed lacks them.
+    readMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["tail", "full", "verify", "anchor-lost"],
+    },
+    readMessageCount: { type: "integer", dataClass: "count", required: false },
+    retainedMessageCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -157,12 +174,18 @@ interface Candidate {
 }
 
 interface PendingProjection {
-  readonly nextKnown: ReadonlyMap<string, KnownCandidate>;
+  /** What the pass changed in the known candidates; adopted when its checkpoint is committed. */
+  readonly knownUpdates: ReadonlyMap<string, KnownCandidate>;
   readonly events: readonly OpenCodeReconciliationEvent[];
   readonly signals: ReadonlyMap<string, CodingSafeActivitySignal>;
   readonly emptyTextCount: number;
   readonly nativeRetrySignalCount: number;
   readonly heldIdleCount: number;
+  /** The pass stopped at the event cap, so candidates it did not reach are still to be emitted. */
+  readonly capped: boolean;
+  /** Where the next sync may start reading; absent when it must read the whole window. */
+  readonly tail?: TailState | undefined;
+  readonly sync?: OpenCodeV2SyncStats | undefined;
 }
 
 interface KnownCandidate {
@@ -170,6 +193,15 @@ interface KnownCandidate {
   readonly textLength?: number;
 }
 
+/** How a settled sync read its window: an anchored tail, a lost anchor, or the planned full read. */
+function settledReadMode(
+  base: TailState | undefined,
+  planned: OpenCodeV2ReadMode | undefined,
+): OpenCodeV2ReadMode {
+  if (base !== undefined) return "tail";
+  if (planned === "tail") return "anchor-lost";
+  return planned ?? "full";
+}
 export class OpenCodeV2HistoryError extends Error {
   constructor(readonly safeCode: string) {
     super("opencode-v2-history-invalid");
@@ -335,6 +367,47 @@ export interface OpenCodeV2ProjectionReuse {
 export interface OpenCodeV2HistoryProjectionOptions {
   /** Defaults to true. Off rebuilds every message each call, the reference the reuse is proven against. */
   readonly reuseMessages?: boolean | undefined;
+  /**
+   * Defaults to true. Off plans every read as a complete one and projects the whole window each call,
+   * the reference the tail reads are proven against (#4104).
+   */
+  readonly incremental?: boolean | undefined;
+  /**
+   * How many of the newest messages a tail read re-reads and re-projects, because the runtime
+   * persists a streamed part empty and then completes it in place. Defaults to 32.
+   */
+  readonly tailMargin?: number | undefined;
+  /**
+   * After this many tail reads the next read is a complete one, which catches an edit to a message
+   * older than the tail. Defaults to 256.
+   */
+  readonly verifyEvery?: number | undefined;
+}
+
+const DEFAULT_TAIL_MARGIN = 32;
+const DEFAULT_VERIFY_EVERY = 256;
+// The most events one pass returns; a pass that reaches it leaves candidates for the next.
+const PASS_EVENT_CAP = 256;
+
+/** How a pass obtained its messages (#4104); the projection line records it. */
+export type OpenCodeV2ReadMode = "tail" | "full" | "verify" | "anchor-lost";
+
+/** What the next history read should ask the runtime for. */
+export interface OpenCodeV2ReadPlan {
+  /**
+   * The id of a message the projection already holds. The read may end there and hand the messages
+   * from it on. Absent when the whole window must be read.
+   */
+  readonly anchorId: string | undefined;
+}
+
+/** How the last `project` call obtained and spent its messages. Counts and a closed word only. */
+export interface OpenCodeV2SyncStats {
+  readonly readMode: OpenCodeV2ReadMode;
+  /** The messages the call handed to the projection. */
+  readonly readMessageCount: number;
+  /** The older messages the call carried over from earlier calls without reading them. */
+  readonly retainedMessageCount: number;
 }
 
 /** What the messages of one `project` call are: the whole session, or only its newest window. */
@@ -344,6 +417,12 @@ export interface OpenCodeV2HistoryWindow {
    * conversation Coding History captured earlier is kept rather than replaced by the window.
    */
   readonly truncated?: boolean | undefined;
+  /**
+   * The messages begin at the anchor the last `readPlan` named, and the older ones are unchanged
+   * since the previous call (#4104). The projection then works on these messages alone and carries
+   * everything before them over. A window that does not begin at that anchor is refused.
+   */
+  readonly anchored?: boolean | undefined;
 }
 
 export interface OpenCodeV2HistoryProjection {
@@ -360,6 +439,14 @@ export interface OpenCodeV2HistoryProjection {
    * call, and those projected again. Counts only, for the projection line and its proofs.
    */
   lastReuse(): OpenCodeV2ProjectionReuse;
+  /**
+   * Where the next read should start (#4104). Every read before a `project` call asks for it, with
+   * the checkpoint it will pass: the plan names an anchor only when the earlier calls are fully
+   * committed and caught up, so the messages before it cannot hold anything still to be emitted.
+   */
+  readPlan(checkpoint: number | undefined): OpenCodeV2ReadPlan;
+  /** How the last `project` call obtained its messages and how many it handed and carried over. */
+  lastSync(): OpenCodeV2SyncStats;
   /**
    * Notes one event of the runtime's event stream. A streamed part is persisted only empty and
    * complete, so the text and reasoning deltas the stream carries are what the next `project` shows
@@ -1028,36 +1115,130 @@ function settleReuse(reuse: MessageReuse): OpenCodeV2ProjectionReuse {
   return counts;
 }
 
+/**
+ * What a scan carries from one message to the next: the user message the next assistant message
+ * answers and the background children launched and reported so far. A tail read resumes from it.
+ */
+interface ScanState {
+  readonly parentMessageId: string | undefined;
+  readonly launched: ReadonlySet<string>;
+  readonly reported: ReadonlySet<string>;
+}
+
+/** Where the next sync reads from (#4104): the anchor message and what the scan held before it. */
+interface TailState {
+  readonly anchorId: string;
+  readonly scan: ScanState;
+  /** The messages before the anchor that earlier syncs carried over. */
+  readonly precedingCount: number;
+  /** The ids of the messages from the anchor to the newest of the pass that chose it. */
+  readonly windowIds: ReadonlySet<string>;
+  /** The base read was the newest window of a session past the read bound. */
+  readonly truncated: boolean;
+}
+
+interface ScanWindow {
+  /** The state before the window's first message; absent when the window opens the session. */
+  readonly start?: ScanState | undefined;
+  /** The index of the message the next window starts at. */
+  readonly anchorIndex: number;
+}
+
+interface ScannedCandidates {
+  readonly candidates: readonly Candidate[];
+  /** The next window's start; absent for an empty window. */
+  readonly anchor?:
+    | {
+        readonly id: string;
+        /** The index of the anchor message's first candidate. */
+        readonly candidateIndex: number;
+        readonly state: ScanState;
+      }
+    | undefined;
+}
+
+interface ScanContext {
+  readonly live: OpenCodeV2LiveText;
+  readonly known: ReadonlyMap<string, KnownCandidate>;
+  readonly toolProfile: OpenCodeToolProfile;
+  readonly activity?: HistoryActivity | undefined;
+  readonly reuse?: MessageReuse | undefined;
+}
+
+interface ScanCursor {
+  readonly candidates: Candidate[];
+  readonly children: BackgroundChildren;
+  parentMessageId: string | undefined;
+}
+
+function userDisplayFor(
+  message: Readonly<Record<string, unknown>>,
+  context: ScanContext,
+): string | undefined {
+  if (message.type !== "user") return undefined;
+  const id = messageId(message);
+  return context.activity?.userMessageDisplay?.(id, !context.known.has(`${id}:message`));
+}
+
+function scanMessage(
+  cursor: ScanCursor,
+  message: Readonly<Record<string, unknown>>,
+  context: ScanContext,
+): void {
+  const { live, known, toolProfile, reuse } = context;
+  if (message.type === "user") cursor.parentMessageId = messageId(message);
+  observeBackgroundChildren(message, cursor.children);
+  const { parentMessageId, children } = cursor;
+  cursor.candidates.push(
+    ...(reuse !== undefined && message.type === "assistant"
+      ? assistantCandidatesReusing(message, parentMessageId, live, toolProfile, children, reuse)
+      : messageCandidates(
+          message,
+          parentMessageId,
+          live,
+          toolProfile,
+          children,
+          userDisplayFor(message, context),
+        )),
+    ...changedNativeRetryCandidates(message, parentMessageId, known),
+  );
+}
+
+function snapshotAnchor(
+  cursor: ScanCursor,
+  message: Readonly<Record<string, unknown>>,
+): NonNullable<ScannedCandidates["anchor"]> {
+  return {
+    id: messageId(message),
+    candidateIndex: cursor.candidates.length,
+    state: {
+      parentMessageId: cursor.parentMessageId,
+      launched: new Set(cursor.children.launched),
+      reported: new Set(cursor.children.reported),
+    },
+  };
+}
+
 function allCandidates(
   sessionId: string,
   messages: readonly Readonly<Record<string, unknown>>[],
-  live: OpenCodeV2LiveText,
-  known: ReadonlyMap<string, KnownCandidate>,
-  toolProfile: OpenCodeToolProfile,
-  activity?: HistoryActivity,
-  reuse?: MessageReuse,
-): readonly Candidate[] {
-  const result: Candidate[] = [candidate(`${sessionId}:created`, "observation", sessionId)];
-  const children: BackgroundChildren = { launched: new Set(), reported: new Set() };
-  let parentMessageId: string | undefined;
-  for (const message of messages) {
-    if (message.type === "user") parentMessageId = messageId(message);
-    observeBackgroundChildren(message, children);
-    const userDisplay =
-      message.type === "user"
-        ? activity?.userMessageDisplay?.(
-            messageId(message),
-            !known.has(`${messageId(message)}:message`),
-          )
-        : undefined;
-    result.push(
-      ...(reuse !== undefined && message.type === "assistant"
-        ? assistantCandidatesReusing(message, parentMessageId, live, toolProfile, children, reuse)
-        : messageCandidates(message, parentMessageId, live, toolProfile, children, userDisplay)),
-      ...changedNativeRetryCandidates(message, parentMessageId, known),
-    );
+  context: ScanContext,
+  window: ScanWindow,
+): ScannedCandidates {
+  const cursor: ScanCursor = {
+    candidates: [candidate(`${sessionId}:created`, "observation", sessionId)],
+    children: {
+      launched: new Set(window.start?.launched),
+      reported: new Set(window.start?.reported),
+    },
+    parentMessageId: window.start?.parentMessageId,
+  };
+  let anchor: ScannedCandidates["anchor"];
+  for (const [index, message] of messages.entries()) {
+    if (index === window.anchorIndex) anchor = snapshotAnchor(cursor, message);
+    scanMessage(cursor, message, context);
   }
-  return result;
+  return { candidates: cursor.candidates, anchor };
 }
 
 function changedNativeRetryCandidates(
@@ -1071,36 +1252,15 @@ function changedNativeRetryCandidates(
   return [nativeRetryCandidate(message, id, parentMessageId, eventTime(message))];
 }
 
-// Coding History records what the runtime persisted: a text part's own text, never the live text the
-// timeline shows while the part streams, so a turn cut short does not leave a partial answer behind
-// and a streaming turn does not rewrite the stored message on every delta.
-function conversationMessages(candidates: readonly Candidate[]): readonly CodingHistoryMessage[] {
-  const messages = new Map<string, CodingHistoryMessage>();
-  for (const { signal, capturedText, nativeRetryState } of candidates) {
-    if (signal?.kind === "message" && !nativeRetryState)
-      messages.set(signal.messageId, {
-        messageId: signal.messageId,
-        role: signal.role,
-        content: "",
-      });
-    if (signal?.kind !== "text") continue;
-    const message = messages.get(signal.messageId);
-    if (message !== undefined)
-      messages.set(signal.messageId, {
-        ...message,
-        content: message.content + (capturedText ?? signal.text),
-      });
-  }
-  return [...messages.values()];
-}
-
 function makePending(
   sessionId: string,
   checkpoint: number,
   known: ReadonlyMap<string, KnownCandidate>,
   candidates: readonly Candidate[],
 ): PendingProjection {
-  const nextKnown = new Map(known);
+  // Only what this pass changes: copying the whole known set per pass would cost the session's
+  // length on every sync, and the set is adopted into the owned map when the checkpoint commits.
+  const knownUpdates = new Map<string, KnownCandidate>();
   const events: OpenCodeReconciliationEvent[] = [];
   const signals = new Map<string, CodingSafeActivitySignal>();
   let emptyTextCount = 0;
@@ -1122,7 +1282,7 @@ function makePending(
     };
     events.push(event);
     const text = candidateText(item);
-    nextKnown.set(item.key, {
+    knownUpdates.set(item.key, {
       digest: item.digest,
       ...(text === undefined ? {} : { textLength: text.length }),
     });
@@ -1131,9 +1291,17 @@ function makePending(
     heldIdleCount += Number(item.heldIdle === true);
     const signal = incrementalSignal(item, previous);
     if (signal !== undefined) signals.set(`${sessionId}\u0000${String(sequence)}`, signal);
-    if (events.length === 256) break;
+    if (events.length === PASS_EVENT_CAP) break;
   }
-  return { nextKnown, events, signals, emptyTextCount, nativeRetrySignalCount, heldIdleCount };
+  return {
+    knownUpdates,
+    events,
+    signals,
+    emptyTextCount,
+    nativeRetrySignalCount,
+    heldIdleCount,
+    capped: events.length === PASS_EVENT_CAP,
+  };
 }
 
 function historyEventDigest(item: Candidate, sessionId: string, sequence: number): string {
@@ -1218,38 +1386,10 @@ function recordHistoryProjection(
         liveDroppedCount: counts.dropped,
         liveDivergedCount: counts.diverged,
         ...(pending.heldIdleCount === 0 ? {} : { heldIdleCount: pending.heldIdleCount }),
+        ...pending.sync,
       },
     ),
   );
-}
-
-function sameConversation(
-  left: readonly CodingHistoryMessage[] | undefined,
-  right: readonly CodingHistoryMessage[],
-): boolean {
-  if (left?.length !== right.length) return false;
-  return left.every((message, index) => {
-    const other = right[index];
-    return (
-      message.messageId === other?.messageId &&
-      message.role === other.role &&
-      message.content === other.content
-    );
-  });
-}
-
-// An unchanged conversation is recognised by comparing it with the last one accepted, not by hashing
-// it again on every read.
-function conversationCapture(
-  activity: HistoryActivity | undefined,
-): (candidates: readonly Candidate[]) => void {
-  let captured: readonly CodingHistoryMessage[] | undefined;
-  return (candidates): void => {
-    if (activity?.captureMessages === undefined) return;
-    const conversation = conversationMessages(candidates);
-    if (!sameConversation(captured, conversation) && activity.captureMessages(conversation))
-      captured = conversation;
-  };
 }
 
 /** A pull repeats unchanged candidates until the adapter commits its checkpoint. */
@@ -1302,18 +1442,43 @@ function stepCallIds(content: unknown): readonly string[] {
   });
 }
 
+function tailSettings(options: OpenCodeV2HistoryProjectionOptions | undefined): {
+  readonly incremental: boolean;
+  readonly margin: number;
+  readonly verifyEvery: number;
+} {
+  return {
+    incremental: options?.incremental !== false,
+    margin: Math.max(1, options?.tailMargin ?? DEFAULT_TAIL_MARGIN),
+    verifyEvery: Math.max(1, options?.verifyEvery ?? DEFAULT_VERIFY_EVERY),
+  };
+}
+
 class HistoryProjection implements OpenCodeV2HistoryProjection {
-  private known: ReadonlyMap<string, KnownCandidate> = new Map();
+  private readonly known = new Map<string, KnownCandidate>();
+  // Where the next sync may start reading, as of the last committed pass.
+  private tail: TailState | undefined;
   private pending: PendingProjection | undefined;
   private pendingStart = -1;
   private readonly toolProfile: OpenCodeToolProfile;
-  private readonly capture: (candidates: readonly Candidate[]) => void;
+  private readonly ledger: ConversationLedger;
   private readonly activeSignals = new Map<string, CodingSafeActivitySignal>();
   private readonly live = createOpenCodeV2LiveText();
   private readonly reuse: MessageReuse | undefined;
+  private readonly incremental: boolean;
+  private readonly margin: number;
+  private readonly verifyEvery: number;
+  // Tail reads since the last complete one, and what the last `readPlan` asked for.
+  private tailPasses = 0;
+  private plannedMode: OpenCodeV2ReadMode | undefined;
   private reuseOfLastProject: OpenCodeV2ProjectionReuse = {
     reusedMessageCount: 0,
     projectedMessageCount: 0,
+  };
+  private syncOfLastProject: OpenCodeV2SyncStats = {
+    readMode: "full",
+    readMessageCount: 0,
+    retainedMessageCount: 0,
   };
 
   constructor(
@@ -1322,12 +1487,28 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
   ) {
     this.toolProfile = activity?.toolProfile ?? "direct";
     openCodeVisibleToolNames(this.toolProfile);
-    this.capture = conversationCapture(activity);
+    this.ledger = new ConversationLedger(activity?.captureMessages);
     this.reuse = options?.reuseMessages === false ? undefined : newMessageReuse();
+    const tail = tailSettings(options);
+    this.incremental = tail.incremental;
+    this.margin = tail.margin;
+    this.verifyEvery = tail.verifyEvery;
   }
 
   lastReuse(): OpenCodeV2ProjectionReuse {
     return this.reuseOfLastProject;
+  }
+
+  lastSync(): OpenCodeV2SyncStats {
+    return this.syncOfLastProject;
+  }
+
+  readPlan(checkpoint: number | undefined): OpenCodeV2ReadPlan {
+    this.settle(checkpoint ?? -1);
+    const tail = this.usableTail();
+    if (tail === undefined) return this.plan("full", undefined);
+    if (this.tailPasses >= this.verifyEvery) return this.plan("verify", undefined);
+    return this.plan("tail", tail.anchorId);
   }
 
   project(
@@ -1337,11 +1518,7 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
     window?: OpenCodeV2HistoryWindow,
   ): readonly OpenCodeReconciliationEvent[] {
     const position = checkpoint ?? -1;
-    if (this.pending !== undefined && position === this.pendingStart + this.pending.events.length) {
-      // This snapshot is privately owned; subsequent staging always copies before writing.
-      this.known = this.pending.nextKnown;
-      this.pending = undefined;
-    }
+    this.settle(position);
     if (this.pending !== undefined && position !== this.pendingStart) {
       throw new Error("opencode-v2-checkpoint-invalid");
     }
@@ -1351,28 +1528,114 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
     return this.pending.events;
   }
 
+  // The checkpoint reached the end of the pending page: its changes become the known state, and the
+  // tail it chose becomes where the next read starts.
+  private settle(position: number): void {
+    if (this.pending === undefined || position !== this.pendingStart + this.pending.events.length)
+      return;
+    for (const [key, known] of this.pending.knownUpdates) this.known.set(key, known);
+    this.tail = this.pending.tail;
+    this.pending = undefined;
+  }
+
+  private plan(mode: OpenCodeV2ReadMode, anchorId: string | undefined): OpenCodeV2ReadPlan {
+    this.plannedMode = mode;
+    return { anchorId };
+  }
+
+  // A tail is usable only when everything before it is committed and caught up (a page still
+  // pending, or a pass cut at the event cap, leaves candidates the older messages still owe), and
+  // when no message older than the tail still holds live text: such a message is decided by its
+  // overlay and the history together, so it is read again.
+  private usableTail(): TailState | undefined {
+    const tail = this.tail;
+    if (!this.incremental || tail === undefined || this.pending !== undefined) return undefined;
+    for (const id of this.live.fedMessageIds())
+      if (!tail.windowIds.has(id) && this.known.has(`${id}:message`)) return undefined;
+    return tail;
+  }
+
+  // The tail state this pass starts from, when its window is anchored.
+  private anchoredBase(
+    messages: readonly Readonly<Record<string, unknown>>[],
+    window: OpenCodeV2HistoryWindow | undefined,
+  ): TailState | undefined {
+    if (window?.anchored !== true) return undefined;
+    if (this.tail === undefined || messages[0]?.id !== this.tail.anchorId)
+      throw new Error("opencode-v2-tail-anchor-mismatch");
+    return this.tail;
+  }
+
   private projectFresh(
     sessionId: string,
     messages: readonly Readonly<Record<string, unknown>>[],
     position: number,
     window: OpenCodeV2HistoryWindow | undefined,
   ): PendingProjection {
-    const candidates = allCandidates(
+    const base = this.anchoredBase(messages, window);
+    const anchorIndex = Math.max(0, messages.length - this.margin);
+    const scanned = allCandidates(
       sessionId,
       messages,
-      this.live,
-      this.known,
-      this.toolProfile,
-      this.activity,
-      this.reuse,
+      {
+        live: this.live,
+        known: this.known,
+        toolProfile: this.toolProfile,
+        activity: this.activity,
+        reuse: this.reuse,
+      },
+      { start: base?.scan, anchorIndex },
     );
     if (this.reuse !== undefined) this.reuseOfLastProject = settleReuse(this.reuse);
-    const pending = makePending(sessionId, position, this.known, candidates);
+    const made = makePending(sessionId, position, this.known, scanned.candidates);
     // A truncated window never replaces the conversation captured from the complete history.
-    if (window?.truncated !== true) this.capture(candidates);
+    const truncated = base?.truncated ?? window?.truncated === true;
+    if (!truncated)
+      this.ledger.observe(
+        scanned.candidates,
+        scanned.anchor?.candidateIndex ?? 0,
+        base === undefined,
+      );
+    const sync = this.settleSync(base, messages.length);
+    const pending = {
+      ...made,
+      sync,
+      tail: made.capped
+        ? undefined
+        : this.nextTail(messages, scanned, base, truncated, anchorIndex),
+    };
     recordHistoryProjection(this.activity, pending, this.live);
     recordNativeQuestions(this.activity, pending);
     return pending;
+  }
+
+  private settleSync(base: TailState | undefined, windowLength: number): OpenCodeV2SyncStats {
+    const planned = this.plannedMode;
+    this.plannedMode = undefined;
+    this.tailPasses = base === undefined ? 0 : this.tailPasses + 1;
+    this.syncOfLastProject = {
+      readMode: settledReadMode(base, planned),
+      readMessageCount: windowLength,
+      retainedMessageCount: base?.precedingCount ?? 0,
+    };
+    return this.syncOfLastProject;
+  }
+
+  private nextTail(
+    messages: readonly Readonly<Record<string, unknown>>[],
+    scanned: ScannedCandidates,
+    base: TailState | undefined,
+    truncated: boolean,
+    anchorIndex: number,
+  ): TailState | undefined {
+    if (!this.incremental || scanned.anchor === undefined) return undefined;
+    return {
+      anchorId: scanned.anchor.id,
+      scan: scanned.anchor.state,
+      precedingCount: (base?.precedingCount ?? 0) + anchorIndex,
+      windowIds: new Set(messages.slice(anchorIndex).map((message) => messageId(message))),
+      truncated,
+    };
   }
 
   takeSignal(event: OpenCodeReconciliationEvent): CodingSafeActivitySignal | undefined {

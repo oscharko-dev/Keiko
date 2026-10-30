@@ -16,8 +16,7 @@ function cursorFixture(): {
     binding: captureCursorBinding({
       toolRef: fixture.pure.descriptor.toolRef,
       requestDigest: "b".repeat(64),
-      workspaceIdentity: fixture.context.workspaceIdentity,
-      workspaceRevision: fixture.context.workspaceRevision,
+      scopeDigest: "a".repeat(64),
       profile: fixture.pure.projection.profile,
       projectionDigest: fixture.pure.projection.projectionDigest,
       expiresAt: new Date(20_000).toISOString(),
@@ -59,8 +58,8 @@ describe("opaque catalog cursors on the existing invocation registry", () => {
     fixture.options.invocationRegistry.dispose();
   });
   it.each([
-    { workspaceIdentity: "other-workspace" },
-    { workspaceRevision: "c".repeat(40) },
+    { scopeDigest: "invalid-scope" },
+    { scopeDigest: "c".repeat(64) },
     { projectionDigest: "d".repeat(64) },
     { requestDigest: "e".repeat(64) },
     { budgetReservationId: "other-budget" },
@@ -145,7 +144,7 @@ describe("opaque catalog cursors on the existing invocation registry", () => {
     ])
       expect(() => captureCursorBinding({ ...binding, ...patch })).toThrow();
     let reads = 0;
-    const getter = Object.defineProperty({ ...binding }, "workspaceIdentity", {
+    const getter = Object.defineProperty({ ...binding }, "scopeDigest", {
       enumerable: true,
       get: (): string => {
         reads++;
