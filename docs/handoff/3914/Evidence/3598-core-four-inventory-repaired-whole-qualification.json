@@ -1,0 +1,26 @@
+{
+  "args": [
+    "npm",
+    "exec",
+    "--offline",
+    "--",
+    "node",
+    "/tmp/keiko-3914-intake/conversation-fixture-inventory-qualification-tooling-20261030/invoke.mjs",
+    "/tmp/keiko-3914-intake/osv-security-repair-557932c-20261023/3597-inventory-repaired-whole-request.json"
+  ],
+  "exitCode": 2,
+  "seconds": 942.1250739097595,
+  "sourceOutputGitExact": true,
+  "sourceGitExact": true,
+  "outputHashesMembershipExact": true,
+  "outputChangeAllowedForActualBuild": false,
+  "sourceMembershipCount": 9215,
+  "trackedFileCount": 9215,
+  "untrackedPaths": [],
+  "outputs": 7281,
+  "childClosed": true,
+  "awakeClosed": true,
+  "ownedGroup": 5213,
+  "groupAbsent": true,
+  "logSha256": "5022f969f760a8a37fa7490724874c55fc869d8f1737ebf1558b74e64ba5510a"
+}

@@ -1,0 +1,13 @@
+{
+  "head": "6dfe5f2bf7ffdd41b676d6c338166b66421cd5ea",
+  "parent": "34833c04b81806dfd4eac25b4147c5e75b52a97b",
+  "signature": "G",
+  "only3Owners": [
+    "docs/qa/code-quality-policy.md",
+    "scripts/__tests__/code-quality-inventory.test.mjs",
+    "scripts/lib/code-quality-inventory.mjs"
+  ],
+  "sourceOutputExact": true,
+  "clean": true,
+  "published": false
+}

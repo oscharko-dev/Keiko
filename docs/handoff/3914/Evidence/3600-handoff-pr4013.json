@@ -1,0 +1,6 @@
+{
+  "at": "2026-10-30T09:59:49.346655+00:00",
+  "exitCode": 0,
+  "output": "{\"autoMergeRequest\":null,\"baseRefName\":\"codex/epic-anti-slop-quality\",\"headRefName\":\"codex/issue-3918-boundary-responsibilities\",\"headRefOid\":\"557932c54df23cafbac73faf3c2922185463ddcd\",\"isDraft\":true,\"mergedAt\":null,\"number\":4013,\"state\":\"OPEN\",\"url\":\"https://github.com/oscharko-dev/Keiko/pull/4013\"}\n",
+  "error": ""
+}

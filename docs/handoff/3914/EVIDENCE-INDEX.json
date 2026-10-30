@@ -1,0 +1,2393 @@
+{
+  "createdUTC": "2026-10-30T10:02:25.804967+00:00",
+  "scope": "Selected immutable handoff-critical copies, not entire14GB scratch history; no credentials copied",
+  "count": 477,
+  "bytes": 175971663,
+  "files": [
+    {
+      "path": "Evidence/3434-four-rule-actual-measurement/artifacts.json",
+      "bytes": 1092,
+      "sha256": "40615f6883a2d5767d53c47769e3472218ae10ce9b5b4ae60b00df6c73c27e7f"
+    },
+    {
+      "path": "Evidence/3434-four-rule-actual-measurement/canonical-policy.json",
+      "bytes": 341910,
+      "sha256": "51494b717759a17e8c7c033f3ad1c50e7f5511b577b22c238e05b6a8e061c515"
+    },
+    {
+      "path": "Evidence/3434-four-rule-actual-measurement/canonical-report.json",
+      "bytes": 12959212,
+      "sha256": "cc2edd4420951014701086d727888a4cf1a71a09d0f9c6174126b75ac9d5f279"
+    },
+    {
+      "path": "Evidence/3434-four-rule-actual-measurement/execution-bindings.json",
+      "bytes": 8395,
+      "sha256": "38a2102f3847bd3887d814c340c563483d587bc323f0f584f1c8da4f938ff158"
+    },
+    {
+      "path": "Evidence/3434-four-rule-actual-measurement/measurement.json",
+      "bytes": 1126,
+      "sha256": "ea9a83e7b2fd034b1834c836b7fd2ff00f2472d06bdf122a91af4df9d3154e25"
+    },
+    {
+      "path": "Evidence/3434-four-rule-actual-measurement/prospective-assessment.json",
+      "bytes": 29773035,
+      "sha256": "9a83f03c6bc5e470f7a4d116c0f3d249937e4cb806efeb81ccdec48e3fdac304"
+    },
+    {
+      "path": "Evidence/3434-four-rule-actual-measurement/prospective-policy.json",
+      "bytes": 345682,
+      "sha256": "a1db3bd0c19d17a7144f090492a116ab609b60d804ddb321f523455f94383d3f"
+    },
+    {
+      "path": "Evidence/3434-full-qualification-prospective.json",
+      "bytes": 750,
+      "sha256": "3da19779c6a60e23110699445b42215a5149d8e1525bc91067088d75df9a35ff"
+    },
+    {
+      "path": "Evidence/3434-root-complete-qualification-verification.json",
+      "bytes": 996,
+      "sha256": "2eca88bdc3b114181023fd45026870b1706ce541337fe129ead51852f8bd9f67"
+    },
+    {
+      "path": "Evidence/3490-dirty-native-performance-archive/ARCHIVE.json",
+      "bytes": 1284,
+      "sha256": "f2452a3ecb4736cccf78594106e0cdbdabb15987e8d5af5ed723134350fef2e8"
+    },
+    {
+      "path": "Evidence/3490-dirty-native-performance-archive/DirtyRED/docs/release/2952-coding-runtime-calibration.json",
+      "bytes": 11261,
+      "sha256": "38ac5674cc311a142eaec06968d7d014340ead7cb1011aa5aa2725d9a419811c"
+    },
+    {
+      "path": "Evidence/3490-dirty-native-performance-archive/DirtyRED/docs/release/2952-coding-runtime-perf-evidence.json",
+      "bytes": 11357,
+      "sha256": "e8da81eb95c45668c4afed10ccfbe8273be54a7e63ca47ac1328b5578cf10473"
+    },
+    {
+      "path": "Evidence/3490-dirty-native-performance-archive/DirtyRED/scripts/coding-runtime-performance-budget.json",
+      "bytes": 385,
+      "sha256": "6f852129c23524b37dc5e3a298b3c81e57cffa44dcd83ab191ed46825c6eca0e"
+    },
+    {
+      "path": "Evidence/3490-dirty-native-performance-archive/SignedHEAD/docs/release/2952-coding-runtime-calibration.json",
+      "bytes": 11249,
+      "sha256": "bbc89395a4c8703bfea3d9ed23e8eb261031fd57d6dc09f0ab4dd6a6eb6ac00d"
+    },
+    {
+      "path": "Evidence/3490-dirty-native-performance-archive/SignedHEAD/docs/release/2952-coding-runtime-perf-evidence.json",
+      "bytes": 11315,
+      "sha256": "4b36fd1179e790416c86e57ccfa578588a5abf6ec6e2205351602ee1b36c28c9"
+    },
+    {
+      "path": "Evidence/3490-dirty-native-performance-archive/SignedHEAD/scripts/coding-runtime-performance-budget.json",
+      "bytes": 383,
+      "sha256": "7420c4c8ff4e647e1fe1309200c7db8bdecebaa5ce48406c3ea09b1190fc96fd"
+    },
+    {
+      "path": "Evidence/3524-awake-renewal.json",
+      "bytes": 330,
+      "sha256": "16ef39772d908c452f953b80e96e9bebe2b18dfaed221bf70398e5b89b2cc26d"
+    },
+    {
+      "path": "Evidence/3554-independent-current-core-rebind-review.json",
+      "bytes": 2367,
+      "sha256": "114869498f83cf82acda4895008dbadab81c57adae2110edbefa43a320dbdd4a"
+    },
+    {
+      "path": "Evidence/3562-current-core-actual-census.json",
+      "bytes": 16316,
+      "sha256": "182e972aff0e9f6489502657f880b411f4b996021059c60957d27f4f306eb5bf"
+    },
+    {
+      "path": "Evidence/3563-independent-toolcatalog-pair-actual-review.json",
+      "bytes": 6727,
+      "sha256": "21b58ea17bfb97fd64084f84ac5b8df690e2581f352b05d752f0081813c3f884"
+    },
+    {
+      "path": "Evidence/3567-core-runtime-api-baseline-after.json",
+      "bytes": 2222682,
+      "sha256": "7a32276850eb17a82a3df7f8db7f98be57934494192e412fc56a3a1d64d4ca4d"
+    },
+    {
+      "path": "Evidence/3567-core-runtime-api-baseline-before.json",
+      "bytes": 2222682,
+      "sha256": "7a32276850eb17a82a3df7f8db7f98be57934494192e412fc56a3a1d64d4ca4d"
+    },
+    {
+      "path": "Evidence/3567-core-runtime-api-baseline.json",
+      "bytes": 770,
+      "sha256": "45cd92713bba88e6e9181cdc53b17175db991d47114f4eff83e4820c5b932c91"
+    },
+    {
+      "path": "Evidence/3567-core-runtime-api-baseline.log",
+      "bytes": 126,
+      "sha256": "42dcdcad1735f123c78677a609ae8bccfe85af5bce4a6f7ccd6fe1ccd2780364"
+    },
+    {
+      "path": "Evidence/3567-core-runtime-api-baseline.report.json",
+      "bytes": 75419,
+      "sha256": "7e1d59b3382c88e1014362edfa59debfec519b17dbaf3968472ffc0624bf7e79"
+    },
+    {
+      "path": "Evidence/3568-core-four-boundary-adoption.json",
+      "bytes": 820,
+      "sha256": "d98c0f7af8e4cc65c1069b14ead3f9a8c0f1401ded0d6ffda74a984ea7c069f9"
+    },
+    {
+      "path": "Evidence/3569-core-four-typecheck-after.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3569-core-four-typecheck-before.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3569-core-four-typecheck.json",
+      "bytes": 528,
+      "sha256": "7a3e0c0039dd5872eeb166abdb90241abdc8493a54a27d05a9429d78ec8c77a0"
+    },
+    {
+      "path": "Evidence/3569-core-four-typecheck.log",
+      "bytes": 640,
+      "sha256": "41f80ee91eb0bdd0f0189d59ac82757046380b66dd0854f7c6888cd83e48c698"
+    },
+    {
+      "path": "Evidence/3570-core-four-api-tests-after.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3570-core-four-api-tests-before.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3570-core-four-api-tests.json",
+      "bytes": 765,
+      "sha256": "6f988d8d51682b803569c52887de49432b2fb3ff7188f7874e0342f6aa4111c6"
+    },
+    {
+      "path": "Evidence/3570-core-four-api-tests.log",
+      "bytes": 120,
+      "sha256": "f612890e34991e3857cb62e82d52252278fd56dac9233095f79565af63c40c21"
+    },
+    {
+      "path": "Evidence/3570-core-four-api-tests.report.json",
+      "bytes": 79525,
+      "sha256": "0e28289854986c156b5615ca5afae058c7e412037d5868dee8ea579c766f3e64"
+    },
+    {
+      "path": "Evidence/3571-core-four-targeted-lint-after.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3571-core-four-targeted-lint-before.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3571-core-four-targeted-lint.json",
+      "bytes": 675,
+      "sha256": "6110d15bd744f29678bbc691990ffa2fa5c86bc30a0eb287007f5c4095f28c93"
+    },
+    {
+      "path": "Evidence/3571-core-four-targeted-lint.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "Evidence/3572-core-four-owner-case-preservation.json",
+      "bytes": 372,
+      "sha256": "ffb21e8ebcf3c9f80530c4f479089495308007d4cec7ac44e264c732b3358bb8"
+    },
+    {
+      "path": "Evidence/3573-core-four-format-after.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3573-core-four-format-before.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3573-core-four-format.json",
+      "bytes": 715,
+      "sha256": "b04b363967a0ac4bf08d6d67863913a7d738f13b42f60a2982e5c102513c042c"
+    },
+    {
+      "path": "Evidence/3573-core-four-format.log",
+      "bytes": 66,
+      "sha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "path": "Evidence/3573-independent-core-four-local-actual-review.json",
+      "bytes": 4895,
+      "sha256": "385489cedcd1a603111d7bb4b07bf0ca2c150792e9f99db4bd9cc3c6eeab00f2"
+    },
+    {
+      "path": "Evidence/3574-core-four-local-sonar-after.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3574-core-four-local-sonar-before.json",
+      "bytes": 2222824,
+      "sha256": "caf979b474ad0671e25d0879fcc3fb3347caae57b50669698b8baec9625e157f"
+    },
+    {
+      "path": "Evidence/3574-core-four-local-sonar.json",
+      "bytes": 532,
+      "sha256": "baab0f6f37a8adb0af70967aef96dfb50f3e17b1e6e2ab9a02220bd249ebc501"
+    },
+    {
+      "path": "Evidence/3574-core-four-local-sonar.log",
+      "bytes": 89373,
+      "sha256": "721e18cbf0057b7785b0ebc41d708876423b89775aff0b4e97a5558d6caa4f1c"
+    },
+    {
+      "path": "Evidence/3575-core-four-commit-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3575-core-four-commit-before.json",
+      "bytes": 2222824,
+      "sha256": "448c7fe02ffe909f8ccbce4325f8875dc17a8dc09fb6098809aa51499b67279f"
+    },
+    {
+      "path": "Evidence/3575-core-four-commit.log",
+      "bytes": 155,
+      "sha256": "f5809da413e9ef2537fa5745023401b9e20768b7cd0846677c8d6eedb6b4db73"
+    },
+    {
+      "path": "Evidence/3575-core-four-message.txt",
+      "bytes": 484,
+      "sha256": "e0aa66a4336919b8827b04db61714e54ccd710b922487ddbcd3a56aa2d4ab880"
+    },
+    {
+      "path": "Evidence/3575-core-four-signed-checkpoint.json",
+      "bytes": 834,
+      "sha256": "0866a66840870d41c6d1be25e86ee123d4f44e899b2b1040a7c4d6c5d633622b"
+    },
+    {
+      "path": "Evidence/3576-core-four-whole-request.json",
+      "bytes": 6632,
+      "sha256": "220aa76f43b9435298b9476a4360e72c2bb23daa27a5d6b13e0bc56d1c8eff47"
+    },
+    {
+      "path": "Evidence/3577-core-four-whole-qualification-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3577-core-four-whole-qualification-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3577-core-four-whole-qualification.json",
+      "bytes": 754,
+      "sha256": "fa1282fd6641e53725cdeca739e2897cd5ea00a8a75aa9db61e6940d6908fe0e"
+    },
+    {
+      "path": "Evidence/3577-core-four-whole-qualification.log",
+      "bytes": 654,
+      "sha256": "43659d1ce11bd50941e97989f4f45bc495285e61ff6fbddb9270fcaff6969c2f"
+    },
+    {
+      "path": "Evidence/3578-current-unclassified-path-diagnostic-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3578-current-unclassified-path-diagnostic-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3578-current-unclassified-path-diagnostic.json",
+      "bytes": 616,
+      "sha256": "c60440e3f60d827849821ba9ee3ace7e55a3929bf7580041454c00cfbbc15e3e"
+    },
+    {
+      "path": "Evidence/3578-current-unclassified-path-diagnostic.log",
+      "bytes": 141,
+      "sha256": "73d70bd558e463fe92620fd1df41fb8e34fbfa2772aff04f8e81d5b9f020d0c3"
+    },
+    {
+      "path": "Evidence/3578-current-unclassified-path-diagnostic.mjs",
+      "bytes": 1148,
+      "sha256": "56f9657e279101e70d9e5920b021aced29edb5ce497c4346434e5e06d42b44c7"
+    },
+    {
+      "path": "Evidence/3578-current-unclassified-path-diagnostic.result.json",
+      "bytes": 158,
+      "sha256": "f9c60b7dc8e4e2be45fff4795ead086f8cf827b697ea0864de3787b49aed2691"
+    },
+    {
+      "path": "Evidence/3579-current-runtime-unclassified-diagnostic-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3579-current-runtime-unclassified-diagnostic-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3579-current-runtime-unclassified-diagnostic.json",
+      "bytes": 619,
+      "sha256": "4280bc718f89016b72e051de3f8ef8482cd757fa49b05055e6bc7f003d2ee7d8"
+    },
+    {
+      "path": "Evidence/3579-current-runtime-unclassified-diagnostic.log",
+      "bytes": 1051,
+      "sha256": "cbffe1c2a68dcffc17adb086fb9970e24bcdf10bf4dd56d99bd22d51b3a914d7"
+    },
+    {
+      "path": "Evidence/3579-current-runtime-unclassified-diagnostic.mjs",
+      "bytes": 1648,
+      "sha256": "51e1c02541bc2ae7e672b5135a3c4cca77fbcc5ffe424ee58b938078cb60d897"
+    },
+    {
+      "path": "Evidence/3580-current-runtime-unclassified-diagnostic-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3580-current-runtime-unclassified-diagnostic-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3580-current-runtime-unclassified-diagnostic.json",
+      "bytes": 618,
+      "sha256": "7a9f53c3b7a24e3bdbb6e763d412e4316e6571834b7b4cc741fb2873a465013e"
+    },
+    {
+      "path": "Evidence/3580-current-runtime-unclassified-diagnostic.log",
+      "bytes": 327,
+      "sha256": "a95937270205ed95bb412e5013fff87c39685776dfffd5cfb87e363fc4319d2d"
+    },
+    {
+      "path": "Evidence/3580-current-runtime-unclassified-diagnostic.mjs",
+      "bytes": 1821,
+      "sha256": "5e6812d445ae2545f10a7c411a684d147e696c92ed25255974d836358ac6518e"
+    },
+    {
+      "path": "Evidence/3580-current-runtime-unclassified-diagnostic.result.json",
+      "bytes": 340,
+      "sha256": "def7dc03463b7cee03f2c2bec02630584fe8deaeed83e7aae7ff642f8eb501a6"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/AGENTS.md",
+      "bytes": 130804,
+      "sha256": "8751d00c604a03e90657fdfa010843e8dc45e9af6e44089e58534c0872d36e3f"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/BINDINGS.json",
+      "bytes": 10604,
+      "sha256": "3f5ca9235b1183f9c961e074d7e9e855065653a5a5b47628ad9c0235723e0c94"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/CENSUS.actual.json",
+      "bytes": 3107,
+      "sha256": "95ad10390e6e99b452b666a040f8acaf3e898279dae1a9e6815de591d485697e"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/CONTRIBUTING.md",
+      "bytes": 74645,
+      "sha256": "461f71bdc2e3690fbd4cae7ae5540afa0ec8046d47b9a6516cbc785800a5ed74"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+      "bytes": 16971,
+      "sha256": "d9ab0d78b5225a623737d605cd8f6644b5100505eae8759a6da5b5078d6f6baf"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/docs/qa/code-quality-policy.md",
+      "bytes": 151748,
+      "sha256": "aa5e699baf0f476002e59ad86042ccd152d06c31ae1dc78d83ed3575982ab20e"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/eslint.config.js",
+      "bytes": 12509,
+      "sha256": "1158ab2fe3f6098343b3a17ca60a20aad63abb4f9ab3ebb7ff0d5a2e88788726"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/package-lock.json",
+      "bytes": 609238,
+      "sha256": "1bf3ed323ab5efe5f200446b7c571b39f07099393dfdce019a4f71e4bc5607fc"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/package.json",
+      "bytes": 35836,
+      "sha256": "dfd25833798f05ed054ed24f62a50f879bed3b7759d775a193d4b735f0981d36"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/package.json",
+      "bytes": 3246,
+      "sha256": "f12e5ee92b767722ab0dbc19cb56f8a4ca86428fa8543e7d7b4a715cfd408463"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+      "bytes": 16813,
+      "sha256": "60d941c4d68958e7974b07557b0f1aefa336bcc1a3c4a0a5e5f3227ce7004d37"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/src/tool-catalog/__fixtures__/catalogDefinition.ts",
+      "bytes": 2508,
+      "sha256": "5d62d3b403d55b7bc919a9a632eb4e91243eff9182ea9dbc9bfe4a95053d6621"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/src/tool-catalog/__fixtures__/catalogRuntimeFixture.ts",
+      "bytes": 6489,
+      "sha256": "5f2b5f2ba01e04e6ec2a4737575fa33693cf9949079ff63ae4a2f308dcd07b77"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.ts",
+      "bytes": 4550,
+      "sha256": "d6381855cfbf6d5144aaa4559c9a2c834edaca8a121c644d76c2a88dea70ef96"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/src/tool-catalog/__fixtures__/conversationConsumer.ts",
+      "bytes": 8342,
+      "sha256": "65181574803002505a55203ebd0cb17772ab9a4fda10564264040d8a5ccc5d67"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts",
+      "bytes": 6086,
+      "sha256": "36701406339d3981347db29d1c0c1daf3b3b061d1571dec1c4c4cc508dce107e"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/src/tool-catalog/catalogNonCodingConsumer.test.ts",
+      "bytes": 40653,
+      "sha256": "6fa0dd982c0290960b3058ba0e9e9c967a5fe115e63ebfd74b2f7a71e677c26e"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/packages/keiko-server/tsconfig.json",
+      "bytes": 1896,
+      "sha256": "30d37eeb9a3c2fd33aa139db5618933c6ca3175b9be8972037d1b6c1e2c27949"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/scripts/__tests__/code-quality-inventory.test.mjs",
+      "bytes": 34016,
+      "sha256": "3078da96311b65a09cc1d48a7e54139407a4cb2eb34cf7a29be2e09bcad3a1b6"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/scripts/__tests__/support/code-quality-fixture.mjs",
+      "bytes": 7317,
+      "sha256": "e85671a036fea0f1d9e608c9b0b55eea80285d350ae0b511f02ae8d096dd9bbe"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/scripts/__tests__/support/code-quality-responsibility-fixture.mjs",
+      "bytes": 125294,
+      "sha256": "eca47cb8bc65abd97d68510c7143f68b0abc406e7cb2413976b2ecd8fc410265"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/scripts/lib/code-quality-inventory.mjs",
+      "bytes": 12847,
+      "sha256": "a8cbebeb5233b60181597531a3892756b5afce80340c85f81427606d530e7a2f"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/scripts/lib/code-quality-policy.mjs",
+      "bytes": 22755,
+      "sha256": "584b1447f933773d9245dcb44a417419817bc20c4b635373932016dd34196cf1"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/scripts/lib/code-quality-production.mjs",
+      "bytes": 17539,
+      "sha256": "a61e4409d53e6ba64d6aef4ca4fc725c653c5fae2fdfc5efa7ed0efd6a56afef"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/scripts/sonar-analysis-scope.mjs",
+      "bytes": 22374,
+      "sha256": "668f691bb3edefd6bab1254e4af886c571d0ebf242deaf7d14286102b3c67f97"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/scripts/workspace-graph.mjs",
+      "bytes": 3102,
+      "sha256": "941e51e1210f0cbe10ef47dcdc9db6031ed4e975653e18f51af7793c8c1802a3"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/tests/support/buffered-server-log.ts",
+      "bytes": 344,
+      "sha256": "6ef83eb3d392a36b221f8b38482908060ec84aea896ed1e90965c783bf2b3efa"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/tsconfig.base.json",
+      "bytes": 445,
+      "sha256": "76697f22a7e654a7c19f886e8adbdd6c176be72603dfd975e5af995957d6907a"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/tsconfig.json",
+      "bytes": 679,
+      "sha256": "ec670db520a4d444fcb3ac1d5af63d2f1d0f5a8620047f5224c32dcff2e14a99"
+    },
+    {
+      "path": "Evidence/3581-conversation-fixture-inventory-source/vitest.config.ts",
+      "bytes": 3933,
+      "sha256": "81a272298e24ab8b12771fc9b825db24d7a895c147bebedc2b057b9a28ddc5fa"
+    },
+    {
+      "path": "Evidence/3581-independent-c002-finding-body.md",
+      "bytes": 2266,
+      "sha256": "9eccc11cf9c6f34b427ce92f73501c4d49901ca21ea3fc321bd54ecbccc2542e"
+    },
+    {
+      "path": "Evidence/3581-independent-c002-finding-receipt.json",
+      "bytes": 2610,
+      "sha256": "1d530e97faa5153cfb0fcc09d688a630ce235046b23bb2d615308d65cacd532e"
+    },
+    {
+      "path": "Evidence/3582-conversation-fixture-context-census.mjs",
+      "bytes": 1245,
+      "sha256": "9e0b9c988b83fb597c032d4ef7a98d4c984c92adf5c63737aab6f672e2a87836"
+    },
+    {
+      "path": "Evidence/3583-inventory-baseline-failure-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3583-inventory-baseline-failure-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3583-inventory-baseline-failure.json",
+      "bytes": 756,
+      "sha256": "6c4219eadc50558623bd6447c42756d353eb8d339a6f5fe0024ac36903bbdf88"
+    },
+    {
+      "path": "Evidence/3583-inventory-baseline-failure.log",
+      "bytes": 127,
+      "sha256": "143b6d57316b8806d29e4b6eeaef79716ff2f2c69595b709812c98877712f255"
+    },
+    {
+      "path": "Evidence/3583-inventory-baseline-failure.report.json",
+      "bytes": 33365,
+      "sha256": "f571593cfa9b19f6e3c060ad7348d858f5428c9eaa64e4f385c15cf933232899"
+    },
+    {
+      "path": "Evidence/3584-independent-conversation-fixture-source-review.json",
+      "bytes": 2413,
+      "sha256": "8c24fbf7e7528c41a90ce4b613297ad3916329ef803cb22d76dfed143ed29c6e"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/AGENTS.md",
+      "bytes": 130804,
+      "sha256": "8751d00c604a03e90657fdfa010843e8dc45e9af6e44089e58534c0872d36e3f"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/CONTRIBUTING.md",
+      "bytes": 74645,
+      "sha256": "461f71bdc2e3690fbd4cae7ae5540afa0ec8046d47b9a6516cbc785800a5ed74"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+      "bytes": 16971,
+      "sha256": "d9ab0d78b5225a623737d605cd8f6644b5100505eae8759a6da5b5078d6f6baf"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/docs/qa/code-quality-policy.md",
+      "bytes": 153244,
+      "sha256": "8ab3facaba3b261f64453635835598601ff35834c3a0283aaa6f6a2148995c53"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/eslint.config.js",
+      "bytes": 12509,
+      "sha256": "1158ab2fe3f6098343b3a17ca60a20aad63abb4f9ab3ebb7ff0d5a2e88788726"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/package-lock.json",
+      "bytes": 609238,
+      "sha256": "1bf3ed323ab5efe5f200446b7c571b39f07099393dfdce019a4f71e4bc5607fc"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/package.json",
+      "bytes": 35836,
+      "sha256": "dfd25833798f05ed054ed24f62a50f879bed3b7759d775a193d4b735f0981d36"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/package.json",
+      "bytes": 3246,
+      "sha256": "f12e5ee92b767722ab0dbc19cb56f8a4ca86428fa8543e7d7b4a715cfd408463"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+      "bytes": 16813,
+      "sha256": "60d941c4d68958e7974b07557b0f1aefa336bcc1a3c4a0a5e5f3227ce7004d37"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/src/tool-catalog/__fixtures__/catalogDefinition.ts",
+      "bytes": 2508,
+      "sha256": "5d62d3b403d55b7bc919a9a632eb4e91243eff9182ea9dbc9bfe4a95053d6621"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/src/tool-catalog/__fixtures__/catalogRuntimeFixture.ts",
+      "bytes": 6489,
+      "sha256": "5f2b5f2ba01e04e6ec2a4737575fa33693cf9949079ff63ae4a2f308dcd07b77"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.ts",
+      "bytes": 4550,
+      "sha256": "d6381855cfbf6d5144aaa4559c9a2c834edaca8a121c644d76c2a88dea70ef96"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/src/tool-catalog/__fixtures__/conversationConsumer.ts",
+      "bytes": 8342,
+      "sha256": "65181574803002505a55203ebd0cb17772ab9a4fda10564264040d8a5ccc5d67"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts",
+      "bytes": 6086,
+      "sha256": "36701406339d3981347db29d1c0c1daf3b3b061d1571dec1c4c4cc508dce107e"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/src/tool-catalog/catalogNonCodingConsumer.test.ts",
+      "bytes": 40653,
+      "sha256": "6fa0dd982c0290960b3058ba0e9e9c967a5fe115e63ebfd74b2f7a71e677c26e"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/packages/keiko-server/tsconfig.json",
+      "bytes": 1896,
+      "sha256": "30d37eeb9a3c2fd33aa139db5618933c6ca3175b9be8972037d1b6c1e2c27949"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/scripts/__tests__/code-quality-inventory.test.mjs",
+      "bytes": 38746,
+      "sha256": "0a26c435cf54b1c2bfa4f43ded59d8fcb50205d1608f4427151a679afadba484"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/scripts/__tests__/support/code-quality-fixture.mjs",
+      "bytes": 7317,
+      "sha256": "e85671a036fea0f1d9e608c9b0b55eea80285d350ae0b511f02ae8d096dd9bbe"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/scripts/__tests__/support/code-quality-responsibility-fixture.mjs",
+      "bytes": 125294,
+      "sha256": "eca47cb8bc65abd97d68510c7143f68b0abc406e7cb2413976b2ecd8fc410265"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/scripts/lib/code-quality-inventory.mjs",
+      "bytes": 12928,
+      "sha256": "9b16ffc0b517b994a22613df509f8896d9739df7b6723fcb2407f948959473a2"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/scripts/lib/code-quality-policy.mjs",
+      "bytes": 22755,
+      "sha256": "584b1447f933773d9245dcb44a417419817bc20c4b635373932016dd34196cf1"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/scripts/lib/code-quality-production.mjs",
+      "bytes": 17539,
+      "sha256": "a61e4409d53e6ba64d6aef4ca4fc725c653c5fae2fdfc5efa7ed0efd6a56afef"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/scripts/sonar-analysis-scope.mjs",
+      "bytes": 22374,
+      "sha256": "668f691bb3edefd6bab1254e4af886c571d0ebf242deaf7d14286102b3c67f97"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/scripts/workspace-graph.mjs",
+      "bytes": 3102,
+      "sha256": "941e51e1210f0cbe10ef47dcdc9db6031ed4e975653e18f51af7793c8c1802a3"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/tests/support/buffered-server-log.ts",
+      "bytes": 344,
+      "sha256": "6ef83eb3d392a36b221f8b38482908060ec84aea896ed1e90965c783bf2b3efa"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/tsconfig.base.json",
+      "bytes": 445,
+      "sha256": "76697f22a7e654a7c19f886e8adbdd6c176be72603dfd975e5af995957d6907a"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/tsconfig.json",
+      "bytes": 679,
+      "sha256": "ec670db520a4d444fcb3ac1d5af63d2f1d0f5a8620047f5224c32dcff2e14a99"
+    },
+    {
+      "path": "Evidence/3585-conversation-fixture-formatted/vitest.config.ts",
+      "bytes": 3933,
+      "sha256": "81a272298e24ab8b12771fc9b825db24d7a895c147bebedc2b057b9a28ddc5fa"
+    },
+    {
+      "path": "Evidence/3585-conversation-format.json",
+      "bytes": 1005,
+      "sha256": "9dc5219d9b8ad00b0a7504685d338d4cdd2858c0b48d6bd3d4d75a042711998e"
+    },
+    {
+      "path": "Evidence/3585-conversation-format.log",
+      "bytes": 499,
+      "sha256": "d012403b29508f724b3f0a1538881239728ff97438d5debdb4b02de20bf6a5d2"
+    },
+    {
+      "path": "Evidence/3586-conversation-candidate-census-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3586-conversation-candidate-census-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3586-conversation-candidate-census.json",
+      "bytes": 609,
+      "sha256": "aa4d4e6e153a4aff099ed3fa70a32f8ead8bc65d8f9c897628f4835c7f09c4a8"
+    },
+    {
+      "path": "Evidence/3586-conversation-candidate-census.log",
+      "bytes": 634,
+      "sha256": "adff6d0a2e4823b4011c6113b59142cc25ca8cb4741fc1444019ef6e80037918"
+    },
+    {
+      "path": "Evidence/3586-conversation-candidate-census.mjs",
+      "bytes": 1644,
+      "sha256": "5e0c33903c566d4548b7b99a81f11b52632312a3c4aa07579c240db6e3c7c18a"
+    },
+    {
+      "path": "Evidence/3587-conversation-candidate-census-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3587-conversation-candidate-census-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3587-conversation-candidate-census.json",
+      "bytes": 609,
+      "sha256": "7301a388d8a56923a907b5d4fbdbd57613391a3ce9f9d6e689eb9d5375defe92"
+    },
+    {
+      "path": "Evidence/3587-conversation-candidate-census.log",
+      "bytes": 634,
+      "sha256": "ea3c46922cfa5d10e12012bb0f4481b6807d370cdd019b12e0511492bddcbe83"
+    },
+    {
+      "path": "Evidence/3587-conversation-candidate-census.mjs",
+      "bytes": 1792,
+      "sha256": "c30ea160df0f4d0a69d54f48977127e8a4c8b31c7e2d0f4c05bdbc3ec00ba8e7"
+    },
+    {
+      "path": "Evidence/3588-conversation-candidate-census-after.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3588-conversation-candidate-census-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3588-conversation-candidate-census.json",
+      "bytes": 609,
+      "sha256": "1f80e533fa895d2c5f2ba819d589c9a65dd5988d79e82b47069a04912a9c7403"
+    },
+    {
+      "path": "Evidence/3588-conversation-candidate-census.log",
+      "bytes": 42,
+      "sha256": "1c7cff0eb86266670481f4f9735932831f49b7e8952f5f689d5e991e8051ef72"
+    },
+    {
+      "path": "Evidence/3588-conversation-candidate-census.mjs",
+      "bytes": 1827,
+      "sha256": "23a8694842094e564f7ec6788bf1c4d4e6fc49760bc18da7f133c47972db1617"
+    },
+    {
+      "path": "Evidence/3588-conversation-candidate-census.report.json",
+      "bytes": 3146,
+      "sha256": "d15e8889e96bcd14aa6235d1a3cb63b046c9443f542a25e2beaa4f18a899172b"
+    },
+    {
+      "path": "Evidence/3589-inventory-newtests-oldengine-red-after.json",
+      "bytes": 2222736,
+      "sha256": "8382254411fedb0b5565b0437a6763714a93030b53e753b2df427b9c5c66c155"
+    },
+    {
+      "path": "Evidence/3589-inventory-newtests-oldengine-red-before.json",
+      "bytes": 2222736,
+      "sha256": "8382254411fedb0b5565b0437a6763714a93030b53e753b2df427b9c5c66c155"
+    },
+    {
+      "path": "Evidence/3589-inventory-newtests-oldengine-red.json",
+      "bytes": 761,
+      "sha256": "9172f279ce68d18f39e00b801ad2786f04ab7a23bb33ad8f24f9e94f5d8f46e8"
+    },
+    {
+      "path": "Evidence/3589-inventory-newtests-oldengine-red.log",
+      "bytes": 133,
+      "sha256": "201a89b66973ddc62dd9e42e7d897af3f5e2bbd8c7d79e1df9bb2d2c7c2e2895"
+    },
+    {
+      "path": "Evidence/3589-inventory-newtests-oldengine-red.report.json",
+      "bytes": 40514,
+      "sha256": "b7da74579157aabd16e0725edbb6f40174de3029d4e3418d2f1dd0a6b13a6af9"
+    },
+    {
+      "path": "Evidence/3589-red-adoption-after.json",
+      "bytes": 2222736,
+      "sha256": "8382254411fedb0b5565b0437a6763714a93030b53e753b2df427b9c5c66c155"
+    },
+    {
+      "path": "Evidence/3589-red-adoption-before.json",
+      "bytes": 2222682,
+      "sha256": "8efc222d38fba85dbf1d77a1547f3384f1fc704311f1377a6fd494016a55dedc"
+    },
+    {
+      "path": "Evidence/3590-inventory-repair-adoption-after.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3590-inventory-repair-adoption-before.json",
+      "bytes": 2222736,
+      "sha256": "8382254411fedb0b5565b0437a6763714a93030b53e753b2df427b9c5c66c155"
+    },
+    {
+      "path": "Evidence/3590-inventory-repaired-green-after.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3590-inventory-repaired-green-before.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3590-inventory-repaired-green.json",
+      "bytes": 753,
+      "sha256": "0f36d314753b160bce0bd25e1ee6b022fa8018b6fcce2f7204b991f927019f6e"
+    },
+    {
+      "path": "Evidence/3590-inventory-repaired-green.log",
+      "bytes": 125,
+      "sha256": "27c8169b5b8ee89d962fbc4364f8e2c3b886f3ad95e89fbab8a4a038bdd274ad"
+    },
+    {
+      "path": "Evidence/3590-inventory-repaired-green.report.json",
+      "bytes": 34910,
+      "sha256": "624e0304ae258c04bd5b2b2216ec20267a32461ec09837d8c2eca7735863c68a"
+    },
+    {
+      "path": "Evidence/3591-inventory-red-green-summary.json",
+      "bytes": 241,
+      "sha256": "4c955ebd5f52ec86a55f18852e36cd1a57c062e67bc897f9a873c00ab6f3d9bc"
+    },
+    {
+      "path": "Evidence/3591-inventory-targeted-lint-after.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3591-inventory-targeted-lint-before.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3591-inventory-targeted-lint.json",
+      "bytes": 671,
+      "sha256": "6d78ac2fc09e9e5a68ff8a51b1944356ad48122c18577de7355fc6160bb56cc5"
+    },
+    {
+      "path": "Evidence/3591-inventory-targeted-lint.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "Evidence/3592-independent-c002-owning-actual-review.json",
+      "bytes": 4250,
+      "sha256": "1987a48c557f00327a8c1d08892d4a5de8919e59efc8b465c45126eb72fac7e9"
+    },
+    {
+      "path": "Evidence/3592-inventory-format-after.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3592-inventory-format-before.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3592-inventory-format.json",
+      "bytes": 705,
+      "sha256": "5bc305c3d72ead3c8892b13c504d2d2d7445a96d90bdabb3c3122991f477f8bd"
+    },
+    {
+      "path": "Evidence/3592-inventory-format.log",
+      "bytes": 66,
+      "sha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "path": "Evidence/3593-awake-renewal.json",
+      "bytes": 334,
+      "sha256": "bb2712e7deab142b3542ddad5a0033fc2a2f0d3c74de8b5f91e3586661de1507"
+    },
+    {
+      "path": "Evidence/3593-inventory-native-typecheck-after.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3593-inventory-native-typecheck-before.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3593-inventory-native-typecheck.json",
+      "bytes": 529,
+      "sha256": "91104cccaef08faf9dc01cb7a5c2894e20400bb4b0e9d7a2e8b6c051e7a6d963"
+    },
+    {
+      "path": "Evidence/3593-inventory-native-typecheck.log",
+      "bytes": 640,
+      "sha256": "41f80ee91eb0bdd0f0189d59ac82757046380b66dd0854f7c6888cd83e48c698"
+    },
+    {
+      "path": "Evidence/3594-independent-c002-tool-rebind-review.json",
+      "bytes": 2016,
+      "sha256": "1d736e1ee682cb5a5d2231d9869b64e6e6056c5f74543cf895435a0a9663b18b"
+    },
+    {
+      "path": "Evidence/3594-inventory-local-sonar-after.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3594-inventory-local-sonar-before.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3594-inventory-local-sonar.json",
+      "bytes": 532,
+      "sha256": "7cc2b2e0f71a3268635ce4b9beaea119edc28f0e483b2597627d50f72bbca613"
+    },
+    {
+      "path": "Evidence/3594-inventory-local-sonar.log",
+      "bytes": 89378,
+      "sha256": "88860f8a2107c7c044af6e3089e8b0c303089990576e2bd86790fc4358176d74"
+    },
+    {
+      "path": "Evidence/3595-inventory-cli-smoke-after.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3595-inventory-cli-smoke-before.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3595-inventory-cli-smoke.json",
+      "bytes": 554,
+      "sha256": "b0ba8a59a005b149901e4f697fb8bfd9429d5fc5ffb84e66778c1455080518d1"
+    },
+    {
+      "path": "Evidence/3595-inventory-cli-smoke.log",
+      "bytes": 346,
+      "sha256": "03752ce4c505c1661d6def1490cb0378bece570dfee4d0ac1c39354224c3c4f8"
+    },
+    {
+      "path": "Evidence/3596-inventory-commit-body.txt",
+      "bytes": 357,
+      "sha256": "6406c02a3a2af54a5385323f2e9ec5e0b89210c8c7bee218baaad3013257c5ac"
+    },
+    {
+      "path": "Evidence/3596-inventory-commit.log",
+      "bytes": 168,
+      "sha256": "173a6eaf9d9b69d6639cef032c455e09713c3ee7eeb48576d85ecfed93fbccb0"
+    },
+    {
+      "path": "Evidence/3596-inventory-signed-checkpoint-after.json",
+      "bytes": 2222682,
+      "sha256": "d6ea534b9361de3d86d8e0a37891ab0064aa3197190fa538bf84a033667515c2"
+    },
+    {
+      "path": "Evidence/3596-inventory-signed-checkpoint-before.json",
+      "bytes": 2222814,
+      "sha256": "3694e567367e213845662e52d90ef089eeaffad0742d788929d71c92cb128ab3"
+    },
+    {
+      "path": "Evidence/3596-inventory-signed-checkpoint.json",
+      "bytes": 365,
+      "sha256": "a4697ccaa2a0de8f70132876e96388fc4f708022521dd4867ebc559607ddf0be"
+    },
+    {
+      "path": "Evidence/3597-inventory-repaired-whole-request.json",
+      "bytes": 6651,
+      "sha256": "d1f5097da88bd95b05db0fad5ab08377d2be6c3ca280d8b85dbb378f4d5dd855"
+    },
+    {
+      "path": "Evidence/3598-core-four-inventory-repaired-whole-measurement/artifacts.json",
+      "bytes": 583,
+      "sha256": "a8e13c29b1c167114daee26bd9340c5e0ece651c2485e722ed85ada0946c6e1b"
+    },
+    {
+      "path": "Evidence/3598-core-four-inventory-repaired-whole-measurement/canonical-policy.json",
+      "bytes": 353317,
+      "sha256": "38cbfc98ce275d0a6f4ec6ab58380c2d28a6a0171718e7635549f24f44eed564"
+    },
+    {
+      "path": "Evidence/3598-core-four-inventory-repaired-whole-measurement/execution-bindings.json",
+      "bytes": 8580,
+      "sha256": "78e91a909a49412461c0d3a1e85b5d5c2657bb6fc5a175b64efccb6c323e3b5f"
+    },
+    {
+      "path": "Evidence/3598-core-four-inventory-repaired-whole-measurement/inconclusive.json",
+      "bytes": 209,
+      "sha256": "2d36c4fe8105ecf4278859c94ae5ddac5fbb26b9e2370702c503c11c2124db29"
+    },
+    {
+      "path": "Evidence/3598-core-four-inventory-repaired-whole-qualification-after.json",
+      "bytes": 2222682,
+      "sha256": "d6ea534b9361de3d86d8e0a37891ab0064aa3197190fa538bf84a033667515c2"
+    },
+    {
+      "path": "Evidence/3598-core-four-inventory-repaired-whole-qualification-before.json",
+      "bytes": 2222682,
+      "sha256": "d6ea534b9361de3d86d8e0a37891ab0064aa3197190fa538bf84a033667515c2"
+    },
+    {
+      "path": "Evidence/3598-core-four-inventory-repaired-whole-qualification.json",
+      "bytes": 764,
+      "sha256": "bd3e9ef2440064c0e9ad3a8941a781616b8cbf033f918931c40e47db3ee408db"
+    },
+    {
+      "path": "Evidence/3598-core-four-inventory-repaired-whole-qualification.log",
+      "bytes": 1855,
+      "sha256": "5022f969f760a8a37fa7490724874c55fc869d8f1737ebf1558b74e64ba5510a"
+    },
+    {
+      "path": "Evidence/3599-current-runtime-witness-audit.mjs",
+      "bytes": 3391,
+      "sha256": "7514ee2587633de867f50da8365da5da53aa8cfa9693fb0acd59224d93e7029b"
+    },
+    {
+      "path": "Evidence/3599-independent-runtime-witness-audit-source-review.json",
+      "bytes": 1953,
+      "sha256": "82c937498dbb23bf306d1238974749cb1dd6fa21fe92dc3f2b1d1a45208b845d"
+    },
+    {
+      "path": "Evidence/3600-handoff-children.json",
+      "bytes": 2728,
+      "sha256": "b551d1717fb75816082805ae7565c25ef57e90385d894cfe8d4481d8015bde9b"
+    },
+    {
+      "path": "Evidence/3600-handoff-pr4013.json",
+      "bytes": 426,
+      "sha256": "d162587899cb29778f75dd547a454858f44648bcdee6389b7664b1ba28fc9383"
+    },
+    {
+      "path": "Evidence/3600-handoff-remoteDev.json",
+      "bytes": 254,
+      "sha256": "39c626ff5ab43beafa6cb370b67996198f9b4eba538026b9325e0b827a91d3b6"
+    },
+    {
+      "path": "Evidence/AGENTS-remote-dev-e153759.md",
+      "bytes": 127227,
+      "sha256": "3a6c3e3b3c09ff1af09ab16f1faa2ed3e83f077eb68d9930c11999605bb09df0"
+    },
+    {
+      "path": "Evidence/RESUME-CURRENT.json",
+      "bytes": 78811,
+      "sha256": "c95670ffb1ec368afc89ae9731f9d99ed32092a14ce93aadc882a5286c4e3746"
+    },
+    {
+      "path": "Evidence/capture.py",
+      "bytes": 2974,
+      "sha256": "cb3fba06efa4aca439b006edaf19dbf1b4c29ad276880b5c1716d540dc837ebd"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/AGENTS.md",
+      "bytes": 130804,
+      "sha256": "8751d00c604a03e90657fdfa010843e8dc45e9af6e44089e58534c0872d36e3f"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/CONTRIBUTING.md",
+      "bytes": 74645,
+      "sha256": "461f71bdc2e3690fbd4cae7ae5540afa0ec8046d47b9a6516cbc785800a5ed74"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+      "bytes": 16971,
+      "sha256": "d9ab0d78b5225a623737d605cd8f6644b5100505eae8759a6da5b5078d6f6baf"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/docs/qa/code-quality-policy.md",
+      "bytes": 153244,
+      "sha256": "8ab3facaba3b261f64453635835598601ff35834c3a0283aaa6f6a2148995c53"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/eslint.config.js",
+      "bytes": 12509,
+      "sha256": "1158ab2fe3f6098343b3a17ca60a20aad63abb4f9ab3ebb7ff0d5a2e88788726"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/package-lock.json",
+      "bytes": 609238,
+      "sha256": "1bf3ed323ab5efe5f200446b7c571b39f07099393dfdce019a4f71e4bc5607fc"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/package.json",
+      "bytes": 35836,
+      "sha256": "dfd25833798f05ed054ed24f62a50f879bed3b7759d775a193d4b735f0981d36"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/package.json",
+      "bytes": 3246,
+      "sha256": "f12e5ee92b767722ab0dbc19cb56f8a4ca86428fa8543e7d7b4a715cfd408463"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+      "bytes": 16813,
+      "sha256": "60d941c4d68958e7974b07557b0f1aefa336bcc1a3c4a0a5e5f3227ce7004d37"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/src/tool-catalog/__fixtures__/catalogDefinition.ts",
+      "bytes": 2508,
+      "sha256": "5d62d3b403d55b7bc919a9a632eb4e91243eff9182ea9dbc9bfe4a95053d6621"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/src/tool-catalog/__fixtures__/catalogRuntimeFixture.ts",
+      "bytes": 6489,
+      "sha256": "5f2b5f2ba01e04e6ec2a4737575fa33693cf9949079ff63ae4a2f308dcd07b77"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.ts",
+      "bytes": 4550,
+      "sha256": "d6381855cfbf6d5144aaa4559c9a2c834edaca8a121c644d76c2a88dea70ef96"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/src/tool-catalog/__fixtures__/conversationConsumer.ts",
+      "bytes": 8342,
+      "sha256": "65181574803002505a55203ebd0cb17772ab9a4fda10564264040d8a5ccc5d67"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts",
+      "bytes": 6086,
+      "sha256": "36701406339d3981347db29d1c0c1daf3b3b061d1571dec1c4c4cc508dce107e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/src/tool-catalog/catalogNonCodingConsumer.test.ts",
+      "bytes": 40653,
+      "sha256": "6fa0dd982c0290960b3058ba0e9e9c967a5fe115e63ebfd74b2f7a71e677c26e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/packages/keiko-server/tsconfig.json",
+      "bytes": 1896,
+      "sha256": "30d37eeb9a3c2fd33aa139db5618933c6ca3175b9be8972037d1b6c1e2c27949"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/scripts/__tests__/code-quality-inventory.test.mjs",
+      "bytes": 38683,
+      "sha256": "a761448642374eeafbd0ab4b6ab3c81ace62ec8c40f335b2b5673154aa251721"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/scripts/__tests__/support/code-quality-fixture.mjs",
+      "bytes": 7317,
+      "sha256": "e85671a036fea0f1d9e608c9b0b55eea80285d350ae0b511f02ae8d096dd9bbe"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/scripts/__tests__/support/code-quality-responsibility-fixture.mjs",
+      "bytes": 125294,
+      "sha256": "eca47cb8bc65abd97d68510c7143f68b0abc406e7cb2413976b2ecd8fc410265"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/scripts/lib/code-quality-inventory.mjs",
+      "bytes": 12928,
+      "sha256": "9b16ffc0b517b994a22613df509f8896d9739df7b6723fcb2407f948959473a2"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/scripts/lib/code-quality-policy.mjs",
+      "bytes": 22755,
+      "sha256": "584b1447f933773d9245dcb44a417419817bc20c4b635373932016dd34196cf1"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/scripts/lib/code-quality-production.mjs",
+      "bytes": 17539,
+      "sha256": "a61e4409d53e6ba64d6aef4ca4fc725c653c5fae2fdfc5efa7ed0efd6a56afef"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/scripts/sonar-analysis-scope.mjs",
+      "bytes": 22374,
+      "sha256": "668f691bb3edefd6bab1254e4af886c571d0ebf242deaf7d14286102b3c67f97"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/scripts/workspace-graph.mjs",
+      "bytes": 3102,
+      "sha256": "941e51e1210f0cbe10ef47dcdc9db6031ed4e975653e18f51af7793c8c1802a3"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/tests/support/buffered-server-log.ts",
+      "bytes": 344,
+      "sha256": "6ef83eb3d392a36b221f8b38482908060ec84aea896ed1e90965c783bf2b3efa"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/tsconfig.base.json",
+      "bytes": 445,
+      "sha256": "76697f22a7e654a7c19f886e8adbdd6c176be72603dfd975e5af995957d6907a"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/tsconfig.json",
+      "bytes": 679,
+      "sha256": "ec670db520a4d444fcb3ac1d5af63d2f1d0f5a8620047f5224c32dcff2e14a99"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Candidate/vitest.config.ts",
+      "bytes": 3933,
+      "sha256": "81a272298e24ab8b12771fc9b825db24d7a895c147bebedc2b057b9a28ddc5fa"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/HELPER-REPLACEMENTS.json",
+      "bytes": 1357,
+      "sha256": "dc1d252da84e4b5c23a2e722a8cf2fc56410d03a36a35db5fb2321a30fbcdea0"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/INPUT-BINDINGS.json",
+      "bytes": 10604,
+      "sha256": "3f5ca9235b1183f9c961e074d7e9e855065653a5a5b47628ad9c0235723e0c94"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/INPUT-CENSUS.actual.json",
+      "bytes": 3107,
+      "sha256": "95ad10390e6e99b452b666a040f8acaf3e898279dae1a9e6815de591d485697e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Inverse.patch",
+      "bytes": 10508,
+      "sha256": "7a2799e28c473da9cd98deb3db7e7443275aa0ae26df31b8667f0d30347e4012"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/MANIFEST.json",
+      "bytes": 12065,
+      "sha256": "dfd1bda003e333aa3a999d374f59536a58ae3be59d7fcb18df5c00d352a658e0"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/OLD-TEST-PRESERVATION.json",
+      "bytes": 866,
+      "sha256": "345c30158bf88ecb3e4c97d611199628c2d5067e9c6ccda3a3755d347c096e7f"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/AGENTS.md",
+      "bytes": 130804,
+      "sha256": "8751d00c604a03e90657fdfa010843e8dc45e9af6e44089e58534c0872d36e3f"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/CONTRIBUTING.md",
+      "bytes": 74645,
+      "sha256": "461f71bdc2e3690fbd4cae7ae5540afa0ec8046d47b9a6516cbc785800a5ed74"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+      "bytes": 16971,
+      "sha256": "d9ab0d78b5225a623737d605cd8f6644b5100505eae8759a6da5b5078d6f6baf"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/docs/qa/code-quality-policy.md",
+      "bytes": 151748,
+      "sha256": "aa5e699baf0f476002e59ad86042ccd152d06c31ae1dc78d83ed3575982ab20e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/eslint.config.js",
+      "bytes": 12509,
+      "sha256": "1158ab2fe3f6098343b3a17ca60a20aad63abb4f9ab3ebb7ff0d5a2e88788726"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/package-lock.json",
+      "bytes": 609238,
+      "sha256": "1bf3ed323ab5efe5f200446b7c571b39f07099393dfdce019a4f71e4bc5607fc"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/package.json",
+      "bytes": 35836,
+      "sha256": "dfd25833798f05ed054ed24f62a50f879bed3b7759d775a193d4b735f0981d36"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/package.json",
+      "bytes": 3246,
+      "sha256": "f12e5ee92b767722ab0dbc19cb56f8a4ca86428fa8543e7d7b4a715cfd408463"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+      "bytes": 16813,
+      "sha256": "60d941c4d68958e7974b07557b0f1aefa336bcc1a3c4a0a5e5f3227ce7004d37"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/src/tool-catalog/__fixtures__/catalogDefinition.ts",
+      "bytes": 2508,
+      "sha256": "5d62d3b403d55b7bc919a9a632eb4e91243eff9182ea9dbc9bfe4a95053d6621"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/src/tool-catalog/__fixtures__/catalogRuntimeFixture.ts",
+      "bytes": 6489,
+      "sha256": "5f2b5f2ba01e04e6ec2a4737575fa33693cf9949079ff63ae4a2f308dcd07b77"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.ts",
+      "bytes": 4550,
+      "sha256": "d6381855cfbf6d5144aaa4559c9a2c834edaca8a121c644d76c2a88dea70ef96"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/src/tool-catalog/__fixtures__/conversationConsumer.ts",
+      "bytes": 8342,
+      "sha256": "65181574803002505a55203ebd0cb17772ab9a4fda10564264040d8a5ccc5d67"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/src/tool-catalog/__fixtures__/nativeEffectRuntimeFixture.ts",
+      "bytes": 6086,
+      "sha256": "36701406339d3981347db29d1c0c1daf3b3b061d1571dec1c4c4cc508dce107e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/src/tool-catalog/catalogNonCodingConsumer.test.ts",
+      "bytes": 40653,
+      "sha256": "6fa0dd982c0290960b3058ba0e9e9c967a5fe115e63ebfd74b2f7a71e677c26e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/packages/keiko-server/tsconfig.json",
+      "bytes": 1896,
+      "sha256": "30d37eeb9a3c2fd33aa139db5618933c6ca3175b9be8972037d1b6c1e2c27949"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/scripts/__tests__/code-quality-inventory.test.mjs",
+      "bytes": 34016,
+      "sha256": "3078da96311b65a09cc1d48a7e54139407a4cb2eb34cf7a29be2e09bcad3a1b6"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/scripts/__tests__/support/code-quality-fixture.mjs",
+      "bytes": 7317,
+      "sha256": "e85671a036fea0f1d9e608c9b0b55eea80285d350ae0b511f02ae8d096dd9bbe"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/scripts/__tests__/support/code-quality-responsibility-fixture.mjs",
+      "bytes": 125294,
+      "sha256": "eca47cb8bc65abd97d68510c7143f68b0abc406e7cb2413976b2ecd8fc410265"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/scripts/lib/code-quality-inventory.mjs",
+      "bytes": 12847,
+      "sha256": "a8cbebeb5233b60181597531a3892756b5afce80340c85f81427606d530e7a2f"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/scripts/lib/code-quality-policy.mjs",
+      "bytes": 22755,
+      "sha256": "584b1447f933773d9245dcb44a417419817bc20c4b635373932016dd34196cf1"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/scripts/lib/code-quality-production.mjs",
+      "bytes": 17539,
+      "sha256": "a61e4409d53e6ba64d6aef4ca4fc725c653c5fae2fdfc5efa7ed0efd6a56afef"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/scripts/sonar-analysis-scope.mjs",
+      "bytes": 22374,
+      "sha256": "668f691bb3edefd6bab1254e4af886c571d0ebf242deaf7d14286102b3c67f97"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/scripts/workspace-graph.mjs",
+      "bytes": 3102,
+      "sha256": "941e51e1210f0cbe10ef47dcdc9db6031ed4e975653e18f51af7793c8c1802a3"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/tests/support/buffered-server-log.ts",
+      "bytes": 344,
+      "sha256": "6ef83eb3d392a36b221f8b38482908060ec84aea896ed1e90965c783bf2b3efa"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/tsconfig.base.json",
+      "bytes": 445,
+      "sha256": "76697f22a7e654a7c19f886e8adbdd6c176be72603dfd975e5af995957d6907a"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/tsconfig.json",
+      "bytes": 679,
+      "sha256": "ec670db520a4d444fcb3ac1d5af63d2f1d0f5a8620047f5224c32dcff2e14a99"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Original/vitest.config.ts",
+      "bytes": 3933,
+      "sha256": "81a272298e24ab8b12771fc9b825db24d7a895c147bebedc2b057b9a28ddc5fa"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/PAIRS.json",
+      "bytes": 10510,
+      "sha256": "9848f5ffbdfc96b1dc4a6fab47d387ac7ea63c33a9a42f1f5b867cd90d4a1025"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/REPORT.md",
+      "bytes": 4081,
+      "sha256": "1077683f6e7bba5ac7456436e61bb8aa927d8db3902875b397d2f3ae1f935e6f"
+    },
+    {
+      "path": "Evidence/conversation-fixture-exact-inventory-source-proposal-20261030/Source.patch",
+      "bytes": 10508,
+      "sha256": "35fe4b96c80917ef682c4216b674ff94aa85ed2c3685bf3768648d0d0ad9ab27"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/ENGINE-BINDINGS.json",
+      "bytes": 14457,
+      "sha256": "7cb065c4c79d22d7e6988377cd350d02b5e75b831ef6fc254ebe7f150165edb6"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/EXPECTED-POLICY-METADATA.json",
+      "bytes": 6424,
+      "sha256": "4f02b080a4835090f9d0684fd064c6f89b2f6271dcc1433c51e1de1f4fb711eb"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/.prettierignore",
+      "bytes": 2138,
+      "sha256": "731c23447253ffca268c2fd02be6b8846b8ce0ceb514ee08d5c2cc57648613bf"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/.prettierrc.json",
+      "bytes": 128,
+      "sha256": "64a1f04d3bb038ae20ab4e3d797e5c22fe723e30a7d0287f1228f5e7f2fc1c77"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/AGENTS.md",
+      "bytes": 130804,
+      "sha256": "8751d00c604a03e90657fdfa010843e8dc45e9af6e44089e58534c0872d36e3f"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/CONTRIBUTING.md",
+      "bytes": 74645,
+      "sha256": "461f71bdc2e3690fbd4cae7ae5540afa0ec8046d47b9a6516cbc785800a5ed74"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+      "bytes": 16971,
+      "sha256": "d9ab0d78b5225a623737d605cd8f6644b5100505eae8759a6da5b5078d6f6baf"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/docs/qa/code-quality-policy.md",
+      "bytes": 153244,
+      "sha256": "8ab3facaba3b261f64453635835598601ff35834c3a0283aaa6f6a2148995c53"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/eslint.config.js",
+      "bytes": 12509,
+      "sha256": "1158ab2fe3f6098343b3a17ca60a20aad63abb4f9ab3ebb7ff0d5a2e88788726"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/package-lock.json",
+      "bytes": 609238,
+      "sha256": "1bf3ed323ab5efe5f200446b7c571b39f07099393dfdce019a4f71e4bc5607fc"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/package.json",
+      "bytes": 35836,
+      "sha256": "dfd25833798f05ed054ed24f62a50f879bed3b7759d775a193d4b735f0981d36"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/package.json",
+      "bytes": 31444,
+      "sha256": "7c5fea485dc1b622c525daa362a19dc6df45d54eed9c85fb8a5e067203c1bd6f"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/coding-workbench-issue-binding.ts",
+      "bytes": 2797,
+      "sha256": "bad0a28c3f5af410ea391eaf3ac9769ae2dcbbf3fc8b473424222fb5086274e5"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime-api-validation.ts",
+      "bytes": 10463,
+      "sha256": "541397905a5003e2202d2ed51a963a7b61a3efe09ee59b7440574037d163f703"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "bytes": 115741,
+      "sha256": "63eb92e23e08f1cbed157ac0f1c11f164041c9e58670a39e46f844b84727d011"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime-api.ts",
+      "bytes": 107032,
+      "sha256": "54580389d72bcf0c59d4c8bcc2ddd3f6da7b6f97c1472b65dddd082518cbaa55"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime-constants.ts",
+      "bytes": 10379,
+      "sha256": "7f75a2f3522e04dc66bc3bafdfbc4bf3aeadce5989b3b9dffdb35b9bc33efc59"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime.ts",
+      "bytes": 44405,
+      "sha256": "73c41ffce083a150c02cb9fec9ef52a4297d6a04e38b01e21c633620564e86af"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/coding-workbench-validation.ts",
+      "bytes": 61287,
+      "sha256": "d7bd5c3ecbbd2d917b9076015c1e2ae35fbc2eb228434f565faa52aeb0209760"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/coding-workbench.ts",
+      "bytes": 38340,
+      "sha256": "8a497bd699243c81649bf42513df4fc776906be10a293fcd296ec4fccf561266"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "bytes": 4269,
+      "sha256": "ed3376a30a122ae3c9306114f1bd53bcc06a0b5f30c2cd7c80db825de2cab6e6"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/draft-delivery.ts",
+      "bytes": 8482,
+      "sha256": "bf7b88d5d74ce615f96c07036485c2ee69d9eebd3071cf043d9063bdd104cc0e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/editor-verification.ts",
+      "bytes": 19639,
+      "sha256": "9d0dede590212700b989026b539ab1ed5bee742d365de7c34b18f269dd5fe504"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/gateway.ts",
+      "bytes": 62176,
+      "sha256": "92e31454f8021d0bcf0b98d32d91638ff9461f88b0fa508daa66b5ca3f9b779a"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/git-ci-readiness.ts",
+      "bytes": 8909,
+      "sha256": "057017e713bc659b61d666a1e91836824283eae6f7e7ce2ad96ba3c48b346354"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/git-repository.test.ts",
+      "bytes": 31252,
+      "sha256": "e020de4900282dc4713c5ae0c722412c1ccf85de3ec13f5f2a2562d52570fa8d"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/github-issue-reference.ts",
+      "bytes": 10700,
+      "sha256": "fe76b2ffc2cfe17e79e1ea4912b98a6836753fab8b0ea8964b7be4538a899d52"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/index.ts",
+      "bytes": 185180,
+      "sha256": "471b1f206fdb3b2cf9aca4bd646c6c6394d5e36c327c5e22a82d6d5f56703805"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/text-safety.ts",
+      "bytes": 9246,
+      "sha256": "9d486f0bd79e45b03226597df05f644bed1682f810f9d0bc9366cfe4d29566cf"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/verified-commit.ts",
+      "bytes": 10130,
+      "sha256": "8f50d735d6657844b9f0729cd4dc81bc910342a3f5ff1d9d20d618ab475c9f47"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/src/workbench-description-status.ts",
+      "bytes": 11211,
+      "sha256": "1e2ca597107e53608462e203c29b67e2cc0a91fb8876f6517e63543cfb117176"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-contracts/tsconfig.json",
+      "bytes": 377,
+      "sha256": "e53dbffc0219f6a71bb6cffa56b2e0a4b2424c3ef9abb32a0f89c81441df6f63"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+      "bytes": 101301,
+      "sha256": "99ae9ac2323a9e6c0c1180c75927ab154f2c5260afa1aea0a9ec1ef146658d8a"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.ts",
+      "bytes": 52442,
+      "sha256": "7c51c968e48c5d13fec95acc4a4b23825767b26a97c84256ebbe8fc725fdfcee"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-server/src/coding-runtime/opencodeCommands.ts",
+      "bytes": 23738,
+      "sha256": "1fa23853588c5fb76d6eda69eba78d3d842e9bc790500c37e1330530b504aa59"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts",
+      "bytes": 27343,
+      "sha256": "b70d6feed608b9d97f63326590754b8bcd925545696956c8ed957201850dfc79"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/scripts/code-quality-policy.json",
+      "bytes": 353317,
+      "sha256": "38cbfc98ce275d0a6f4ec6ab58380c2d28a6a0171718e7635549f24f44eed564"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/scripts/lib/code-quality-policy.mjs",
+      "bytes": 22755,
+      "sha256": "584b1447f933773d9245dcb44a417419817bc20c4b635373932016dd34196cf1"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/scripts/lib/code-quality-responsibilities.mjs",
+      "bytes": 34516,
+      "sha256": "5e5b6d1f5f6fafcc1ec2660e0837c2c741ee9b10dc9026a0a880b1400eb21135"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/tsconfig.base.json",
+      "bytes": 445,
+      "sha256": "76697f22a7e654a7c19f886e8adbdd6c176be72603dfd975e5af995957d6907a"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/tsconfig.json",
+      "bytes": 679,
+      "sha256": "ec670db520a4d444fcb3ac1d5af63d2f1d0f5a8620047f5224c32dcff2e14a99"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/FrozenInputs/vitest.config.ts",
+      "bytes": 3933,
+      "sha256": "81a272298e24ab8b12771fc9b825db24d7a895c147bebedc2b057b9a28ddc5fa"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/IMPLEMENTATION-PINS.json",
+      "bytes": 1887,
+      "sha256": "921b78c96feca252506951a11f69fd650cbb486dd33f0ac575d04b6a4f952d8e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/MANIFEST.json",
+      "bytes": 10436,
+      "sha256": "8b651b86a3e0b8ca4e743e108ed31b6a1689f8184994c6c5a4b921cf594756d0"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/README.md",
+      "bytes": 2817,
+      "sha256": "ee59a8bb34d1bc4a16c4855c564181abe8e33a80ebc452de2980abd9341870fe"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/REBIND-CHANGES.json",
+      "bytes": 1975,
+      "sha256": "4b15b6de863e481ecc4a820ccef29bfb2240670e7e89f91fe0a36edb7af1876e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/RebindOriginal/ENGINE-BINDINGS.json",
+      "bytes": 14229,
+      "sha256": "26f60a7b83fe95c24a09850d5adfc7e4ff15f451e23a07291640d4b97906e201"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/RebindOriginal/FrozenInputs/docs/qa/code-quality-policy.md",
+      "bytes": 151748,
+      "sha256": "aa5e699baf0f476002e59ad86042ccd152d06c31ae1dc78d83ed3575982ab20e"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/RebindOriginal/IMPLEMENTATION-PINS.json",
+      "bytes": 1887,
+      "sha256": "ec4adc7de6fbc078799145a4cf1c2e03a73649e54c119a5aaac026927c32f6d2"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/RebindOriginal/MANIFEST.json",
+      "bytes": 8736,
+      "sha256": "dd023dc20c09d32e70bf10664e46f1c2ea74351d358e06ea8fda3dadeb74bf6b"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/RebindOriginal/README.md",
+      "bytes": 1881,
+      "sha256": "79f17caea619ba8f78b57c16549cbd8e78616c3a411988cf492302438534214b"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/TOOLCHAIN-INPUT-BINDINGS.json",
+      "bytes": 1415,
+      "sha256": "0e63b21726d01539814c4fd229243f9017d79ebf3650df13aea20c9fa966dca7"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/ToolchainInputs/scripts/__tests__/code-quality-inventory.test.mjs",
+      "bytes": 38746,
+      "sha256": "0a26c435cf54b1c2bfa4f43ded59d8fcb50205d1608f4427151a679afadba484"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/ToolchainInputs/scripts/lib/code-quality-inventory.mjs",
+      "bytes": 12928,
+      "sha256": "9b16ffc0b517b994a22613df509f8896d9739df7b6723fcb2407f948959473a2"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/invoke.mjs",
+      "bytes": 826,
+      "sha256": "e61bbf1d36c3eb7ec5b50e534c469d09eda483ae658fde30394d22722a7790ba"
+    },
+    {
+      "path": "Evidence/conversation-fixture-inventory-qualification-tooling-20261030/measurement.mjs",
+      "bytes": 14404,
+      "sha256": "4dffbd247210920eefefc10a87b05ced086924965c3172a310067ccd85ff2aca"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/APPROVED-BINDINGS.json",
+      "bytes": 24503,
+      "sha256": "6f72a8ddc0cfccb1fc607e10c37541723a96c9d9dcad023d341f0e5edbb0f4ee"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/CONTEXT-CHANGES.json",
+      "bytes": 2570,
+      "sha256": "c3d64c884f9fda1a7b8bca06b2ae3945b238316b50987f148e4496449fecf31f"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/CURRENT-BINDINGS.json",
+      "bytes": 15107,
+      "sha256": "917755cd39f0c40ce44d4549099c8f0c9f0b05170d2cece160513c8d4723c7d6"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/.prettierignore",
+      "bytes": 2138,
+      "sha256": "731c23447253ffca268c2fd02be6b8846b8ce0ceb514ee08d5c2cc57648613bf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/.prettierrc.json",
+      "bytes": 128,
+      "sha256": "64a1f04d3bb038ae20ab4e3d797e5c22fe723e30a7d0287f1228f5e7f2fc1c77"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/AGENTS.md",
+      "bytes": 130804,
+      "sha256": "8751d00c604a03e90657fdfa010843e8dc45e9af6e44089e58534c0872d36e3f"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/CONTRIBUTING.md",
+      "bytes": 74645,
+      "sha256": "461f71bdc2e3690fbd4cae7ae5540afa0ec8046d47b9a6516cbc785800a5ed74"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+      "bytes": 16971,
+      "sha256": "d9ab0d78b5225a623737d605cd8f6644b5100505eae8759a6da5b5078d6f6baf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/docs/qa/code-quality-policy.md",
+      "bytes": 151748,
+      "sha256": "aa5e699baf0f476002e59ad86042ccd152d06c31ae1dc78d83ed3575982ab20e"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/eslint.config.js",
+      "bytes": 12509,
+      "sha256": "1158ab2fe3f6098343b3a17ca60a20aad63abb4f9ab3ebb7ff0d5a2e88788726"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/package-lock.json",
+      "bytes": 609238,
+      "sha256": "1bf3ed323ab5efe5f200446b7c571b39f07099393dfdce019a4f71e4bc5607fc"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/package.json",
+      "bytes": 35836,
+      "sha256": "dfd25833798f05ed054ed24f62a50f879bed3b7759d775a193d4b735f0981d36"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/package.json",
+      "bytes": 31444,
+      "sha256": "7c5fea485dc1b622c525daa362a19dc6df45d54eed9c85fb8a5e067203c1bd6f"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/coding-workbench-issue-binding.ts",
+      "bytes": 2797,
+      "sha256": "bad0a28c3f5af410ea391eaf3ac9769ae2dcbbf3fc8b473424222fb5086274e5"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/coding-workbench-runtime-api-validation.ts",
+      "bytes": 10463,
+      "sha256": "541397905a5003e2202d2ed51a963a7b61a3efe09ee59b7440574037d163f703"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "bytes": 115741,
+      "sha256": "63eb92e23e08f1cbed157ac0f1c11f164041c9e58670a39e46f844b84727d011"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/coding-workbench-runtime-api.ts",
+      "bytes": 107032,
+      "sha256": "54580389d72bcf0c59d4c8bcc2ddd3f6da7b6f97c1472b65dddd082518cbaa55"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/coding-workbench-runtime-constants.ts",
+      "bytes": 10379,
+      "sha256": "7f75a2f3522e04dc66bc3bafdfbc4bf3aeadce5989b3b9dffdb35b9bc33efc59"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/coding-workbench-runtime.ts",
+      "bytes": 44405,
+      "sha256": "73c41ffce083a150c02cb9fec9ef52a4297d6a04e38b01e21c633620564e86af"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/coding-workbench-validation.ts",
+      "bytes": 61287,
+      "sha256": "d7bd5c3ecbbd2d917b9076015c1e2ae35fbc2eb228434f565faa52aeb0209760"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/coding-workbench.ts",
+      "bytes": 38340,
+      "sha256": "8a497bd699243c81649bf42513df4fc776906be10a293fcd296ec4fccf561266"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "bytes": 4269,
+      "sha256": "ed3376a30a122ae3c9306114f1bd53bcc06a0b5f30c2cd7c80db825de2cab6e6"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/draft-delivery.ts",
+      "bytes": 8482,
+      "sha256": "bf7b88d5d74ce615f96c07036485c2ee69d9eebd3071cf043d9063bdd104cc0e"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/editor-verification.ts",
+      "bytes": 19639,
+      "sha256": "9d0dede590212700b989026b539ab1ed5bee742d365de7c34b18f269dd5fe504"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/gateway.ts",
+      "bytes": 62176,
+      "sha256": "92e31454f8021d0bcf0b98d32d91638ff9461f88b0fa508daa66b5ca3f9b779a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/git-ci-readiness.ts",
+      "bytes": 8909,
+      "sha256": "057017e713bc659b61d666a1e91836824283eae6f7e7ce2ad96ba3c48b346354"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/git-repository.test.ts",
+      "bytes": 31252,
+      "sha256": "e020de4900282dc4713c5ae0c722412c1ccf85de3ec13f5f2a2562d52570fa8d"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/github-issue-reference.ts",
+      "bytes": 10700,
+      "sha256": "fe76b2ffc2cfe17e79e1ea4912b98a6836753fab8b0ea8964b7be4538a899d52"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/index.ts",
+      "bytes": 185180,
+      "sha256": "471b1f206fdb3b2cf9aca4bd646c6c6394d5e36c327c5e22a82d6d5f56703805"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/text-safety.ts",
+      "bytes": 9246,
+      "sha256": "9d486f0bd79e45b03226597df05f644bed1682f810f9d0bc9366cfe4d29566cf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/verified-commit.ts",
+      "bytes": 10130,
+      "sha256": "8f50d735d6657844b9f0729cd4dc81bc910342a3f5ff1d9d20d618ab475c9f47"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/src/workbench-description-status.ts",
+      "bytes": 11211,
+      "sha256": "1e2ca597107e53608462e203c29b67e2cc0a91fb8876f6517e63543cfb117176"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-contracts/tsconfig.json",
+      "bytes": 377,
+      "sha256": "e53dbffc0219f6a71bb6cffa56b2e0a4b2424c3ef9abb32a0f89c81441df6f63"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+      "bytes": 101301,
+      "sha256": "99ae9ac2323a9e6c0c1180c75927ab154f2c5260afa1aea0a9ec1ef146658d8a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.ts",
+      "bytes": 52442,
+      "sha256": "7c51c968e48c5d13fec95acc4a4b23825767b26a97c84256ebbe8fc725fdfcee"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-server/src/coding-runtime/opencodeCommands.ts",
+      "bytes": 23738,
+      "sha256": "1fa23853588c5fb76d6eda69eba78d3d842e9bc790500c37e1330530b504aa59"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts",
+      "bytes": 27343,
+      "sha256": "b70d6feed608b9d97f63326590754b8bcd925545696956c8ed957201850dfc79"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/scripts/code-quality-policy.json",
+      "bytes": 353317,
+      "sha256": "38cbfc98ce275d0a6f4ec6ab58380c2d28a6a0171718e7635549f24f44eed564"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/scripts/lib/code-quality-policy.mjs",
+      "bytes": 22755,
+      "sha256": "584b1447f933773d9245dcb44a417419817bc20c4b635373932016dd34196cf1"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/scripts/lib/code-quality-responsibilities.mjs",
+      "bytes": 34516,
+      "sha256": "5e5b6d1f5f6fafcc1ec2660e0837c2c741ee9b10dc9026a0a880b1400eb21135"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/tsconfig.base.json",
+      "bytes": 445,
+      "sha256": "76697f22a7e654a7c19f886e8adbdd6c176be72603dfd975e5af995957d6907a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/tsconfig.json",
+      "bytes": 679,
+      "sha256": "ec670db520a4d444fcb3ac1d5af63d2f1d0f5a8620047f5224c32dcff2e14a99"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Candidate/vitest.config.ts",
+      "bytes": 3933,
+      "sha256": "81a272298e24ab8b12771fc9b825db24d7a895c147bebedc2b057b9a28ddc5fa"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Inverse.patch",
+      "bytes": 26641,
+      "sha256": "6872be00dd224da007c9fe1e6b509e2c0fa1bb8d3dc5333045ca066eb1cacd1a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/MANIFEST.json",
+      "bytes": 25327,
+      "sha256": "73251df9b76a526c9fd76a4376bdf509aa73ecd2e432db36d811c8c05faf3444"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/.prettierignore",
+      "bytes": 2138,
+      "sha256": "731c23447253ffca268c2fd02be6b8846b8ce0ceb514ee08d5c2cc57648613bf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/.prettierrc.json",
+      "bytes": 128,
+      "sha256": "64a1f04d3bb038ae20ab4e3d797e5c22fe723e30a7d0287f1228f5e7f2fc1c77"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/AGENTS.md",
+      "bytes": 130804,
+      "sha256": "8751d00c604a03e90657fdfa010843e8dc45e9af6e44089e58534c0872d36e3f"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/CONTRIBUTING.md",
+      "bytes": 74645,
+      "sha256": "461f71bdc2e3690fbd4cae7ae5540afa0ec8046d47b9a6516cbc785800a5ed74"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+      "bytes": 16971,
+      "sha256": "d9ab0d78b5225a623737d605cd8f6644b5100505eae8759a6da5b5078d6f6baf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/docs/qa/code-quality-policy.md",
+      "bytes": 149476,
+      "sha256": "17f0562d09c46d1af0ebe753dc91727fdc7f3f7179b24926d84fe3ad1071049b"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/eslint.config.js",
+      "bytes": 12509,
+      "sha256": "1158ab2fe3f6098343b3a17ca60a20aad63abb4f9ab3ebb7ff0d5a2e88788726"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/package-lock.json",
+      "bytes": 609238,
+      "sha256": "1bf3ed323ab5efe5f200446b7c571b39f07099393dfdce019a4f71e4bc5607fc"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/package.json",
+      "bytes": 35836,
+      "sha256": "dfd25833798f05ed054ed24f62a50f879bed3b7759d775a193d4b735f0981d36"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/package.json",
+      "bytes": 31444,
+      "sha256": "7c5fea485dc1b622c525daa362a19dc6df45d54eed9c85fb8a5e067203c1bd6f"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/coding-workbench-issue-binding.ts",
+      "bytes": 2797,
+      "sha256": "bad0a28c3f5af410ea391eaf3ac9769ae2dcbbf3fc8b473424222fb5086274e5"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/coding-workbench-runtime-api-validation.ts",
+      "bytes": 10463,
+      "sha256": "541397905a5003e2202d2ed51a963a7b61a3efe09ee59b7440574037d163f703"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "bytes": 104283,
+      "sha256": "124b581febeb58b5571d1eacbb70a553a5808ad87a6f7efdb5c99c73c8178358"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/coding-workbench-runtime-api.ts",
+      "bytes": 107032,
+      "sha256": "54580389d72bcf0c59d4c8bcc2ddd3f6da7b6f97c1472b65dddd082518cbaa55"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/coding-workbench-runtime-constants.ts",
+      "bytes": 10379,
+      "sha256": "7f75a2f3522e04dc66bc3bafdfbc4bf3aeadce5989b3b9dffdb35b9bc33efc59"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/coding-workbench-runtime.ts",
+      "bytes": 44405,
+      "sha256": "73c41ffce083a150c02cb9fec9ef52a4297d6a04e38b01e21c633620564e86af"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/coding-workbench-validation.ts",
+      "bytes": 61287,
+      "sha256": "d7bd5c3ecbbd2d917b9076015c1e2ae35fbc2eb228434f565faa52aeb0209760"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/coding-workbench.ts",
+      "bytes": 38340,
+      "sha256": "8a497bd699243c81649bf42513df4fc776906be10a293fcd296ec4fccf561266"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "bytes": 4269,
+      "sha256": "ed3376a30a122ae3c9306114f1bd53bcc06a0b5f30c2cd7c80db825de2cab6e6"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/draft-delivery.ts",
+      "bytes": 8482,
+      "sha256": "bf7b88d5d74ce615f96c07036485c2ee69d9eebd3071cf043d9063bdd104cc0e"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/editor-verification.ts",
+      "bytes": 19639,
+      "sha256": "9d0dede590212700b989026b539ab1ed5bee742d365de7c34b18f269dd5fe504"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/gateway.ts",
+      "bytes": 62176,
+      "sha256": "92e31454f8021d0bcf0b98d32d91638ff9461f88b0fa508daa66b5ca3f9b779a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/git-ci-readiness.ts",
+      "bytes": 8909,
+      "sha256": "057017e713bc659b61d666a1e91836824283eae6f7e7ce2ad96ba3c48b346354"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/git-repository.test.ts",
+      "bytes": 31252,
+      "sha256": "e020de4900282dc4713c5ae0c722412c1ccf85de3ec13f5f2a2562d52570fa8d"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/github-issue-reference.ts",
+      "bytes": 10700,
+      "sha256": "fe76b2ffc2cfe17e79e1ea4912b98a6836753fab8b0ea8964b7be4538a899d52"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/index.ts",
+      "bytes": 185180,
+      "sha256": "471b1f206fdb3b2cf9aca4bd646c6c6394d5e36c327c5e22a82d6d5f56703805"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/text-safety.ts",
+      "bytes": 9246,
+      "sha256": "9d486f0bd79e45b03226597df05f644bed1682f810f9d0bc9366cfe4d29566cf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/verified-commit.ts",
+      "bytes": 10130,
+      "sha256": "8f50d735d6657844b9f0729cd4dc81bc910342a3f5ff1d9d20d618ab475c9f47"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/src/workbench-description-status.ts",
+      "bytes": 11211,
+      "sha256": "1e2ca597107e53608462e203c29b67e2cc0a91fb8876f6517e63543cfb117176"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-contracts/tsconfig.json",
+      "bytes": 377,
+      "sha256": "e53dbffc0219f6a71bb6cffa56b2e0a4b2424c3ef9abb32a0f89c81441df6f63"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+      "bytes": 101301,
+      "sha256": "99ae9ac2323a9e6c0c1180c75927ab154f2c5260afa1aea0a9ec1ef146658d8a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.ts",
+      "bytes": 52442,
+      "sha256": "7c51c968e48c5d13fec95acc4a4b23825767b26a97c84256ebbe8fc725fdfcee"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-server/src/coding-runtime/opencodeCommands.ts",
+      "bytes": 23738,
+      "sha256": "1fa23853588c5fb76d6eda69eba78d3d842e9bc790500c37e1330530b504aa59"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts",
+      "bytes": 27343,
+      "sha256": "b70d6feed608b9d97f63326590754b8bcd925545696956c8ed957201850dfc79"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/scripts/code-quality-policy.json",
+      "bytes": 341910,
+      "sha256": "51494b717759a17e8c7c033f3ad1c50e7f5511b577b22c238e05b6a8e061c515"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/scripts/lib/code-quality-policy.mjs",
+      "bytes": 22755,
+      "sha256": "584b1447f933773d9245dcb44a417419817bc20c4b635373932016dd34196cf1"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/scripts/lib/code-quality-responsibilities.mjs",
+      "bytes": 34516,
+      "sha256": "5e5b6d1f5f6fafcc1ec2660e0837c2c741ee9b10dc9026a0a880b1400eb21135"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/tsconfig.base.json",
+      "bytes": 445,
+      "sha256": "76697f22a7e654a7c19f886e8adbdd6c176be72603dfd975e5af995957d6907a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/tsconfig.json",
+      "bytes": 679,
+      "sha256": "ec670db520a4d444fcb3ac1d5af63d2f1d0f5a8620047f5224c32dcff2e14a99"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Original/vitest.config.ts",
+      "bytes": 3933,
+      "sha256": "81a272298e24ab8b12771fc9b825db24d7a895c147bebedc2b057b9a28ddc5fa"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/PAIRS.json",
+      "bytes": 19019,
+      "sha256": "3659c34be7e02e30c557e7d34b9bd6d9eb9b59d988b259f02626670d329e1eed"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/REPORT.md",
+      "bytes": 3243,
+      "sha256": "0ad970d2657c575ef3ba495489b6d799667213229ca33cf7bfba0d202a9e3c7e"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Source.patch",
+      "bytes": 26641,
+      "sha256": "ef50841a7a86f7eb6315fae5b45ce77bca91b1972cfbf8859dc273faa64be8bb"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/ENGINE-BINDINGS.json",
+      "bytes": 14229,
+      "sha256": "26f60a7b83fe95c24a09850d5adfc7e4ff15f451e23a07291640d4b97906e201"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/EXPECTED-POLICY-METADATA.json",
+      "bytes": 6424,
+      "sha256": "4f02b080a4835090f9d0684fd064c6f89b2f6271dcc1433c51e1de1f4fb711eb"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/.prettierignore",
+      "bytes": 2138,
+      "sha256": "731c23447253ffca268c2fd02be6b8846b8ce0ceb514ee08d5c2cc57648613bf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/.prettierrc.json",
+      "bytes": 128,
+      "sha256": "64a1f04d3bb038ae20ab4e3d797e5c22fe723e30a7d0287f1228f5e7f2fc1c77"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/AGENTS.md",
+      "bytes": 130804,
+      "sha256": "8751d00c604a03e90657fdfa010843e8dc45e9af6e44089e58534c0872d36e3f"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/CONTRIBUTING.md",
+      "bytes": 74645,
+      "sha256": "461f71bdc2e3690fbd4cae7ae5540afa0ec8046d47b9a6516cbc785800a5ed74"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+      "bytes": 16971,
+      "sha256": "d9ab0d78b5225a623737d605cd8f6644b5100505eae8759a6da5b5078d6f6baf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/docs/qa/code-quality-policy.md",
+      "bytes": 151748,
+      "sha256": "aa5e699baf0f476002e59ad86042ccd152d06c31ae1dc78d83ed3575982ab20e"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/eslint.config.js",
+      "bytes": 12509,
+      "sha256": "1158ab2fe3f6098343b3a17ca60a20aad63abb4f9ab3ebb7ff0d5a2e88788726"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/package-lock.json",
+      "bytes": 609238,
+      "sha256": "1bf3ed323ab5efe5f200446b7c571b39f07099393dfdce019a4f71e4bc5607fc"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/package.json",
+      "bytes": 35836,
+      "sha256": "dfd25833798f05ed054ed24f62a50f879bed3b7759d775a193d4b735f0981d36"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/package.json",
+      "bytes": 31444,
+      "sha256": "7c5fea485dc1b622c525daa362a19dc6df45d54eed9c85fb8a5e067203c1bd6f"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/coding-workbench-issue-binding.ts",
+      "bytes": 2797,
+      "sha256": "bad0a28c3f5af410ea391eaf3ac9769ae2dcbbf3fc8b473424222fb5086274e5"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime-api-validation.ts",
+      "bytes": 10463,
+      "sha256": "541397905a5003e2202d2ed51a963a7b61a3efe09ee59b7440574037d163f703"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "bytes": 115741,
+      "sha256": "63eb92e23e08f1cbed157ac0f1c11f164041c9e58670a39e46f844b84727d011"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime-api.ts",
+      "bytes": 107032,
+      "sha256": "54580389d72bcf0c59d4c8bcc2ddd3f6da7b6f97c1472b65dddd082518cbaa55"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime-constants.ts",
+      "bytes": 10379,
+      "sha256": "7f75a2f3522e04dc66bc3bafdfbc4bf3aeadce5989b3b9dffdb35b9bc33efc59"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/coding-workbench-runtime.ts",
+      "bytes": 44405,
+      "sha256": "73c41ffce083a150c02cb9fec9ef52a4297d6a04e38b01e21c633620564e86af"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/coding-workbench-validation.ts",
+      "bytes": 61287,
+      "sha256": "d7bd5c3ecbbd2d917b9076015c1e2ae35fbc2eb228434f565faa52aeb0209760"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/coding-workbench.ts",
+      "bytes": 38340,
+      "sha256": "8a497bd699243c81649bf42513df4fc776906be10a293fcd296ec4fccf561266"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "bytes": 4269,
+      "sha256": "ed3376a30a122ae3c9306114f1bd53bcc06a0b5f30c2cd7c80db825de2cab6e6"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/draft-delivery.ts",
+      "bytes": 8482,
+      "sha256": "bf7b88d5d74ce615f96c07036485c2ee69d9eebd3071cf043d9063bdd104cc0e"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/editor-verification.ts",
+      "bytes": 19639,
+      "sha256": "9d0dede590212700b989026b539ab1ed5bee742d365de7c34b18f269dd5fe504"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/gateway.ts",
+      "bytes": 62176,
+      "sha256": "92e31454f8021d0bcf0b98d32d91638ff9461f88b0fa508daa66b5ca3f9b779a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/git-ci-readiness.ts",
+      "bytes": 8909,
+      "sha256": "057017e713bc659b61d666a1e91836824283eae6f7e7ce2ad96ba3c48b346354"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/git-repository.test.ts",
+      "bytes": 31252,
+      "sha256": "e020de4900282dc4713c5ae0c722412c1ccf85de3ec13f5f2a2562d52570fa8d"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/github-issue-reference.ts",
+      "bytes": 10700,
+      "sha256": "fe76b2ffc2cfe17e79e1ea4912b98a6836753fab8b0ea8964b7be4538a899d52"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/index.ts",
+      "bytes": 185180,
+      "sha256": "471b1f206fdb3b2cf9aca4bd646c6c6394d5e36c327c5e22a82d6d5f56703805"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/text-safety.ts",
+      "bytes": 9246,
+      "sha256": "9d486f0bd79e45b03226597df05f644bed1682f810f9d0bc9366cfe4d29566cf"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/verified-commit.ts",
+      "bytes": 10130,
+      "sha256": "8f50d735d6657844b9f0729cd4dc81bc910342a3f5ff1d9d20d618ab475c9f47"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/src/workbench-description-status.ts",
+      "bytes": 11211,
+      "sha256": "1e2ca597107e53608462e203c29b67e2cc0a91fb8876f6517e63543cfb117176"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-contracts/tsconfig.json",
+      "bytes": 377,
+      "sha256": "e53dbffc0219f6a71bb6cffa56b2e0a4b2424c3ef9abb32a0f89c81441df6f63"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts",
+      "bytes": 101301,
+      "sha256": "99ae9ac2323a9e6c0c1180c75927ab154f2c5260afa1aea0a9ec1ef146658d8a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.ts",
+      "bytes": 52442,
+      "sha256": "7c51c968e48c5d13fec95acc4a4b23825767b26a97c84256ebbe8fc725fdfcee"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-server/src/coding-runtime/opencodeCommands.ts",
+      "bytes": 23738,
+      "sha256": "1fa23853588c5fb76d6eda69eba78d3d842e9bc790500c37e1330530b504aa59"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/packages/keiko-ui/src/lib/coding-workbench-runtime-api.ts",
+      "bytes": 27343,
+      "sha256": "b70d6feed608b9d97f63326590754b8bcd925545696956c8ed957201850dfc79"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/scripts/code-quality-policy.json",
+      "bytes": 353317,
+      "sha256": "38cbfc98ce275d0a6f4ec6ab58380c2d28a6a0171718e7635549f24f44eed564"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/scripts/lib/code-quality-policy.mjs",
+      "bytes": 22755,
+      "sha256": "584b1447f933773d9245dcb44a417419817bc20c4b635373932016dd34196cf1"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/scripts/lib/code-quality-responsibilities.mjs",
+      "bytes": 34516,
+      "sha256": "5e5b6d1f5f6fafcc1ec2660e0837c2c741ee9b10dc9026a0a880b1400eb21135"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/tsconfig.base.json",
+      "bytes": 445,
+      "sha256": "76697f22a7e654a7c19f886e8adbdd6c176be72603dfd975e5af995957d6907a"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/tsconfig.json",
+      "bytes": 679,
+      "sha256": "ec670db520a4d444fcb3ac1d5af63d2f1d0f5a8620047f5224c32dcff2e14a99"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/FrozenInputs/vitest.config.ts",
+      "bytes": 3933,
+      "sha256": "81a272298e24ab8b12771fc9b825db24d7a895c147bebedc2b057b9a28ddc5fa"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/IMPLEMENTATION-PINS.json",
+      "bytes": 1887,
+      "sha256": "ec4adc7de6fbc078799145a4cf1c2e03a73649e54c119a5aaac026927c32f6d2"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/MANIFEST.json",
+      "bytes": 8736,
+      "sha256": "dd023dc20c09d32e70bf10664e46f1c2ea74351d358e06ea8fda3dadeb74bf6b"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/README.md",
+      "bytes": 1881,
+      "sha256": "79f17caea619ba8f78b57c16549cbd8e78616c3a411988cf492302438534214b"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/invoke.mjs",
+      "bytes": 826,
+      "sha256": "e61bbf1d36c3eb7ec5b50e534c469d09eda483ae658fde30394d22722a7790ba"
+    },
+    {
+      "path": "Evidence/current-runtime-api-four-boundaries-rebind-20261030/Tooling/measurement.mjs",
+      "bytes": 14404,
+      "sha256": "4dffbd247210920eefefc10a87b05ced086924965c3172a310067ccd85ff2aca"
+    }
+  ]
+}
