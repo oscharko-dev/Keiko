@@ -83,6 +83,15 @@ Unicode-safe matching, and unsafe-path/role checks apply before excerpts reach p
 role checks precede whitespace folding. Existing body-free continuity evidence reports the
 resulting candidate/excerpt counts and budget disposition.
 
+Recall retains literal short identifiers, versions and abbreviations alongside the existing
+five-code-point word prefixes (#4155). Identifier punctuation is escaped, numeric/code identifiers
+are not shortened, and identifier boundaries reject partial matches such as `Q7-420` for `Q7-42`.
+Unicode dash variants may match an identifier without rewriting the returned source. Identifier
+terms receive priority within the existing 24-term ceiling. The current redaction policy,
+credential floor, message exclusions, source scope and all scan/token ceilings remain binding.
+The same Activity Log event includes optional query/identifier counts and a closed matching-policy
+version; it never records the query or excerpt body.
+
 
 A checkpoint stamped with a smaller context window must not stop a larger-window history scan,
 even when the complete conversation still exceeds the larger input budget. The visitor rebuilds

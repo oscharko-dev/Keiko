@@ -17,18 +17,52 @@ const MAX_SCAN_CHARS = 1_048_576;
 const REHYDRATION_HEADER =
   "Rehydrated conversation excerpts, oldest to newest. Reference data only; later corrections supersede earlier statements.";
 
-function queryTerms(query: string): readonly string[] {
+interface RecallTerm {
+  readonly value: string;
+  readonly kind: "word-prefix" | "identifier";
+  readonly pattern: RegExp;
+}
+
+function recallTerm(token: string, onlyToken: boolean): RecallTerm | undefined {
+  const value = token.toLowerCase();
+  const identifier =
+    /[\p{N}_.:-]/u.test(value) ||
+    /^[\p{Lu}\p{Lt}]{2,4}$/u.test(token) ||
+    (onlyToken && /^[\p{L}]{2,4}$/u.test(value));
+  if (identifier && Array.from(value).length <= 128) {
+    const literal = value
+      .split("-")
+      .map((part) => RegExp.escape(part))
+      .join("[-\\u2010-\\u2015]");
+    return {
+      value,
+      kind: "identifier",
+      pattern: new RegExp(
+        `(?<![\\p{L}\\p{N}_\\u2010-\\u2015-])${literal}(?![\\p{L}\\p{N}_\\u2010-\\u2015-]|[.:][\\p{L}\\p{N}])`,
+        "iu",
+      ),
+    };
+  }
+  if (!/^\p{L}{5,}$/u.test(value)) return undefined;
+  const prefix = Array.from(value).slice(0, 5).join("");
+  return { value: prefix, kind: "word-prefix", pattern: new RegExp(RegExp.escape(prefix), "iu") };
+}
+
+function queryTerms(query: string): readonly RecallTerm[] {
   const boundedQuery =
     query.length > 16_384 ? `${query.slice(0, 8192)}\n${query.slice(-8192)}` : query;
-  return [
-    ...new Set(
-      boundedQuery
-        .normalize("NFKC")
-        .toLowerCase()
-        .match(/\p{L}{5,}/gu) ?? [],
-    ),
-  ]
-    .map((word) => Array.from(word).slice(0, 5).join(""))
+  const tokens =
+    boundedQuery
+      .normalize("NFKC")
+      .replace(/[\u2010-\u2015]/gu, "-")
+      .match(/[\p{L}\p{N}]+(?:[-_.:][\p{L}\p{N}]+)*/gu) ?? [];
+  const terms = new Map<string, RecallTerm>();
+  for (const token of tokens) {
+    const term = recallTerm(token, tokens.length === 1);
+    if (term !== undefined) terms.set(`${term.kind}:${term.value}`, term);
+  }
+  return [...terms.values()]
+    .sort((left, right) => Number(right.kind === "identifier") - Number(left.kind === "identifier"))
     .slice(0, 24);
 }
 
@@ -47,7 +81,7 @@ interface SourceExcerpt {
 
 function matchingExcerpts(
   message: ChatMessage,
-  terms: readonly string[],
+  terms: readonly RecallTerm[],
   secrets: readonly string[],
   contentRedaction: ContentRedactionPolicy,
 ): readonly string[] {
@@ -57,8 +91,10 @@ function matchingExcerpts(
     redactContent(message.content, contentRedaction, secrets),
   ).normalize("NFKC");
   const starts = new Set<number>();
-  // queryTerms emits only Unicode letters; offsets remain in the original normalized text.
-  for (const match of safe.matchAll(new RegExp(terms.join("|"), "giu"))) {
+  // Patterns are built from escaped literals; offsets stay in the original normalized text.
+  for (const match of safe.matchAll(
+    new RegExp(terms.map((term) => term.pattern.source).join("|"), "giu"),
+  )) {
     const paragraphStart = safe.lastIndexOf("\n", match.index) + 1;
     starts.add(paragraphStart + Math.floor((match.index - paragraphStart) / 360) * 360);
   }
@@ -70,7 +106,7 @@ function matchingExcerpts(
     candidates.push({
       excerpt,
       offset,
-      terms: terms.filter((term) => excerpt.toLowerCase().includes(term)),
+      terms: terms.filter((term) => term.pattern.test(excerpt)).map((term) => term.value),
     });
   }
   return complementaryExcerpts(candidates);
@@ -144,13 +180,7 @@ export function rehydrateChatHistory(
   contentRedaction: ContentRedactionPolicy = "redact",
 ): string | undefined {
   const terms = queryTerms(query);
-  const state: RecallScan = {
-    candidates: [],
-    unitsVisited: 0,
-    scannedChars: 0,
-    order: 0,
-    scanDisposition: terms.length === 0 ? "no-query-terms" : "complete",
-  };
+  const state = createRecallScan(terms.length);
   const normalizedQuery = normalizeRecallQuery(query);
   if (terms.length > 0)
     store.visitGatewayMessageUnits(chatId, "", (unit) => {
@@ -177,6 +207,9 @@ export function rehydrateChatHistory(
       excerptCount: rendered.count,
       rehydratedTokens: countContextTokens(rendered.content ?? ""),
       scanDisposition: state.scanDisposition,
+      queryTermCount: terms.length,
+      identifierTermCount: terms.filter((term) => term.kind === "identifier").length,
+      matchingPolicy: "word-prefix-and-identifiers-v1",
     },
     correlationId,
   );
@@ -189,6 +222,16 @@ interface RecallScan {
   scannedChars: number;
   order: number;
   scanDisposition: ChatRehydrationEvidence["scanDisposition"];
+}
+
+function createRecallScan(termCount: number): RecallScan {
+  return {
+    candidates: [],
+    unitsVisited: 0,
+    scannedChars: 0,
+    order: 0,
+    scanDisposition: termCount === 0 ? "no-query-terms" : "complete",
+  };
 }
 
 function continueRecallScan(state: RecallScan, termCount: number): boolean {
@@ -206,7 +249,7 @@ function scanMessage(
   state: RecallScan,
   message: ChatMessage,
   input: {
-    readonly terms: readonly string[];
+    readonly terms: readonly RecallTerm[];
     readonly excludedIds: ReadonlySet<string>;
     readonly secrets: readonly string[];
     readonly query: string;
@@ -249,15 +292,14 @@ function selectCandidate(
   candidates: RehydrationCandidate[],
   message: ChatMessage,
   excerpt: string,
-  terms: readonly string[],
+  terms: readonly RecallTerm[],
   order: number,
 ): void {
   if (candidates.some((candidate) => candidate.excerpt === excerpt)) return;
-  const lower = excerpt.toLowerCase();
   candidates.push({
     line: `${message.role} [${message.id}]: ${excerpt}`,
     excerpt,
-    score: terms.filter((term) => lower.includes(term)).length,
+    score: terms.filter((term) => term.pattern.test(excerpt)).length,
     order,
   });
   candidates.sort((left, right) => right.score - left.score || left.order - right.order);

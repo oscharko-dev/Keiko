@@ -68,6 +68,9 @@ const CHAT_CONTINUITY_CAPTURE = defineActivityLogOperation({
 });
 
 export interface ChatRehydrationEvidence {
+  readonly queryTermCount?: number;
+  readonly identifierTermCount?: number;
+  readonly matchingPolicy?: "word-prefix-and-identifiers-v1";
   readonly unitsVisited: number;
   readonly scannedChars: number;
   readonly candidateCount: number;
@@ -85,6 +88,14 @@ const CHAT_CONTINUITY_REHYDRATION = defineActivityLogOperation({
   category: "gateway",
   emitter: "chat-continuity-log.logChatRehydration",
   fields: {
+    queryTermCount: { type: "integer", dataClass: "count", required: false },
+    identifierTermCount: { type: "integer", dataClass: "count", required: false },
+    matchingPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["word-prefix-and-identifiers-v1"],
+    },
     unitsVisited: { type: "integer", dataClass: "count", required: true },
     scannedChars: { type: "integer", dataClass: "count", required: true },
     candidateCount: { type: "integer", dataClass: "count", required: true },

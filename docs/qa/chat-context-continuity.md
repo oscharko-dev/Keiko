@@ -9,7 +9,28 @@ repair verified defects and repeat the same measurements. Keep the working pull 
 `dev` open for incremental review. Native auto-merge remains off.
 
 The product source baseline is `e153759e6` (Keiko 1.3.3). Initial changes are qualification tooling
-and tests only. There is no production continuity repair in this first increment.
+and tests only. Subsequent iterations repair measured defects and preserve the original subject.
+
+Owner clarification: implementation and measurement proceed iteratively. A complete long campaign
+does not block a repair already supported by a reproducible before case. The original product is
+preserved in a separate checkout at `67638d66e`; its benchmark uses its own build, dependencies and
+private state, so development cannot replace its executable subject.
+
+## Iteration measurements
+
+The quality scale is 0–10 for each explicitly named measurement, calculated as ten times its pass
+fraction on the same frozen cases. Scores name their scope, case count, model where relevant and
+unmeasured areas. A narrow score is not an overall production-readiness claim. An expanded matrix
+receives a new version and is replayed on the baseline as well as the candidate.
+
+| Iteration | Measurement                                                    | Before       | After         | Evidence                                                                                                              |
+| --------- | -------------------------------------------------------------- | ------------ | ------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 1         | Literal identifier retrieval, eight fixed producer-level cases | 0/8 = 0.0/10 | 8/8 = 10.0/10 | Failure-first history suite: identifiers, Unicode dash, abbreviation, numeric/version and substring/punctuation cases |
+
+This iteration also passes current-policy credential-floor, exclusion and body-free logging checks.
+The complete targeted history/content/continuity run passes 55 tests across three files. The
+eight-case score measures retrieval availability; it does not claim live-model answer accuracy,
+complete-history recall or a composite score for the remaining work.
 
 ## Measurement design
 
@@ -162,6 +183,11 @@ tooling. Measurement tests check actual model-port input, canonical-message pres
 output and repeatability; they deliberately do not pin today's missing recall or partial coverage
 as behavior that future repairs must preserve.
 
+An independently repeated observation after forced-build attestation produced identical structural
+results. Its source/distribution/compiler hashes use the new canonical digest method and are retained
+in [`structural-baseline-attested.json`](evidence/4155/structural-baseline-attested.json). The original
+artifact remains immutable; its older commit-tree digest is a different measurement method.
+
 ## Remaining code-grounded audit hypotheses
 
 These are targets for controlled reproduction, not established causes of a reported customer loss:
@@ -195,3 +221,19 @@ memory capture/governance path. This qualification grants no new memory-promotio
 
 Provider-native features are compatibility-dependent comparators. Their existence is not evidence
 that the configured local providers implement them or that Keiko's current paths invoke them.
+
+Recent research informs explicit experiments, independently of provider guides:
+
+| Primary work                                                      | Published/version date                               | Implication to test in Keiko                                                                                                   |
+| ----------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| [JustMem](https://arxiv.org/abs/2609.19877)                       | 17 September 2026; preprint                          | Vary discovery breadth and recover original evidence when a compact representation is insufficient                             |
+| [TRACE](https://arxiv.org/abs/2608.06503)                         | Revised 14 October 2026; preliminary empirical study | Compare paired continuations at the same compaction boundary to separate state-loss effects from model variability             |
+| [Compact-Bench](https://arxiv.org/abs/2610.31710)                 | 22 October 2026; preprint                            | Measure continuing the task and retaining recurring details separately, including successive compactions                       |
+| [Bud ContextCompact 2.0](https://arxiv.org/abs/2610.25516)        | 18 October 2026; preprint                            | Test protected literal channels, complete newly folded spans and early enough triggers; measure summary latency and cache cost |
+| [Rate–distortion view](https://arxiv.org/abs/2607.08032)          | 9 July 2026; survey/proposal                         | Evaluate task utility lost at each budget rather than the compression ratio alone                                              |
+| [Continuous Context Management](https://arxiv.org/abs/2609.35540) | 28 September 2026; preprint                          | Treat per-turn compaction as an experimental arm; its untrained performance varies by model                                    |
+
+Reported benchmark gains are the respective authors' results, not Keiko measurements. These papers
+motivate experiments and acceptance evidence; novelty or a published claim does not establish local
+production readiness. This retrieval iteration introduces no new persistent-memory architecture or
+automatic memory promotion.

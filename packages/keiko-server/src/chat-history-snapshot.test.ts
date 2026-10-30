@@ -289,6 +289,75 @@ describe("paged conversation continuity", () => {
     expect(result?.indexOf("75000")).toBeLessThan(result?.indexOf("60000") ?? -1);
   });
 
+  it.each([
+    ["Q7-42?", "Q7-42"],
+    ["Q7‑42?", "Q7-42"],
+    ["A7?", "A7"],
+    ["MCP?", "MCP"],
+    ["mcp?", "MCP"],
+    ["47?", "47"],
+    ["v1.2?", "v1.2"],
+  ])("rehydrates a literal short identifier without answer hints: %s", (query, identifier) => {
+    const { store, chatId, add } = fixture();
+    const source = add("user", `Reference ${identifier}: the agreed inspection color is ochre.`);
+    add("assistant", "Acknowledged.");
+    const result = rehydrateChatHistory(store, chatId, query, new Set(), []);
+    expect(result).toContain(source.id);
+    expect(result).toContain("ochre");
+  });
+
+  it("does not match identifier substrings or treat their punctuation as regex syntax", () => {
+    const { store, chatId, add } = fixture();
+    const source = add(
+      "user",
+      "Reference Q7-42: agreed color ochre. Version v1.2 uses offline mode.",
+    );
+    add("assistant", "Acknowledged.");
+    add("user", "Reference XQ7-42 and Q7-420 are unrelated. Version v1x2 uses remote mode.");
+    add("assistant", "Acknowledged.");
+    const identifier = rehydrateChatHistory(store, chatId, "Q7-42?", new Set(), []);
+    const version = rehydrateChatHistory(store, chatId, "v1.2?", new Set(), []);
+    expect(identifier).toContain(source.id);
+    expect(identifier).not.toContain("unrelated");
+    expect(version).toContain("offline mode");
+    expect(version).not.toContain("remote mode");
+  });
+
+  it("keeps identifier recall inside exclusions and the current credential floor", () => {
+    const { store, chatId, add } = fixture();
+    const source = add("user", "Reference A7: the agreed color is ochre.");
+    add("assistant", "Acknowledged.");
+    add("user", "Reference fixture-key-73: synthetic private value.");
+    expect(rehydrateChatHistory(store, chatId, "A7?", new Set([source.id]), [])).toBeUndefined();
+    expect(
+      rehydrateChatHistory(store, chatId, "fixture-key-73?", new Set(), ["fixture-key-73"]),
+    ).toBeUndefined();
+  });
+
+  it("records identifier matching counts without the query or source body", () => {
+    const { store, chatId, add } = fixture();
+    add("user", "Reference Q7-42: private fixture phrase.");
+    add("assistant", "Acknowledged.");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    expect(rehydrateChatHistory(store, chatId, "Q7-42?", new Set(), [])).toContain(
+      "private fixture phrase",
+    );
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.rehydration");
+    expect(event?.extra).toMatchObject({
+      queryTermCount: 1,
+      identifierTermCount: 1,
+      matchingPolicy: "word-prefix-and-identifiers-v1",
+      excerptCount: 1,
+    });
+    expectActivityLogProof(
+      "chat.continuity.rehydration.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("Q7-42");
+    expect(JSON.stringify(sink.events)).not.toContain("private fixture phrase");
+  });
+
   it("keeps corrections reachable after repeated follow-up questions and duplicate answers", () => {
     const { store, chatId, add } = fixture();
     add("user", "Das Projekt heißt Linden. Unser Budget beträgt 75000 Euro.");

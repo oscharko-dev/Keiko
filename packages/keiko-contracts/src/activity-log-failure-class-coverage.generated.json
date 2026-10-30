@@ -2572,6 +2572,24 @@
               "required": true
             },
             {
+              "name": "identifierTermCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "matchingPolicy",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "queryTermCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "rehydratedTokens",
               "type": "integer",
               "dataClass": "count",

@@ -10,11 +10,21 @@ describe("production-path continuity measurements", () => {
     expect(report.summarySourceCoverage.witnessesDelivered).toBeLessThanOrEqual(40);
     expect(report.canonicalMessagesAfter).toBe(40);
     expect(report.shortIdentifierRecall.originalExists).toBe(true);
+    expect(report.identifierRecallBenchmark).toMatchObject({
+      version: "literal-identifier-v1",
+      total: 8,
+    });
+    expect(report.identifierRecallBenchmark.score).toBeGreaterThanOrEqual(0);
+    expect(report.identifierRecallBenchmark.score).toBeLessThanOrEqual(10);
+    expect(report.identifierRecallBenchmark.cases.every((entry) => entry.originalsPreserved)).toBe(
+      true,
+    );
     expect(report.logOperations).toContain("chat.continuity.rehydration");
   });
   it("reports counts and closed states without retaining fixture bodies or ephemeral identifiers", async () => {
     const report = await observeChatContinuityStructure();
     const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain("ochre");
     for (const content of [
       "WitnessMarker",
       "8100",

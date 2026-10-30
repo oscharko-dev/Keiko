@@ -1668,6 +1668,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      queryTermCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      identifierTermCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      matchingPolicy: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["word-prefix-and-identifiers-v1"],
+      },
       unitsVisited: {
         type: "integer",
         dataClass: "count",

@@ -1,7 +1,8 @@
 // Observe real compaction/recall producers without equating structural coverage with model quality.
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { URL } from "node:url";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
@@ -19,6 +20,71 @@ const PROFILE = deriveContextProfile({
   safetyMarginTokens: 1000,
 });
 const SOURCE_MESSAGES = 40;
+const IDENTIFIER_CASES = [
+  { id: "short-hyphen", query: "Q7-42?", identifier: "Q7-42" },
+  { id: "unicode-dash", query: "Q7‑42?", identifier: "Q7-42" },
+  { id: "mixed-identifier", query: "A7?", identifier: "A7" },
+  { id: "upper-abbreviation", query: "MCP?", identifier: "MCP" },
+  { id: "lower-abbreviation", query: "mcp?", identifier: "MCP" },
+  { id: "numeric", query: "47?", identifier: "47" },
+  { id: "version", query: "v1.2?", identifier: "v1.2" },
+  { id: "literal-boundaries", query: "Q7-42?", identifier: "Q7-42", boundary: true },
+];
+const IDENTIFIER_ANSWER = "ochre";
+const IDENTIFIER_DISTRACTOR =
+  "Reference XQ7-42 and Q7-420 are unrelated; version v1x2 uses remote mode.";
+
+function identifierCase(store, project, entry, rehydrate) {
+  const chatId = store.createChat(project, "Synthetic identifier case", "structural").id;
+  const source = storedMessage(
+    store,
+    chatId,
+    "user",
+    `Reference ${entry.identifier}: agreed color ${IDENTIFIER_ANSWER}. Version v1.2 uses offline mode.`,
+    0,
+  );
+  storedMessage(store, chatId, "assistant", "Acknowledged.", 1);
+  if (entry.boundary) {
+    storedMessage(store, chatId, "user", IDENTIFIER_DISTRACTOR, 2);
+    storedMessage(store, chatId, "assistant", "Acknowledged.", 3);
+  }
+  const queries = entry.boundary ? [entry.query, "v1.2?"] : [entry.query];
+  const results = queries.map((query) =>
+    rehydrate(store, chatId, query, new Set(), [], "identifier-benchmark"),
+  );
+  return {
+    id: entry.id,
+    passed: results.every(
+      (result) =>
+        result?.includes(source.id) &&
+        result.includes(IDENTIFIER_ANSWER) &&
+        !result.includes("remote mode"),
+    ),
+    originalsPreserved: store.countMessages(chatId) === (entry.boundary ? 4 : 2),
+  };
+}
+
+async function identifierRecallBenchmark(store, project) {
+  const { rehydrateChatHistory } = await importBuilt("keiko-server", "chat-history-rehydration.js");
+  const cases = IDENTIFIER_CASES.map((entry) =>
+    identifierCase(store, project, entry, rehydrateChatHistory),
+  );
+  const passed = cases.filter((entry) => entry.passed).length;
+  return {
+    version: "literal-identifier-v1",
+    caseDigest: sha256Hex(
+      JSON.stringify({
+        cases: IDENTIFIER_CASES,
+        answer: IDENTIFIER_ANSWER,
+        distractor: IDENTIFIER_DISTRACTOR,
+      }),
+    ),
+    passed,
+    total: cases.length,
+    score: Number(((10 * passed) / cases.length).toFixed(2)),
+    cases,
+  };
+}
 
 function storedMessage(store, chatId, role, content, index) {
   return store.createMessage({
@@ -196,6 +262,7 @@ export async function observeChatContinuityStructure() {
     const report = {
       measurementKind: "deterministic-production-path-observation-not-model-quality",
       shortIdentifierRecall: await shortIdentifierRecall(store, project),
+      identifierRecallBenchmark: await identifierRecallBenchmark(store, project),
       summarySourceCoverage: await summarySourceCoverage(store, chatId, messages),
       manualProjection: await manualProjection(messages),
       canonicalMessagesAfter: store.countMessages(chatId),
@@ -218,6 +285,7 @@ async function main() {
   const output = privateContinuityOutput(cli.values.output);
   const report = {
     ...readContinuityBuildIdentity(),
+    harnessDigest: sha256Hex(readFileSync(new URL(import.meta.url))),
     ...(await observeChatContinuityStructure()),
   };
   writeFileSync(output, JSON.stringify(report, null, 2), { mode: 0o600, flag: "wx" });

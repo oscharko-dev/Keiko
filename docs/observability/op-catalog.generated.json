@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "685bfc1be7bef6a80760caa8e513cd7858aeefdd3b2a24eac75ed42a2f27deec",
+    "catalogDigest": "49f3c589edb738af384e5ef5bb40a533b0302d9035ac5143c4dbec706ee47c65",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1680,7 +1680,7 @@
         "proofIds": ["chat.continuity.capture.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:29",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:142"]
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:153"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1723,8 +1723,8 @@
         "failureClasses": ["chat-context-management"],
         "proofIds": ["chat.continuity.degraded.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:110",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:181"]
+        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:121",
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:192"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1743,6 +1743,22 @@
             "type": "string",
             "dataClass": "loss-state",
             "required": true
+          },
+          "queryTermCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "identifierTermCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "matchingPolicy": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["word-prefix-and-identifiers-v1"]
           },
           "unitsVisited": {
             "type": "integer",
@@ -1788,8 +1804,8 @@
         "failureClasses": ["chat-context-management"],
         "proofIds": ["chat.continuity.rehydration.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:80",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:159"]
+        "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:83",
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:170"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -56688,6 +56704,24 @@
                   "required": true
                 },
                 {
+                  "name": "identifierTermCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "matchingPolicy",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "queryTermCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "rehydratedTokens",
                   "type": "integer",
                   "dataClass": "count",
@@ -104541,13 +104575,13 @@
     {
       "op": "chat.continuity.degraded",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-continuity-log.ts:113",
+      "site": "packages/keiko-server/src/chat-continuity-log.ts:124",
       "package": "keiko-server"
     },
     {
       "op": "chat.continuity.rehydration",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-continuity-log.ts:83",
+      "site": "packages/keiko-server/src/chat-continuity-log.ts:86",
       "package": "keiko-server"
     },
     {
