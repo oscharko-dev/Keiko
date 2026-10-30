@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { ModelCapability } from "./gateway.js";
-import type { ReviewSeedCase, ReviewSeedRunResult } from "./pull-request-review.js";
+import type {
+  ReviewDiffIncludedFile,
+  ReviewDiffUnprocessedFile,
+  ReviewSeedCase,
+  ReviewSeedRunResult,
+} from "./pull-request-review.js";
 import {
   REVIEW_FINDING_FINGERPRINT_DOMAIN,
   evaluateReviewRoleEligibility,
   normalizeReviewDefectExcerpt,
+  reviewDiffCoverageSettlement,
+  reviewDiffPackageFailureSettlement,
   reviewFindingFingerprintPreimage,
   scoreReviewSeedRun,
 } from "./pull-request-review-rules.js";
@@ -273,6 +280,80 @@ describe("scoreReviewSeedRun", () => {
       requiredCount: 0,
       requiredFound: 0,
       unmatchedResults: 0,
+    });
+  });
+});
+
+describe("review diff coverage settlement (Issue #4134)", () => {
+  function included(
+    includedHunkCount: number,
+    hunkCount = includedHunkCount,
+  ): ReviewDiffIncludedFile {
+    return {
+      path: "src/a.ts",
+      status: "modified",
+      language: "typescript",
+      addedLines: 1,
+      removedLines: 1,
+      hunkCount,
+      includedHunkCount,
+      partial: includedHunkCount < hunkCount,
+    };
+  }
+  const unprocessed: ReviewDiffUnprocessedFile = {
+    path: "src/b.ts",
+    status: "modified",
+    language: "typescript",
+    addedLines: 1,
+    removedLines: 1,
+    reason: "budget",
+  };
+
+  it("lets only a fully processed package with reviewable content proceed", () => {
+    expect(reviewDiffCoverageSettlement({ included: [included(2)], unprocessed: [] })).toEqual({
+      kind: "reviewable",
+    });
+  });
+
+  it("never presents an unprocessed or partially included file as a clean review", () => {
+    const incomplete = { kind: "incomplete", reason: "files-unprocessed" };
+    expect(reviewDiffCoverageSettlement({ included: [included(1, 3)], unprocessed: [] })).toEqual(
+      incomplete,
+    );
+    expect(
+      reviewDiffCoverageSettlement({ included: [included(2)], unprocessed: [unprocessed] }),
+    ).toEqual(incomplete);
+  });
+
+  it("skips a run with nothing reviewed", () => {
+    expect(reviewDiffCoverageSettlement({ included: [], unprocessed: [unprocessed] })).toEqual({
+      kind: "skipped",
+      reason: "diff-too-large",
+    });
+    expect(reviewDiffCoverageSettlement({ included: [included(0)], unprocessed: [] })).toEqual({
+      kind: "skipped",
+      reason: "no-reviewable-changes",
+    });
+    expect(reviewDiffCoverageSettlement({ included: [], unprocessed: [] })).toEqual({
+      kind: "skipped",
+      reason: "no-reviewable-changes",
+    });
+  });
+
+  it("maps every packaging failure to its settlement", () => {
+    expect(
+      reviewDiffPackageFailureSettlement({ reason: "diff-too-large", detail: "deadline" }),
+    ).toEqual({
+      kind: "skipped",
+      reason: "diff-too-large",
+    });
+    expect(reviewDiffPackageFailureSettlement({ reason: "cancelled" })).toEqual({
+      kind: "abandoned",
+      reason: "cancelled",
+    });
+    expect(reviewDiffPackageFailureSettlement({ reason: "git-failed" })).toEqual({
+      kind: "abandoned",
+      reason: "interrupted",
     });
   });
 });

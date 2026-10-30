@@ -541,3 +541,266 @@ export async function listGitReviewWorktrees(
     .filter((entry): entry is GitReviewWorktreeListEntry => entry !== undefined);
   return { ok: true, value: entries };
 }
+
+// ─── Change listing and patches (Issue #4134) ────────────────────────────────
+
+/** Rename detection gives up its exhaustive pass above this many candidates (a rename storm). */
+export const GIT_REVIEW_RENAME_LIMIT = 1000;
+const GIT_REVIEW_MAX_CONTEXT_LINES = 64;
+
+export type GitReviewChangeStatus = "A" | "M" | "D" | "R" | "T";
+
+/** One changed path of a commit pair, with its names as the exact bytes Git stores. */
+export interface GitReviewChange {
+  readonly status: GitReviewChangeStatus;
+  readonly oldMode: string;
+  readonly newMode: string;
+  readonly oldOid: string;
+  readonly newOid: string;
+  /** The head path (the base path of a deletion). */
+  readonly path: Uint8Array;
+  /** The base path of a rename. */
+  readonly previousPath: Uint8Array | undefined;
+  /** Git's line counts; `undefined` when Git counts the pair as binary. */
+  readonly addedLines: number | undefined;
+  readonly removedLines: number | undefined;
+}
+
+export class GitReviewOutputError extends TypeError {
+  public constructor(what: string) {
+    super(`unexpected review Git output: ${what}`);
+    this.name = "GitReviewOutputError";
+  }
+}
+
+const C_ESCAPES: Readonly<Record<string, number>> = {
+  a: 0x07,
+  b: 0x08,
+  t: 0x09,
+  n: 0x0a,
+  v: 0x0b,
+  f: 0x0c,
+  r: 0x0d,
+  '"': 0x22,
+  "\\": 0x5c,
+};
+
+function unquoteEscape(text: string, index: number, bytes: number[]): number {
+  const next = text.charAt(index + 1);
+  const named = C_ESCAPES[next];
+  if (named !== undefined) {
+    bytes.push(named);
+    return index + 2;
+  }
+  const octal = text.slice(index + 1, index + 4);
+  if (!/^[0-3][0-7]{2}$/u.test(octal)) throw new GitReviewOutputError("path escape");
+  bytes.push(Number.parseInt(octal, 8));
+  return index + 4;
+}
+
+/**
+ * The exact bytes of one path as Git prints it under `core.quotePath=true`: a plain token is
+ * ASCII, a quoted one is a C string with octal escapes for every byte above 0x7f. Anything else
+ * means the output cannot be trusted to name the path exactly, so it throws.
+ */
+export function unquoteGitReviewPath(text: string): Uint8Array {
+  if (!text.startsWith('"')) {
+    if (text.length === 0 || NOT_PRINTABLE_ASCII.test(text)) throw new GitReviewOutputError("path");
+    return Buffer.from(text, "latin1");
+  }
+  if (text.length < 3 || !text.endsWith('"')) throw new GitReviewOutputError("path quote");
+  return unquoteBody(text.slice(1, -1));
+}
+
+const NOT_PRINTABLE_ASCII = /[^ -~]/u;
+
+function unquoteBody(body: string): Uint8Array {
+  const bytes: number[] = [];
+  let index = 0;
+  while (index < body.length) {
+    const char = body.charAt(index);
+    if (char === "\\") {
+      index = unquoteEscape(body, index, bytes);
+      continue;
+    }
+    if (char === '"' || NOT_PRINTABLE_ASCII.test(char))
+      throw new GitReviewOutputError("path quote");
+    bytes.push(char.charCodeAt(0));
+    index += 1;
+  }
+  return Uint8Array.from(bytes);
+}
+
+const RAW_RECORD =
+  /^:(\d{6}) (\d{6}) ([a-f0-9]{40}|[a-f0-9]{64}) ([a-f0-9]{40}|[a-f0-9]{64}) ([AMDT]|R\d{1,3})$/u;
+const NUMSTAT_RECORD = /^(\d{1,10}|-)\t(\d{1,10}|-)\t./u;
+
+type RawChange = Omit<GitReviewChange, "addedLines" | "removedLines">;
+
+function rawNames(fields: readonly string[], status: GitReviewChangeStatus): Uint8Array[] {
+  const names = fields.slice(1).map(unquoteGitReviewPath);
+  if (names.length !== (status === "R" ? 2 : 1)) throw new GitReviewOutputError("raw paths");
+  return names;
+}
+
+function parseRawRecord(line: string): RawChange {
+  const fields = line.split("\t");
+  const match = RAW_RECORD.exec(fields[0] ?? "");
+  if (match === null) throw new GitReviewOutputError("raw record");
+  const [oldMode, newMode, oldOid, newOid, code] = match.slice(1).map(String);
+  const status = String(code).charAt(0) as GitReviewChangeStatus;
+  const [first, second] = rawNames(fields, status);
+  if (first === undefined) throw new GitReviewOutputError("raw paths");
+  return {
+    status,
+    oldMode: String(oldMode),
+    newMode: String(newMode),
+    oldOid: String(oldOid),
+    newOid: String(newOid),
+    path: second ?? first,
+    previousPath: second === undefined ? undefined : first,
+  };
+}
+
+function parseCount(value: string | undefined): number | undefined {
+  return value === undefined || value === "-" ? undefined : Number(value);
+}
+
+/**
+ * Pairs `--raw` records with the `--numstat` records Git prints after them in the same order.
+ * The numstat path (which Git rewrites for renames) is never read: only the counts, so a hostile
+ * name cannot shift the pairing.
+ */
+function parseChangeListing(stdout: string): readonly GitReviewChange[] {
+  const lines = stdout.split("\n").filter((line) => line.length > 0);
+  const raw = lines.filter((line) => line.startsWith(":")).map(parseRawRecord);
+  const counts = lines.filter((line) => !line.startsWith(":"));
+  if (counts.length !== raw.length) throw new GitReviewOutputError("numstat pairing");
+  return raw.map((change, index) => {
+    const match = NUMSTAT_RECORD.exec(counts[index] ?? "");
+    if (match === null) throw new GitReviewOutputError("numstat record");
+    return { ...change, addedLines: parseCount(match[1]), removedLines: parseCount(match[2]) };
+  });
+}
+
+export type GitReviewChangeListing =
+  | GitReviewOperationResult<readonly GitReviewChange[]>
+  | { readonly ok: false; readonly malformed: true; readonly result: GitProcessResult };
+
+/**
+ * Every changed path between two commits, read from the objects alone (no working tree, no
+ * index): recursive, with rename detection bounded by `GIT_REVIEW_RENAME_LIMIT`, full object ids,
+ * no color, and paths in Git's quoted form (the review runner forces `core.quotePath=true`).
+ */
+export async function listGitReviewChanges(
+  ctx: GitReviewOperationContext,
+  request: { readonly cwd: string; readonly baseSha: string; readonly headSha: string },
+): Promise<GitReviewChangeListing> {
+  const result = await run(ctx, request.cwd, [
+    "diff-tree",
+    "-r",
+    "-M",
+    `-l${String(GIT_REVIEW_RENAME_LIMIT)}`,
+    "--raw",
+    "--numstat",
+    "--no-abbrev",
+    "--no-color",
+    assertObjectId(request.baseSha, "baseSha"),
+    assertObjectId(request.headSha, "headSha"),
+  ]);
+  if (!succeeded(result)) return { ok: false, result };
+  try {
+    return { ok: true, value: parseChangeListing(result.stdout) };
+  } catch (error) {
+    if (error instanceof GitReviewOutputError) return { ok: false, malformed: true, result };
+    throw error;
+  }
+}
+
+export interface GitReviewObjectInfo {
+  readonly type: string;
+  readonly size: number;
+}
+
+const BATCH_CHECK_RECORD =
+  /^([a-f0-9]{40}|[a-f0-9]{64}) (?:(blob|tree|commit|tag) (\d+)|missing)$/u;
+
+/**
+ * The type and size of each object, without reading any content (`cat-file --batch-check`, ids on
+ * standard input). A missing object has no entry.
+ */
+export async function readGitReviewObjectSizes(
+  ctx: GitReviewOperationContext,
+  request: { readonly cwd: string; readonly oids: readonly string[] },
+): Promise<GitReviewOperationResult<ReadonlyMap<string, GitReviewObjectInfo>>> {
+  const sizes = new Map<string, GitReviewObjectInfo>();
+  if (request.oids.length === 0) return { ok: true, value: sizes };
+  const input = request.oids.map((oid) => `${assertObjectId(oid, "oid")}\n`).join("");
+  const format = "--batch-check=%(objectname) %(objecttype) %(objectsize)";
+  const result = await run(ctx, request.cwd, ["cat-file", format], [], input);
+  if (!succeeded(result)) return { ok: false, result };
+  for (const line of result.stdout.split("\n")) {
+    if (line.length === 0) continue;
+    const match = BATCH_CHECK_RECORD.exec(line);
+    if (match === null) return { ok: false, result };
+    const [, oid = "", type, size] = match;
+    if (type !== undefined && size !== undefined) sizes.set(oid, { type, size: Number(size) });
+  }
+  return { ok: true, value: sizes };
+}
+
+/**
+ * At most `bytes` leading bytes of one blob: the process is stopped at the cap, so a giant blob is
+ * never read past it. Used for Git's own binary sniff (a NUL byte in the first 8,000 bytes).
+ */
+export async function readGitReviewBlobPrefix(
+  ctx: GitReviewOperationContext,
+  request: { readonly cwd: string; readonly oid: string; readonly bytes: number },
+): Promise<GitReviewOperationResult<string>> {
+  const oid = assertObjectId(request.oid, "oid");
+  if (!Number.isSafeInteger(request.bytes) || request.bytes < 1) {
+    throw new GitReviewOperandError("bytes");
+  }
+  const result = await ctx.runner([...GIT_BASE_ARGS, "cat-file", "blob", oid], {
+    cwd: request.cwd,
+    timeoutMs: ctx.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    maxBytes: request.bytes,
+    abortSignal: ctx.abortSignal,
+    expectedTruncation: true,
+  });
+  const cut = result.truncated && result.timedOut !== true && result.aborted !== true;
+  const complete = result.exitCode === 0 && !result.truncated;
+  if (result.refusal === undefined && (cut || complete)) return { ok: true, value: result.stdout };
+  return { ok: false, result };
+}
+
+/**
+ * The unified diff of two blobs by object id, so no path, attribute or pathspec is involved. The
+ * runner adds `--no-ext-diff --no-textconv`; the context, hunk merging and algorithm are fixed
+ * here so the repository's configuration cannot change the hunks.
+ */
+export async function diffGitReviewBlobs(
+  ctx: GitReviewOperationContext,
+  request: {
+    readonly cwd: string;
+    readonly oldOid: string;
+    readonly newOid: string;
+    readonly contextLines: number;
+  },
+): Promise<GitReviewOperationResult<string>> {
+  const lines = request.contextLines;
+  if (!Number.isSafeInteger(lines) || lines < 0 || lines > GIT_REVIEW_MAX_CONTEXT_LINES) {
+    throw new GitReviewOperandError("contextLines");
+  }
+  const result = await run(ctx, request.cwd, [
+    "diff",
+    `-U${String(lines)}`,
+    "--no-color",
+    "--inter-hunk-context=0",
+    "--diff-algorithm=myers",
+    "--indent-heuristic",
+    assertObjectId(request.oldOid, "oldOid"),
+    assertObjectId(request.newOid, "newOid"),
+  ]);
+  return succeeded(result) ? { ok: true, value: result.stdout } : { ok: false, result };
+}

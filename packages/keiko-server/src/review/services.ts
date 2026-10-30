@@ -39,6 +39,12 @@ import {
 } from "./target/resolver.js";
 import { createReviewWorktreeManager, type ReviewWorktreeManager } from "./worktree/manager.js";
 import { createReviewRegistry, type ReviewRegistry } from "./worktree/registry.js";
+import { buildReviewDiffPackage } from "./diff-package/builder.js";
+import type {
+  ReviewDiffPackageInput,
+  ReviewDiffPackageLimits,
+  ReviewDiffPackageResult,
+} from "./diff-package/types.js";
 import { reportReviewFailure } from "./diagnostics.js";
 import { correlationIdOrUnknown, newCorrelationId } from "../correlation.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
@@ -70,6 +76,7 @@ export interface ReviewServicesDeps {
   readonly maxPaths?: number | undefined;
   readonly maxMaterializedBytes?: number | undefined;
   readonly createDeadlineMs?: number | undefined;
+  readonly diffPackageLimits?: Partial<ReviewDiffPackageLimits> | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
@@ -79,6 +86,10 @@ export interface ReviewServices {
   readonly pullRequests: ReviewPullRequestReads;
   readonly worktrees: ReviewWorktreeManager;
   resolveTarget(input: ReviewTargetResolveInput): Promise<ReviewTargetResolution>;
+  /** The review diff package of a resolved target, read from its objects (Issue #4134). */
+  buildDiffPackage(
+    input: ReviewDiffPackageInput & { readonly correlationId?: string | undefined },
+  ): Promise<ReviewDiffPackageResult>;
   sweepRefs(trigger: ReviewRefSweepTrigger, correlationId?: string): Promise<ReviewRefSweepResult>;
   startup(correlationId?: string): Promise<void>;
   dispose(correlationId?: string): Promise<void>;
@@ -237,6 +248,23 @@ class ReviewServicesImpl implements ReviewServices {
       });
     }
     return resolution;
+  }
+
+  public buildDiffPackage(
+    input: ReviewDiffPackageInput & { readonly correlationId?: string | undefined },
+  ): Promise<ReviewDiffPackageResult> {
+    return buildReviewDiffPackage(
+      {
+        runner: (options) => this.localRunner(options, input.correlationId),
+        limits: {
+          ...(this.deps.blobLimitBytes === undefined
+            ? {}
+            : { blobLimitBytes: this.deps.blobLimitBytes }),
+          ...this.deps.diffPackageLimits,
+        },
+      },
+      input,
+    );
   }
 
   public sweepRefs(
