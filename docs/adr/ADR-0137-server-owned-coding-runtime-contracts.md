@@ -2048,6 +2048,17 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   A denied, cancelled, timed-out, limit-breached or entirely skipped run, a candidate that changed
   during its verification, an unstaged candidate and unsaved editor buffers still refuse. A mode
   lowered after the proposal turns the red checks back into the gate before the Git effect.
+  Untracked files outside the staged candidate follow the same owner decision (#3907 AC3, lab lane
+  T17): the model's own `npm install` left an untracked `package-lock.json`, the model rightly kept
+  it out of the commit, and every verification answered `candidate-not-staged` until the run's
+  deadline while standalone committed the staged change. In Full access a verification of a staged
+  candidate with nothing unstaged and no unsaved buffer, beside untracked files, now runs and forms
+  evidence that never proves the commit: the `git.verified-commit` verification line records
+  `passed: false`, `reason: candidate-not-staged` and the untracked count, the model reads
+  `commitProof: "admitted"` with the untracked paths, and the commit carries only the staged tree.
+  The proposal, its review and the execution recheck the same staged candidate and leave the
+  untracked files out of the comparison; any other mode, an unstaged change, or Full access ending
+  before execution still refuses.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

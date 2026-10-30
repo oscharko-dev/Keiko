@@ -14333,7 +14333,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["not-applicable", "recorded", "unavailable"],
+        values: ["not-applicable", "recorded", "unavailable", "admitted"],
       },
       commitProofReason: {
         type: "string",

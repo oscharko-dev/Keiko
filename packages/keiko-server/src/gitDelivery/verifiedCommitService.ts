@@ -283,12 +283,16 @@ interface VerificationTicket {
   readonly context: VerifiedCommitRunContext;
   readonly facts: VerifiedCommitFacts;
   readonly startedAtMs: number;
+  /** Full access verified a staged candidate while untracked files lay outside it (#3907). */
+  readonly untracked: boolean;
 }
 interface VerificationProof extends VerificationTicket {
   readonly evidenceId: string;
   readonly passed: boolean;
   /** The checks ran on this unchanged candidate and at least one failed: evidence, not proof. */
   readonly failed: boolean;
+  /** The checks ran on a working tree that also held untracked files: evidence, not proof. */
+  readonly unproven: boolean;
 }
 
 // Why a completed verification cannot prove the candidate, or undefined when it does. The cause is
@@ -323,6 +327,80 @@ function failingEvidence(
     sameVerifiedCommitFacts(before.facts, after) &&
     now - before.startedAtMs < TTL_MS
   );
+}
+
+// Full access commits the staged candidate while untracked files lie outside it, as a plain `git
+// commit` does (owner decision 2026-10-30, #3907): the parity lane's own `npm install` had left an
+// untracked package-lock.json, and the model, which rightly kept it out of the commit, read
+// candidate-not-staged until the run's deadline. Unstaged changes and unsaved buffers still refuse.
+function untrackedOutsideCandidate(
+  context: VerifiedCommitRunContext,
+  facts: VerifiedCommitFacts,
+): boolean {
+  const blocking = facts.blocking;
+  return (
+    !facts.clean &&
+    blocking?.unstagedCount === 0 &&
+    blocking.untrackedCount > 0 &&
+    context.buffersClean()
+  );
+}
+
+// The same staged candidate on the same head and base; untracked files outside it are not compared.
+function sameCommitCandidate(a: VerifiedCommitFacts, b: VerifiedCommitFacts): boolean {
+  return (
+    a.headSha === b.headSha &&
+    a.baseSha === b.baseSha &&
+    a.stagedTreeDigest === b.stagedTreeDigest &&
+    a.repositoryDigest === b.repositoryDigest
+  );
+}
+
+// A verification that ran to its end, passing or failing, on an unchanged staged candidate that had
+// untracked files beside it: it describes the working tree, not the commit, so it is never a proof.
+function untrackedEvidence(
+  context: VerifiedCommitRunContext,
+  before: VerificationTicket,
+  after: VerifiedCommitFacts,
+  report: VerificationReport,
+  now: number,
+): boolean {
+  const ran =
+    commitVerificationReportPassed(report, before.startedAtMs, now) ||
+    commitVerificationReportFailed(report, before.startedAtMs, now);
+  return (
+    report.workspaceRoot === before.context.workspace.root &&
+    ran &&
+    sameCommitCandidate(before.facts, after) &&
+    (after.clean || untrackedOutsideCandidate(context, after)) &&
+    now - before.startedAtMs < TTL_MS
+  );
+}
+
+interface VerificationVerdict {
+  readonly rejection: ReturnType<typeof verificationRejection> | "candidate-not-staged";
+  readonly passed: boolean;
+  readonly failed: boolean;
+  readonly unproven: boolean;
+}
+
+// A ticket issued beside untracked files can never prove the candidate; it is unproven evidence or
+// nothing. Any other ticket is a proof, failing evidence, or nothing.
+function verificationVerdict(
+  context: VerifiedCommitRunContext,
+  before: VerificationTicket,
+  after: VerifiedCommitFacts,
+  report: VerificationReport,
+  now: number,
+): VerificationVerdict {
+  if (before.untracked) {
+    const unproven = untrackedEvidence(context, before, after, report, now);
+    return { rejection: "candidate-not-staged", passed: false, failed: false, unproven };
+  }
+  const rejection = verificationRejection(before, after, report, now);
+  const passed = rejection === undefined;
+  const failed = !passed && failingEvidence(before, after, report, now);
+  return { rejection, passed, failed, unproven: false };
 }
 
 function blockingCounts(
@@ -509,7 +587,8 @@ class VerifiedCommitController implements VerifiedCommitService {
       verificationGeneration: identity.verificationGeneration,
     });
     const facts = await this.facts(context);
-    if (!facts.clean) {
+    const untracked = this.admitsUntracked(context, facts);
+    if (!facts.clean && !untracked) {
       // Named, not merely counted, for the model: the blocking paths travel on the tool result,
       // only their counts on this line (run 16, 2026-09-10).
       const blocking = facts.blocking ?? NO_BLOCKING_PATHS;
@@ -522,7 +601,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       return { kind: "refused", reason, blocking };
     }
     const ticket = {};
-    this.tickets.set(ticket, { context, facts, startedAtMs: this.now() });
+    this.tickets.set(ticket, { context, facts, startedAtMs: this.now(), untracked });
     this.ticketIdentities.set(ticket, identity);
     return { kind: "ticket", ticket };
   }
@@ -560,12 +639,16 @@ class VerifiedCommitController implements VerifiedCommitService {
     }
     if (!this.verificationGuardLive(context, guard)) return false;
     const now = this.now();
-    const rejection = verificationRejection(before, after, report, now);
-    const passed = rejection === undefined;
-    const failed = !passed && failingEvidence(before, after, report, now);
+    const { rejection, passed, failed, unproven } = verificationVerdict(
+      context,
+      before,
+      after,
+      report,
+      now,
+    );
     const history = this.recordCheck(context.runId, report, before.facts.stagedTreeDigest);
     const evidenceId = this.recordVerificationEvidence(context, before.facts, report, history);
-    this.proof = { ...before, passed, failed, evidenceId };
+    this.proof = { ...before, passed, failed, unproven, evidenceId };
     this.log(context, "verification", {
       passed,
       ...(rejection === undefined ? {} : { reason: rejection }),
@@ -660,7 +743,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       return this.record(context, binding, "verification-failed", "verification-failed");
     if (
       !contextMatches(context, verification.context) ||
-      !sameVerifiedCommitFacts(verification.facts, facts) ||
+      !this.candidateCurrent(verification.unproven, context, verification.facts, facts) ||
       this.now() - verification.startedAtMs >= TTL_MS
     )
       return this.record(context, binding, "drift", "verification-stale");
@@ -683,7 +766,35 @@ class VerifiedCommitController implements VerifiedCommitService {
   // decision 2026-10-30, #3907): the failing evidence stays bound to the commit and its log lines,
   // never presented as a pass. Every other mode keeps a passing verification as the gate.
   private admitsFailedVerification(verification: VerificationProof): boolean {
-    return verification.failed && this.options.policyAllowsWithoutApproval?.("commit") === true;
+    return (verification.failed || verification.unproven) && this.fullAccess();
+  }
+
+  private fullAccess(): boolean {
+    return this.options.policyAllowsWithoutApproval?.("commit") === true;
+  }
+
+  private admitsUntracked(context: VerifiedCommitRunContext, facts: VerifiedCommitFacts): boolean {
+    return this.fullAccess() && untrackedOutsideCandidate(context, facts);
+  }
+
+  // An unproven verification stays bound to its staged candidate, with untracked files beside it.
+  private candidateCurrent(
+    unproven: boolean,
+    context: VerifiedCommitRunContext,
+    verified: VerifiedCommitFacts,
+    facts: VerifiedCommitFacts,
+  ): boolean {
+    if (!unproven) return sameVerifiedCommitFacts(verified, facts);
+    return (
+      sameCommitCandidate(verified, facts) && (facts.clean || this.admitsUntracked(context, facts))
+    );
+  }
+
+  /** The untracked paths a Full-access commit leaves outside, once its verification ran (#3907). */
+  public unprovenAdmission(): VerifiedCommitBlockingPaths | undefined {
+    const verification = this.proof;
+    if (verification?.unproven !== true || !this.fullAccess()) return undefined;
+    return verification.facts.blocking;
   }
 
   private async prepareProposal(
@@ -702,7 +813,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     );
     if (review === undefined) return this.record(context, binding, "blocked", "review-incomplete");
     const afterReview = await this.facts(context);
-    if (!sameVerifiedCommitFacts(facts, afterReview))
+    if (!this.candidateCurrent(verificationFailed, context, facts, afterReview))
       return this.record(context, binding, "drift", "candidate-drift");
     const proposal: VerifiedCommitProposal = {
       binding,
@@ -834,7 +945,8 @@ class VerifiedCommitController implements VerifiedCommitService {
   private async current(proposal: VerifiedCommitProposal): Promise<boolean> {
     const facts = await this.facts(proposal.context);
     return (
-      facts.clean &&
+      (facts.clean ||
+        (proposal.verificationFailed === true && this.admitsUntracked(proposal.context, facts))) &&
       facts.headSha === proposal.binding.parentSha &&
       facts.baseSha === proposal.binding.baseSha &&
       facts.stagedTreeDigest === proposal.binding.stagedTreeDigest &&
