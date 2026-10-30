@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4c69248b7fa211e51405a7da27c470a93b17b0a363b167c5104d5c3a84ef00f2",
+    "catalogDigest": "1ce3cab48917cf3b12d4b70000ba68806121dc5b70bfded48ace3965dabb6924",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -14970,7 +14970,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["not-applicable", "recorded", "unavailable"]
+            "values": ["not-applicable", "recorded", "unavailable", "admitted"]
           },
           "commitProofReason": {
             "type": "string",
@@ -15013,10 +15013,10 @@
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2029",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2149",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2277",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2439",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2683",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2803",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2826"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2442",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2686",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2806",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2829"
         ]
       },
       {
@@ -28751,7 +28751,7 @@
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:115",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1138"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1252"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -105566,7 +105566,7 @@
     {
       "op": "coding-runtime.accepted-initialization",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3106",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3109",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106372,7 +106372,7 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2489",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2492",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
