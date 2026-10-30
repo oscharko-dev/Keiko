@@ -25,8 +25,28 @@ import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-
 export interface DraftDeliveryRunContext extends VerifiedCommitRunContext {
   readonly taskId: string;
   readonly workspaceId: string;
+  /** Absent for an issue-free run, which delivers by pushing its own task branch (ADR-0085 D1b). */
+  readonly issueBinding?: CodingWorkbenchIssueBinding;
+}
+
+/** A run context whose accepted issue exists: the only one that resolves a GitHub target or opens a PR. */
+export interface IssueBoundDraftDeliveryRunContext extends DraftDeliveryRunContext {
   readonly issueBinding: CodingWorkbenchIssueBinding;
 }
+
+export function isIssueBoundContext(
+  context: DraftDeliveryRunContext,
+): context is IssueBoundDraftDeliveryRunContext {
+  return context.issueBinding !== undefined;
+}
+
+/** The closed outcome of verifying an issue-free run's `origin` before a branch push. */
+export type DraftBranchTargetResolution =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: "remote-drift" | "provider-failed" | "authority-denied";
+    };
 
 export type DraftDeliveryTargetResolution =
   | { readonly ok: true; readonly repository: string }
@@ -60,10 +80,20 @@ export interface DraftDeliveryDependencies {
    * the pull request's related-issue line. Best effort: an unavailable answer is no line, never a
    * refused delivery. Absent in compositions without an issue reader.
    */
-  readonly resolveRelatedIssues?: (context: DraftDeliveryRunContext) => Promise<readonly number[]>;
+  readonly resolveRelatedIssues?: (
+    context: IssueBoundDraftDeliveryRunContext,
+  ) => Promise<readonly number[]>;
   readonly resolveTarget: (
-    context: DraftDeliveryRunContext,
+    context: IssueBoundDraftDeliveryRunContext,
   ) => Promise<DraftDeliveryTargetResolution>;
+  /**
+   * Verifies an issue-free run's `origin` before a branch push: still the remote the run was
+   * admitted with, not a local-only repository, and, when its push URL is canonical GitHub, the
+   * URL `publishSeams` may then use. Absent in compositions without a checkout authority.
+   */
+  readonly resolveBranchTarget?: (
+    context: DraftDeliveryRunContext,
+  ) => Promise<DraftBranchTargetResolution>;
   readonly inspectionAdapter: (
     context: DraftDeliveryRunContext,
   ) => GitPullRequestInspectionAdapter | undefined;
@@ -80,6 +110,11 @@ export interface DraftDeliveryDependencies {
 
 export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {
   readonly context: () => DraftDeliveryRunContext | undefined;
+  /**
+   * The run this service belongs to. Only names a refusal when `context` resolves nothing, so the
+   * Activity Log still carries the run and its correlation.
+   */
+  readonly runId?: string;
   /** See VerifiedCommitServiceOptions.policyAllowsWithoutApproval. */
   readonly policyAllowsWithoutApproval?:
     ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;

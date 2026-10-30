@@ -651,7 +651,9 @@ test on macOS the generic reason left the model without a check it could run, an
 port presents such a report, in which every step was skipped, to the model as not run: the reason
 and its guidance reach the model instead of a generic verification failure. Every other refused
 bootstrap remains a failed verification. Isolation, the refusal and its evidence rules are
-unchanged.
+unchanged. The shell check the guidance asks for proves the staged commit candidate through the
+same verified-commit ticket (ADR-0137, #3907 AC3), so a native run on macOS can commit verified
+work.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in

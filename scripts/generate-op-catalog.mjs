@@ -772,6 +772,9 @@ function typedRegistryProgram(repoRoot) {
         "@oscharko-dev/keiko-contracts/runtime/observability": [
           "packages/keiko-contracts/src/observability.ts",
         ],
+        "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity": [
+          "packages/keiko-contracts/src/coding-safe-activity.ts",
+        ],
         "@oscharko-dev/keiko-contracts/runtime/diagnostics": [
           "packages/keiko-contracts/src/diagnostics.ts",
         ],

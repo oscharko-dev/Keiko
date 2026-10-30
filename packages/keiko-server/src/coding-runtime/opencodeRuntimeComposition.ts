@@ -93,6 +93,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
+  codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
 } from "./codingToolFacade.js";
@@ -104,6 +105,7 @@ import {
 import {
   isCodingSafeActivityPresentationPath,
   type CodingSafeActivityToolPresentation,
+  type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
@@ -4946,6 +4948,7 @@ function responseForToolResult(
       actionId,
       result,
       presentation.bridgeDurationMs,
+      presentation.verificationOutcome,
     );
   }
   return { status: 200, body: responseBody };
@@ -4963,9 +4966,16 @@ function recordRenderedToolResult(
   actionId: string | undefined,
   result: CodingToolResult,
   bridgeDurationMs: number | undefined,
+  verificationOutcome: CodingSafeActivityVerificationOutcome | undefined,
 ): void {
   try {
-    recordGovernedToolModelContent(rendered.sink, rendered.correlationId, result, bridgeDurationMs);
+    recordGovernedToolModelContent(
+      rendered.sink,
+      rendered.correlationId,
+      result,
+      bridgeDurationMs,
+      verificationOutcome,
+    );
   } catch (error) {
     emitServerDiagnostic(diagnostics, {
       correlationId: actionCorrelationId(actionId),
@@ -5105,6 +5115,7 @@ function governedToolPresentation(
   result: CodingToolResult,
 ): CodingSafeActivityToolPresentation {
   if (request.action === "edit") return codingToolEditPresentation(result);
+  if (request.action === "verification") return codingToolVerificationPresentation(result);
   if (result.status !== "completed" || !("read" in result)) return {};
   if (request.action === "discover") {
     return "returnedPathCount" in result.read && typeof result.read.returnedPathCount === "number"

@@ -11,6 +11,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.answer": "Frage beantworten",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "Neue Aufgabe",
+  "codingWorkbench.history.noBranch": "Ordner",
   "codingWorkbench.history.search": "Coding-Aufgaben suchen",
   "codingWorkbench.history.filter": "Aufgabenstatus",
   "codingWorkbench.history.active": "Aktiv",
@@ -339,7 +340,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.task.title": "Begrenzte Coding-Aufgabe beschreiben",
   "codingWorkbench.task.instructions": "Aufgabenanweisungen",
   "codingWorkbench.task.placeholder":
-    "Bitte Keiko, etwas in diesem Repository zu prüfen, zu erklären, umzusetzen, zu testen oder zu reparieren…",
+    "Bitte Keiko, etwas in diesem Projekt zu prüfen, zu erklären, umzusetzen, zu testen oder zu reparieren…",
+  "codingWorkbench.task.placeholder.followUp": "Antworte Keiko oder bitte um die nächste Änderung…",
   "codingWorkbench.task.help":
     "Aufgabentext ist eine flüchtige Absicht. Start wird erst freigeschaltet, wenn alle Bereitschaftsprüfungen bestätigt sind.",
   "codingWorkbench.task.starting": "Wird gestartet…",
@@ -517,6 +519,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
+  "codingWorkbench.repository.folderModeHint":
+    "Kein Git-Repository: Der Agent bearbeitet, führt aus und prüft hier, ohne Commits oder Pushes.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":
@@ -526,6 +530,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.title": "Code-Einrichtung",
   "codingWorkbench.setup.help":
     "Bereite einen gesteuerten Aufgabenarbeitsbereich für das ausgewählte Repository vor.",
+  "codingWorkbench.setup.folderHelp":
+    "Öffne den ausgewählten Ordner für den Agenten. Ein Branch ist nicht nötig: Der Agent arbeitet direkt in diesem Ordner.",
+  "codingWorkbench.setup.folderBindFailed":
+    "Der Ordner konnte nicht für den Workbench geöffnet werden. Prüfe, ob er noch verfügbar ist, und versuche es erneut.",
   "codingWorkbench.setup.repositoryNotConnected":
     "Dieses Repository ist in Git nicht verfügbar. Verbinde es dort erneut und wähle es dann aus.",
   "codingWorkbench.setup.repositoryCatalogUnavailable":
@@ -693,10 +701,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.richContent.diagram.note":
     "Das Diagramm konnte nicht gezeichnet werden. Sein Quelltext wird so gezeigt, wie er geschrieben ist.",
   "codingWorkbench.activity.reasoningBoundary":
-    "Diese Zeitleiste zeigt die Konversation, die Arbeitsaktivität und, wenn das Modell sie liefert, die Überlegungen des Modells. Diese Überlegungen sind ungeprüft und werden weder im Verlauf noch in Nachweisen gespeichert.",
-  "codingWorkbench.activity.reasoning.title": "Überlegungen des Modells",
-  "codingWorkbench.activity.reasoning.note":
-    "Ungeprüfte Überlegungen des Modells: So ist es an diesen Schritt herangegangen. Sie können falsch sein; für dich zählen die Antwort und die Änderungen.",
+    "Diese Zeitleiste zeigt die Konversation, die Arbeitsaktivität und, wenn das Modell sie liefert, seine Überlegungen; sie sind ungeprüft und werden weder im Verlauf noch in Nachweisen gespeichert.",
+  "codingWorkbench.activity.reasoning.title": "Überlegungen",
   "codingWorkbench.activity.status.idle": "Noch kein Lauf gestartet.",
   "codingWorkbench.activity.status.loading": "Aktivität wird verbunden…",
   "codingWorkbench.activity.status.live": "Live.",
@@ -720,6 +726,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.succeeded": "Erfolgreich",
   "codingWorkbench.activity.toolState.failed": "Fehlgeschlagen",
   "codingWorkbench.activity.toolState.exited": "Exit-Code {code}",
+  "codingWorkbench.activity.toolState.waiting-for-trust": "Wartet auf Freigabe",
+  "codingWorkbench.activity.toolState.no-runnable-steps": "Nichts auszuführen",
+  "codingWorkbench.activity.toolState.not-run": "Nicht ausgeführt",
   "codingWorkbench.activity.toolState.denied": "Abgelehnt",
   "codingWorkbench.activity.toolState.cancelled": "Abgebrochen",
   "codingWorkbench.activity.plan.title": "Aktueller Plan",
@@ -752,7 +761,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "Das Kontextfenster des konfigurierten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens). Keiko hat es automatisch geprüft und konnte 32.000 Tokens nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben.",
   "codingWorkbench.source.unavailableReason.model-verification-pending":
-    "Keiko prüft dieses Modell gerade beim Gateway (Chat-Verfügbarkeit, ein Kontextfenster von mindestens 32.000 Token und Tool-Calling). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; die Workbench aktualisiert sich von selbst, sobald die Prüfung abgeschlossen ist.",
+    "Keiko prüft dieses Modell noch beim Gateway. Die Workbench aktualisiert sich von selbst, sobald die Prüfung abgeschlossen ist.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
     "Die letzte automatische Chat-Prüfung konnte dieses Modell nicht nutzen. Keiko prüft im Hintergrund weiter; wähle ein anderes bereites Modell oder warte auf die Wiederherstellung.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
@@ -798,7 +807,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.resumeMode.help":
     "Setze den Lauf mit dem serverbestätigten aktuellen oder einem strengeren Modus fort. Eine Erweiterung ist nicht verfügbar.",
   "codingWorkbench.approval.eyebrow": "Genehmigung erforderlich",
-  "codingWorkbench.approval.title": "Begrenzte Aktion prüfen",
+  "codingWorkbench.approval.details": "Details",
   "codingWorkbench.approval.facts": "Genehmigungsdetails",
   "codingWorkbench.approval.permissionKind": "Berechtigungsart",
   "codingWorkbench.approval.actionClass": "Aktionsklasse",
@@ -918,6 +927,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.draftDelivery.remote.notDraft": "Kein Entwurf",
   "codingWorkbench.draftDelivery.details": "Gespeichertes Übermittlungsziel",
   "codingWorkbench.draftDelivery.repository": "Repository",
+  "codingWorkbench.draftDelivery.remoteName": "Remote-Ziel",
   "codingWorkbench.draftDelivery.issue": "Akzeptiertes Issue",
   "codingWorkbench.draftDelivery.headRef": "Feature-Branch",
   "codingWorkbench.draftDelivery.headSha": "Freigegebener Commit",
@@ -1088,18 +1098,17 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.help":
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
   "codingWorkbench.approval.native.title": "Was der Agent ausführen möchte",
-  "codingWorkbench.approval.native.help":
-    "Genehmigen erlaubt genau diese Aktion einmal; Ablehnen lässt den Agenten ohne sie weiterarbeiten.",
+  "codingWorkbench.approval.native.help": "Erlaubt genau diese Aktion einmal.",
   "codingWorkbench.approval.native.help.shell":
-    "Genehmigen führt diesen Befehl einmal im Aufgaben-Workspace aus; Ablehnen lässt den Agenten ohne ihn weiterarbeiten.",
+    "Führt diesen Befehl einmal im Aufgaben-Workspace aus.",
   "codingWorkbench.approval.native.help.edit":
-    "Genehmigen wendet diese Änderung einmal auf die aufgeführten Dateien an; Ablehnen lässt den Agenten ohne sie weiterarbeiten.",
+    "Wendet diese Änderung einmal auf die aufgeführten Dateien an.",
   "codingWorkbench.approval.native.help.internet":
-    "Genehmigen erlaubt dem Agenten für diese Anfrage einmal den Zugriff auf das Internet; Ablehnen lässt den Agenten ohne ihn weiterarbeiten. Internetzugriff gibt es nur im Modus Vollzugriff.",
+    "Erlaubt diese eine Internetanfrage. Internetzugriff gibt es nur im Modus Vollzugriff.",
   "codingWorkbench.approval.native.help.execute":
-    "Genehmigen führt dieses Code-Mode-Programm einmal in der Skript-Sandbox von OpenCode aus: Es kann die Verwaltungswerkzeuge von OpenCode aufrufen und unterhalb von Vollzugriff nur lokale Adressen erreichen. Ablehnen lässt den Agenten ohne es weiterarbeiten.",
+    "Führt dieses Code-Mode-Programm einmal in der Skript-Sandbox von OpenCode aus.",
   "codingWorkbench.approval.native.help.worktree":
-    "Genehmigen legt einen neuen verwalteten Task-Workspace mit diesem Namen an, auf einem eigenen Branch vom aktuellen Task-Branch; er öffnet sich als eigene Aufgabe, und dieser Lauf arbeitet hier weiter. Ablehnen lässt den Agenten ohne ihn weiterarbeiten.",
+    "Legt einen neuen Aufgaben-Workspace auf eigenem Branch an; dieser Lauf bleibt hier.",
   "codingWorkbench.approval.native.resources": "Angeforderter Befehl, Pfade oder Adressen",
   "codingWorkbench.approval.native.noResources":
     "Weder Befehl noch Pfad noch Adresse wurde genannt.",
@@ -1142,7 +1151,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":
-    "Eine vorherige Aktion kann Dateien oder ein externes System bereits verändert haben. Prüfe ihr Ergebnis, bevor du einen neuen Lauf startest. Keiko wiederholt die Aktion nicht automatisch.",
+    "Eine vorherige Aktion kann bereits Dateien verändert haben. Prüfe ihr Ergebnis vor einem neuen Versuch; Keiko wiederholt sie nicht.",
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
   "codingWorkbench.header.notReady": "Nicht startbereit",
@@ -1176,7 +1185,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.resourceStatus.unavailable": "Nicht verfügbar",
   "codingWorkbench.announcement.runChecking": "Laufstatus wird geprüft.",
   "codingWorkbench.announcement.noActiveRun": "Kein aktiver Coding-Lauf.",
-  "codingWorkbench.announcement.runRevision": "{state}. Revision {revision}.",
   "codingWorkbench.announcement.recoveryComplete": "Wiederherstellungsbestätigung abgeschlossen.",
   "codingWorkbench.announcement.setupReady": "Authentifizierungseinrichtungsplan bereit.",
   "codingWorkbench.announcement.setupChecking": "Authentifizierungseinrichtungsplan wird geprüft.",
@@ -1294,17 +1302,28 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.status.passed": "Bestanden",
   "codingWorkbench.verification.status.failed": "Fehlgeschlagen",
   "codingWorkbench.verification.status.partial": "Teilweise",
+  "codingWorkbench.verification.status.notRun": "Nicht gelaufen",
   "codingWorkbench.verification.checks":
     "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {skipped} übersprungen",
-  "codingWorkbench.verification.duration": "Dauer: {duration} ms",
+  "codingWorkbench.verification.duration": "Dauer: {duration}",
   "codingWorkbench.activity.readBytes": "Gelesen: {bytes} Bytes",
   "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
   "codingWorkbench.activity.returnedPaths": "Zurückgegebene Pfade: {count}",
   "codingWorkbench.activity.editRefusal": "Edit abgelehnt: {reason}",
   "codingWorkbench.activity.affectedFile": "Betroffene Datei: {path}",
-  "codingWorkbench.activity.serviceDuration": "Tool-Verarbeitung: {duration} ms",
+  "codingWorkbench.activity.serviceDuration": "Dauer: {duration}",
   "codingWorkbench.activity.exitCode": "Der Befehl wurde mit Code {code} beendet.",
   "codingWorkbench.activity.toolError": "Das Tool hat dem Modell einen Fehler gemeldet.",
+  "codingWorkbench.activity.verification.passed":
+    "Alle angeforderten Verifizierungsprüfungen sind bestanden.",
+  "codingWorkbench.activity.verification.failed-check":
+    "Eine Verifizierungsprüfung wurde ausgeführt und ist fehlgeschlagen. Das Modell hat die fehlerhaften Stellen erhalten.",
+  "codingWorkbench.activity.verification.waiting-for-trust":
+    "Die Verifizierung ist nicht gelaufen: Die Paket-Skripte dieses Workspace sind noch nicht zugelassen. Lasse im Kopfbereich der Coding Workbench die Paket-Skripte für die Verifizierung zu und verifiziere dann erneut.",
+  "codingWorkbench.activity.verification.no-runnable-steps":
+    "Die Verifizierung ist nicht gelaufen: Dieses Repository definiert kein Skript, das der Verifizierer ausführen kann, etwa test, lint oder build. Das ist keine fehlgeschlagene Prüfung.",
+  "codingWorkbench.activity.verification.not-run":
+    "Die Verifizierung ist nicht vollständig gelaufen: Ein Schritt wurde übersprungen, abgelehnt oder abgebrochen. Das ist keine fehlgeschlagene Prüfung.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

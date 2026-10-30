@@ -1082,7 +1082,10 @@ repository or workspace that was not activated (`history-repository-switched`,
 refused request's correlation and the run as parent; #4117) and a diff that switched to the
 windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `run-changes` or
 `answer-diff`, and `fileCount`, `totalLineCount`, `totalByteCount`; once per diff, not per page turn;
-never a path or diff text; #4108). These were warn/unknown
+never a path or diff text; #4108). An unpaired window names the missing pairing once, in the
+run status sentence, and holds its secondary notices until it is paired; each hold is recorded as
+`notice-held` with the closed `notice` (`task-session`, `skills`, `mcp`, `activity`, `questions`,
+`editor-bridge`; #3880). These were warn/unknown
 `client.diagnostic` notes before and buried the rare real browser failures. The server side of
 that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
 `refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
@@ -1093,6 +1096,17 @@ recorded on `editor.agent.action-queue` with the closed `reason` (`queue-count`,
 `process-bytes`) and the action, session and process counts and bytes (#4107). `gateway.setup.target.accepted` records,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
+
+`client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
+request the Coding Workbench gave up on at its own client-side deadline (#4109): the closed `call`
+(`status`, `snapshot`, `start`, `approval`, `stop`, `takeover`, `retry`, `recovery-ack`, `pause`,
+`resume`, `follow-up`, `revert`, `inbox`, `research-revoke`, `question-answer`,
+`question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
+Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
+status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
+every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
+while another mutation is pending. Closed values and one duration only.
 
 `client.editor.line-ending.adopted` records, at info and on the routine budget, that the Editor's
 Monaco model adopted the line ending of text Keiko wrote into it (#4123): `lineEnding` (`lf`,
@@ -1117,7 +1131,10 @@ recording model names, requests or answers. An uninvoked model port consumes no 
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
 accounting. A chat probe that only times out or meets a transient overload status keeps and renews
 a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
-diagnostic), so a busy single-slot model stays selectable (#4115). See
+diagnostic), so a busy single-slot model stays selectable (#4115). A verified model nobody asked for in
+15 minutes is neither renewed nor recovered in the background; `gateway.readiness.renewal.paused`
+records that pause (`paused`: `renewal`, `recovery`; optional `idleMs`), and the model's next
+conversation request verifies it on demand (#4103). See
 [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
@@ -1262,7 +1279,10 @@ alone); the `coding-workbench` latency profile selects timeout floors only.
 
 For dictation, `speech.stt.request.dispatch` records the sent container class and byte count,
 and `speech.stt.request.completed` records a received provider HTTP status. An absent status
-means no response was observed. Browser clips are normalized in memory to mono PCM16 WAV;
+means no response was observed. When a provider's `text` is exactly its verbose segments joined
+by line breaks (whisper.cpp), the adapter joins the segments as they are and the same line counts
+the removed separators (`segmentSeparatorsRemoved`); any other line break is the provider's own
+and stays. Browser clips are normalized in memory to mono PCM16 WAV;
 normalization failures use the existing body-free client diagnostic sink (ADR-0100 D8).
 
 Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only.

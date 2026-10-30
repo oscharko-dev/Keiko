@@ -1,5 +1,7 @@
 import type {
   DraftDeliveryBinding,
+  DraftDeliveryBranchBinding,
+  DraftDeliveryIssueBinding,
   DraftDeliveryRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
@@ -27,6 +29,7 @@ import {
   DraftDeliveryFailure,
   type DraftDeliveryDependencies,
   type DraftDeliveryRunContext,
+  type IssueBoundDraftDeliveryRunContext,
 } from "./draftDeliveryTypes.js";
 
 const DRAFT_REPOSITORY_DRIFT_OPERATION = defineActivityLogOperation({
@@ -133,7 +136,7 @@ type DraftRepositoryDrift =
 
 function draftRepositoryDrift(
   target: string,
-  context: DraftDeliveryRunContext,
+  context: IssueBoundDraftDeliveryRunContext,
 ): DraftRepositoryDrift | undefined {
   if (codingWorkbenchRemoteDigest(target) !== context.issueBinding.remoteDigest) {
     return "target-repository-mismatch";
@@ -147,7 +150,7 @@ function draftRepositoryDrift(
 
 export async function resolveDraftRepository(
   options: DraftDeliveryDependencies,
-  context: DraftDeliveryRunContext,
+  context: IssueBoundDraftDeliveryRunContext,
 ): Promise<string> {
   assertDraftAuthority(context);
   const target = await options.resolveTarget(context);
@@ -167,19 +170,28 @@ export async function resolveDraftRepository(
   return target.repository.toLowerCase();
 }
 
-export function initialDraftBinding(
+function succeededCommit(
   options: DraftDeliveryDependencies,
   context: DraftDeliveryRunContext,
-  repository: string,
-): DraftDeliveryBinding | undefined {
+): (VerifiedCommitResult & { readonly headSha: string }) | undefined {
   const commit = options.snapshots.get(context.runId)?.verifiedCommitResult;
   if (
     !isVerifiedCommitResult(commit) ||
     commit.status !== "succeeded" ||
-    commit.headSha === undefined
+    commit.headSha === undefined ||
+    !commitContextMatches(commit, context)
   )
     return undefined;
-  if (!commitContextMatches(commit, context)) return undefined;
+  return { ...commit, headSha: commit.headSha };
+}
+
+export function initialDraftBinding(
+  options: DraftDeliveryDependencies,
+  context: IssueBoundDraftDeliveryRunContext,
+  repository: string,
+): DraftDeliveryIssueBinding | undefined {
+  const commit = succeededCommit(options, context);
+  if (commit === undefined) return undefined;
   return {
     runId: context.runId,
     workspaceDigest: context.workspaceDigest,
@@ -198,6 +210,46 @@ export function initialDraftBinding(
     verifiedCommitProposalId: commit.proposalId,
     recoveryId: draftDeliveryId("recovery"),
   };
+}
+
+/**
+ * The durable intent of an issue-free run: the verified commit, pushed to the run's own task branch
+ * on `origin`. There is no repository, issue or pull request fact to bind (ADR-0085 D1b).
+ */
+export function initialBranchBinding(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+): DraftDeliveryBranchBinding | undefined {
+  const commit = succeededCommit(options, context);
+  if (commit === undefined) return undefined;
+  return {
+    kind: "branch-push",
+    runId: context.runId,
+    workspaceDigest: context.workspaceDigest,
+    runtimeAuthorityDigest: context.runtimeAuthorityDigest,
+    envelopeDigest: context.envelopeDigest,
+    remoteDigest: context.repositoryDigest,
+    remoteAlias: "origin",
+    baseRef: context.baseRef,
+    baseSha: commit.baseSha,
+    headRef: context.headRef,
+    headSha: commit.headSha,
+    verifiedCommitProposalId: commit.proposalId,
+    recoveryId: draftDeliveryId("recovery"),
+  };
+}
+
+/** Re-verifies an issue-free run's `origin` immediately before a proposal or an effect. */
+export async function assertDraftBranchTarget(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+): Promise<void> {
+  assertDraftAuthority(context);
+  const resolve = options.resolveBranchTarget;
+  if (resolve === undefined) throw new DraftDeliveryFailure("provider-failed");
+  const target = await resolve(context);
+  assertDraftAuthority(context);
+  if (!target.ok) throw new DraftDeliveryFailure(target.reason);
 }
 
 export async function assertDraftLocalCandidate(
@@ -224,7 +276,7 @@ export interface DraftRemoteState {
 }
 
 function remoteCommitEvidence(
-  binding: DraftDeliveryBinding,
+  binding: DraftDeliveryIssueBinding,
   result: GitPrInspectionResult<string>,
   phase: "base-read" | "head-read",
 ): {
@@ -251,7 +303,7 @@ function remoteCommitEvidence(
 function recordDraftRemoteHeadRead(
   options: DraftDeliveryDependencies,
   context: DraftDeliveryRunContext,
-  binding: DraftDeliveryBinding,
+  binding: DraftDeliveryIssueBinding,
   result: GitPrInspectionResult<string>,
   phase: "base-read" | "head-read",
 ): void {
@@ -277,7 +329,7 @@ function recordDraftRemoteHeadRead(
 export async function readDraftRemoteState(
   options: DraftDeliveryDependencies,
   context: DraftDeliveryRunContext,
-  binding: DraftDeliveryBinding,
+  binding: DraftDeliveryIssueBinding,
 ): Promise<DraftRemoteState> {
   assertDraftAuthority(context);
   const adapter = options.inspectionAdapter(context);
@@ -299,7 +351,7 @@ export async function readDraftRemoteState(
 
 export function prTargetMatches(
   pr: GitPullRequestIdentity,
-  binding: DraftDeliveryBinding,
+  binding: DraftDeliveryIssueBinding,
 ): boolean {
   return (
     isGitPullRequestIdentity(pr) &&
@@ -338,13 +390,13 @@ function commitContextMatches(
     commit.runtimeAuthorityDigest === context.runtimeAuthorityDigest &&
     commit.workspaceDigest === context.workspaceDigest &&
     commit.repositoryDigest === context.repositoryDigest &&
-    commit.issueBindingDigest === context.issueBinding.bindingDigest
+    commit.issueBindingDigest === context.issueBinding?.bindingDigest
   );
 }
 
 function resolveListedIdentity(
   list: readonly GitPullRequestIdentity[],
-  binding: DraftDeliveryBinding,
+  binding: DraftDeliveryIssueBinding,
 ): GitPullRequestIdentity | undefined {
   if (list.length > 1) throw new DraftDeliveryFailure("ambiguous-remote");
   const pr = list[0];

@@ -1,4 +1,7 @@
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isDraftDeliveryIssueBinding,
+  type DraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   isVerifiedCommitResult,
   type VerifiedCommitResult,
@@ -72,7 +75,8 @@ function matchesVerifiedCommit(
     commit.envelopeDigest === target.envelopeDigest,
     commit.repositoryDigest === target.remoteDigest,
     commit.workspaceDigest === target.workspaceDigest,
-    commit.issueBindingDigest === target.issueBindingDigest,
+    commit.issueBindingDigest ===
+      (isDraftDeliveryIssueBinding(target) ? target.issueBindingDigest : undefined),
   ].every(Boolean);
 }
 

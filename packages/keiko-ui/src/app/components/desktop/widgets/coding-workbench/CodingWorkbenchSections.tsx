@@ -60,11 +60,16 @@ import {
   useComposerAutoGrow,
 } from "../../composer/ComposerShell";
 import KeikoSelect from "../../KeikoSelect";
-import { VoiceDictationButton, VoiceDictationPreviewFromController } from "../../VoiceDictation";
+import { VoiceDictationButton, VoiceDictationComposerStatus } from "../../VoiceDictation";
+import { VoiceDictationWaveform } from "../../VoiceDictationWaveform";
 import { OrganicWorkspaceBubble } from "../../EmptyWorkspaceBlob";
 // KeikoSelect serves the composer controls; repository and branch selection live directly above
 // the composer in the Coding Workbench window.
-import { useDictation } from "../../hooks/useDictation";
+import {
+  dictationInsertionPending,
+  remainingDictationCharacters,
+  useDictation,
+} from "../../hooks/useDictation";
 import { supportsDictation, useVoiceCapability } from "../../hooks/useVoiceCapability";
 import { dictationCaptureSupported } from "../../hooks/dictation-recorder";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
@@ -163,6 +168,11 @@ interface TaskStartSectionProps {
   readonly canResume: boolean;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly mutationPending: boolean;
+  /**
+   * True only while a Stop is itself pending. Any other pending mutation leaves Stop enabled: Stop
+   * ends that mutation's client wait instead of queueing behind it (#4109).
+   */
+  readonly stopPending: boolean;
   readonly startBusy: boolean;
   readonly startBlockedReason: string | null;
   /** Retained so `ProjectMemoryToggle` can be re-mounted (currently hidden per owner directive)
@@ -514,6 +524,46 @@ function useComposerKeys(
   };
 }
 
+/**
+ * The Chat composer's dictation, unchanged (#3907): the completed transcript lands in the draft
+ * (never sent), live dictation runs when the deployment offers it, and a changed run cancels a
+ * capture that belonged to the previous one. Only the draft limit is the Workbench's own.
+ */
+function useComposerDictation(
+  draft: {
+    readonly taskIntent: string;
+    readonly onTaskIntentChange: (value: string) => void;
+    readonly runId?: string | undefined;
+  },
+  textareaRef: RefObject<HTMLTextAreaElement | null>,
+): { readonly dictation: ReturnType<typeof useDictation>; readonly dictationVisible: boolean } {
+  const { taskIntent, onTaskIntentChange, runId } = draft;
+  const captureOwner = useId();
+  const voiceCapability = useVoiceCapability();
+  const dictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  const insertTranscript = useCallback(
+    (text: string): void => {
+      onTaskIntentChange(taskIntent.trim().length === 0 ? text : `${taskIntent.trimEnd()} ${text}`);
+      textareaRef.current?.focus();
+    },
+    [onTaskIntentChange, taskIntent, textareaRef],
+  );
+  const dictation = useDictation({
+    onInsert: insertTranscript,
+    insertOnComplete: true,
+    availableCharacters: remainingDictationCharacters(
+      taskIntent,
+      CODING_WORKBENCH_TASK_INTENT_MAX_CHARS,
+    ),
+    contextKey: runId,
+    captureOwner,
+    // Turn-based speech-to-text only (ADR-0154): the Workbench never opens a live voice connection,
+    // even where the deployment offers Realtime voice.
+    realtime: { enabled: false },
+  });
+  return { dictation, dictationVisible };
+}
+
 function useTaskComposerController(
   input: TaskStartSectionProps,
   t: CodingWorkbenchTranslate,
@@ -522,18 +572,10 @@ function useTaskComposerController(
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const micButtonRef = useRef<HTMLButtonElement>(null);
   const submitFeedbackId = useId();
-  const voiceCapability = useVoiceCapability();
-  const dictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
-  const insertTranscript = useCallback(
-    (text: string): void => {
-      onTaskIntentChange(taskIntent.trim().length === 0 ? text : `${taskIntent.trimEnd()} ${text}`);
-      textareaRef.current?.focus();
-    },
-    [onTaskIntentChange, taskIntent],
+  const { dictation, dictationVisible } = useComposerDictation(
+    { taskIntent, onTaskIntentChange, runId: input.runId },
+    textareaRef,
   );
-  const dictation = useDictation({
-    onInsert: insertTranscript,
-  });
   const mentions = useMentions(input, textareaRef);
   const picker = useComposerPicker(input, textareaRef, mentions);
   const menu = useComposerMenu(input, t, textareaRef);
@@ -626,7 +668,11 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
       <ComposerShell
         id="coding-workbench-task-intent"
         value={input.taskIntent}
-        placeholder={t("codingWorkbench.task.placeholder")}
+        placeholder={t(
+          input.runId === undefined
+            ? "codingWorkbench.task.placeholder"
+            : "codingWorkbench.task.placeholder.followUp",
+        )}
         textareaRef={controller.textareaRef}
         maxLength={CODING_WORKBENCH_TASK_INTENT_MAX_CHARS}
         disabled={input.mutationPending}
@@ -642,7 +688,7 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         }
         onKeyDown={controller.onKeyDown}
         aboveInput={<FileReferences controller={controller} t={t} />}
-        belowInput={<DictationPreview controller={controller} input={input} t={t} />}
+        belowInput={<ComposerNotices controller={controller} input={input} t={t} />}
         footer={<ComposerFooter input={input} controller={controller} t={t} />}
       />
     </div>
@@ -683,13 +729,13 @@ function DeliveryNotice({ input, t }: ControlProps): ReactNode {
   );
 }
 
-function DictationPreview({ controller, input, t }: ComposerViewProps): ReactNode {
+function ComposerNotices({ controller, input, t }: ComposerViewProps): ReactNode {
   return (
     <>
       {controller.dictationVisible ? (
-        <VoiceDictationPreviewFromController
-          controller={controller.dictation}
-          onAfterDiscard={() => controller.micButtonRef.current?.focus()}
+        <VoiceDictationComposerStatus
+          error={controller.dictation.error}
+          emptyResult={controller.dictation.emptyResult}
         />
       ) : null}
       <SubmitBlockedFeedback controller={controller} />
@@ -715,6 +761,10 @@ function ComposerFooter({ input, controller, t }: ComposerViewProps): ReactNode 
   return (
     <div className="cmp-bar cmp-bar-compact">
       <ComposerConfigurationControls input={input} t={t} />
+      <VoiceDictationWaveform
+        controller={controller.dictation}
+        visible={controller.dictationVisible}
+      />
       <div className="cmp-bar-main">
         <DictationControl controller={controller} />
         <ComposerControls input={input} controller={controller} t={t} />
@@ -731,6 +781,7 @@ function DictationControl({
   return controller.dictationVisible ? (
     <VoiceDictationButton
       phase={controller.dictation.phase}
+      insertionPending={dictationInsertionPending(controller.dictation)}
       onStart={controller.dictation.start}
       onStop={controller.dictation.stop}
       buttonRef={controller.micButtonRef}
@@ -863,6 +914,7 @@ function ReasoningControl({ input, efforts, t }: ReasoningControlProps): ReactNo
   return (
     <div className={`cmp-model mono ${styles.reasoningControl}`}>
       <KeikoSelect
+        triggerClassName="cmp-model-select"
         value={input.reasoningEffort ?? ""}
         ariaLabel={t("codingWorkbench.composer.effort.label")}
         menuTitle={t("codingWorkbench.composer.effort.menu")}
@@ -895,6 +947,7 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         : {})}
     >
       <KeikoSelect
+        triggerClassName={`cmp-model-select ${styles.cmpAuthorityTrigger}`}
         value={shownMode}
         ariaLabel={t("codingWorkbench.composer.authority.label")}
         ariaDescribedBy={confirmed ? confirmedModeId : undefined}
@@ -953,8 +1006,8 @@ function StopControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): Reac
       type="button"
       data-tip={t("codingWorkbench.controls.stop")}
       aria-label={t("codingWorkbench.controls.stop")}
-      disabled={input.mutationPending || input.runState === "stopping"}
-      aria-busy={input.mutationPending}
+      disabled={input.stopPending || input.runState === "stopping"}
+      aria-busy={input.stopPending}
       onClick={input.actions.onStop}
     >
       <StopIcon size={14} />
@@ -1022,7 +1075,7 @@ function RunningControl({ input, controller, t }: ComposerViewProps): ReactNode 
         data-on="true"
         data-tip={t("codingWorkbench.controls.stop")}
         aria-label={t("codingWorkbench.controls.stop")}
-        disabled={input.mutationPending}
+        disabled={input.stopPending}
         onClick={input.actions.onStop}
       >
         <StopIcon size={16} />

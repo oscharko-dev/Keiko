@@ -4799,6 +4799,19 @@ function safeActivityContentSource(
       };
 }
 
+// A selection (Local checkout, folder) ends the previous workspace's safe activity like any switch.
+function purgingSelection<Request, Result>(
+  select: ((request: Request) => Result) | undefined,
+  purge: () => void,
+): ((request: Request) => Result) | undefined {
+  return select === undefined
+    ? undefined
+    : (request): Result => {
+        purge();
+        return select(request);
+      };
+}
+
 function activityAwareWorkspaceLifecycle(
   lifecycle: WorkspaceLifecycleService | undefined,
   projection: CodingSafeActivityProjection | undefined,
@@ -4807,21 +4820,12 @@ function activityAwareWorkspaceLifecycle(
   const purge = (): void => {
     projection.purgeAll("workspace-switch");
   };
-  const selectLocal = lifecycle.selectLocal;
   return {
     list: lifecycle.list,
     listAll: lifecycle.listAll,
     getActive: lifecycle.getActive,
-    ...(selectLocal === undefined
-      ? {}
-      : {
-          selectLocal: (
-            request: Parameters<typeof selectLocal>[0],
-          ): ReturnType<typeof selectLocal> => {
-            purge();
-            return selectLocal(request);
-          },
-        }),
+    selectLocal: purgingSelection(lifecycle.selectLocal, purge),
+    selectFolder: purgingSelection(lifecycle.selectFolder, purge),
     setActive: (request): ReturnType<WorkspaceLifecycleService["setActive"]> => {
       purge();
       return lifecycle.setActive(request);

@@ -20,7 +20,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-journey-freshness";
 import {
   isDraftDeliveryRecord,
-  type DraftDeliveryRecord,
+  isIssueBoundDraftDeliveryRecord,
+  type IssueBoundDraftDeliveryRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   isReadinessSnapshot,
@@ -35,14 +36,18 @@ import {
 import type { GitJourneyFactsResult } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 export interface JourneyOutcomeInput {
-  readonly draft: DraftDeliveryRecord;
+  readonly draft: IssueBoundDraftDeliveryRecord;
   readonly facts: GitJourneyFactsResult;
   readonly readiness: ReadinessSnapshot | null;
   readonly description: PrDescriptionApplicationStatus | null;
   readonly observedAtMs: number;
 }
-function binding(draft: DraftDeliveryRecord): GitJourneyBinding {
-  if (!isDraftDeliveryRecord(draft) || draft.pullRequest === undefined)
+function binding(draft: IssueBoundDraftDeliveryRecord): GitJourneyBinding {
+  if (
+    !isDraftDeliveryRecord(draft) ||
+    !isIssueBoundDraftDeliveryRecord(draft) ||
+    draft.pullRequest === undefined
+  )
     throw new TypeError("Journey requires a confirmed accepted PR");
   const { binding: value, pullRequest: pr } = draft;
   return {

@@ -67,6 +67,24 @@ describe("native worktree provisioning through the managed task-workspace owner"
     expect(nativeWorktreeAnswer(result)).toMatchObject({ disposition: "provisioned" });
   });
 
+  it("refuses in a plain folder: there is no branch to cut a managed workspace from", async () => {
+    const provision = vi.fn(() => Promise.resolve(provisioned(true)));
+    const folder = {
+      instance: {
+        repositoryRoot: WORKSPACE,
+        taskBranch: "(folder - no branch)",
+        workspaceKind: "folder",
+      },
+      binding: { activeRoot: WORKSPACE },
+    } as unknown as ActiveWorkspaceView;
+    const result = await port({
+      lifecycle: { getActive: () => folder },
+      provisioning: { provision },
+    }).provision(REQUEST);
+    expect(result).toEqual({ ok: false, reason: "unavailable" });
+    expect(provision).not.toHaveBeenCalled();
+  });
+
   it("names an existing workspace of that name as found, not created", async () => {
     const result = await port({
       lifecycle: { getActive: () => active() },

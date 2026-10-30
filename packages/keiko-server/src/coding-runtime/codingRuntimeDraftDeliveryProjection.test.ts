@@ -3,7 +3,7 @@ import { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import { CodingRuntimeOrchestratorState } from "./codingRuntimeOrchestratorState.js";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import type { IssueBoundDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { runMigrations } from "../store/schema.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -40,7 +40,7 @@ const commit: VerifiedCommitResult = {
   committedTreeDigest: digest,
   recordedAt: at,
 };
-const proposed: DraftDeliveryRecord = {
+const proposed: IssueBoundDraftDeliveryRecord = {
   schemaVersion: "1",
   revision: 0,
   phase: "push-proposed",

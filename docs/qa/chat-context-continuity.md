@@ -32,6 +32,12 @@ The complete targeted history/content/continuity run passes 55 tests across thre
 eight-case score measures retrieval availability; it does not claim live-model answer accuracy,
 complete-history recall or a composite score for the remaining work.
 
+The paired native-producer observations are retained as
+[`iteration-00-structural.json`](evidence/4155/iteration-00-structural.json) and
+[`iteration-01-structural.json`](evidence/4155/iteration-01-structural.json). Their harness and case
+digests match exactly. The candidate was measured at `ba6f321e0`, before synchronizing subsequent
+upstream `dev` changes, so this isolated delta is attributable to the retrieval iteration.
+
 ## Measurement design
 
 The existing connected-chat laboratory supplies authenticated application pairing, native BFF and

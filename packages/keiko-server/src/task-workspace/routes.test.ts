@@ -685,3 +685,84 @@ describe("POST /api/task-workspaces/local", () => {
     },
   );
 });
+
+describe("POST /api/task-workspaces/folder (owner decision 2026-10-30)", () => {
+  let plainFolder: string;
+
+  beforeEach(() => {
+    plainFolder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plain-folder-")));
+    writeFileSync(join(plainFolder, "notes.txt"), "plain folder\n");
+  });
+
+  afterEach(() => {
+    rmSync(plainFolder, { recursive: true, force: true });
+  });
+
+  function postFolder(body: unknown = { root: plainFolder, requestedBy: "u" }): Promise<Response> {
+    return fetch(`${baseUrl()}/api/task-workspaces/folder`, {
+      method: "POST",
+      headers: { ...csrfHeaders(), "X-Keiko-Correlation-Id": "folder-route-regression" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function folderRouteFixture(hasLiveRun = vi.fn(() => false)): Promise<LocalRouteFixture> {
+    const fixture = await localRouteFixture(hasLiveRun);
+    deps.store.createProject(plainFolder, "plain folder");
+    return fixture;
+  }
+
+  it("binds a registered ordinary folder without a base branch and returns its folder binding", async () => {
+    const fixture = await folderRouteFixture();
+    const response = await postFolder();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      active: {
+        instance: {
+          workspaceKind: "folder",
+          executionLocation: "local",
+          repositoryRoot: plainFolder,
+        },
+        binding: { activeRoot: plainFolder },
+      },
+    });
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledTimes(1);
+    expect(fixture.pointer.get()?.workspaceId).toMatch(/^folder:/u);
+    const active = await fetch(`${baseUrl()}/api/task-workspaces/active`);
+    expect(await active.json()).toMatchObject({
+      active: { instance: { workspaceKind: "folder" } },
+    });
+  });
+
+  it("refuses a repository and leaves the pointer alone", async () => {
+    const fixture = await folderRouteFixture();
+    deps.store.createProject(repoRoot, "repository");
+    const response = await postFolder({ root: repoRoot, requestedBy: "u" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+
+  it("refuses an unregistered folder and a missing requester before selecting", async () => {
+    const fixture = await folderRouteFixture();
+    expect((await postFolder({ root: plainFolder })).status).toBe(400);
+    deps.store.deleteProject(plainFolder);
+    expect((await postFolder()).status).toBe(400);
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+
+  it("refuses while a coding run is live", async () => {
+    const fixture = await folderRouteFixture(vi.fn(() => true));
+    const response = await postFolder();
+    expect(response.status).toBe(409);
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+
+  it("returns 503 when the lifecycle has no folder capability", async () => {
+    await folderRouteFixture();
+    const lifecycle = deps.workspaceLifecycle;
+    if (lifecycle === undefined) throw new Error("lifecycle was not composed");
+    await rebuild({ workspaceLifecycle: { ...lifecycle, selectFolder: undefined } });
+    expect((await postFolder()).status).toBe(503);
+  });
+});

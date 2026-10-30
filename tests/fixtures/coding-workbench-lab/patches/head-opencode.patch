@@ -1,0 +1,69 @@
+diff --git a/.env b/.env
+new file mode 100644
+index 0000000..ed8b9b1
+--- /dev/null
++++ b/.env
+@@ -0,0 +1 @@
++LAB_TOKEN=lab-placeholder-not-a-secret
+diff --git a/.opencode/agents/reviewer.md b/.opencode/agents/reviewer.md
+new file mode 100644
+index 0000000..4829936
+--- /dev/null
++++ b/.opencode/agents/reviewer.md
+@@ -0,0 +1,13 @@
++---
++description: Reviews the current change for correctness and the rules in AGENTS.md. Read-only; it reports findings and never edits.
++mode: subagent
++permission:
++  edit: deny
++  bash: deny
++---
++
++You review a change in ledger-lab. Read the files the caller names and the code around them.
++Report each finding with the file, the line, what is wrong and why, ordered by severity.
++Check the AGENTS.md rules: integer cents only, a regression test next to every bug fix, no new
++dependencies, no disabled lint rule. Do not edit files and do not run commands. If you find
++nothing, say so in one sentence.
+diff --git a/.opencode/commands/explain-module.md b/.opencode/commands/explain-module.md
+new file mode 100644
+index 0000000..95e8c12
+--- /dev/null
++++ b/.opencode/commands/explain-module.md
+@@ -0,0 +1,6 @@
++---
++description: Explain one module of ledger-lab and list its tests, without editing.
++---
++
++Explain what the module $ARGUMENTS does: its exported functions, the inputs it rejects and which
++test file covers it. Do not edit files and do not run commands.
+diff --git a/.opencode/skills/money-rules/SKILL.md b/.opencode/skills/money-rules/SKILL.md
+new file mode 100644
+index 0000000..d164040
+--- /dev/null
++++ b/.opencode/skills/money-rules/SKILL.md
+@@ -0,0 +1,13 @@
++---
++name: money-rules
++description: How ledger-lab parses, stores and formats money amounts. Use it before changing money.ts or an importer.
++---
++
++# Money rules
++
++- Every amount is integer cents (`Cents` in `src/money.ts`). Convert text to cents exactly, by
++  splitting whole and fractional digits; never multiply a float by 100.
++- `parseAmount` accepts an optional leading `-` and `$` and at most two fractional digits.
++- `formatAmount` is the only formatter; reports never build amount strings themselves.
++- A change to amount parsing adds cases for zero, a negative value, one fractional digit and the
++  largest supported value to `src/money.test.ts`.
+diff --git a/src/importers/AGENTS.md b/src/importers/AGENTS.md
+new file mode 100644
+index 0000000..6f3ea78
+--- /dev/null
++++ b/src/importers/AGENTS.md
+@@ -0,0 +1,6 @@
++# Rules for importers
++
++- Every change to an importer also updates that importer's section in `docs/FORMAT.md`, so the
++  documented format and the parser never disagree.
++- An importer rejects a malformed row with an error that names the line number; it never skips it
++  silently.

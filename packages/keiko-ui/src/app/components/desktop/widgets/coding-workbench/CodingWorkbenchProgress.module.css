@@ -38,6 +38,13 @@
   border-top-color: var(--text-accent);
   animation: workbench-spin 1.2s linear infinite;
 }
+/* Paused reads as the pause glyph, not as an empty ring that looked like an unchecked box. */
+.cmpBar[data-status="paused"] .cmpIndicator {
+  border: 0;
+  background:
+    linear-gradient(currentColor, currentColor) 3px 2px / 3px 10px no-repeat,
+    linear-gradient(currentColor, currentColor) 8px 2px / 3px 10px no-repeat;
+}
 .cmpBar[data-status="approval"],
 .cmpBar[data-status="question"] {
   color: var(--warn);

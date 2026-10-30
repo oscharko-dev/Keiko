@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  isDraftDeliveryIssueBinding,
   isDraftDeliveryRecord,
   type DraftDeliveryPhase,
   type DraftDeliveryRecord,
@@ -48,16 +49,23 @@ export function assertDraftDeliveryForSnapshot(
   if (!isDraftDeliveryRecord(value)) throw new TypeError("invalid draft delivery record");
   const target = value.binding;
   const issue = snapshot.issueBinding;
-  const matches = [
+  const common = [
     target.runId === snapshot.runId,
     target.workspaceDigest === snapshot.workspaceDigest,
     target.runtimeAuthorityDigest === snapshot.authorityDigest,
-    target.issueBindingDigest === issue?.bindingDigest,
-    target.remoteDigest === issue?.remoteDigest,
-    target.issueIdDigest === issue?.issueIdDigest,
-    target.issueNumber === issue?.issueNumber,
-    target.baseRef === issue?.defaultBaseRef,
   ];
+  // An issue-free branch push is bound to a run that has no accepted issue; an issue-bound record
+  // must instead agree with the run's own issue on every fact.
+  const matches = isDraftDeliveryIssueBinding(target)
+    ? [
+        ...common,
+        target.issueBindingDigest === issue?.bindingDigest,
+        target.remoteDigest === issue?.remoteDigest,
+        target.issueIdDigest === issue?.issueIdDigest,
+        target.issueNumber === issue?.issueNumber,
+        target.baseRef === issue?.defaultBaseRef,
+      ]
+    : [...common, issue === undefined];
   if (!matches.every(Boolean)) throw new TypeError("draft delivery runtime binding mismatch");
 }
 
