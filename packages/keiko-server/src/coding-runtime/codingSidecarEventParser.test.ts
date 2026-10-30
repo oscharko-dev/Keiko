@@ -276,7 +276,7 @@ describe("parseCodingSidecarEventLine native action (#3897)", () => {
   });
 
   it("retains a complete MCP identity across the private sidecar event boundary", () => {
-    const permission = mcpToolAction("s".repeat(64), "t".repeat(64));
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(128));
     const event = { ...NATIVE_ASK, nativeAction: { permission, resources: ["*"] } };
     expect(parseCodingSidecarEventLine(JSON.stringify(event))).toMatchObject({
       status: "parsed",

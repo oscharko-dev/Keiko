@@ -5,7 +5,6 @@ import type {
   McpServerDefinition,
   McpSettingsSnapshot,
   McpSettingsUpdate,
-  McpServerConnectionView,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { bffFetchJson, isDeniedError } from "@/lib/http";
 import { Icons } from "../../Icons";
@@ -15,6 +14,8 @@ import {
 } from "@/lib/coding-app-session-client";
 import { useSettingsTranslate as useTranslate } from "./settings-i18n";
 import styles from "./McpSettingsPanel.module.css";
+import { mcpConnectionStatus } from "./McpServerAvailability";
+import { McpServerAuthorization } from "./McpServerAuthorization";
 
 const {
   server: ServerIcon,
@@ -35,6 +36,15 @@ const EMPTY = {
   environmentFile: "",
   legacy: false,
   privateNetwork: false,
+  oauth: false,
+  issuer: "",
+  clientId: "",
+  scope: "",
+  headerName: "Authorization",
+  headerPrefix: "Bearer ",
+  removedHeaders: [] as string[],
+  removedEnvironment: [] as string[],
+  toolPolicies: {} as McpServerDefinition["tools"],
 };
 
 type Form = typeof EMPTY;
@@ -69,26 +79,57 @@ function remoteDefinition(
   form: Form,
   previous: McpServerDefinition | undefined,
 ): Pick<McpServerDefinition, "transport"> & { secrets: McpSettingsUpdate["secrets"] } {
+  if (form.oauth) return oauthDefinition(form);
   const reference = `KEIKO_MCP_SECRET_${crypto.randomUUID().replaceAll("-", "").toUpperCase()}`;
-  const old = previous?.transport.kind === "remote" ? previous.transport.headers : undefined;
+  const previousHeaders =
+    previous?.transport.kind === "remote" ? previous.transport.headers : undefined;
+  const old = Object.fromEntries(
+    Object.entries(previousHeaders ?? {}).filter(([name]) => !form.removedHeaders.includes(name)),
+  );
   const headers =
     form.token === ""
       ? old
       : {
           ...Object.fromEntries(
-            Object.entries(old ?? {}).filter(([name]) => name.toLowerCase() !== "authorization"),
+            Object.entries(old).filter(
+              ([name]) => name.toLowerCase() !== form.headerName.toLowerCase(),
+            ),
           ),
-          Authorization: { secretEnv: reference, prefix: "Bearer " },
+          [form.headerName]: {
+            secretEnv: reference,
+            ...credentialPrefix(form.headerPrefix),
+          },
         };
   return {
     transport: {
       kind: "remote",
       url: form.url,
-      ...(headers === undefined ? {} : { headers }),
+      ...(Object.keys(headers).length === 0 ? {} : { headers }),
       ...(form.legacy ? { protocol: "sse" as const } : {}),
       ...(form.privateNetwork ? { network: "private" as const } : {}),
     },
     secrets: form.token === "" ? {} : { [reference]: { server: form.name, value: form.token } },
+  };
+}
+function credentialPrefix(prefix: string): { readonly prefix?: string } {
+  return prefix === "" ? {} : { prefix };
+}
+function oauthDefinition(
+  form: Form,
+): Pick<McpServerDefinition, "transport"> & { secrets: McpSettingsUpdate["secrets"] } {
+  return {
+    transport: {
+      kind: "remote",
+      url: form.url,
+      ...(form.legacy ? { protocol: "sse" as const } : {}),
+      ...(form.privateNetwork ? { network: "private" as const } : {}),
+      oauth: {
+        issuer: form.issuer,
+        ...(form.clientId === "" ? {} : { clientId: form.clientId }),
+        ...(form.scope === "" ? {} : { scope: form.scope }),
+      },
+    },
+    secrets: {},
   };
 }
 function definition(
@@ -96,13 +137,16 @@ function definition(
   previous: McpServerDefinition | undefined,
 ): { server: McpServerDefinition; secrets: McpSettingsUpdate["secrets"] } {
   const common = {
+    ...(previous?.credentialGeneration === undefined
+      ? {}
+      : { credentialGeneration: previous.credentialGeneration }),
     name: form.name,
     description: previous?.description,
     enabled: previous?.enabled ?? true,
     ...(previous === undefined || previous.discovery === "automatic"
       ? { discovery: "automatic" as const }
       : {}),
-    tools: previous?.tools ?? {},
+    tools: form.toolPolicies,
   };
   if (form.kind === "remote") {
     const remote = remoteDefinition(form, previous);
@@ -123,9 +167,19 @@ function localDefinition(
   return {
     kind: "local",
     command,
-    environment: old?.environment ?? {},
+    environment: Object.fromEntries(
+      Object.entries(old?.environment ?? {}).filter(
+        ([name]) => !form.removedEnvironment.includes(name),
+      ),
+    ),
     ...(keepSecrets && old.secretEnvironment !== undefined
-      ? { secretEnvironment: old.secretEnvironment }
+      ? {
+          secretEnvironment: Object.fromEntries(
+            Object.entries(old.secretEnvironment).filter(
+              ([name]) => !form.removedEnvironment.includes(name),
+            ),
+          ),
+        }
       : {}),
   };
 }
@@ -264,10 +318,11 @@ function remoteNeedsCredentials(
   old: Extract<McpServerDefinition["transport"], { kind: "remote" }>,
 ): boolean {
   if (old.url === form.url) return false;
-  const headers = Object.keys(old.headers ?? {});
-  return (
-    headers.some((key) => key.toLowerCase() !== "authorization") ||
-    (headers.length > 0 && form.token === "")
+  const headers = Object.keys(old.headers ?? {}).filter(
+    (name) => !form.removedHeaders.includes(name),
+  );
+  return headers.some(
+    (key) => key.toLowerCase() !== form.headerName.toLowerCase() || form.token === "",
   );
 }
 function localNeedsCredentials(
@@ -278,7 +333,11 @@ function localNeedsCredentials(
     JSON.stringify(old.command) !==
     JSON.stringify([form.command, ...(form.args === "" ? [] : form.args.split("\n"))]);
   return (
-    changed && Object.keys(old.secretEnvironment ?? {}).length > 0 && form.environmentFile === ""
+    changed &&
+    Object.keys(old.secretEnvironment ?? {}).some(
+      (name) => !form.removedEnvironment.includes(name),
+    ) &&
+    form.environmentFile === ""
   );
 }
 function requiresFreshCredentials(form: Form, previous: McpServerDefinition | undefined): boolean {
@@ -307,7 +366,11 @@ async function submit(model: Model): Promise<void> {
       : { [form.name]: form.environmentFile },
   );
   clearForm(model);
-  if (update.server.enabled) await connect(model, update.server.name);
+  if (
+    update.server.enabled &&
+    !(update.server.transport.kind === "remote" && update.server.transport.oauth !== undefined)
+  )
+    await connect(model, update.server.name);
 }
 function edit(model: Model, server: McpServerDefinition): void {
   const transport = server.transport;
@@ -318,12 +381,17 @@ function edit(model: Model, server: McpServerDefinition): void {
       ...EMPTY,
       name: server.name,
       kind: transport.kind,
+      toolPolicies: server.tools,
       ...(transport.kind === "local"
         ? { command: transport.command[0], args: transport.command.slice(1).join("\n") }
         : {
             url: transport.url,
             legacy: transport.protocol === "sse",
             privateNetwork: transport.network === "private",
+            oauth: transport.oauth !== undefined,
+            issuer: transport.oauth?.issuer ?? "",
+            clientId: transport.oauth?.clientId ?? "",
+            scope: transport.oauth?.scope ?? "",
           }),
     },
   });
@@ -356,23 +424,11 @@ async function changeServer(
   if (remove && model.state.editing === server.name) clearForm(model);
 }
 type ServerViewProps = ViewProps & { readonly server: McpServerDefinition };
-function connectionStatus(
-  state: McpServerConnectionView["state"] | "unavailable",
-  count: number | null | undefined,
-  t: Translate,
-): string {
-  if (state === "unavailable") return t("settings.mcp.statusUnavailable");
-  if (state === "connected") return t("settings.mcp.connected", { count: count ?? 0 });
-  if (state === "disabled") return t("settings.mcp.disabled");
-  if (state === "connecting") return t("settings.mcp.connecting");
-  if (state === "failed") return t("settings.mcp.failed");
-  return t("settings.mcp.unverified");
-}
 function McpServerCard({ model, t, server }: ServerViewProps): ReactNode {
   const connection = model.state.snapshot?.connections?.find((entry) => entry.name === server.name);
   const enabledState = server.enabled ? (connection?.state ?? "idle") : "disabled";
   const state = model.state.statusStale ? "unavailable" : enabledState;
-  const status = connectionStatus(state, connection?.toolCount, t);
+  const status = mcpConnectionStatus(state, connection?.toolCount, t);
   const target =
     server.transport.kind === "remote"
       ? server.transport.url.split(/[?#]/u, 1)[0]
@@ -398,7 +454,23 @@ function McpServerCard({ model, t, server }: ServerViewProps): ReactNode {
         </span>
         <McpServerActions model={model} t={t} server={server} />
       </div>
+      <ServerAuthorization model={model} server={server} />
     </li>
+  );
+}
+function ServerAuthorization({
+  model,
+  server,
+}: Pick<ServerViewProps, "model" | "server">): ReactNode {
+  if (server.transport.kind !== "remote" || server.transport.oauth === undefined) return null;
+  const connection = model.state.snapshot?.connections?.find((entry) => entry.name === server.name);
+  if (!server.enabled && connection?.authentication !== "authorized") return null;
+  return (
+    <McpServerAuthorization
+      name={server.name}
+      authorized={connection?.authentication === "authorized"}
+      onChange={model.reload}
+    />
   );
 }
 function McpServerActions({ model, t, server }: ServerViewProps): ReactNode {
@@ -416,9 +488,7 @@ function McpServerActions({ model, t, server }: ServerViewProps): ReactNode {
       </button>
       <button
         type="button"
-        disabled={
-          busy || (server.transport.kind === "remote" && server.transport.oauth !== undefined)
-        }
+        disabled={busy}
         onClick={(event) => {
           model.formOpener.current = event.currentTarget;
           edit(model, server);
@@ -498,7 +568,16 @@ function TextField({
 }: {
   readonly model: Model;
   readonly label: string;
-  readonly field: "name" | "url" | "token" | "command";
+  readonly field:
+    | "name"
+    | "url"
+    | "token"
+    | "command"
+    | "issuer"
+    | "clientId"
+    | "scope"
+    | "headerName"
+    | "headerPrefix";
   readonly type?: string;
   readonly required?: boolean;
 }): ReactNode {
@@ -518,12 +597,56 @@ function TextField({
     </label>
   );
 }
+function HeaderOptions({ model, t }: ViewProps): ReactNode {
+  const { form } = model.state;
+  return (
+    <>
+      {" "}
+      {!form.oauth && (
+        <details>
+          <summary>{t("settings.mcp.advanced")}</summary>
+          <TextField
+            model={model}
+            field="headerName"
+            label={t("settings.mcp.headerName")}
+            required
+          />
+          <TextField model={model} field="headerPrefix" label={t("settings.mcp.headerPrefix")} />
+          <StoredEntries model={model} t={t} kind="headers" />
+        </details>
+      )}
+    </>
+  );
+}
 function RemoteFields({ model, t }: ViewProps): ReactNode {
   const { form } = model.state;
   return (
     <>
       <TextField model={model} field="url" label={t("settings.mcp.url")} type="url" required />
-      <TextField model={model} field="token" label={t("settings.mcp.token")} type="password" />
+      <HeaderOptions model={model} t={t} />
+      <label className={styles.cmpCheck}>
+        <input
+          type="checkbox"
+          checked={form.oauth}
+          onChange={(event) => change(model, "oauth", event.target.checked)}
+        />
+        {t("settings.mcp.oauth")}
+      </label>
+      {form.oauth ? (
+        <>
+          <TextField
+            model={model}
+            field="issuer"
+            label={t("settings.mcp.issuer")}
+            type="url"
+            required
+          />
+          <TextField model={model} field="clientId" label={t("settings.mcp.clientId")} />
+          <TextField model={model} field="scope" label={t("settings.mcp.scope")} />
+        </>
+      ) : (
+        <TextField model={model} field="token" label={t("settings.mcp.token")} type="password" />
+      )}
       <label className={styles.cmpCheck}>
         <input
           type="checkbox"
@@ -540,6 +663,52 @@ function RemoteFields({ model, t }: ViewProps): ReactNode {
         />
         {t("settings.mcp.legacy")}
       </label>
+    </>
+  );
+}
+function storedEntryNames(model: Model, kind: "headers" | "environment"): readonly string[] {
+  const previous = model.state.snapshot?.servers.find(
+    (server) => server.name === model.state.editing,
+  );
+  const transport = previous?.transport;
+  if (transport === undefined) return [];
+  if (kind === "headers")
+    return transport.kind === "remote" ? Object.keys(transport.headers ?? {}) : [];
+  if (transport.kind !== "local") return [];
+  return [
+    ...new Set([
+      ...Object.keys(transport.environment),
+      ...Object.keys(transport.secretEnvironment ?? {}),
+    ]),
+  ];
+}
+function StoredEntries({
+  model,
+  t,
+  kind,
+}: ViewProps & { readonly kind: "headers" | "environment" }): ReactNode {
+  const names = storedEntryNames(model, kind);
+  const field = kind === "headers" ? "removedHeaders" : "removedEnvironment";
+  return (
+    <>
+      {names
+        .filter((name) => !model.state.form[field].includes(name))
+        .map((name) => (
+          <div key={name}>
+            {name}{" "}
+            <button
+              type="button"
+              aria-label={t("settings.mcp.removeEntry", { name })}
+              onClick={() =>
+                model.patch({
+                  form: { ...model.state.form, [field]: [...model.state.form[field], name] },
+                })
+              }
+            >
+              {t("settings.mcp.remove")}
+            </button>
+          </div>
+        ))}
     </>
   );
 }
@@ -576,7 +745,54 @@ function LocalFields({ model, t }: ViewProps): ReactNode {
           onChange={(event) => importFile(model, event.target)}
         />
       </label>
+      <details>
+        <summary>{t("settings.mcp.advanced")}</summary>
+        <label>
+          {t("settings.mcp.environmentValues")}
+          <textarea
+            rows={3}
+            value={model.state.form.environmentFile}
+            onChange={(event) => change(model, "environmentFile", event.target.value)}
+          />
+        </label>
+        <StoredEntries model={model} t={t} kind="environment" />
+      </details>
       <p>{t("settings.mcp.envHelp")}</p>
+    </>
+  );
+}
+function ToolPolicies({ model, t }: ViewProps): ReactNode {
+  const { form } = model.state;
+  return (
+    <>
+      {" "}
+      {Object.keys(form.toolPolicies).length > 0 && (
+        <details>
+          <summary>{t("settings.mcp.toolPermissions")}</summary>
+          {Object.entries(form.toolPolicies).map(([name, risk]) => (
+            <label key={name}>
+              {name}
+              <select
+                value={risk}
+                onChange={(event) =>
+                  model.patch({
+                    form: {
+                      ...form,
+                      toolPolicies: {
+                        ...form.toolPolicies,
+                        [name]: event.target.value === "read" ? "read" : "write",
+                      },
+                    },
+                  })
+                }
+              >
+                <option value="write">{t("settings.mcp.writePermission")}</option>
+                <option value="read">{t("settings.mcp.readPermission")}</option>
+              </select>
+            </label>
+          ))}
+        </details>
+      )}
     </>
   );
 }
@@ -610,6 +826,7 @@ function McpForm({ model, t }: ViewProps): ReactNode {
         {snapshot === undefined && (
           <p className={styles.cmpHelp}>{t("settings.mcp.saveUnavailable")}</p>
         )}
+        <ToolPolicies model={model} t={t} />
         <div className={styles.cmpActions}>
           <button
             className={styles.cmpPrimary}

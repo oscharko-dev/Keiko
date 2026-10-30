@@ -352,25 +352,31 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
   it.each([false, true])(
     "reports finalization time and timeout truthfully (deadline=%s)",
     async (bounded) => {
-      const { scope, fs } = fixture();
-      const workspaceIndex = createWorkspaceIndex();
-      let now = 0;
-      const save = vi.fn((): Promise<void> => {
-        now = 20;
-        return Promise.resolve();
-      });
-      const result = await searchText(scope, QUERY, LIMITS, {
-        fs,
-        workspaceIndex: { loadSnapshot: workspaceIndex.loadSnapshot, saveSnapshot: save },
-        nowMs: () => now,
-        ...(bounded ? { deadlineAtMs: 10 } : {}),
-      });
-      expect(save).toHaveBeenCalled();
-      expect(result.elapsedMs).toBe(20);
-      expect(result.coverage.elapsedMs).toBe(20);
-      expect(result.coverage.reasons.includes("timeout")).toBe(bounded);
-      expect(result.truncated).toBe(bounded);
-      if (bounded) expect(save).toHaveBeenCalledOnce();
+      // The injected clock owns this deadline; runner load must not fire a real 10 ms timer.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { scope, fs } = fixture();
+        const workspaceIndex = createWorkspaceIndex();
+        let now = 0;
+        const save = vi.fn((): Promise<void> => {
+          now = 20;
+          return Promise.resolve();
+        });
+        const result = await searchText(scope, QUERY, LIMITS, {
+          fs,
+          workspaceIndex: { loadSnapshot: workspaceIndex.loadSnapshot, saveSnapshot: save },
+          nowMs: () => now,
+          ...(bounded ? { deadlineAtMs: 10 } : {}),
+        });
+        expect(save).toHaveBeenCalled();
+        expect(result.elapsedMs).toBe(20);
+        expect(result.coverage.elapsedMs).toBe(20);
+        expect(result.coverage.reasons.includes("timeout")).toBe(bounded);
+        expect(result.truncated).toBe(bounded);
+        if (bounded) expect(save).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 

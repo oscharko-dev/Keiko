@@ -611,6 +611,19 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
+  it("offers central MCP management before a fresh task starts", async () => {
+    runtimeHookMock.mockReturnValue({
+      state: liveState({ run: { status: "ready", value: null, error: null } }),
+      actions: actions(),
+    });
+    const openSettings = vi.fn();
+    render(<CodingWorkbenchWindow selectedRoot="/repo" onOpenMcpSettings={openSettings} />);
+    const manage = await screen.findByRole("button", { name: "Manage MCP servers" });
+    expect(manage).toBeVisible();
+    fireEvent.click(manage);
+    expect(openSettings).toHaveBeenCalledOnce();
+  });
+
   it("keeps a fresh task start available when previous history cannot load", async () => {
     taskSessionHookMock.mockReturnValue({
       ...defaultTaskSession(),

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7ffc89c1e3dddada7a8afe079f33d2dbe9d1fab90d27710ddf58e8e016689f51",
+    "catalogDigest": "351b3e8b3103e243c615de96babad2b599d97dde1a17635a66d78e900a5f3666",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -30980,6 +30980,61 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "mcp.authorization.state",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "mcp.mcpAuthorizationActivity.recordMcpAuthorization",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "attemptCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "state": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "pending",
+              "complete",
+              "failed",
+              "expired",
+              "cancelled",
+              "revoked",
+              "credential-ready",
+              "credential-required",
+              "credential-unavailable"
+            ]
+          },
+          "attemptId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 128
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["mcp-authorization"],
+        "proofIds": ["mcp.authorization.state.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/mcp/mcpAuthorizationActivity.ts:8",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpAuthorizationActivity.ts:61"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "mcp.managed.lifecycle",
         "category": "process",
         "owner": "keiko-mcp",
@@ -31029,6 +31084,12 @@
             "dataClass": "count",
             "required": true
           },
+          "processOwner": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["posix-process-group", "windows-job"]
+          },
           "invocationId": {
             "type": "string",
             "dataClass": "opaque-id",
@@ -31043,7 +31104,7 @@
         "proofIds": ["mcp.managed.lifecycle.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-mcp/src/activity.ts:12",
-        "emitterSites": ["packages/keiko-mcp/src/activity.ts:68"]
+        "emitterSites": ["packages/keiko-mcp/src/activity.ts:77"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31293,7 +31354,7 @@
         "proofIds": ["mcp.settings.updated.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:26",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:94"]
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:95"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31858,9 +31919,9 @@
         "failureClasses": ["portable-native-helper-binding"],
         "proofIds": ["portable.runtime.native-helper-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:204",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:205",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:239"
+          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:240"
         ]
       },
       {
@@ -43237,6 +43298,33 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "mcp-authorization",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["mcp.authorization.state"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["mcp.authorization.state"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["mcp.authorization.state"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["mcp.authorization.state"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "loss-state",
+          "opaque-id"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "chat-tool-transcript",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -54206,8 +54294,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 384,
-      "completeClassCount": 384,
+      "supportedClassCount": 385,
+      "completeClassCount": 385,
       "completeness": "complete",
       "classes": [
         {
@@ -89902,6 +89990,74 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "mcp-authorization",
+          "requirementContract": "mcp-authorization",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["mcp.authorization.state"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "mcp.authorization.state",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["mcp.authorization.state"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "mcp.authorization.state",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "attemptCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "attemptId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "state",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["mcp.authorization.state.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "mcp-managed",
           "requirementContract": "mcp-managed",
           "productSurfaces": ["keiko-mcp"],
@@ -89942,6 +90098,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "processOwner",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "reason",
@@ -106088,7 +106250,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:194",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:195",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106410,7 +106572,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1634",
+      "site": "packages/keiko-server/src/deps.ts:1637",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107219,7 +107381,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2401",
+      "site": "packages/keiko-server/src/deps.ts:2404",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107231,9 +107393,50 @@
       "package": "keiko-server"
     },
     {
+      "op": "mcp.authorization.state",
+      "category": "security",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorizationActivity.ts:11",
+      "package": "keiko-server"
+    },
+    {
       "op": "mcp.connection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:120",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:338",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "mcp.connection",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorization.ts:395",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "mcp.connection",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcp/mcpAuthorizationRoutes.ts:82",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "mcp.connection",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:134",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "mcp.connection",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:27",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "mcp.connection",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcpNativeProcessOwner.ts:68",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107383,7 +107586,7 @@
     {
       "op": "portable.runtime.native-helper-bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:207",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:208",
       "package": "keiko-server"
     },
     {
@@ -107695,7 +107898,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4665",
+      "site": "packages/keiko-server/src/deps.ts:4668",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107855,7 +108058,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3258",
+      "site": "packages/keiko-server/src/deps.ts:3261",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -108861,6 +109064,7 @@
     "managed-lsp.evidence.project",
     "managed-lsp.trust.restrict",
     "manual-pod.job",
+    "mcp.authorization.state",
     "mcp.connection",
     "mcp.managed.lifecycle",
     "mcp.mutation-execution-failed",

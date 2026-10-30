@@ -918,6 +918,7 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
+  onOpenMcpSettings,
 }: {
   readonly selectedRoot?: string | undefined;
   readonly selectedBranch?: string | undefined;
@@ -925,6 +926,7 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
+  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
@@ -1032,6 +1034,7 @@ export function CodingWorkbenchWindow({
     <WorkbenchContent
       history={history}
       onOpenHistory={onOpenHistory}
+      onOpenMcpSettings={onOpenMcpSettings}
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
@@ -1302,6 +1305,7 @@ function useWorkbenchCatalogEvidence(
 }
 
 interface WorkbenchContentProps {
+  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly history: CodingTaskSession;
   readonly onOpenHistory: () => void;
   readonly state: CodingWorkbenchRuntimeState;
@@ -1466,6 +1470,7 @@ function WorkbenchHeader({
   readonly columns: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">;
 }): ReactNode {
   const { repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
+  const t = useCodingWorkbenchTranslate();
   return (
     <header className={styles["cmp-workbench-header"]}>
       <div className={styles.cmpHeaderRow}>
@@ -1480,6 +1485,11 @@ function WorkbenchHeader({
           active={runIsActive}
           onHistory={columns.onOpenHistory}
         />
+        {columns.onOpenMcpSettings !== undefined && (
+          <button type="button" onClick={columns.onOpenMcpSettings}>
+            {t("codingWorkbench.mcp.manage")}
+          </button>
+        )}
       </div>
       <CodingWorkbenchTrustAffordance
         binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
@@ -1589,7 +1599,7 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   runIsActive,
-}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
+}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel" | "onOpenMcpSettings">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
   const issueIntake = useCodingWorkbenchIssueIntake(

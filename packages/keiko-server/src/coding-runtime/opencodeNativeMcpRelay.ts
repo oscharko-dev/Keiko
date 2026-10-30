@@ -168,12 +168,7 @@ export function bindNativeMcpRelays(input: {
   const servers =
     input.relay?.managed === undefined
       ? mcpServersNeedingRelay(input.servers, input.mode)
-      : input.servers.filter(
-          (server) =>
-            isCodingWorkbenchMode(input.mode) &&
-            server.enabled &&
-            (server.transport.kind === "local" || server.transport.oauth === undefined),
-        );
+      : input.servers.filter((server) => isCodingWorkbenchMode(input.mode) && server.enabled);
   const endpoints = new Map<string, OpenCodeNativeMcpRelayEndpoint>();
   if (servers.length === 0) return endpoints;
   const refusals: BindRefusal[] = [];

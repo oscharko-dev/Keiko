@@ -437,6 +437,7 @@
   "lsp.process.terminated": "editor-delivery",
   "lsp.spawn.completed": "editor-delivery",
   "lsp.spawn.failed": "editor-delivery",
+  "mcp.authorization.state": "tools-workflows",
   "mcp.managed.lifecycle": "tools-workflows",
   "mcp.oauth.issuer.checked": "tools-workflows",
   "mcp.registry.loaded": "tools-workflows",
