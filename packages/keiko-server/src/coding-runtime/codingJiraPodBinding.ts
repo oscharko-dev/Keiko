@@ -131,6 +131,27 @@ export function withCodingJiraServer(
   ];
 }
 
+type McpServerRegistry = (correlationId: string) => readonly McpServerDefinition[];
+
+/**
+ * A run's MCP servers: the operator's registry as it is, and for a run bound to a Pod the Pod's
+ * tools, whose reads the human's choice grants. A bound Pod is never dropped, not even when the
+ * operator has no registry: the run then has exactly the Pod's server.
+ */
+export function codingRunMcpServers(
+  registry: McpServerRegistry | undefined,
+  binding: CodingJiraPodBinding | undefined,
+): {
+  readonly mcpServers?: McpServerRegistry;
+  readonly mcpGrantedServers?: ReadonlySet<string>;
+} {
+  if (binding === undefined) return registry === undefined ? {} : { mcpServers: registry };
+  return {
+    mcpServers: (correlationId) => withCodingJiraServer(registry?.(correlationId) ?? [], binding),
+    mcpGrantedServers: new Set([CODING_JIRA_SERVER_NAME]),
+  };
+}
+
 // ─── Activity Log ───────────────────────────────────────────────────────────────────────────────
 
 const JIRA_POD_ACTIONS = ["bind", "call"] as const;

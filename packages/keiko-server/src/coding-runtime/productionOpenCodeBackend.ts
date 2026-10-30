@@ -1,6 +1,6 @@
 import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
-import { CODING_JIRA_SERVER_NAME, withCodingJiraServer } from "./codingJiraPodBinding.js";
+import { codingRunMcpServers } from "./codingJiraPodBinding.js";
 import type { CodingJiraPods } from "./codingJiraPodMcp.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
@@ -541,13 +541,7 @@ function mcpServersFor(
   input: LaunchInput,
   jira: BoundJira | undefined,
 ): Pick<OpenCodeRuntimeCompositionInput, "mcpServers" | "mcpGrantedServers"> {
-  const registry = input.mcpServers;
-  if (registry === undefined) return {};
-  if (jira === undefined) return { mcpServers: registry };
-  return {
-    mcpServers: (runId) => withCodingJiraServer(registry(runId), jira.binding),
-    mcpGrantedServers: new Set([CODING_JIRA_SERVER_NAME]),
-  };
+  return codingRunMcpServers(input.mcpServers, jira?.binding);
 }
 
 // What only a native run reads from the repository and the operator: its Markdown items (#3903)

@@ -13,6 +13,7 @@ import {
   CODING_JIRA_SERVER_NAME,
   CODING_JIRA_TOOL_RISKS,
   codingJiraServerDefinition,
+  codingRunMcpServers,
   sameCodingJiraPodBinding,
   withCodingJiraServer,
 } from "./codingJiraPodBinding.js";
@@ -107,5 +108,36 @@ describe("the servers a bound run admits", () => {
     expect(servers.find((server) => server.name === CODING_JIRA_SERVER_NAME)?.tools).toEqual(
       CODING_JIRA_TOOL_RISKS,
     );
+  });
+});
+
+describe("a run's MCP servers", () => {
+  const operator: McpServerDefinition = {
+    name: "docs",
+    description: undefined,
+    enabled: true,
+    transport: { kind: "remote", url: "https://docs.example.test/mcp" },
+    tools: { search: "read" },
+  };
+
+  it("keeps the operator's registry untouched and grants nothing for a run without a Pod", () => {
+    const registry = (): readonly McpServerDefinition[] => [operator];
+    expect(codingRunMcpServers(registry, undefined)).toEqual({ mcpServers: registry });
+    expect(codingRunMcpServers(undefined, undefined)).toEqual({});
+  });
+
+  it("adds the bound Pod beside the registry and grants only its reads", () => {
+    const servers = codingRunMcpServers(() => [operator], BINDING);
+    expect(servers.mcpServers?.("run-1").map((server) => server.name)).toEqual([
+      "docs",
+      CODING_JIRA_SERVER_NAME,
+    ]);
+    expect([...(servers.mcpGrantedServers ?? [])]).toEqual([CODING_JIRA_SERVER_NAME]);
+  });
+
+  it("never drops a bound Pod when the operator has no registry", () => {
+    const servers = codingRunMcpServers(undefined, BINDING);
+    expect(servers.mcpServers?.("run-1")).toEqual([codingJiraServerDefinition(BINDING)]);
+    expect([...(servers.mcpGrantedServers ?? [])]).toEqual([CODING_JIRA_SERVER_NAME]);
   });
 });
