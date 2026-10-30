@@ -151,7 +151,18 @@ async function startRun(page, workbench, { model, mode, text }) {
     response.url().endsWith("/api/coding-workbench/runtime/runs") &&
     response.request().method() === "POST";
   const started = page.waitForResponse(isStart, { timeout: UI_TIMEOUT_MS });
-  await page.getByRole("button", { name: "Start coding run" }).click();
+  // A failed click must surface as itself, not as this wait rejecting once the browser closes.
+  started.catch(() => undefined);
+  try {
+    await page.getByRole("button", { name: "Start coding run" }).click();
+  } catch (error) {
+    // Keep what the human would have seen: why the Workbench did not offer the start.
+    log("start refused by the Workbench; its text follows");
+    console.log(
+      (await workbench.innerText({ timeout: TEXT_TIMEOUT_MS }).catch(() => "")).slice(0, 4000),
+    );
+    throw error;
+  }
   const response = await started;
   const body = await response.json().catch(() => ({}));
   const runId = body.runId ?? body.snapshot?.runId;
@@ -159,6 +170,9 @@ async function startRun(page, workbench, { model, mode, text }) {
   if (!runId) throw new Error(`the run did not start: ${JSON.stringify(body).slice(0, 500)}`);
   return runId;
 }
+
+// A diagnostic read never waits on a Workbench that is gone: Playwright's own default is no limit.
+const TEXT_TIMEOUT_MS = 5_000;
 
 async function clickIfVisible(locator, label) {
   if (!(await locator.isVisible().catch(() => false))) return false;
@@ -217,6 +231,22 @@ export async function answerGates(page, runId, snapshot, { approve, decided }) {
   if (snapshot.state === "running" && approve !== "ask") await decideChangeReview(page, approve);
 }
 
+/**
+ * A question the model asked through OpenCode's question tool: recorded with its text, then
+ * declined so the run ends on the model's own answer. Standalone `opencode run` offers no question
+ * tool, so a declined question is the closest equivalent of a human who does not reply.
+ */
+async function declineQuestion(page) {
+  const section = page.getByRole("region", { name: "Runtime questions" });
+  const reject = section.getByRole("button", { name: "Reject question", exact: true }).first();
+  if (!(await reject.isEnabled().catch(() => false))) return;
+  log("question asked via UI; its text follows, then the driver declines it");
+  console.log(
+    (await section.innerText({ timeout: TEXT_TIMEOUT_MS }).catch(() => "")).slice(0, 2000),
+  );
+  await reject.click();
+}
+
 async function watchRun(page, runId, { approve, deadline, shots }) {
   let last = "";
   let shotCount = 0;
@@ -238,6 +268,7 @@ async function watchRun(page, runId, { approve, deadline, shots }) {
     }
     if (TERMINAL_STATES.includes(snapshot.state)) break;
     await answerGates(page, runId, snapshot, { approve, decided });
+    if (approve !== "ask") await declineQuestion(page);
     await sleep(POLL_MS);
   }
   return snapshot;
