@@ -28,7 +28,14 @@ const ASSERTION_RULES = [
 
 function expectPublicParserPolicyMetadata(
   record,
-  { selector, rules, witness, assertionCount, output = selector },
+  {
+    selector,
+    rules,
+    witness,
+    assertionCount,
+    output = selector,
+    proofPaths = [selector.consumerPath],
+  },
 ) {
   expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
   expect(record.kind).toBe("public-parser");
@@ -42,7 +49,7 @@ function expectPublicParserPolicyMetadata(
     kind: "public-api-proof",
     owner: record.owner,
   });
-  expect(record.proofs).toEqual([selector.consumerPath]);
+  expect(record.proofs).toEqual(proofPaths);
   expect(record.proofAssertions).toHaveLength(assertionCount);
 }
 
@@ -54,16 +61,21 @@ function expectResponsibilityRemovalRefused(record) {
 
 function expectDeclaredPublicParserProof(
   record,
-  { path, specifier, producer, witness, rules, assertions },
+  { path, specifier, producer, witness, rules, assertions, additionalProofs = [] },
 ) {
+  const proofs = [{ path, assertions }, ...additionalProofs];
   expectPublicParserPolicyMetadata(record, {
     selector: { consumerPath: path, specifier, exportName: producer },
     rules,
     witness,
-    assertionCount: assertions,
+    assertionCount: proofs.reduce((total, proof) => total + proof.assertions, 0),
     output: record.transform,
+    proofPaths: proofs.map((proof) => proof.path),
   });
-  expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
+  for (const proof of proofs)
+    expect(record.proofAssertions.filter((entry) => entry.path === proof.path)).toHaveLength(
+      proof.assertions,
+    );
   expect(validatePolicy(policy)).toEqual([]);
 }
 
@@ -103,9 +115,10 @@ describe("shared symbol resource accounting", () => {
   it("keeps one immutable default profile and validates explicit profiles", () => {
     expect(SYMBOL_LIMITS).toEqual({
       programs: 2,
-      sourceBytes: 64 * 1024 * 1024,
+      sourceBytes: 96 * 1024 * 1024,
       nodes: 5_000_000,
       aliases: 64,
+      collectiveStates: 256,
       emitBytes: 16 * 1024 * 1024,
       emissionTimeout: 10_000,
       emissionOutputBytes: 1024 * 1024,
@@ -425,6 +438,10 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "code-task-public-workspace-id-validator",
       "code-task-public-grant-id-validator",
       "code-task-public-idempotency-id-validator",
+      "runtime-command-request-public-parser",
+      "runtime-commands-channel-public-parser",
+      "runtime-readiness-request-public-parser",
+      "runtime-readiness-public-parser",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
@@ -1166,6 +1183,12 @@ describe("Knowledge family raw input responsibilities (#3918)", () => {
       path: "packages/keiko-contracts/src/local-knowledge-validation.test.ts",
       specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation",
       assertions: 4,
+      additionalProofs: [
+        {
+          path: "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          assertions: 10,
+        },
+      ],
     },
     {
       id: "knowledge-capsule-set-public-parser",
@@ -1206,6 +1229,12 @@ describe("Knowledge family raw input responsibilities (#3918)", () => {
       path: "packages/keiko-contracts/src/local-knowledge-pods.test.ts",
       specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
       assertions: 4,
+      additionalProofs: [
+        {
+          path: "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
+          assertions: 10,
+        },
+      ],
     },
     {
       id: "knowledge-retrieval-activity-public-parser",
@@ -1217,7 +1246,7 @@ describe("Knowledge family raw input responsibilities (#3918)", () => {
     },
   ])(
     "preserves the declared producer and proof owner for $producer",
-    ({ id, producer, witness, path, specifier, assertions }) => {
+    ({ id, producer, witness, path, specifier, assertions, additionalProofs }) => {
       const record = policy.responsibilities.find((entry) => entry.id === id);
       expectDeclaredPublicParserProof(record, {
         path,
@@ -1230,6 +1259,7 @@ describe("Knowledge family raw input responsibilities (#3918)", () => {
           "anti-slop/no-unsafe-dictionary-type",
         ],
         assertions,
+        additionalProofs,
       });
     },
   );

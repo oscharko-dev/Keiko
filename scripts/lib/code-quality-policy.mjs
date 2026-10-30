@@ -2,7 +2,8 @@ import { compareStrings } from "./compare-strings.mjs";
 
 export const SYMBOL_LIMITS = Object.freeze({
   programs: 2,
-  sourceBytes: 64 * 1024 * 1024,
+  // Owner decision 2026-10-30 (ADR-0167 D4).
+  sourceBytes: 96 * 1024 * 1024,
   nodes: 5_000_000,
   aliases: 64,
   collectiveStates: 256,

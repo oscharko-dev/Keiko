@@ -190,7 +190,8 @@ emission, workspace symlink resolution, public main/subpath reexports and UTF-16
 Missing, stale, changed or escaping provenance fails. Matching names or spans alone is insufficient,
 including a same-length producer type change with an unchanged declaration name.
 
-The interface bounds retained programs (2), verified source bytes (64 MiB), visited nodes
+The interface bounds retained programs (2), verified source bytes (96 MiB; 64 MiB until the
+owner decision of 2026-10-30 recorded in ADR-0167 D4), visited nodes
 (5 million), alias traversal (64) and aggregate retained declaration emission and private build-info bytes (16 MiB).
 A distinct `collectiveStates` limit defaults to 256 for the complete connected multi-root private
 raw-helper union under the discovery requirements below. It changes no request, individual-root,
@@ -222,8 +223,9 @@ catches before Program/checker results or resolved modules can be returned or ca
 work, including admitted reads, cached Programs and currentness, refuses with that same error and
 performs no further Keiko text admission. Attempted bytes retain the first refused read's overshoot;
 the refused source has no admitted witness. Programs actually returned by TypeScript are counted
-before an outside refusal, while failed contexts are not cached as qualified. The source ceiling,
-node/alias/emission limits and ordinary production semantic-pending behavior are unchanged.
+before an outside refusal, while failed contexts are not cached as qualified. This refusal behavior
+changes neither the source ceiling, the node/alias/emission limits nor ordinary production
+semantic-pending behavior.
 Numeric stats remain readable and close remains unconditional/idempotent; normal work after close
 reports the existing closed reason. A new compiler is the recovery boundary. The live private marker
 survives exposed counter/limit/snapshot/cache edits, without promising protection against deliberate

@@ -79,13 +79,17 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(synthetic.rules).toEqual(
       production.rules.map((rule) => expectedHistoricalFixtureRule(rule)),
     );
-    expect(production.responsibilities).toHaveLength(129);
-    expect(production.responsibilities.slice(-5).map(({ id }) => id)).toEqual([
+    expect(production.responsibilities).toHaveLength(133);
+    expect(production.responsibilities.slice(-9).map(({ id }) => id)).toEqual([
       "code-task-public-task-id-validator",
       "code-task-public-run-id-validator",
       "code-task-public-workspace-id-validator",
       "code-task-public-grant-id-validator",
       "code-task-public-idempotency-id-validator",
+      "runtime-command-request-public-parser",
+      "runtime-commands-channel-public-parser",
+      "runtime-readiness-request-public-parser",
+      "runtime-readiness-public-parser",
     ]);
     expect(
       production.rules

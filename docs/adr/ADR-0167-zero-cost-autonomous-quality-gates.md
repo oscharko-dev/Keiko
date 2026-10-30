@@ -163,8 +163,14 @@ cardinality, individual discovery, alias and depth bounds remain 64. Numeric, ca
 consumer-binding analysis retain their existing bounds. An oversized union withholds its entire
 helper group, retaining independently valid legacy root slots and every unmatched native finding.
 
-The cumulative 64 MiB source, 5-million-node, two-retained-Program and existing emission/proof
-budgets, currentness checks and independently valid root slots remain authoritative. The mandatory inventory syntax visitors provide detached private
+The cumulative 96 MiB source, 5-million-node, two-retained-Program and existing emission/proof
+budgets, currentness checks and independently valid root slots remain authoritative. The source
+ceiling was 64 MiB until an owner decision on 2026-10-30 raised it: a whole-repository
+qualification measured 65.8 MiB of admitted source across 5,877 files (production programs,
+prepared-receipt digest verification and declaration-map provenance), each read once and each
+carrying a currentness or provenance guarantee, so no guard could be dropped to fit. The ceiling
+remains a finite resource bound, not an acceptance threshold; its refusal stays sticky and
+fail-closed. The mandatory inventory syntax visitors provide detached private
 module facts through a frozen, privately witnessed source/configuration/ownership/membership/output
 receipt. Added traversal uses the same unchanged checked visit ruler before compiler creation;
 each independent compiler seeds that actual preparation cost once and continues the same counter.
