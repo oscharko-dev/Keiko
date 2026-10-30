@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isAbsolute } from "node:path";
+import { posix, win32 } from "node:path";
 import {
   Client,
   fromJsonSchema,
@@ -22,11 +22,17 @@ import type {
   ManagedMcpFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { isMcpLocalAbsolutePath } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { ManagedMcpError } from "./definitions.js";
 import { recordManagedMcp } from "./activity.js";
 import { installExternalMetadataAdmission } from "./external-metadata.js";
+import {
+  ownedStdioLaunch,
+  isNativeMcpLocalAbsolutePath,
+  type McpNativeStdioOwner,
+} from "./owned-stdio.js";
 
 export type ExternalMcpTransportOptions =
   | {
@@ -46,6 +52,7 @@ export type ExternalMcpTransportOptions =
       readonly cwd: string;
       /** Explicit process environment, supplied only after the server admits the launch. */
       readonly environment: Readonly<Record<string, string>>;
+      readonly nativeOwner?: McpNativeStdioOwner;
     };
 export interface ExternalMcpClientOptions {
   readonly transport: ExternalMcpTransportOptions;
@@ -64,6 +71,10 @@ function captured<T>(value: T): T {
   return deepFreeze(JSON.parse(text) as T);
 }
 
+function admittedLocalPath(value: string): boolean {
+  return isNativeMcpLocalAbsolutePath(value);
+}
+
 function transportFor(
   options: ExternalMcpTransportOptions,
   contexts: AsyncLocalStorage<ManagedMcpInvocationContext>,
@@ -71,7 +82,12 @@ function transportFor(
   if (options.kind === "remote") {
     if (!URL.canParse(options.url)) throw new ManagedMcpError("not-admitted");
     const url = new URL(options.url);
-    if (url.protocol !== "https:" || url.username !== "" || url.password !== "")
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.searchParams.has("access_token")
+    )
       throw new ManagedMcpError("not-admitted");
     const fetch: typeof globalThis.fetch = (request, init) =>
       options.fetch(request, init, contexts.getStore());
@@ -89,18 +105,59 @@ function transportFor(
       },
     });
   }
-  if (!isAbsolute(options.command[0]) || !isAbsolute(options.cwd))
+  if (!admittedLocalPath(options.command[0]) || !admittedLocalPath(options.cwd))
     throw new ManagedMcpError("not-admitted");
-  // The SDK merges ambient defaults even with explicit env. Override every inherited key.
-  const cleared = Object.fromEntries(DEFAULT_INHERITED_ENV_VARS.map((key) => [key, ""]));
   return new StdioClientTransport({
-    command: options.command[0],
-    args: options.command.slice(1),
+    ...ownedStdioLaunch(
+      options.command,
+      mcpStdioEnvironment(options),
+      options.cwd,
+      options.nativeOwner,
+    ),
     cwd: options.cwd,
-    env: { ...cleared, HOME: options.cwd, PATH: "/usr/bin:/bin", ...options.environment },
     stderr: "ignore",
     maxBufferSize: MAX_BYTES,
   });
+}
+
+/** Explicit local defaults keep sibling launchers usable without inheriting ambient credentials. */
+export function mcpStdioEnvironment(
+  options: Extract<ExternalMcpTransportOptions, { readonly kind: "local" }>,
+  platform: NodeJS.Platform = process.platform,
+  systemRoot: string | undefined = process.env.SYSTEMROOT ?? process.env.SystemRoot,
+): Record<string, string> {
+  // The SDK merges ambient defaults even with explicit env. Override every inherited key.
+  const cleared = Object.fromEntries(DEFAULT_INHERITED_ENV_VARS.map((key) => [key, ""]));
+  const home = options.cwd;
+  if (platform !== "win32")
+    return {
+      ...cleared,
+      HOME: home,
+      TMPDIR: home,
+      PATH: [posix.dirname(options.command[0]), "/usr/bin", "/bin"].join(":"),
+      ...options.environment,
+    };
+  if (!isMcpLocalAbsolutePath(systemRoot) || !/^[A-Za-z]:/u.test(systemRoot))
+    throw new ManagedMcpError("not-admitted");
+  const entries = Object.entries(options.environment);
+  const explicit = Object.fromEntries(entries.map(([key, value]) => [key.toUpperCase(), value]));
+  if (Object.keys(explicit).length !== entries.length) throw new ManagedMcpError("not-admitted");
+  const system32 = win32.join(systemRoot, "System32");
+  return {
+    ...cleared,
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: home,
+    LOCALAPPDATA: home,
+    TEMP: home,
+    TMP: home,
+    SYSTEMROOT: systemRoot,
+    WINDIR: systemRoot,
+    COMSPEC: win32.join(system32, "cmd.exe"),
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    PATH: [win32.dirname(options.command[0]), system32, systemRoot].join(";"),
+    ...explicit,
+  };
 }
 
 class ExternalClient implements ExternalMcpConnection {
@@ -121,6 +178,7 @@ class ExternalClient implements ExternalMcpConnection {
   #closed = false;
   #drifted = false;
   #closing: Promise<void> | undefined;
+  #metadataTail: Promise<void> = Promise.resolve();
   readonly #abort = (): void => {
     void this.close().catch(() => undefined);
   };
@@ -203,12 +261,15 @@ class ExternalClient implements ExternalMcpConnection {
       throw new ManagedMcpError("protocol-error");
     this.#tools = captured(listed.tools) as readonly AdmittedTool[];
     this.#digest = sha256Hex(canonicalise(this.#tools));
+    const processOwner = process.platform === "win32" ? "windows-job" : "posix-process-group";
     recordManagedMcp(
       this.options.log,
       this.options.correlationId,
       "listed",
       this.#tools.length,
       this.#digest,
+      "none",
+      this.options.transport.kind === "local" ? { processOwner } : {},
     );
   }
   async call(
@@ -217,10 +278,15 @@ class ExternalClient implements ExternalMcpConnection {
     context: ManagedMcpInvocationContext,
   ): Promise<CatalogJsonObject> {
     const tool = this.#tools.find((candidate) => candidate.name === name);
-    const signal = AbortSignal.any([context.signal, this.options.signal, this.signal]);
+    const signal = AbortSignal.any([
+      context.signal,
+      this.options.signal,
+      this.signal,
+      AbortSignal.timeout(TIMEOUT_MS),
+    ]);
     const invocation = { ...context, signal };
     if (this.#drifted) throw new ManagedMcpError("descriptor-drift");
-    if (this.#closed || tool === undefined || signal.aborted)
+    if (this.#closed || tool === undefined || signal.aborted || !context.beforeEffect())
       throw new ManagedMcpError("not-admitted");
     const args = captured(argumentsValue);
     const inputSchema: CatalogJsonObject = tool.inputSchema;
@@ -229,6 +295,7 @@ class ExternalClient implements ExternalMcpConnection {
     if (validation.issues !== undefined) throw new ManagedMcpError("invalid-arguments");
     this.record("started", context);
     try {
+      await this.#contexts.run(invocation, () => this.verifyDeclarations(signal));
       const result = await this.#contexts.run(invocation, () =>
         this.#client.callTool(
           { name, arguments: args },
@@ -251,6 +318,33 @@ class ExternalClient implements ExternalMcpConnection {
       throw failure;
     }
   }
+  private async verifyDeclarations(signal: AbortSignal): Promise<void> {
+    const previous = this.#metadataTail;
+    let release: () => void = (): void => undefined;
+    this.#metadataTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await previous;
+      if (signal.aborted) throw new ManagedMcpError("aborted");
+      await this.readDeclarations(signal);
+    } finally {
+      release();
+    }
+  }
+  private async readDeclarations(signal: AbortSignal): Promise<void> {
+    const listed = await this.#client.listTools(undefined, {
+      cacheMode: "bypass",
+      signal,
+      timeout: TIMEOUT_MS,
+      maxTotalTimeout: TIMEOUT_MS,
+    });
+    if (sha256Hex(canonicalise(captured(listed.tools))) !== this.#digest) {
+      this.#drifted = true;
+      this.#lifetime.abort(new ManagedMcpError("descriptor-drift"));
+      throw new ManagedMcpError("descriptor-drift");
+    }
+  }
   private record(
     phase: "started" | "completed" | "failed",
     context: ManagedMcpInvocationContext,
@@ -263,7 +357,7 @@ class ExternalClient implements ExternalMcpConnection {
       this.#tools.length,
       this.#digest,
       reason,
-      context.invocationId,
+      { invocationId: context.invocationId },
     );
   }
   async close(): Promise<void> {

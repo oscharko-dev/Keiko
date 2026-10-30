@@ -159,6 +159,29 @@ describe("external MCP SDK client", () => {
     expect(f.effects()).toBe(1);
     expect(f.contexts.at(-1)).toBe("external-test-invocation");
   });
+  it("refuses silent metadata drift before dispatch even without a list-change subscription", async () => {
+    const metadata = { name: "save_note", inputSchema: schema, description: "initial declaration" };
+    const f = fixture(false, new AbortController().signal, schema, undefined, metadata);
+    const client = await f.connect();
+    metadata.description = "changed declaration";
+    await expect(
+      client.call("save_note", { text: "synthetic note" }, context()),
+    ).rejects.toMatchObject({ reason: "descriptor-drift" });
+    expect(f.effects()).toBe(0);
+  });
+  it("keeps concurrent metadata checks isolated while each tool executes once", async () => {
+    const f = fixture();
+    const client = await f.connect();
+    const results = await Promise.all([
+      client.call("save_note", { text: "first synthetic note" }, context()),
+      client.call("save_note", { text: "second synthetic note" }, context()),
+    ]);
+    expect(results).toMatchObject([
+      { content: [{ text: "first synthetic note" }] },
+      { content: [{ text: "second synthetic note" }] },
+    ]);
+    expect(f.effects()).toBe(2);
+  });
   it("refuses invalid arguments, unknown tools and revoked authority before handler execution", async () => {
     const f = fixture();
     const client = await f.connect();
@@ -213,29 +236,31 @@ it("rechecks authority after asynchronous schema validation", async () => {
   await expect(pending).rejects.toMatchObject({ reason: "not-admitted" });
   expect(f.effects()).toBe(0);
 });
-it.each(["http://example.test/mcp", "https://user:password@example.test/mcp", "invalid-url"])(
-  "refuses an unsafe remote target before dispatch: %s",
-  async (url) => {
-    let requests = 0;
-    await expect(
-      connectExternalMcp({
-        signal: new AbortController().signal,
-        correlationId: "invalid-target",
-        log: { write: () => undefined },
-        transport: {
-          kind: "remote",
-          url,
-          transport: "streamable-http",
-          fetch: (): Promise<Response> => {
-            requests++;
-            return Promise.resolve(new Response());
-          },
+it.each([
+  "http://example.test/mcp",
+  "https://user:password@example.test/mcp",
+  "https://example.test/mcp?access_token=synthetic-private-token",
+  "invalid-url",
+])("refuses an unsafe remote target before dispatch: %s", async (url) => {
+  let requests = 0;
+  await expect(
+    connectExternalMcp({
+      signal: new AbortController().signal,
+      correlationId: "invalid-target",
+      log: { write: () => undefined },
+      transport: {
+        kind: "remote",
+        url,
+        transport: "streamable-http",
+        fetch: (): Promise<Response> => {
+          requests++;
+          return Promise.resolve(new Response());
         },
-      }),
-    ).rejects.toMatchObject({ reason: "not-admitted" });
-    expect(requests).toBe(0);
-  },
-);
+      },
+    }),
+  ).rejects.toMatchObject({ reason: "not-admitted" });
+  expect(requests).toBe(0);
+});
 
 it("records external client lifecycle without arguments or results", async () => {
   const f = fixture();

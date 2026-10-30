@@ -860,3 +860,10 @@ and security only. Provider and log ports come from server composition; catalog/
 admission remains mandatory. Verify modern protocol metadata, request-local context, schema
 and drift refusal, cancellation, registered Activity Log evidence and the architecture
 negative fixtures. Preserve the operator MCP registry and OpenCode compatibility.
+
+Central external MCP OAuth belongs to the shared Settings/connection owner. Chat and native
+Workbench runs use the same server definition and encrypted custody; the native production
+binding receives only a run-bound relay capability. Preserve issuer/resource/scope binding,
+one-use app-session-bound callbacks, credential-generation revocation and no-replay semantics.
+Changes to tool metadata must be refused before dispatch even without notifications. Include
+real SDK, restart/revocation and browser proofs; legacy native OAuth tests do not replace them.

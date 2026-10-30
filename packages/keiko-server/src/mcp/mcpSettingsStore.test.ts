@@ -84,6 +84,130 @@ function readInNewProcess(input: Parameters<typeof createMcpSettingsStore>[0]): 
 }
 
 describe("shared MCP settings custody", () => {
+  it("never persists or returns a bearer credential embedded in a resource URL", () => {
+    const f = fixture();
+    const result = f.store.update(
+      {
+        expectedRevision: f.store.read("url-credential").revision,
+        servers: [
+          {
+            ...f.server,
+            transport: {
+              kind: "remote",
+              url: `https://fixture.example.test/mcp?access_token=${token}`,
+            },
+          },
+        ],
+        secrets: {},
+      },
+      "url-credential",
+    );
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(readFileSync(join(f.input.stateDir, "mcp-servers.json"), "utf8")).not.toContain(token);
+    const server = result.snapshot.servers[0];
+    expect(server?.transport.kind).toBe("remote");
+    if (server?.transport.kind !== "remote") throw new Error("expected remote migration");
+    const header = server.transport.headers?.Authorization;
+    expect(header?.prefix).toBe("Bearer ");
+    expect(
+      header === undefined
+        ? undefined
+        : createMcpSettingsStore(f.input).secret(header.secretEnv, server),
+    ).toBe(token);
+    expect(JSON.stringify(f.events)).not.toContain(token);
+  });
+  it("migrates a legacy bearer URL before returning its first public snapshot", () => {
+    const f = fixture();
+    writeFileSync(
+      join(f.input.stateDir, "mcp-servers.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        servers: [
+          {
+            ...f.server,
+            transport: {
+              kind: "remote",
+              protocol: "sse",
+              network: "private",
+              url: `https://fixture.example.test/sse?region=eu&access_token=${token}`,
+            },
+          },
+        ],
+      }),
+      { mode: 0o600 },
+    );
+    // The registry reader deliberately refuses public files, including legacy fixtures.
+    const state = f.store.read("legacy-url");
+    expect(JSON.stringify(state)).not.toContain(token);
+    expect(readFileSync(join(f.input.stateDir, "mcp-servers.json"), "utf8")).not.toContain(token);
+    expect(state.servers[0]?.transport).toMatchObject({
+      url: "https://fixture.example.test/sse?region=eu",
+      protocol: "sse",
+      network: "private",
+    });
+    expect(f.store.read("legacy-url")).toEqual(state);
+  });
+  it.each(["duplicate", "empty", "conflicting-header"])(
+    "refuses %s URI credentials before custody or registry effects",
+    (failure) => {
+      const f = fixture();
+      const current = f.store.read("bad-url");
+      const query =
+        failure === "duplicate"
+          ? `access_token=${token}&access_token=other`
+          : failure === "empty"
+            ? "access_token="
+            : `access_token=${token}`;
+      expect(() =>
+        f.store.update(
+          {
+            expectedRevision: current.revision,
+            secrets: {},
+            servers: [
+              {
+                ...f.server,
+                transport: {
+                  kind: "remote",
+                  url: `https://fixture.example.test/mcp?${query}`,
+                  ...(failure === "conflicting-header"
+                    ? { headers: { authorization: { secretEnv: reference } } }
+                    : {}),
+                },
+              },
+            ],
+          },
+          "bad-url",
+        ),
+      ).toThrow(/ambiguous/iu);
+      expect(f.store.read("bad-url")).toEqual(current);
+    },
+  );
+  it("removes stale URL bearer data from OAuth entries without adding static authorization", () => {
+    const f = fixture();
+    const result = f.store.update(
+      {
+        expectedRevision: f.store.read("oauth-url").revision,
+        secrets: {},
+        servers: [
+          {
+            ...f.server,
+            transport: {
+              kind: "remote",
+              url: `https://fixture.example.test/mcp?access_token=${token}`,
+              oauth: { issuer: "https://identity.example.test", clientId: "public-client" },
+            },
+          },
+        ],
+      },
+      "oauth-url",
+    );
+    expect(result.snapshot.servers[0]?.transport).toMatchObject({
+      url: "https://fixture.example.test/mcp",
+      oauth: { issuer: "https://identity.example.test" },
+    });
+    expect(result.snapshot.servers[0]?.transport).not.toHaveProperty("headers");
+    expect(JSON.stringify(result)).not.toContain(token);
+  });
   it("persists one private registry and recovers sealed credentials after restart", () => {
     const f = fixture();
     const before = f.store.read("settings-test");

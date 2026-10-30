@@ -15,17 +15,33 @@ import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js"
 import { API_ROUTES, type RouteContext } from "../routes.js";
 import { createMcpSettingsStore } from "./mcpSettingsStore.js";
 import { createConfiguredMcpConnections } from "./mcpConfiguredConnections.js";
+import { createMcpAuthorization } from "./mcpAuthorization.js";
+import * as oauthPersistence from "./mcpOAuthCredentialStore.js";
+import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   handleConnectMcpServer,
   handleGetMcpSettings,
   handlePutMcpSettings,
 } from "./mcpSettingsRoutes.js";
 
+import {
+  handleStartMcpAuthorization,
+  handleMcpAuthorizationStatus,
+  handleCancelMcpAuthorization,
+  handleRevokeMcpAuthorization,
+} from "./mcpAuthorizationRoutes.js";
 const roots: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-function fixture(): { deps: Parameters<typeof handleGetMcpSettings>[1]; cookie: string } {
+function fixture(): {
+  deps: Parameters<typeof handleGetMcpSettings>[1];
+  cookie: string;
+  stateDir: string;
+  env: Readonly<Record<string, string>>;
+} {
   const channel = createCodingAppSessionChannel({
     registry: createSessionRegistry(),
     pairingPort: createFakeSessionPairingPort(),
@@ -33,14 +49,17 @@ function fixture(): { deps: Parameters<typeof handleGetMcpSettings>[1]; cookie: 
   const paired = channel.pair(fakePairingRequestBody());
   if (!paired.paired) throw new Error("fixture pairing failed");
   const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-route-")));
+  const env = { KEIKO_MCP_OAUTH_CREDENTIALS_KEY: randomBytes(32).toString("base64") };
   roots.push(stateDir);
   return {
+    stateDir,
+    env,
     cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
     deps: {
       codingAppSessionChannel: channel,
       mcpSettings: createMcpSettingsStore({
         stateDir,
-        env: { KEIKO_MCP_OAUTH_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
+        env,
         keychainAccess: (): undefined => undefined,
       }),
     },
@@ -62,6 +81,71 @@ function context(cookie: string, body: unknown = {}): RouteContext {
 }
 
 describe("authenticated shared MCP settings routes", () => {
+  it("keeps GET and a committed PUT available when an OAuth vault record cannot be restored", async () => {
+    const f = fixture();
+    const store = f.deps.mcpSettings;
+    if (store === undefined) throw new Error("missing fixture store");
+    const server: McpServerDefinition = {
+      name: "unavailable-vault",
+      enabled: true,
+      description: undefined,
+      transport: {
+        kind: "remote",
+        url: "https://synthetic-tools.example.test/mcp",
+        oauth: { issuer: "https://synthetic-identity.example.test", clientId: "public-fixture" },
+      },
+      tools: {},
+      discovery: "automatic",
+    };
+    store.update(
+      { expectedRevision: store.read("fixture").revision, servers: [server], secrets: {} },
+      "fixture",
+    );
+    vi.spyOn(oauthPersistence, "createCentralMcpOAuthPersistence").mockReturnValue({
+      read: () => {
+        throw new SyntaxError("synthetic-private-vault-payload");
+      },
+      write: vi.fn(),
+      clear: vi.fn(),
+    });
+    const write = vi.fn<(event: ServerLogEvent) => void>();
+    const owner = createMcpAuthorization({
+      stateDir: f.stateDir,
+      env: f.env,
+      keychainAccess: () => undefined,
+      settings: store,
+      log: { write },
+      egress: () => undefined,
+    });
+    try {
+      const deps = { ...f.deps, mcpAuthorization: owner };
+      const read = handleGetMcpSettings(context(f.cookie), deps);
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({ connections: [{ authentication: "required" }] });
+      const result = await handlePutMcpSettings(
+        context(f.cookie, {
+          expectedRevision: store.read("fixture").revision,
+          servers: [server],
+          secrets: {},
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ connections: [{ authentication: "required" }] });
+      expect(
+        write.mock.calls.find(([event]) => event.op === "mcp.authorization.state")?.[0],
+      ).toMatchObject({
+        op: "mcp.authorization.state",
+        extra: { state: "credential-unavailable" },
+        correlationId: "mcp-settings-test",
+      });
+      expect(JSON.stringify([read.body, result.body, write.mock.calls])).not.toContain(
+        "synthetic-private-vault-payload",
+      );
+    } finally {
+      await owner.close();
+    }
+  });
   it("mounts GET and PUT on the production router", () => {
     expect(
       API_ROUTES.filter((route) => route.pattern === "/api/mcp/servers").map(
@@ -203,3 +287,89 @@ it("GET observes the existing owner and connect confirms the committed discovery
     await manager.close();
   }
 });
+
+describe("central MCP authorization route authority", () => {
+  it("mounts every authorization action on the authenticated production router", () => {
+    for (const suffix of ["", "/status", "/cancel", "/revoke"])
+      expect(
+        API_ROUTES.some(
+          (route) =>
+            route.method === "POST" &&
+            route.pattern === `/api/mcp/servers/:serverName/authorization${suffix}`,
+        ),
+      ).toBe(true);
+  });
+  it("refuses every anonymous authorization action before reaching the owner", async () => {
+    const f = fixture();
+    const start = vi.fn();
+    const deps = { ...f.deps, mcpAuthorization: authorizationOwner(start) };
+    for (const handler of [
+      handleStartMcpAuthorization,
+      handleMcpAuthorizationStatus,
+      handleCancelMcpAuthorization,
+      handleRevokeMcpAuthorization,
+    ])
+      expect((await handler(context(""), deps)).status).toBe(403);
+    expect(start).not.toHaveBeenCalled();
+  });
+  it.each([null, [], {}])(
+    "rejects an invalid JSON status boundary before consulting its owner: %j",
+    async (body) => {
+      const f = fixture();
+      const owner = authorizationOwner();
+      const result = await handleMcpAuthorizationStatus(context(f.cookie, body), {
+        ...f.deps,
+        mcpAuthorization: owner,
+      });
+      expect(result.status).toBe(400);
+      expect(owner.status).not.toHaveBeenCalled();
+    },
+  );
+  it("rejects oversized and ambiguous status requests before consulting the owner", async () => {
+    const f = fixture();
+    const owner = authorizationOwner();
+    for (const body of [
+      { attemptId: "forged" },
+      { attemptId: "con_" + "a".repeat(48), extra: true },
+      { attemptId: "a".repeat(2048) },
+    ]) {
+      const result = await handleMcpAuthorizationStatus(context(f.cookie, body), {
+        ...f.deps,
+        mcpAuthorization: owner,
+      });
+      expect(result.status).toBeGreaterThanOrEqual(400);
+    }
+    expect(owner.status).not.toHaveBeenCalled();
+  });
+  it("rechecks the app session after an asynchronous authorization start", async () => {
+    const f = fixture();
+    const start = vi.fn<import("./mcpAuthorization.js").McpAuthorization["start"]>(
+      (_name, _session, current) => {
+        expect(current()).toBe(true);
+        f.deps.codingAppSessionChannel?.signOut(f.cookie.slice(APP_SESSION_COOKIE_NAME.length + 1));
+        expect(current()).toBe(false);
+        return Promise.resolve({ outcome: "refused", reason: "failed" });
+      },
+    );
+    const result = await handleStartMcpAuthorization(context(f.cookie), {
+      ...f.deps,
+      mcpAuthorization: authorizationOwner(start),
+    });
+    expect(result.status).toBe(403);
+    expect(start).toHaveBeenCalledOnce();
+  });
+});
+function authorizationOwner(
+  start: import("./mcpAuthorization.js").McpAuthorization["start"] = vi.fn(),
+): import("./mcpAuthorization.js").McpAuthorization {
+  return {
+    start,
+    authorized: vi.fn(() => false),
+    credentials: vi.fn(() => []),
+    token: vi.fn(() => Promise.resolve("synthetic-unused")),
+    status: vi.fn(() => "unavailable" as const),
+    cancel: vi.fn(),
+    revoke: vi.fn(),
+    close: vi.fn(() => Promise.resolve()),
+  };
+}

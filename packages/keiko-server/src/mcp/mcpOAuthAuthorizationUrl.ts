@@ -31,10 +31,24 @@ export function mcpOAuthAuthorizationRefusal(
 ): McpOAuthAuthorizationRefusal | undefined {
   if (!URL.canParse(value)) return "malformed";
   const url = new URL(value);
+  if (!uniqueAuthorizationParameters(url.searchParams)) return "malformed";
   const endpoint = new URL(expected.authorizationEndpoint);
   if (url.origin !== endpoint.origin || url.pathname !== endpoint.pathname || url.hash !== "")
     return "endpoint-mismatch";
   return requestRefusal(url.searchParams, expected);
+}
+
+function uniqueAuthorizationParameters(query: URLSearchParams): boolean {
+  return [
+    "response_type",
+    "client_id",
+    "redirect_uri",
+    "state",
+    "code_challenge",
+    "code_challenge_method",
+    "resource",
+    "scope",
+  ].every((name) => query.getAll(name).length <= 1);
 }
 
 // The authorization request itself, in the order a reader checks it.
@@ -69,6 +83,10 @@ function loopbackCallback(value: string | null): boolean {
     url.protocol === "http:" &&
     url.hostname === "127.0.0.1" &&
     url.port !== "" &&
-    url.pathname === "/callback"
+    url.pathname === "/callback" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === ""
   );
 }

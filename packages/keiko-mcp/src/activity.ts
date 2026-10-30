@@ -44,6 +44,12 @@ const LIFECYCLE = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
     toolCount: { type: "integer", dataClass: "count", required: true },
+    processOwner: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["posix-process-group", "windows-job"],
+    },
     invocationId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
   },
   causal: "correlation",
@@ -61,7 +67,10 @@ export function recordManagedMcp(
   toolCount: number,
   registrySha256: string,
   reason: ManagedMcpFailure | "none" = "none",
-  invocationId?: string,
+  details: {
+    readonly invocationId?: string;
+    readonly processOwner?: "posix-process-group" | "windows-job";
+  } = {},
 ): void {
   try {
     log.write(
@@ -75,7 +84,8 @@ export function recordManagedMcp(
           registrySha256,
           completeness: "complete",
           loss: "none",
-          ...(invocationId === undefined ? {} : { invocationId }),
+          ...(details.invocationId === undefined ? {} : { invocationId: details.invocationId }),
+          ...(details.processOwner === undefined ? {} : { processOwner: details.processOwner }),
         },
       ),
     );

@@ -15,7 +15,7 @@ import type { RouteContext, RouteResult } from "../routes.js";
 
 type SettingsDeps = Pick<
   UiHandlerDeps,
-  "mcpSettings" | "mcpConnections" | "codingAppSessionChannel" | "diagnostics"
+  "mcpSettings" | "mcpConnections" | "mcpAuthorization" | "codingAppSessionChannel" | "diagnostics"
 >;
 const denied = (): RouteResult => ({
   status: 403,
@@ -90,7 +90,21 @@ function withConnections(
       state: server.enabled ? ("idle" as const) : ("disabled" as const),
       toolCount: null,
     }));
-  return { ...snapshot, connections };
+  return {
+    ...snapshot,
+    connections: connections.map((connection) => {
+      const server = snapshot.servers.find((entry) => entry.name === connection.name);
+      if (server?.transport.kind !== "remote" || server.transport.oauth === undefined)
+        return connection;
+      return {
+        ...connection,
+        authentication:
+          deps.mcpAuthorization?.authorized(server, correlationId) === true
+            ? ("authorized" as const)
+            : ("required" as const),
+      };
+    }),
+  };
 }
 const conflict = (): RouteResult => ({
   status: 409,

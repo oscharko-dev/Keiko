@@ -6,6 +6,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "mcp-authorization",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["mcp.authorization.state"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["mcp.authorization.state"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["mcp.authorization.state"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["mcp.authorization.state"],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "loss-state",
+      "opaque-id",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "chat-tool-transcript",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

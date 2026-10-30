@@ -85,6 +85,12 @@ import {
   handleConnectMcpServer,
 } from "./mcp/mcpSettingsRoutes.js";
 import {
+  handleStartMcpAuthorization,
+  handleMcpAuthorizationStatus,
+  handleCancelMcpAuthorization,
+  handleRevokeMcpAuthorization,
+} from "./mcp/mcpAuthorizationRoutes.js";
+import {
   handleDeleteConversationAttachment,
   handleUploadConversationAttachment,
 } from "./conversation-attachment-routes.js";
@@ -526,6 +532,26 @@ function dispatchGitChangeApplyDescription(
 // two desktop chat routes, desktop terminal JSON routes, and read-only Files widget routes.
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization",
+    handler: handleStartMcpAuthorization,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/status",
+    handler: handleMcpAuthorizationStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/cancel",
+    handler: handleCancelMcpAuthorization,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/revoke",
+    handler: handleRevokeMcpAuthorization,
+  },
   { method: "GET", pattern: "/api/mcp/servers", handler: handleGetMcpSettings },
   { method: "PUT", pattern: "/api/mcp/servers", handler: handlePutMcpSettings },
   {
