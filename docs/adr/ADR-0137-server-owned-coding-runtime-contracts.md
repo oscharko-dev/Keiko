@@ -2016,6 +2016,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   records a failed proof, and a line whose status another command decided completes nothing.
   `coding-runtime.verification` records the outcome (`state: "native-proof"`, `verifierId`,
   `stepCount`, `commitProof`, `commitProofReason`).
+  The same parity run then showed a proven, approved commit settling `recovery-required` after
+  its signed object already existed: a human who checks out the task branch locally gives the run
+  that branch as its own base, and Git refuses a ref transaction that both verifies and updates one
+  ref. The governed commit now guards such a branch by the update's own expected old value alone,
+  which is equivalent only while the verified base and head agree; when they differ it fails closed
+  before any ref update. A distinct base keeps its separate `verify` line in the same atomic
+  transaction.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the
