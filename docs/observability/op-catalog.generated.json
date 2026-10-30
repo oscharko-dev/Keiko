@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "abc467700fa27f4c9498f2b11465c326e0fa3b3731b1e15096d9a49fbfff82fd",
+    "catalogDigest": "9b41338c31267dc179a2840c321a3aa029b452cead97c611b9e9ef76f3989ca2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8024,7 +8024,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:141",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1597"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1591"
         ]
       },
       {
@@ -9744,8 +9744,8 @@
         "failureClasses": ["coding-runtime-jira-pod"],
         "proofIds": ["coding-runtime.jira-pod.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:148",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:251"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:169",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:272"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -105821,7 +105821,7 @@
     {
       "op": "coding-runtime.jira-pod",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:151",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:172",
       "package": "keiko-server"
     },
     {
