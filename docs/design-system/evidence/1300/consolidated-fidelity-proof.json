@@ -64,11 +64,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "6af8c86d701ebf73781e57d0895563f8518370fa0ef8fe7946a5e99f59c2e37e"
+      "sha256": "5a4089c177fb875047d07403c5ce3fbed7258ebff4d94358b76b1939a9bab7a2"
     },
     {
       "path": "package.json",
-      "sha256": "8ab1bb8f0881ebf2902ca64bcb525e34eaa07faa07067a041b30ab7e1ba59db9"
+      "sha256": "87c57aeb10c271423b77a85ae98d29153a6f855ab9b6220c0cb00634a113cf24"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -139,9 +139,9 @@
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-10-30T02:36:53.885Z",
-    "generatedAt": "2026-10-30T02:36:58.026Z",
-    "repoHeadSha": "bb8012f81e8f990a0efc83a6ef89c7b5c95efabb"
+    "startedAt": "2026-10-30T21:59:44.443Z",
+    "generatedAt": "2026-10-30T21:59:49.427Z",
+    "repoHeadSha": "3de4bdfb7b0cf113e8ece75a2f541f7eff19c8b6"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -395,7 +395,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.10000002384185791,
+    "durationMs": 0.19999999925494194,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,
