@@ -80,9 +80,12 @@ Keiko creates a dedicated, detached review worktree at the head SHA. The user's 
 branches are never modified. Hooks, filter drivers (including Git LFS smudge), `core.symlinks` and
 fsmonitor are neutralized for that worktree, symbolic links are checked out as plain files, and
 workspace containment and sensitive-path denials apply unchanged. A fork pull request is treated
-exactly like any other: every pull request is hostile input regardless of its author. The worktree
+exactly like any other: every pull request is hostile input regardless of its author. A head
+whose tree exceeds the path or byte budget is refused before checkout (`worktree-failed` with the
+closed detail `tree-too-large`), as are case or normalization collisions; a pull request target's
+branch names are display data only (Keiko fetches by number and reviews SHAs). The worktree
 is removed when the run settles or is abandoned. Private review refs
-(`refs/keiko-review/<n>/<headSha>`) remain only to serve the reviewed diff and are swept when the
+(`refs/keiko-review/<installation>/<n>/<headSha>`, namespaced per installation) remain only to serve the reviewed diff and are swept when the
 pull request closes, when no run references them, or after 30 days. ADR-0086 and ADR-0098 are
 amended by Issue #4133.
 

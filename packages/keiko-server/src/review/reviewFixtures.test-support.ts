@@ -235,3 +235,32 @@ export function startLoopbackGitRemote(projectRoot: string): Promise<LoopbackGit
     });
   });
 }
+
+/** Writes a raw object without Git's own validation (`hash-object --literally`). */
+export function writeRawObject(repo: string, type: "blob" | "tree", content: Buffer): string {
+  return execFileSync("git", ["hash-object", "-w", "--literally", "-t", type, "--stdin"], {
+    cwd: repo,
+    env: gitEnv(),
+    input: content,
+  })
+    .toString("utf8")
+    .trim();
+}
+
+/** A raw tree of regular-file entries, in the given order, duplicates allowed. */
+export function rawTree(
+  repo: string,
+  entries: readonly (readonly [string, string, string])[],
+): string {
+  const body = Buffer.concat(
+    entries.map(([mode, name, oid]) =>
+      Buffer.concat([Buffer.from(`${mode} ${name}\0`, "utf8"), Buffer.from(oid, "hex")]),
+    ),
+  );
+  return writeRawObject(repo, "tree", body);
+}
+
+/** A commit of `tree` on top of `parent`, without touching any branch. */
+export function commitTree(repo: string, tree: string, parent: string): string {
+  return git(repo, "commit-tree", tree, "-p", parent, "-m", "crafted");
+}

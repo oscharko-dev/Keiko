@@ -439,8 +439,11 @@ free-form `gh` usage:
   each emit one constant GraphQL **query** document (no mutation). The only variables are the
   verified `owner/repo` of the repository's `origin`, the page size (50) or the pull request number
   (validated integers), and the pagination cursor GitHub itself returned (validated shape). The
-  documents never request the pull request body or comments; title and author are untrusted
-  display data, bounded and stripped of control characters.
+  documents never request the pull request body or comments; title, author and branch names are
+  untrusted display data, bounded and stripped of control, bidi and zero-width characters by the
+  canonical `text-safety` stripper. A branch name outside the safe ref alphabet never hides the
+  pull request: it is shown sanitized and never passed to Git (the review fetches
+  `refs/pull/<n>/head` by number).
 - A dedicated rule set `GIT_REVIEW_PULL_REQUEST_COMMAND_RULES` allows `gh api` only, forbids leading
   flags, and denies `--input`, `--paginate`, `--slurp`, `--method`/`-X`, `--header`/`-H`,
   `--jq`/`-q`, `--template`/`-t`, `--cache`, `--include`/`-i`, `--preview`/`-p` and `--verbose`.

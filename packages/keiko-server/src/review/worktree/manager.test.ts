@@ -4,7 +4,16 @@
 // a user's `git worktree prune` during a run, reconciliation ignoring the review root).
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, renameSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { createGitProcessRunner, gitEnv } from "@oscharko-dev/keiko-git";
 import {
@@ -20,6 +29,9 @@ import {
   git,
   initRepository,
   LFS_POINTER,
+  commitTree,
+  rawTree,
+  writeRawObject,
   type ReviewFixtureRoot,
 } from "../reviewFixtures.test-support.js";
 import { reviewRunLeaf } from "./leaf.js";
@@ -152,6 +164,129 @@ describe("pre-checkout refusals and exclusions (AC4)", () => {
     expect(existsSync(join(created.worktree.path, "large.txt"))).toBe(false);
     expect(existsSync(join(created.worktree.path, "-image.bin"))).toBe(false);
     expect(readFileSync(join(created.worktree.path, "small.txt"), "utf8")).toBe("small\n");
+  });
+});
+
+describe("disk-fill and malformed-tree defences", () => {
+  it("refuses a git bomb of reused subtrees before checkout, writing nothing", async () => {
+    const base = git(repo, "rev-parse", "HEAD");
+    const blob = writeRawObject(repo, "blob", Buffer.alloc(1024 * 1024, 0x61));
+    const leaf = rawTree(
+      repo,
+      Array.from(
+        { length: 64 },
+        (_, index) => ["100644", `f${String(index).padStart(2, "0")}`, blob] as const,
+      ),
+    );
+    const root = rawTree(
+      repo,
+      Array.from(
+        { length: 64 },
+        (_, index) => ["40000", `d${String(index).padStart(2, "0")}`, leaf] as const,
+      ),
+    );
+    const head = commitTree(repo, root, base);
+    const review = services({ maxMaterializedBytes: 32 * 1024 * 1024 });
+    const created = await review.worktrees.create({
+      runId: "bomb",
+      repositoryRoot: repo,
+      headSha: head,
+    });
+    expect(created).toEqual({ ok: false, reason: "tree-too-large" });
+    expect(readdirSync(review.reviewRoot).filter((name) => name.startsWith("r-"))).toEqual([]);
+    expect(adminEntries()).toEqual([]);
+    expect(log.withOp("review.worktree.refused")[0]?.extra?.reason).toBe("tree-too-large");
+  });
+
+  it("refuses a tree that lists one path twice instead of materializing the skipped duplicate", async () => {
+    const base = git(repo, "rev-parse", "HEAD");
+    const small = writeRawObject(repo, "blob", Buffer.from("small\n"));
+    const large = writeRawObject(repo, "blob", Buffer.alloc(8192, 0x62));
+    const head = commitTree(
+      repo,
+      rawTree(repo, [
+        ["100644", "x", small],
+        ["100644", "x", large],
+      ]),
+      base,
+    );
+    const review = services({ blobLimitBytes: 1024 });
+    expect(
+      await review.worktrees.create({ runId: "dup", repositoryRoot: repo, headSha: head }),
+    ).toEqual({
+      ok: false,
+      reason: "checkout-failed",
+    });
+    expect(readdirSync(review.reviewRoot).filter((name) => name.startsWith("r-"))).toEqual([]);
+  });
+
+  it("is not refused by a head that names hundreds of filter drivers in hundreds of attribute files", async () => {
+    git(repo, "checkout", "-q", "-b", "attributes");
+    const names = Array.from(
+      { length: 80 },
+      (_, index) => `*.x${String(index)} filter=f${String(index)}`,
+    );
+    for (let index = 0; index < 300; index += 1) {
+      writeFileSync(join(repo, `.gitattributes-${String(index)}`), "");
+      mkdirSync(join(repo, `a${String(index)}`));
+      writeFileSync(join(repo, `a${String(index)}`, ".gitattributes"), `${names.join("\n")}\n`);
+    }
+    writeFileSync(join(repo, "notes.txt"), "line $Id$\n");
+    writeFileSync(join(repo, ".gitattributes"), "*.txt eol=crlf ident\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "attributes");
+    const head = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-q", "main");
+    const created = await services().worktrees.create({
+      runId: "attrs",
+      repositoryRoot: repo,
+      headSha: head,
+    });
+    if (!created.ok) throw new Error(created.reason);
+    expect(readFileSync(join(created.worktree.path, "notes.txt"), "utf8")).toBe("line $Id$\n");
+  });
+
+  it("excludes a decomposed binary path in a precomposing repository", async () => {
+    git(repo, "config", "core.precomposeunicode", "true");
+    const base = git(repo, "rev-parse", "HEAD");
+    const binary = writeRawObject(repo, "blob", Buffer.from([0, 1, 2, 0]));
+    const readme = git(repo, "rev-parse", "HEAD:README.md");
+    const tree = rawTree(repo, [
+      ["100644", "README.md", readme],
+      ["100644", "cafe\u0301.bin", binary],
+    ]);
+    const head = commitTree(repo, tree, base);
+    const created = await services().worktrees.create({
+      runId: "nfd",
+      repositoryRoot: repo,
+      headSha: head,
+    });
+    if (!created.ok) throw new Error(created.reason);
+    expect(created.worktree.skippedBinary).toEqual(["cafe\u0301.bin"]);
+    expect(readdirSync(created.worktree.path).filter((name) => name.endsWith(".bin"))).toEqual([]);
+  });
+
+  it("refuses as cancelled when the caller aborts and as timeout at the creation deadline", async () => {
+    const head = git(repo, "rev-parse", "HEAD");
+    const controller = new AbortController();
+    controller.abort();
+    const review = services();
+    expect(
+      await review.worktrees.create({
+        runId: "aborted",
+        repositoryRoot: repo,
+        headSha: head,
+        abortSignal: controller.signal,
+      }),
+    ).toEqual({ ok: false, reason: "cancelled" });
+    const late = services({ createDeadlineMs: 0 });
+    expect(
+      await late.worktrees.create({ runId: "late", repositoryRoot: repo, headSha: head }),
+    ).toEqual({
+      ok: false,
+      reason: "timeout",
+    });
+    expect(adminEntries()).toEqual([]);
   });
 });
 

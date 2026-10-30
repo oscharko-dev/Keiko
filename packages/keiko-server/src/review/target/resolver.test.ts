@@ -20,7 +20,10 @@ import {
 import { createReviewServices, type ReviewServices } from "../services.js";
 import {
   commitFile,
+  commitTree,
   createFixtureRoot,
+  rawTree,
+  writeRawObject,
   git,
   gitAsync,
   initRepository,
@@ -63,6 +66,21 @@ function detail(overrides: Partial<ReviewPullRequestDetail> = {}): ReviewPullReq
     approvalCount: 0,
     ...overrides,
   };
+}
+
+function reviewServicesAt(
+  stateName: string,
+  outcome: () => GitReviewPrDetailOutcome,
+): ReviewServices {
+  const reader: GitReviewPullRequestReader = {
+    listOpenPullRequests: () => Promise.resolve({ availability: "failed", pages: 1 }),
+    readPullRequest: () => Promise.resolve(outcome()),
+  };
+  return createReviewServices({
+    reviewRoot: join(fixture.root, stateName, "review-worktrees"),
+    activityLog: log.sink,
+    github: { ownerAndRepo: () => Promise.resolve("o/r"), readerFor: () => reader },
+  });
 }
 
 function reviewServices(
@@ -150,7 +168,7 @@ describe("pull request targets", () => {
       headSha,
       isCrossRepository: true,
     });
-    expect(privateRefs()).toEqual([`refs/keiko-review/7/${headSha}`]);
+    expect(privateRefs()).toEqual([`refs/keiko-review/${review.namespace}/7/${headSha}`]);
     const created = await review.worktrees.create({
       runId: "run-ac2",
       repositoryRoot: repo,
@@ -202,7 +220,10 @@ describe("pull request targets", () => {
     });
     expect(resolution.ok).toBe(true);
     expect(privateRefs()).toEqual(
-      [`refs/keiko-review/7/${headSha}`, `refs/keiko-review/7/base-${advancedBase}`].sort(),
+      [
+        `refs/keiko-review/${review.namespace}/7/${headSha}`,
+        `refs/keiko-review/${review.namespace}/7/base-${advancedBase}`,
+      ].sort(),
     );
     const [line] = log.withOp("review.target.resolved");
     expect(line?.extra).toMatchObject({
@@ -212,6 +233,34 @@ describe("pull request targets", () => {
     });
     expect(JSON.stringify(line)).not.toContain(headSha);
     expect(JSON.stringify(log.events)).not.toContain(repo);
+  });
+
+  it("refuses a pull request whose head carries a malformed tree: fsck rejects it at fetch", async () => {
+    const small = writeRawObject(author, "blob", Buffer.from("small\n"));
+    const large = writeRawObject(author, "blob", Buffer.alloc(4096, 0x63));
+    const malformed = commitTree(
+      author,
+      rawTree(author, [
+        ["100644", "x", small],
+        ["100644", "x", large],
+      ]),
+      headSha,
+    );
+    git(author, "push", "-q", bare, `${malformed}:refs/pull/9/head`);
+    const review = reviewServices(() => ({
+      availability: "available",
+      pullRequest: detail({ number: 9, headSha: malformed }),
+    }));
+    expect(
+      await review.resolveTarget({
+        repositoryRoot: repo,
+        runId: "fsck",
+        request: { kind: "pull-request", number: 9 },
+      }),
+    ).toEqual({ ok: false, reason: "fetch-failed" });
+    expect(privateRefs()).toEqual([]);
+    // The malformed objects never entered the user's object store.
+    expect(() => git(repo, "cat-file", "-e", malformed)).toThrow();
   });
 
   it("maps provider and transport failures onto the closed refusal reasons", async () => {
@@ -280,6 +329,36 @@ describe("pull request targets", () => {
   });
 });
 
+describe("private ref namespaces", () => {
+  it("never sweeps the live refs of another installation reviewing the same repository", async () => {
+    const other = reviewServicesAt("other-state", () => ({
+      availability: "available",
+      pullRequest: detail(),
+    }));
+    const mine = reviewServicesAt("my-state", () => ({
+      availability: "available",
+      pullRequest: detail(),
+    }));
+    expect(other.namespace).not.toBe(mine.namespace);
+    const theirs = await other.resolveTarget({
+      repositoryRoot: repo,
+      runId: "theirs",
+      request: { kind: "pull-request", number: 7 },
+    });
+    const ours = await mine.resolveTarget({
+      repositoryRoot: repo,
+      runId: "ours",
+      request: { kind: "local-range", baseRef: "main", headRef: "main" },
+    });
+    if (!theirs.ok || !ours.ok) throw new Error("expected both targets");
+    // Our resolution is not pinned by a worktree in this instance's memory after a restart.
+    const restarted = reviewServicesAt("my-state", () => ({ availability: "failed" }));
+    expect(await restarted.sweepRefs("daily")).toEqual({ deleted: 1, retained: 0, failed: 0 });
+    expect(privateRefs()).toEqual([...theirs.privateRefs]);
+    await other.dispose();
+  });
+});
+
 describe("local range targets", () => {
   it("resolves both refs to full SHAs and retains the head under a run-scoped private ref", async () => {
     git(repo, "checkout", "-q", "-b", "topic");
@@ -301,7 +380,9 @@ describe("local range targets", () => {
       headRef: "topic",
     });
     expect(resolution.privateRefs).toHaveLength(1);
-    expect(resolution.privateRefs[0]).toMatch(/^refs\/keiko-review\/local\/r-[a-f0-9]{24}$/u);
+    expect(resolution.privateRefs[0]).toMatch(
+      /^refs\/keiko-review\/k[a-f0-9]{16}\/local\/r-[a-f0-9]{24}$/u,
+    );
     expect(repositoryStateDigest(repo)).toEqual(before);
   });
 

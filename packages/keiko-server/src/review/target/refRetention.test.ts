@@ -7,8 +7,8 @@ import { REVIEW_PRIVATE_REF_RETENTION_MS } from "@oscharko-dev/keiko-contracts/r
 import { reviewRefExpired } from "./refRetention.js";
 
 const SHA = "c".repeat(40);
-const REF = `refs/keiko-review/12/${SHA}`;
-const LOCAL = "refs/keiko-review/local/r-0123456789abcdef01234567";
+const REF = `refs/keiko-review/k0123456789abcdef/12/${SHA}`;
+const LOCAL = "refs/keiko-review/k0123456789abcdef/local/r-0123456789abcdef01234567";
 
 function facts(
   overrides: Partial<Parameters<typeof reviewRefExpired>[1]> = {},

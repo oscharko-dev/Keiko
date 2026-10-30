@@ -18,14 +18,13 @@ import type {
   ReviewPullRequestSummary,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  REVIEW_DISPLAY_REF_MAX_CHARS,
   REVIEW_PULL_REQUEST_PAGE_SIZE,
   REVIEW_PULL_REQUEST_TITLE_MAX_CHARS,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { isGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
-import {
-  isGitObjectId,
-  isSafeGitRefName,
-} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 
 const PULL_REQUEST_FIELDS =
   "number title isDraft createdAt updatedAt author{login} baseRefName baseRefOid headRefName " +
@@ -224,20 +223,31 @@ const NAME_WITH_OWNER = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/u;
 // eslint-disable-next-line no-control-regex -- intentionally matches control characters to replace them
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/gu;
 
-/** Untrusted title text: control characters become spaces, then bounded by code points. */
+/**
+ * Untrusted display text: the canonical text-safety stripper removes bidi, zero-width, BOM and
+ * format spoofing code points; the remaining line breaks and controls become spaces; the result is
+ * bounded by code points.
+ */
+function boundedDisplayText(value: string, maxChars: number): string {
+  const flattened = stripUnsafeFormatChars(value).replace(CONTROL_CHARACTERS, " ").trim();
+  return Array.from(flattened).slice(0, maxChars).join("");
+}
+
 export function boundedPullRequestTitle(value: string): string {
-  const flattened = value.replace(CONTROL_CHARACTERS, " ").trim();
-  return Array.from(flattened).slice(0, REVIEW_PULL_REQUEST_TITLE_MAX_CHARS).join("");
+  return boundedDisplayText(value, REVIEW_PULL_REQUEST_TITLE_MAX_CHARS);
 }
 
 function isoTime(value: unknown): string | undefined {
   return typeof value === "string" && ISO_TIME.test(value) ? value : undefined;
 }
 
-function refName(value: unknown): string | undefined {
-  return typeof value === "string" && !value.startsWith("refs/") && isSafeGitRefName(value)
-    ? value
-    : undefined;
+// Branch names a pull request reports are display data only (Keiko fetches `refs/pull/<n>/head`
+// and reviews SHAs), so a fork's unusual branch name never hides the pull request: it is sanitized
+// like a title, never passed to Git.
+function displayRefName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const display = boundedDisplayText(value, REVIEW_DISPLAY_REF_MAX_CHARS);
+  return display.length > 0 ? display : undefined;
 }
 
 function objectId(value: unknown): string | undefined {
@@ -296,9 +306,9 @@ interface Identity {
 
 function identity(node: JsonRecord): Identity | undefined {
   const number = count(node.number);
-  const baseRef = refName(node.baseRefName);
+  const baseRef = displayRefName(node.baseRefName);
   const baseSha = objectId(node.baseRefOid);
-  const headRef = refName(node.headRefName);
+  const headRef = displayRefName(node.headRefName);
   const headSha = objectId(node.headRefOid);
   if (number === undefined || number < 1 || baseRef === undefined || headRef === undefined) {
     return undefined;

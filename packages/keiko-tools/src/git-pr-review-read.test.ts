@@ -188,11 +188,31 @@ describe("pull request projection", () => {
     expect(hostile?.checkState).toBe("none");
   });
 
-  it("rejects nodes with unsafe refs, abbreviated SHAs or malformed facts", () => {
+  it("strips bidi and zero-width spoofing from titles and branch names", () => {
+    const spoofed = parseReviewPullRequestSummary(
+      pullRequestNode({
+        title: "fix: safe\u202e\u2066change\u2069\u200b\u200f\ufeff",
+        headRefName: "feature/\u202ex#12",
+      }),
+    );
+    expect(spoofed?.title).toBe("fix: safechange");
+    expect(spoofed?.headRef).toBe("feature/x#12");
+  });
+
+  it("keeps a pull request whose fork branch name is not a safe ref name, as display data", () => {
+    for (const headRefName of ["feature/#12", "fix/\u00fcmlaut", "-x", "a..b"]) {
+      const parsed = parseReviewPullRequestSummary(pullRequestNode({ headRefName }));
+      expect(parsed?.headRef).toBe(headRefName);
+      expect(parsed?.headSha).toBe(SHA_B);
+    }
+    expect(
+      parseReviewPullRequestSummary(pullRequestNode({ headRefName: "\u200b" })),
+    ).toBeUndefined();
+  });
+
+  it("rejects nodes with abbreviated SHAs or malformed facts", () => {
     for (const overrides of [
-      { headRefName: "-x" },
-      { headRefName: "refs/heads/x" },
-      { baseRefName: "a..b" },
+      { headRefName: 5 },
       { headRefOid: "abc123" },
       { number: 0 },
       { additions: -1 },

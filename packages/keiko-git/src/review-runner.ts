@@ -36,6 +36,11 @@ export const GIT_REVIEW_HARDENING_CONFIG: readonly (readonly [string, string])[]
   Object.freeze(["core.protectNTFS", "true"] as const),
   Object.freeze(["core.protectHFS", "true"] as const),
   Object.freeze(["core.sparseCheckout", "false"] as const),
+  // Materialize every file byte-identical to its blob: no end-of-line conversion from
+  // configuration (in-tree attributes are disabled separately, see `attributeSourceArgs`), and no
+  // re-encoding of path names on macOS, so the paths Keiko names are the paths Git writes.
+  Object.freeze(["core.autocrlf", "false"] as const),
+  Object.freeze(["core.precomposeUnicode", "false"] as const),
   Object.freeze(["core.editor", "true"] as const),
   Object.freeze(["core.pager", "cat"] as const),
   Object.freeze(["submodule.recurse", "false"] as const),
@@ -45,6 +50,18 @@ export const GIT_REVIEW_HARDENING_CONFIG: readonly (readonly [string, string])[]
   Object.freeze(["gc.auto", "0"] as const),
   Object.freeze(["maintenance.auto", "false"] as const),
 ]);
+
+/**
+ * The fetch verifies every received object (`fetch.fsckObjects`), so a malformed tree (duplicate
+ * entries, `..` or `.git` names, bad modes) is rejected before it can enter the user's object
+ * store; the review then refuses the target as `fetch-failed`.
+ */
+const GIT_REVIEW_FETCH_FSCK_ARGS: readonly string[] = [
+  "-c",
+  "fetch.fsckObjects=true",
+  "-c",
+  "transfer.fsckObjects=true",
+];
 
 /** Driver names Keiko neutralizes on every review operation, whether or not they are configured. */
 const ALWAYS_NEUTRALIZED_FILTER_DRIVERS: readonly string[] = ["lfs"];
@@ -63,14 +80,31 @@ const MAX_FILTER_DRIVERS = 64;
 const MAX_BIG_FILE_THRESHOLD_BYTES = 512 * 1024 * 1024;
 
 export interface GitReviewRunnerOptions {
-  /** Filter driver names named by the head's attributes or the repository's configuration. */
+  /** Filter driver names the repository's configuration defines. */
   readonly filterDrivers?: readonly string[] | undefined;
   /**
    * Blobs above this size are treated as binary by the diff machinery without being loaded, so a
    * binary scan never reads a giant blob. Mirrors the review worktree's blob limit.
    */
   readonly bigFileThresholdBytes?: number | undefined;
+  /**
+   * Reads `.gitattributes` from the empty tree of this object format instead of the reviewed
+   * head (`--attr-source`), so no in-tree attribute can select a filter driver, convert line
+   * endings, re-encode the working tree (`working-tree-encoding`) or expand `$Id$` (`ident`): every
+   * materialized file is exactly its blob. A Git without `--attr-source` (older than 2.42) refuses
+   * the invocation, so the review fails closed instead of running unneutralized.
+   */
+  readonly neutralizeTreeAttributes?: "sha1" | "sha256" | undefined;
   readonly platform?: NodeJS.Platform | undefined;
+}
+
+const EMPTY_TREE: Readonly<Record<"sha1" | "sha256", string>> = {
+  sha1: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+  sha256: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+};
+
+function attributeSourceArgs(format: "sha1" | "sha256" | undefined): readonly string[] {
+  return format === undefined ? [] : [`--attr-source=${EMPTY_TREE[format]}`];
 }
 
 function configPairArgs(pairs: readonly (readonly [string, string])[]): readonly string[] {
@@ -120,6 +154,7 @@ function bigFileThresholdArgs(bytes: number | undefined): readonly string[] {
 export function gitReviewFixedArgs(options: GitReviewRunnerOptions = {}): readonly string[] {
   const platform = options.platform ?? process.platform;
   return [
+    ...attributeSourceArgs(options.neutralizeTreeAttributes),
     ...configPairArgs(hardeningConfig(platform)),
     ...gitReviewFilterNeutralizationArgs(options.filterDrivers ?? []),
     ...bigFileThresholdArgs(options.bigFileThresholdBytes),
@@ -163,7 +198,11 @@ export function createGitReviewProcessRunner(
  * network neutralization, plus the review hardening set.
  */
 export function createGitReviewNetworkProcessRunner(): GitProcessRunner {
-  const fixedArgs = [...NETWORK_CONFIG_ARGS, ...gitReviewFixedArgs()];
+  const fixedArgs = [
+    ...NETWORK_CONFIG_ARGS,
+    ...gitReviewFixedArgs(),
+    ...GIT_REVIEW_FETCH_FSCK_ARGS,
+  ];
   return refusingCallerConfiguration(
     createGitProcessRunnerWithFixedArgs(() => networkGitReviewEnv(), fixedArgs),
   );

@@ -19,7 +19,11 @@ import type {
   ReviewWorktreeRefusalReason,
   ReviewWorktreeState,
 } from "@oscharko-dev/keiko-contracts";
-import { REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES,
+  REVIEW_WORKTREE_MAX_MATERIALIZED_BYTES,
+  REVIEW_WORKTREE_MAX_PATHS,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { isReviewRunId } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
@@ -30,7 +34,6 @@ import {
   listGitReviewConfiguredFilterDrivers,
   listGitReviewTree,
   listGitReviewWorktrees,
-  readGitReviewBlob,
   readGitReviewTreeIntoIndex,
   removeGitReviewWorktree,
   resolveGitReviewCommit,
@@ -41,7 +44,6 @@ import {
   type GitProcessRunner,
   type GitReviewOperationContext,
   type GitReviewRunnerOptions,
-  type GitReviewTreeEntry,
 } from "@oscharko-dev/keiko-git";
 import type { ServerLogSink } from "../../observability/index.js";
 import {
@@ -55,17 +57,17 @@ import { ensureReviewRoot, type ReviewRegistry } from "./registry.js";
 import { reportReviewFailure } from "../diagnostics.js";
 import { REVIEW_RUN_LEAF_PATTERN, reviewRunLeaf } from "./leaf.js";
 import {
-  filterDriversInAttributes,
-  isGitAttributesPath,
+  preflightReviewTree,
   scanReviewTree,
+  type ReviewTreeLimits,
   type ReviewTreeScan,
 } from "./treeScan.js";
 
 const GIT_TIMEOUT_MS = 120_000;
 const LISTING_MAX_BYTES = 64 * 1024 * 1024;
-const ATTRIBUTES_MAX_FILES = 256;
-const ATTRIBUTES_MAX_BYTES = 1024 * 1024;
 const MAX_FILTER_DRIVERS = 64;
+/** The whole creation, every Git process included, ends by this deadline unless configured. */
+const DEFAULT_CREATE_DEADLINE_MS = 10 * 60 * 1000;
 
 export interface ReviewWorktreeManagerDeps {
   readonly reviewRoot: string;
@@ -78,6 +80,9 @@ export interface ReviewWorktreeManagerDeps {
     correlationId: string | undefined,
   ) => GitProcessRunner;
   readonly blobLimitBytes?: number | undefined;
+  readonly maxPaths?: number | undefined;
+  readonly maxMaterializedBytes?: number | undefined;
+  readonly createDeadlineMs?: number | undefined;
   /** Called once a run's worktree is gone (removed or swept). */
   readonly onRemoved?: ((runId: string) => void) | undefined;
 }
@@ -87,6 +92,8 @@ interface ReviewWorktreeCreateInput {
   readonly repositoryRoot: string;
   readonly headSha: string;
   readonly correlationId?: string | undefined;
+  /** Aborts every Git process of the creation; the worktree is then refused as `cancelled`. */
+  readonly abortSignal?: AbortSignal | undefined;
 }
 
 interface ReviewWorktree {
@@ -134,55 +141,84 @@ class WorktreeRefusal extends Error {
 
 const DISK_FULL = /no space left on device|disk quota exceeded|ENOSPC/iu;
 
-function refusalFor(result: GitProcessResult): WorktreeRefusal {
+/** The creation's abort: the caller's cancellation or the creation deadline, told apart. */
+interface CreationAbort {
+  readonly signal: AbortSignal;
+  readonly deadlineReached: () => boolean;
+  readonly release: () => void;
+}
+
+function refusalFor(result: GitProcessResult, abort?: CreationAbort): WorktreeRefusal {
+  if (result.aborted === true) {
+    return new WorktreeRefusal(abort?.deadlineReached() === true ? "timeout" : "cancelled");
+  }
   if (result.timedOut === true) return new WorktreeRefusal("timeout");
   if (DISK_FULL.test(result.stderr)) return new WorktreeRefusal("disk-full");
   return new WorktreeRefusal("checkout-failed");
 }
 
-function unwrap<T>(
-  outcome:
-    | { readonly ok: true; readonly value: T }
-    | { readonly ok: false; readonly result: GitProcessResult },
-): T {
-  if (!outcome.ok) throw refusalFor(outcome.result);
+type Outcome<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly result: GitProcessResult };
+
+function unwrap<T>(outcome: Outcome<T>, abort?: CreationAbort): T {
+  if (!outcome.ok) throw refusalFor(outcome.result, abort);
   return outcome.value;
 }
 
-function context(runner: GitProcessRunner): GitReviewOperationContext {
-  return { runner, timeoutMs: GIT_TIMEOUT_MS, maxBytes: LISTING_MAX_BYTES };
+/** A listing cut at its byte cap names more paths than any accepted tree can have. */
+function unwrapListing<T>(outcome: Outcome<T>, abort: CreationAbort): T {
+  if (!outcome.ok && isCapCut(outcome.result)) throw new WorktreeRefusal("tree-too-large");
+  return unwrap(outcome, abort);
 }
 
-async function attributeDrivers(
-  ctx: GitReviewOperationContext,
-  cwd: string,
-  entries: readonly GitReviewTreeEntry[],
-): Promise<readonly string[]> {
-  const files = entries.filter((entry) => entry.type === "blob" && isGitAttributesPath(entry.path));
-  if (files.length > ATTRIBUTES_MAX_FILES) throw new WorktreeRefusal("checkout-failed");
-  const names: string[] = [];
-  for (const file of files) {
-    if ((file.size ?? 0) > ATTRIBUTES_MAX_BYTES) throw new WorktreeRefusal("checkout-failed");
-    const content = unwrap(await readGitReviewBlob(ctx, { cwd, oid: file.oid }));
-    names.push(...filterDriversInAttributes(content));
-  }
-  // An unsafe name in the head's attributes cannot match a configured driver (every configured
-  // name must itself be safe below), so Git applies no filter for it; it is not passed to Git.
-  return names.filter(isSafeGitFilterDriverName);
+function isCapCut(result: GitProcessResult): boolean {
+  return result.truncated && result.timedOut !== true && result.aborted !== true;
 }
 
-async function filterDrivers(
+function context(runner: GitProcessRunner, abortSignal?: AbortSignal): GitReviewOperationContext {
+  return { runner, timeoutMs: GIT_TIMEOUT_MS, maxBytes: LISTING_MAX_BYTES, abortSignal };
+}
+
+function creationAbort(deadlineMs: number, caller: AbortSignal | undefined): CreationAbort {
+  const controller = new AbortController();
+  let deadline = false;
+  const timer = setTimeout(() => {
+    deadline = true;
+    controller.abort();
+  }, deadlineMs);
+  timer.unref();
+  const onCaller = (): void => {
+    controller.abort();
+  };
+  if (caller?.aborted === true) controller.abort();
+  caller?.addEventListener("abort", onCaller, { once: true });
+  return {
+    signal: controller.signal,
+    deadlineReached: (): boolean => deadline,
+    release: (): void => {
+      clearTimeout(timer);
+      caller?.removeEventListener("abort", onCaller);
+    },
+  };
+}
+
+/**
+ * The filter drivers the repository's own configuration defines. In-tree `.gitattributes` are
+ * disabled for every review checkout (`--attr-source` = the empty tree), so an attribute-only
+ * `filter=<name>` selects nothing and is neither counted nor neutralized: a head cannot force a
+ * refusal by naming many drivers or shipping many attribute files.
+ */
+async function configuredFilterDrivers(
   ctx: GitReviewOperationContext,
   worktreePath: string,
-  entries: readonly GitReviewTreeEntry[],
+  abort: CreationAbort,
 ): Promise<readonly string[]> {
-  const configured = unwrap(await listGitReviewConfiguredFilterDrivers(ctx, { cwd: worktreePath }));
+  const listed = await listGitReviewConfiguredFilterDrivers(ctx, { cwd: worktreePath });
+  const configured = unwrap(listed, abort);
   if (!configured.every(isSafeGitFilterDriverName)) throw new WorktreeRefusal("checkout-failed");
-  const all = [
-    ...new Set([...configured, ...(await attributeDrivers(ctx, worktreePath, entries))]),
-  ];
-  if (all.length > MAX_FILTER_DRIVERS) throw new WorktreeRefusal("checkout-failed");
-  return all;
+  if (configured.length > MAX_FILTER_DRIVERS) throw new WorktreeRefusal("checkout-failed");
+  return configured;
 }
 
 interface Materialized {
@@ -195,8 +231,13 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
 
   public constructor(private readonly deps: ReviewWorktreeManagerDeps) {}
 
-  private get blobLimit(): number {
-    return this.deps.blobLimitBytes ?? REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES;
+  private get limits(): ReviewTreeLimits {
+    return {
+      blobLimitBytes: this.deps.blobLimitBytes ?? REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES,
+      maxPaths: this.deps.maxPaths ?? REVIEW_WORKTREE_MAX_PATHS,
+      maxMaterializedBytes:
+        this.deps.maxMaterializedBytes ?? REVIEW_WORKTREE_MAX_MATERIALIZED_BYTES,
+    };
   }
 
   private pathFor(runId: string): string {
@@ -214,8 +255,12 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
     const path = this.pathFor(input.runId);
     await ensureReviewRoot(this.deps.reviewRoot);
     await this.register(input.runId, input.repositoryRoot);
+    const abort = creationAbort(
+      this.deps.createDeadlineMs ?? DEFAULT_CREATE_DEADLINE_MS,
+      input.abortSignal,
+    );
     try {
-      const materialized = await this.materialize(input, path);
+      const materialized = await this.materialize(input, path, abort);
       return this.accept(input, path, materialized, startedMs);
     } catch (error) {
       const reason = error instanceof WorktreeRefusal ? error.reason : "checkout-failed";
@@ -228,6 +273,8 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
         this.elapsed(startedMs),
       );
       return { ok: false, reason };
+    } finally {
+      abort.release();
     }
   }
 
@@ -254,30 +301,48 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
     }));
   }
 
-  private async materialize(input: ReviewWorktreeCreateInput, path: string): Promise<Materialized> {
+  private async materialize(
+    input: ReviewWorktreeCreateInput,
+    path: string,
+    abort: CreationAbort,
+  ): Promise<Materialized> {
     const { repositoryRoot, headSha: sha, correlationId } = input;
-    const base = context(
-      this.deps.runner({ bigFileThresholdBytes: this.blobLimit }, correlationId),
-    );
-    unwrap(await addGitReviewWorktree(base, { repositoryRoot, path, sha }));
-    const entries = unwrap(await listGitReviewTree(base, { cwd: path, sha }));
-    const binary = unwrap(await listGitReviewBinaryPaths(base, { cwd: path, sha }));
-    const scan = scanReviewTree(entries, binary, this.blobLimit);
+    const limits = this.limits;
+    const runnerOptions = {
+      bigFileThresholdBytes: limits.blobLimitBytes,
+      neutralizeTreeAttributes: sha.length === 40 ? "sha1" : "sha256",
+    } as const;
+    const base = context(this.deps.runner(runnerOptions, correlationId), abort.signal);
+    unwrap(await addGitReviewWorktree(base, { repositoryRoot, path, sha }), abort);
+    const entries = unwrapListing(await listGitReviewTree(base, { cwd: path, sha }), abort);
+    // Budget, duplicates and collisions are refused before a single blob is read or written.
+    const refusal = preflightReviewTree(entries, limits);
+    if (refusal !== undefined) throw new WorktreeRefusal(refusal);
+    const binary = unwrap(await listGitReviewBinaryPaths(base, { cwd: path, sha }), abort);
+    const scan = scanReviewTree(entries, binary, limits);
     if (scan.kind === "refused") throw new WorktreeRefusal(scan.reason);
-    const drivers = await filterDrivers(base, path, entries);
+    const drivers = await configuredFilterDrivers(base, path, abort);
     const hardened = context(
-      this.deps.runner(
-        { filterDrivers: drivers, bigFileThresholdBytes: this.blobLimit },
-        correlationId,
-      ),
+      this.deps.runner({ ...runnerOptions, filterDrivers: drivers }, correlationId),
+      abort.signal,
     );
-    unwrap(await readGitReviewTreeIntoIndex(hardened, { worktreePath: path, sha }));
-    const excluded = [...scan.skippedLarge, ...scan.skippedBinary];
-    unwrap(await skipGitReviewWorktreePaths(hardened, { worktreePath: path, paths: excluded }));
-    unwrap(await checkoutGitReviewWorktree(hardened, { worktreePath: path, sha }));
-    const head = unwrap(await resolveGitReviewCommit(hardened, { cwd: path, ref: "HEAD" }));
-    if (head !== sha) throw new WorktreeRefusal("checkout-failed");
+    await this.checkout(hardened, path, sha, scan, abort);
     return { scan, driverCount: drivers.length };
+  }
+
+  private async checkout(
+    ctx: GitReviewOperationContext,
+    path: string,
+    sha: string,
+    scan: Extract<ReviewTreeScan, { kind: "accepted" }>,
+    abort: CreationAbort,
+  ): Promise<void> {
+    unwrap(await readGitReviewTreeIntoIndex(ctx, { worktreePath: path, sha }), abort);
+    const excluded = [...scan.skippedLarge, ...scan.skippedBinary];
+    unwrap(await skipGitReviewWorktreePaths(ctx, { worktreePath: path, paths: excluded }), abort);
+    unwrap(await checkoutGitReviewWorktree(ctx, { worktreePath: path, sha }), abort);
+    const head = unwrap(await resolveGitReviewCommit(ctx, { cwd: path, ref: "HEAD" }), abort);
+    if (head !== sha) throw new WorktreeRefusal("checkout-failed");
   }
 
   private accept(

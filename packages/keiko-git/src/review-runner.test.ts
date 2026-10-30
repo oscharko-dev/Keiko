@@ -15,6 +15,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -59,6 +60,7 @@ import type { GitProcessRunner } from "./types.js";
 const LFS_POINTER =
   "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a".repeat(64) + "\nsize 12\n";
 
+const NS = "k0123456789abcdef";
 let root: string;
 let repo: string;
 let markers: string;
@@ -224,6 +226,72 @@ describe("hostile fixture checkout", () => {
   });
 });
 
+describe("materialization fidelity", () => {
+  // macOS repositories carry `core.precomposeunicode=true`, which re-encodes decomposed argv.
+  function decomposedRepository(): string {
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "config", "user.email", "fixture@example.invalid");
+    git(repo, "config", "user.name", "Fixture");
+    git(repo, "config", "core.precomposeunicode", "true");
+    const store = (content: Buffer | string): string =>
+      execFileSync("git", ["hash-object", "-w", "--stdin"], {
+        cwd: repo,
+        env: gitEnv(),
+        input: content,
+      })
+        .toString("utf8")
+        .trim();
+    // Index entries are written directly so no add-time conversion touches the fixture blobs.
+    const add = (blob: string, name: string): void => {
+      git(
+        repo,
+        "-c",
+        "core.precomposeunicode=false",
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `100644,${blob},${name}`,
+      );
+    };
+    add(store(Buffer.from([0, 1, 2, 0])), "cafe\u0301.bin");
+    add(store("*.txt eol=crlf ident working-tree-encoding=UTF-16\n"), ".gitattributes");
+    add(store("line $Id$\nsecond\n"), "notes.txt");
+    git(repo, "commit", "-q", "-m", "decomposed");
+    return git(repo, "rev-parse", "HEAD");
+  }
+
+  it("skips a decomposed path in a precomposing repository through one stdin process", async () => {
+    const sha = decomposedRepository();
+    const path = join(root, "nfd");
+    const ctx = context(createGitReviewProcessRunner({ neutralizeTreeAttributes: "sha1" }));
+    await addGitReviewWorktree(ctx, { repositoryRoot: repo, path, sha });
+    await readGitReviewTreeIntoIndex(ctx, { worktreePath: path, sha });
+    const skipped = await skipGitReviewWorktreePaths(ctx, {
+      worktreePath: path,
+      paths: ["cafe\u0301.bin"],
+    });
+    expect(skipped.ok).toBe(true);
+    expect((await checkoutGitReviewWorktree(ctx, { worktreePath: path, sha })).ok).toBe(true);
+    expect(readdirSync(path).filter((name) => name.endsWith(".bin"))).toEqual([]);
+  });
+
+  it("materializes every file byte-identical to its blob whatever the head's attributes say", async () => {
+    const sha = decomposedRepository();
+    const neutralized = join(root, "neutralized");
+    await materialize(
+      createGitReviewProcessRunner({ neutralizeTreeAttributes: "sha1" }),
+      sha,
+      neutralized,
+    );
+    expect(readFileSync(join(neutralized, "notes.txt"), "utf8")).toBe("line $Id$\nsecond\n");
+    // Positive control: the same head through a runner that honours in-tree attributes expands
+    // the file (CRLF, the `$Id$` keyword, UTF-16) far beyond its blob size.
+    const honoured = join(root, "honoured");
+    await materialize(createGitReviewProcessRunner(), sha, honoured);
+    expect(statSync(join(honoured, "notes.txt")).size).toBeGreaterThan(2 * 18);
+  });
+});
+
 describe("review operations", () => {
   function plainRepository(): string {
     git(repo, "init", "-q", "-b", "main");
@@ -272,11 +340,20 @@ describe("review operations", () => {
       ok: true,
       value: false,
     });
-    const ref = gitReviewLocalRangeRef("run-1");
+    const ref = gitReviewLocalRangeRef(NS, "run-1");
     expect((await createGitReviewRef(ctx, { cwd: repo, ref, sha })).ok).toBe(true);
-    expect(await listGitReviewRefs(ctx, { cwd: repo })).toEqual({ ok: true, value: [ref] });
+    expect(await listGitReviewRefs(ctx, { cwd: repo, namespace: NS })).toEqual({
+      ok: true,
+      value: [ref],
+    });
+    const foreign = gitReviewLocalRangeRef("kfedcba9876543210", "run-1");
+    expect((await createGitReviewRef(ctx, { cwd: repo, ref: foreign, sha })).ok).toBe(true);
     expect((await deleteGitReviewRef(ctx, { cwd: repo, ref })).ok).toBe(true);
-    expect(await listGitReviewRefs(ctx, { cwd: repo })).toEqual({ ok: true, value: [] });
+    expect(await listGitReviewRefs(ctx, { cwd: repo, namespace: NS })).toEqual({
+      ok: true,
+      value: [],
+    });
+    expect(git(repo, "for-each-ref", "--format=%(refname)", "refs/keiko-review/")).toBe(foreign);
     expect(() => deleteGitReviewRef(ctx, { cwd: repo, ref: "refs/heads/main" })).toThrow(
       GitReviewOperandError,
     );
@@ -285,11 +362,12 @@ describe("review operations", () => {
 
   it("names private refs from validated operands only", () => {
     const sha = "c".repeat(40);
-    expect(gitReviewPullRequestRef(7, sha)).toBe(`refs/keiko-review/7/${sha}`);
-    expect(gitReviewPullRequestBaseRef(7, sha)).toBe(`refs/keiko-review/7/base-${sha}`);
-    expect(() => gitReviewPullRequestRef(0, sha)).toThrow(GitReviewOperandError);
-    expect(() => gitReviewPullRequestRef(7, "HEAD")).toThrow(GitReviewOperandError);
-    expect(() => gitReviewLocalRangeRef("../x")).toThrow(GitReviewOperandError);
+    expect(gitReviewPullRequestRef(NS, 7, sha)).toBe(`refs/keiko-review/${NS}/7/${sha}`);
+    expect(gitReviewPullRequestBaseRef(NS, 7, sha)).toBe(`refs/keiko-review/${NS}/7/base-${sha}`);
+    expect(() => gitReviewPullRequestRef(NS, 0, sha)).toThrow(GitReviewOperandError);
+    expect(() => gitReviewPullRequestRef(NS, 7, "HEAD")).toThrow(GitReviewOperandError);
+    expect(() => gitReviewPullRequestRef("local", 7, sha)).toThrow(GitReviewOperandError);
+    expect(() => gitReviewLocalRangeRef(NS, "../x")).toThrow(GitReviewOperandError);
   });
 
   it("lists configured filter drivers and locks, unlocks and removes a worktree with its entry", async () => {

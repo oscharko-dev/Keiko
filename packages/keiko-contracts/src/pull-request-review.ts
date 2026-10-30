@@ -10,6 +10,8 @@
 export const REVIEW_CONTRACT_VERSION = 1 as const;
 
 export const REVIEW_REPOSITORY_ID_MAX_CHARS = 128;
+/** Maximum length of a pull request target's display branch name (Git's own ref bound). */
+export const REVIEW_DISPLAY_REF_MAX_CHARS = 255;
 export const REVIEW_RUN_ID_MAX_CHARS = 128;
 export const REVIEW_MODEL_ID_MAX_CHARS = 256;
 export const REVIEW_PULL_REQUEST_NUMBER_MAX = 2_147_483_647;
@@ -35,7 +37,11 @@ export interface PullRequestReviewTarget {
   /** Full 40- or 64-hex Git object ids, never abbreviations or revision expressions. */
   readonly baseSha: string;
   readonly headSha: string;
-  /** Validated Git ref names without the `refs/` prefix. */
+  /**
+   * The branch names GitHub reports, as display data only: Keiko fetches `refs/pull/<n>/head` and
+   * reviews the SHAs, so these are never Git arguments. Bounded, without control, bidi or
+   * zero-width characters (a fork may name its branch anything Git accepts).
+   */
   readonly baseRef: string;
   readonly headRef: string;
   /** Whether the head lives in another repository (a fork). Protection does not depend on it. */
@@ -324,6 +330,8 @@ export type ReviewTargetRefusalReason = (typeof REVIEW_TARGET_REFUSAL_REASONS)[n
 
 /** Closed details of a refused review worktree; child 6 settles each as `skipped/worktree-failed`. */
 export const REVIEW_WORKTREE_REFUSAL_REASONS = [
+  "tree-too-large",
+  "cancelled",
   "case-collision",
   "normalization-collision",
   "checkout-failed",
@@ -343,6 +351,13 @@ export type ReviewWorktreeState = (typeof REVIEW_WORKTREE_STATES)[number];
 
 /** Files above this size are not materialized in a review worktree (reported as `too-large`). */
 export const REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES = 2 * 1024 * 1024;
+/**
+ * A head whose tree lists more paths, or whose blobs within the per-file limit sum to more bytes,
+ * is refused as `tree-too-large` before anything is written: a few kilobytes of reused subtrees
+ * would otherwise check out gigabytes.
+ */
+export const REVIEW_WORKTREE_MAX_PATHS = 100_000;
+export const REVIEW_WORKTREE_MAX_MATERIALIZED_BYTES = 512 * 1024 * 1024;
 /** Private review refs older than this are swept regardless of run references. */
 export const REVIEW_PRIVATE_REF_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 

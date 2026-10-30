@@ -540,6 +540,38 @@ function wireGitProcessEvents(
   });
 }
 
+export // Standard input for the few operations that take NUL-separated data (`update-index -z --stdin`):
+// paths travel as bytes, so they are neither length-limited nor re-encoded the way argv is. A child
+// that exits before reading everything closes the pipe; that EPIPE is the process's own outcome,
+// already reported through its exit status, so it is not raised a second time here.
+function writeProcessInput(child: ChildProcess, input: string | undefined): void {
+  if (input === undefined || child.stdin === null) return;
+  child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code !== "EPIPE") child.emit("error", error);
+  });
+  child.stdin.end(input, "utf8");
+}
+
+function spawnGit(
+  executable: string,
+  argv: readonly string[],
+  options: {
+    readonly cwd: string;
+    readonly env: NodeJS.ProcessEnv;
+    readonly input?: string | undefined;
+  },
+): ChildProcess {
+  const child = spawn(executable, argv, {
+    cwd: options.cwd,
+    env: options.env,
+    shell: false,
+    windowsHide: true,
+    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+  });
+  writeProcessInput(child, options.input);
+  return child;
+}
+
 export function createGitProcessRunnerWithFixedArgs(
   buildEnv: () => NodeJS.ProcessEnv,
   fixedArgs: readonly string[],
@@ -562,12 +594,10 @@ export function createGitProcessRunnerWithFixedArgs(
         resolveResult({ ...base, truncated: false, timedOut: false, aborted: false });
         return;
       }
-      const child = spawn(resolution.path, [...fixedArgs, ...withDiffFamilyNeutralized(args)], {
+      const child = spawnGit(resolution.path, [...fixedArgs, ...withDiffFamilyNeutralized(args)], {
         cwd: options.cwd,
         env,
-        shell: false,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        input: options.input,
       });
       const state = newRunState();
       const onAbort = (): void => {

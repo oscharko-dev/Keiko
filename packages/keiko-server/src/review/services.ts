@@ -7,6 +7,7 @@
 // review worktree on server shutdown.
 
 import { chmodSync, mkdirSync, realpathSync } from "node:fs";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   createGitReviewNetworkProcessRunner,
@@ -64,11 +65,15 @@ export interface ReviewServicesDeps {
   /** Refs a retained review run still references (the run store, Issue #4136). Default: none. */
   readonly retainedRunRefs?: ((repositoryRoot: string) => ReadonlySet<string>) | undefined;
   readonly blobLimitBytes?: number | undefined;
+  readonly maxPaths?: number | undefined;
+  readonly maxMaterializedBytes?: number | undefined;
+  readonly createDeadlineMs?: number | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export interface ReviewServices {
   readonly reviewRoot: string;
+  readonly namespace: string;
   readonly pullRequests: ReviewPullRequestReads;
   readonly worktrees: ReviewWorktreeManager;
   resolveTarget(input: ReviewTargetResolveInput): Promise<ReviewTargetResolution>;
@@ -113,6 +118,15 @@ export function productionReviewGitHubPort(): ReviewGitHubRepositoryPort {
   };
 }
 
+/**
+ * One installation's private ref namespace: a digest of its canonical review root, so two Keiko
+ * installations (two state directories) reviewing the same repository never sweep each other's
+ * refs.
+ */
+export function reviewRefNamespace(canonicalReviewRoot: string): string {
+  return `k${sha256Hex(`keiko-review/namespace:${canonicalReviewRoot}`).slice(0, 16)}`;
+}
+
 /** Creates the owner-private review root (0700) and returns its canonical path. */
 function preparedReviewRoot(reviewRoot: string): string {
   mkdirSync(reviewRoot, { recursive: true, mode: 0o700 });
@@ -127,6 +141,8 @@ interface PinnedRefs {
 
 class ReviewServicesImpl implements ReviewServices {
   public readonly reviewRoot: string;
+  /** This installation's private ref namespace, derived from its canonical review root. */
+  public readonly namespace: string;
   public readonly pullRequests: ReviewPullRequestReads;
   public readonly worktrees: ReviewWorktreeManager;
   private readonly registry: ReviewRegistry;
@@ -139,6 +155,7 @@ class ReviewServicesImpl implements ReviewServices {
 
   public constructor(private readonly deps: ReviewServicesDeps) {
     this.reviewRoot = preparedReviewRoot(deps.reviewRoot);
+    this.namespace = reviewRefNamespace(this.reviewRoot);
     this.now = deps.now ?? Date.now;
     this.registry = createReviewRegistry(this.reviewRoot);
     this.github = deps.github ?? productionReviewGitHubPort();
@@ -154,6 +171,9 @@ class ReviewServicesImpl implements ReviewServices {
       now: this.now,
       runner: (options, correlationId) => this.localRunner(options, correlationId),
       blobLimitBytes: deps.blobLimitBytes,
+      maxPaths: deps.maxPaths,
+      maxMaterializedBytes: deps.maxMaterializedBytes,
+      createDeadlineMs: deps.createDeadlineMs,
       onRemoved: (runId) => {
         this.pinned.delete(runId);
       },
@@ -186,6 +206,7 @@ class ReviewServicesImpl implements ReviewServices {
     const resolution = await resolveReviewTarget(
       {
         github: this.github,
+        namespace: this.namespace,
         localRunner: (id) => this.localRunner({}, id),
         networkRunner: (id) => this.networkRunner(id),
         registry: this.registry,
@@ -210,6 +231,7 @@ class ReviewServicesImpl implements ReviewServices {
     return sweepReviewRefs(
       {
         registry: this.registry,
+        namespace: this.namespace,
         runner: (id) => this.localRunner({}, id),
         activityLog: this.deps.activityLog,
         now: this.now,

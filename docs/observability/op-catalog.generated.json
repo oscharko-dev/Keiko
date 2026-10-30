@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7f18bc6848548344a142706f64abfc612e4fdad39999e8c7d24004a261680868",
+    "catalogDigest": "ce8af6dda81a4a6d965233c7a9c6eeb13ad7b732e69e4641847f9ef575631bd1",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33457,7 +33457,7 @@
         "proofIds": ["review.target.listed.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/review/activity-log.ts:23",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:274"]
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:276"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33506,7 +33506,7 @@
         "proofIds": ["review.target.refused.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/review/activity-log.ts:87",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:330"]
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:332"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33567,7 +33567,7 @@
         "proofIds": ["review.target.resolved.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/review/activity-log.ts:59",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:306"]
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:308"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33621,7 +33621,7 @@
         "proofIds": ["review.worktree.created.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/review/activity-log.ts:125",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:353"]
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:355"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33658,8 +33658,8 @@
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.orphan-swept.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:207",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:409"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:209",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:411"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33707,8 +33707,8 @@
         "failureClasses": ["review-private-ref-retention"],
         "proofIds": ["review.worktree.refs-swept.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:226",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:433"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:228",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:435"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33739,6 +33739,8 @@
             "dataClass": "closed-enum",
             "required": true,
             "values": [
+              "tree-too-large",
+              "cancelled",
               "case-collision",
               "normalization-collision",
               "checkout-failed",
@@ -33754,7 +33756,7 @@
         "proofIds": ["review.worktree.refused.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/review/activity-log.ts:147",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:375"]
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:377"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33799,8 +33801,8 @@
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.removed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:177",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:391"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:179",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:393"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -108197,20 +108199,20 @@
     {
       "op": "review.worktree.orphan-swept",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:210",
+      "site": "packages/keiko-server/src/review/activity-log.ts:212",
       "package": "keiko-server"
     },
     {
       "op": "review.worktree.refs-sweep",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/review/services.ts:241",
+      "site": "packages/keiko-server/src/review/services.ts:263",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "review.worktree.refs-swept",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:229",
+      "site": "packages/keiko-server/src/review/activity-log.ts:231",
       "package": "keiko-server"
     },
     {
@@ -108222,7 +108224,7 @@
     {
       "op": "review.worktree.removed",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:180",
+      "site": "packages/keiko-server/src/review/activity-log.ts:182",
       "package": "keiko-server"
     },
     {

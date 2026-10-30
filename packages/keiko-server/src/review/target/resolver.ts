@@ -56,6 +56,8 @@ export type ReviewTargetResolution =
 
 export interface ReviewTargetResolverDeps {
   readonly github: ReviewGitHubRepositoryPort;
+  /** This installation's private ref namespace (`refs/keiko-review/<namespace>/`). */
+  readonly namespace: string;
   /** Observed review runners: local operations and the credential-capable fetch. */
   readonly localRunner: (correlationId: string | undefined) => GitProcessRunner;
   readonly networkRunner: (correlationId: string | undefined) => GitProcessRunner;
@@ -153,11 +155,12 @@ async function fetchAndVerifyHead(
   const fetched = await fetchGitReviewPullRequestHead(network, {
     cwd: repositoryRoot,
     remote: REVIEW_FETCH_REMOTE,
+    namespace: deps.namespace,
     number: detail.number,
     headSha: detail.headSha,
   });
   if (!fetched.ok) return refused("fetch-failed");
-  const ref = gitReviewPullRequestRef(detail.number, detail.headSha);
+  const ref = gitReviewPullRequestRef(deps.namespace, detail.number, detail.headSha);
   const local = localContext(deps, correlationId);
   const resolved = await resolveGitReviewCommit(local, { cwd: repositoryRoot, ref });
   if (resolved.ok && resolved.value === detail.headSha) return { ok: true, value: ref };
@@ -179,10 +182,11 @@ async function ensureBaseCommit(
   const fetched = await fetchGitReviewCommit(network, {
     cwd: repositoryRoot,
     remote: REVIEW_FETCH_REMOTE,
+    namespace: deps.namespace,
     number: detail.number,
     sha: detail.baseSha,
   });
-  const ref = gitReviewPullRequestBaseRef(detail.number, detail.baseSha);
+  const ref = gitReviewPullRequestBaseRef(deps.namespace, detail.number, detail.baseSha);
   const after = await resolveGitReviewCommit(local, { cwd: repositoryRoot, ref });
   if (fetched.ok && after.ok && after.value === detail.baseSha) return { ok: true, value: ref };
   return refused("fetch-failed");
@@ -264,7 +268,7 @@ async function resolveLocalRange(
   if (!base.ok || !head.ok || !isGitObjectId(base.value) || !isGitObjectId(head.value)) {
     return refused("ref-invalid");
   }
-  const ref = gitReviewLocalRangeRef(reviewRunLeaf(input.runId));
+  const ref = gitReviewLocalRangeRef(deps.namespace, reviewRunLeaf(input.runId));
   const created = await createGitReviewRef(local, {
     cwd: input.repositoryRoot,
     ref,

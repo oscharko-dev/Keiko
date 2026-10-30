@@ -7,7 +7,6 @@
 // runner a caller passes must be a review runner (`review-runner.ts`), which injects the reviewed
 // hardening set and refuses caller configuration.
 
-import { Buffer } from "node:buffer";
 import { isAbsolute } from "node:path";
 import { GIT_BASE_ARGS } from "./runner.js";
 import type { GitProcessResult, GitProcessRunner } from "./types.js";
@@ -19,11 +18,14 @@ const OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const PULL_REQUEST_NUMBER_MAX = 2_147_483_647;
 const REMOTE_ALIAS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+// One installation's private refs live under `refs/keiko-review/<namespace>/`, so a sweep never
+// touches the refs another Keiko installation (another state directory) keeps in the same
+// repository.
+const NAMESPACE = /^k[a-f0-9]{16}$/u;
 const PRIVATE_REF =
-  /^refs\/keiko-review\/(?:[1-9]\d{0,9}\/(?:base-)?(?:[a-f0-9]{40}|[a-f0-9]{64})|local\/[A-Za-z0-9][A-Za-z0-9._-]{0,127})$/u;
+  /^refs\/keiko-review\/k[a-f0-9]{16}\/(?:[1-9]\d{0,9}\/(?:base-)?(?:[a-f0-9]{40}|[a-f0-9]{64})|local\/[A-Za-z0-9][A-Za-z0-9._-]{0,127})$/u;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BYTES = 1024 * 1024;
-const SKIP_WORKTREE_ARGV_BYTES = 16 * 1024;
 // eslint-disable-next-line no-control-regex -- intentionally matches control characters to reject them
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 
@@ -67,6 +69,16 @@ function assertWorktreePath(value: string): string {
   return value;
 }
 
+function assertNamespace(value: string): string {
+  if (!NAMESPACE.test(value)) throw new GitReviewOperandError("namespace");
+  return value;
+}
+
+/** Whether a value is a valid private ref namespace (`k` + 16 hex digits). */
+export function isGitReviewRefNamespace(value: string): boolean {
+  return NAMESPACE.test(value);
+}
+
 function assertPrivateRef(value: string): string {
   if (!PRIVATE_REF.test(value)) throw new GitReviewOperandError("ref");
   return value;
@@ -78,21 +90,31 @@ function assertTreePath(value: string): string {
 }
 
 /** The private ref that retains a pull request head after its worktree is gone. */
-export function gitReviewPullRequestRef(pullRequestNumber: number, headSha: string): string {
+export function gitReviewPullRequestRef(
+  namespace: string,
+  pullRequestNumber: number,
+  headSha: string,
+): string {
   const number = assertPullRequestNumber(pullRequestNumber);
-  return `${GIT_REVIEW_PRIVATE_REF_PREFIX}${String(number)}/${assertObjectId(headSha, "headSha")}`;
+  const prefix = `${GIT_REVIEW_PRIVATE_REF_PREFIX}${assertNamespace(namespace)}/`;
+  return `${prefix}${String(number)}/${assertObjectId(headSha, "headSha")}`;
 }
 
 /** The private ref that retains a pull request base commit Keiko had to fetch. */
-export function gitReviewPullRequestBaseRef(pullRequestNumber: number, baseSha: string): string {
+export function gitReviewPullRequestBaseRef(
+  namespace: string,
+  pullRequestNumber: number,
+  baseSha: string,
+): string {
   const number = assertPullRequestNumber(pullRequestNumber);
-  return `${GIT_REVIEW_PRIVATE_REF_PREFIX}${String(number)}/base-${assertObjectId(baseSha, "baseSha")}`;
+  const prefix = `${GIT_REVIEW_PRIVATE_REF_PREFIX}${assertNamespace(namespace)}/`;
+  return `${prefix}${String(number)}/base-${assertObjectId(baseSha, "baseSha")}`;
 }
 
 /** The private ref that retains a local-range head for one run. */
-export function gitReviewLocalRangeRef(runId: string): string {
+export function gitReviewLocalRangeRef(namespace: string, runId: string): string {
   if (!RUN_ID.test(runId)) throw new GitReviewOperandError("runId");
-  return `${GIT_REVIEW_PRIVATE_REF_PREFIX}local/${runId}`;
+  return `${GIT_REVIEW_PRIVATE_REF_PREFIX}${assertNamespace(namespace)}/local/${runId}`;
 }
 
 export function isGitReviewPrivateRef(value: string): boolean {
@@ -104,6 +126,7 @@ async function run(
   cwd: string,
   args: readonly string[],
   expectedExitCodes?: readonly number[],
+  input?: string,
 ): Promise<GitProcessResult> {
   return ctx.runner([...GIT_BASE_ARGS, ...args], {
     cwd,
@@ -111,6 +134,7 @@ async function run(
     maxBytes: ctx.maxBytes ?? DEFAULT_MAX_BYTES,
     abortSignal: ctx.abortSignal,
     expectedExitCodes,
+    ...(input === undefined ? {} : { input }),
   });
 }
 
@@ -132,6 +156,7 @@ async function runUnit(
 export interface GitReviewFetchRequest {
   readonly cwd: string;
   readonly remote: string;
+  readonly namespace: string;
 }
 
 // `--refmap=` (empty) disables the opportunistic remote-tracking update a configured refspec would
@@ -158,7 +183,7 @@ export function fetchGitReviewPullRequestHead(
   ctx: GitReviewOperationContext,
   request: GitReviewFetchRequest & { readonly number: number; readonly headSha: string },
 ): Promise<GitReviewOperationResult<undefined>> {
-  const destination = gitReviewPullRequestRef(request.number, request.headSha);
+  const destination = gitReviewPullRequestRef(request.namespace, request.number, request.headSha);
   const source = `refs/pull/${String(request.number)}/head`;
   return runUnit(ctx, request.cwd, fetchArgs(request.remote, `+${source}:${destination}`));
 }
@@ -168,7 +193,7 @@ export function fetchGitReviewCommit(
   ctx: GitReviewOperationContext,
   request: GitReviewFetchRequest & { readonly number: number; readonly sha: string },
 ): Promise<GitReviewOperationResult<undefined>> {
-  const destination = gitReviewPullRequestBaseRef(request.number, request.sha);
+  const destination = gitReviewPullRequestBaseRef(request.namespace, request.number, request.sha);
   return runUnit(ctx, request.cwd, fetchArgs(request.remote, `+${request.sha}:${destination}`));
 }
 
@@ -234,14 +259,15 @@ export function deleteGitReviewRef(
   ]);
 }
 
+/** The private refs of ONE namespace; another installation's refs are never listed. */
 export async function listGitReviewRefs(
   ctx: GitReviewOperationContext,
-  request: { readonly cwd: string },
+  request: { readonly cwd: string; readonly namespace: string },
 ): Promise<GitReviewOperationResult<readonly string[]>> {
   const result = await run(ctx, request.cwd, [
     "for-each-ref",
     "--format=%(refname)",
-    GIT_REVIEW_PRIVATE_REF_PREFIX,
+    `${GIT_REVIEW_PRIVATE_REF_PREFIX}${assertNamespace(request.namespace)}/`,
   ]);
   if (!succeeded(result)) return { ok: false, result };
   const refs = result.stdout.split("\n").filter((line) => isGitReviewPrivateRef(line));
@@ -411,35 +437,26 @@ export function readGitReviewTreeIntoIndex(
   return runUnit(ctx, path, ["read-tree", assertObjectId(request.sha, "sha")]);
 }
 
-function skipWorktreeBatches(paths: readonly string[]): readonly (readonly string[])[] {
-  const batches: string[][] = [];
-  let current: string[] = [];
-  let bytes = 0;
-  for (const path of paths) {
-    const size = Buffer.byteLength(assertTreePath(path), "utf8") + 1;
-    if (current.length > 0 && bytes + size > SKIP_WORKTREE_ARGV_BYTES) {
-      batches.push(current);
-      current = [];
-      bytes = 0;
-    }
-    current.push(path);
-    bytes += size;
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
-}
-
-/** Marks paths skip-worktree in the review index so the checkout never materializes them. */
+/**
+ * Marks paths skip-worktree in the review index so the checkout never materializes them. One
+ * process for every path: the paths travel NUL-separated on standard input, so the index is
+ * rewritten once, no argv length limit applies, and macOS never precomposes a decomposed name.
+ */
 export async function skipGitReviewWorktreePaths(
   ctx: GitReviewOperationContext,
   request: { readonly worktreePath: string; readonly paths: readonly string[] },
 ): Promise<GitReviewOperationResult<undefined>> {
   const cwd = assertWorktreePath(request.worktreePath);
-  for (const batch of skipWorktreeBatches(request.paths)) {
-    const outcome = await runUnit(ctx, cwd, ["update-index", "--skip-worktree", "--", ...batch]);
-    if (!outcome.ok) return outcome;
-  }
-  return { ok: true, value: undefined };
+  if (request.paths.length === 0) return { ok: true, value: undefined };
+  const input = request.paths.map((path) => `${assertTreePath(path)}\0`).join("");
+  const result = await run(
+    ctx,
+    cwd,
+    ["update-index", "-z", "--skip-worktree", "--stdin"],
+    [],
+    input,
+  );
+  return succeeded(result) ? { ok: true, value: undefined } : { ok: false, result };
 }
 
 /** Materializes the review worktree at the exact commit, never recursing into submodules. */

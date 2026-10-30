@@ -158,6 +158,8 @@ const REVIEW_WORKTREE_REFUSED = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: [
+        "tree-too-large",
+        "cancelled",
         "case-collision",
         "normalization-collision",
         "checkout-failed",

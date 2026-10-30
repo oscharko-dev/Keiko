@@ -32295,6 +32295,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: [
+          "tree-too-large",
+          "cancelled",
           "case-collision",
           "normalization-collision",
           "checkout-failed",

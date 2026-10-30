@@ -69,6 +69,11 @@ export interface GitProcessOptions {
   readonly cwd: string;
   readonly maxBytes: number;
   readonly timeoutMs: number;
+  /**
+   * Data written to the process's standard input, which is otherwise closed. Only operations that
+   * read NUL-separated paths (`update-index -z --stdin`) use it; the runner never interprets it.
+   */
+  readonly input?: string | undefined;
   /** Cancels an admitted process when the originating bounded request disconnects. */
   readonly abortSignal?: AbortSignal | undefined;
   /**

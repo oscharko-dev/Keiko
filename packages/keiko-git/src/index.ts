@@ -62,6 +62,7 @@ export {
   gitReviewPullRequestBaseRef,
   gitReviewPullRequestRef,
   isGitReviewPrivateRef,
+  isGitReviewRefNamespace,
   listGitReviewBinaryPaths,
   listGitReviewConfiguredFilterDrivers,
   listGitReviewRefs,

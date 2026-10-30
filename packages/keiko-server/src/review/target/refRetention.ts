@@ -20,6 +20,11 @@ import { reportReviewFailure } from "../diagnostics.js";
 
 export interface ReviewRefRetentionDeps {
   readonly registry: ReviewRegistry;
+  /**
+   * This installation's private ref namespace. Only refs below it are ever listed or deleted:
+   * another Keiko installation sharing the repository keeps and sweeps its own namespace.
+   */
+  readonly namespace: string;
   readonly runner: (correlationId: string | undefined) => GitProcessRunner;
   readonly activityLog: ServerLogSink;
   readonly now: () => number;
@@ -35,7 +40,7 @@ export interface ReviewRefSweepResult {
   readonly failed: number;
 }
 
-const PULL_REQUEST_REF = /^refs\/keiko-review\/(\d+)\//u;
+const PULL_REQUEST_REF = /^refs\/keiko-review\/k[a-f0-9]{16}\/(\d+)\//u;
 
 function pullRequestNumber(ref: string): number | undefined {
   const digits = PULL_REQUEST_REF.exec(ref)?.[1];
@@ -92,7 +97,7 @@ async function sweepRepository(
     return { deleted: 0, dropped: records.map((record) => record.ref), retained: 0, failed: 0 };
   }
   const ctx = { runner: deps.runner(correlationId), timeoutMs: 30_000 };
-  const listed = await listGitReviewRefs(ctx, { cwd: repositoryRoot });
+  const listed = await listGitReviewRefs(ctx, { cwd: repositoryRoot, namespace: deps.namespace });
   if (!listed.ok) return { deleted: 0, dropped: [], retained: 0, failed: 1 };
   const facts: RepositoryFacts = {
     retained: deps.retainedRefs(repositoryRoot),
