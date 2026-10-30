@@ -28,7 +28,7 @@ pipeline under test enters the replay and the seed gate through an injected port
 from the package's existing offline-versus-live provider selector (`createEvaluationModelProvider`):
 a scripted transcript in CI, the gateway only when a live run is authorized. Seed scoring is
 `scoreReviewSeedRun` from `keiko-contracts`, the same rule the server's pair qualification uses.
-`npm run eval:review` runs the family's deterministic tests; the root suite runs them as well.
+The root test suite runs the family's deterministic tests; `npx vitest run packages/keiko-evaluations/src/review packages/keiko-server/src/review/qualification scripts/__tests__/review-harvest.test.mjs` runs them alone (after `npm run build:packages`).
 
 ## The harvest dataset
 
@@ -83,7 +83,7 @@ rebased-in base change from the pull request's own.
 
 Determinism: the dataset carries no wall-clock value and is sorted by pull request number and
 thread id, and its digest is SHA-256 over canonical (key-sorted) JSON. The same GitHub state
-therefore yields the same digest; `npm run check:review-harvest-dataset` recomputes it.
+therefore yields the same digest; `node scripts/review-harvest.mjs --verify packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v1.json.gz` recomputes it.
 
 ### Running the harvest
 
@@ -97,7 +97,7 @@ echo "$PWD/.git/objects" > /tmp/keiko-review-git/objects/info/alternates
 git -C /tmp/keiko-review-git remote add origin https://github.com/oscharko-dev/Keiko.git
 git -C /tmp/keiko-review-git fetch --no-tags origin '+refs/pull/*/head:refs/pull/*/head'
 
-npm run review:harvest -- --repo oscharko-dev/Keiko --git-dir /tmp/keiko-review-git \
+node scripts/review-harvest.mjs --repo oscharko-dev/Keiko --git-dir /tmp/keiko-review-git \
   --checkpoint /tmp/keiko-review-harvest.checkpoint.json --fetch-missing-commits \
   --out packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v1.json.gz
 ```

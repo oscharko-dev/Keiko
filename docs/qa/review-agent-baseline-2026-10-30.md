@@ -29,7 +29,7 @@ made unreachable):
 node scripts/review-harvest.mjs --repo oscharko-dev/Keiko --git-dir <bare repository> \
   --checkpoint <checkpoint file> --fetch-missing-commits --page-size 10 \
   --out packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v1.json.gz
-npm run check:review-harvest-dataset
+node scripts/review-harvest.mjs --verify packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v1.json.gz
 ```
 
 ## Per producer
