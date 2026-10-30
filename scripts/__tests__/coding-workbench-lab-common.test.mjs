@@ -38,6 +38,7 @@ import {
   registerProjectRequest,
   resolveMode,
   resolveTaskInput,
+  stopUnfinishedRun,
 } from "../testing/coding-workbench-lab/lab-common.mjs";
 
 const TEMP_DIRECTORIES = [];
@@ -373,6 +374,23 @@ describe("numbers, modes and run ids", () => {
     }
     expect(exitCodeForState("running")).toBe(3);
     expect(exitCodeForState(undefined)).toBe(3);
+  });
+
+  // #3907 parity batch: a lane that hit its deadline left its run active, and every later task in
+  // the batch was refused with LOCK_CONTENTION before it started.
+  it("stops a run the deadline left active, and leaves an ended run alone", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const post = vi.fn(async () => ({ status: 200 }));
+    await expect(stopUnfinishedRun(post, "run-7", { state: "running" })).resolves.toBe(200);
+    expect(post).toHaveBeenCalledExactlyOnceWith("/api/coding-workbench/runtime/runs/run-7/stop", {
+      requestId: "run-7",
+    });
+    await expect(stopUnfinishedRun(post, "run-8", {})).resolves.toBe(200);
+    post.mockClear();
+    for (const state of TERMINAL_STATES) {
+      await expect(stopUnfinishedRun(post, "run-9", { state })).resolves.toBeNull();
+    }
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("describes a run snapshot with the kind of a pending permission", () => {

@@ -31,6 +31,7 @@ import {
   resolveTaskInput,
   runMain,
   selectLabCheckout,
+  stopUnfinishedRun,
 } from "./lab-common.mjs";
 
 const USAGE = [
@@ -276,6 +277,13 @@ export async function operateRun(page, options) {
     deadline: Date.now() + timeoutMs,
     shots,
   });
+  await stopUnfinishedRun(
+    async (path, data) => ({
+      status: (await page.request.post(path, { headers: CSRF_HEADERS, data })).status(),
+    }),
+    runId,
+    snapshot,
+  );
   await reportRun(page, workbench, runId, snapshot, { shots, textOut, approve });
   return exitCodeForState(snapshot.state);
 }

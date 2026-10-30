@@ -452,6 +452,20 @@ export function exitCodeForState(state) {
   return TERMINAL_STATES.includes(state) ? 1 : 3;
 }
 
+/**
+ * Stops a run the driver started when its deadline passed before the run ended. An active run keeps
+ * holding the dev server's checkout, so the next task would be refused with LOCK_CONTENTION.
+ * `post(path, body)` resolves to `{ status }`. Returns the stop's status, or null for an ended run.
+ */
+export async function stopUnfinishedRun(post, runId, snapshot) {
+  if (TERMINAL_STATES.includes(snapshot?.state)) return null;
+  const { status } = await post(`/api/coding-workbench/runtime/runs/${runId}/stop`, {
+    requestId: runId,
+  });
+  log(`deadline passed while ${String(snapshot?.state)}; stopped the run (${String(status)})`);
+  return status;
+}
+
 export function loadTasks() {
   return JSON.parse(readFileSync(TASKS_FILE, "utf8"));
 }
