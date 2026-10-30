@@ -14,6 +14,7 @@ import {
   COUNTER_CHECK_VERDICTS,
   FINDING_DISMISSAL_REASONS,
   REVIEW_DECISION_NOTE_MAX_CHARS,
+  REVIEW_DISPLAY_REF_MAX_CHARS,
   REVIEW_EVIDENCE_MAX_ENTRIES,
   REVIEW_EVIDENCE_MIN_ENTRIES,
   REVIEW_EVIDENCE_ROLES,
@@ -135,6 +136,24 @@ function checkRefName(value: unknown, path: string, issues: Issues): void {
   }
 }
 
+/**
+ * A provider-reported branch name of a pull request target: display data only (Keiko fetches
+ * `refs/pull/<n>/head` and reviews SHAs), so any name GitHub accepts is representable, but it must
+ * be non-empty, bounded and free of control, bidi and zero-width characters. It is never passed to
+ * Git as an argument.
+ */
+function checkDisplayRefName(value: unknown, path: string, issues: Issues): void {
+  if (value === undefined) return;
+  const valid =
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= REVIEW_DISPLAY_REF_MAX_CHARS &&
+    value.trim() === value &&
+    !hasControlCharacter(value) &&
+    stripUnsafeFormatChars(value) === value;
+  if (!valid) issues.push({ code: "invalid-ref-name", path });
+}
+
 function checkInteger(value: unknown, max: number, path: string, issues: Issues): void {
   if (value === undefined) return;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > max) {
@@ -215,8 +234,10 @@ export function validateReviewTarget(value: unknown): ReviewContractValidation<R
   );
   checkObjectId(own(value, "baseSha"), "baseSha", issues);
   checkObjectId(own(value, "headSha"), "headSha", issues);
-  checkRefName(own(value, "baseRef"), "baseRef", issues);
-  checkRefName(own(value, "headRef"), "headRef", issues);
+  // A local range names refs Keiko resolves with Git; a pull request reports display names only.
+  const checkRef = kind === "local-range" ? checkRefName : checkDisplayRefName;
+  checkRef(own(value, "baseRef"), "baseRef", issues);
+  checkRef(own(value, "headRef"), "headRef", issues);
   if (kind === "pull-request") {
     checkEnum(own(value, "provider"), ["github"], "provider", issues);
     checkInteger(own(value, "number"), REVIEW_PULL_REQUEST_NUMBER_MAX, "number", issues);

@@ -94,3 +94,25 @@ export function networkGitEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.P
       "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes -oNumberOfPasswordPrompts=0 -oKbdInteractiveAuthentication=no -oPasswordAuthentication=no",
   };
 }
+
+// Review env (ADR-0182 D3, Issue #4133): the review worktree materializes a hostile pull request
+// head, so both review profiles add the Git LFS smudge skip on top of their base profile. With it,
+// an installed `git-lfs` that a configured `filter.lfs.*` driver would otherwise invoke leaves every
+// LFS pointer a pointer; the runner's filter neutralization removes the driver itself as well.
+// Local review operations keep `gitEnv`'s complete config isolation; the pull request fetch keeps
+// `networkGitEnv`'s bounded credential passthrough. Neither inherits a caller's `GIT_*` variables.
+const GIT_REVIEW_ENV_ADDITIONS: Readonly<NodeJS.ProcessEnv> = Object.freeze({
+  GIT_LFS_SKIP_SMUDGE: "1",
+  GIT_TERMINAL_PROMPT: "0",
+});
+
+export function gitReviewEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return { ...gitEnv(source, platform), ...GIT_REVIEW_ENV_ADDITIONS };
+}
+
+export function networkGitReviewEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...networkGitEnv(source), ...GIT_REVIEW_ENV_ADDITIONS };
+}

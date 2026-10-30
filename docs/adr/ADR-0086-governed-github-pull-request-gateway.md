@@ -427,6 +427,43 @@ provider-side facts.
   "read GitHub immediately before mutating GitHub" check in one place and one pattern, rather than
   inventing a second one inside a local-snapshot evaluator that cannot make network calls.
 
+
+### D13 — Two fixed, read-only GraphQL documents for the Pull requests area (#4133, ADR-0182 D3)
+
+Keiko for Quality (ADR-0182) needs the repository's open pull requests and one pull request's
+detail (base and head SHAs, checks, approvals, mergeability) before any review can start. They are
+added as two more fixed builders on the same `gh api` transport and credential boundary, never as
+free-form `gh` usage:
+
+- `buildPrListOpenGraphqlArgv` and `buildPrDetailGraphqlArgv` (`keiko-tools/src/git-pr-review-read.ts`)
+  each emit one constant GraphQL **query** document (no mutation). The only variables are the
+  verified `owner/repo` of the repository's `origin`, the page size (50) or the pull request number
+  (validated integers), and the pagination cursor GitHub itself returned (validated shape). The
+  documents never request the pull request body or comments; title, author and branch names are
+  untrusted display data, bounded and stripped of control, bidi and zero-width characters by the
+  canonical `text-safety` stripper. A branch name outside the safe ref alphabet never hides the
+  pull request: it is shown sanitized and never passed to Git (the review fetches
+  `refs/pull/<n>/head` by number).
+- A dedicated rule set `GIT_REVIEW_PULL_REQUEST_COMMAND_RULES` allows `gh api` only, forbids leading
+  flags, and denies `--input`, `--paginate`, `--slurp`, `--method`/`-X`, `--header`/`-H`,
+  `--jq`/`-q`, `--template`/`-t`, `--cache`, `--include`/`-i`, `--preview`/`-p` and `--verbose`.
+  `CommandRule` cannot express a whole argument vector, so the reader additionally refuses, before
+  any spawn, every argument vector that `isGitReviewPullRequestReadArgv` does not accept: the guard
+  rebuilds the vector from the two builders and requires byte-for-byte equality, so any other
+  document, a mutation, an extra flag, a reordered argument or a changed host is refused.
+- The list follows the cursor for at most 20 pages (1,000 pull requests) and reports more with an
+  explicit `truncated` flag. Failures map onto a closed availability state (`gh-unavailable`,
+  `gh-unauthenticated`, `no-github-remote`, `rate-limited`, `failed`); a missing pull request number
+  is a well-formed `null` detail.
+- The server serves them read-only as `GET /api/git-review/pull-requests?root=…` and
+  `GET /api/git-review/pull-requests/{number}?root=…`, cached per repository for 30 seconds. The
+  repository is addressed by `root` like every other Git window read (ADR-0098 D2), not by the
+  one-way `repositoryId` digest, so the registered-project and managed-root authority applies
+  unchanged.
+
+The existing allowlist (create, update, get, draft transitions, head-branch lookup) is unchanged;
+there is still no merge, approve, review, comment, dismiss or delete method on this gateway.
+
 ## Consequences
 
 ### Positive

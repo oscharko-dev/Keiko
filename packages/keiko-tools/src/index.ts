@@ -326,6 +326,24 @@ export {
   type GitPullRequestMarkReadyAdapter,
 } from "./git-pr-gateway.js";
 
+// Keiko for Quality (Issue #4133, ADR-0086): the two fixed, read-only GraphQL documents for the
+// open pull request list and one pull request's detail, their exact-argv allowlist and parsers.
+export {
+  GIT_REVIEW_PR_DETAIL_QUERY,
+  GIT_REVIEW_PR_LIST_QUERY,
+  GIT_REVIEW_PULL_REQUEST_COMMAND_RULES,
+  GitReviewPullRequestArgvError,
+  buildPrDetailGraphqlArgv,
+  buildPrListOpenGraphqlArgv,
+  isGitReviewPullRequestReadArgv,
+  parseReviewPullRequestDetail,
+  parseReviewPullRequestListPage,
+  parseReviewPullRequestSummary,
+  type GitReviewPrDetailRequest,
+  type GitReviewPrListPage,
+  type GitReviewPrListRequest,
+} from "./git-pr-review-read.js";
+
 // The SEPARATE governed merge authority (Issue #478, ADR-0087). A THIRD parallel gateway to the publish
 // and PR gateways — never an extension of either. The pure surface — merge command, narrow two-method
 // adapter port (readiness read + merge execute), dedicated `gh api` allowlist, argv builders, GitHub

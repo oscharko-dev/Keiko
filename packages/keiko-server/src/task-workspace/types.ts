@@ -312,6 +312,9 @@ export interface WorkspaceReconciliationServiceDeps extends WorkspaceActivityLog
   // key, mirroring WorkspaceCleanupServiceDeps, so it cannot race — or write over the result of — a
   // concurrent activate/pause/repair/cleanup of the same workspace (KEIKO-0996, #3339).
   readonly mutex: WorkspaceMutexRegistry;
+  // Issue #4133 (ADR-0182 D3): the server-owned review worktree root. A review worktree is not a
+  // task workspace: its entries in the repository's worktree list are neither matched nor counted.
+  readonly reviewWorktreeRoot?: string | undefined;
 }
 
 export type WorkspaceRepairOutcome = "repaired" | "operator-required";

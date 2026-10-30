@@ -127,10 +127,26 @@ describe("validateReviewTarget", () => {
   );
 
   it.each(["refs/heads/dev", "-dev", "dev..main", "dev.lock", "a b", "dev\0", "@", "", "x~1"])(
-    "rejects the hostile ref name %j",
+    "rejects the hostile local-range ref name %j, which Keiko passes to Git",
     (ref) => {
-      expect(rejection(validateReviewTarget({ ...PULL_REQUEST_TARGET, baseRef: ref }))).toEqual([
+      expect(rejection(validateReviewTarget({ ...LOCAL_RANGE_TARGET, baseRef: ref }))).toEqual([
         "invalid-ref-name@baseRef",
+      ]);
+    },
+  );
+
+  it.each(["feature/#12", "fix/\u00fcmlaut", "a..b", "-dev", "refs/heads/x"])(
+    "accepts the provider branch name %j of a pull request target as display data",
+    (ref) => {
+      expect(validateReviewTarget({ ...PULL_REQUEST_TARGET, headRef: ref }).ok).toBe(true);
+    },
+  );
+
+  it.each(["", " padded", "a\u0000b", "a\nb", "evil\u202egnp", "zero\u200bwidth", "x".repeat(256)])(
+    "rejects the unsafe display branch name %j of a pull request target",
+    (ref) => {
+      expect(rejection(validateReviewTarget({ ...PULL_REQUEST_TARGET, headRef: ref }))).toEqual([
+        "invalid-ref-name@headRef",
       ]);
     },
   );

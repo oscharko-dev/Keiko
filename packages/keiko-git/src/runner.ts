@@ -39,7 +39,7 @@ const LOCAL_READ_CONFIG_ARGS: readonly string[] = [
   "-c",
   "core.editor=true",
 ];
-const NETWORK_CONFIG_ARGS: readonly string[] = [
+export const NETWORK_CONFIG_ARGS: readonly string[] = [
   "-c",
   "core.fsmonitor=false",
   "-c",
@@ -133,8 +133,8 @@ const PRE_SUBCOMMAND_FLAG_NO_VALUE: ReadonlySet<string> = new Set([
 // `--no-ext-diff --no-textconv` — silently reopening the repository-local `diff.external` /
 // `textconv` path that #3348 closed, for any key the deny-list does not name. One set now, so a
 // flag added to the grammar cannot be known to one half of it and invisible to the other.
-const CONFIG_OVERRIDE_FLAGS: ReadonlySet<string> = new Set(["-c", "--config-env"]);
-const CONFIG_ENV_JOINED_PREFIX = "--config-env=";
+export const CONFIG_OVERRIDE_FLAGS: ReadonlySet<string> = new Set(["-c", "--config-env"]);
+export const CONFIG_ENV_JOINED_PREFIX = "--config-env=";
 
 const PRE_SUBCOMMAND_FLAG_ONE_VALUE: ReadonlySet<string> = new Set([
   "-C",
@@ -447,7 +447,7 @@ const SPAWN_UNTRUSTED_RESULT: Omit<GitProcessResult, "truncated" | "timedOut" | 
   refusal: "untrusted-executable",
 };
 
-function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitProcessResult {
+export function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitProcessResult {
   return {
     exitCode: 128,
     signal: null,
@@ -540,7 +540,39 @@ function wireGitProcessEvents(
   });
 }
 
-function createGitProcessRunnerWithFixedArgs(
+export // Standard input for the few operations that take NUL-separated data (`update-index -z --stdin`):
+// paths travel as bytes, so they are neither length-limited nor re-encoded the way argv is. A child
+// that exits before reading everything closes the pipe; that EPIPE is the process's own outcome,
+// already reported through its exit status, so it is not raised a second time here.
+function writeProcessInput(child: ChildProcess, input: string | undefined): void {
+  if (input === undefined || child.stdin === null) return;
+  child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code !== "EPIPE") child.emit("error", error);
+  });
+  child.stdin.end(input, "utf8");
+}
+
+function spawnGit(
+  executable: string,
+  argv: readonly string[],
+  options: {
+    readonly cwd: string;
+    readonly env: NodeJS.ProcessEnv;
+    readonly input?: string | undefined;
+  },
+): ChildProcess {
+  const child = spawn(executable, argv, {
+    cwd: options.cwd,
+    env: options.env,
+    shell: false,
+    windowsHide: true,
+    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+  });
+  writeProcessInput(child, options.input);
+  return child;
+}
+
+export function createGitProcessRunnerWithFixedArgs(
   buildEnv: () => NodeJS.ProcessEnv,
   fixedArgs: readonly string[],
 ): GitProcessRunner {
@@ -562,12 +594,10 @@ function createGitProcessRunnerWithFixedArgs(
         resolveResult({ ...base, truncated: false, timedOut: false, aborted: false });
         return;
       }
-      const child = spawn(resolution.path, [...fixedArgs, ...withDiffFamilyNeutralized(args)], {
+      const child = spawnGit(resolution.path, [...fixedArgs, ...withDiffFamilyNeutralized(args)], {
         cwd: options.cwd,
         env,
-        shell: false,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        input: options.input,
       });
       const state = newRunState();
       const onAbort = (): void => {

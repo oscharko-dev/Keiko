@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted (Issue #1573, Epic #1572, 2026-06-27; amended 2026-08-31)
+Accepted (Issue #1573, Epic #1572, 2026-06-27; amended 2026-08-31; amended 2026-10-30 by Issue #4133)
 
 ## Version
 
-0.3.0
+0.4.0
 
 ## Context
 
@@ -305,6 +305,72 @@ No route is added or re-shaped. `/api/projects`, `/api/repositories/clone`,
 a mid-flight continuity refusal without misclassifying it as `git-error`. `GitDeliveryActionKind`,
 the governed policy packs, the mutation kernel, and `mutationEvidenceLedger.ts` remain untouched;
 the extension grants no new authority and requires no schema-version bump.
+
+
+### D8 — Review worktrees and private review refs (#4133, ADR-0182 D3)
+
+Keiko for Quality reviews the exact head of a pull request or a local range without touching the
+user's checkout. This adds two kinds of transient repository state, and nothing else:
+
+- **A locked, detached review worktree.** One per review run at
+  `<state>/review-worktrees/<leaf>`, beside the task-workspace managed root and outside every user
+  checkout (the owner-private review root is created on first use, so a server that never reviews
+  leaves nothing in its state directory, and shutdown waits for a running startup sweep), where `<leaf>` is a domain-separated digest of the run id (run ids may contain `:`,
+  which neither a Windows path segment nor a ref name may hold). It is added with
+  `worktree add --detach --no-checkout --lock --reason keiko-review`, so a user's
+  `git worktree prune` cannot remove it during a run, and it never appears in task workspace lists:
+  reconciliation neither matches nor counts entries below the review root. Before any blob is
+  read or written the tree listing is checked: more than 100,000 paths, or blobs within the
+  per-file limit summing to more than 512 MiB (counted once per path, so reused subtrees cannot
+  multiply a small pack into gigabytes), refuse the worktree as `tree-too-large`; a path listed
+  twice (a malformed tree) refuses it; case- or Unicode-normalization-colliding paths refuse it
+  (`case-collision`, `normalization-collision`). Blobs above the blob limit (2 MiB) and blobs Git
+  classifies as binary are marked skip-worktree in the review index, in one
+  `update-index -z --skip-worktree --stdin` process (paths as bytes, never precomposed or
+  argv-bounded), and never materialized. The whole creation shares one abort signal: the caller's
+  cancellation refuses it as `cancelled`, a 10-minute creation deadline as `timeout`. Removal (`worktree unlock`, `worktree remove --force`, which also drops that one
+  administrative entry even when the directory is already gone) runs on settlement, abandonment and
+  server shutdown, and the next start sweeps every orphan a crash left; `git worktree prune`, which
+  would touch the user's other stale entries, is never used.
+- **Private review refs.** `refs/keiko-review/<ns>/<n>/<headSha>` (and `.../base-<baseSha>` when
+  the base had to be fetched) or `refs/keiko-review/<ns>/local/<leaf>` keep the reviewed objects
+  available after the worktree is gone. `<ns>` is this installation's namespace (`k` + 16 hex
+  digits of a digest of its canonical review root): a sweep lists and deletes only its own
+  namespace, so two Keiko installations (two state directories) reviewing one repository never
+  delete each other's live refs. Refs another installation left behind are that installation's to
+  sweep; an operator removes an abandoned namespace with `git update-ref -d`. The fetch uses `--no-tags --no-recurse-submodules
+  --no-write-fetch-head --no-auto-maintenance --refmap=` so no branch, remote-tracking ref or
+  `FETCH_HEAD` is written; a ref is swept when its pull request is closed, when no retained run
+  references it, or after 30 days, at server start and daily. Deletion is refused before a spawn
+  for any ref outside `refs/keiko-review/<ns>/`. The fetch verifies every received object
+  (`fetch.fsckObjects=true`, `transfer.fsckObjects=true`), so a malformed tree never enters the
+  user's object store and the target is refused as `fetch-failed`.
+- **Known limitation: the fetch size.** The pull request fetch is bounded only by its 120-second
+  timeout, and the received pack stays in the user's object store until Git's own garbage
+  collection. A size-bounding `--filter=blob:limit=<n>` is not used: on a full clone it converts
+  the user's repository into a partial clone (it writes `repositoryformatversion=1`,
+  `remote.origin.promisor` and `remote.origin.partialclonefilter`), which is a change to the user's
+  repository configuration this decision does not allow.
+
+Both run through a third runner profile in `keiko-git` beside D4a's two: `createGitReviewProcessRunner`
+(local review operations, `gitEnv` isolation) and `createGitReviewNetworkProcessRunner` (the pull
+request fetch, `networkGitEnv` plus `NETWORK_CONFIG_ARGS`), each adding `GIT_LFS_SKIP_SMUDGE=1` and
+injecting the one reviewed constant `GIT_REVIEW_HARDENING_CONFIG` ahead of every caller argument:
+`core.hooksPath` = the null device (no file can exist below it, so no hook resolves),
+`core.fsmonitor=false`, `core.symlinks=false`, `core.protectNTFS=true`, `core.protectHFS=true`,
+`core.sparseCheckout=false`, `core.autocrlf=false`, `core.precomposeUnicode=false`,
+`submodule.recurse=false`, `fetch.recurseSubmodules=false`,
+`protocol.file.allow=never`, `protocol.ext.allow=never`, `gc.auto=0`, `maintenance.auto=false`, plus
+empty `smudge`/`clean`/`process` commands and `required=false` for `lfs` and for every filter
+driver the repository configuration defines (validated names only; an unsafe configured name
+refuses the worktree). Every worktree operation also runs with `--attr-source=<empty tree>`: the
+head's `.gitattributes` are never read, so no in-tree attribute selects a filter, converts line
+endings, re-encodes the working tree or expands `ident`, and every materialized file is exactly its
+blob, which is what makes the byte budget above sound. A Git older than 2.42 rejects the option and
+the worktree is refused rather than created unneutralized. An attribute-only `filter=<name>` therefore
+selects nothing and is not counted, so a head cannot force a refusal by naming many drivers. A review runner refuses every caller-supplied
+`-c`/`--config-env` override. The user's branches, `HEAD`, index, working tree, stash and
+`FETCH_HEAD` are byte-identical before and after resolution, worktree creation and cleanup.
 
 ## Consequences
 
