@@ -434,7 +434,10 @@ Keiko for Quality review instance. It changes no Coding Workbench mode and adds 
   authority that may change the workspace; every coding authority carries `workspace-write`, so
   nothing changes for coding runs, and the read-only review authority is refused instead of asked.
 - **Refusal instead of ask (D4).** No autonomy mode denies an effect today; Ask for approval asks.
-  A run that carries review authority therefore never reaches an ask: its tool facade and catalog
-  bridge refuse every action other than `read`, `discover`, `search` and `review-report` before any
-  admission (ADR-0182 D2 layer 4, `reviewRuntimeGuard.ts`), each refusal leaving one body-free
-  `review.run.action-refused` line.
+  A review run therefore never reaches an ask: its tool facade and catalog bridge refuse every
+  action other than `read`, `discover`, `search` and `review-report` before any admission, and its
+  tool bridge refuses the native read, permission-request, native-policy and web-search transports
+  before dispatch (ADR-0182 D2 layer 4, `reviewRuntimeGuard.ts`), each refusal leaving one
+  body-free `review.run.action-refused` line. The purpose they enforce comes from the review
+  composition's own tool profile, not from the minted authority, so the refusal holds even if the
+  review authority were missing.

@@ -178,6 +178,7 @@ import {
   isCodingWorkbenchBuiltInAgent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import {
   createOpenCodeV2ApprovalRequests,
   type OpenCodeV2ApprovalDecision,
@@ -279,6 +280,7 @@ import {
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
+import { composedRuntimePurpose, refuseReviewBridgeTransport } from "./reviewRuntimeGuard.js";
 import { reviewConfigurationIsExact, reviewPluginSetIsExact } from "../review/runtime/selfCheck.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -971,6 +973,7 @@ function compositionToolBridgeDeps(
     renderedResults: renderedResultLog(input),
     resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
     activityLog: input.activityLog ?? processServerLogSink(),
+    runtimePurpose: composedRuntimePurpose(input.toolProfile ?? "direct", undefined),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     ...(input.externalReadRoots === undefined
       ? {}
@@ -3568,6 +3571,12 @@ interface ToolBridgeExecutionDeps {
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   readonly externalReadRoots?: readonly string[] | undefined;
   readonly nativeWebSearch?: NativeWebSearch | undefined;
+  /**
+   * The composition's own purpose (ADR-0182 D2 layer 4): `review` for a runtime composed with the
+   * review tool profile, whatever a run's minted context says. A review bridge refuses its native
+   * transports; any other purpose leaves the bridge's dispatch unchanged.
+   */
+  readonly runtimePurpose: CodingRuntimePurpose | undefined;
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -3962,6 +3971,9 @@ function handleDirectToolRequest(
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
   }
+  if (reviewBridgeRefusesTransport(deps, runs, input.body)) {
+    return Promise.resolve({ status: 403, body: "", rejection: "approval-unavailable" });
+  }
   const read = nativeReadTransportValue(input.body);
   if (read !== undefined)
     return handleNativeReadTransport(read, input.signal, deps, runs, nativeRead);
@@ -3991,6 +4003,28 @@ function handleDirectToolRequest(
   return executeToolRequest(deps, input.headers, input.body, admission).finally(
     detachExternalAbort,
   );
+}
+
+/**
+ * ADR-0182 D2 layer 4 at the tool bridge itself: a review run reads through the governed facade
+ * only, so a native read invocation, a V2 permission request, a native policy ask and a native web
+ * search are refused before they are dispatched. A permission request is refused, never queued for
+ * a human. The refusal line correlates with the run the body names only when that run is this
+ * bridge's own.
+ */
+function reviewBridgeRefusesTransport(
+  deps: ToolBridgeExecutionDeps,
+  runs: ReadonlyMap<string, PreparedRun>,
+  body: string,
+): boolean {
+  if (deps.runtimePurpose !== "review" || !validJson(body)) return false;
+  const record = v2Record(JSON.parse(body));
+  const runId =
+    typeof record?.runId === "string" && runs.has(record.runId) ? record.runId : undefined;
+  return refuseReviewBridgeTransport(deps.runtimePurpose, record?.action, {
+    sink: deps.activityLog,
+    correlationId: () => runId,
+  });
 }
 
 function parseNativePolicyBody(body: string): OpenCodeNativePolicyRequest | undefined {

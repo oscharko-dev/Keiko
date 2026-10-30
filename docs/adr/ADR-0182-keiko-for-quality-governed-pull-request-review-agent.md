@@ -51,7 +51,8 @@ Implemented by Issue #4135 (`packages/keiko-server/src/review/runtime/`): one re
 repository is composed on demand by the production coding runtime resolver with the `review` tool
 profile, its own orchestrator, private in-memory run snapshots, no Coding History store and a state
 root under `<stateDir>/review-runtime/`; it serves one review run at a time and stops after five idle
-minutes. Its workspace view names only the review worktree of D3 and is never the user's active
+minutes (the idle stop is re-armed whenever a review releases the repository, including a review
+that ended before it reached the instance). Its workspace view names only the review worktree of D3 and is never the user's active
 task workspace pointer. Its sidecar reaches the server under `/api/review-sidecar/*`, which serves the
 same gateway and tool-facade handlers with the instance's own runtime capabilities. The review agent
 is `keiko-reviewer` (`review` is reserved and an OpenCode command), defined in the generated
@@ -84,17 +85,43 @@ profile or with any layer missing. Hard denials stay mode-independent. Proven by
 
 As implemented (#4135): layer 1 is the `review` tool profile's generated configuration (`*: deny`,
 then exactly the four tools allowed, for the configuration and for the review agent, written again
-as the server-owned `OPENCODE_CONFIG_CONTENT`); layer 2 is the generated governed-tools plugin, which
-registers exactly the four tools, and the gateway's `hasExactOpenCodeVisibleToolContract(tools,
-"review")`, which pins their projected schemas by digest; layer 3 is the review authority
-(`workspace-read` alone, `governed-assist`), checked by the tool authority port on every call, whose
-relaxed planning paths now also require `workspace-write`; layer 4 is `reviewRuntimeGuard.ts`,
-consulted by the tool facade and, independently, the catalog bridge. The startup self-check
-(`selfCheck.ts`) reads the configuration and plugins the review profile generates, the authority a
-run would be minted with and the facade's purpose, and refuses with `review-profile-invalid`,
-`native-profile` or `authority-missing` (`review.run.profile-refused`); the composition re-checks the
-configuration and plugin set of every review launch before it is written. Each layer is proven
-alone with the others disabled (`readOnlyLayers.test.ts`).
+as the server-owned `OPENCODE_CONFIG_CONTENT`); layer 2 is the generated plugin set, exactly the
+governed-tools plugin (which registers exactly the four tools) and the context plugin, and the
+gateway's `hasExactOpenCodeVisibleToolContract(tools, "review")`, which pins their projected schemas
+by digest; layer 3 is the review authority (`workspace-read` alone, `governed-assist`, review
+purpose), checked by the tool authority port on every call, whose relaxed planning paths now also
+require `workspace-write`; layer 4 is `reviewRuntimeGuard.ts`. Its purpose is the composition's own:
+a runtime composed with the `review` tool profile hands every run's tool facade, catalog bridge and
+tool bridge the review purpose itself (`composedRuntimePurpose`), never copied from the minted
+context, so layer 4 still refuses when the authority of layer 3 is absent or wrong. The tool facade
+and, independently, the catalog bridge refuse every action but the three reads and the report. The
+tool bridge also refuses its own native transports, which it dispatches before the facade sees a
+request: a native read invocation, a V2 permission request (refused, never queued for a human), a
+native policy ask and a native web search; a review run reads through the governed facade only.
+Each refusal is recorded on `review.run.action-refused` with its `layer` (`tool-facade`,
+`catalog-bridge`, `tool-bridge`) and `action`.
+
+The startup self-check (`selfCheck.ts`) refuses with `review-profile-invalid`, `native-profile` or
+`authority-missing` (`review.run.profile-refused`) unless: the readiness profile is `review`; the
+generated configuration deep-equals the canonical review configuration regenerated for the context
+geometry it declares (the only geometry-dependent parts are the provider model limits and the
+compaction derived from them), so any added, removed or changed key refuses, including plugins,
+commands, skills, references, shell, web search, foreign providers and policies; the plugin set is
+exactly the two review plugins, each source matching its pinned SHA-256; the authority a run would
+be minted with is `workspace-read` only at `governed-assist` with the review purpose; and the
+composed resolver's facade purpose (read from the composition, not from the authority probe) is
+`review`. The composition re-checks the configuration and plugin set of every review launch with the
+same exact comparisons before they are written. Each layer is proven alone with the others disabled
+(`readOnlyLayers.test.ts`), and layer 4 is proven with the review purpose removed from the minted
+authority (`composition.test.ts`).
+
+Rejections on the review sidecar routes are logged by the shared handlers with
+`runtimePurpose: "review"` (`coding-sidecar.gateway.rejected`, `coding-sidecar.tool-facade.rejected`)
+and their diagnostics name the `/api/review-sidecar/*` route, so they are distinguishable from the
+Coding Workbench's own. The review task's untrusted data neutralises every `review-data` marker
+lookalike, matched after NFKC folding, lowercasing and removal of format characters (fullwidth and
+compatibility forms, zero-width and other format characters); only the lookalike's `<` is replaced,
+and the data is otherwise kept as it was.
 
 ### D3 — Review target and hardened review worktree
 
@@ -134,7 +161,8 @@ tool boundary). The run-bound intake (`findingIntake.ts`) validates each call wi
 regular file of the head tree outside the sensitive-path deny list (`path-outside-worktree`), every
 range must lie within that blob (`range-invalid`), and the report's location must be backed by
 `defect` evidence in the same file whose excerpt is not blank (`evidence-mismatch`). It computes the
-fingerprint from the head excerpt, accepts at most eight candidates per run (`limit-reached` after),
+fingerprint from the head excerpt, accepts at most eight candidates per run (`limit-reached` after;
+each report reserves its slot before it is judged, so concurrent reports never exceed the cap),
 answers the model a closed acknowledgement so it can correct a report once, and logs
 `review.finding.reported` body-free. The rules reader (`rulesFile.ts`) resolves
 `<baseSha>:<path>` through the hardened review runner (`readGitReviewPathObject`): a missing file is

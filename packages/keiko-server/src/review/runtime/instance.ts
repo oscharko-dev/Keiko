@@ -306,6 +306,10 @@ async function runReview(
     return await prepareAndRun(context, request);
   } finally {
     context.reserved.delete(key);
+    // An idle stop that fell while this review held the repository bailed without stopping the
+    // instance; re-arm it now, whether or not this review reached the instance.
+    const live = context.instances.get(key);
+    if (live !== undefined && !live.busy) context.arm(key, live);
   }
 }
 
@@ -382,7 +386,7 @@ async function runOnInstance(
     live.slot.intake = undefined;
     live.busy = false;
     live.runCount += 1;
-    context.arm(request.repositoryRoot, live);
+    // `runReview` re-arms the idle stop once the repository's reservation is released.
   }
 }
 

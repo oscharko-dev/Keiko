@@ -15118,6 +15118,12 @@
               "required": false
             },
             {
+              "name": "runtimePurpose",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "toolMismatchSha256",
               "type": "string",
               "dataClass": "digest",
@@ -15894,6 +15900,12 @@
               "name": "runId",
               "type": "string",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "runtimePurpose",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             }
           ],

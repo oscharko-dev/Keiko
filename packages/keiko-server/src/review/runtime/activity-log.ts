@@ -21,7 +21,14 @@ import { correlationIdOrUnknown } from "../../correlation.js";
 import { reviewEvidenceDigest } from "../activity-log.js";
 
 export type ReviewRuntimeStopTrigger = "idle" | "shutdown" | "start-failed";
-export type ReviewRuntimeRefusalLayer = "tool-facade" | "catalog-bridge";
+export type ReviewRuntimeRefusalLayer = "tool-facade" | "catalog-bridge" | "tool-bridge";
+/**
+ * The tool bridge's own native transports, which the bridge dispatches before the facade sees a
+ * request (a native read invocation, a V2 permission request, a native policy ask, a native web
+ * search). A review run reaches none of them; layer 4 refuses each at the bridge.
+ */
+export type ReviewBridgeTransport =
+  "native-read" | "permission-request" | "native-policy" | "native-web-search";
 
 const REVIEW_RUN_RUNTIME_STARTED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -134,7 +141,7 @@ const REVIEW_RUN_ACTION_REFUSED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["tool-facade", "catalog-bridge"],
+      values: ["tool-facade", "catalog-bridge", "tool-bridge"],
     },
     action: {
       type: "string",
@@ -155,6 +162,10 @@ const REVIEW_RUN_ACTION_REFUSED = defineActivityLogOperation({
         "skill-discover",
         "child-agent",
         "review-report",
+        "native-read",
+        "permission-request",
+        "native-policy",
+        "native-web-search",
       ],
     },
   },
@@ -306,7 +317,7 @@ export function logReviewActionRefused(
   log: ServerLogSink,
   correlationId: string | undefined,
   layer: ReviewRuntimeRefusalLayer,
-  action: CodingToolAction,
+  action: CodingToolAction | ReviewBridgeTransport,
 ): void {
   log.write(
     activityLogEvent(

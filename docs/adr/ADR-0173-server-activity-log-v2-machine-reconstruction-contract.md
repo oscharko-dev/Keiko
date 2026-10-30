@@ -2204,6 +2204,11 @@ optional closed field `runtimePurpose` (`coding` | `review`):
 - Every other line of a review run joins those through the ordinary correlation of D5: the run id
   is the correlation id of the run's own lines, and the review instance's own `review.run.*` and
   `review.finding.reported` lines carry a digest of the review run id.
+- The shared sidecar handlers serve both instances (`/api/coding-sidecar/*` and its
+  `/api/review-sidecar/*` twin). Their rejection lines `coding-sidecar.gateway.rejected` and
+  `coding-sidecar.tool-facade.rejected` carry `runtimePurpose: "review"` when the request arrived on
+  the review route (closed vocabulary `review`; absent reads as `coding`), and the gateway's
+  diagnostics name the route the request arrived on.
 
 The field is a closed vocabulary with no body, so D4 is unchanged. The review instance's own
 operations (`review.run.runtime-started`, `review.run.runtime-stopped`, `review.run.profile-refused`,

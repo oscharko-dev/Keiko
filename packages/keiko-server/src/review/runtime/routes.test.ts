@@ -2,24 +2,50 @@
 // gateway and tool-facade handlers with the deps of the ONE review instance whose capability it
 // carries, and with no runtime at all otherwise -- never with the Coding Workbench's runtime.
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../../../tests/support/activity-log-test-support.js";
 import { mockRequest, mockResponse } from "../../_support.js";
+import { handleCodingSidecarGatewayChatCompletions } from "../../coding-sidecar-gateway.js";
+import { handleCodingSidecarToolFacade } from "../../coding-sidecar-tool-facade.js";
+import { createServerLogger, setServerLogger } from "../../observability/index.js";
 import type { CodingRuntimeToolFacadeBridge } from "../../coding-runtime/codingRuntimeControlPlane.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import { API_ROUTES, matchRoute, type RouteContext } from "../../routes.js";
 import type { ReviewRuntimeComposition } from "./composition.js";
 import type { ReviewRuntimeService } from "./instance.js";
-import { handleReviewSidecarToolFacade, reviewSidecarDeps } from "./routes.js";
+import {
+  handleReviewSidecarGatewayChatCompletions,
+  handleReviewSidecarToolFacade,
+  reviewSidecarDeps,
+} from "./routes.js";
+import { sidecarGatewayRouteTemplate } from "./sidecarSurface.js";
 
-function context(path: string, bearer?: string): RouteContext {
+const processLog = createBufferedServerLogSink();
+beforeEach(() => {
+  processLog.events.splice(0);
+  setServerLogger(createServerLogger({ sink: processLog, level: "debug" }));
+});
+afterEach(() => {
+  resetServerLogger();
+});
+
+function context(
+  path: string,
+  bearer?: string,
+  extraHeaders: Readonly<Record<string, string>> = {},
+): RouteContext {
   return {
     correlationId: "review-sidecar-route-test",
     req: mockRequest({
       method: "POST",
       url: path,
       body: '{"action":"read"}',
-      headers: bearer === undefined ? {} : { authorization: `Bearer ${bearer}` },
+      headers: {
+        ...(bearer === undefined ? {} : { authorization: `Bearer ${bearer}` }),
+        ...extraHeaders,
+      },
     }),
     res: mockResponse().res,
     params: {},
@@ -109,6 +135,48 @@ describe("review sidecar routes", () => {
     );
     expect(result).toMatchObject({ status: 503 });
     expect(codingHandle).not.toHaveBeenCalled();
+  });
+
+  // Security review of #4135, finding 6: a rejection on the review twin was indistinguishable from
+  // one on the Coding Workbench's own route.
+  it("tags the shared handlers' rejection lines with the review purpose on the review routes", async () => {
+    const origin = { origin: "https://example.invalid" };
+    await handleReviewSidecarToolFacade(
+      context("/api/review-sidecar/tool", "review-capability", origin),
+      codingDeps(),
+    );
+    await handleCodingSidecarToolFacade(
+      context("/api/coding-sidecar/tool", "coding-capability", origin),
+      codingDeps(),
+    );
+    await handleReviewSidecarGatewayChatCompletions(
+      context("/api/review-sidecar/gateway/chat/completions", undefined, origin),
+      codingDeps(),
+    );
+    await handleCodingSidecarGatewayChatCompletions(
+      context("/api/coding-sidecar/gateway/chat/completions", undefined, origin),
+      codingDeps(),
+    );
+
+    const lines = (op: string): readonly (Readonly<Record<string, unknown>> | undefined)[] =>
+      processLog.events.filter((event) => event.op === op).map((event) => event.extra);
+    const facade = lines("coding-sidecar.tool-facade.rejected");
+    expect(facade).toHaveLength(2);
+    expect(facade[0]).toMatchObject({ reason: "origin-not-allowed", runtimePurpose: "review" });
+    expect(facade[1]).not.toHaveProperty("runtimePurpose");
+    const gateway = lines("coding-sidecar.gateway.rejected");
+    expect(gateway).toHaveLength(2);
+    expect(gateway[0]).toMatchObject({ runtimePurpose: "review" });
+    expect(gateway[1]).not.toHaveProperty("runtimePurpose");
+  });
+
+  it("names the review route in the gateway's diagnostics on the review route", () => {
+    expect(
+      sidecarGatewayRouteTemplate(context("/api/review-sidecar/gateway/chat/completions")),
+    ).toBe("POST /api/review-sidecar/gateway/chat/completions");
+    expect(
+      sidecarGatewayRouteTemplate(context("/api/coding-sidecar/gateway/chat/completions")),
+    ).toBe("POST /api/coding-sidecar/gateway/chat/completions");
   });
 
   it("refuses review sidecar calls when the server composed no review runtime", () => {

@@ -8,7 +8,9 @@
 //   - the tool profile is `review` (four tools, `*: deny`, the server-defined review agent);
 //   - the workspace authority binds the review worktree through the instance's own workspace view
 //     (`reviewWorkspace.ts`) and mints the review authority (`runtimePurpose: "review"`);
-//   - the run's facade carries the review purpose and the run-bound `keiko_review_report` port;
+//   - the run's facade and the tool bridge carry the review purpose, set by this composition's own
+//     review profile rather than copied from the minted authority, and the facade carries the
+//     run-bound `keiko_review_report` port;
 //   - the snapshot and evidence stores are in-memory and private to the instance, and there is no
 //     Coding History store, so review runs are never listed by Coding Workbench or Coding History;
 //   - the sidecar reaches the server under `/api/review-sidecar/*`, which serves the same gateway
@@ -117,6 +119,11 @@ export interface ReviewRuntimeComposition {
    * authority path the resolver uses; `undefined` when none can be resolved (self-check layer 3).
    */
   readonly authorityProbe: (modelId: string) => ReviewRuntimeAuthorityFacts | undefined;
+  /**
+   * The purpose the composed resolver hands every run's tool facade and catalog bridge (self-check
+   * layer 4). The composition sets it from its own review profile, never from a minted context.
+   */
+  readonly facadePurpose: CodingRuntimePurpose | undefined;
   /** The deps the shared sidecar handlers read, with this instance's runtime capabilities. */
   readonly sidecarDeps: (base: UiHandlerDeps) => UiHandlerDeps;
   readonly close: () => void;
@@ -268,6 +275,7 @@ export function composeReviewRuntime(
     confirmations,
     authority,
     evidence,
+    facadePurpose: () => resolver.facadePurpose,
   });
 }
 
@@ -280,6 +288,7 @@ function assembleComposition(
     readonly confirmations: ReturnType<typeof reviewStartConfirmations>;
     readonly authority: ProductionCodingRuntimeResolverInput["workspaceAuthority"];
     readonly evidence: ReturnType<typeof createCodingRuntimeEvidenceAggregator>;
+    readonly facadePurpose: () => CodingRuntimePurpose | undefined;
   },
 ): ReviewRuntimeComposition {
   const snapshots = privateSnapshotStore();
@@ -304,6 +313,9 @@ function assembleComposition(
     expectStart: parts.confirmations.expect,
     authorityProbe: (modelId): ReviewRuntimeAuthorityFacts | undefined =>
       probeAuthority(parts.authority, parts.workspace, input.serverPrincipal(), modelId),
+    get facadePurpose(): CodingRuntimePurpose | undefined {
+      return parts.facadePurpose();
+    },
     sidecarDeps: (base): UiHandlerDeps => reviewSidecarDeps(base, controlPlane, gatewayEvidence),
     close: (): void => {
       snapshots.db.close();

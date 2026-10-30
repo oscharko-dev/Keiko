@@ -103,6 +103,7 @@ function fakeComposition(
     workspace,
     expectStart: () => undefined,
     authorityProbe: () => undefined,
+    facadePurpose: "review",
     sidecarDeps: (base) => base,
     close: (): void => {
       observed.closes += 1;
@@ -259,6 +260,30 @@ describe("createReviewRuntimeService", () => {
     expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
     const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
     expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
+  });
+
+  // Security review of #4135, finding 5: an idle stop that fell while a later review held the
+  // repository bailed without re-arming; that review then ended before reaching the instance, so
+  // the instance was never stopped.
+  it("still stops the instance when its idle stop fell during a review that ended early", async () => {
+    const { repo, base, head } = headRepository();
+    const { subject, observed, timers } = service({ reports: [] });
+    await subject.run(request(repo, base, head));
+    expect(timers).toHaveLength(1);
+
+    const tooLarge = subject.run(
+      request(repo, base, head, { diffPackageText: "x".repeat(70_000) }),
+    );
+    timers[0]?.();
+    await expect(tooLarge).resolves.toMatchObject({ ok: false, reason: "task-too-large" });
+    expect(subject.instanceCount()).toBe(1);
+
+    expect(timers).toHaveLength(2);
+    timers[1]?.();
+    await vi.waitFor(() => {
+      expect(subject.instanceCount()).toBe(0);
+    });
+    expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
   });
 
   it("refuses an invalid rules file before any runtime is composed (AC5)", async () => {

@@ -6,6 +6,7 @@ import {
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
+import { composedRuntimePurpose } from "./reviewRuntimeGuard.js";
 import {
   createProductionDraftDeliveryService,
   requestDraftDeliveryApproval,
@@ -50,6 +51,7 @@ import {
   isCodingWorkbenchMode,
   type CodingWorkbenchCodeTaskDeliveryAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import {
   EditorAgentAuthorityRegistry,
@@ -326,13 +328,30 @@ function researchIssuingApprovalAuthority(
 
 export function createProductionCodingRuntimeResolver(
   input: ProductionCodingRuntimeResolverInput,
-): ProductionCodingRuntimeResolver {
+): ProductionCodingRuntimeResolver & {
+  /**
+   * The purpose the composed runtime hands every run's tool facade and catalog bridge,
+   * independently of the minted context (ADR-0182 D2 layer 4): `review` for a runtime composed
+   * with the review tool profile. `undefined` until a runtime is composed.
+   */
+  readonly facadePurpose: CodingRuntimePurpose | undefined;
+} {
+  let facadePurpose: CodingRuntimePurpose | undefined;
   return {
-    resolve: () =>
-      input.confirmationConsumer !== undefined &&
-      trustedManagedWorkspaceRoot(input.workspaceAuthority.managedTaskWorkspaceRoot)
-        ? composeRuntime(input)
-        : undefined,
+    get facadePurpose(): CodingRuntimePurpose | undefined {
+      return facadePurpose;
+    },
+    resolve: (): QualifiedProductionCodingRuntime | undefined => {
+      if (
+        input.confirmationConsumer === undefined ||
+        !trustedManagedWorkspaceRoot(input.workspaceAuthority.managedTaskWorkspaceRoot)
+      ) {
+        return undefined;
+      }
+      const shared = sharedRunComposition(input);
+      facadePurpose = composedRuntimePurpose(shared.toolProfile, undefined);
+      return composeRuntime(input, shared);
+    },
   };
 }
 
@@ -436,6 +455,7 @@ function lateBoundAttachers(
 
 function composeRuntime(
   input: ProductionCodingRuntimeResolverInput,
+  shared: RunComposition,
 ): QualifiedProductionCodingRuntime {
   const authority = new CodingRuntimeAuthorityService(
     input.authorityRegistry ?? editorAgentAuthorityRegistry,
@@ -460,7 +480,6 @@ function composeRuntime(
   // late-settling dispose can never clear a NEWER run's bridge).
   const toolFacadeBridge: { current: OpenCodeToolBridge | undefined } = { current: undefined };
   const manager = createProductionRuntimeManager(runs, authority, () => runtimeNow(input));
-  const shared = sharedRunComposition(input);
   const { research, skillCatalog } = shared;
   return {
     createManager: (onRuntimeEvent): CodingRuntimeManager => {
@@ -1520,7 +1539,8 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
 }
 
 // ADR-0182 D2/D4 (#4135): a review run's facade carries its purpose (layer 4) and its report port;
-// an ordinary coding run carries neither.
+// an ordinary coding run carries neither. The purpose follows the composition's tool profile, so a
+// review composition's facade refuses even when its minted context carries no review purpose.
 function reviewRunFacadeOptions({
   input,
   context,
@@ -1531,9 +1551,11 @@ function reviewRunFacadeOptions({
   "toolProfile" | "runtimePurpose" | "reviewReport"
 > {
   const reviewReport = input.reviewReportPort?.(minted.authorityRef.runId);
+  // The composition's own profile decides the review purpose; the minted context cannot drop it.
+  const runtimePurpose = composedRuntimePurpose(toolProfile, context.runtimePurpose);
   return {
     toolProfile,
-    ...(context.runtimePurpose === undefined ? {} : { runtimePurpose: context.runtimePurpose }),
+    ...(runtimePurpose === undefined ? {} : { runtimePurpose }),
     ...(reviewReport === undefined ? {} : { reviewReport }),
   };
 }

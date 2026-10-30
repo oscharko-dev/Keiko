@@ -89,8 +89,9 @@ export function configuredReviewRunBudget(
 /**
  * The self-check's view of a composed instance: the profile the instance's readiness serves, the
  * configuration and plugins that profile generates, and the authority a run would be minted with.
- * The facade purpose is the purpose the resolver hands the run's facade, which is the minted
- * context's own.
+ * The facade purpose is the one the composed resolver hands every run's facade and catalog bridge,
+ * set by the composition's own review profile; it is read from the composition, never copied from
+ * the authority probe, so layers 3 and 4 are checked independently.
  */
 export function productionReviewRuntimeLayers(
   composition: ReviewRuntimeComposition,
@@ -110,7 +111,7 @@ export function productionReviewRuntimeLayers(
     configValue: profile.ok ? profile.configValue : undefined,
     pluginSources: createGeneratedOpenCodeV2Plugins(toolProfile),
     authority,
-    facadePurpose: authority?.runtimePurpose,
+    facadePurpose: composition.facadePurpose,
   };
 }
 
