@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b3c57376caaac7d2dd8b64999ba7e0fc5c76f4d3b815e78a3a44f928aec704dc"
+    "catalogDigest": "9ee9c3caaeff4a1ae9d1bfb6a223103207587f2ea3f6d1e74e20d6519abc7bf2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 622,
-    "proofCount": 645,
-    "resolvedProofCount": 645,
-    "failureClassCount": 388,
+    "operationCount": 628,
+    "proofCount": 651,
+    "resolvedProofCount": 651,
+    "failureClassCount": 392,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -679,6 +679,12 @@
         "pr-description.model.failed",
         "pr-description.model.started",
         "pr-description.repository.mismatch",
+        "review.finding.reported",
+        "review.run.action-refused",
+        "review.run.profile-refused",
+        "review.run.rules-file",
+        "review.run.runtime-started",
+        "review.run.runtime-stopped",
         "review.target.listed",
         "review.target.refused",
         "review.target.resolved",
@@ -1199,7 +1205,11 @@
     "review-target-read": ["editor-delivery.dependency-failure"],
     "review-target-resolution": ["editor-delivery.rejection"],
     "review-worktree-lifecycle": ["editor-delivery.rejection"],
-    "review-private-ref-retention": ["editor-delivery.dependency-failure"]
+    "review-private-ref-retention": ["editor-delivery.dependency-failure"],
+    "review-runtime-lifecycle": ["editor-delivery.dependency-failure"],
+    "review-runtime-profile": ["editor-delivery.rejection"],
+    "review-rules-file": ["editor-delivery.dependency-failure"],
+    "review-finding-intake": ["editor-delivery.dependency-failure"]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -2625,6 +2635,23 @@
       "packages/keiko-local-knowledge/src/repository-pod.test.ts"
     ],
     "request.close-line": ["packages/keiko-server/src/server.activity-log-proof.test.ts"],
+    "review.finding.reported.line": [
+      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
+    ],
+    "review.run.action-refused.line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
+      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
+    ],
+    "review.run.profile-refused.line": [
+      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
+    ],
+    "review.run.rules-file.line": ["packages/keiko-server/src/review/runtime/activity-log.test.ts"],
+    "review.run.runtime-started.line": [
+      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
+    ],
+    "review.run.runtime-stopped.line": [
+      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
+    ],
     "review.target.listed.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
     "review.target.refused.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
     "review.target.resolved.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
