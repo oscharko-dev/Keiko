@@ -787,8 +787,9 @@ describe("CodingToolFacade", () => {
   it.each([
     ["repository-required", "not a remote or network problem"],
     ["remote-required", "no 'origin' remote"],
+    ["github-origin-required", "github.com repository"],
     ["issue-binding-required", "bound to an issue"],
-  ])("tells the model why an issue-free delivery is refused: %s", async (reasonCode, cause) => {
+  ])("tells the model why a delivery is refused: %s", async (reasonCode, cause) => {
     const ports = facade();
     ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
     const subject = createCodingToolFacade(ports);

@@ -79,6 +79,7 @@ const DRAFT_DELIVERY_OPERATION = defineActivityLogOperation({
         "provider-unavailable",
         "repository-required",
         "remote-required",
+        "github-origin-required",
         "issue-binding-required",
       ],
     },
@@ -231,7 +232,7 @@ export function draftChanged(
   });
   options.onChanged(record);
 }
-// An issue-free branch push has no issue facts to log; the line carries only what exists.
+// An issue-free run has no issue facts to log; the line carries only what exists.
 function issueActivityFields(
   binding: DraftDeliveryBinding,
 ): Pick<DraftDeliveryActivityFields, "issueBindingDigest" | "issueIdDigest" | "issueNumber"> {

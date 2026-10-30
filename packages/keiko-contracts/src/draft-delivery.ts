@@ -36,8 +36,9 @@ export interface DraftDeliveryIssueBinding {
 
 /**
  * Durable intent of an issue-free run that pushes its verified commit to its own task branch on
- * `origin` — any Git remote, so no repository, issue or pull request fact exists to bind. Only the
- * push phases are admissible (see `BRANCH_PHASES`); a pull request needs an issue binding.
+ * `origin` when that remote is not a verified github.com repository — any other Git remote, so no
+ * repository, issue or pull request fact exists to bind. Only the push phases are admissible (see
+ * `BRANCH_PHASES`); a pull request needs a forge, which a foreign remote does not offer.
  */
 export interface DraftDeliveryBranchBinding {
   readonly kind: "branch-push";
@@ -55,7 +56,38 @@ export interface DraftDeliveryBranchBinding {
   readonly recoveryId: string;
 }
 
-export type DraftDeliveryBinding = DraftDeliveryIssueBinding | DraftDeliveryBranchBinding;
+/**
+ * Durable intent of an issue-free run whose `origin` is a verified github.com repository: the same
+ * task-branch push as `DraftDeliveryBranchBinding`, plus the repository a draft pull request opens
+ * in. No issue binds it; an accepted issue only ever LINKS a pull request and is never its
+ * precondition (owner decision, 2026-10-30). The record is created with this kind from its first
+ * push, because a stored target never changes kind between phases (the persistence layer pins the
+ * target across transitions), so a push and the pull request that follows it share one binding.
+ * Every phase is admissible, and a `pullRequest` identity is carried exactly as for an issue.
+ */
+export interface DraftDeliveryRepositoryBinding {
+  readonly kind: "github-repository";
+  readonly runId: string;
+  readonly workspaceDigest: string;
+  readonly runtimeAuthorityDigest: string;
+  readonly envelopeDigest: string;
+  readonly remoteDigest: string;
+  readonly repository: string;
+  readonly remoteAlias: "origin";
+  readonly baseRef: string;
+  readonly baseSha: string;
+  readonly headRef: string;
+  readonly headSha: string;
+  readonly verifiedCommitProposalId: string;
+  readonly recoveryId: string;
+}
+
+export type DraftDeliveryBinding =
+  DraftDeliveryIssueBinding | DraftDeliveryBranchBinding | DraftDeliveryRepositoryBinding;
+
+/** A binding that names a GitHub repository, so a draft pull request can be opened from it. */
+export type DraftDeliveryPullRequestBinding =
+  DraftDeliveryIssueBinding | DraftDeliveryRepositoryBinding;
 
 export type DraftDeliveryPhase =
   | "push-proposed"
@@ -129,6 +161,7 @@ const BRANCH_BINDING_KEYS = new Set([
   "verifiedCommitProposalId",
   "recoveryId",
 ]);
+const REPOSITORY_BINDING_KEYS = new Set([...BRANCH_BINDING_KEYS, "repository"]);
 const BRANCH_DIGESTS = [
   "workspaceDigest",
   "runtimeAuthorityDigest",
@@ -248,14 +281,32 @@ function validBranchTarget(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasExactKeys(value: Record<string, unknown>, keys: ReadonlySet<string>): boolean {
+  return (
+    Object.keys(value).length === keys.size && Object.keys(value).every((key) => keys.has(key))
+  );
+}
+
 function isBranchBindingShape(value: unknown): value is DraftDeliveryBranchBinding {
   return (
     record(value) &&
     value.kind === "branch-push" &&
-    Object.keys(value).length === BRANCH_BINDING_KEYS.size &&
-    Object.keys(value).every((key) => BRANCH_BINDING_KEYS.has(key)) &&
+    hasExactKeys(value, BRANCH_BINDING_KEYS) &&
     BRANCH_DIGESTS.every((key) => matches(value[key], DIGEST)) &&
     BINDING_IDS.every((key) => matches(value[key], SAFE_ID)) &&
+    validBranchTarget(value)
+  );
+}
+
+function isRepositoryBindingShape(value: unknown): value is DraftDeliveryRepositoryBinding {
+  return (
+    record(value) &&
+    value.kind === "github-repository" &&
+    hasExactKeys(value, REPOSITORY_BINDING_KEYS) &&
+    BRANCH_DIGESTS.every((key) => matches(value[key], DIGEST)) &&
+    BINDING_IDS.every((key) => matches(value[key], SAFE_ID)) &&
+    typeof value.repository === "string" &&
+    isGitHubOwnerAndRepo(value.repository) &&
     validBranchTarget(value)
   );
 }
@@ -267,15 +318,35 @@ export function isDraftDeliveryBranchBinding(
   return value.kind === "branch-push";
 }
 
-/** Whether a binding belongs to an issue-bound run, the only kind that can open a pull request. */
+/** Whether a binding belongs to an issue-bound run: it names the accepted issue and a repository. */
 export function isDraftDeliveryIssueBinding(
   value: DraftDeliveryBinding,
 ): value is DraftDeliveryIssueBinding {
   return value.kind === undefined;
 }
 
+/** Whether a binding belongs to an issue-free run on a verified github.com origin. */
+export function isDraftDeliveryRepositoryBinding(
+  value: DraftDeliveryBinding,
+): value is DraftDeliveryRepositoryBinding {
+  return value.kind === "github-repository";
+}
+
+/**
+ * Whether a binding names a GitHub repository, so a draft pull request can be opened from it: an
+ * issue-bound run or an issue-free run on a verified github.com origin. A branch-push binding names
+ * no forge and never stands for a pull request.
+ */
+export function isDraftDeliveryPullRequestBinding(
+  value: DraftDeliveryBinding,
+): value is DraftDeliveryPullRequestBinding {
+  return value.kind === undefined || value.kind === "github-repository";
+}
+
 export function isDraftDeliveryBinding(value: unknown): value is DraftDeliveryBinding {
-  return isIssueBindingShape(value) || isBranchBindingShape(value);
+  return (
+    isIssueBindingShape(value) || isBranchBindingShape(value) || isRepositoryBindingShape(value)
+  );
 }
 
 function validRecordedAt(value: unknown): boolean {
@@ -295,7 +366,7 @@ function validPhase(value: Record<string, unknown>): boolean {
 
 function validRemote(value: Record<string, unknown>, binding: DraftDeliveryBinding): boolean {
   const pr = value.pullRequest;
-  // A branch-push run has no pull request: neither an identity nor a pull-request phase can exist.
+  // A branch-push run has no forge: neither a pull-request identity nor a pull-request phase can exist.
   if (isDraftDeliveryBranchBinding(binding))
     return pr === undefined && BRANCH_PHASES.has(String(value.phase));
   if (pr === undefined) return value.phase !== "draft-created";
@@ -312,7 +383,7 @@ function validRemote(value: Record<string, unknown>, binding: DraftDeliveryBindi
 
 function currentDraftMatches(
   pr: GitPullRequestIdentity,
-  binding: DraftDeliveryIssueBinding,
+  binding: DraftDeliveryPullRequestBinding,
 ): boolean {
   return (
     pr.headSha === binding.headSha &&
@@ -336,7 +407,7 @@ function validRecordMetadata(value: Record<string, unknown>): boolean {
   );
 }
 
-/** A delivery record whose binding names an issue and a repository: the only kind with a pull request. */
+/** A delivery record whose binding names the accepted issue and its repository. */
 export type IssueBoundDraftDeliveryRecord = DraftDeliveryRecord & {
   readonly binding: DraftDeliveryIssueBinding;
 };
@@ -345,6 +416,17 @@ export function isIssueBoundDraftDeliveryRecord(
   value: DraftDeliveryRecord,
 ): value is IssueBoundDraftDeliveryRecord {
   return isDraftDeliveryIssueBinding(value.binding);
+}
+
+/** A delivery record whose binding names a GitHub repository: the kinds a pull request can belong to. */
+export type PullRequestDraftDeliveryRecord = DraftDeliveryRecord & {
+  readonly binding: DraftDeliveryPullRequestBinding;
+};
+
+export function isPullRequestDraftDeliveryRecord(
+  value: DraftDeliveryRecord,
+): value is PullRequestDraftDeliveryRecord {
+  return isDraftDeliveryPullRequestBinding(value.binding);
 }
 
 export function isDraftDeliveryRecord(value: unknown): value is DraftDeliveryRecord {

@@ -21,6 +21,8 @@ export interface TaskActionsInput {
   /** The composer's draft, which a retry of the last start is compared with. */
   readonly taskIntent: string;
   readonly projectMemoryEnabled: boolean;
+  /** The Jira Pod picked in the composer for the next start; absent starts without Jira. */
+  readonly jiraPodId?: string | undefined;
   readonly conversationId: string | undefined;
   /**
    * The fork the person asked for (S03): the start begins a new task from it and continues no
@@ -86,6 +88,7 @@ function beginStart(
       ...startedFrom(input),
       issue,
       ...startPromptInputs(inputs),
+      ...(input.jiraPodId === undefined ? {} : { jiraPodId: input.jiraPodId }),
     });
   });
 }

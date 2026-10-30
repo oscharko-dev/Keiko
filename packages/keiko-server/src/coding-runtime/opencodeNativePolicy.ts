@@ -877,6 +877,12 @@ export interface OpenCodeNativeMcpGrants {
       readonly risk: McpToolRisk;
       readonly remote: boolean;
       readonly managed?: boolean;
+      /**
+       * The human selected this managed server for this run (a Jira Pod chosen in the composer,
+       * owner decision 2026-10-30): its read tools are allowed in every mode. The grant never
+       * reaches a write tool, which keeps following the mode matrix.
+       */
+      readonly runGrantedRead?: boolean;
       readonly mutation?: import("./opencodeNativeMcpMutationJournal.js").NativeMcpMutationSource;
     }
   >;
@@ -893,7 +899,8 @@ export function decideOpenCodeNativePolicy(
     classifyMcpAction(request, input.mcp) ?? classifyNativeAction(request, admittedRootsOf(input));
   if ("reason" in classification) return deny(classification.reason, classification.message);
   // Reads and planning are allowed in every mode (ADR-0124 D1); only effects consult the matrix.
-  if (alwaysAllowedRead(classification)) return { effect: "allow", classification };
+  if (alwaysAllowedRead(classification, request, input.mcp))
+    return { effect: "allow", classification };
   // Below Full access the sandbox has no route beyond this machine, and customer networks are often
   // firewalled anyway: refuse at once with a clear reason instead of an approval the kernel would
   // then block (#3897), so the agent continues with local files and tools. Managed MCP uses the
@@ -925,6 +932,15 @@ export function decideOpenCodeNativePolicy(
   };
 }
 
+/** A read tool of a managed server the human chose for this run; a write never qualifies. */
+function runGrantedRead(
+  request: OpenCodeNativePolicyRequest,
+  mcp: OpenCodeNativeMcpGrants | undefined,
+): boolean {
+  const grant = mcp?.actions.get(request.permission);
+  return grant?.runGrantedRead === true && grant.managed === true && grant.risk === "read";
+}
+
 function nativeInternetUnavailable(input: OpenCodeNativePolicyInput): boolean {
   return input.mode !== "autonomous-delivery" && !managedMcpRequest(input.request, input.mcp);
 }
@@ -951,10 +967,16 @@ function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
 }
 
 // Reads and planning in the workspace are allowed in every mode (ADR-0124 D1); a read of an
-// accepted external reference is an `external-file` action the mode decides (#3900 AC5).
-function alwaysAllowedRead(classification: OpenCodeNativeActionClassification): boolean {
+// accepted external reference is an `external-file` action the mode decides (#3900 AC5). A read
+// tool of a managed server the human chose for this run is the human's explicit grant (#3907).
+function alwaysAllowedRead(
+  classification: OpenCodeNativeActionClassification,
+  request: OpenCodeNativePolicyRequest,
+  mcp: OpenCodeNativeMcpGrants | undefined,
+): boolean {
   return (
-    classification.actionClass === "workspace-read" && classification.scope !== "external-file"
+    (classification.actionClass === "workspace-read" && classification.scope !== "external-file") ||
+    runGrantedRead(request, mcp)
   );
 }
 

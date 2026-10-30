@@ -178,6 +178,39 @@ verifiers, endpoints and provider responses are excluded.
 Managed Jira providers remain server-composed and require no operator registry entry. Retrieval,
 citations and conversation budgets remain owned by their existing paths.
 
+**A Jira Pod for a Coding run (owner decision 2026-10-30, #3907).** A Coding run can reach Jira
+through the same managed provider, host and relay, with no second host, policy layer or connector.
+The human picks one Pod explicitly in the Workbench composer (`jiraPodId` on the start request;
+none keeps today's behaviour). The pick is the run's Jira read grant: the nine read tools are
+allowed in all three modes. The five write tools (`create`, `edit`, `assign`, `comment`,
+`transition`) keep following the mode: Ask for approval and Supervised workspace ask through the
+existing approval channel, Full access is allowed inside the validated Authority Envelope. Hard
+denials stay mode-independent and fail closed with zero HTTP.
+
+The start resolves the Pod before the one-use start confirmation is consumed: it must be the
+caller's own (server principal) and ready, on a native `keiko-sidecar` run with the managed relay;
+otherwise the start is refused as `invalid-intent` with a closed reason (`pod-not-found`,
+`pod-not-ready`, `unsupported-runtime`, `unavailable`). The Pod, its credential generation and
+its verification revision join the confirmation claim, so the binding cannot be swapped, and they
+are the `credentialGeneration` of the run's synthetic server definition (`jira`, a placeholder
+remote URL naming the Pod), which therefore also enters the native mutation journal's
+configuration digest. A registry server named `jira` is not admitted into such a run. The
+definition is never written to the operator registry and carries no credential.
+
+`ConfiguredMcpConnections` is wrapped per run: every other server is served by the shared
+connections, `jira` by one managed host per Pod credential identity (descriptor drift, result
+validation, deadlines and `mcp.managed.lifecycle` are the host's), reached through
+`createMcpRelayEndpoint`. Every request and every effect re-checks that the Pod is still exactly
+the credential the human chose; a replaced token, re-verification, deletion, unfinished custody
+work or another owner ends the binding (the relay capability is revoked, later calls perform no
+request). Writes pass the relay's existing durable mutation permit before dispatch; a write that
+does not complete is an uncertain mutation, and the run enters the existing recovery.
+
+Evidence is `coding-runtime.jira-pod` under the run's correlation: the binding decision at start
+(`bound` or `refused` with the closed reason) and one line per call or refusal with the closed Jira
+tool and its risk. It carries no Pod id or name, URL, issue key or text. The Pod owner, credentials
+and `AtlassianCredentialCustody` are unchanged and never leave custody.
+
 Settings extend the same registry additively: explicit automatic discovery permits an
 initially empty tool map, and local secret environment entries use references instead of
 literal credentials. Existing explicit tool maps retain their admission semantics. Discovery

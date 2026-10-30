@@ -818,8 +818,10 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
       "This run has no verified Git repository context to deliver from; a plain folder that is not a Git repository has none. This is not a remote or network problem: keep editing and verifying, report the result, and do not initialize a repository or run Git another way.",
     "remote-required":
       "This repository has no 'origin' remote, so there is nowhere to push. Report this blocker to the operator; do not add a remote or push to any other URL.",
+    "github-origin-required":
+      "A draft pull request can only be opened where this repository's 'origin' is a github.com repository, and it is not. The branch push is the complete delivery here: report the pushed branch name and do not retry the pull request. This is not about an issue: no issue is needed for a pull request.",
     "issue-binding-required":
-      "A pull request can only be opened for a run that is bound to an issue, and this run has none. The branch push is the complete delivery here: report the pushed branch name and do not retry the pull request.",
+      "Observing a delivered pull request's CI needs a run that is bound to an issue, and this run has none. The pull request itself is delivered: report it and do not retry the observation.",
   },
   git: {
     "repository-required": REPOSITORY_REQUIRED_GUIDANCE,

@@ -363,6 +363,58 @@ describe("Coding Workbench composer", () => {
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
   });
 
+  // Owner decision 2026-10-30: one compact choice, "Jira: none" by default; picking a Pod is the
+  // run's Jira read grant, so it is shown in the composer and sent with the start.
+  describe("the Jira Pod choice for the next run", () => {
+    const POD = { id: "d5f5681e-ce98-4c3c-b27e-51d707c9d018", name: "Acme Jira", ready: true };
+
+    it("shows no Jira control when the person has no ready Pod", () => {
+      renderComposerWithOverrides({ jiraPod: undefined });
+
+      expect(screen.queryByRole("combobox", { name: /Jira/u })).toBeNull();
+    });
+
+    it("offers none first and picks a Pod by its name", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderComposerWithOverrides({ jiraPod: { choices: [POD], value: "", onChange } });
+
+      const control = screen.getByRole("combobox", { name: "Jira Pod for this run" });
+      expect(control).toHaveTextContent("Jira: none");
+      await user.click(control);
+      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(
+        expect.arrayContaining(["Jira: none", "Jira: Acme Jira"]),
+      );
+      await user.click(screen.getByRole("option", { name: "Jira: Acme Jira" }));
+
+      expect(onChange).toHaveBeenCalledWith(POD.id);
+    });
+
+    it("shows the chosen Pod and goes back to none", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderComposerWithOverrides({ jiraPod: { choices: [POD], value: POD.id, onChange } });
+
+      const control = screen.getByRole("combobox", { name: "Jira Pod for this run" });
+      expect(control).toHaveTextContent("Jira: Acme Jira");
+      await user.click(control);
+      await user.click(screen.getByRole("option", { name: "Jira: none" }));
+
+      expect(onChange).toHaveBeenCalledWith("");
+    });
+
+    it("cannot be changed while a run is active", () => {
+      render(
+        <TaskStartSection
+          {...composerProps("running", composerActions())}
+          jiraPod={{ choices: [POD], value: POD.id, onChange: vi.fn() }}
+        />,
+      );
+
+      expect(screen.getByRole("combobox", { name: "Jira Pod for this run" })).toBeDisabled();
+    });
+  });
+
   // #3873 live review: both listboxes exposed every option as a nameless "option" in the
   // accessibility tree while showing "gpt-5.4" and "gemma-4-31b-it", so a screen reader announced
   // nothing. Each option carries its visible text as its own accessible name.

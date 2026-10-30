@@ -422,3 +422,12 @@ same typed, content-free permission request of D6, carrying a closed `native-*` 
 own command, paths or address ride the authenticated approval-review channel only. A denied or
 expired ask answers the native call with the D6 guidance so the native loop continues without it.
 
+## Amendment — a Jira Pod the human chose for a run (2026-10-30, #3907)
+
+The Workbench composer lets the human choose one of their own Jira Pods for the next run. The
+choice is an explicit, per-run grant of the Pod's Jira read tools (allowed in all three modes);
+the Pod's write tools are external effects that follow the mode matrix: Ask for approval and
+Supervised workspace ask, Full access acts inside the validated Authority Envelope. An invalid,
+revoked, changed, not-ready or foreign Pod is a mode-independent hard denial that fails closed
+before any request. A run without a choice has no Jira tools and is unchanged. See
+[ADR-0181](ADR-0181-shared-managed-mcp-host.md) for the mechanism.
