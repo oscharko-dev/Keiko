@@ -468,9 +468,15 @@ function DeliveryBinding({
 export function DeliveryBindingFacts({
   delivery,
   t,
+  includeRecord = true,
 }: {
   readonly delivery: DraftDeliveryRecord;
   readonly t: CodingWorkbenchTranslate;
+  /**
+   * The approval card shows the exact target the human approves and leaves out the record's own
+   * proposal id and time (#3907, owner: less is more); the status card keeps them for observation.
+   */
+  readonly includeRecord?: boolean;
 }): ReactNode {
   const target = delivery.binding;
   return (
@@ -481,19 +487,28 @@ export function DeliveryBindingFacts({
         { id: "headSha", label: t("codingWorkbench.draftDelivery.headSha"), value: target.headSha },
         { id: "baseRef", label: t("codingWorkbench.draftDelivery.baseRef"), value: target.baseRef },
         { id: "baseSha", label: t("codingWorkbench.draftDelivery.baseSha"), value: target.baseSha },
-        {
-          id: "proposalId",
-          label: t("codingWorkbench.draftDelivery.proposal"),
-          value: delivery.proposalId,
-        },
-        {
-          id: "recordedAt",
-          label: t("codingWorkbench.draftDelivery.recordedAt"),
-          value: delivery.recordedAt,
-        },
+        ...(includeRecord ? deliveryRecordFacts(delivery, t) : []),
       ]}
     />
   );
+}
+
+function deliveryRecordFacts(
+  delivery: DraftDeliveryRecord,
+  t: CodingWorkbenchTranslate,
+): readonly DeliveryFact[] {
+  return [
+    {
+      id: "proposalId",
+      label: t("codingWorkbench.draftDelivery.proposal"),
+      value: delivery.proposalId,
+    },
+    {
+      id: "recordedAt",
+      label: t("codingWorkbench.draftDelivery.recordedAt"),
+      value: delivery.recordedAt,
+    },
+  ];
 }
 
 // An issue-bound delivery names its repository and accepted issue; an issue-free branch push has

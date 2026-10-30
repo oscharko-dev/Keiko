@@ -3235,6 +3235,9 @@ describe("CodingWorkbenchWindow", () => {
         "1".repeat(40),
       ])
         expect(target).toHaveTextContent(value);
+      // #3907: the record's own proposal id and time stay on the status card, not on the decision.
+      expect(target.querySelector('[data-fact="proposalId"]')).toBeNull();
+      expect(target.querySelector('[data-fact="recordedAt"]')).toBeNull();
       expect(screen.queryByRole("group", { name: "Changed files" })).not.toBeInTheDocument();
       if (action === "pull-request") {
         expect(
