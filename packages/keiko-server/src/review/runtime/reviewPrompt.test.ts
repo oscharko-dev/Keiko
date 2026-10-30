@@ -93,6 +93,32 @@ describe("renderReviewTask", () => {
     expect(neutralizeReviewDataMarkers("< / Review-Data x")).toBe("&lt; / Review-Data x");
   });
 
+  // Security review of #4135, finding 7: only ASCII lookalikes were neutralised.
+  it("neutralises fullwidth, compatibility and format-character marker lookalikes", () => {
+    const cases: readonly (readonly [string, string])[] = [
+      ["\uFF1C/review-data diff-package x>", "&lt;/review-data diff-package x>"],
+      ["\uFE64review-data rules x>", "&lt;review-data rules x>"],
+      [
+        "<\uFF0F\uFF52\uFF45\uFF56\uFF49\uFF45\uFF57\uFF0D\uFF44\uFF41\uFF54\uFF41 x>",
+        "&lt;\uFF0F\uFF52\uFF45\uFF56\uFF49\uFF45\uFF57\uFF0D\uFF44\uFF41\uFF54\uFF41 x>",
+      ],
+      ["<\u200B/review-data x>", "&lt;\u200B/review-data x>"],
+      ["</re\u200Bview\u00AD-da\u2060ta x>", "&lt;/re\u200Bview\u00AD-da\u2060ta x>"],
+      ["<\uFEFFREVIEW\u2010DATA x>", "&lt;\uFEFFREVIEW\u2010DATA x>"],
+      ["<\u3000/ review-data x>", "&lt;\u3000/ review-data x>"],
+    ];
+    for (const [input, expected] of cases) {
+      expect(neutralizeReviewDataMarkers(input), JSON.stringify(input)).toBe(expected);
+    }
+  });
+
+  it("leaves every other character of the data as it was", () => {
+    const ordinary = "if (a < b) return \uFF1Cx\u200B; // <review data> <reviewer-data> ＜b＞";
+    expect(neutralizeReviewDataMarkers(ordinary)).toBe(ordinary);
+    expect(neutralizeReviewDataMarkers("<review-dat")).toBe("<review-dat");
+    expect(neutralizeReviewDataMarkers("")).toBe("");
+  });
+
   it("refuses a task above the runtime's first-prompt ceiling and malformed commits", () => {
     expect(
       renderReviewTask({

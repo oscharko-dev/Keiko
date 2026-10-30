@@ -89,13 +89,60 @@ export type ReviewTaskResult =
 
 const SHA_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 const NONCE_PATTERN = /^[0-9a-f]{12}$/u;
-// Any opening or closing marker lookalike inside the data, whatever its case or spacing. One
-// character class between `<` and the name keeps the match linear in the data's length.
-const MARKER_LOOKALIKE = /<([\s/]*review-data)/giu;
+const MARKER_NAME = "review-data";
+const FORMAT_CHARACTER = /^\p{Cf}$/u;
+const DASH = /^\p{Pd}$/u;
+const SPACE = /^\s+$/u;
 
-/** Neutralizes every marker lookalike in untrusted data so it can neither close nor open a block. */
+/**
+ * One character as the marker match reads it: NFKC-folded and lowercased, so a fullwidth or other
+ * compatibility form matches its ASCII original; a format character (zero-width space, joiner,
+ * soft hyphen, BOM, ...) folds to nothing, and any dash to `-`. Matching only: the data is never
+ * rewritten with these folds.
+ */
+function foldedForMatch(char: string): string {
+  if (FORMAT_CHARACTER.test(char)) return "";
+  const folded = char.normalize("NFKC").toLowerCase();
+  return DASH.test(folded) ? "-" : folded;
+}
+
+/** The index of the first character after `from` that is no separator between `<` and a name. */
+function afterSeparators(chars: readonly string[], from: number): number {
+  let index = from;
+  while (index < chars.length) {
+    const folded = foldedForMatch(chars[index] ?? "");
+    if (folded !== "" && folded !== "/" && !SPACE.test(folded)) return index;
+    index += 1;
+  }
+  return index;
+}
+
+/** Whether the characters from `from` on read as the marker name once folded. */
+function readsMarkerName(chars: readonly string[], from: number): boolean {
+  let matched = "";
+  for (let index = from; index < chars.length && matched.length < MARKER_NAME.length; index += 1) {
+    matched += foldedForMatch(chars[index] ?? "");
+    if (!MARKER_NAME.startsWith(matched.slice(0, MARKER_NAME.length))) return false;
+  }
+  return matched.startsWith(MARKER_NAME);
+}
+
+/**
+ * Neutralizes every opening or closing marker lookalike in untrusted data so it can neither close
+ * nor open a block: whatever its case, spacing, slashes, compatibility forms (`＜`, `ｒｅｖｉｅｗ`)
+ * or interleaved format characters. Only the lookalike's `<` is replaced (by `&lt;`); every other
+ * character of the data is kept as it was. Each `<` scans forward only over its own separators and
+ * at most the name, so the work stays linear in the data's length.
+ */
 export function neutralizeReviewDataMarkers(data: string): string {
-  return data.replace(MARKER_LOOKALIKE, "&lt;$1");
+  const chars = Array.from(data);
+  return chars
+    .map((char, index) =>
+      foldedForMatch(char) === "<" && readsMarkerName(chars, afterSeparators(chars, index + 1))
+        ? "&lt;"
+        : char,
+    )
+    .join("");
 }
 
 function dataBlock(label: "rules" | "diff-package", nonce: string, data: string): string {

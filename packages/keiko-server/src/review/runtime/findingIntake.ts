@@ -180,6 +180,7 @@ export function createReviewFindingIntake(input: ReviewFindingIntakeInput): Revi
   const accepted: ReviewCandidateFinding[] = [];
   const rejected = emptyRejections();
   const max = input.maxCandidates ?? REVIEW_RUN_MAX_CANDIDATE_REPORTS;
+  let reserved = 0;
   const record = (
     acknowledgement: ReviewReportAcknowledgement,
     candidate?: ReviewCandidateFinding,
@@ -189,13 +190,22 @@ export function createReviewFindingIntake(input: ReviewFindingIntakeInput): Revi
   return {
     runId: input.runId,
     async submit(value, signal): Promise<ReviewReportAcknowledgement> {
-      if (accepted.length >= max) {
+      // Up to eight reports may be judged at once: each reserves its slot synchronously before the
+      // head-commit judgement is awaited, so concurrent reports can never exceed the cap. The slot
+      // is released once the judgement settles; an accepted candidate then occupies it.
+      if (accepted.length + reserved >= max) {
         rejected["limit-reached"] += 1;
         const limit: ReviewReportAcknowledgement = { status: "limit-reached" };
         record(limit);
         return limit;
       }
-      const verdict = await judge(reader, value, signal);
+      reserved += 1;
+      let verdict: Awaited<ReturnType<typeof judge>>;
+      try {
+        verdict = await judge(reader, value, signal);
+      } finally {
+        reserved -= 1;
+      }
       if (!verdict.ok) {
         rejected[verdict.reason] += 1;
         const refusal: ReviewReportAcknowledgement = { status: "rejected", reason: verdict.reason };

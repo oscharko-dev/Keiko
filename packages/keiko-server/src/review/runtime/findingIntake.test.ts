@@ -195,6 +195,53 @@ describe("createReviewFindingIntake", () => {
     expect(intake.rejections()["limit-reached"]).toBe(1);
   });
 
+  // Security review of #4135, finding 4: the cap was checked before the head-commit judgement was
+  // awaited, so concurrent reports all passed the check and more than eight were accepted.
+  it("never accepts more than eight candidates from concurrent reports", async () => {
+    const intake = intakeFor(createBufferedServerLogSink());
+    const categories = [
+      "correctness",
+      "security",
+      "reliability",
+      "performance",
+      "concurrency",
+      "data-integrity",
+      "test-gap",
+      "maintainability",
+    ] as const;
+    const reports = categories.flatMap((category) =>
+      [1, 2].map((line) =>
+        report({
+          category,
+          startLine: line,
+          endLine: line,
+          evidence: [{ file: "src/first.ts", startLine: line, endLine: line, role: "defect" }],
+        }),
+      ),
+    );
+    const answers = await Promise.all(reports.map((value) => intake.submit(value)));
+
+    const statuses = answers.map((answer) => answer.status);
+    expect(statuses.filter((status) => status === "accepted")).toHaveLength(
+      REVIEW_RUN_MAX_CANDIDATE_REPORTS,
+    );
+    expect(statuses.filter((status) => status === "limit-reached")).toHaveLength(
+      reports.length - REVIEW_RUN_MAX_CANDIDATE_REPORTS,
+    );
+    expect(intake.candidates()).toHaveLength(REVIEW_RUN_MAX_CANDIDATE_REPORTS);
+  });
+
+  it("releases a reserved slot when the reserved report is rejected", async () => {
+    const intake = intakeFor(createBufferedServerLogSink(), 1);
+    await expect(intake.submit(report({ file: "src/missing.ts" }))).resolves.toMatchObject({
+      status: "rejected",
+    });
+    await expect(intake.submit(report())).resolves.toMatchObject({ status: "accepted" });
+    await expect(intake.submit(report({ category: "security" }))).resolves.toEqual({
+      status: "limit-reached",
+    });
+  });
+
   it("keeps one candidate per fingerprint when the model repeats a finding", async () => {
     const intake = intakeFor(createBufferedServerLogSink());
 
