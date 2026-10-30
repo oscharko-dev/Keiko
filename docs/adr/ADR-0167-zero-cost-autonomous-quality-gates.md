@@ -176,9 +176,9 @@ guard could be dropped to fit. A subsequent complete whole-repository qualificat
 budget refusal. The ceiling remains a finite resource bound, not an acceptance threshold; its
 refusal stays sticky and fail-closed. The same constant also bounds the separate inventory
 preparation counter described below, so the decision raised that bound to 96 MiB as well.
-Preparation bytes are counted once by that counter and are not seeded into compiler counters. A
-compiler whose source limit exceeds the receipt's uses charged extraction instead of inheriting a
-preparation source refusal. The mandatory inventory syntax visitors provide detached private
+Preparation bytes are counted once by that counter and are not seeded into compiler counters. When
+preparation itself refused on source, a compiler whose source limit exceeds the receipt's uses
+charged extraction instead of inheriting that refusal; a healthy receipt stays usable. The mandatory inventory syntax visitors provide detached private
 module facts through a frozen, privately witnessed source/configuration/ownership/membership/output
 receipt. Added traversal uses the same unchanged checked visit ruler before compiler creation;
 each independent compiler seeds that actual preparation cost once and continues the same counter.
