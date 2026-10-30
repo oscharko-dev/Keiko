@@ -179,6 +179,38 @@ sees the Reviewer's reasoning. A finding reaches the person only if the Counter-
 with its own code evidence; refuted and undecided findings are retained in the run record for
 measurement and are never shown as findings. Proven by Issue #4136.
 
+As implemented (#4136): the read-only child machinery is generalized, not copied.
+`runGovernedReadOnlySession` (`readOnlyChildOrchestrator.ts`) owns the governance of any bounded
+read-only session (one gate per tool call: stop, one-layer, read-only class, own ceiling, parent
+budget; the first denial latches; a wall-clock deadline aborts the runner; authority is re-checked
+after it resolves), and `runReadOnlyHarnessSession` (`productionReadOnlyChildRunner.ts`) runs the
+bounded harness session over a caller-supplied catalog, reserved profile and tool port with a
+configurable wall time. `keiko_child_agent` keeps its reserved `child@1` profile and behaviour on
+the same two functions. The counter-check (`review/counter-check/`) uses its own reserved profile,
+`review-counter-check@1` (ADR-0175 D2): `keiko_counter_check_read`, `keiko_counter_check_discover`,
+`keiko_counter_check_search` (a fixed-string `git grep -F` over the head commit, `grepGitReviewTree`)
+and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
+commit in the run's review worktree (never a working tree), behind the sensitive-path deny list.
+Each candidate gets a fresh session with the Counter-checker model whose only input is the candidate
+task: location, category, condition, mechanism, consequence and evidence locations as nonce-bound
+untrusted data, never the Reviewer's reasoning, transcript, title, remedy, failure-mode prose or any
+other candidate. The verdict tool records the first valid `CounterCheckVerdict` (the server binds
+the fingerprint) and ends the session; free text is ignored and a missing or invalid verdict is
+`undecided/insufficient-context`. Defaults per candidate: 32 tool calls, 120 seconds, 200,000 prompt
+tokens, and 1,200,000 prompt tokens for all counter-checks of a run; the harness bound, the tool
+ceiling or a refused reservation ends a session `undecided/out-of-budget` and the run
+`incomplete/budget-exhausted`, the deadline `incomplete/deadline-exceeded`, a failed or unavailable
+model `incomplete/model-failed`. Candidates are checked by severity, then in the Reviewer's order;
+candidates left when the run's allowance ran out stay unchecked and make the run incomplete.
+
+The presentation rule is one pure function (`review/service/presentation.ts`): a candidate is
+presented only when its verdict is `confirmed`, bound to its own fingerprint, every verdict evidence
+range names a readable file of the reviewed head and lies inside it, and at least one range overlaps
+the reported location or one of the candidate's own evidence ranges; at most three, by severity,
+then Reviewer order. An abandoned run presents nothing. Issue #4141's exclusion is an injected
+predicate that defaults to none. The measurement switches (counter-check off, role swap) exist only
+on `createReviewEvaluationService`; the product route's request shape is closed and refuses them.
+
 ### D6 — Honest settlement
 
 Every run ends in exactly one settlement with a closed reason. Incomplete work never presents as a
@@ -193,6 +225,44 @@ clean review.
 
 A pull request head that moves after preparation marks the run's results `stale` for display; stale
 is never a settlement. The vocabulary is `ReviewRunSettlement` in `keiko-contracts`.
+
+As implemented (#4136): one pure function, `settleReviewRun` (`review/service/settlement.ts`), maps
+the facts a run collected onto this table; an interruption wins over a cancellation, a cancellation
+over everything else, a preparation failure skips the run, and of several incomplete reasons the
+most consequential names it (`model-failed`, `budget-exhausted`, `deadline-exceeded`,
+`files-unprocessed`). The building blocks' closed refusals map as follows (`mapping.ts`): a target
+that moved or no longer resolves (`target-changed`, `not-found`, `ref-invalid`) is
+`skipped/target-changed`, a target Keiko cannot fetch (no provider access, no GitHub remote, rate
+limit, failed fetch) and every worktree refusal but cancellation `skipped/worktree-failed`; the
+review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too-large`
+`skipped/diff-too-large`, `runtime-unavailable` and a Reviewer run the orchestrator refused
+`skipped/model-unavailable`, a failed read-only self-check `skipped/policy-invalid`, and a failed
+rules read `abandoned/interrupted`. A Reviewer that fails with an exhausted prompt allowance or
+authority budget is `incomplete/budget-exhausted`, with an exhausted envelope duration
+`incomplete/deadline-exceeded`, otherwise `incomplete/model-failed`; its candidates are still
+counter-checked, and findings confirmed before an incomplete settlement are presented. The
+Reviewer's diff budget is sized so the task always fits the 64 KiB first-prompt bound beside the
+largest admitted rules file (the gateway estimator counts at least one token per 3.5 bytes); a
+larger task is refused, never truncated. A record that cannot be written (a full disk) settles the
+run `abandoned/interrupted` with nothing presented; every run a stopped server left unsettled is
+settled `abandoned/interrupted` when the review service is composed at the next start, and child 3's
+startup sweep removes its worktree. The stale flag compares the reviewed head with the pull
+request's current head from the read-only detail (cached 30 seconds), at settlement and on every
+read; it never changes the settlement.
+
+The run records live in the server store (migration 55): `review_runs` (one row per run; a partial
+unique index allows one unsettled run per repository, and the repository id and client request id
+are unique, so a repeated start returns the same run), `review_coverage` (path, list, closed reason)
+and `review_findings` (fingerprint, report, verdict, verdict evidence, head anchoring, presented
+flag and rank). The routes are `POST /api/git-review/runs` (with `dryRun`), `GET
+/api/git-review/runs/{runId}`, `GET /api/git-review/runs?repositoryId=…&pullRequestNumber=…`, `GET
+/api/git-review/review-states?repositoryId=…`, `GET /api/git-review/runs/{runId}/diff` (from the
+Git objects the run's private refs retain; `objects-unavailable` once the sweep removed them, which
+keeps refs a recorded run references), `GET /api/git-review/runs/{runId}/events` (SSE through the
+shared flow control: phases and counts only, then one `settled` event) and `POST
+/api/git-review/runs/{runId}/cancel`. The start route addresses the repository by the Git window's
+selected `root` through the registered-project authority, like every Git read; reads address
+records by the content-free repository id.
 
 The review diff package (Issue #4134) is the input to that decision. It is built from the Git
 objects of the base and head commits through the hardened review runner (ADR-0098 D8), never from a

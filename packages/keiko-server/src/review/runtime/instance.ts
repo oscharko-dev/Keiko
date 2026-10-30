@@ -18,6 +18,8 @@
 
 import { randomUUID } from "node:crypto";
 
+import { sha256Hex } from "@oscharko-dev/keiko-security";
+
 import type {
   ReviewProfileRefusalReason,
   ReviewReportRejectionReason,
@@ -78,13 +80,16 @@ type ReviewRuntimeRefusalReason =
   | "task-too-large"
   | "runtime-unavailable";
 
-type ReviewRuntimeRunResult =
+export type ReviewRuntimeRunResult =
   | {
       readonly ok: true;
       readonly outcome: ReviewRunDriveOutcome["outcome"];
       readonly runtimeRunId?: string | undefined;
       readonly failureCode?: string | undefined;
+      readonly effort?: ReviewRunDriveOutcome["effort"];
       readonly rules: ReviewRulesFileOutcome;
+      /** SHA-256 of the loaded rules text (#4136 run record); absent without rules. */
+      readonly rulesDigest?: string | undefined;
       readonly candidates: readonly ReviewCandidateFinding[];
       readonly rejections: Readonly<Record<ReviewReportRejectionReason, number>>;
     }
@@ -337,14 +342,24 @@ async function prepareAndRun(
   if (instance === undefined) {
     return { ok: false, reason: "runtime-unavailable", rules: rules.outcome };
   }
-  return runOnInstance(context, instance, request, { taskText: task.text, rules: rules.outcome });
+  return runOnInstance(context, instance, request, {
+    taskText: task.text,
+    rules: rules.outcome,
+    ...(rules.outcome === "loaded" ? { rulesDigest: sha256Hex(rules.text) } : {}),
+  });
+}
+
+interface PreparedReviewTask {
+  readonly taskText: string;
+  readonly rules: ReviewRulesFileOutcome;
+  readonly rulesDigest?: string | undefined;
 }
 
 async function runOnInstance(
   context: ServiceContext,
   live: LiveInstance,
   request: ReviewRuntimeRunRequest,
-  prepared: { readonly taskText: string; readonly rules: ReviewRulesFileOutcome },
+  prepared: PreparedReviewTask,
 ): Promise<ReviewRuntimeRunResult> {
   if (live.busy) return { ok: false, reason: "busy" };
   live.busy = true;
@@ -379,7 +394,7 @@ async function runOnInstance(
       signal: request.signal,
       correlationId: request.correlationId,
     });
-    return collected(live, outcome, prepared.rules);
+    return collected(live, outcome, prepared);
   } finally {
     workspace.clear();
     live.slot.pending = undefined;
@@ -393,7 +408,7 @@ async function runOnInstance(
 function collected(
   live: LiveInstance,
   outcome: ReviewRunDriveOutcome,
-  rules: ReviewRulesFileOutcome,
+  prepared: Omit<PreparedReviewTask, "taskText">,
 ): ReviewRuntimeRunResult {
   const intake = live.slot.intake;
   return {
@@ -401,7 +416,9 @@ function collected(
     outcome: outcome.outcome,
     ...(outcome.runId === undefined ? {} : { runtimeRunId: outcome.runId }),
     ...(outcome.failureCode === undefined ? {} : { failureCode: outcome.failureCode }),
-    rules,
+    ...(outcome.effort === undefined ? {} : { effort: outcome.effort }),
+    rules: prepared.rules,
+    ...(prepared.rulesDigest === undefined ? {} : { rulesDigest: prepared.rulesDigest }),
     candidates: intake?.candidates() ?? [],
     rejections: intake?.rejections() ?? {
       "schema-invalid": 0,

@@ -19,7 +19,10 @@ export type ReviewDiagnosticOperation =
   | "review.target.provider-read"
   | "review.target.resolve"
   | "review.worktree.registry-read"
-  | "review.worktree.remove";
+  | "review.worktree.remove"
+  | "review.run.execute"
+  | "review.run.persist"
+  | "review.run.diff";
 
 export function reportReviewFailure(
   operation: ReviewDiagnosticOperation,

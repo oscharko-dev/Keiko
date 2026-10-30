@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 54;
+export const SCHEMA_VERSION = 55;
 
 interface Migration {
   readonly version: number;
@@ -1847,6 +1847,71 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE chat_tool_mutations ADD COLUMN native_mcp_action_digest TEXT
       CHECK (native_mcp_action_digest IS NULL OR (consumer_kind = 'coding'
         AND length(native_mcp_action_digest) = 64 AND native_mcp_action_digest NOT GLOB '*[^0-9a-f]*'));`,
+  },
+  {
+    version: 55,
+    // ADR-0182 D6 (#4136): Keiko for Quality review runs, their coverage and their candidate
+    // findings. Paths and finding text are local product data for the UI; they never enter logs.
+    // One unsettled run per repository is enforced here, not only by the service.
+    sql: `CREATE TABLE review_runs (
+      run_id TEXT PRIMARY KEY CHECK (length(run_id) BETWEEN 1 AND 128),
+      repository_id TEXT NOT NULL CHECK (length(repository_id) BETWEEN 1 AND 128),
+      repository_root TEXT NOT NULL CHECK (length(repository_root) BETWEEN 1 AND 4096),
+      client_request_id TEXT NOT NULL CHECK (length(client_request_id) BETWEEN 1 AND 128),
+      correlation_id TEXT NOT NULL CHECK (length(correlation_id) BETWEEN 1 AND 128),
+      target_kind TEXT NOT NULL CHECK (target_kind IN ('pull-request','local-range')),
+      pull_request_number INTEGER CHECK (pull_request_number IS NULL OR pull_request_number > 0),
+      base_sha TEXT CHECK (base_sha IS NULL OR length(base_sha) IN (40, 64)),
+      head_sha TEXT CHECK (head_sha IS NULL OR length(head_sha) IN (40, 64)),
+      private_refs_json TEXT NOT NULL DEFAULT '[]',
+      reviewer_model_id TEXT NOT NULL CHECK (length(reviewer_model_id) BETWEEN 1 AND 256),
+      counter_checker_model_id TEXT NOT NULL CHECK (length(counter_checker_model_id) BETWEEN 1 AND 256),
+      gateway_generation INTEGER,
+      rules_digest TEXT CHECK (rules_digest IS NULL OR length(rules_digest) = 64),
+      phase TEXT NOT NULL CHECK (phase IN ('preparing','reviewing','counter-checking','settling','settled')),
+      created_at INTEGER NOT NULL CHECK (created_at >= 0),
+      reviewing_at INTEGER,
+      counter_checking_at INTEGER,
+      settling_at INTEGER,
+      settled_at INTEGER,
+      coverage_json TEXT,
+      settlement_kind TEXT CHECK (settlement_kind IS NULL OR settlement_kind IN ('complete','incomplete','abandoned','skipped')),
+      settlement_reason TEXT CHECK (settlement_reason IS NULL OR length(settlement_reason) BETWEEN 1 AND 64),
+      candidate_count INTEGER NOT NULL DEFAULT 0,
+      reviewer_prompt_count INTEGER NOT NULL DEFAULT 0,
+      reviewer_completion_count INTEGER NOT NULL DEFAULT 0,
+      reviewer_duration_ms INTEGER NOT NULL DEFAULT 0,
+      counter_prompt_count INTEGER NOT NULL DEFAULT 0,
+      counter_completion_count INTEGER NOT NULL DEFAULT 0,
+      counter_duration_ms INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (repository_id, client_request_id),
+      CHECK ((phase = 'settled') = (settlement_kind IS NOT NULL AND settled_at IS NOT NULL)),
+      CHECK ((target_kind = 'pull-request') = (pull_request_number IS NOT NULL))
+    ) STRICT;
+    CREATE INDEX review_runs_history ON review_runs(repository_id, pull_request_number, created_at DESC);
+    CREATE UNIQUE INDEX review_runs_active ON review_runs(repository_id) WHERE phase != 'settled';
+    CREATE TABLE review_coverage (
+      run_id TEXT NOT NULL REFERENCES review_runs(run_id) ON DELETE CASCADE,
+      ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+      path TEXT NOT NULL,
+      list TEXT NOT NULL CHECK (list IN ('included','unprocessed','deletedOnly','filtered','binary','submodule','symlink','modeOnly')),
+      reason TEXT CHECK (reason IS NULL OR length(reason) BETWEEN 1 AND 64),
+      PRIMARY KEY (run_id, ordinal)
+    ) STRICT;
+    CREATE TABLE review_findings (
+      run_id TEXT NOT NULL REFERENCES review_runs(run_id) ON DELETE CASCADE,
+      fingerprint TEXT NOT NULL CHECK (length(fingerprint) = 64),
+      reviewer_rank INTEGER NOT NULL CHECK (reviewer_rank > 0),
+      report_json TEXT NOT NULL,
+      verdict TEXT CHECK (verdict IS NULL OR verdict IN ('confirmed','refuted','undecided')),
+      verdict_reason TEXT CHECK (verdict_reason IS NULL OR length(verdict_reason) BETWEEN 1 AND 64),
+      verdict_evidence_json TEXT,
+      evidence_in_head INTEGER NOT NULL DEFAULT 0 CHECK (evidence_in_head IN (0, 1)),
+      presented INTEGER NOT NULL CHECK (presented IN (0, 1)),
+      presentation_rank INTEGER CHECK (presentation_rank IS NULL OR presentation_rank BETWEEN 1 AND 3),
+      PRIMARY KEY (run_id, fingerprint),
+      CHECK ((presented = 1) = (presentation_rank IS NOT NULL))
+    ) STRICT;`,
   },
 ];
 

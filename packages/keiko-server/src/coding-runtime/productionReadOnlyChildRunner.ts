@@ -64,7 +64,6 @@ const TRANSIENT_SINK: EventSink = { emit: (): void => undefined };
  * so a gate denial terminates the child instead of merely answering one tool call with "denied".
  */
 interface ChildRunState {
-  successfulReads: number;
   stoppedReason: string | undefined;
   stop: (reason: string) => void;
 }
@@ -92,7 +91,10 @@ type ReturnTypeForRunner = Awaited<ReturnType<ReadOnlyChildRunner["run"]>>;
  * read tool whose `ToolCallResult` sets `commandExecuted: false` explicitly, so the counter is
  * never consumed — the zero here is now a stated invariant, not a workaround.
  */
-function childLimits(maxToolCalls: number): Parameters<typeof createSession>[1]["limits"] {
+function childLimits(
+  maxToolCalls: number,
+  maxWallTimeMs: number,
+): Parameters<typeof createSession>[1]["limits"] {
   return {
     maxIterations: Math.max(4, maxToolCalls * 2 + 2),
     maxModelCalls: Math.max(3, maxToolCalls + 2),
@@ -100,7 +102,7 @@ function childLimits(maxToolCalls: number): Parameters<typeof createSession>[1][
     maxCommandExecutions: 0,
     maxContextBytes: 128_000,
     maxPatchBytes: 0,
-    maxWallTimeMs: 120_000,
+    maxWallTimeMs,
     maxFailureAttempts: 1,
   };
 }
@@ -108,7 +110,6 @@ function childLimits(maxToolCalls: number): Parameters<typeof createSession>[1][
 /** Until the session exists a denial can only latch its reason; no tool call can run before then. */
 function newChildRunState(): ChildRunState {
   const state: ChildRunState = {
-    successfulReads: 0,
     stoppedReason: undefined,
     stop: (reason): void => {
       state.stoppedReason ??= reason;
@@ -132,43 +133,119 @@ function bindSessionCancellation(
   if (state.stoppedReason !== undefined) session.cancel(state.stoppedReason);
 }
 
-function buildChildSession(
-  deps: ProductionReadOnlyChildRunnerDeps,
-  input: ReadOnlyChildRunnerInput,
-  model: ModelPort,
+/** The child's harness wall time when the caller states none (#2387). */
+const CHILD_DEFAULT_WALL_TIME_MS = 120_000;
+
+/**
+ * The tool surface of one bounded read-only harness session: the catalog and reserved profile it
+ * is bound to, the handler attestations, and the port whose `execute` routes every call through
+ * the session's governance gate (ADR-0175 D2).
+ */
+export interface ReadOnlyHarnessToolset {
+  readonly catalog: ReturnType<typeof createKeikoToolCatalog>;
+  readonly profile: { readonly id: string; readonly version: number };
+  readonly attestations: Parameters<typeof createLegacyPortCatalogFactory>[3];
+  readonly tools: ToolPort;
+}
+
+/** One bounded read-only harness session (#2387; generalized for the #4136 counter-check). */
+export interface ReadOnlyHarnessSessionSpec {
+  readonly model: ModelPort;
+  readonly reservePromptTokens: (promptTokens: number) => boolean;
+  readonly sessionId: string;
+  readonly objective: string;
+  readonly modelId: string;
+  readonly workspaceRoot: string;
+  readonly maxToolCalls: number;
+  readonly maxWallTimeMs?: number | undefined;
+  readonly signal: AbortSignal;
+  readonly parentCorrelationId: string;
+  readonly toolset: (stop: (reason: string) => void) => ReadOnlyHarnessToolset;
+  /** Provider-reported usage of each completed model call; counts only. */
+  readonly onUsage?: ((usage: ReadOnlyHarnessModelUsage) => void) | undefined;
+}
+
+export interface ReadOnlyHarnessModelUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface ReadOnlyHarnessSessionOutcome {
+  readonly outcome: string;
+  /** The session's closing summary; never logged, only digested by the child runner. */
+  readonly summary: string;
+  /** The reason a governance denial latched, if one stopped the session. */
+  readonly stoppedReason: string | undefined;
+}
+
+function buildHarnessSession(
+  spec: ReadOnlyHarnessSessionSpec,
   state: ChildRunState,
 ): ReturnType<typeof createSession> {
-  const tools = readOnlyTools(deps, input, state);
+  const toolset = spec.toolset((reason) => {
+    state.stop(reason);
+  });
   return createSession(
     {
       taskType: "editor-agent-turn",
-      input: { goal: input.objective, sessionId: input.envelope.childRunId },
+      input: { goal: spec.objective, sessionId: spec.sessionId },
     },
     {
-      model: input.modelId,
-      workingDirectory: input.workspaceRoot,
+      model: spec.modelId,
+      workingDirectory: spec.workspaceRoot,
       dryRun: false,
-      limits: childLimits(input.maxToolCalls),
+      limits: childLimits(spec.maxToolCalls, spec.maxWallTimeMs ?? CHILD_DEFAULT_WALL_TIME_MS),
     },
     {
-      model: budgetedChildModel(model, deps.reservePromptTokens),
-      tools,
-      // #3407: dispatch through the mandatory catalog path again, bound to the reserved
-      // `child` profile. Every call still runs through readOnlyTools(...).execute() below --
-      // the same parent-gate-before-read and stop-on-denial semantics, unmodified.
+      model: budgetedChildModel(spec.model, spec.reservePromptTokens, spec.onUsage),
+      tools: toolset.tools,
+      // #3407: dispatch through the mandatory catalog path, bound to the session's reserved
+      // profile. Every call still runs through the toolset's execute() -- the same
+      // parent-gate-before-read and stop-on-denial semantics, unmodified.
       bindToolCatalog: createLegacyPortCatalogFactory(
-        CHILD_CATALOG,
-        CHILD_PROFILE,
-        tools,
-        CHILD_HANDLER_ATTESTATIONS,
+        toolset.catalog,
+        toolset.profile,
+        toolset.tools,
+        toolset.attestations,
       ),
       sink: TRANSIENT_SINK,
-      // KEIKO-0726 (#3323): a real, tool-using production call site — a read-only child can loop
-      // through many keiko_child_workspace_read rounds against a 128KB budget and genuinely grow
-      // past it, so this is where the gap this issue closes actually gets exercised.
+      // KEIKO-0726 (#3323): a real, tool-using production call site — a read-only session can loop
+      // through many read rounds against a 128KB budget and genuinely grow past it, so this is
+      // where the gap this issue closes actually gets exercised.
       compactionPort: serverHarnessContextCompactor,
     },
   );
+}
+
+/**
+ * Runs one bounded read-only harness session to its end. A governance denial cancels the session;
+ * the caller's signal cancels it as `parent-stopped`. A failed session throws.
+ */
+export async function runReadOnlyHarnessSession(
+  spec: ReadOnlyHarnessSessionSpec,
+): Promise<ReadOnlyHarnessSessionOutcome> {
+  const state = newChildRunState();
+  const session = buildHarnessSession(spec, state);
+  bindSessionCancellation(state, session);
+  const abort = (): void => {
+    session.cancel("parent-stopped");
+  };
+  spec.signal.addEventListener("abort", abort, { once: true });
+  if (spec.signal.aborted) abort();
+  try {
+    const result = await session.result;
+    logHarnessContextCompactionEvents(result.events, {
+      parentCorrelationId: spec.parentCorrelationId,
+    });
+    if (result.outcome === "failed") throw new Error("child-session-failed");
+    return {
+      outcome: result.outcome,
+      summary: result.report ?? result.outcome,
+      stoppedReason: state.stoppedReason,
+    };
+  } finally {
+    spec.signal.removeEventListener("abort", abort);
+  }
 }
 
 async function runChildSession(
@@ -177,48 +254,53 @@ async function runChildSession(
 ): Promise<ReturnTypeForRunner> {
   const model = deps.modelPortFactory(input.modelId);
   if (model === undefined) throw new Error("child-model-unavailable");
-  const state = newChildRunState();
-  const session = buildChildSession(deps, input, model, state);
-  bindSessionCancellation(state, session);
-  const abort = (): void => {
-    session.cancel("parent-stopped");
+  let successfulReads = 0;
+  const finished = await runReadOnlyHarnessSession({
+    model,
+    reservePromptTokens: deps.reservePromptTokens,
+    sessionId: input.envelope.childRunId,
+    objective: input.objective,
+    modelId: input.modelId,
+    workspaceRoot: input.workspaceRoot,
+    maxToolCalls: input.maxToolCalls,
+    signal: input.signal,
+    parentCorrelationId: input.envelope.parentRunId,
+    toolset: (stop) => ({
+      catalog: CHILD_CATALOG,
+      profile: CHILD_PROFILE,
+      attestations: CHILD_HANDLER_ATTESTATIONS,
+      tools: readOnlyTools(deps, input, stop, () => {
+        successfulReads += 1;
+      }),
+    }),
+  });
+  return {
+    resultCount: successfulReads,
+    resultDigest: {
+      outcome: "known",
+      value: createHash("sha256").update(finished.summary, "utf8").digest("hex"),
+    },
   };
-  input.signal.addEventListener("abort", abort, { once: true });
-  if (input.signal.aborted) abort();
-  try {
-    const result = await session.result;
-    logHarnessContextCompactionEvents(result.events, {
-      parentCorrelationId: input.envelope.parentRunId,
-    });
-    if (result.outcome === "failed") throw new Error("child-session-failed");
-    const summary = result.report ?? result.outcome;
-    return {
-      resultCount: state.successfulReads,
-      resultDigest: {
-        outcome: "known",
-        value: createHash("sha256").update(summary, "utf8").digest("hex"),
-      },
-    };
-  } finally {
-    input.signal.removeEventListener("abort", abort);
-  }
 }
 
 function budgetedChildModel(
   model: ModelPort,
   reservePromptTokens: (promptTokens: number) => boolean,
+  onUsage: ReadOnlyHarnessSessionSpec["onUsage"],
 ): ModelPort {
   const stream = model.callStream;
   return {
-    call: (request, signal): Promise<Awaited<ReturnType<ModelPort["call"]>>> => {
+    call: async (request, signal): Promise<Awaited<ReturnType<ModelPort["call"]>>> => {
       reserveChildPrompt(request, reservePromptTokens);
-      return model.call(request, signal);
+      const response = await model.call(request, signal);
+      reportUsage(onUsage, response);
+      return response;
     },
     ...(stream === undefined
       ? {}
       : {
           callStream: (request: GatewayRequest, signal: AbortSignal) =>
-            budgetedChildStream(stream, request, signal, reservePromptTokens),
+            budgetedChildStream(stream, request, signal, reservePromptTokens, onUsage),
         }),
   };
 }
@@ -228,9 +310,25 @@ async function* budgetedChildStream(
   request: GatewayRequest,
   signal: AbortSignal,
   reservePromptTokens: (promptTokens: number) => boolean,
+  onUsage: ReadOnlyHarnessSessionSpec["onUsage"],
 ): AsyncIterable<GatewayStreamChunk> {
   reserveChildPrompt(request, reservePromptTokens);
-  yield* stream(request, signal);
+  for await (const chunk of stream(request, signal)) {
+    if (chunk.type === "done") reportUsage(onUsage, chunk.response);
+    yield chunk;
+  }
+}
+
+function reportUsage(
+  onUsage: ReadOnlyHarnessSessionSpec["onUsage"],
+  response: {
+    readonly usage: { readonly promptTokens: number; readonly completionTokens: number };
+  },
+): void {
+  onUsage?.({
+    inputTokens: response.usage.promptTokens,
+    outputTokens: response.usage.completionTokens,
+  });
 }
 
 function reserveChildPrompt(
@@ -270,11 +368,13 @@ function childPromptTokenEstimate(request: GatewayRequest): number {
 function readOnlyTools(
   deps: ProductionReadOnlyChildRunnerDeps,
   input: ReadOnlyChildRunnerInput,
-  state: ChildRunState,
+  stop: (reason: string) => void,
+  onRead: () => void,
 ): ToolPort {
   return {
     listTools: (): readonly ToolDefinition[] => [CHILD_READ_TOOL],
-    execute: (request): Promise<ToolCallResult> => executeRead(deps, input, state, request),
+    execute: (request): Promise<ToolCallResult> =>
+      executeRead(deps, input, { stop, onRead }, request),
   };
 }
 
@@ -297,7 +397,7 @@ const DENIED = '{"status":"denied"}';
 async function executeRead(
   deps: ProductionReadOnlyChildRunnerDeps,
   input: ReadOnlyChildRunnerInput,
-  state: ChildRunState,
+  state: { readonly stop: (reason: string) => void; readonly onRead: () => void },
   request: ToolCallRequest,
 ): Promise<ToolCallResult> {
   if (request.toolName !== CHILD_WORKSPACE_READ_ALIAS) {
@@ -318,7 +418,7 @@ async function executeRead(
     signal: request.signal,
   });
   if (!read.ok) return result(request.toolCallId, `{"status":"${read.reason}"}`);
-  state.successfulReads += 1;
+  state.onRead();
   return result(request.toolCallId, read.text);
 }
 

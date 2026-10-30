@@ -28,6 +28,12 @@ interface VersionRollback {
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
   {
+    version: 55,
+    sql: `DROP TABLE review_findings;
+    DROP TABLE review_coverage;
+    DROP TABLE review_runs;`,
+  },
+  {
     version: 54,
     sql: `ALTER TABLE chat_tool_mutations DROP COLUMN native_mcp_action_digest;
     DROP INDEX chat_tool_mutations_active;

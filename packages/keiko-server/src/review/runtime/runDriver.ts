@@ -24,6 +24,8 @@ export interface ReviewRunDriveOutcome {
   readonly outcome: "completed" | "failed" | "cancelled" | "refused";
   readonly runId?: string | undefined;
   readonly failureCode?: string | undefined;
+  /** The Reviewer's prompt tokens and model turns as the runtime host accounted them (#4136). */
+  readonly effort?: { readonly promptTokens: number; readonly modelTurns: number } | undefined;
 }
 
 function outcomeFor(
@@ -108,9 +110,13 @@ export async function driveReviewRun(
     release();
   }
   const settled = orchestrator.getSnapshot(runId);
+  const effort = composition.runEffort?.(runId);
   return {
     outcome: outcomeFor(settled?.state),
     runId,
     ...(settled?.failureCode === undefined ? {} : { failureCode: settled.failureCode }),
+    ...(effort === undefined
+      ? {}
+      : { effort: { promptTokens: effort.promptTokensTotal, modelTurns: effort.modelTurnCount } }),
   };
 }

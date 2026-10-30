@@ -219,7 +219,10 @@ const REVIEW_WORKTREE_REFS_SWEPT = defineActivityLogOperation({
 });
 
 /** A domain-separated digest of an object id or run id: joinable, never the raw value. */
-export function reviewEvidenceDigest(kind: "sha" | "run", value: string): string {
+export function reviewEvidenceDigest(
+  kind: "sha" | "run" | "fingerprint" | "model",
+  value: string,
+): string {
   return sha256Hex(`keiko-review/${kind}\u0000${value}`);
 }
 

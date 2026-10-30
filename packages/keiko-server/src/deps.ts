@@ -551,6 +551,9 @@ import {
   createProductionReviewRuntimeService,
 } from "./review/runtime/production.js";
 import type { ReviewRuntimeService } from "./review/runtime/instance.js";
+import { counterCheckCandidate } from "./review/counter-check/counterCheck.js";
+import { createReviewRunService, type ReviewRunService } from "./review/service/service.js";
+import { ReviewRunStore } from "./review/service/store.js";
 import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -1201,6 +1204,9 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Issue #4135 (ADR-0182 D1/D2): the dedicated, server-owned Keiko for Quality review runtime
   // instances, composed from the same activated OpenCode runtime as the Coding Workbench's.
   readonly reviewRuntime?: ReviewRuntimeService | undefined;
+  // Issue #4136 (ADR-0182 D5/D6): the review run service (start, records, progress, cancel, diff),
+  // composed over the review services, the review runtime and the server store.
+  readonly reviewRunService?: ReviewRunService | undefined;
   // Epic #1941 — native OS file/folder dialog seam. Tests inject a fake adapter, platform, or
   // single-flight state; production leaves this undefined so the route lazily selects the real
   // platform adapter and the module-level single-flight instance.
@@ -2707,6 +2713,9 @@ interface ComposedPersistence {
   // over the SAME DatabaseSync handle. Undefined only when a UiStore is injected without also
   // supplying one (mirrors `codingRuntimeSnapshotStore`'s own injection contract above).
   readonly codingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined;
+  // Issue #4136: the review run records (schema.ts §V55), over the SAME handle. Undefined when a
+  // UiStore is injected: reviews then stay unavailable (503), like the review services.
+  readonly reviewRunStore: ReviewRunStore | undefined;
 }
 
 // A `UiStoreSchemaVersionError` or unrecoverable corruption here crashes startup — correctly: this
@@ -2748,6 +2757,24 @@ function privateUiStore(
   return buildUiStoreOverDatabase(db, { redactString, redactContentString });
 }
 
+/** An injected UiStore brings only the stores it was given; nothing is composed over a handle. */
+function injectedPersistence(
+  store: UiStore,
+  codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined,
+  codingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined,
+): ComposedPersistence {
+  return {
+    store,
+    dispose: undefined,
+    relationship: undefined,
+    workspaceInstanceStore: undefined,
+    activeWorkspacePointerStore: undefined,
+    codingRuntimeSnapshotStore,
+    codingRuntimeDescriptionJobStore,
+    reviewRunStore: undefined,
+  };
+}
+
 function composePersistence(
   injected: UiStore | undefined,
   injectedCodingRuntimeSnapshots: CodingRuntimeSnapshotStore | undefined,
@@ -2757,15 +2784,11 @@ function composePersistence(
   runtime: PersistenceRuntimeContext,
 ): ComposedPersistence {
   if (injected !== undefined) {
-    return {
-      store: injected,
-      dispose: undefined,
-      relationship: undefined,
-      workspaceInstanceStore: undefined,
-      activeWorkspacePointerStore: undefined,
-      codingRuntimeSnapshotStore: injectedCodingRuntimeSnapshots,
-      codingRuntimeDescriptionJobStore: injectedCodingRuntimeDescriptionJobStore,
-    };
+    return injectedPersistence(
+      injected,
+      injectedCodingRuntimeSnapshots,
+      injectedCodingRuntimeDescriptionJobStore,
+    );
   }
   const db = openUiDatabaseForComposition(
     resolvedUiDbPath,
@@ -2798,6 +2821,7 @@ function composePersistence(
     activeWorkspacePointerStore: buildActiveWorkspacePointerStoreOverDatabase(db),
     codingRuntimeSnapshotStore: createCodingRuntimeSnapshotStore(db),
     codingRuntimeDescriptionJobStore: createCodingRuntimeDescriptionJobStore(db),
+    reviewRunStore: new ReviewRunStore(db),
   };
 }
 
@@ -4117,6 +4141,7 @@ interface PersistenceBundle {
   readonly preferredProjectPath: string | undefined;
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
   readonly codingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined;
+  readonly reviewRunStore: ReviewRunStore | undefined;
 }
 
 // The optional correlationId is threaded by the callers that have one in scope — the verification
@@ -4352,8 +4377,7 @@ function buildPersistenceBundle(
       workspaceScriptTrust,
       dispose: persistence.dispose,
       relationship: persistence.relationship,
-      codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
-      codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
+      ...persistenceRecordStores(persistence),
       ...services,
       managedTaskWorkspaceRoot: composedManagedWorktreeRoot(
         services.workspaceProvisioning,
@@ -4373,6 +4397,20 @@ function buildPersistenceBundle(
     persistence.dispose?.();
     throw error;
   }
+}
+
+/** The record stores composed over the shared handle (coding runtime, descriptions, reviews). */
+function persistenceRecordStores(
+  persistence: ComposedPersistence,
+): Pick<
+  PersistenceBundle,
+  "codingRuntimeSnapshotStore" | "codingRuntimeDescriptionJobStore" | "reviewRunStore"
+> {
+  return {
+    codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
+    codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
+    reviewRunStore: persistence.reviewRunStore,
+  };
 }
 
 function withOptionalLocalCheckout(
@@ -5019,9 +5057,13 @@ function composeReviewServices(args: UiHandlerDepsAssemblyArgs): ReviewServices 
   // An injected store (tests, embedded graphs) owns no server state directory to place it in.
   if (args.options.store !== undefined) return undefined;
   try {
+    const runs = args.bundle.reviewRunStore;
     return createReviewServices({
       reviewRoot: join(dirname(args.resolvedUiDbPath), REVIEW_WORKTREE_ROOT_NAME),
       activityLog: args.options.activityLog ?? processServerLogSink(),
+      // Issue #4136: the refs a recorded run still references survive the retention sweep until
+      // the pull request closes or 30 days pass, so the reviewed diff stays readable.
+      ...(runs === undefined ? {} : { retainedRunRefs: (root: string) => runs.retainedRefs(root) }),
     });
   } catch (error) {
     emitServerDiagnostic(
@@ -5046,6 +5088,7 @@ function composeReviewServices(args: UiHandlerDepsAssemblyArgs): ReviewServices 
 function attachReviewServicesLifecycle(args: UiHandlerDepsAssemblyArgs, deps: UiHandlerDeps): void {
   const reviewServices = deps.reviewServices;
   if (reviewServices === undefined) return;
+  attachReviewRunService(args, deps);
   if (args.options.reviewServices === undefined) {
     const correlationId = newCorrelationId();
     void Promise.resolve()
@@ -5068,11 +5111,53 @@ function attachReviewServicesLifecycle(args: UiHandlerDepsAssemblyArgs, deps: Ui
   const disposeGraph = deps.dispose;
   Object.assign(deps, {
     dispose: async (): Promise<void> => {
+      await deps.reviewRunService?.dispose();
       await deps.reviewRuntime?.dispose();
       await reviewServices.dispose();
       await disposeGraph?.();
     },
   });
+}
+
+/**
+ * Issue #4136 (ADR-0182 D5/D6): the review run service over the review services, the review runtime
+ * and the review run records. Its counter-checks run on the generalized read-only child runner with
+ * the graph's own model port factory (every call passes the Model Gateway). Composed only beside
+ * production review services and records; otherwise the review run routes answer 503. Composing it
+ * settles every run a previous process left unsettled as `abandoned/interrupted`.
+ */
+function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandlerDeps): void {
+  const reviewServices = deps.reviewServices;
+  const store = args.bundle.reviewRunStore;
+  if (reviewServices === undefined || store === undefined) return;
+  const activityLog = args.options.activityLog ?? processServerLogSink();
+  const reviewRunService = createReviewRunService({
+    store,
+    reviewServices,
+    reviewRuntime: deps.reviewRuntime,
+    counterCheck: (input) =>
+      counterCheckCandidate(
+        {
+          modelPortFactory: deps.modelPortFactory,
+          runner: () => reviewServices.reviewRunner(input.runCorrelationId),
+          activityLog,
+        },
+        input,
+      ),
+    models: {
+      capability: (modelId) => {
+        const config = deps.gatewayConfig?.current();
+        return config === undefined ? undefined : findConfiguredCapability(config, modelId);
+      },
+      generation: () => deps.gatewayConfig?.generation(),
+    },
+    activityLog,
+    reviewerPromptBudget: configuredReviewRunBudget(
+      args.options.env,
+      configuredRuntimeEnvelopeBounds(args.options.env),
+    ).promptTokenBudget,
+  });
+  Object.assign(deps, { reviewRunService });
 }
 
 /**

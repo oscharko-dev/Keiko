@@ -398,6 +398,100 @@ export async function listGitReviewTree(
   return { ok: true, value: entries };
 }
 
+export interface GitReviewGrepMatch {
+  readonly path: string;
+  readonly line: number;
+  readonly text: string;
+}
+
+export interface GitReviewGrepResult {
+  readonly matches: readonly GitReviewGrepMatch[];
+  /** The output bound cut the listing: more matches may exist. */
+  readonly truncated: boolean;
+}
+
+const GREP_LITERAL_MAX_CHARS = 200;
+const GREP_MAX_COUNT_PER_FILE_MAX = 100;
+
+function assertGrepLiteral(value: string): string {
+  if (
+    value.length === 0 ||
+    value.length > GREP_LITERAL_MAX_CHARS ||
+    CONTROL_CHARACTER.test(value)
+  ) {
+    throw new GitReviewOperandError("literal");
+  }
+  return value;
+}
+
+function parseGrepRecords(stdout: string, sha: string, complete: boolean): GitReviewGrepMatch[] {
+  const prefix = `${sha}:`;
+  const records = stdout.split("\n");
+  // A cut listing ends in a partial record; only complete lines are reported.
+  if (!complete || records.at(-1) === "") records.pop();
+  const matches: GitReviewGrepMatch[] = [];
+  for (const record of records) {
+    const [name = "", line = "", ...rest] = record.split("\0");
+    if (!name.startsWith(prefix) || !/^[1-9]\d*$/u.test(line)) continue;
+    matches.push({ path: name.slice(prefix.length), line: Number(line), text: rest.join("\0") });
+  }
+  return matches;
+}
+
+/**
+ * Searches one commit's tree for a fixed string (`git grep -F` over the commit object, never a
+ * working tree or index): no pattern language, no pathspec, binary files skipped, at most
+ * `maxCountPerFile` matches per file. A listing cut by the byte bound returns its complete records
+ * with `truncated`.
+ */
+export async function grepGitReviewTree(
+  ctx: GitReviewOperationContext,
+  request: {
+    readonly cwd: string;
+    readonly sha: string;
+    readonly literal: string;
+    readonly maxCountPerFile: number;
+  },
+): Promise<GitReviewOperationResult<GitReviewGrepResult>> {
+  const sha = assertObjectId(request.sha, "sha");
+  const literal = assertGrepLiteral(request.literal);
+  const perFile = assertGrepCount(request.maxCountPerFile);
+  const args = ["grep", "--no-color", "-I", "-F", "-n", "-z", "--full-name"];
+  const result = await ctx.runner(
+    [...GIT_BASE_ARGS, ...args, `--max-count=${String(perFile)}`, "-e", literal, sha, "--"],
+    {
+      cwd: request.cwd,
+      timeoutMs: ctx.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      maxBytes: ctx.maxBytes ?? DEFAULT_MAX_BYTES,
+      abortSignal: ctx.abortSignal,
+      expectedExitCodes: [0, 1],
+      expectedTruncation: true,
+    },
+  );
+  return grepListing(result, sha);
+}
+
+function assertGrepCount(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > GREP_MAX_COUNT_PER_FILE_MAX) {
+    throw new GitReviewOperandError("maxCountPerFile");
+  }
+  return value;
+}
+
+/** A complete listing, or a listing the byte bound cut (complete records only, `truncated`). */
+function grepListing(
+  result: GitProcessResult,
+  sha: string,
+): GitReviewOperationResult<GitReviewGrepResult> {
+  const cut = result.truncated && result.timedOut !== true && result.aborted !== true;
+  const complete = (result.exitCode === 0 || result.exitCode === 1) && !result.truncated;
+  if (result.refusal !== undefined || !(cut || complete)) return { ok: false, result };
+  return {
+    ok: true,
+    value: { matches: parseGrepRecords(result.stdout, sha, complete), truncated: cut },
+  };
+}
+
 /**
  * The paths of a commit's tree that Git's own diff machinery classifies as binary, from one
  * `diff-tree --numstat` against the empty tree. Blobs above the runner's `core.bigFileThreshold`

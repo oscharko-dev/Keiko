@@ -264,6 +264,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "review-items",
   "review-queue",
   "review-sidecar",
+  "review-states",
   "revoke",
   "root",
   "roots",

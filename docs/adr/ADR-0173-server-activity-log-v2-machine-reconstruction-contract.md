@@ -2216,6 +2216,14 @@ operations (`review.run.runtime-started`, `review.run.runtime-stopped`, `review.
 their owner per D6 and carry counts, closed outcomes, durations, opaque ids and digests only -- never
 code, a prompt, model output, a path, the rules text or finding prose.
 
+A review run (#4136) is one correlation: the run's correlation id is the start request's, and it
+threads `review.run.started`, every `review.run.phase` and `review.run.settled` (settlement, closed
+reason, coverage, candidate and verdict counts, tokens and durations per role, stale flag). Each
+counter-check session has its own correlation id and points at its run through
+`parentCorrelationId` (`review.counter-check.completed`, `review.counter-check.failed` with frames
+and cause chain), so the analyzer joins the sessions to the run's timeline. A start refused without
+a run writes `review.run.refused` under the request's correlation. Model ids appear only as digests.
+
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract

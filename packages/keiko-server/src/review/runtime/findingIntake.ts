@@ -62,7 +62,8 @@ export interface ReviewFindingIntake {
   rejections(): Readonly<Record<ReviewReportRejectionReason, number>>;
 }
 
-type HeadFile =
+/** One head-commit file as the intake and the counter-check verify locations against it. */
+export type ReviewHeadFile =
   | { readonly kind: "lines"; readonly lines: readonly string[] }
   | { readonly kind: "refused"; readonly reason: "path-outside-worktree" | "range-invalid" };
 
@@ -91,12 +92,18 @@ function admissiblePath(path: string): boolean {
   return !isDenied(path);
 }
 
-class HeadFileReader {
-  private readonly files = new Map<string, Promise<HeadFile>>();
+/**
+ * Reads cited files of the reviewed head commit from its objects (never the worktree), cached per
+ * path and bounded per run. Shared by the finding intake and the counter-check (#4136).
+ */
+export class ReviewHeadFileReader {
+  private readonly files = new Map<string, Promise<ReviewHeadFile>>();
 
-  public constructor(private readonly input: ReviewFindingIntakeInput) {}
+  public constructor(
+    private readonly input: Pick<ReviewFindingIntakeInput, "worktreeRoot" | "headSha" | "runner">,
+  ) {}
 
-  public read(path: string, signal: AbortSignal | undefined): Promise<HeadFile> {
+  public read(path: string, signal: AbortSignal | undefined): Promise<ReviewHeadFile> {
     const cached = this.files.get(path);
     if (cached !== undefined) return cached;
     if (this.files.size >= MAX_CACHED_FILES) {
@@ -107,7 +114,7 @@ class HeadFileReader {
     return pending;
   }
 
-  private async load(path: string, signal: AbortSignal | undefined): Promise<HeadFile> {
+  private async load(path: string, signal: AbortSignal | undefined): Promise<ReviewHeadFile> {
     if (!admissiblePath(path)) return { kind: "refused", reason: "path-outside-worktree" };
     const ctx = { runner: this.input.runner, timeoutMs: HEAD_READ_TIMEOUT_MS, abortSignal: signal };
     const cwd = this.input.worktreeRoot;
@@ -131,7 +138,7 @@ function locations(report: ReviewFindingReport): readonly ReviewCodeLocation[] {
 }
 
 async function checkLocations(
-  reader: HeadFileReader,
+  reader: ReviewHeadFileReader,
   report: ReviewFindingReport,
   signal: AbortSignal | undefined,
 ): Promise<Exclude<ReviewReportRejectionReason, "limit-reached"> | undefined> {
@@ -155,7 +162,7 @@ function backingDefect(report: ReviewFindingReport): ReviewCodeLocation | undefi
 }
 
 async function judge(
-  reader: HeadFileReader,
+  reader: ReviewHeadFileReader,
   value: unknown,
   signal: AbortSignal | undefined,
 ): Promise<Verdict> {
@@ -176,7 +183,7 @@ async function judge(
 
 /** Creates the intake of one review run. */
 export function createReviewFindingIntake(input: ReviewFindingIntakeInput): ReviewFindingIntake {
-  const reader = new HeadFileReader(input);
+  const reader = new ReviewHeadFileReader(input);
   const accepted: ReviewCandidateFinding[] = [];
   const rejected = emptyRejections();
   const max = input.maxCandidates ?? REVIEW_RUN_MAX_CANDIDATE_REPORTS;

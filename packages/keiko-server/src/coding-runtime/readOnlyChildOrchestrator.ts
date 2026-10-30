@@ -361,7 +361,11 @@ async function handleChildRequest(
     emitRejectedAdmission(deps, context.parentAuthority.runId, childRunId, prepared.outcome);
     return prepared.outcome;
   }
-  const preStop = currentStopReason(deps, context);
+  const preStop = currentStopReason({
+    ...context,
+    cancellation: deps.cancellation,
+    clock: deps.clock,
+  });
   if (preStop !== undefined) {
     const outcome = rejectedOutcome("stopped", preStop);
     emitRejectedAdmission(deps, context.parentAuthority.runId, childRunId, outcome);
@@ -428,29 +432,112 @@ async function runChild(
   envelope: ReadOnlyChildEnvelope,
   maxToolCalls: number,
 ): Promise<AuxiliaryCapabilityOutcomeV1> {
-  const state: GateState = { latched: undefined, childToolCalls: 0 };
-  const gate = createGate(deps, context, envelope, maxToolCalls, state);
-  const { signal, cleanup } = composeDeadlineSignal(deps, context);
-  try {
-    const result = await deps.runner.run({
-      envelope,
-      objective: context.objective,
-      modelId: context.modelId,
-      workspaceRoot: context.workspaceRoot,
+  const session = await runGovernedReadOnlySession(
+    {
+      allowedActionClasses: envelope.allowedActionClasses,
       maxToolCalls,
-      signal,
-      gate,
-    });
-    return finalizeOutcome(deps, context, state, result);
+      charger: deps.charger,
+      cancellation: deps.cancellation,
+      clock: deps.clock,
+      deadlineMs: context.deadlineMs,
+      signal: context.signal,
+      // Fail closed on a runner fault: prefer a latched governance terminal, then a closed
+      // trust-boundary refusal the runner itself signaled (the child fabricated a tool call or sent
+      // malformed arguments — a governance outcome, not lost infrastructure), else a content-free
+      // `unavailable`. Either way, a redacted diagnostic ties the opaque outcome to a correlatable
+      // event record.
+      reportRunnerFault: (failure, error) => {
+        emitRunnerFault(
+          deps,
+          context.parentAuthority.runId,
+          childRequest.childRunId,
+          failure,
+          error,
+        );
+      },
+    },
+    (gate, signal) =>
+      deps.runner.run({
+        envelope,
+        objective: context.objective,
+        modelId: context.modelId,
+        workspaceRoot: context.workspaceRoot,
+        maxToolCalls,
+        signal,
+        gate,
+      }),
+  );
+  if (session.ok) return acceptedOutcome(session.value);
+  return rejectedOutcome(session.terminal, session.reasonCode);
+}
+
+/**
+ * The governance one bounded read-only session runs under (#2387, generalized for the Keiko for
+ * Quality counter-check by #4136): the action classes it may touch, its own tool-call ceiling, the
+ * parent budget every call is charged against, the live stop source and the wall-clock deadline.
+ */
+export interface ReadOnlySessionGovernance {
+  readonly allowedActionClasses: readonly CodingWorkbenchActionClass[];
+  readonly maxToolCalls: number;
+  readonly charger: ReadOnlyChildBudgetCharger;
+  readonly cancellation: ReadOnlyChildCancellationSource;
+  readonly clock: { readonly now: () => number };
+  /** Absolute wall-clock deadline (epoch ms) after which the session cascades to `stopped`. */
+  readonly deadlineMs: number;
+  readonly signal: AbortSignal;
+  /**
+   * Records a runner that threw, with its closed failure: the owning surface's own failure line
+   * (the child's `coding-runtime.read-only-child.runner-failed`, the counter-check's failure line).
+   */
+  readonly reportRunnerFault: (
+    failure: { readonly terminal: ReadOnlyChildTerminal; readonly reasonCode: string },
+    error: unknown,
+  ) => void;
+}
+
+/**
+ * How a governed session ended: its runner's value, or the governance terminal that ended it.
+ * `thrown` marks a runner that rejected; `error` is what it threw.
+ */
+export type ReadOnlySessionResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false;
+      readonly terminal: ReadOnlyChildTerminal;
+      readonly reasonCode: string;
+      readonly thrown: boolean;
+      readonly error?: unknown;
+    };
+
+/**
+ * Runs one bounded runner under the read-only governance: every tool call passes the one gate
+ * (stop, one-layer, read-only, own ceiling, parent budget; the first denial latches), the runner's
+ * signal aborts on a parent stop and at the deadline, and authority is re-checked after the runner
+ * resolves so a late revocation or deadline never surfaces as an accepted result.
+ */
+export async function runGovernedReadOnlySession<T>(
+  governance: ReadOnlySessionGovernance,
+  run: (
+    gate: (attempt: ReadOnlyChildToolAttempt) => ReadOnlyChildGateDecision,
+    signal: AbortSignal,
+  ) => Promise<T>,
+): Promise<ReadOnlySessionResult<T>> {
+  const state: GateState = { latched: undefined, childToolCalls: 0 };
+  const gate = createGate(governance, state);
+  const { signal, cleanup } = composeDeadlineSignal(governance);
+  try {
+    const value = await run(gate, signal);
+    if (state.latched !== undefined) return { ok: false, ...state.latched, thrown: false };
+    const stop = currentStopReason(governance);
+    if (stop !== undefined) {
+      return { ok: false, terminal: "stopped", reasonCode: stop, thrown: false };
+    }
+    return { ok: true, value };
   } catch (error) {
-    // Fail closed on a runner fault: prefer a latched governance terminal, then a closed
-    // trust-boundary refusal the runner itself signaled (the child fabricated a tool call or sent
-    // malformed arguments — a governance outcome, not lost infrastructure), else a content-free
-    // `unavailable`. Either way, a redacted diagnostic ties the opaque outcome to a correlatable
-    // event record.
     const failure = childRunnerFailure(state, error);
-    emitRunnerFault(deps, context.parentAuthority.runId, childRequest.childRunId, failure, error);
-    return rejectedOutcome(failure.terminal, failure.reasonCode);
+    const { reportRunnerFault } = governance;
+    reportRunnerFault(failure, error);
+    return { ok: false, ...failure, thrown: true, error };
   } finally {
     cleanup();
   }
@@ -466,20 +553,17 @@ interface DeadlineSignal {
  * non-cooperative runner that never re-checks the gate is actually stopped — not just reported
  * `stopped` late once it eventually returns on its own.
  */
-function composeDeadlineSignal(
-  deps: ReadOnlyChildOrchestratorDeps,
-  context: ReadOnlyChildInvocationContext,
-): DeadlineSignal {
+function composeDeadlineSignal(governance: ReadOnlySessionGovernance): DeadlineSignal {
   const controller = new AbortController();
   const onParentAbort = (): void => {
     controller.abort();
   };
-  if (context.signal.aborted) {
+  if (governance.signal.aborted) {
     controller.abort();
   } else {
-    context.signal.addEventListener("abort", onParentAbort, { once: true });
+    governance.signal.addEventListener("abort", onParentAbort, { once: true });
   }
-  const delayMs = Math.max(0, context.deadlineMs - deps.clock.now());
+  const delayMs = Math.max(0, governance.deadlineMs - governance.clock.now());
   const timer = setTimeout(() => {
     controller.abort();
   }, delayMs);
@@ -488,32 +572,13 @@ function composeDeadlineSignal(
     signal: controller.signal,
     cleanup: (): void => {
       clearTimeout(timer);
-      context.signal.removeEventListener("abort", onParentAbort);
+      governance.signal.removeEventListener("abort", onParentAbort);
     },
   };
 }
 
-function finalizeOutcome(
-  deps: ReadOnlyChildOrchestratorDeps,
-  context: ReadOnlyChildInvocationContext,
-  state: GateState,
-  result: ReadOnlyChildRunnerResult,
-): AuxiliaryCapabilityOutcomeV1 {
-  if (state.latched !== undefined) {
-    return rejectedOutcome(state.latched.terminal, state.latched.reasonCode);
-  }
-  // Re-check authority AFTER the runner resolves: a revocation or deadline that lands after its
-  // last gate call but before it returns must never surface as an accepted result.
-  const stop = currentStopReason(deps, context);
-  if (stop !== undefined) return rejectedOutcome("stopped", stop);
-  return acceptedOutcome(result);
-}
-
 function createGate(
-  deps: ReadOnlyChildOrchestratorDeps,
-  context: ReadOnlyChildInvocationContext,
-  envelope: ReadOnlyChildEnvelope,
-  maxToolCalls: number,
+  governance: ReadOnlySessionGovernance,
   state: GateState,
 ): (attempt: ReadOnlyChildToolAttempt) => ReadOnlyChildGateDecision {
   return (attempt): ReadOnlyChildGateDecision => {
@@ -521,7 +586,7 @@ function createGate(
     if (state.latched !== undefined) {
       return { ok: false, terminal: state.latched.terminal, reasonCode: state.latched.reasonCode };
     }
-    const decision = evaluateAttempt(deps, context, envelope, maxToolCalls, state, attempt);
+    const decision = evaluateAttempt(governance, state, attempt);
     if (!decision.ok) {
       state.latched = { terminal: decision.terminal, reasonCode: decision.reasonCode };
     }
@@ -530,20 +595,21 @@ function createGate(
 }
 
 function evaluateAttempt(
-  deps: ReadOnlyChildOrchestratorDeps,
-  context: ReadOnlyChildInvocationContext,
-  envelope: ReadOnlyChildEnvelope,
-  maxToolCalls: number,
+  governance: ReadOnlySessionGovernance,
   state: GateState,
   attempt: ReadOnlyChildToolAttempt,
 ): ReadOnlyChildGateDecision {
-  const stop = currentStopReason(deps, context);
+  const stop = currentStopReason(governance);
   if (stop !== undefined) return deny("stopped", stop);
   if (attempt.toolClass === "child-agent") return deny("denied", "nested-child-denied");
-  const readOnlyDenial = readOnlyDenialReason(attempt.toolClass, envelope);
+  const readOnlyDenial = readOnlyDenialReason(attempt.toolClass, governance.allowedActionClasses);
   if (readOnlyDenial !== undefined) return deny("denied", readOnlyDenial);
-  if (state.childToolCalls >= maxToolCalls) return deny("limit-reached", "child-max-tool-calls");
-  if (!deps.charger.chargeParentToolCall()) return deny("limit-reached", "parent-budget-exceeded");
+  if (state.childToolCalls >= governance.maxToolCalls) {
+    return deny("limit-reached", "child-max-tool-calls");
+  }
+  if (!governance.charger.chargeParentToolCall()) {
+    return deny("limit-reached", "parent-budget-exceeded");
+  }
   state.childToolCalls += 1;
   return { ok: true };
 }
@@ -554,21 +620,20 @@ function deny(terminal: ReadOnlyChildTerminal, reasonCode: string): ReadOnlyChil
 
 function readOnlyDenialReason(
   toolClass: CodingWorkbenchActionClass,
-  envelope: ReadOnlyChildEnvelope,
+  allowedActionClasses: readonly CodingWorkbenchActionClass[],
 ): string | undefined {
-  return envelope.allowedActionClasses.includes(toolClass)
+  return allowedActionClasses.includes(toolClass)
     ? undefined
     : READ_ONLY_DENIAL_BY_CLASS[toolClass];
 }
 
 function currentStopReason(
-  deps: ReadOnlyChildOrchestratorDeps,
-  context: ReadOnlyChildInvocationContext,
+  governance: Pick<ReadOnlySessionGovernance, "signal" | "cancellation" | "clock" | "deadlineMs">,
 ): ReadOnlyChildStopReason | undefined {
-  if (context.signal.aborted) return "parent-stopped";
-  const reason = deps.cancellation.stopReason();
+  if (governance.signal.aborted) return "parent-stopped";
+  const reason = governance.cancellation.stopReason();
   if (reason !== undefined) return reason;
-  if (deps.clock.now() >= context.deadlineMs) return "timeout";
+  if (governance.clock.now() >= governance.deadlineMs) return "timeout";
   return undefined;
 }
 

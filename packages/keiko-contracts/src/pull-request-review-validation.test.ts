@@ -17,6 +17,7 @@ import {
   validateReviewFindingRecord,
   validateReviewFindingReport,
   validateReviewModelPolicy,
+  validateReviewRunStartRequest,
   validateReviewRunSettlement,
   validateReviewTarget,
   type ReviewContractIssueCode,
@@ -556,5 +557,47 @@ describe("validateReviewModelPolicy and identifiers", () => {
     expect(isReviewRunId("r".repeat(129))).toBe(false);
     expect(isReviewFindingFingerprint(FINGERPRINT)).toBe(true);
     expect(isReviewFindingFingerprint(FINGERPRINT.toUpperCase())).toBe(false);
+  });
+});
+
+describe("validateReviewRunStartRequest (Issue #4136)", () => {
+  const valid = {
+    target: { kind: "pull-request", number: 12 },
+    reviewerModelId: "gemma-4-31b-it",
+    counterCheckerModelId: "qwen3.6-35b-a3b-8bit",
+    clientRequestId: "start-0001",
+  };
+
+  it("accepts both target kinds and an optional dry run", () => {
+    expect(validateReviewRunStartRequest(valid).ok).toBe(true);
+    expect(
+      validateReviewRunStartRequest({
+        ...valid,
+        target: { kind: "local-range", baseRef: "main", headRef: "feature/x" },
+        dryRun: true,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("refuses evaluation switches and every malformed field without echoing values", () => {
+    const refused = [
+      { ...valid, counterCheck: "off" },
+      { ...valid, swapRoles: true },
+      { ...valid, target: { kind: "pull-request" } },
+      { ...valid, target: { kind: "pull-request", number: 0 } },
+      { ...valid, target: { kind: "local-range", baseRef: "-x", headRef: "main" } },
+      { ...valid, target: { kind: "branch", name: "x" } },
+      { ...valid, reviewerModelId: "bad model" },
+      { ...valid, clientRequestId: "" },
+      { ...valid, clientRequestId: "x".repeat(129) },
+      { ...valid, dryRun: "yes" },
+      { target: valid.target },
+      "not an object",
+    ];
+    for (const value of refused) {
+      const result = validateReviewRunStartRequest(value);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(JSON.stringify(result.issues)).not.toContain("bad model");
+    }
   });
 });

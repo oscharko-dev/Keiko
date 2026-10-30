@@ -145,7 +145,15 @@ export function neutralizeReviewDataMarkers(data: string): string {
     .join("");
 }
 
-function dataBlock(label: "rules" | "diff-package", nonce: string, data: string): string {
+/**
+ * One fenced, labelled, nonce-bound block of untrusted data. Shared with the counter-check task
+ * (#4136), whose candidate block uses the same markers and neutralization.
+ */
+export function renderReviewDataBlock(
+  label: "rules" | "diff-package" | "candidate",
+  nonce: string,
+  data: string,
+): string {
   return [
     `<review-data ${label} ${nonce}>`,
     neutralizeReviewDataMarkers(data),
@@ -155,7 +163,7 @@ function dataBlock(label: "rules" | "diff-package", nonce: string, data: string)
 
 function rulesBlock(rules: ReviewTaskRules, nonce: string): string {
   if (rules.outcome === "loaded" && rules.text !== undefined && rules.text.length > 0) {
-    return dataBlock("rules", nonce, rules.text);
+    return renderReviewDataBlock("rules", nonce, rules.text);
   }
   return "Review rules: none for this repository.";
 }
@@ -176,7 +184,7 @@ export function renderReviewTask(input: ReviewTaskInput): ReviewTaskResult {
     `Base commit: ${input.baseSha}`,
     `Head commit: ${input.headSha}`,
     rulesBlock(input.rules, nonce),
-    dataBlock("diff-package", nonce, input.diffPackageText),
+    renderReviewDataBlock("diff-package", nonce, input.diffPackageText),
   ].join("\n\n");
   const byteCount = Buffer.byteLength(text, "utf8");
   if (byteCount > REVIEW_TASK_MAX_BYTES) return { ok: false, reason: "task-too-large" };

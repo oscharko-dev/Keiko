@@ -788,3 +788,175 @@ export const REVIEW_FINDING_REPORT_ARGUMENT_SCHEMAS: Readonly<
     additionalProperties: false,
   },
 });
+
+// ─── Review runs (Issue #4136) ───────────────────────────────────────────────
+
+export const REVIEW_RUNS_ROUTE = "/api/git-review/runs";
+export const REVIEW_RUN_ROUTE = "/api/git-review/runs/:runId";
+export const REVIEW_RUN_DIFF_ROUTE = "/api/git-review/runs/:runId/diff";
+export const REVIEW_RUN_EVENTS_ROUTE = "/api/git-review/runs/:runId/events";
+export const REVIEW_RUN_CANCEL_ROUTE = "/api/git-review/runs/:runId/cancel";
+export const REVIEW_STATES_ROUTE = "/api/git-review/review-states";
+
+/** A client's idempotency key for one start request. */
+export const REVIEW_CLIENT_REQUEST_ID_MAX_CHARS = 128;
+/** Runs a history read returns, newest first. */
+export const REVIEW_RUN_HISTORY_MAX = 50;
+/** Context lines the diff route may show around each change (the hardened diff bound). */
+export const REVIEW_RUN_DIFF_CONTEXT_MAX = 64;
+
+/** Counter-check bounds per candidate finding (ADR-0182 D5); operators may configure them. */
+export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
+export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 120_000;
+/** Prompt tokens one counter-check may spend, and all counter-checks of one run together. */
+export const REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS = 200_000;
+export const REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS = 1_200_000;
+
+/**
+ * `POST /api/git-review/runs`. The repository is the Git window's selected root (`?root=`).
+ * `dryRun` validates the models and the target and returns the estimate without starting.
+ * Evaluation switches (counter-check off, role swap) are not part of this wire shape: a product
+ * request can never set them.
+ */
+export interface ReviewRunStartRequest {
+  readonly target: ReviewTargetRequest;
+  readonly reviewerModelId: string;
+  readonly counterCheckerModelId: string;
+  readonly clientRequestId: string;
+  readonly dryRun?: boolean;
+}
+
+/** Closed reasons a start request is refused without a run (`review.run.refused`). */
+export const REVIEW_RUN_REFUSAL_REASONS = [
+  "active-review-exists",
+  "policy-invalid",
+  "model-unavailable",
+  "request-invalid",
+] as const;
+export type ReviewRunRefusalReason = (typeof REVIEW_RUN_REFUSAL_REASONS)[number];
+
+/** A dry run's estimate. `estimatedDurationMs` is `null` until this deployment settled a run. */
+export interface ReviewRunEstimate {
+  readonly changedLines: number;
+  readonly estimatedInputTokens: {
+    readonly reviewer: number;
+    readonly counterChecker: number;
+  };
+  readonly estimatedDurationMs: number | null;
+}
+
+export type ReviewRunStartResponse =
+  | { readonly kind: "dry-run"; readonly estimate: ReviewRunEstimate }
+  | { readonly kind: "started"; readonly run: ReviewRunView };
+
+/** Token and duration totals of one review role. */
+export interface ReviewRoleTotals {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly durationMs: number;
+}
+
+/** One coverage entry as the run record keeps it: a path, its list and its closed reason. */
+export interface ReviewCoverageEntry {
+  readonly path: string;
+  readonly list: ReviewDiffCoverageList;
+  readonly reason?: string | undefined;
+}
+
+/** A candidate finding as the run record keeps it; the counter-check evidence is the verdict's. */
+export interface ReviewRunFinding extends ReviewFindingRecord {
+  /** Order in which the Reviewer filed it (1-based). */
+  readonly reviewerRank: number;
+}
+
+/** The run record `GET /api/git-review/runs/{runId}` serves. Paths and prose are local data. */
+export interface ReviewRunView {
+  readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+  readonly runId: string;
+  readonly repositoryId: string;
+  readonly targetKind: ReviewTargetRequest["kind"];
+  readonly pullRequestNumber: number | null;
+  readonly baseSha: string | null;
+  readonly headSha: string | null;
+  readonly reviewerModelId: string;
+  readonly counterCheckerModelId: string;
+  readonly phase: ReviewRunPhase;
+  readonly settlement: ReviewRunSettlement | null;
+  readonly createdAt: string;
+  readonly settledAt: string | null;
+  readonly coverage: ReviewDiffCoverageSummary | null;
+  readonly coverageEntries: readonly ReviewCoverageEntry[];
+  /** Presented findings only, in presentation order; refuted and undecided ones stay server-side. */
+  readonly presentedFindings: readonly ReviewRunFinding[];
+  readonly candidateCount: number;
+  readonly totals: {
+    readonly reviewer: ReviewRoleTotals;
+    readonly counterChecker: ReviewRoleTotals;
+  };
+  /** The pull request's head moved after the review; display only, never a settlement. */
+  readonly stale: boolean;
+}
+
+export interface ReviewRunHistoryResponse {
+  readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+  readonly runs: readonly ReviewRunView[];
+}
+
+/** The review state of one pull request row: its latest run. */
+export type ReviewPullRequestReviewState =
+  | { readonly pullRequestNumber: number; readonly state: "reviewing"; readonly runId: string }
+  | {
+      readonly pullRequestNumber: number;
+      readonly state: "settled";
+      readonly runId: string;
+      readonly settlement: ReviewRunSettlement;
+      readonly presentedCount: number;
+    }
+  | { readonly pullRequestNumber: number; readonly state: "stale"; readonly runId: string };
+
+export interface ReviewStatesResponse {
+  readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+  readonly states: readonly ReviewPullRequestReviewState[];
+}
+
+/** `GET /api/git-review/runs/{runId}/diff`: the reviewed base-to-head diff of one file. */
+export type ReviewRunDiffResponse =
+  | {
+      readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+      readonly status: "available";
+      readonly path: string;
+      readonly baseSha: string;
+      readonly headSha: string;
+      readonly contextLines: number;
+      /** Unified diff text from the Git objects of the reviewed commits. */
+      readonly diff: string;
+    }
+  | {
+      readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+      readonly status: "objects-unavailable" | "not-in-review" | "not-settled";
+    };
+
+/** Body-free counts the progress stream carries; never candidate content. */
+export interface ReviewRunProgressCounts {
+  readonly filesPackaged: number;
+  readonly candidates: number;
+  readonly counterChecked: number;
+}
+
+/** One frame of `GET /api/git-review/runs/{runId}/events`. */
+export type ReviewRunEvent =
+  | {
+      readonly kind: "phase";
+      readonly runId: string;
+      readonly phase: ReviewRunPhase;
+      readonly elapsedMs: number;
+      readonly counts: ReviewRunProgressCounts;
+    }
+  | {
+      readonly kind: "settled";
+      readonly runId: string;
+      readonly settlement: ReviewRunSettlement;
+      readonly presentedCount: number;
+      readonly elapsedMs: number;
+      readonly counts: ReviewRunProgressCounts;
+    };
