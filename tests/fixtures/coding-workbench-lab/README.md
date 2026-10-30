@@ -122,14 +122,14 @@ never contains secrets, and none is needed to run its tests.
 
 The fixture is data, so the repository gates must neither lint, format, type-check nor run it:
 
-| Gate                      | How the fixture stays out                                                                                                                |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| ESLint (`npm run lint`)   | `eslint.config.js` `ignores` lists `tests/fixtures/coding-workbench-lab/ledger-lab/**`                                                   |
-| Prettier (`format:check`) | `.prettierignore` lists `tests/fixtures/coding-workbench-lab/ledger-lab/`                                                                |
-| TypeScript (`typecheck`)  | `tsconfig.json` `exclude` lists `tests/fixtures/coding-workbench-lab/ledger-lab/**` (it uses `.ts` import extensions and type stripping) |
-| Vitest and coverage       | `vitest.config.ts` and `vitest.coverage.packages.config.ts` already exclude `tests/fixtures/**`; the lab tests use `node:test`           |
-| knip                      | `knip.json` already ignores `tests/fixtures/**`                                                                                          |
-| SonarCloud                | `tests/**` is test scope (`sonar.exclusions` and `sonar.test.inclusions`)                                                                |
+| Gate                      | How the fixture stays out                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| ESLint (`npm run lint`)   | `eslint.config.js` `ignores` lists `tests/fixtures/coding-workbench-lab/ledger-lab/**`                                                         |
+| Prettier (`format:check`) | `.prettierignore` lists `tests/fixtures/coding-workbench-lab/ledger-lab/`                                                                      |
+| TypeScript (`typecheck`)  | `tsconfig.json` `exclude` lists `tests/fixtures/coding-workbench-lab/ledger-lab/**` (it uses `.ts` import extensions and type stripping)       |
+| Vitest and coverage       | `vitest.config.ts` and `vitest.coverage.packages.config.ts` already exclude `tests/fixtures/**`; the lab tests use `node:test`                 |
+| knip                      | `knip.json` already ignores `tests/fixtures/**`                                                                                                |
+| SonarCloud                | `tests/**` is test scope (`sonar.exclusions` and `sonar.test.inclusions`); `sonar.test.exclusions` lists `ledger-lab/**` and `inventory-py/**` |
 
 ESLint 10 resolves the nearest configuration of an explicit path, so
 `npx eslint tests/fixtures/coding-workbench-lab/ledger-lab` lints the fixture with its own
