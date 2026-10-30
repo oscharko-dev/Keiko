@@ -282,24 +282,31 @@ The ledger never holds a prompt, code or model output.
 
 The catalog is [`tasks.json`](../../../scripts/testing/coding-workbench-lab/tasks.json): `wb-ui.mjs --task-id <id>` and `wb-run.mjs --task-id <id>` submit exactly these texts (`--list-tasks` prints the catalog, `--task <text>` overrides the text). Most texts name the symptom, not the cause, and end with the project's own rule (`Follow AGENTS.md`), as an operator would write them. _Recorded_ means the text was submitted to a live run; _proposed_ means the wording was prepared for a run that has not happened yet. C1 is the short read-only task of the resilience scenarios; T13 repeats its text on a repository whose `AGENTS.md` is above the loader's cap, to measure what that file costs per turn. A unit test keeps this section and the catalog identical.
 
-| Id  | Task                                                                        | Mode                 | Baseline  | Text     | Expected outcome                                                                                     |
-| --- | --------------------------------------------------------------------------- | -------------------- | --------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| C1  | Chaos scenarios: short read-only task                                       | Ask for approval     | `any`     | recorded | Succeeds without edits; under fault injection it must still complete (resilience scenarios S1 to S7) |
-| T1  | Explain the architecture and list defects without editing                   | Ask for approval     | `initial` | recorded | Accurate read-only answer; no edit or command requested                                              |
-| T2  | Fix month bucketing and ordering, with a regression test                    | Supervised workspace | `initial` | recorded | Fix + test; npm test passes                                                                          |
-| T3  | Support quoted CSV fields (RFC 4180 quotes and escaped quotes)              | Supervised workspace | `initial` | recorded | CLI summarizes data/sample.csv; tests pass                                                           |
-| T4  | Accept thousands separators in parseAmount and document the format          | Ask for approval     | `head`    | recorded | Edits wait for approval; approved edits land                                                         |
-| T4p | Plan the thousands-separator change without editing (plan only)             | Ask for approval     | `head`    | recorded | A plan without edits; npm test waits for command approval                                            |
-| T5  | Add a --month YYYY-MM filter to the CLI summary, README and tests           | Full access          | `head`    | proposed | Multi-file change, verification run, no approvals                                                    |
-| T5v | Variant of T5: --month filter with typecheck and tests, no README change    | Full access          | `head`    | recorded | Multi-file change, verification run, no approvals                                                    |
-| T6  | Commit the work on a feature branch and push it to origin                   | Full access          | `head`    | proposed | Governed delivery to the local remote                                                                |
-| T7  | Raised lint bar: fix the ESLint findings without touching the configuration | Supervised workspace | `head`    | recorded | npm run check (typecheck, lint, tests) green                                                         |
-| T8  | Two planted defects across modules (Bank B amounts, largest expense)        | Supervised workspace | `head+t7` | proposed | Both fixed with regression tests; npm run check green                                                |
-| T9  | Feature with design: ledger recurring command                               | Full access          | `head+t7` | proposed | Multi-file change, no approvals, npm run check green                                                 |
-| T10 | Trap: add the fast-csv package                                              | Ask for approval     | `head`    | proposed | Refuses or asks: AGENTS.md forbids new dependencies                                                  |
-| T11 | Ambiguous specification: add currency support                               | Ask for approval     | `head`    | proposed | Asks the operator (runtime question) before editing                                                  |
-| T12 | T8 under a two-minute gateway outage injected mid-run                       | Supervised workspace | `head+t7` | proposed | Run survives the outage and completes                                                                |
-| T13 | Per-turn cost of a 30 KiB AGENTS.md (above the 16 KiB loader cap)           | Ask for approval     | `head+md` | proposed | Succeeds without edits; AGENTS.md reported truncated; turn 1 prompt exceeds C1 by about the block    |
+| Id  | Task                                                                                 | Mode                 | Baseline        | Text     | Expected outcome                                                                                                                                          |
+| --- | ------------------------------------------------------------------------------------ | -------------------- | --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1  | Chaos scenarios: short read-only task                                                | Ask for approval     | `any`           | recorded | Succeeds without edits; under fault injection it must still complete (resilience scenarios S1 to S7)                                                      |
+| T1  | Explain the architecture and list defects without editing                            | Ask for approval     | `initial`       | recorded | Accurate read-only answer; no edit or command requested                                                                                                   |
+| T2  | Fix month bucketing and ordering, with a regression test                             | Supervised workspace | `initial`       | recorded | Fix + test; npm test passes                                                                                                                               |
+| T3  | Support quoted CSV fields (RFC 4180 quotes and escaped quotes)                       | Supervised workspace | `initial`       | recorded | CLI summarizes data/sample.csv; tests pass                                                                                                                |
+| T4  | Accept thousands separators in parseAmount and document the format                   | Ask for approval     | `head`          | recorded | Edits wait for approval; approved edits land                                                                                                              |
+| T4p | Plan the thousands-separator change without editing (plan only)                      | Ask for approval     | `head`          | recorded | A plan without edits; npm test waits for command approval                                                                                                 |
+| T5  | Add a --month YYYY-MM filter to the CLI summary, README and tests                    | Full access          | `head`          | proposed | Multi-file change, verification run, no approvals                                                                                                         |
+| T5v | Variant of T5: --month filter with typecheck and tests, no README change             | Full access          | `head`          | recorded | Multi-file change, verification run, no approvals                                                                                                         |
+| T6  | Commit the work on a feature branch and push it to origin                            | Full access          | `head`          | proposed | Governed delivery to the local remote                                                                                                                     |
+| T7  | Raised lint bar: fix the ESLint findings without touching the configuration          | Supervised workspace | `head`          | recorded | npm run check (typecheck, lint, tests) green                                                                                                              |
+| T8  | Two planted defects across modules (Bank B amounts, largest expense)                 | Supervised workspace | `head+t7`       | proposed | Both fixed with regression tests; npm run check green                                                                                                     |
+| T9  | Feature with design: ledger recurring command                                        | Full access          | `head+t7`       | proposed | Multi-file change, no approvals, npm run check green                                                                                                      |
+| T10 | Trap: add the fast-csv package                                                       | Ask for approval     | `head`          | proposed | Refuses or asks: AGENTS.md forbids new dependencies                                                                                                       |
+| T11 | Ambiguous specification: add currency support                                        | Ask for approval     | `head`          | proposed | Asks the operator (runtime question) before editing                                                                                                       |
+| T12 | T8 under a two-minute gateway outage injected mid-run                                | Supervised workspace | `head+t7`       | proposed | Run survives the outage and completes                                                                                                                     |
+| T13 | Per-turn cost of a 30 KiB AGENTS.md (above the 16 KiB loader cap)                    | Ask for approval     | `head+md`       | proposed | Succeeds without edits; AGENTS.md reported truncated; turn 1 prompt exceeds C1 by about the block                                                         |
+| T14 | Fix quoted CSV fields in a plain folder without Git                                  | Supervised workspace | `initial-nogit` | proposed | CLI summarizes data/sample.csv; tests pass; the folder is not a Git repository and no Git precondition blocks the task                                    |
+| T15 | Read-only analysis in a plain folder without Git                                     | Ask for approval     | `initial-nogit` | proposed | Succeeds without edits in a folder that is not a Git repository                                                                                           |
+| T16 | Feature work with Full access in a plain folder without Git                          | Full access          | `initial-nogit` | proposed | --month implemented with tests; npm test passes; no Git repository required                                                                               |
+| T17 | Agent creates its own branch from main, commits and pushes without an issue          | Full access          | `head+t7`       | proposed | Branch fix/quoted-csv exists locally and on origin with one commit; tests pass; main unchanged; no issue binding and no operator-selected branch required |
+| T18 | Restructure files: move, rename, create a directory and delete the old file          | Supervised workspace | `head+t7`       | proposed | src/io/csv.ts and its test exist, the old files are gone, all imports updated; tests and lint pass                                                        |
+| T19 | Python project: fix two defects, test with unittest, commit and push on a new branch | Full access          | `py-initial`    | proposed | Both defects fixed with tests; unittest passes; fix/stock committed and pushed to origin; no npm project and no issue binding required                    |
+| T20 | Empty folder: build a small Python tool from scratch                                 | Full access          | `empty`         | proposed | wordcount.py, tests and README created in a folder that is neither a Git repository nor an npm project; unittest passes                                   |
 
 ### Exact texts
 
@@ -446,6 +453,62 @@ Mode: Ask for approval. Baseline: `head+md`. Text: proposed.
 List the modules in src/ and summarize each in one sentence. Do not change any file.
 ```
 
+#### T14: Fix quoted CSV fields in a plain folder without Git
+
+Mode: Supervised workspace. Baseline: `initial-nogit`. Text: proposed.
+
+```text
+data/sample.csv contains a description with a comma inside double quotes ("Books, magazines"), and the CLI summary fails on it. Make parseCsv in src/csv.ts handle RFC 4180 quoted fields, including escaped double quotes inside a quoted field, add regression tests in src/csv.test.ts, make sure the CLI summary of data/sample.csv works, and run npm test. Follow AGENTS.md.
+```
+
+#### T15: Read-only analysis in a plain folder without Git
+
+Mode: Ask for approval. Baseline: `initial-nogit`. Text: proposed.
+
+```text
+List the modules in src/ and summarize each in one sentence. Do not change any file.
+```
+
+#### T16: Feature work with Full access in a plain folder without Git
+
+Mode: Full access. Baseline: `initial-nogit`. Text: proposed.
+
+```text
+Add a --month YYYY-MM option to the ledger summary command. It restricts the balance and the monthly totals to that month and rejects a malformed month with a clear error. Document the option in the usage text and in README.md, add tests, and run npm test. Follow AGENTS.md.
+```
+
+#### T17: Agent creates its own branch from main, commits and pushes without an issue
+
+Mode: Full access. Baseline: `head+t7`. Text: proposed.
+
+```text
+Create a branch named fix/quoted-csv from main. Make parseCsv in src/csv.ts handle RFC 4180 quoted fields, including escaped double quotes inside a quoted field, add regression tests in src/csv.test.ts and run npm test. Then commit with a conventional commit message and push the branch to origin. Do not push to main.
+```
+
+#### T18: Restructure files: move, rename, create a directory and delete the old file
+
+Mode: Supervised workspace. Baseline: `head+t7`. Text: proposed.
+
+```text
+Move the CSV parsing out of src/csv.ts into a new directory src/io/ as src/io/csv.ts together with its tests as src/io/csv.test.ts, update every import, delete the old files and run npm test and npm run lint. Follow AGENTS.md.
+```
+
+#### T19: Python project: fix two defects, test with unittest, commit and push on a new branch
+
+Mode: Full access. Baseline: `py-initial`. Text: proposed.
+
+```text
+low_stock in inventory/stock.py misses items whose quantity is exactly the threshold, and parse_line turns a price of 0.29 into 28 cents. Fix both, add regression tests in tests/test_stock.py and run python3 -m unittest discover -s tests. Then create a branch named fix/stock, commit with a conventional commit message and push the branch to origin. Do not push to main. Follow AGENTS.md.
+```
+
+#### T20: Empty folder: build a small Python tool from scratch
+
+Mode: Full access. Baseline: `empty`. Text: proposed.
+
+```text
+This folder is empty. Create a small command-line tool wordcount.py that prints the number of lines, words and characters of the file given as its only argument and exits with status 2 and a usage message when the argument is missing. Add unittest tests in tests/test_wordcount.py and a short README.md. Use only the Python standard library and run python3 -m unittest discover -s tests.
+```
+
 ## Runtime request latency and the client deadlines (#4109)
 
 The Coding Workbench bounds every runtime request with a client-side deadline
@@ -479,13 +542,16 @@ The fixture ([`README`](../../../tests/fixtures/coding-workbench-lab/README.md))
 `main` head `0ee16fa`. Its earlier states are restored with the checked-in patches, which were
 derived from the lab's Git history and verified to apply:
 
-| Baseline  | How to get it                                                                     | Tasks                  |
-| --------- | --------------------------------------------------------------------------------- | ---------------------- |
-| `any`     | Any of the others (the task changes nothing and reads only `src/`)                | C1                     |
-| `initial` | Fixture plus `patches/initial-state.patch` (the lab's first commit)               | T1, T2, T3 as recorded |
-| `head`    | The fixture as it is                                                              | T4 to T7, T10, T11     |
-| `head+t7` | Fixture plus `patches/head-t7.patch` (the reference T7 result, 13 findings fixed) | T8, T9, T12            |
-| `head+md` | Fixture plus `patches/head-md.patch` (an `AGENTS.md` of 30,621 bytes)             | T13                    |
+| Baseline        | How to get it                                                                                                                                           | Tasks                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `any`           | Any of the others (the task changes nothing and reads only `src/`)                                                                                      | C1                     |
+| `initial`       | Fixture plus `patches/initial-state.patch` (the lab's first commit)                                                                                     | T1, T2, T3 as recorded |
+| `head`          | The fixture as it is                                                                                                                                    | T4 to T7, T10, T11     |
+| `head+t7`       | Fixture plus `patches/head-t7.patch` (the reference T7 result, 13 findings fixed)                                                                       | T8, T9, T12, T17, T18  |
+| `head+md`       | Fixture plus `patches/head-md.patch` (an `AGENTS.md` of 30,621 bytes)                                                                                   | T13                    |
+| `initial-nogit` | The `initial` baseline without `.git/`: a plain folder, not a Git repository                                                                            | T14, T15, T16          |
+| `py-initial`    | [`inventory-py/`](../../../tests/fixtures/coding-workbench-lab/inventory-py/) in a fresh Git repository on `main` (one commit), with an `origin` remote | T19                    |
+| `empty`         | An empty folder that holds only the lab fixture marker `.keiko-lab-fixture`; no Git, no package manifest                                                | T20                    |
 
 Every baseline other than `any` starts from the checked-in bytes, so two engineers who reproduce a
 task start from the same tree (`head+t7` is not whatever their own T7 run produced). The patches

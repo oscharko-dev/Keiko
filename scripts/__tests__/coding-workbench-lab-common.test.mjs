@@ -20,6 +20,7 @@ import {
   approvalPolicyText,
   assertCheckoutSelected,
   assertLabRepository,
+  LAB_FIXTURE_MARKER,
   assertProjectRegistered,
   browserBaseUrl,
   checkoutRequest,
@@ -172,6 +173,17 @@ describe("lab repository (fail closed)", () => {
     expect(() => assertLabRepository(empty)).toThrow(/names null/u);
     writeFileSync(join(empty, "package.json"), "null");
     expect(() => assertLabRepository(empty)).toThrow(UsageError);
+  });
+
+  it("accepts a folder with the exact lab fixture marker and refuses any other marker text", () => {
+    const fixture = mkdtempSync(join(tmpdir(), "keiko-lab-fixture-"));
+    TEMP_DIRECTORIES.push(fixture);
+    expect(() => assertLabRepository(fixture)).toThrow(UsageError);
+    writeFileSync(join(fixture, LAB_FIXTURE_MARKER), "something else\n");
+    expect(() => assertLabRepository(fixture)).toThrow(UsageError);
+    writeFileSync(join(fixture, LAB_FIXTURE_MARKER), "keiko-lab-fixture\n");
+    expect(() => assertLabRepository(fixture)).not.toThrow();
+    expect(labRepositoryPath(fixture, {})).toBe(resolve(fixture));
   });
 
   it("reads the marker through the injected reader", () => {

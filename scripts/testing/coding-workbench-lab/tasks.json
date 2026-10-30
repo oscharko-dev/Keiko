@@ -142,5 +142,68 @@
     "textStatus": "proposed",
     "text": "List the modules in src/ and summarize each in one sentence. Do not change any file.",
     "expected": "Succeeds without edits; AGENTS.md reported truncated; turn 1 prompt exceeds C1 by about the block"
+  },
+  {
+    "id": "T14",
+    "title": "Fix quoted CSV fields in a plain folder without Git",
+    "mode": "Supervised workspace",
+    "baseline": "initial-nogit",
+    "textStatus": "proposed",
+    "text": "data/sample.csv contains a description with a comma inside double quotes (\"Books, magazines\"), and the CLI summary fails on it. Make parseCsv in src/csv.ts handle RFC 4180 quoted fields, including escaped double quotes inside a quoted field, add regression tests in src/csv.test.ts, make sure the CLI summary of data/sample.csv works, and run npm test. Follow AGENTS.md.",
+    "expected": "CLI summarizes data/sample.csv; tests pass; the folder is not a Git repository and no Git precondition blocks the task"
+  },
+  {
+    "id": "T15",
+    "title": "Read-only analysis in a plain folder without Git",
+    "mode": "Ask for approval",
+    "baseline": "initial-nogit",
+    "textStatus": "proposed",
+    "text": "List the modules in src/ and summarize each in one sentence. Do not change any file.",
+    "expected": "Succeeds without edits in a folder that is not a Git repository"
+  },
+  {
+    "id": "T16",
+    "title": "Feature work with Full access in a plain folder without Git",
+    "mode": "Full access",
+    "baseline": "initial-nogit",
+    "textStatus": "proposed",
+    "text": "Add a --month YYYY-MM option to the ledger summary command. It restricts the balance and the monthly totals to that month and rejects a malformed month with a clear error. Document the option in the usage text and in README.md, add tests, and run npm test. Follow AGENTS.md.",
+    "expected": "--month implemented with tests; npm test passes; no Git repository required"
+  },
+  {
+    "id": "T17",
+    "title": "Agent creates its own branch from main, commits and pushes without an issue",
+    "mode": "Full access",
+    "baseline": "head+t7",
+    "textStatus": "proposed",
+    "text": "Create a branch named fix/quoted-csv from main. Make parseCsv in src/csv.ts handle RFC 4180 quoted fields, including escaped double quotes inside a quoted field, add regression tests in src/csv.test.ts and run npm test. Then commit with a conventional commit message and push the branch to origin. Do not push to main.",
+    "expected": "Branch fix/quoted-csv exists locally and on origin with one commit; tests pass; main unchanged; no issue binding and no operator-selected branch required"
+  },
+  {
+    "id": "T18",
+    "title": "Restructure files: move, rename, create a directory and delete the old file",
+    "mode": "Supervised workspace",
+    "baseline": "head+t7",
+    "textStatus": "proposed",
+    "text": "Move the CSV parsing out of src/csv.ts into a new directory src/io/ as src/io/csv.ts together with its tests as src/io/csv.test.ts, update every import, delete the old files and run npm test and npm run lint. Follow AGENTS.md.",
+    "expected": "src/io/csv.ts and its test exist, the old files are gone, all imports updated; tests and lint pass"
+  },
+  {
+    "id": "T19",
+    "title": "Python project: fix two defects, test with unittest, commit and push on a new branch",
+    "mode": "Full access",
+    "baseline": "py-initial",
+    "textStatus": "proposed",
+    "text": "low_stock in inventory/stock.py misses items whose quantity is exactly the threshold, and parse_line turns a price of 0.29 into 28 cents. Fix both, add regression tests in tests/test_stock.py and run python3 -m unittest discover -s tests. Then create a branch named fix/stock, commit with a conventional commit message and push the branch to origin. Do not push to main. Follow AGENTS.md.",
+    "expected": "Both defects fixed with tests; unittest passes; fix/stock committed and pushed to origin; no npm project and no issue binding required"
+  },
+  {
+    "id": "T20",
+    "title": "Empty folder: build a small Python tool from scratch",
+    "mode": "Full access",
+    "baseline": "empty",
+    "textStatus": "proposed",
+    "text": "This folder is empty. Create a small command-line tool wordcount.py that prints the number of lines, words and characters of the file given as its only argument and exits with status 2 and a usage message when the argument is missing. Add unittest tests in tests/test_wordcount.py and a short README.md. Use only the Python standard library and run python3 -m unittest discover -s tests.",
+    "expected": "wordcount.py, tests and README created in a folder that is neither a Git repository nor an npm project; unittest passes"
   }
 ]

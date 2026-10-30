@@ -213,11 +213,25 @@ export function gateActions(snapshot, approve, decided) {
   return actions;
 }
 
+/** The marker file of a lab fixture that is not the ledger-lab copy (a Python project, an empty or a plain folder). */
+export const LAB_FIXTURE_MARKER = ".keiko-lab-fixture";
+const LAB_FIXTURE_MARKER_TEXT = "keiko-lab-fixture";
+
+function hasLabFixtureMarker(root, readText) {
+  try {
+    return readText(join(root, LAB_FIXTURE_MARKER), "utf8").trim() === LAB_FIXTURE_MARKER_TEXT;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Fails closed unless `root` is a lab repository: the drivers approve edits and run commands on
- * the repository they are given, so they only accept a copy of the ledger-lab fixture.
+ * the repository they are given, so they only accept a copy of the ledger-lab fixture or a folder
+ * that carries the explicit lab fixture marker (#3907 AC3: other languages, empty and plain folders).
  */
 export function assertLabRepository(root, readText = readFileSync) {
+  if (hasLabFixtureMarker(root, readText)) return;
   const { name, failure } = packageName(root, readText);
   if (name === LAB_REPOSITORY_NAME) return;
   const reason = failure ?? `its package.json names ${JSON.stringify(name ?? null)}`;
