@@ -89,12 +89,13 @@ export type ReviewTaskResult =
 
 const SHA_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 const NONCE_PATTERN = /^[0-9a-f]{12}$/u;
-// Any opening or closing marker lookalike inside the data, whatever its case or spacing.
-const MARKER_LOOKALIKE = /<(\s*\/?\s*)(review-data)/giu;
+// Any opening or closing marker lookalike inside the data, whatever its case or spacing. One
+// character class between `<` and the name keeps the match linear in the data's length.
+const MARKER_LOOKALIKE = /<([\s/]*review-data)/giu;
 
 /** Neutralizes every marker lookalike in untrusted data so it can neither close nor open a block. */
 export function neutralizeReviewDataMarkers(data: string): string {
-  return data.replace(MARKER_LOOKALIKE, "&lt;$1$2");
+  return data.replace(MARKER_LOOKALIKE, "&lt;$1");
 }
 
 function dataBlock(label: "rules" | "diff-package", nonce: string, data: string): string {

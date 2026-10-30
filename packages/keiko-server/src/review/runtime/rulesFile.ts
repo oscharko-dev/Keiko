@@ -13,6 +13,7 @@ import {
   type ReviewRulesFileOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { hasControlCharacter } from "@oscharko-dev/keiko-contracts/text-safety";
 import {
   readGitReviewBlob,
   readGitReviewPathObject,
@@ -20,8 +21,6 @@ import {
 } from "@oscharko-dev/keiko-git";
 
 const RULES_READ_TIMEOUT_MS = 10_000;
-// eslint-disable-next-line no-control-regex -- a configured path with a control character is refused
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 
 /** Supplies the repository's configured rules path (child 7 persists it; absent is the default). */
 export interface ReviewRulesSettingsPort {
@@ -57,7 +56,7 @@ export class ReviewRulesReadError extends Error {
  */
 export function resolveReviewRulesPath(path: string | undefined): string | undefined {
   const candidate = path ?? REVIEW_RULES_FILE_DEFAULT_PATH;
-  return isPortableWorkspaceRelativePath(candidate) && !CONTROL_CHARACTER.test(candidate)
+  return isPortableWorkspaceRelativePath(candidate) && !hasControlCharacter(candidate)
     ? candidate
     : undefined;
 }

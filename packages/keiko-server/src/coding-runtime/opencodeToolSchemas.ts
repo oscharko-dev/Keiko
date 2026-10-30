@@ -661,10 +661,10 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
  * The generated-tool definitions the review profile registers (ADR-0182 D2): exactly the three
  * read tools of the governed set and `keiko_review_report`, nothing else.
  */
+const REVIEW_TOOL_NAME_SET: ReadonlySet<string> = new Set(REVIEW_RUNTIME_TOOL_NAMES);
+
 export const OPENCODE_REVIEW_TOOL_SOURCE_DEFINITIONS = [
-  ...OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(({ name }) =>
-    (REVIEW_RUNTIME_TOOL_NAMES as readonly string[]).includes(name),
-  ),
+  ...OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(({ name }) => REVIEW_TOOL_NAME_SET.has(name)),
   {
     name: "keiko_review_report",
     action: "review-report",
