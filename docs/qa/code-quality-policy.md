@@ -1820,3 +1820,30 @@ selectors remain unchanged. Structural readiness permits these diagnostic slots 
 the existing checker. Combined canonical clearance still requires the complete core and observation
 proof owners and fresh semantic qualification. Dictionary checks, native census and scope activation
 retain their existing contracts.
+
+### Runtime commands and readiness parser responsibilities (#3918)
+
+Four public-parser records describe existing typed boundaries in
+`coding-workbench-runtime-api.ts`; each declares only `anti-slop/no-unknown-parameters`.
+
+| Responsibility                            | Public parser                                          | Direct unknown-input coordinate |
+| ----------------------------------------- | ------------------------------------------------------ | ------------------------------- |
+| `runtime-command-request-public-parser`   | `parseCodingWorkbenchCommandRequest`                   | 276:10                          |
+| `runtime-commands-channel-public-parser`  | `validateCodingWorkbenchRuntimeCommandsChannelPayload` | 544:10                          |
+| `runtime-readiness-request-public-parser` | `parseCodingWorkbenchRuntimeReadinessRequest`          | 1685:10                         |
+| `runtime-readiness-public-parser`         | `validateCodingWorkbenchRuntimeReadiness`              | 2237:10                         |
+
+The owning test invokes the real `runtime/coding-workbench-runtime-api` public subpath through
+four fixed typed proof consumers. Root-index type exports do not authorize runtime values.
+Selected proofs retain identity, optional-property ownership, closed malformed-input diagnostics,
+physical listing validation, authority narrowing, availability evidence, observed getter failures
+and distinct typed success/failure arms. Existing API and real route/browser consumer obligations
+remain intact; no product implementation, public export or behavior changes.
+
+These declarations target four direct unknown-input obligations, not the entire runtime API
+backlog. The command-name guard's runtime-typeof coordinate at 263:10 remains unmapped; other
+helpers and remaining findings receive no blanket admission. Existing bounded canonical graph,
+currentness, exact consumer and executed-proof checks decide any additional actual helper slots.
+All four migration activation scopes remain empty. Source declarations and authored proofs alone
+do not establish qualified-slot counts, a runtime membership total or whole-gate clearance; those
+require fresh complete semantic qualification against the current source and emitted outputs.

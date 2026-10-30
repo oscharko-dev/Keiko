@@ -1,4 +1,16 @@
+import { throws as assertThrows } from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
+import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
+import {
+  parseCodingWorkbenchCommandRequest as parseRuntimeCommandRequestPublic,
+  validateCodingWorkbenchRuntimeCommandsChannelPayload as validateRuntimeCommandsChannelPublic,
+  parseCodingWorkbenchRuntimeReadinessRequest as parseRuntimeReadinessRequestPublic,
+  validateCodingWorkbenchRuntimeReadiness as validateRuntimeReadinessPublic,
+  type CodingWorkbenchCommandRequest,
+  type CodingWorkbenchRuntimeCommandsChannelPayload,
+  type CodingWorkbenchRuntimeReadinessRequest,
+  type CodingWorkbenchRuntimeReadiness,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import { CODING_WORKBENCH_RUNTIME_EVENT_KINDS } from "./coding-workbench.js";
 import {
@@ -2905,4 +2917,276 @@ describe("incoming request consumed revision admission", () => {
       expect(reads).toBe(2);
     });
   }
+});
+
+export function parsePublicRuntimeCommandRequest(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchCommandRequest> {
+  const result = parseRuntimeCommandRequestPublic(input);
+  return result;
+}
+
+export function parsePublicRuntimeCommandsChannel(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeCommandsChannelPayload> {
+  const result = validateRuntimeCommandsChannelPublic(input);
+  return result;
+}
+
+export function parsePublicRuntimeReadinessRequest(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeReadinessRequest> {
+  const result = parseRuntimeReadinessRequestPublic(input);
+  return result;
+}
+
+export function parsePublicRuntimeReadiness(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeReadiness> {
+  const result = validateRuntimeReadinessPublic(input);
+  return result;
+}
+
+function runtimeReadinessBoundaryFixture(): CodingWorkbenchRuntimeReadiness {
+  return {
+    schemaVersion: "1",
+    requestedMode: "autonomous-delivery",
+    deploymentCeiling: "autonomous-delivery",
+    effectiveMode: "supervised-coding",
+    runtimeAvailable: true,
+    runtimeEvidenceClass: "functional-not-platform-qualified",
+    selectableAgents: ["build", "plan"],
+    promptInputs: { delivery: true, references: true, commands: true, mentions: true },
+  };
+}
+
+describe("Runtime API commands/readiness public parser responsibility (#3918)", () => {
+  it("command request: preserves original identity and closed output", () => {
+    const input = { name: "review" };
+    const result = parsePublicRuntimeCommandRequest(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (result.ok) {
+      expect(result.value).toBe(input);
+      expect(result.value.name).toBe("review");
+    }
+  });
+
+  it("command request: rejects malformed and foreign-key input", () => {
+    expect(parsePublicRuntimeCommandRequest(null)).toEqual({
+      ok: false,
+      errors: ["command must be an object"],
+    });
+    expect(parsePublicRuntimeCommandRequest({ name: "review", authority: "forged" })).toEqual({
+      ok: false,
+      errors: ["command.authority is not allowed"],
+    });
+    for (const value of [[], {}, { name: "" }, { name: "a b" }, { name: "../path" }]) {
+      expect(parsePublicRuntimeCommandRequest(value).ok).toBe(false);
+    }
+  });
+
+  it("commands channel: preserves listing identities and optional ownership", () => {
+    const commands = [{ name: "review", description: "Review changes" }];
+    const agents = [{ name: "general" }];
+    const primaryAgents = [{ name: "build" }];
+    const skills = [{ id: "review-method", name: "Review method" }];
+    const input = { session: "active", commands, agents, primaryAgents, skills };
+    const result = parsePublicRuntimeCommandsChannel(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (result.ok) {
+      expect(result.value).toBe(input);
+      expect(result.value.commands).toBe(commands);
+      expect(result.value.commands?.[0]).toBe(commands[0]);
+      expect(result.value.agents).toBe(agents);
+      expect(result.value.primaryAgents).toBe(primaryAgents);
+      expect(result.value.skills).toBe(skills);
+    }
+    const omitted = parsePublicRuntimeCommandsChannel({ session: "active" });
+    const stated = parsePublicRuntimeCommandsChannel({ session: "active", commands: undefined });
+    expect(omitted.ok).toBe(true);
+    expect(stated.ok).toBe(true);
+    if (omitted.ok && stated.ok) {
+      expect(Object.hasOwn(omitted.value, "commands")).toBe(false);
+      expect(Object.hasOwn(stated.value, "commands")).toBe(true);
+    }
+  });
+
+  it("commands channel: rejects malformed, unpaired and hostile physical listings", () => {
+    expect(parsePublicRuntimeCommandsChannel({ session: "unpaired", commands: [] })).toEqual({
+      ok: false,
+      errors: ["commandsChannelPayload listings must be absent when the session is unpaired"],
+    });
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    let traversalCalls = 0;
+    const spoofed = Object.assign([null], {
+      forEach: (): void => {
+        traversalCalls += 1;
+      },
+    });
+    for (const members of [sparse, spoofed]) {
+      for (const key of ["commands", "agents", "primaryAgents", "skills"]) {
+        expect(parsePublicRuntimeCommandsChannel({ session: "active", [key]: members }).ok).toBe(
+          false,
+        );
+      }
+    }
+    expect(traversalCalls).toBe(0);
+    const tooMany = Array.from({ length: CODING_WORKBENCH_COMMANDS_MAX + 1 }, (_, index) => ({
+      name: `command-${String(index)}`,
+    }));
+    for (const payload of [
+      [],
+      { session: "invalid" },
+      { session: "active", commands: [{ name: "review" }, { name: "review" }] },
+      { session: "active", commands: [{ name: "review", template: "forged" }] },
+      { session: "active", commands: tooMany },
+    ]) {
+      expect(parsePublicRuntimeCommandsChannel(payload).ok).toBe(false);
+    }
+  });
+
+  it("readiness request: preserves original identity and requested mode", () => {
+    const input = { requestedMode: "supervised-coding" };
+    const result = parsePublicRuntimeReadinessRequest(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (result.ok) {
+      expect(result.value).toBe(input);
+      expect(result.value.requestedMode).toBe("supervised-coding");
+    }
+  });
+
+  it("readiness request: rejects primitives, unknown modes and authority keys", () => {
+    expect(parsePublicRuntimeReadinessRequest([])).toEqual({
+      ok: false,
+      errors: ["runtime readiness request must be an object"],
+    });
+    expect(parsePublicRuntimeReadinessRequest({ requestedMode: "root-access" })).toEqual({
+      ok: false,
+      errors: ["requestedMode is invalid"],
+    });
+    expect(
+      parsePublicRuntimeReadinessRequest({ requestedMode: "governed-assist", authority: "forged" }),
+    ).toEqual({ ok: false, errors: ["runtimeReadinessRequest.authority is not allowed"] });
+  });
+
+  it("readiness result: preserves narrow authority and availability evidence", () => {
+    const input = runtimeReadinessBoundaryFixture();
+    const result = parsePublicRuntimeReadiness(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (result.ok) {
+      expect(result.value).toBe(input);
+      expect(result.value.selectableAgents).toBe(input.selectableAgents);
+      expect(result.value.promptInputs).toBe(input.promptInputs);
+      expect(result.value.effectiveMode).toBe("supervised-coding");
+      expect(Object.hasOwn(result.value, "runtimeVersion")).toBe(false);
+    }
+    const stated = parsePublicRuntimeReadiness({ ...input, runtimeVersion: undefined });
+    expect(stated.ok).toBe(true);
+    if (stated.ok) expect(Object.hasOwn(stated.value, "runtimeVersion")).toBe(true);
+  });
+
+  it("readiness result: refuses widened modes and inconsistent runtime facts", () => {
+    const input = runtimeReadinessBoundaryFixture();
+    for (const value of [
+      {
+        ...input,
+        requestedMode: "governed-assist",
+        deploymentCeiling: "governed-assist",
+        effectiveMode: "autonomous-delivery",
+      },
+      { ...input, runtimeAvailable: false },
+      { ...input, runtimeEvidenceClass: undefined },
+      { ...input, selectableAgents: ["plan"] },
+      { ...input, schemaVersion: "foreign" },
+      { ...input, promptInputs: { delivery: "yes", references: true } },
+    ]) {
+      expect(parsePublicRuntimeReadiness(value).ok).toBe(false);
+    }
+  });
+
+  it("all four parsers preserve observed reads and thrown getter identity", () => {
+    const fixtures = [
+      {
+        source: parseCodingWorkbenchCommandRequest,
+        public: parsePublicRuntimeCommandRequest,
+        input: { name: "review" },
+        field: "name",
+      },
+      {
+        source: validateCodingWorkbenchRuntimeCommandsChannelPayload,
+        public: parsePublicRuntimeCommandsChannel,
+        input: { session: "active" },
+        field: "commands",
+      },
+      {
+        source: parseCodingWorkbenchRuntimeReadinessRequest,
+        public: parsePublicRuntimeReadinessRequest,
+        input: { requestedMode: "supervised-coding" },
+        field: "requestedMode",
+      },
+      {
+        source: validateCodingWorkbenchRuntimeReadiness,
+        public: parsePublicRuntimeReadiness,
+        input: runtimeReadinessBoundaryFixture(),
+        field: "schemaVersion",
+      },
+    ];
+    for (const fixture of fixtures) {
+      const observed: string[] = [];
+      const thrown = new TypeError("fixture getter failure");
+      Object.defineProperty(fixture.input, fixture.field, {
+        enumerable: true,
+        get(): never {
+          observed.push(fixture.field);
+          throw thrown;
+        },
+      });
+      for (const parse of [fixture.source, fixture.public]) {
+        observed.length = 0;
+        assertThrows(
+          () => parse(fixture.input),
+          (error: unknown): boolean => error === thrown,
+        );
+        expect(observed).toEqual([fixture.field]);
+      }
+    }
+  });
+
+  it("all four parsers retain distinct typed success and failure arms", () => {
+    const command = parsePublicRuntimeCommandRequest({ name: "review" });
+    expect(command.ok).toBe(true);
+    if (command.ok) {
+      // @ts-expect-error A command request does not carry the required readiness mode.
+      const wrong: CodingWorkbenchRuntimeReadinessRequest = command.value;
+      expect(wrong).toBe(command.value);
+    }
+    const channel = parsePublicRuntimeCommandsChannel({ session: "active" });
+    expect(channel.ok).toBe(true);
+    if (channel.ok) {
+      // @ts-expect-error A commands channel has no command request name.
+      const wrong: CodingWorkbenchCommandRequest = channel.value;
+      expect(wrong).toBe(channel.value);
+    }
+    const request = parsePublicRuntimeReadinessRequest({ requestedMode: "governed-assist" });
+    expect(request.ok).toBe(true);
+    if (request.ok) {
+      // @ts-expect-error A readiness request lacks the server-owned response fields.
+      const wrong: CodingWorkbenchRuntimeReadiness = request.value;
+      expect(wrong).toBe(request.value);
+    }
+    const readiness = parsePublicRuntimeReadiness(runtimeReadinessBoundaryFixture());
+    expect(readiness.ok).toBe(true);
+    if (readiness.ok) {
+      // @ts-expect-error A readiness response has no commands-channel session facet.
+      const wrong: CodingWorkbenchRuntimeCommandsChannelPayload = readiness.value;
+      expect(wrong).toBe(readiness.value);
+    }
+    const refused = parsePublicRuntimeCommandRequest(null);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      // @ts-expect-error Refused admission has errors, never a typed value.
+      expect(refused.value).toBeUndefined();
+    }
+  });
 });

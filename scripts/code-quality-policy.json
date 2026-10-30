@@ -7064,6 +7064,214 @@
           "testName": "public CodeTask ID consumer refuses an invalid idempotency key"
         }
       ]
+    },
+    {
+      "id": "runtime-command-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parseCodingWorkbenchCommandRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parseCodingWorkbenchCommandRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parseCodingWorkbenchCommandRequest"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parsePublicRuntimeCommandRequest"
+      },
+      "proofs": ["packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Coding Workbench slash commands and first-prompt references parses a command request as exactly its name"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) command request: preserves original identity and closed output"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) command request: rejects malformed and foreign-key input"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) all four parsers preserve observed reads and thrown getter identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) all four parsers retain distinct typed success and failure arms"
+        }
+      ]
+    },
+    {
+      "id": "runtime-commands-channel-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "validateCodingWorkbenchRuntimeCommandsChannelPayload",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "validateCodingWorkbenchRuntimeCommandsChannelPayload"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "validateCodingWorkbenchRuntimeCommandsChannelPayload"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parsePublicRuntimeCommandsChannel"
+      },
+      "proofs": ["packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Coding Workbench slash commands and first-prompt references validates the commands channel as a bounded, duplicate-free listing"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) commands channel: preserves listing identities and optional ownership"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) commands channel: rejects malformed, unpaired and hostile physical listings"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) all four parsers preserve observed reads and thrown getter identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) all four parsers retain distinct typed success and failure arms"
+        }
+      ]
+    },
+    {
+      "id": "runtime-readiness-request-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parseCodingWorkbenchRuntimeReadinessRequest",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parseCodingWorkbenchRuntimeReadinessRequest"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parseCodingWorkbenchRuntimeReadinessRequest"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parsePublicRuntimeReadinessRequest"
+      },
+      "proofs": ["packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Coding Workbench runtime API contracts accepts only a content-free requested mode for runtime readiness"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) readiness request: preserves original identity and requested mode"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) readiness request: rejects primitives, unknown modes and authority keys"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) all four parsers preserve observed reads and thrown getter identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) all four parsers retain distinct typed success and failure arms"
+        }
+      ]
+    },
+    {
+      "id": "runtime-readiness-public-parser",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "public-parser",
+      "rules": ["anti-slop/no-unknown-parameters"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "validateCodingWorkbenchRuntimeReadiness",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "validateCodingWorkbenchRuntimeReadiness"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "validateCodingWorkbenchRuntimeReadiness"
+      },
+      "consumer": {
+        "kind": "public-api-proof",
+        "owner": "@oscharko-dev/keiko-contracts",
+        "consumerPath": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+        "specifier": "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api",
+        "exportName": "parsePublicRuntimeReadiness"
+      },
+      "proofs": ["packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Coding Workbench runtime API contracts validates server-owned readiness as the fail-closed effective mode projection"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) readiness result: preserves narrow authority and availability evidence"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) readiness result: refuses widened modes and inconsistent runtime facts"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) all four parsers preserve observed reads and thrown getter identity"
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+          "testName": "Runtime API commands/readiness public parser responsibility (#3918) all four parsers retain distinct typed success and failure arms"
+        }
+      ]
     }
   ]
 }
