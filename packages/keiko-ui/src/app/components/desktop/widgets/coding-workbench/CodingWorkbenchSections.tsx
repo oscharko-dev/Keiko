@@ -70,13 +70,8 @@ import {
   remainingDictationCharacters,
   useDictation,
 } from "../../hooks/useDictation";
-import {
-  supportsDictation,
-  supportsRealtimeVoice,
-  useVoiceCapability,
-} from "../../hooks/useVoiceCapability";
+import { supportsDictation, useVoiceCapability } from "../../hooks/useVoiceCapability";
 import { dictationCaptureSupported } from "../../hooks/dictation-recorder";
-import { realtimeVoiceTransportSupported } from "../../hooks/voice-rtc-transport";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -546,8 +541,6 @@ function useComposerDictation(
   const captureOwner = useId();
   const voiceCapability = useVoiceCapability();
   const dictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
-  const liveDictation =
-    dictationVisible && supportsRealtimeVoice(voiceCapability) && realtimeVoiceTransportSupported();
   const insertTranscript = useCallback(
     (text: string): void => {
       onTaskIntentChange(taskIntent.trim().length === 0 ? text : `${taskIntent.trimEnd()} ${text}`);
@@ -564,7 +557,9 @@ function useComposerDictation(
     ),
     contextKey: runId,
     captureOwner,
-    realtime: { enabled: liveDictation },
+    // Turn-based speech-to-text only (ADR-0154): the Workbench never opens a live voice connection,
+    // even where the deployment offers Realtime voice.
+    realtime: { enabled: false },
   });
   return { dictation, dictationVisible };
 }

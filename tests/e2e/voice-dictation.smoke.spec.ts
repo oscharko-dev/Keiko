@@ -158,13 +158,12 @@ test("coding workbench dictation @smoke — full voice capability still uses STT
   await workbench.open();
   await page.getByRole("button", { name: "Dictate a message" }).click();
   await page.getByRole("button", { name: "Stop dictation" }).click();
-  await expect(page.getByRole("textbox", { name: "Review your dictation" })).toHaveValue(
-    "inspect this repository",
-  );
-  await page.getByRole("button", { name: "Insert transcript into the message" }).click();
+  // #3907: the Workbench composer inserts the transcript like Chat, without a review preview.
   await expect(page.getByRole("textbox", { name: "Task instructions" })).toHaveValue(
     "inspect this repository",
   );
+  await expect(page.getByRole("textbox", { name: "Review your dictation" })).toHaveCount(0);
+  await expect(page.getByText(/live dictation connection/iu)).toHaveCount(0);
   expect(transcriptionCalls).toBe(1);
   expect(voiceRequests).toEqual([]);
 });

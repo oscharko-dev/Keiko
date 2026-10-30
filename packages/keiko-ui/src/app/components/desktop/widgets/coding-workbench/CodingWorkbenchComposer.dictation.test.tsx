@@ -179,6 +179,28 @@ describe("Coding Workbench composer dictation", () => {
     expect(lastOptions().captureOwner).toEqual(expect.any(String));
   });
 
+  // Turn-based capture is the Workbench's only dictation path (ADR-0154, #3559): even a deployment
+  // with Realtime voice and a browser that could carry it must not open the live connection.
+  it("keeps dictation turn-based when the deployment and browser offer Realtime voice", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: {
+        ...STT,
+        profile: "full-realtime",
+        capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+        transport: { websocketControl: true, webrtcMedia: true },
+      },
+    });
+    class StubPeerConnection {
+      addTransceiver(): void {
+        // Present only so the browser reports Realtime support.
+      }
+    }
+    vi.stubGlobal("RTCPeerConnection", StubPeerConnection);
+    renderComposer("");
+    await screen.findByRole("button", { name: /dictate/i });
+    expect(lastOptions().realtime).toEqual({ enabled: false });
+  });
+
   it("draws the shared waveform inside the composer bar while recording, with no review preview", async () => {
     dictationMock.state = { phase: "recording", micReady: true, busy: true, audioLevel: 0.5 };
     renderComposer("");
