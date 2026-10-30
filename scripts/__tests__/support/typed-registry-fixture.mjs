@@ -1,7 +1,6 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { URL } from "node:url";
 
 // Builds a throwaway repository root with a minimal `packages/keiko-contracts/src/observability.ts`
 // (the two canonical registry APIs, same signatures as production) and
@@ -26,16 +25,6 @@ export function withTypedRegistryFixture(pkgName, fileContents, check, extraFile
         "",
       ].join("\n"),
       "utf8",
-    );
-    writeFileSync(
-      join(contractsDir, "activity-log-field-contracts.ts"),
-      readFileSync(
-        new URL(
-          "../../../packages/keiko-contracts/src/activity-log-field-contracts.ts",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
     );
     writeFileSync(join(emitterDir, "fixture.ts"), fileContents, "utf8");
     for (const [relativePath, contents] of Object.entries(extraFiles)) {

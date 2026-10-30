@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   compareRegister,
   countRegisterFindings,
@@ -154,5 +156,78 @@ describe("code-quality ratchet arguments (#4145)", () => {
   ])("rejects %j (ci=%s)", async (args, ci, reason) => {
     const { parsePolicyArguments } = await import("../check-code-quality-policy.mjs");
     expect(() => parsePolicyArguments(args, ci)).toThrow(reason);
+  });
+});
+
+const RATCHET_COMMAND = "npm run check:code-quality-policy -- --mode ratchet";
+
+function ratchetStepDefects(step) {
+  const defects = [];
+  if (step.run !== RATCHET_COMMAND) defects.push("partial");
+  if (Object.hasOwn(step, "if")) defects.push("conditional");
+  if (Object.hasOwn(step, "continue-on-error")) defects.push("continued");
+  return defects;
+}
+
+function ratchetOrderDefects(steps, step) {
+  const runs = steps.map((entry) => entry.run);
+  const prerequisites = ["npm run typecheck", "npm run lint"].map((run) => runs.indexOf(run));
+  const position = steps.indexOf(step);
+  return prerequisites.every((index) => index >= 0 && index < position) ? [] : ["reordered"];
+}
+
+function ratchetWiringDefects(workflow) {
+  const defects = workflow.jobs.ci.needs.includes("core-quality") ? [] : ["not-required"];
+  const steps = workflow.jobs["core-quality"].steps;
+  const ratchets = steps.filter((step) => step.run?.includes("check:code-quality-policy"));
+  if (ratchets.length !== 1) return [...defects, "missing-or-duplicated"];
+  return [
+    ...defects,
+    ...ratchetStepDefects(ratchets[0]),
+    ...ratchetOrderDefects(steps, ratchets[0]),
+  ];
+}
+
+// Replaces the epic's qualification-workflow pins on dev (#4145): the required `ci` context must
+// run the full-repository ratchet unconditionally, after the build and lint it depends on.
+describe("code-quality ratchet CI wiring (#4145)", () => {
+  const workflow = () => parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+  const ratchetStep = (copy) =>
+    copy.jobs["core-quality"].steps.find((step) => step.run === RATCHET_COMMAND);
+
+  it("runs the ratchet once, unconditionally, after typecheck and lint in a required job", () => {
+    expect(ratchetWiringDefects(workflow())).toEqual([]);
+    const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+    expect(manifest.scripts["check:code-quality-policy"]).toBe(
+      "node scripts/check-code-quality-policy.mjs",
+    );
+  });
+
+  it.each([
+    [
+      "missing-or-duplicated",
+      (copy) => {
+        const steps = copy.jobs["core-quality"].steps;
+        steps.splice(steps.indexOf(ratchetStep(copy)), 1);
+      },
+    ],
+    ["conditional", (copy) => (ratchetStep(copy).if = "${{ false }}")],
+    ["continued", (copy) => (ratchetStep(copy)["continue-on-error"] = true)],
+    ["partial", (copy) => (ratchetStep(copy).run = `${RATCHET_COMMAND} --scope contracts`)],
+    [
+      "reordered",
+      (copy) => {
+        const steps = copy.jobs["core-quality"].steps;
+        steps.unshift(...steps.splice(steps.indexOf(ratchetStep(copy)), 1));
+      },
+    ],
+    [
+      "not-required",
+      (copy) => (copy.jobs.ci.needs = copy.jobs.ci.needs.filter((id) => id !== "core-quality")),
+    ],
+  ])("refuses a %s ratchet mutation", (defect, mutate) => {
+    const copy = workflow();
+    mutate(copy);
+    expect(ratchetWiringDefects(copy)).toContain(defect);
   });
 });
