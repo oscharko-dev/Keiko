@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -88,6 +96,7 @@ beforeEach(() => {
 afterEach(() => {
   db.close();
   rmSync(root, { recursive: true, force: true });
+  rmSync(`${root}-original`, { recursive: true, force: true });
 });
 
 describe("folder workspace selection (owner decision 2026-10-30)", () => {
@@ -183,7 +192,10 @@ describe("folder workspace selection (owner decision 2026-10-30)", () => {
   it("fails closed when the bound folder is replaced under the same path", () => {
     const { service } = fixture();
     service.selectFolder({ root, requestedBy: "test" });
-    rmSync(root, { recursive: true, force: true });
+    // Move the bound folder aside instead of deleting it: while the original directory still exists
+    // its inode stays allocated, so the replacement differs on every filesystem. A delete followed by
+    // mkdir may reuse the same inode number on Linux, which this test must not depend on.
+    renameSync(root, `${root}-original`);
     mkdirSync(root);
     expect(service.getActive()).toBeUndefined();
   });
