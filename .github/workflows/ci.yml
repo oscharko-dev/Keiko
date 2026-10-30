@@ -434,6 +434,13 @@ jobs:
       - run: npm run lint
         env:
           NODE_OPTIONS: --max-old-space-size=12288
+      - name: Anti-slop code-quality ratchet (#4145)
+        # Runs after `npm run typecheck` (which builds packages): the engine imports the compiled
+        # keiko-server dist. Fails on any per-file, per-rule increase over the committed register
+        # scripts/code-quality-register.json, and on any stale register entry.
+        env:
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: npm run check:code-quality-policy -- --mode ratchet
       - run: npm run format:check
       - name: UI i18n guard
         env:
