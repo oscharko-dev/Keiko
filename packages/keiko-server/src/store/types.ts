@@ -1,5 +1,4 @@
 import type { ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
-import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolMutationStore } from "./chatToolMutationTypes.js";
 import type { ChatReadGrantStore } from "../atlassian/chatReadGrantState.js";
 // ADR-0013 D4 — UiStore port and entity types. The port is the seam for testing; the concrete
@@ -32,6 +31,7 @@ import type {
   ChatGitChangeScope,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
+  ContextCompactionRecord,
   CodingWorkbenchMode,
   StoredPdfCitationPreviewCitation,
   WorkspaceManifest,

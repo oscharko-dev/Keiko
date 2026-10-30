@@ -54,15 +54,11 @@ interface CheckpointCaptureInput extends HistoryCheckpointInput {
 export function loadHistoryCheckpoint(input: HistoryCheckpointInput): LoadedHistoryCheckpoint {
   try {
     const checkpoint = input.store.readChatContinuityCheckpoint(input.chatId);
+    const presentOutcome = checkpoint?.record === undefined ? "invalid" : "available";
     logChatContinuityCheckpoint(
       {
         operation: "read",
-        outcome:
-          checkpoint === undefined
-            ? "missing"
-            : checkpoint.record === undefined
-              ? "invalid"
-              : "available",
+        outcome: checkpoint === undefined ? "missing" : presentOutcome,
         ...(checkpoint === undefined ? {} : { generation: checkpoint.generation }),
       },
       input.correlationId,
