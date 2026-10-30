@@ -79,14 +79,18 @@ fixes only that test launcher. Publisher-test stderr is exposed in its assertion
   and require reconciliation. Failure of one server does not unnecessarily block healthy peers.
 - New lifecycle/probe behavior records content-free Activity Log evidence through existing ports.
 
-## Executed final verification
+## Recorded qualification evidence for 0660e765f / f19f24871
+
+The PASS rows below describe recorded qualification runs, not a declaration that the current PR
+head has passed CI. Current-head integration qualification was still pending when this receipt
+was recorded. Resolve that live status from PR #4129 before integration or publication.
 
 Runtime production source froze at `0660e765f`. `f19f24871` only corrects the native test's stdin.
 The complete coverage run uses that unchanged production source. The real Windows native-quality
 step on `f19f24871` passed, including the corrected final-response/status integration. Current-head CI remains the
 independent integration gate, including fresh real Windows execution.
 
-| Check                                                       | Executed result                                                                                                                                                                                         |
+| Check                                                       | Recorded qualification result                                                                                                                                                                           |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Full root/UI typecheck, lint and format                     | PASS; separate commands, not inferred from Vitest                                                                                                                                                       |
 | Focused process/handler regressions                         | 104/104; native companion source/gate tests 19 passed, 26 platform skips                                                                                                                                |
