@@ -5,3 +5,40 @@ This product includes software authored by oscharko-dev.
 
 This NOTICE file is provided for attribution purposes only. Its contents do not
 modify the Apache License 2.0 that applies to this repository.
+
+------------------------------------------------------------------------
+
+Third-party notices
+
+PR-Agent v0.49.0 (https://github.com/The-PR-Agent/pr-agent/tree/v0.49.0)
+
+Keiko for Quality (ADR-0182) ports PR-Agent's diff packaging to TypeScript in
+packages/keiko-server/src/review/diff-package/: hunk context extension and
+dynamic enclosing-function context (pr_agent/algo/git_patch_processing.py), the
+decoupled "__new hunk__"/"__old hunk__" hunk presentation, language
+prioritization, file-type filtering and budget packing with the clip policy
+(pr_agent/algo/pr_processing.py, pr_agent/algo/language_handler.py,
+pr_agent/algo/file_filter.py, pr_agent/settings/configuration.toml).
+PR-Agent is distributed under the following license:
+
+MIT License
+
+Copyright (c) 2026 The PR Agent
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -29,27 +29,38 @@ function nullDevice(platform: NodeJS.Platform = process.platform): string {
  * pairs. `core.hooksPath` names the null device rather than a directory: no file can ever exist
  * below it, so no hook can be resolved even if the review root were written to (see ADR-0098).
  */
-export const GIT_REVIEW_HARDENING_CONFIG: readonly (readonly [string, string])[] = Object.freeze([
-  Object.freeze(["core.hooksPath", nullDevice()] as const),
-  Object.freeze(["core.fsmonitor", "false"] as const),
-  Object.freeze(["core.symlinks", "false"] as const),
-  Object.freeze(["core.protectNTFS", "true"] as const),
-  Object.freeze(["core.protectHFS", "true"] as const),
-  Object.freeze(["core.sparseCheckout", "false"] as const),
-  // Materialize every file byte-identical to its blob: no end-of-line conversion from
-  // configuration (in-tree attributes are disabled separately, see `attributeSourceArgs`), and no
-  // re-encoding of path names on macOS, so the paths Keiko names are the paths Git writes.
-  Object.freeze(["core.autocrlf", "false"] as const),
-  Object.freeze(["core.precomposeUnicode", "false"] as const),
-  Object.freeze(["core.editor", "true"] as const),
-  Object.freeze(["core.pager", "cat"] as const),
-  Object.freeze(["submodule.recurse", "false"] as const),
-  Object.freeze(["fetch.recurseSubmodules", "false"] as const),
-  Object.freeze(["protocol.file.allow", "never"] as const),
-  Object.freeze(["protocol.ext.allow", "never"] as const),
-  Object.freeze(["gc.auto", "0"] as const),
-  Object.freeze(["maintenance.auto", "false"] as const),
-]);
+export const GIT_REVIEW_HARDENING_CONFIG: readonly (readonly [string, string])[] = Object.freeze(
+  (
+    [
+      ["core.hooksPath", nullDevice()],
+      ["core.fsmonitor", "false"],
+      ["core.symlinks", "false"],
+      ["core.protectNTFS", "true"],
+      ["core.protectHFS", "true"],
+      ["core.sparseCheckout", "false"],
+      // Materialize every file byte-identical to its blob: no end-of-line conversion from
+      // configuration (in-tree attributes are disabled separately, see `attributeSourceArgs`),
+      // and no re-encoding of path names on macOS, so the paths Keiko names are the paths Git
+      // writes.
+      ["core.autocrlf", "false"],
+      ["core.precomposeUnicode", "false"],
+      // Name every path in Git's quoted form outside `-z` output: bytes above 0x7f, control
+      // characters, quotes and backslashes become C escapes, so a listing is ASCII and lossless
+      // whatever the repository configures, and a name cannot break a line-oriented record.
+      // Keep an empty context line as a single space, so every hunk body line carries its marker.
+      ["core.quotePath", "true"],
+      ["diff.suppressBlankEmpty", "false"],
+      ["core.editor", "true"],
+      ["core.pager", "cat"],
+      ["submodule.recurse", "false"],
+      ["fetch.recurseSubmodules", "false"],
+      ["protocol.file.allow", "never"],
+      ["protocol.ext.allow", "never"],
+      ["gc.auto", "0"],
+      ["maintenance.auto", "false"],
+    ] satisfies [string, string][]
+  ).map((pair) => Object.freeze(pair)),
+);
 
 /**
  * The fetch verifies every received object (`fetch.fsckObjects`), so a malformed tree (duplicate

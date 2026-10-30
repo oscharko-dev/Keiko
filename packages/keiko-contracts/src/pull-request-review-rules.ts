@@ -1,11 +1,15 @@
-// Pure rules shared by every Keiko for Quality consumer (ADR-0182, Issue #4131): the finding
-// fingerprint preimage, the review-role eligibility rule and seed scoring. Each rule exists exactly
+// Pure rules shared by every Keiko for Quality consumer (ADR-0182, Issues #4131 and #4134): the
+// finding fingerprint preimage, the review-role eligibility rule, seed scoring and the mapping of a
+// diff package's coverage to the run's settlement input. Each rule exists exactly
 // once, so the development seed gate (keiko-evaluations) and the shipped pair qualification
 // (keiko-server) score identically without importing each other.
 
 import { codingWorkbenchModelEligibility, type ModelCapability } from "./gateway.js";
 import type {
   ReviewCodeLocation,
+  ReviewDiffCoverage,
+  ReviewDiffPackageFailure,
+  ReviewDiffSettlementInput,
   ReviewFindingCategory,
   ReviewRoleBudget,
   ReviewRoleEligibility,
@@ -180,4 +184,42 @@ export function scoreReviewSeedRun(
   }
   for (const seed of cases) scoreCase(seed, byCase.get(seed.id), score);
   return { ...score };
+}
+
+// ─── Diff package coverage → settlement input (Issue #4134) ──────────────────
+
+/**
+ * What a diff package's coverage means for the run (ADR-0182 D6). Nothing included while some
+ * reviewable file was left unprocessed is `skipped/diff-too-large`, never `no-reviewable-changes`;
+ * nothing to review at all (every path filtered, binary, deleted, a gitlink, a link, a mode change
+ * or a content-free rename) is `skipped/no-reviewable-changes`; any unprocessed or partially
+ * included file makes the run `incomplete/files-unprocessed`. Only a fully processed package with
+ * reviewable content is `reviewable`, which lets the run settle `complete` if nothing else fails.
+ */
+export function reviewDiffCoverageSettlement(
+  coverage: Pick<ReviewDiffCoverage, "included" | "unprocessed">,
+): ReviewDiffSettlementInput {
+  const reviewable = coverage.included.some((file) => file.includedHunkCount > 0);
+  if (!reviewable) {
+    return coverage.unprocessed.length > 0
+      ? { kind: "skipped", reason: "diff-too-large" }
+      : { kind: "skipped", reason: "no-reviewable-changes" };
+  }
+  const partial = coverage.included.some((file) => file.partial);
+  if (partial || coverage.unprocessed.length > 0) {
+    return { kind: "incomplete", reason: "files-unprocessed" };
+  }
+  return { kind: "reviewable" };
+}
+
+/**
+ * The settlement of a run whose diff package failed: an exceeded bound (deadline included) skips
+ * it as `diff-too-large`, a cancellation abandons it, and a failing Git read interrupts it.
+ */
+export function reviewDiffPackageFailureSettlement(
+  failure: ReviewDiffPackageFailure,
+): Exclude<ReviewDiffSettlementInput, { readonly kind: "reviewable" }> {
+  if (failure.reason === "diff-too-large") return { kind: "skipped", reason: "diff-too-large" };
+  if (failure.reason === "cancelled") return { kind: "abandoned", reason: "cancelled" };
+  return { kind: "abandoned", reason: "interrupted" };
 }

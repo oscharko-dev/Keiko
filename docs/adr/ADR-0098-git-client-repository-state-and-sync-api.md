@@ -359,7 +359,9 @@ injecting the one reviewed constant `GIT_REVIEW_HARDENING_CONFIG` ahead of every
 `core.hooksPath` = the null device (no file can exist below it, so no hook resolves),
 `core.fsmonitor=false`, `core.symlinks=false`, `core.protectNTFS=true`, `core.protectHFS=true`,
 `core.sparseCheckout=false`, `core.autocrlf=false`, `core.precomposeUnicode=false`,
-`submodule.recurse=false`, `fetch.recurseSubmodules=false`,
+`core.quotePath=true` and `diff.suppressBlankEmpty=false` (#4134: outside `-z` output every path is
+printed in Git's quoted, lossless ASCII form and every hunk body line keeps its marker, whatever the
+repository configures), `submodule.recurse=false`, `fetch.recurseSubmodules=false`,
 `protocol.file.allow=never`, `protocol.ext.allow=never`, `gc.auto=0`, `maintenance.auto=false`, plus
 empty `smudge`/`clean`/`process` commands and `required=false` for `lfs` and for every filter
 driver the repository configuration defines (validated names only; an unsafe configured name
@@ -371,6 +373,17 @@ the worktree is refused rather than created unneutralized. An attribute-only `fi
 selects nothing and is not counted, so a head cannot force a refusal by naming many drivers. A review runner refuses every caller-supplied
 `-c`/`--config-env` override. The user's branches, `HEAD`, index, working tree, stash and
 `FETCH_HEAD` are byte-identical before and after resolution, worktree creation and cleanup.
+
+- **The review diff package reads objects only (#4134, ADR-0182 D6).** The same local review runner,
+  with `--attr-source=<empty tree>` and `core.bigFileThreshold` at the blob limit, lists the change
+  set with `diff-tree -r -M -l1000 --raw --numstat --no-abbrev --no-color <base> <head>` (quoted
+  paths parsed to their exact bytes; the numstat path is never read), reads sizes with
+  `cat-file --batch-check` (ids on standard input), sniffs at most 8,000 bytes of a blob above the
+  limit, reads an added file with `cat-file blob` and diffs two blobs by id with
+  `diff -U<n> --no-color --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic`. No path,
+  pathspec, index, working tree or in-tree attribute is involved, so the package is the same from
+  any checkout (the user's or a review worktree) and a head's `.gitattributes` cannot mark a source
+  file binary to hide it from review.
 
 ## Consequences
 

@@ -465,3 +465,188 @@ export interface ReviewPullRequestDetailResponse {
   /** `null` when unavailable or when the repository has no such open or closed pull request. */
   readonly pullRequest: ReviewPullRequestDetail | null;
 }
+
+// ─── Review diff package (Issue #4134) ───────────────────────────────────────
+
+/**
+ * PR-Agent v0.49.0 packaging defaults (`patch_extra_lines_before`, `patch_extra_lines_after`,
+ * `max_extra_lines_before_dynamic_context`): every included hunk carries this many unchanged
+ * lines before and after its changes, and is extended upward to its enclosing function or class
+ * header when that header lies within the dynamic window. Child 8 measurement may change them.
+ */
+export const REVIEW_DIFF_CONTEXT_LINES_BEFORE = 5;
+export const REVIEW_DIFF_CONTEXT_LINES_AFTER = 1;
+export const REVIEW_DIFF_DYNAMIC_CONTEXT_MAX_LINES = 10;
+/** PR-Agent's own cap on configured context lines (`MAX_EXTRA_LINES`). */
+export const REVIEW_DIFF_CONTEXT_LINES_MAX = 10;
+/** More changed paths than this fail the package closed as `diff-too-large`. */
+export const REVIEW_DIFF_MAX_CHANGED_FILES = 20_000;
+/** A file with more changed lines than this is never packaged (`unprocessed/too-large`). */
+export const REVIEW_DIFF_FILE_MAX_CHANGED_LINES = 20_000;
+/** A file whose context patch exceeds this many bytes is never packaged (`unprocessed/too-large`). */
+export const REVIEW_DIFF_FILE_MAX_PATCH_BYTES = 4 * 1024 * 1024;
+/** Patch bytes read for the whole package; exceeding them fails it closed as `diff-too-large`. */
+export const REVIEW_DIFF_MAX_TOTAL_PATCH_BYTES = 64 * 1024 * 1024;
+/** The whole packaging, every Git process included, ends by this deadline unless configured. */
+export const REVIEW_DIFF_DEFAULT_DEADLINE_MS = 5 * 60 * 1000;
+
+/** Languages the package recognizes by file name; `other` covers every unrecognized name. */
+export const REVIEW_DIFF_LANGUAGES = [
+  "typescript",
+  "javascript",
+  "python",
+  "java",
+  "go",
+  "csharp",
+  "kotlin",
+  "rust",
+  "c",
+  "cpp",
+  "ruby",
+  "php",
+  "swift",
+  "scala",
+  "shell",
+  "css",
+  "html",
+  "markdown",
+  "json",
+  "yaml",
+  "sql",
+  "xml",
+  "other",
+] as const;
+export type ReviewDiffLanguage = (typeof REVIEW_DIFF_LANGUAGES)[number];
+
+/** How Git reports a changed path between the base and the head commit. */
+export const REVIEW_DIFF_FILE_STATUSES = [
+  "added",
+  "modified",
+  "deleted",
+  "renamed",
+  "type-changed",
+] as const;
+export type ReviewDiffFileStatus = (typeof REVIEW_DIFF_FILE_STATUSES)[number];
+
+/** Why a reviewable changed file was not (completely) packaged. Each one makes a run incomplete. */
+export const REVIEW_DIFF_UNPROCESSED_REASONS = ["budget", "too-large", "timeout"] as const;
+export type ReviewDiffUnprocessedReason = (typeof REVIEW_DIFF_UNPROCESSED_REASONS)[number];
+
+/** Why a changed file was deliberately left out of the review. */
+export const REVIEW_DIFF_FILTER_REASONS = [
+  "generated",
+  "lockfile",
+  "vendored",
+  "minified",
+  "review-config-excluded",
+] as const;
+export type ReviewDiffFilterReason = (typeof REVIEW_DIFF_FILTER_REASONS)[number];
+
+/** Every coverage list. Each changed path appears in exactly one of them. */
+export const REVIEW_DIFF_COVERAGE_LISTS = [
+  "included",
+  "unprocessed",
+  "deletedOnly",
+  "filtered",
+  "binary",
+  "submodule",
+  "symlink",
+  "modeOnly",
+] as const;
+export type ReviewDiffCoverageList = (typeof REVIEW_DIFF_COVERAGE_LISTS)[number];
+
+/**
+ * One changed path, reported verbatim. `path` is the head path (the base path for a deletion) as
+ * Git stores it when its bytes are valid UTF-8, without normalization: newlines, tabs, quotes,
+ * leading dashes, `..` segments and decomposed Unicode stay exactly as they are. A name whose
+ * bytes are not UTF-8 has a display `path` (invalid bytes become U+FFFD) and its exact bytes in
+ * `pathBytesBase64`, so two such names never collapse into one entry. Paths are local product
+ * data: they never enter the Activity Log.
+ */
+export interface ReviewDiffFileRef {
+  readonly path: string;
+  readonly pathBytesBase64?: string;
+  /** The base path of a rename. */
+  readonly previousPath?: string;
+  readonly previousPathBytesBase64?: string;
+  readonly status: ReviewDiffFileStatus;
+  readonly language: ReviewDiffLanguage;
+  /** Lines Git counts as added and removed; zero for binary, oversized and gitlink entries. */
+  readonly addedLines: number;
+  readonly removedLines: number;
+}
+
+/** A packaged file. `partial` files lost trailing hunks to the budget and make a run incomplete. */
+export interface ReviewDiffIncludedFile extends ReviewDiffFileRef {
+  readonly hunkCount: number;
+  readonly includedHunkCount: number;
+  readonly partial: boolean;
+}
+
+export interface ReviewDiffUnprocessedFile extends ReviewDiffFileRef {
+  readonly reason: ReviewDiffUnprocessedReason;
+}
+
+export interface ReviewDiffFilteredFile extends ReviewDiffFileRef {
+  readonly reason: ReviewDiffFilterReason;
+}
+
+export interface ReviewDiffCoverageSummary {
+  readonly changedFiles: number;
+  /** Included completely. */
+  readonly reviewedFiles: number;
+  /** Included with some hunks left out by the budget. */
+  readonly partiallyReviewedFiles: number;
+  readonly unprocessedFiles: number;
+  readonly addedLines: number;
+  readonly removedLines: number;
+  readonly budgetTokens: number;
+  /** The included content's token count as the gateway's estimator measures it. */
+  readonly usedTokens: number;
+}
+
+/** What the package reviewed and what it did not, with closed reason codes (ADR-0182 D6). */
+export interface ReviewDiffCoverage {
+  readonly included: readonly ReviewDiffIncludedFile[];
+  readonly unprocessed: readonly ReviewDiffUnprocessedFile[];
+  readonly deletedOnly: readonly ReviewDiffFileRef[];
+  readonly filtered: readonly ReviewDiffFilteredFile[];
+  readonly binary: readonly ReviewDiffFileRef[];
+  readonly submodule: readonly ReviewDiffFileRef[];
+  readonly symlink: readonly ReviewDiffFileRef[];
+  readonly modeOnly: readonly ReviewDiffFileRef[];
+  readonly summary: ReviewDiffCoverageSummary;
+}
+
+/**
+ * Why no package was returned. `diff-too-large` covers every exceeded time or byte bound, so an
+ * oversized change set never returns a partial package presented as complete.
+ */
+export const REVIEW_DIFF_PACKAGE_FAILURE_REASONS = [
+  "diff-too-large",
+  "cancelled",
+  "git-failed",
+] as const;
+export type ReviewDiffPackageFailureReason = (typeof REVIEW_DIFF_PACKAGE_FAILURE_REASONS)[number];
+
+/** The bound a `diff-too-large` failure exceeded; closed and body-free. */
+export const REVIEW_DIFF_TOO_LARGE_DETAILS = [
+  "changed-files",
+  "listing-bytes",
+  "patch-bytes",
+  "deadline",
+] as const;
+export type ReviewDiffTooLargeDetail = (typeof REVIEW_DIFF_TOO_LARGE_DETAILS)[number];
+
+export type ReviewDiffPackageFailure =
+  | { readonly reason: "diff-too-large"; readonly detail: ReviewDiffTooLargeDetail }
+  | { readonly reason: "cancelled" }
+  | { readonly reason: "git-failed" };
+
+/**
+ * What a diff package means for the run's settlement (child 6): `reviewable` lets the run proceed
+ * and settle `complete` if nothing else fails; the others settle it on their own.
+ */
+export type ReviewDiffSettlementInput =
+  | { readonly kind: "reviewable" }
+  | Extract<ReviewRunSettlement, { readonly kind: "incomplete" | "skipped" | "abandoned" }>;

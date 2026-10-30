@@ -123,6 +123,25 @@ clean review.
 A pull request head that moves after preparation marks the run's results `stale` for display; stale
 is never a settlement. The vocabulary is `ReviewRunSettlement` in `keiko-contracts`.
 
+The review diff package (Issue #4134) is the input to that decision. It is built from the Git
+objects of the base and head commits through the hardened review runner (ADR-0098 D8), never from a
+working tree, and reports every changed path in exactly one coverage list with a closed reason:
+`included` (whole or `partial`), `unprocessed` (`budget`, `too-large`, `timeout`), `deletedOnly`,
+`filtered` (`generated`, `lockfile`, `vendored`, `minified`, `review-config-excluded`), `binary`,
+`submodule` (never recursed), `symlink` (never followed) and `modeOnly`. Paths are reported
+verbatim (exact bytes for a name that is not UTF-8) and never enter the Activity Log. One pure rule,
+`reviewDiffCoverageSettlement`, maps the coverage to the settlement: any unprocessed or partial file
+is `incomplete/files-unprocessed`; nothing reviewable is `skipped/no-reviewable-changes`, or
+`skipped/diff-too-large` when reviewable files were left unprocessed; an exceeded time or byte bound
+fails the package closed as `skipped/diff-too-large` (`reviewDiffPackageFailureSettlement`). The
+packaging ports PR-Agent v0.49.0: five lines of context before and one after each hunk, extension to
+the enclosing function or class header within ten lines (detected by Keiko for TypeScript,
+JavaScript, Python, Java, Go, C# and Kotlin, since in-tree attributes are neutralized), files of the
+base commit's dominant languages first and larger changes first, and `clip`, which in Keiko keeps
+whole hunks only. The included content never exceeds the reviewer budget as the gateway's estimator
+counts it. PR-Agent applies its extra lines on top of the provider's three default context lines;
+Keiko applies the five and one exactly, and child 8 measurement may change these defaults.
+
 ### D7 — Finding decisions and the audit trail
 
 A person decides each presented finding: `accepted`, `dismissed` with a closed reason
