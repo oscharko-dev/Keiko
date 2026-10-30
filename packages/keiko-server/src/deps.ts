@@ -4952,8 +4952,6 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // no configured model profile — is the ONE closed reason prDescriptionRoutes.ts's "unavailable"
   // fallback exists for.
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
-  const reviewServices = composeReviewServices(args);
-  const reviewRuntime = composeReviewRuntimeService(args, services, reviewServices);
   const deps: UiHandlerDeps = {
     mcpSettings,
     mcpAuthorization,
@@ -4976,8 +4974,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...(args.options.gatewayReadinessFetch === undefined
       ? {}
       : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),
-    ...(reviewServices === undefined ? {} : { reviewServices }),
-    ...(reviewRuntime === undefined ? {} : { reviewRuntime }),
+    ...composeReviewDeps(args, services),
     dispose: createUiHandlerDispose(
       args,
       services,
@@ -5004,6 +5001,19 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
  * A composition failure leaves the review routes unavailable (503) and records a diagnostic; it
  * never fails server start.
  */
+/** Issue #4133/#4135: the review services and the read-only Reviewer runtime composed over them. */
+function composeReviewDeps(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+): Pick<UiHandlerDeps, "reviewServices" | "reviewRuntime"> {
+  const reviewServices = composeReviewServices(args);
+  const reviewRuntime = composeReviewRuntimeService(args, services, reviewServices);
+  return {
+    ...(reviewServices === undefined ? {} : { reviewServices }),
+    ...(reviewRuntime === undefined ? {} : { reviewRuntime }),
+  };
+}
+
 function composeReviewServices(args: UiHandlerDepsAssemblyArgs): ReviewServices | undefined {
   if (args.options.reviewServices !== undefined) return args.options.reviewServices;
   // An injected store (tests, embedded graphs) owns no server state directory to place it in.

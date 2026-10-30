@@ -109250,14 +109250,14 @@
     {
       "op": "review.runtime.compose",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5112",
+      "site": "packages/keiko-server/src/deps.ts:5122",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "review.services.compose",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5021",
+      "site": "packages/keiko-server/src/deps.ts:5031",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109319,7 +109319,7 @@
     {
       "op": "review.worktree.startup-sweep",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5049",
+      "site": "packages/keiko-server/src/deps.ts:5059",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
