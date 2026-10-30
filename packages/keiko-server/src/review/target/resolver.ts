@@ -10,6 +10,7 @@
 // change is the private ref, which the retention sweep removes.
 
 import type {
+  ReviewPullRequestDetail,
   ReviewTarget,
   ReviewTargetRefusalReason,
   ReviewTargetRequest,
@@ -33,7 +34,6 @@ import {
   type GitProcessRunner,
   type GitReviewOperationContext,
 } from "@oscharko-dev/keiko-git";
-import type { ReviewPullRequestDetail } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogSink } from "../../observability/index.js";
 import { deriveRepositoryId } from "../../task-workspace/naming.js";
 import {

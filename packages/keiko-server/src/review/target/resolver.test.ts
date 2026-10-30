@@ -6,7 +6,7 @@
 // the same path, the closed refusal reasons, and local ranges.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ReviewPullRequestDetail } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -199,7 +199,8 @@ describe("pull request targets", () => {
     ).toEqual({ ok: false, reason: "target-changed" });
     expect(privateRefs()).toEqual([]);
     expect(existsSync(join(repo, ".git", "worktrees"))).toBe(false);
-    expect(readdirSync(review.reviewRoot).filter((name) => name.startsWith("r-"))).toEqual([]);
+    // Nothing was written below the state directory: the review root is created on first use.
+    expect(existsSync(review.reviewRoot)).toBe(false);
     expect(log.withOp("review.target.refused").map((line) => line.extra?.reason)).toEqual([
       "target-changed",
     ]);

@@ -18,6 +18,7 @@ import { CommandDeniedError } from "./errors.js";
 import {
   nodeSpawnFn,
   runCommand,
+  type CommandTerminationEvidence,
   type RunCommandDeps,
   type ExecutableResolver,
   type HomeProvider,
@@ -48,6 +49,9 @@ export interface NodeGitReviewPullRequestReaderDeps {
   readonly home?: HomeProvider | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
+  // The termination-evidence port for every runCommand of this reader (RunCommandDeps deps-level
+  // seam, exec.ts): a timed-out or cancelled `gh` leaves its termination on the caller's log.
+  readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
   /** Receives the cause of every read that ends in a closed failure state (body-free evidence). */
   readonly failureSink?: GitReviewPrReadFailureSink | undefined;
 }
@@ -151,7 +155,11 @@ async function runRead(
     signal: deps.signal ?? new AbortController().signal,
   };
   try {
-    return parseOutput(deps, await runCommand(input, runDeps(deps)));
+    const commandDeps: RunCommandDeps = {
+      ...runDeps(deps),
+      ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
+    };
+    return parseOutput(deps, await runCommand(input, commandDeps));
   } catch (error) {
     const failure = error instanceof Error ? failureFromError(error) : "failed";
     deps.failureSink?.record(failure, error);

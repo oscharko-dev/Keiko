@@ -314,7 +314,8 @@ user's checkout. This adds two kinds of transient repository state, and nothing 
 
 - **A locked, detached review worktree.** One per review run at
   `<state>/review-worktrees/<leaf>`, beside the task-workspace managed root and outside every user
-  checkout, where `<leaf>` is a domain-separated digest of the run id (run ids may contain `:`,
+  checkout (the owner-private review root is created on first use, so a server that never reviews
+  leaves nothing in its state directory, and shutdown waits for a running startup sweep), where `<leaf>` is a domain-separated digest of the run id (run ids may contain `:`,
   which neither a Windows path segment nor a ref name may hold). It is added with
   `worktree add --detach --no-checkout --lock --reason keiko-review`, so a user's
   `git worktree prune` cannot remove it during a run, and it never appears in task workspace lists:

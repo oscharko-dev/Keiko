@@ -67,6 +67,17 @@ function runAndKill(args: readonly string[]): Promise<string> {
   });
 }
 
+describe("state directory footprint", () => {
+  it("creates nothing in the state directory when the server starts and stops without a review", async () => {
+    const reviewRoot = join(fixture.root, "state", "review-worktrees");
+    const services = createReviewServices({ reviewRoot, activityLog: captureActivityLog().sink });
+    const startup = services.startup();
+    await services.dispose();
+    await startup;
+    expect(existsSync(join(fixture.root, "state"))).toBe(false);
+  });
+});
+
 describe("crash recovery (AC5)", () => {
   it("removes the worktree and administrative entry of a killed server at the next start", async () => {
     expect(existsSync(BUILT_SERVICES)).toBe(true);

@@ -22,8 +22,16 @@ const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 // touches the refs another Keiko installation (another state directory) keeps in the same
 // repository.
 const NAMESPACE = /^k[a-f0-9]{16}$/u;
-const PRIVATE_REF =
-  /^refs\/keiko-review\/k[a-f0-9]{16}\/(?:[1-9]\d{0,9}\/(?:base-)?(?:[a-f0-9]{40}|[a-f0-9]{64})|local\/[A-Za-z0-9][A-Za-z0-9._-]{0,127})$/u;
+// Two simple patterns rather than one alternation: a pull request ref (head, or `base-` for a
+// fetched base) and a local-range ref, both below one namespace.
+const PRIVATE_PULL_REQUEST_REF =
+  /^refs\/keiko-review\/k[a-f0-9]{16}\/[1-9]\d{0,9}\/(?:base-)?[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
+const PRIVATE_LOCAL_REF =
+  /^refs\/keiko-review\/k[a-f0-9]{16}\/local\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+
+function matchesPrivateRef(value: string): boolean {
+  return PRIVATE_PULL_REQUEST_REF.test(value) || PRIVATE_LOCAL_REF.test(value);
+}
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 // eslint-disable-next-line no-control-regex -- intentionally matches control characters to reject them
@@ -80,7 +88,7 @@ export function isGitReviewRefNamespace(value: string): boolean {
 }
 
 function assertPrivateRef(value: string): string {
-  if (!PRIVATE_REF.test(value)) throw new GitReviewOperandError("ref");
+  if (!matchesPrivateRef(value)) throw new GitReviewOperandError("ref");
   return value;
 }
 
@@ -118,7 +126,7 @@ export function gitReviewLocalRangeRef(namespace: string, runId: string): string
 }
 
 export function isGitReviewPrivateRef(value: string): boolean {
-  return PRIVATE_REF.test(value);
+  return matchesPrivateRef(value);
 }
 
 async function run(

@@ -152,7 +152,12 @@ export function createReviewRegistry(reviewRoot: string): ReviewRegistry {
     read: () => serialized(() => readSnapshot(reviewRoot)),
     update: (change) =>
       serialized(async () => {
-        await writeSnapshot(reviewRoot, change(await readSnapshot(reviewRoot)));
+        const current = await readSnapshot(reviewRoot);
+        const next = change(current);
+        // An update that changes nothing writes nothing: sweeps over an empty or unchanged
+        // registry never create the review root or rewrite its file.
+        if (JSON.stringify(next) === JSON.stringify(current)) return;
+        await writeSnapshot(reviewRoot, next);
       }),
   };
 }

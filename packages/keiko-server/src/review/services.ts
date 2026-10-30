@@ -6,7 +6,8 @@
 // sweeps the private refs; a daily timer sweeps the refs again; `dispose()` removes every live
 // review worktree on server shutdown.
 
-import { chmodSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
@@ -39,7 +40,8 @@ import {
 import { createReviewWorktreeManager, type ReviewWorktreeManager } from "./worktree/manager.js";
 import { createReviewRegistry, type ReviewRegistry } from "./worktree/registry.js";
 import { reportReviewFailure } from "./diagnostics.js";
-import { newCorrelationId } from "../correlation.js";
+import { correlationIdOrUnknown, newCorrelationId } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   defaultServerDiagnosticSink,
@@ -109,6 +111,13 @@ export function productionReviewGitHubPort(): ReviewGitHubRepositoryPort {
       createNodeGitReviewPullRequestReader({
         workspace: workspaceFor(repositoryRoot),
         processEnv: process.env,
+        onTerminated: (evidence): void => {
+          logCommandTermination(
+            processServerLogSink(),
+            correlationIdOrUnknown(correlationId),
+            evidence,
+          );
+        },
         failureSink: {
           record: (_failure, error): void => {
             reportReviewFailure("review.target.provider-read", correlationId, error);
@@ -124,14 +133,19 @@ export function productionReviewGitHubPort(): ReviewGitHubRepositoryPort {
  * refs.
  */
 export function reviewRefNamespace(canonicalReviewRoot: string): string {
-  return `k${sha256Hex(`keiko-review/namespace:${canonicalReviewRoot}`).slice(0, 16)}`;
+  const digest = sha256Hex(`keiko-review/namespace:${canonicalReviewRoot}`);
+  return `k${digest.slice(0, 16)}`;
 }
 
-/** Creates the owner-private review root (0700) and returns its canonical path. */
-function preparedReviewRoot(reviewRoot: string): string {
-  mkdirSync(reviewRoot, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") chmodSync(reviewRoot, 0o700);
-  return realpathSync(reviewRoot);
+/**
+ * The review root's canonical path, WITHOUT creating it: the owner-private directory is created on
+ * first use (a worktree or a registry write), so a server that never reviews leaves nothing in its
+ * state directory. The parent is canonicalized so the namespace is the same before and after.
+ */
+function canonicalReviewRoot(reviewRoot: string): string {
+  if (existsSync(reviewRoot)) return realpathSync(reviewRoot);
+  const parent = dirname(reviewRoot);
+  return existsSync(parent) ? join(realpathSync(parent), basename(reviewRoot)) : reviewRoot;
 }
 
 interface PinnedRefs {
@@ -152,9 +166,10 @@ class ReviewServicesImpl implements ReviewServices {
   // follow the retention rule like every other review ref.
   private readonly pinned = new Map<string, PinnedRefs>();
   private timer: NodeJS.Timeout | undefined;
+  private readonly inFlight = new Set<Promise<void>>();
 
   public constructor(private readonly deps: ReviewServicesDeps) {
-    this.reviewRoot = preparedReviewRoot(deps.reviewRoot);
+    this.reviewRoot = canonicalReviewRoot(deps.reviewRoot);
     this.namespace = reviewRefNamespace(this.reviewRoot);
     this.now = deps.now ?? Date.now;
     this.registry = createReviewRegistry(this.reviewRoot);
@@ -244,7 +259,17 @@ class ReviewServicesImpl implements ReviewServices {
     );
   }
 
-  public async startup(correlationId?: string): Promise<void> {
+  public startup(correlationId?: string): Promise<void> {
+    const sweep = this.startupSweep(correlationId);
+    this.inFlight.add(sweep);
+    const release = (): void => {
+      this.inFlight.delete(sweep);
+    };
+    void sweep.then(release, release);
+    return sweep;
+  }
+
+  private async startupSweep(correlationId: string | undefined): Promise<void> {
     await this.worktrees.sweepOrphans(correlationId);
     await this.sweepRefs("startup", correlationId);
     this.timer ??= setInterval(() => {
@@ -273,6 +298,9 @@ class ReviewServicesImpl implements ReviewServices {
   public async dispose(correlationId?: string): Promise<void> {
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
+    // A shutdown that overtakes the startup sweep waits for it, so nothing writes into the state
+    // directory after dispose resolves. Its outcome was already reported by its own caller.
+    await Promise.allSettled(this.inFlight);
     await this.worktrees.removeAll("shutdown", correlationId);
   }
 }

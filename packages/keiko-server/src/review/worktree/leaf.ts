@@ -10,5 +10,6 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 export const REVIEW_RUN_LEAF_PATTERN = /^r-[a-f0-9]{24}$/u;
 
 export function reviewRunLeaf(runId: string): string {
-  return `r-${sha256Hex(`keiko-review/leaf:${runId}`).slice(0, 24)}`;
+  const digest = sha256Hex(`keiko-review/leaf:${runId}`);
+  return `r-${digest.slice(0, 24)}`;
 }

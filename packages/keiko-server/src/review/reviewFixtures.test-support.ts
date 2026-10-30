@@ -19,8 +19,9 @@ import {
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { gitEnv } from "@oscharko-dev/keiko-git";
+import { join, win32 } from "node:path";
+import { gitEnv, resolveGitExecutable } from "@oscharko-dev/keiko-git";
+import { resolveWindowsSystemDirectory } from "@oscharko-dev/keiko-security";
 
 export const LFS_POINTER =
   "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a".repeat(64) + "\nsize 12\n";
@@ -44,6 +45,23 @@ export function createFixtureRoot(prefix: string): ReviewFixtureRoot {
   };
 }
 
+// The fixture runs Git by the absolute path the product's own trusted-executable resolver
+// (keiko-git `resolveGitExecutable`) chooses, never by a PATH lookup, and gives `git http-backend`
+// a fixed system PATH (javascript:S4036).
+function trustedGit(): string {
+  const resolution = resolveGitExecutable(gitEnv(), tmpdir());
+  if (!resolution.ok) throw new TypeError("no trusted git executable for the review fixtures");
+  return resolution.path;
+}
+
+const GIT = trustedGit();
+// The CGI child needs no PATH lookup (Git runs its own helpers from its exec path); it gets the
+// fixed system directory only, on Windows from the one trusted keiko-security decision.
+function fixedSystemPath(): string {
+  if (process.platform !== "win32") return "/usr/bin:/bin";
+  return win32.join(resolveWindowsSystemDirectory(), "System32");
+}
+
 // The fixture's own Git: config-isolated like the local reads, but allowed to push to and clone
 // from the fixture remotes (the product's review runners never receive this environment).
 function fixtureGitEnv(): NodeJS.ProcessEnv {
@@ -52,7 +70,7 @@ function fixtureGitEnv(): NodeJS.ProcessEnv {
 
 export function git(cwd: string, ...args: string[]): string {
   try {
-    return execFileSync("git", args, {
+    return execFileSync(GIT, args, {
       cwd,
       encoding: "utf8",
       env: fixtureGitEnv(),
@@ -69,7 +87,7 @@ export function git(cwd: string, ...args: string[]): string {
 /** Non-blocking Git for commands that talk to the in-process loopback remote. */
 export function gitAsync(cwd: string, ...args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, encoding: "utf8", env: fixtureGitEnv() }, (error, stdout) => {
+    execFile(GIT, args, { cwd, encoding: "utf8", env: fixtureGitEnv() }, (error, stdout) => {
       if (error === null) resolve(stdout.trim());
       else reject(new Error(`git ${args[0] ?? ""} failed`, { cause: error }));
     });
@@ -175,7 +193,7 @@ function cgiEnvironment(
   url: URL,
 ): NodeJS.ProcessEnv {
   return {
-    PATH: process.env.PATH ?? "",
+    PATH: fixedSystemPath(),
     GIT_PROJECT_ROOT: projectRoot,
     GIT_HTTP_EXPORT_ALL: "1",
     GIT_CONFIG_NOSYSTEM: "1",
@@ -208,37 +226,51 @@ function relayCgiResponse(output: Buffer, response: ServerResponse): void {
 /** Serves the bare repositories below `projectRoot` over loopback HTTP with `git http-backend`. */
 export function startLoopbackGitRemote(projectRoot: string): Promise<LoopbackGitRemote> {
   const server: Server = createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const child = spawn("git", ["http-backend"], {
-      env: cgiEnvironment(projectRoot, request, url),
-    });
-    const chunks: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
-    child.on("close", () => {
-      relayCgiResponse(Buffer.concat(chunks), response);
-    });
-    request.pipe(child.stdin);
+    serveWithHttpBackend(projectRoot, request, response);
   });
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") throw new TypeError("expected TCP");
-      resolve({
-        url: `http://127.0.0.1:${String(address.port)}`,
-        close: () =>
-          new Promise<void>((done) => {
-            server.close(() => {
-              done();
-            });
-          }),
-      });
+      resolve(loopbackRemote(server));
     });
   });
 }
 
+/** One CGI exchange: the request body to `git http-backend`, its response back to the client. */
+function serveWithHttpBackend(
+  projectRoot: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  const url = new URL(request.url ?? "/", "http://127.0.0.1");
+  const child = spawn(GIT, ["http-backend"], { env: cgiEnvironment(projectRoot, request, url) });
+  const chunks: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+  child.on("close", () => {
+    relayCgiResponse(Buffer.concat(chunks), response);
+  });
+  request.pipe(child.stdin);
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise<void>((done) => {
+    server.close(() => {
+      done();
+    });
+  });
+}
+
+function loopbackRemote(server: Server): LoopbackGitRemote {
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new TypeError("expected TCP");
+  return {
+    url: `http://127.0.0.1:${String(address.port)}`,
+    close: () => closeServer(server),
+  };
+}
+
 /** Writes a raw object without Git's own validation (`hash-object --literally`). */
 export function writeRawObject(repo: string, type: "blob" | "tree", content: Buffer): string {
-  return execFileSync("git", ["hash-object", "-w", "--literally", "-t", type, "--stdin"], {
+  return execFileSync(GIT, ["hash-object", "-w", "--literally", "-t", type, "--stdin"], {
     cwd: repo,
     env: gitEnv(),
     input: content,

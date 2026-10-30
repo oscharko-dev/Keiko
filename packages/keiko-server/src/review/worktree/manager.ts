@@ -466,39 +466,45 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
     trigger: ReviewWorktreeRemovalTrigger,
     correlationId?: string,
   ): Promise<void> {
-    for (const runId of [...this.live.keys()]) await this.remove(runId, trigger, correlationId);
+    // Removal deletes from the map; a Map iterator tolerates that and skips removed entries.
+    for (const runId of this.live.keys()) await this.remove(runId, trigger, correlationId);
   }
 
   public async sweepOrphans(
     correlationId?: string,
   ): Promise<{ readonly removed: number; readonly failed: number }> {
-    const liveLeaves = new Set([...this.live.keys()].map(reviewRunLeaf));
+    const liveLeaves = new Set<string>();
+    for (const runId of this.live.keys()) liveLeaves.add(reviewRunLeaf(runId));
     const snapshot = await this.deps.registry.read();
-    let removed = 0;
-    let failed = 0;
-    const count = (ok: boolean): void => {
-      if (ok) removed += 1;
-      else failed += 1;
-    };
-    for (const record of snapshot.worktrees.filter((entry) => !liveLeaves.has(entry.leaf))) {
-      const ok = await this.removeOrReport(
-        record.repositoryRoot,
-        join(this.deps.reviewRoot, record.leaf),
-        correlationId,
-      );
-      if (ok) await this.unregister(record.leaf);
-      count(ok);
-    }
-    const repositories = new Set(
-      [...snapshot.worktrees, ...snapshot.refs].map((entry) => entry.repositoryRoot),
-    );
+    const outcomes = [
+      ...(await this.sweepRegisteredWorktrees(snapshot.worktrees, liveLeaves, correlationId)),
+    ];
+    const repositories = new Set<string>();
+    for (const entry of [...snapshot.worktrees, ...snapshot.refs])
+      repositories.add(entry.repositoryRoot);
     for (const repositoryRoot of repositories) {
-      for (const ok of await this.sweepListedEntries(repositoryRoot, liveLeaves, correlationId))
-        count(ok);
+      outcomes.push(...(await this.sweepListedEntries(repositoryRoot, liveLeaves, correlationId)));
     }
-    for (const ok of await this.sweepUnregisteredDirectories(liveLeaves)) count(ok);
+    outcomes.push(...(await this.sweepUnregisteredDirectories(liveLeaves)));
+    const removed = outcomes.filter(Boolean).length;
+    const failed = outcomes.length - removed;
     logReviewWorktreeOrphanSwept(this.deps.activityLog, correlationId, removed, failed);
     return { removed, failed };
+  }
+
+  private async sweepRegisteredWorktrees(
+    records: readonly { readonly leaf: string; readonly repositoryRoot: string }[],
+    liveLeaves: ReadonlySet<string>,
+    correlationId: string | undefined,
+  ): Promise<readonly boolean[]> {
+    const outcomes: boolean[] = [];
+    for (const record of records.filter((entry) => !liveLeaves.has(entry.leaf))) {
+      const path = join(this.deps.reviewRoot, record.leaf);
+      const removed = await this.removeOrReport(record.repositoryRoot, path, correlationId);
+      if (removed) await this.unregister(record.leaf);
+      outcomes.push(removed);
+    }
+    return outcomes;
   }
 
   /** Locked `keiko-review` entries under the review root that no live run owns (a lost registry). */
@@ -528,6 +534,7 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
   private async sweepUnregisteredDirectories(
     liveLeaves: ReadonlySet<string>,
   ): Promise<readonly boolean[]> {
+    if (!existsSync(this.deps.reviewRoot)) return [];
     const entries = await readdir(this.deps.reviewRoot, { withFileTypes: true });
     const results: boolean[] = [];
     for (const entry of entries) {
