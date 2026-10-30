@@ -151,7 +151,16 @@ async function startRun(page, workbench, { model, mode, text }) {
     response.url().endsWith("/api/coding-workbench/runtime/runs") &&
     response.request().method() === "POST";
   const started = page.waitForResponse(isStart, { timeout: UI_TIMEOUT_MS });
-  await page.getByRole("button", { name: "Start coding run" }).click();
+  // A failed click must surface as itself, not as this wait rejecting once the browser closes.
+  started.catch(() => undefined);
+  try {
+    await page.getByRole("button", { name: "Start coding run" }).click();
+  } catch (error) {
+    // Keep what the human would have seen: why the Workbench did not offer the start.
+    log("start refused by the Workbench; its text follows");
+    console.log((await workbench.innerText().catch(() => "")).slice(0, 4000));
+    throw error;
+  }
   const response = await started;
   const body = await response.json().catch(() => ({}));
   const runId = body.runId ?? body.snapshot?.runId;
