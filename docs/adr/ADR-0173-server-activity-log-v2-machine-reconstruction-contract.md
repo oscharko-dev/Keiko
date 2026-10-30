@@ -587,6 +587,11 @@ A registration never declares `frames` or `causeChain` required. Redaction omits
 a required one would reject the ordinary failure without Keiko frames or a cause. The generator
 reports that declaration as `registration-omitted-field-required`.
 
+Gateway discovery records regional registry identifiers without disclosing the qualifier:
+`gateway.discovery.alias-intersection` carries the optional boolean `regionQualified` alongside
+the existing alias digest and closed role. Historical lines without the flag are not measurements
+of an unqualified identifier. The production formatter and analyzer retain this bounded evidence.
+
 Grounded diagnostics use the same registry and request correlation. `search.citations.reconciled`
 covers numeric references and file locations for Knowledge Pod, folder, multi-source and hybrid
 answers. `citationKind` identifies `numeric` or `file`; hybrid may emit one of each. Required

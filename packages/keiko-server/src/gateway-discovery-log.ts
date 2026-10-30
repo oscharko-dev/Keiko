@@ -24,6 +24,7 @@ const ALIAS_INTERSECTION = defineActivityLogOperation({
       required: true,
       values: ["chat", "embedding", "voice", "rerank", "unsupported"],
     },
+    regionQualified: { type: "boolean", dataClass: "closed-enum", required: false },
     deploymentCount: { type: "integer", dataClass: "count", required: true },
     state: {
       type: "string",
@@ -70,6 +71,7 @@ export function logAliasIntersection(
       {
         ...modelIdEvidence(input.alias),
         role: input.role,
+        regionQualified: input.alias.includes("@"),
         deploymentCount: input.deploymentCount,
         state: input.state,
         maxOutputTokens: input.maxOutputTokens,

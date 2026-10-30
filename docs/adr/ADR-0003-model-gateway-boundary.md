@@ -64,6 +64,14 @@ requesting "the cheapest model that supports tool calling and structured output 
 by hard-coding a model name. The registry schema carries a `kind` discriminant (`chat | embedding |
 ocr-vision`) and capability flags so that non-chat modalities are first-class.
 
+Runtime onboarding retains up to 1,000 distinct chat/embedding model ids and their metadata,
+with a separate bounded voice lane. Larger catalogs retain the existing explicit truncation
+diagnostic. The capped HTTP reader, four concurrent chat smoke probes and finite smoke-round
+deadline still bound setup work; a larger inventory does not grant unverified tool capabilities.
+Registry ids retain gateway region qualifiers unchanged through chat creation and selection.
+The existing `gateway.discovery.alias-intersection` timeline records the model digest, role,
+geometry and a body-free `regionQualified` flag, never the model id or endpoint.
+
 ### D4 — Usage metadata as a first-class field on every response
 
 Every `NormalizedResponse` carries a non-optional `usage: UsageMetadata` field. Partial or missing

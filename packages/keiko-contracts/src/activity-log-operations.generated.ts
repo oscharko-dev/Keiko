@@ -15221,6 +15221,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["chat", "embedding", "voice", "rerank", "unsupported"],
       },
+      regionQualified: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       deploymentCount: {
         type: "integer",
         dataClass: "count",

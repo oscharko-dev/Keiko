@@ -10803,6 +10803,40 @@ describe("normalizeDiscoveryPayload", () => {
     );
   });
 
+  it("retains a complete regional gateway catalog beyond 100 models with correlated evidence", () => {
+    const data = Array.from({ length: 110 }, (_unused, index) => ({
+      id: `vendor/chat-${String(index)}@eu-central-1`,
+      context_window: 200_000,
+      max_output_tokens: 8_192,
+    }));
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const catalog = parseModelDiscovery({ data }, "corr-regional-catalog");
+      expect(catalog.chatModelIds).toEqual(data.map((model) => model.id));
+      expect(catalog.truncated).toBeUndefined();
+      expect(catalog.modelMetadata?.[data.at(-1)?.id ?? ""]).toMatchObject({
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+      });
+      const events = sink.events.filter(
+        (event) => event.op === "gateway.discovery.alias-intersection",
+      );
+      expect(events).toHaveLength(data.length);
+      const line = formatActivityLogProofLine(events.at(-1) ?? {});
+      expect(
+        expectActivityLogProof("gateway.discovery.alias-intersection.line", line),
+      ).toMatchObject({
+        correlationId: "corr-regional-catalog",
+        role: "chat",
+        regionQualified: true,
+      });
+      expect(JSON.stringify(events)).not.toContain("vendor/chat-");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
   it("truncates to MAX_DISCOVERED_MODELS when the payload is oversized", () => {
     const payload = {
       data: Array.from({ length: MAX_DISCOVERED_MODELS + 5 }, (_unused, index) => ({

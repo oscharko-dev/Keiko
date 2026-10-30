@@ -141,7 +141,9 @@ import { createProviderSecretResolver } from "./credentialVault.js";
 const MAX_BODY_BYTES = 64_000;
 // Issue #144: exported so discovery-normalization tests can pin the slice cap
 // without hardcoding the number. The discovery surface is a public seam.
-export const MAX_DISCOVERED_MODELS = 100;
+// Multi-provider catalogs exceed 100 entries. Retain their model metadata and selection
+// options while keeping response bytes, smoke concurrency and round deadlines bounded.
+export const MAX_DISCOVERED_MODELS = 1_000;
 const MAX_DEPLOYMENT_NAMES = 100;
 const MAX_MODEL_ID_LENGTH = 160;
 const MISTRAL_TOOL_CALLING_LIMITATION =
@@ -5932,7 +5934,7 @@ interface SetupCandidateModels {
   readonly modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
   // KEIKO-0325: true when the raw discovery payload contained more distinct model ids
   // than the caller (MAX_DISCOVERED_MODELS) admits, so the downstream setup pipeline can
-  // surface the truncation instead of silently proceeding with the first 100 models.
+  // surface the truncation instead of silently proceeding with a partial catalog.
   // Absent for legacy string-array discovery outputs and for payloads that fit within
   // the cap; consumers should treat missing as `false`.
   readonly truncated?: boolean;

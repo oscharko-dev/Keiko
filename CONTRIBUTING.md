@@ -125,6 +125,8 @@ The closed outcome (`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, 
 reference, attached and dangling counts describe the actual reconciliation. File lines also carry
 ambiguous-marker and dropped-implicit counts. Weak-overlap and grouped-marker counts are optional:
 absence means they were not measured on that path, not zero. `gateway.discovery.alias-intersection` carries
+the body-free `regionQualified` flag for a gateway model id with an `@region` suffix, alongside its digest;
+the qualifier itself never enters the log. It also carries
 the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
 `gateway.reranker.setup.resolved` records once per committed setup whether a discovered reranker was
 `wired`, `kept-existing` or `probe-failed` (at `warn`, with a diagnostic), with candidate and probe

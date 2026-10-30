@@ -567,7 +567,7 @@ Gateway setup completes, but a model the proxy serves does not appear in the con
 
 **Root Cause**
 
-Discovery caps the candidate set at 100 models. Multi-team LiteLLM proxies can expose more
+Discovery caps the candidate set at 1,000 models. Multi-team LiteLLM proxies can expose more
 aliases than that; entries beyond the cap are not probed and not configured.
 
 **Diagnostic Steps**
@@ -631,17 +631,17 @@ Count the aliases the key can see:
 
 The cap is KEIKO's own discovery bound (MAX_DISCOVERED_MODELS), applied AFTER the response
 arrives — this direct call bypasses it. The number is an UPPER BOUND on what Keiko keeps, in
-the direction that matters: 100 or fewer means nothing is truncated, full stop. Above 100 it
+the direction that matters: 1,000 or fewer means nothing is truncated, full stop. Above 1,000 it
 is a strong indication, not a proof, because `parseModelDiscovery` still drops entries whose
 declared mode the gateway does not accept for chat or embedding before the cap applies — so a
-raw 120 can end up as 90 kept. Confirm truncation by comparing this number with the deployment
-list Keiko itself shows after a successful save: exactly 100 there is the cap in action.
+raw 1,020 can end up as 990 kept. Confirm truncation by comparing this number with the deployment
+list Keiko itself shows after a successful save and the `GATEWAY_DISCOVERY_TRUNCATED` diagnostic.
 
 **Resolution**
 
 Enter the intended deployments explicitly in the setup form's deployment-names field — an
-explicit list bypasses discovery and is probed as given. Alternatively, use a virtual key whose
-model allowance is scoped to the models Keiko should use.
+explicit list (up to 100 names) bypasses automatic inventory selection and is probed as given.
+Alternatively, use a virtual key whose model allowance is scoped to the models Keiko should use.
 
 ---
 
