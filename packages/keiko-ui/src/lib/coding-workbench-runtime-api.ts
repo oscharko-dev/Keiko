@@ -482,6 +482,14 @@ export function getCodingWorkbenchRuntimeSnapshot(
 
 // `signal` is the queue's preemption signal: Stop aborts the wait of a mutation it takes the place
 // of (#4109). Every mutation below takes one and joins it to its own deadline.
+/** A run-scoped lifecycle POST: every one validates and returns the run's snapshot. */
+function runSnapshotPost<Body>(
+  call: ClientCodingRuntimeCall,
+  suffix: string,
+): (runId: string, input: Body, signal?: AbortSignal) => Promise<CodingWorkbenchRuntimeSnapshot> {
+  return (runId, input, signal) => postSnapshot(call, runPath(runId, suffix), input, signal);
+}
+
 export async function startCodingWorkbenchRuntime(
   input: CodingWorkbenchRuntimeStartRequest,
   signal?: AbortSignal,
@@ -494,83 +502,51 @@ export async function startCodingWorkbenchRuntime(
   }
 }
 
-export function decideCodingWorkbenchRuntimeApproval(
-  runId: string,
-  input: CodingWorkbenchRuntimeApprovalDecisionRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("approval", runPath(runId, "/approvals"), input, signal);
-}
+export const decideCodingWorkbenchRuntimeApproval =
+  runSnapshotPost<CodingWorkbenchRuntimeApprovalDecisionRequest>("approval", "/approvals");
 
 // The server refuses a stop whose `requestId` is not the run id (`isEndRequestConsistent`).
-export function stopCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeStopRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("stop", runPath(runId, "/stop"), input, signal);
-}
+export const stopCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeStopRequest>(
+  "stop",
+  "/stop",
+);
 
 // Likewise for a takeover: `requestId` must equal `runId`.
-export function takeOverCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeTakeoverRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("takeover", runPath(runId, "/takeover"), input, signal);
-}
+export const takeOverCodingWorkbenchRuntime =
+  runSnapshotPost<CodingWorkbenchRuntimeTakeoverRequest>("takeover", "/takeover");
 
-export function retryCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeRetryRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("retry", runPath(runId, "/retry"), input, signal);
-}
+export const retryCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeRetryRequest>(
+  "retry",
+  "/retry",
+);
 
-export function acknowledgeCodingWorkbenchRuntimeRecovery(
-  runId: string,
-  input: CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("recovery-ack", runPath(runId, "/recovery-ack"), input, signal);
-}
+export const acknowledgeCodingWorkbenchRuntimeRecovery =
+  runSnapshotPost<CodingWorkbenchRuntimeRecoveryAcknowledgementRequest>(
+    "recovery-ack",
+    "/recovery-ack",
+  );
 
-export function pauseCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeLifecycleBody,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("pause", runPath(runId, "/pause"), input, signal);
-}
+export const pauseCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeLifecycleBody>(
+  "pause",
+  "/pause",
+);
 
-export function resumeCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeResumeRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("resume", runPath(runId, "/resume"), input, signal);
-}
+export const resumeCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeResumeRequest>(
+  "resume",
+  "/resume",
+);
 
-export function submitCodingWorkbenchRuntimeFollowUp(
-  runId: string,
-  input: CodingWorkbenchRuntimeFollowUpBody,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("follow-up", runPath(runId, "/follow-up"), input, signal);
-}
+export const submitCodingWorkbenchRuntimeFollowUp =
+  runSnapshotPost<CodingWorkbenchRuntimeFollowUpBody>("follow-up", "/follow-up");
 
 /**
  * Undo the run's newest turn or restore an undo (B3, S04). The server stops the turn in flight, if
  * any, and restores the workspace files that turn changed; the run stays live until it is stopped.
  */
-export function revertCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeRevertRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("revert", runPath(runId, "/revert"), input, signal);
-}
+export const revertCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeRevertRequest>(
+  "revert",
+  "/revert",
+);
 
 /**
  * Reads what an undo would do or has done over the authenticated app-session channel: counts only,
@@ -664,13 +640,8 @@ export function readCodingWorkbenchMcpAuthorization(
  * D10). Bound to the observed revision like a follow-up; the server proves the message is one the
  * operator delivered into this turn and answers one the runtime already took as delivered.
  */
-export function submitCodingWorkbenchRuntimeInboxAction(
-  runId: string,
-  input: CodingWorkbenchRuntimeInboxRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("inbox", runPath(runId, "/inbox"), input, signal);
-}
+export const submitCodingWorkbenchRuntimeInboxAction =
+  runSnapshotPost<CodingWorkbenchRuntimeInboxRequest>("inbox", "/inbox");
 
 /**
  * Reads the messages still waiting for the running turn over the authenticated app-session channel:
@@ -693,13 +664,11 @@ export function fetchCodingWorkbenchRuntimeInbox(
  * Revoke the live internet research grant. The server drops the grant for the parent run and every
  * child in one revision bump; general runtime snapshots never carry grant content (#2644).
  */
-export function revokeCodingWorkbenchRuntimeResearchGrant(
-  runId: string,
-  input: CodingWorkbenchRuntimeResearchRevokeRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("research-revoke", runPath(runId, "/research/revoke"), input, signal);
-}
+export const revokeCodingWorkbenchRuntimeResearchGrant =
+  runSnapshotPost<CodingWorkbenchRuntimeResearchRevokeRequest>(
+    "research-revoke",
+    "/research/revoke",
+  );
 
 /**
  * Read pending and approved research state over the authenticated app-session channel. Both the
@@ -795,21 +764,14 @@ export function listCodingWorkbenchRuntimeQuestions(
 // re-declaring the requestId/expectedRevision/questionId/answers shape locally: the server route
 // parses this exact wire body with parseCodingWorkbenchRuntimeQuestionAnswerRequest, so there is
 // exactly one definition of what an answer looks like, not two that can drift apart.
-export function answerCodingWorkbenchRuntimeQuestion(
-  runId: string,
-  input: CodingWorkbenchRuntimeQuestionAnswerRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("question-answer", runPath(runId, "/questions/answer"), input, signal);
-}
+export const answerCodingWorkbenchRuntimeQuestion =
+  runSnapshotPost<CodingWorkbenchRuntimeQuestionAnswerRequest>(
+    "question-answer",
+    "/questions/answer",
+  );
 
-export function rejectCodingWorkbenchRuntimeQuestion(
-  runId: string,
-  input: CodingWorkbenchRuntimeQuestionRejectBody,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot("question-reject", runPath(runId, "/questions/reject"), input, signal);
-}
+export const rejectCodingWorkbenchRuntimeQuestion =
+  runSnapshotPost<CodingWorkbenchRuntimeQuestionRejectBody>("question-reject", "/questions/reject");
 
 export function createCodingWorkbenchRuntimeEventSource(
   runId: string,

@@ -642,10 +642,21 @@ export interface ClientDiagnosticIngestRequest {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  // A Git-client operation (add-repository dialog discard, or manual retry) settling after the
+  // surface that asked for it is already gone (PR #3625 review): which operation, and how it
+  // settled — never the repository, path or URL involved.
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
+  // An open `KeikoSelect` menu dismissed by Escape (PR #3625 review): the closed reason and which
+  // focus location — trigger, search or option — Escape acted from, never a label or option text.
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  // The chat's Knowledge Pod picker offered no usable pod (PR #3678 review): counts only, sent as
+  // structured evidence rather than folded into the message the server reduces to a digest.
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
+  // A chat answer copy (PR #3678 review): its outcome and the marker groups removed and kept,
+  // never the copied text.
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
+  // An answer prepared for the voice dialogue (PR #3678 review): the marker groups removed and kept,
+  // under the correlation its synthesis request carries, never the spoken text.
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
   readonly scopeNotice?: ClientDiagnosticScopeNotice | undefined;
@@ -654,9 +665,18 @@ export interface ClientDiagnosticIngestRequest {
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly updateNotice?: ClientUpdateNotice | undefined;
+  // The Editor's model adopted the line ending of text Keiko wrote into it (#4123).
   readonly editorLineEnding?: ClientEditorLineEnding | undefined;
+  // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
+  // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
+  // and how many were cut, never a message, path or run name.
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
+  // What the human did on the Coding Workbench page (#3897): closed values, a trust binding's two
+  // body-free ids and a changeset's file count — routine evidence, never a failure.
   readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
+  // A runtime request the Workbench gave up on at its own deadline (#4109): the call kind and the
+  // deadline in milliseconds, under the failed request's correlation id — a failure report, never
+  // a preemption.
   readonly codingRequestTimeout?: ClientDiagnosticCodingRequestTimeout | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerSubmission?: ClientComposerSubmission | undefined;
