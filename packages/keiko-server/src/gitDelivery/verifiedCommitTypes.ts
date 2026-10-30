@@ -48,6 +48,8 @@ export interface VerifiedCommitProposal {
   readonly command: GitCommitCommand;
   readonly context: VerifiedCommitRunContext;
   readonly expiresAtMs: number;
+  /** Full access admitted this candidate although its verification ran and failed (#3907). */
+  readonly verificationFailed?: true;
   readonly review: import("@oscharko-dev/keiko-contracts").CodingWorkbenchRuntimePendingApprovalReview;
 }
 

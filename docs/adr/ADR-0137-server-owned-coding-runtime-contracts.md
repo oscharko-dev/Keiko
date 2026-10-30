@@ -2036,6 +2036,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   which is equivalent only while the verified base and head agree; when they differ it fails closed
   before any ref update. A distinct base keeps its separate `verify` line in the same atomic
   transaction.
+  A red check is the commit gate in Ask for approval and Supervised workspace, and failing
+  evidence in Full access (owner decision 2026-10-30, #3907 AC3). The same parity lane asked for a
+  branch, commit and push while the repository's own `npm run check` was already red; standalone
+  committed and pushed, Keiko refused every commit until the run's deadline. A verification that
+  ran every check to its own end (a non-zero exit, no signal, no breached limit) on the unchanged
+  staged candidate now forms failing evidence alongside the passing proof. In Full access, whose
+  policy already commits without per-action approval, that evidence admits the commit the task
+  asked for; the receipt keeps the failing `verificationEvidenceId`, and the `git.verified-commit`
+  approval line records `passed: false` beside it, so nothing reports the commit as verified green.
+  A denied, cancelled, timed-out, limit-breached or entirely skipped run, a candidate that changed
+  during its verification, an unstaged candidate and unsaved editor buffers still refuse. A mode
+  lowered after the proposal turns the red checks back into the gate before the Git effect.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the
