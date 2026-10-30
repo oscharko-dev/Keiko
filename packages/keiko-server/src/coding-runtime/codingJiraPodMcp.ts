@@ -1,10 +1,10 @@
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type { JiraManagedConnection } from "@oscharko-dev/keiko-connectors";
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyPort,
   AtlassianHttpBodyRequest,
   AtlassianHttpRequest,
+  JiraManagedConnection,
 } from "@oscharko-dev/keiko-connectors";
 import type {
   JiraMutationAttempt,
