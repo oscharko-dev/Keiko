@@ -1,3 +1,5 @@
+import { createBoundedRunRecords } from "./boundedRunRecords.js";
+
 /**
  * The task branches Keiko's own `keiko_git_branch` moved a run onto (#3907, owner decision
  * 2026-10-31).
@@ -38,18 +40,5 @@ export interface GovernedTaskBranches {
 export const GOVERNED_TASK_BRANCHES_MAX_RUNS = 256;
 
 export function createGovernedTaskBranches(): GovernedTaskBranches {
-  const branches = new Map<string, GovernedTaskBranch>();
-  return {
-    record: (branch): void => {
-      branches.delete(branch.runId);
-      branches.set(branch.runId, Object.freeze({ ...branch }));
-      if (branches.size <= GOVERNED_TASK_BRANCHES_MAX_RUNS) return;
-      const oldest = branches.keys().next().value;
-      if (oldest !== undefined) branches.delete(oldest);
-    },
-    latest: (runId): GovernedTaskBranch | undefined => branches.get(runId),
-    clear: (runId): void => {
-      branches.delete(runId);
-    },
-  };
+  return createBoundedRunRecords<GovernedTaskBranch>(GOVERNED_TASK_BRANCHES_MAX_RUNS);
 }

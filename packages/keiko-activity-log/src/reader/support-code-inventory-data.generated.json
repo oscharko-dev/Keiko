@@ -1130,6 +1130,7 @@
     "keiko-server/coding-context/issuePreviewRoutes",
     "keiko-server/coding-context/jiraCodeContextConnector",
     "keiko-server/coding-context/jiraCodeContextPort",
+    "keiko-server/coding-runtime/boundedRunRecords",
     "keiko-server/coding-runtime/ciRepairPromptReservation",
     "keiko-server/coding-runtime/codexAppServerClient",
     "keiko-server/coding-runtime/codexAppServerProtocol",
