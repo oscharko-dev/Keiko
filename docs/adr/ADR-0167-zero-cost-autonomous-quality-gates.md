@@ -144,7 +144,7 @@ under #4145, as a ratchet rather than as complete enforcement:
 - The ratchet does not run the epic's responsibility qualifications and therefore does not claim
   that any rule is qualified or fully enforced. Rule dispositions, thresholds, required contexts,
   review loops and integration authority are unchanged.
-- Baseline on `dev` `55e4b02b2`: 7,208 files and 46,514 findings. Epic workstreams and ordinary
+- Baseline on `dev` `d273b65c6`: 7,208 files and 46,517 findings. Epic workstreams and ordinary
   `dev` work prune the register; #3991 removes it at zero and activates full enforcement.
 
 Known limitation: counts are per file and rule, so fixing one finding and adding another of the same

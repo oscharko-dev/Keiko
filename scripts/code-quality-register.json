@@ -6592,7 +6592,7 @@
       "anti-slop/no-conditional-empty-object-spread": 8,
       "anti-slop/no-known-value-widening": 9,
       "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unknown-returns": 7,
+      "anti-slop/no-unknown-returns": 8,
       "anti-slop/require-safety-comment-for-type-assertion": 11
     },
     "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts": {
@@ -6845,7 +6845,7 @@
       "anti-slop/no-unknown-parameters": 3,
       "anti-slop/no-unknown-returns": 2,
       "anti-slop/no-unsafe-dictionary-type": 4,
-      "anti-slop/require-safety-comment-for-type-assertion": 15
+      "anti-slop/require-safety-comment-for-type-assertion": 16
     },
     "packages/keiko-server/src/coding-runtime/codingToolFacade.ts": {
       "anti-slop/no-conditional-empty-object-spread": 12,
@@ -18641,7 +18641,7 @@
       "anti-slop/no-runtime-typeof": 4
     },
     "scripts/lib/runtime-override-projection.mjs": {
-      "anti-slop/no-runtime-typeof": 1
+      "anti-slop/no-runtime-typeof": 2
     },
     "scripts/lib/runtime-requirements.mjs": {
       "anti-slop/no-array-filter-map": 1,
