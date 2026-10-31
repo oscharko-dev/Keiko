@@ -9,10 +9,9 @@
 //   DELETE /api/editor/verification/runs/:runId           cancel an in-flight run
 //   GET    /api/editor/verification/events                SSE stream of content-free lifecycle events
 
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
-import { openPlainNamespacedSseStream } from "../sse.js";
-import type { SseBackpressureSignal } from "../sse-write.js";
+import { openPlainNamespacedRouteStream, plainNamespacedStreamOpener } from "../sse.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
 import {
@@ -256,31 +255,9 @@ export function handleDeleteVerificationRun(ctx: RouteContext, deps: UiHandlerDe
 export function handleVerificationEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
-  openVerificationSseStream(ctx.res, guard, deps.redactor, undefined, ctx.correlationId);
-  ctx.req.on("close", () => {
-    ctx.res.end();
-  });
+  openPlainNamespacedRouteStream(ctx, openVerificationSseStream, guard, deps.redactor);
   return STREAMING;
 }
 
-// Exported for unit-testing the backpressure path (mirrors openCommandSseStream). `onBackpressure` is
-// optional and defaults to undefined in production; it fires exactly once when the client drains
-// nothing within the shared stall bound, before the socket is destroyed.
-export function openVerificationSseStream(
-  res: ServerResponse,
-  manager: VerificationRunnerManager,
-  redactor: UiHandlerDeps["redactor"],
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-  correlationId?: string,
-): void {
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only the
-  // per-connection `id:` cursor differs between them.
-  openPlainNamespacedSseStream(
-    res,
-    "verification",
-    redactor,
-    (listener) => manager.subscribe(listener),
-    onBackpressure,
-    correlationId,
-  );
-}
+// Exported for unit testing stalled-reader handling.
+export const openVerificationSseStream = plainNamespacedStreamOpener("verification");

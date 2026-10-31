@@ -7,13 +7,12 @@
 //   DELETE /api/commands/runs/:runId           cancel an in-flight run
 //   GET    /api/commands/events                SSE stream of run lifecycle events
 
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { parseCommandTaskRunRequest } from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { openPlainNamespacedSseStream } from "./sse.js";
-import type { SseBackpressureSignal } from "./sse-write.js";
+import { openPlainNamespacedRouteStream, plainNamespacedStreamOpener } from "./sse.js";
 import {
   errorBody,
   STREAMING,
@@ -170,35 +169,9 @@ export function handleDeleteCommandRun(ctx: RouteContext, deps: UiHandlerDeps): 
 export function handleCommandEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
-  openCommandSseStream(ctx.res, guard, deps.redactor, undefined, ctx.correlationId);
-  ctx.req.on("close", () => {
-    ctx.res.end();
-  });
+  openPlainNamespacedRouteStream(ctx, openCommandSseStream, guard, deps.redactor);
   return STREAMING;
 }
 
-// Exported for unit testing stalled-reader handling. The optional observer runs once after the
-// canonical no-drain deadline, before the controller aborts and the socket is destroyed.
-export function openCommandSseStream(
-  res: ServerResponse,
-  manager: CommandRunnerManager,
-  redactor: UiHandlerDeps["redactor"],
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-  correlationId?: string,
-): void {
-  // Per-connection abort: a slow-client backpressure kill (writeSseFrame) aborts this controller,
-  // which unsubscribes from the manager so no further frames are produced for a dead socket. The
-  // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
-  // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
-  // (hence no abort) can occur before `unsubscribe` is assigned.
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
-  // the per-connection `id:` cursor differs between them.
-  openPlainNamespacedSseStream(
-    res,
-    "command",
-    redactor,
-    (listener) => manager.subscribe(listener),
-    onBackpressure,
-    correlationId,
-  );
-}
+// Exported for unit testing stalled-reader handling.
+export const openCommandSseStream = plainNamespacedStreamOpener("command");
