@@ -5,6 +5,7 @@
 #include <userenv.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #define SERVICE_NAME L"KeikoRuntimeGateway"
 #define PIPE_NAME L"\\\\.\\pipe\\KeikoRuntimeGateway-v1"
@@ -38,9 +39,11 @@ static BOOL transfer(HANDLE pipe, void *data, DWORD size, BOOL write, HANDLE sto
 
 static BOOL tree_sid(const BYTE *nonce, PSID *sid) {
   static const wchar_t hex[] = L"0123456789abcdef";
-  wchar_t name[80] = L"Keiko.Gateway.";
+  /* The AppContainer moniker is limited to 64 characters. 128 bits of the
+   * service-generated nonce identify the package; the full challenge binds the ACK. */
+  wchar_t name[48] = L"Keiko.Gateway.";
   size_t offset = wcslen(name);
-  for (size_t i = 0; i < CHALLENGE_SIZE; i++) {
+  for (size_t i = 0; i < 16; i++) {
     name[offset++] = hex[nonce[i] >> 4];
     name[offset++] = hex[nonce[i] & 15];
   }
@@ -84,7 +87,8 @@ int keiko_gateway_connect(struct keiko_gateway_connection *c) {
       !transfer(c->pipe, c->nonce, CHALLENGE_SIZE, FALSE, NULL)) {
     fputs("gateway peer challenge unavailable\n", stderr); return 0;
   }
-  return tree_sid(c->nonce, &c->sid);
+  if (!tree_sid(c->nonce, &c->sid)) { fputs("gateway package SID unavailable\n", stderr); return 0; }
+  return 1;
 }
 
 int keiko_gateway_confirm(struct keiko_gateway_connection *c, HANDLE job, BYTE *frame) {
@@ -147,7 +151,8 @@ static void serve(HANDLE pipe, HANDLE image) {
       keiko_gateway_request_admit(&challenge, frame, sizeof(frame), &request) != ERROR_SUCCESS ||
       !tree_sid(nonce, &sid)) goto done;
   source = OpenProcess(PROCESS_DUP_HANDLE, FALSE, peer.pid);
-  if (!source || !DuplicateHandle(source, (HANDLE)(ULONG_PTR)request.job_handle,
+  HANDLE remote_job = (HANDLE)(ULONG_PTR)request.job_handle;
+  if (!source || !remote_job || !DuplicateHandle(source, remote_job,
       GetCurrentProcess(), &job, JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE, FALSE, 0) ||
       !tree_matches(job, sid)) goto done;
   owned = TRUE;
@@ -218,13 +223,15 @@ static DWORD WINAPI control(DWORD code, DWORD type, LPVOID data, LPVOID context)
 }
 
 static void WINAPI service_main(DWORD argc, LPWSTR *argv) {
-  wchar_t path[32768];
+  wchar_t *path;
   HANDLE image = INVALID_HANDLE_VALUE, pipe = INVALID_HANDLE_VALUE;
   DWORD error = ERROR_SUCCESS;
   (void)argc; (void)argv;
   registration = RegisterServiceCtrlHandlerExW(SERVICE_NAME, control, NULL);
   if (!registration) return;
   report(SERVICE_START_PENDING, ERROR_SUCCESS);
+  path = calloc(32768, sizeof(wchar_t));
+  if (!path) { report(SERVICE_STOPPED, ERROR_OUTOFMEMORY); return; }
   stopping = CreateEventW(NULL, TRUE, FALSE, NULL);
   DWORD length = GetModuleFileNameW(NULL, path, 32768);
   if (!stopping || !length || length >= 32768) { error = ERROR_INVALID_DATA; goto done; }
@@ -240,7 +247,8 @@ static void WINAPI service_main(DWORD argc, LPWSTR *argv) {
   }
   if (WaitForSingleObject(stopping, 0) != WAIT_OBJECT_0) error = ERROR_BROKEN_PIPE;
 done:
-  if (pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);
+  free(path);
+  if (pipe && pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);
   if (image != INVALID_HANDLE_VALUE) CloseHandle(image);
   report(SERVICE_STOPPED, error);
   if (stopping) CloseHandle(stopping);

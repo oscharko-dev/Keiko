@@ -67,11 +67,12 @@ function frame(valid) {
 async function qualify(valid, unavailable = false) {
   const child = spawn(helper, ["--gateway-supervised"], {
     windowsHide: true,
-    stdio: ["pipe", "pipe", "inherit", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
     timeout: 12000,
   });
   const exited = once(child, "close");
   const output = [];
+  child.stderr.on("data", (chunk) => process.stderr.write(chunk));
   child.stdout.on("data", (chunk) => output.push(chunk));
   const responses = streamReader(child.stdio[4]);
   try {
