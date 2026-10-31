@@ -150,9 +150,15 @@ On 2026-10-30 at 23:09 UTC GitHub published
 11.0.1) and [GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4) (glob 9.0.0
 through 14.0.1), and the required OSV scan matched three lockfile entries: the shipped
 `minimatch` 10.2.6 (via `@sigstore/tuf`), the dev-only `glob` 13.0.6 (via `cacache`) and the
-dev-only `minimatch` 3.1.5 under `eslint-config-next`. The root override `minimatch@10` now
-resolves every 10.x consumer (ESLint, `@eslint/config-array`, `typescript-estree`,
-`eslint-plugin-sonarjs`, Stryker and `@tufjs/models`) to 11.0.3, and `glob@13` resolves to 14.0.3,
+dev-only `minimatch` 3.1.5 under `eslint-config-next`. The flat root override `minimatch` 11.0.3
+now resolves every 10.x consumer (ESLint, `@eslint/config-array`, `typescript-estree`,
+`eslint-plugin-sonarjs`, Stryker and `@tufjs/models`) to 11.0.3. It is flat and exact because the
+publish staging projects only that form into the distributed package: there `@sigstore/tuf`,
+`tuf-js` and `@tufjs/models` are vendored and the package's own runtime dependency becomes
+`minimatch` 11.0.3, which the installable-package smoke exercises. A range-scoped `minimatch@10` key
+fixed the repository lockfile but not that projection, and the macOS customer-shape qualification
+failed closed on it. `minimatch@3` entries nested under the three ESLint plugins named below keep
+their own 3.x edges on 3.1.5 without reaching their `eslint` peer. `glob@13` resolves to 14.0.3,
 which requires minimatch ^11 and brings `path-scurry` 3.0.0. Those consumers use only the
 `minimatch()`, `Minimatch#match` and `hasMagic` APIs that 11.x retains. minimatch 11 itself
 requires `brace-expansion` ^5.0.12, so the former nested `brace-expansion` 5.0.12 pin under

@@ -52,11 +52,11 @@ id = "GHSA-g3hv-75wg-m249"
 ignoreUntil = 2026-11-30
 reason = """
 minimatch denial of service through globparts amplification (CVE-2026-118764, medium; CVSS 4.0
-6.9). The advisory
-covers every release before 11.0.1. The other affected instance, the shipped
+6.9). The advisory covers every release before 11.0.1. The other affected instance, the shipped
 node_modules/minimatch (via @sigstore/tuf -> tuf-js -> @tufjs/models) and its build-time consumers,
-is moved to 11.0.3 by the root `minimatch@10` override, so this entry covers only the instance that
-cannot follow it.
+is moved to 11.0.3 by the flat root `minimatch` override, which the publish staging also projects
+into the distributed package. The `minimatch@3` entries nested under the three plugins below keep
+their 3.x edges on 3.1.5, so this entry covers only the instance that cannot follow.
 
 Reach: the remaining instance is minimatch@3.1.5 at
 node_modules/eslint-config-next/node_modules/minimatch, flagged dev, required by
