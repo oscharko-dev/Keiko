@@ -173,19 +173,20 @@ function gitScopeResponse(malformed: boolean): Response {
   );
 }
 
-async function driveGitScopeRefusal(context: (body: string) => RouteContext): Promise<void> {
-  let malformed = false;
-  let delivery: Promise<Response> | undefined;
+// Answers the fixture's upstream reads through `upstream` and forwards every client diagnostic to
+// the real ingest route, so a test sees each delivered body and its route status.
+function stubDiagnosticForwardingFetch(
+  context: (body: string) => RouteContext,
+  upstream: (input: string, init?: RequestInit) => Response | undefined,
+): { readonly bodies: string[]; readonly expectSingleDelivery: () => Promise<void> } {
   const bodies: string[] = [];
-  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
-  resetGitDiagnosticFixture();
-  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
-  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  let delivery: Promise<Response> | undefined;
   vi.stubGlobal(
     "fetch",
     async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       if (typeof input !== "string") throw new TypeError("fixture string request required");
-      if (input.startsWith("/api/git/diff?")) return gitScopeResponse(malformed);
+      const response = upstream(input, init);
+      if (response !== undefined) return response;
       if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
         throw new TypeError("unexpected fixture request");
       bodies.push(init.body);
@@ -194,6 +195,23 @@ async function driveGitScopeRefusal(context: (body: string) => RouteContext): Pr
       );
       return delivery;
     },
+  );
+  const expectSingleDelivery = async (): Promise<void> => {
+    expect(bodies).toHaveLength(1);
+    if (delivery === undefined) throw new TypeError("diagnostic delivery required");
+    expect((await delivery).status).toBe(204);
+  };
+  return { bodies, expectSingleDelivery };
+}
+
+async function driveGitScopeRefusal(context: (body: string) => RouteContext): Promise<void> {
+  let malformed = false;
+  const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
+  resetGitDiagnosticFixture();
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  const { bodies, expectSingleDelivery } = stubDiagnosticForwardingFetch(context, (input) =>
+    input.startsWith("/api/git/diff?") ? gitScopeResponse(malformed) : undefined,
   );
   await expect(api.fetchGitDiff({ root: "/private-git-root" })).resolves.toMatchObject({
     scope: "all",
@@ -205,9 +223,7 @@ async function driveGitScopeRefusal(context: (body: string) => RouteContext): Pr
     status: 502,
     correlationId: "git-scope-response-scenario",
   });
-  expect(bodies).toHaveLength(1);
-  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
-  expect((await delivery).status).toBe(204);
+  await expectSingleDelivery();
   expect(bodies[0]).not.toContain("private-git-root");
   expect(bodies[0]).not.toContain("private git diff body");
   expect(bodies[0]).not.toContain("scope invalid");
@@ -250,26 +266,13 @@ async function driveStructuredGitRefusal(
   kind: "structured-diff" | "blame",
 ): Promise<void> {
   let malformed = false;
-  let delivery: Promise<Response> | undefined;
-  const bodies: string[] = [];
   const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
   resetGitDiagnosticFixture();
   diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
   vi.spyOn(console, "warn").mockImplementation((): void => undefined);
-  vi.stubGlobal(
-    "fetch",
-    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      if (typeof input !== "string") throw new TypeError("fixture string request required");
-      const prefix = kind === "structured-diff" ? "/api/git/diff/structured?" : "/api/git/blame?";
-      if (input.startsWith(prefix)) return structuredGitResponse(kind, malformed);
-      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
-        throw new TypeError("unexpected fixture request");
-      bodies.push(init.body);
-      delivery = handleClientDiagnosticIngest(context(init.body)).then(
-        (result): Response => new Response(null, { status: result.status }),
-      );
-      return delivery;
-    },
+  const prefix = kind === "structured-diff" ? "/api/git/diff/structured?" : "/api/git/blame?";
+  const { bodies, expectSingleDelivery } = stubDiagnosticForwardingFetch(context, (input) =>
+    input.startsWith(prefix) ? structuredGitResponse(kind, malformed) : undefined,
   );
   const read = (): Promise<unknown> =>
     kind === "structured-diff"
@@ -284,9 +287,7 @@ async function driveStructuredGitRefusal(
   expect(bodies).toEqual([]);
   malformed = true;
   const failure = await read().catch((error: unknown): unknown => error);
-  expect(bodies).toHaveLength(1);
-  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
-  expect((await delivery).status).toBe(204);
+  await expectSingleDelivery();
   expect(failure).toMatchObject({
     code: "CONTRACT_VALIDATION_FAILED",
     status: 502,
@@ -340,26 +341,12 @@ async function driveCommandRefusal(
 ): Promise<void> {
   const api = await loadCommandDiagnosticFixture();
   let malformed = false;
-  let delivery: Promise<Response> | undefined;
   let commandCalls = 0;
-  const bodies: string[] = [];
-  vi.stubGlobal(
-    "fetch",
-    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      if (typeof input !== "string") throw new TypeError("fixture string request required");
-      if (input.startsWith("/api/commands/")) {
-        commandCalls += 1;
-        return commandResponse(kind, malformed);
-      }
-      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
-        throw new TypeError("unexpected fixture request");
-      bodies.push(init.body);
-      delivery = handleClientDiagnosticIngest(context(init.body)).then(
-        (result): Response => new Response(null, { status: result.status }),
-      );
-      return delivery;
-    },
-  );
+  const { bodies, expectSingleDelivery } = stubDiagnosticForwardingFetch(context, (input) => {
+    if (!input.startsWith("/api/commands/")) return undefined;
+    commandCalls += 1;
+    return commandResponse(kind, malformed);
+  });
   const read = (): Promise<unknown> =>
     kind === "catalog"
       ? api.fetchCommandCatalog("/private-command-project")
@@ -368,9 +355,7 @@ async function driveCommandRefusal(
   expect(bodies).toEqual([]);
   malformed = true;
   const failure = await read().catch((error: unknown): unknown => error);
-  expect(bodies).toHaveLength(1);
-  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
-  expect((await delivery).status).toBe(204);
+  await expectSingleDelivery();
   expect(failure).toMatchObject({
     code: "CONTRACT_VALIDATION_FAILED",
     status: 502,
@@ -397,29 +382,16 @@ function gitSyncResponse(malformed: boolean): Response {
 
 async function driveGitSyncRefusal(context: (body: string) => RouteContext): Promise<void> {
   let executions = 0;
-  let delivery: Promise<Response> | undefined;
-  const bodies: string[] = [];
   const { api, diagnostics, transport } = await loadGitDiagnosticFixture();
   resetGitDiagnosticFixture();
   diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
   vi.spyOn(console, "warn").mockImplementation((): void => undefined);
-  vi.stubGlobal(
-    "fetch",
-    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      if (input === "/api/git-delivery/fetch/execute") {
-        expect(init?.method).toBe("POST");
-        executions += 1;
-        return gitSyncResponse(executions > 1);
-      }
-      if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
-        throw new TypeError("unexpected fixture request");
-      bodies.push(init.body);
-      delivery = handleClientDiagnosticIngest(context(init.body)).then(
-        (result): Response => new Response(null, { status: result.status }),
-      );
-      return delivery;
-    },
-  );
+  const { bodies, expectSingleDelivery } = stubDiagnosticForwardingFetch(context, (input, init) => {
+    if (input !== "/api/git-delivery/fetch/execute") return undefined;
+    expect(init?.method).toBe("POST");
+    executions += 1;
+    return gitSyncResponse(executions > 1);
+  });
   const request = {
     operation: "fetch",
     projectId: "private-sync-project",
@@ -434,9 +406,7 @@ async function driveGitSyncRefusal(context: (body: string) => RouteContext): Pro
     status: 502,
     correlationId: "git-sync-response-scenario",
   });
-  expect(bodies).toHaveLength(1);
-  if (delivery === undefined) throw new TypeError("diagnostic delivery required");
-  expect((await delivery).status).toBe(204);
+  await expectSingleDelivery();
   expect(executions).toBe(2);
   for (const privateValue of ["private-sync-branch", "private-sync-ref", "private-sync-project"])
     expect(bodies[0]).not.toContain(privateValue);
