@@ -2451,6 +2451,90 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
   });
 });
 
+type RuntimeTaskDispatcher = ReturnType<typeof createProductionRuntimeTaskDispatcher>;
+
+interface ReservedRunAction<Answer> {
+  readonly refusalTitle: string;
+  readonly runId: string;
+  /** A run record whose turn port answers the action with `answer()`; without one it lacks it. */
+  readonly record: (runId: string, answer?: () => Promise<Answer>) => ProductionRuntimeRunRecord;
+  readonly dispatch: (
+    dispatcher: RuntimeTaskDispatcher,
+    runId: string,
+  ) => Promise<unknown> | undefined;
+  readonly success: Answer;
+  readonly refusal: Answer;
+  readonly failureReason: string;
+}
+
+// The admission cases every reserved, revision-bound run action shares: refusal of unavailable
+// runs, release of the reservation after a port refusal, and a body-free answer to a throwing port.
+function registerReservedRunAction<Answer>(action: ReservedRunAction<Answer>): void {
+  it(action.refusalTitle, async () => {
+    let calls = 0;
+    const stopped = action.record("run-stopped", () => {
+      calls += 1;
+      return Promise.resolve(action.success);
+    });
+    stopped.controller.abort();
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        ["run-stopped", stopped],
+        ["run-codex", action.record("run-codex")],
+      ]),
+    );
+    for (const [runId, reason] of [
+      ["run-missing", "run-unavailable"],
+      ["run-stopped", "run-unavailable"],
+      ["run-codex", "unsupported"],
+    ] as const) {
+      await expect(action.dispatch(dispatcher, runId)).resolves.toEqual({ ok: false, reason });
+    }
+    expect(calls).toBe(0);
+  });
+
+  it("releases the reservation when the port refuses, so the same revision can be retried", async () => {
+    let answer = action.refusal;
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([[action.runId, action.record(action.runId, () => Promise.resolve(answer))]]),
+    );
+    await expect(action.dispatch(dispatcher, action.runId)).resolves.toEqual(action.refusal);
+    answer = action.success;
+    await expect(action.dispatch(dispatcher, action.runId)).resolves.toEqual(action.success);
+  });
+
+  it("answers a throwing port with a body-free diagnostic and frees the reservation", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    let fail = true;
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          action.runId,
+          action.record(action.runId, () =>
+            fail
+              ? Promise.reject(new Error("private failure text"))
+              : Promise.resolve(action.success),
+          ),
+        ],
+      ]),
+      { record: (diagnostic): void => void records.push(diagnostic) },
+    );
+    await expect(action.dispatch(dispatcher, action.runId)).resolves.toEqual({
+      ok: false,
+      reason: action.failureReason,
+    });
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.task-dispatch",
+        code: "stage=dispatch:reason=exception",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("private failure text");
+    fail = false;
+    await expect(action.dispatch(dispatcher, action.runId)).resolves.toEqual(action.success);
+  });
+}
+
 describe("turn revert admission (B3, S04)", () => {
   type RevertTurn = NonNullable<ProductionRuntimeRunRecord["turnPort"]["revertTurn"]>;
   type RevertState = NonNullable<ProductionRuntimeRunRecord["turnPort"]["revertState"]>;
@@ -2527,70 +2611,15 @@ describe("turn revert admission (B3, S04)", () => {
     expect(revertTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses an unknown run, a stopped run and a runtime that cannot revert", async () => {
-    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(APPLIED));
-    const stopped = revertRecord("run-stopped", { revertTurn });
-    stopped.controller.abort();
-    const dispatcher = createProductionRuntimeTaskDispatcher(
-      new Map([
-        ["run-stopped", stopped],
-        ["run-codex", revertRecord("run-codex", {})],
-      ]),
-    );
-
-    await expect(dispatcher.revert?.(revertRequest("run-missing", "req-1", 4))).resolves.toEqual({
-      ok: false,
-      reason: "run-unavailable",
-    });
-    await expect(dispatcher.revert?.(revertRequest("run-stopped", "req-1", 4))).resolves.toEqual({
-      ok: false,
-      reason: "run-unavailable",
-    });
-    await expect(dispatcher.revert?.(revertRequest("run-codex", "req-1", 4))).resolves.toEqual({
-      ok: false,
-      reason: "unsupported",
-    });
-    expect(revertTurn).not.toHaveBeenCalled();
-  });
-
-  it("releases the reservation when the port refuses, so the same revision can be retried", async () => {
-    let answer: Awaited<ReturnType<RevertTurn>> = { ok: false, reason: "interrupt-failed" };
-    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(answer));
-    const dispatcher = createProductionRuntimeTaskDispatcher(
-      new Map([["run-r", revertRecord("run-r", { revertTurn })]]),
-    );
-
-    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual({
-      ok: false,
-      reason: "interrupt-failed",
-    });
-
-    answer = APPLIED;
-    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual(APPLIED);
-  });
-
-  it("answers a throwing port with a body-free diagnostic and frees the reservation", async () => {
-    const records: ServerDiagnosticRecord[] = [];
-    const revertTurn = vi.fn<RevertTurn>(() => Promise.reject(new Error("private failure text")));
-    const dispatcher = createProductionRuntimeTaskDispatcher(
-      new Map([["run-r", revertRecord("run-r", { revertTurn })]]),
-      { record: (diagnostic): void => void records.push(diagnostic) },
-    );
-
-    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual({
-      ok: false,
-      reason: "revert-failed",
-    });
-
-    expect(records).toEqual([
-      expect.objectContaining({
-        operation: "coding-runtime.task-dispatch",
-        code: "stage=dispatch:reason=exception",
-      }),
-    ]);
-    expect(JSON.stringify(records)).not.toContain("private failure text");
-    revertTurn.mockImplementation(() => Promise.resolve(APPLIED));
-    await expect(dispatcher.revert?.(revertRequest("run-r", "req-1", 4))).resolves.toEqual(APPLIED);
+  registerReservedRunAction<Awaited<ReturnType<RevertTurn>>>({
+    refusalTitle: "refuses an unknown run, a stopped run and a runtime that cannot revert",
+    runId: "run-r",
+    record: (runId, answer) =>
+      revertRecord(runId, answer === undefined ? {} : { revertTurn: () => answer() }),
+    dispatch: (dispatcher, runId) => dispatcher.revert?.(revertRequest(runId, "req-1", 4)),
+    success: APPLIED,
+    refusal: { ok: false, reason: "interrupt-failed" },
+    failureReason: "revert-failed",
   });
 
   it("reads the counts through the run's port and reports none for an unknown run or a port without them", async () => {
@@ -2834,72 +2863,15 @@ describe("pending message admission (S07)", () => {
     expect(actOnInbox).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses an unknown run, a stopped run and a runtime that holds no inbox", async () => {
-    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.resolve(CANCELLED));
-    const stopped = inboxRecord("run-stopped", { actOnInbox });
-    stopped.controller.abort();
-    const dispatcher = createProductionRuntimeTaskDispatcher(
-      new Map([
-        ["run-stopped", stopped],
-        ["run-codex", inboxRecord("run-codex", {})],
-      ]),
-    );
-
-    await expect(
-      dispatcher.inboxAction?.(inboxRequest("run-missing", "req-1", 4)),
-    ).resolves.toEqual({ ok: false, reason: "run-unavailable" });
-    await expect(
-      dispatcher.inboxAction?.(inboxRequest("run-stopped", "req-1", 4)),
-    ).resolves.toEqual({ ok: false, reason: "run-unavailable" });
-    await expect(dispatcher.inboxAction?.(inboxRequest("run-codex", "req-1", 4))).resolves.toEqual({
-      ok: false,
-      reason: "unsupported",
-    });
-    expect(actOnInbox).not.toHaveBeenCalled();
-  });
-
-  it("releases the reservation when the port refuses, so the same revision can be retried", async () => {
-    let answer: Awaited<ReturnType<ActOnInbox>> = { ok: false, reason: "unknown-item" };
-    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.resolve(answer));
-    const dispatcher = createProductionRuntimeTaskDispatcher(
-      new Map([["run-i", inboxRecord("run-i", { actOnInbox })]]),
-    );
-
-    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual({
-      ok: false,
-      reason: "unknown-item",
-    });
-
-    answer = CANCELLED;
-    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual(
-      CANCELLED,
-    );
-  });
-
-  it("answers a throwing port with a body-free diagnostic and frees the reservation", async () => {
-    const records: ServerDiagnosticRecord[] = [];
-    const actOnInbox = vi.fn<ActOnInbox>(() => Promise.reject(new Error("private failure text")));
-    const dispatcher = createProductionRuntimeTaskDispatcher(
-      new Map([["run-i", inboxRecord("run-i", { actOnInbox })]]),
-      { record: (diagnostic): void => void records.push(diagnostic) },
-    );
-
-    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual({
-      ok: false,
-      reason: "inbox-failed",
-    });
-
-    expect(records).toEqual([
-      expect.objectContaining({
-        operation: "coding-runtime.task-dispatch",
-        code: "stage=dispatch:reason=exception",
-      }),
-    ]);
-    expect(JSON.stringify(records)).not.toContain("private failure text");
-    actOnInbox.mockImplementation(() => Promise.resolve(CANCELLED));
-    await expect(dispatcher.inboxAction?.(inboxRequest("run-i", "req-1", 4))).resolves.toEqual(
-      CANCELLED,
-    );
+  registerReservedRunAction<Awaited<ReturnType<ActOnInbox>>>({
+    refusalTitle: "refuses an unknown run, a stopped run and a runtime that holds no inbox",
+    runId: "run-i",
+    record: (runId, answer) =>
+      inboxRecord(runId, answer === undefined ? {} : { actOnInbox: () => answer() }),
+    dispatch: (dispatcher, runId) => dispatcher.inboxAction?.(inboxRequest(runId, "req-1", 4)),
+    success: CANCELLED,
+    refusal: { ok: false, reason: "unknown-item" },
+    failureReason: "inbox-failed",
   });
 
   it("lists through the run's port and reports none for an unknown run or a port without an inbox", async () => {
