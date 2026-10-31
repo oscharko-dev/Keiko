@@ -240,3 +240,20 @@ failed on Windows path separators; normalizing the resolved relative path to man
 notation preserves the complete dependency check and both source-binding tests now pass.
 Representative desktop dark and editor light captures were visually inspected. Historical
 fixture layout limits and the separation from real Workbench acceptance remain unchanged.
+
+## Dependency alignment with #4168 — 2026-10-31
+
+The four original producers were rerun on Windows x64 with Node 24.18.0 and npm
+11.16.0 after aligning minimatch 11.0.3 and glob 14.0.3 with #4168 while retaining
+the exact-flat runtime override. Each proof binds this branch's own source inputs;
+no proof hashes were copied from the other PR.
+
+Component fidelity passed 427 probes with zero gated differences. Editor fidelity
+passed 160 gated probes with zero gated differences and all 14 reference captures;
+the existing non-gated accent differences remain recorded. The seven-mode axe
+proof has zero serious/critical violations and zero unresolved incomplete findings.
+All 108 browser captures passed their page-error, API, selector, crash and trust
+controls. All 281 CSS/proof tests passed. No assertions, tolerances or budgets changed.
+
+These synthetic fixtures do not replace the tool-catalog performance pairing,
+D12 reference measurement or release-owner runtime approval.
