@@ -1,9 +1,7 @@
 import { acceptedValue } from "./__tests__/support/accepted-value.js";
 import type {
-  CheckedResultExpected,
-  CheckedResultFacts,
-  LibraryParserTripleExpected,
-  LibraryParserTripleFacts,
+  PublicParserExpected,
+  PublicParserFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
@@ -529,23 +527,19 @@ export function parsePublicPromptScorecard(
 describe("Prompt scorecard public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      PublicParserFacts<
         typeof validatePromptCandidateScorecard,
         typeof publicPromptScorecard,
         typeof parsePublicPromptScorecard
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      PublicParserExpected<
         PromptEnhancerValidation<PromptCandidateScorecard>,
-        PublicPromptValidation<PublicPromptScorecard>,
         PublicPromptValidation<PublicPromptScorecard>
       >
     >();
   });
   it("pins independent public nested output fields", () => {
-    expectTypeOf<
-      CheckedResultFacts<typeof publicPromptScorecard>
-    >().toEqualTypeOf<CheckedResultExpected>();
     const value = acceptedValue(publicPromptScorecard(validScorecard()));
     expectTypeOf(value.candidateId).toEqualTypeOf<string>();
     expectTypeOf(value.aggregateScore).toEqualTypeOf<number>();
@@ -593,23 +587,19 @@ export function parsePublicPromptSelection(
 describe("Prompt selection public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      PublicParserFacts<
         typeof validatePromptCandidateSelection,
         typeof publicPromptSelection,
         typeof parsePublicPromptSelection
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      PublicParserExpected<
         PromptEnhancerValidation<PromptCandidateSelection>,
-        PublicPromptValidation<PublicPromptSelection>,
         PublicPromptValidation<PublicPromptSelection>
       >
     >();
   });
   it("pins independent public nested output fields", () => {
-    expectTypeOf<
-      CheckedResultFacts<typeof publicPromptSelection>
-    >().toEqualTypeOf<CheckedResultExpected>();
     const value = acceptedValue(publicPromptSelection(validSelection()));
     expectTypeOf(value.winner).not.toBeAny();
     expectTypeOf(value.winner.aggregateScore).toEqualTypeOf<number>();

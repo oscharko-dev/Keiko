@@ -63,3 +63,26 @@ export function receiverCheckedReads<T extends object>(
   expectAcceptedReference(validate, input);
   return reads;
 }
+
+/** Admits `input` as itself with `member` intact, then refuses the `refused` variant. */
+export function expectRetainedWithRefusal<
+  T extends object,
+  V extends object,
+  K extends keyof T & keyof V,
+>(
+  validate: (
+    input: object,
+  ) =>
+    | { readonly ok: true; readonly value: V }
+    | { readonly ok: false; readonly errors: readonly string[] },
+  input: T,
+  member: K,
+  refused: object,
+): void {
+  const result = validate(input);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value).toBe(input);
+  expect(result.value[member]).toBe(input[member]);
+  expect(validate(refused).ok).toBe(false);
+}

@@ -255,44 +255,47 @@ function checkBrowserApprovalDecisionResult(
   return admitted;
 }
 
-function hasRequestsMembers(value: unknown): value is readonly BrowserApprovalRequestDescriptor[] {
-  return isPhysicalArrayOf(value, isBrowserApprovalRequestDescriptor);
+// A bounded physical collection of records, each with a valid identity and no identity repeated.
+function hasUniqueRecords<T>(
+  value: unknown,
+  limit: number,
+  isRecord: (entry: unknown) => entry is T,
+  key: keyof T,
+  isIdentity: (identity: unknown) => identity is string,
+): value is T[] {
+  if (!Array.isArray(value) || value.length > limit) return false;
+  if (!isPhysicalArrayOf(value, isRecord)) return false;
+  const entries: readonly T[] = value;
+  const count = entries.length;
+  const identities = new Set<string>();
+  for (let index = 0; index < count; index += 1) {
+    const entry = entries[index];
+    if (!isRecord(entry)) return false;
+    const identity: unknown = entry[key];
+    if (!isIdentity(identity)) return false;
+    identities.add(identity);
+  }
+  return identities.size === value.length;
 }
 
 function hasValidRequests(value: unknown): value is BrowserApprovalRequestDescriptor[] {
-  if (!Array.isArray(value) || value.length > BROWSER_APPROVAL_MAX_RECORDS) return false;
-  if (!hasRequestsMembers(value)) return false;
-  const entries: readonly BrowserApprovalRequestDescriptor[] = value;
-  const count = entries.length;
-  const identities = new Set<string>();
-  for (let index = 0; index < count; index += 1) {
-    const entry = entries[index];
-    if (!isBrowserApprovalRequestDescriptor(entry)) return false;
-    const identity: unknown = entry.requestId;
-    if (!isBrowserApprovalRequestId(identity)) return false;
-    identities.add(identity);
-  }
-  return identities.size === value.length;
-}
-
-function hasApprovalsMembers(value: unknown): value is readonly BrowserApprovalDescriptor[] {
-  return isPhysicalArrayOf(value, isBrowserApprovalDescriptor);
+  return hasUniqueRecords(
+    value,
+    BROWSER_APPROVAL_MAX_RECORDS,
+    isBrowserApprovalRequestDescriptor,
+    "requestId",
+    isBrowserApprovalRequestId,
+  );
 }
 
 function hasValidApprovals(value: unknown): value is BrowserApprovalDescriptor[] {
-  if (!Array.isArray(value) || value.length > BROWSER_APPROVAL_MAX_RECORDS * 2) return false;
-  if (!hasApprovalsMembers(value)) return false;
-  const entries: readonly BrowserApprovalDescriptor[] = value;
-  const count = entries.length;
-  const identities = new Set<string>();
-  for (let index = 0; index < count; index += 1) {
-    const entry = entries[index];
-    if (!isBrowserApprovalDescriptor(entry)) return false;
-    const identity: unknown = entry.approvalId;
-    if (!isBrowserApprovalId(identity)) return false;
-    identities.add(identity);
-  }
-  return identities.size === value.length;
+  return hasUniqueRecords(
+    value,
+    BROWSER_APPROVAL_MAX_RECORDS * 2,
+    isBrowserApprovalDescriptor,
+    "approvalId",
+    isBrowserApprovalId,
+  );
 }
 
 export function validateBrowserApprovalManagementResult(

@@ -1,9 +1,7 @@
 import { acceptedValue } from "./__tests__/support/accepted-value.js";
 import type {
-  CheckedResultExpected,
-  CheckedResultFacts,
-  LibraryParserTripleExpected,
-  LibraryParserTripleFacts,
+  PublicParserExpected,
+  PublicParserFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 // Tests for the pure Prompt Enhancer validators and branded-id constructors (Issue #1309).
 // Covers happy-path acceptance, per-invariant rejection, and the Ok|Fail discriminated result so
@@ -913,23 +911,19 @@ export function parsePublicPromptRequest(
 describe("Prompt request public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      PublicParserFacts<
         typeof validatePromptEnhancementRequest,
         typeof publicPromptRequest,
         typeof parsePublicPromptRequest
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      PublicParserExpected<
         PromptEnhancerValidation<PromptEnhancementRequest>,
-        PublicPromptValidation<PublicPromptRequest>,
         PublicPromptValidation<PublicPromptRequest>
       >
     >();
   });
   it("pins independent public nested output fields", () => {
-    expectTypeOf<
-      CheckedResultFacts<typeof publicPromptRequest>
-    >().toEqualTypeOf<CheckedResultExpected>();
     const value = acceptedValue(publicPromptRequest(validRequest()));
     expectTypeOf(value.requestId).not.toBeAny();
     expectTypeOf(value.requestId).toEqualTypeOf<PublicRequestId>();
@@ -978,23 +972,19 @@ export function parsePublicPromptAnalysis(
 describe("Prompt analysis public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      PublicParserFacts<
         typeof validatePromptTaskAnalysis,
         typeof publicSignalAnalysis,
         typeof parsePublicPromptAnalysis
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      PublicParserExpected<
         PromptEnhancerValidation<PromptTaskAnalysis>,
-        PublicPromptValidation<PublicPromptAnalysis>,
         PublicPromptValidation<PublicPromptAnalysis>
       >
     >();
   });
   it("pins independent public nested output fields", () => {
-    expectTypeOf<
-      CheckedResultFacts<typeof publicSignalAnalysis>
-    >().toEqualTypeOf<CheckedResultExpected>();
     const value = acceptedValue(publicSignalAnalysis(analyzePrompt(validRequest())));
     expectTypeOf(value.requestId).not.toBeAny();
     expectTypeOf(value.requestId).toEqualTypeOf<PublicRequestId>();
@@ -1056,23 +1046,19 @@ export function parsePublicPromptGrounding(
 describe("Prompt grounding public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      PublicParserFacts<
         typeof validateGroundingPlan,
         typeof publicGroundingPlan,
         typeof parsePublicPromptGrounding
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      PublicParserExpected<
         PromptEnhancerValidation<GroundingPlan>,
-        PublicPromptValidation<PublicGroundingPlan>,
         PublicPromptValidation<PublicGroundingPlan>
       >
     >();
   });
   it("pins independent public nested output fields", () => {
-    expectTypeOf<
-      CheckedResultFacts<typeof publicGroundingPlan>
-    >().toEqualTypeOf<CheckedResultExpected>();
     const value = acceptedValue(
       publicGroundingPlan(planFor("Explain the latest security guidance.")),
     );
@@ -1128,23 +1114,19 @@ export function parsePublicEnhancedPrompt(
 describe("Enhanced prompt public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      PublicParserFacts<
         typeof validateEnhancedPrompt,
         typeof publicEnhancedPrompt,
         typeof parsePublicEnhancedPrompt
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      PublicParserExpected<
         PromptEnhancerValidation<EnhancedPrompt>,
-        PublicPromptValidation<PublicEnhancedPrompt>,
         PublicPromptValidation<PublicEnhancedPrompt>
       >
     >();
   });
   it("pins independent public nested output fields", () => {
-    expectTypeOf<
-      CheckedResultFacts<typeof publicEnhancedPrompt>
-    >().toEqualTypeOf<CheckedResultExpected>();
     const value = acceptedValue(publicEnhancedPrompt(validEnhancedPrompt()));
     expectTypeOf(value.promptId).not.toBeAny();
     expectTypeOf(value.promptId).toEqualTypeOf<PublicEnhancedId>();

@@ -153,3 +153,21 @@ export type ContextDiagnosticTripleExpected<Result> = readonly [
   [unknown],
   number,
 ];
+
+/** A source and public declaration of the same optional field, with presence made required. */
+export type OptionalFieldPair<Source, Public, Key extends keyof Source & keyof Public> = readonly [
+  Required<Source>[Key],
+  Required<Public>[Key],
+];
+
+/** The parser triple's facts plus the public stage's checked-result facts. */
+export type PublicParserFacts<
+  S extends Callable,
+  P extends Callable,
+  W extends Callable,
+> = readonly [LibraryParserTripleFacts<S, P, W>, CheckedResultFacts<P>];
+
+export type PublicParserExpected<SOutput, POutput> = readonly [
+  LibraryParserTripleExpected<SOutput, POutput, POutput>,
+  CheckedResultExpected,
+];

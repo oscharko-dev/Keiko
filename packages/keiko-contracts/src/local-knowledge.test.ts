@@ -1,3 +1,4 @@
+import type { OptionalFieldPair } from "./__tests__/support/library-parser-type-facts.js";
 // Unit tests for the Local Knowledge Connector contracts (Epic #189, Issue #191). Each
 // negative test mutates exactly one field of a known-good fixture so failures point
 // precisely at the broken invariant — the same mutation-robust pattern used by
@@ -1454,8 +1455,9 @@ describe("Knowledge graph public responsibility (#3918)", () => {
 });
 
 function assertSetPresentUndefinedTypes(): void {
-  expectTypeOf<Required<CapsuleSet>["description"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<PublicCapsuleSet>["description"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<OptionalFieldPair<CapsuleSet, PublicCapsuleSet, "description">>().toEqualTypeOf<
+    readonly [string | undefined, string | undefined]
+  >();
 }
 
 it("preserves source and public Set option presence with truthful types", (): void => {
@@ -1477,18 +1479,20 @@ it("preserves source and public Set option presence with truthful types", (): vo
 });
 
 function assertReindexPresentUndefinedTypes(): void {
-  expectTypeOf<Required<CapsuleReindexRequest>["mode"]>().toEqualTypeOf<
-    (typeof CAPSULE_REINDEX_MODES)[number] | undefined
+  expectTypeOf<
+    OptionalFieldPair<CapsuleReindexRequest, PublicReindexRequest, "mode">
+  >().toEqualTypeOf<
+    readonly [
+      (typeof CAPSULE_REINDEX_MODES)[number] | undefined,
+      (typeof CAPSULE_REINDEX_MODES)[number] | undefined,
+    ]
   >();
-  expectTypeOf<Required<PublicReindexRequest>["mode"]>().toEqualTypeOf<
-    (typeof CAPSULE_REINDEX_MODES)[number] | undefined
-  >();
-  expectTypeOf<Required<CapsuleReindexRequest>["force"]>().toEqualTypeOf<boolean | undefined>();
-  expectTypeOf<Required<PublicReindexRequest>["force"]>().toEqualTypeOf<boolean | undefined>();
-  expectTypeOf<Required<CapsuleReindexRequest>["resumeJobId"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<PublicReindexRequest>["resumeJobId"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<
+    OptionalFieldPair<CapsuleReindexRequest, PublicReindexRequest, "force">
+  >().toEqualTypeOf<readonly [boolean | undefined, boolean | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<CapsuleReindexRequest, PublicReindexRequest, "resumeJobId">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
 }
 
 it("preserves source and public Reindex option presence with truthful types", (): void => {
@@ -1518,36 +1522,27 @@ it("preserves source and public Reindex option presence with truthful types", ()
 });
 
 function assertEmbeddingIdentityPresentUndefinedTypes(): void {
-  expectTypeOf<Required<EmbeddingModelIdentity>["modelRevision"]>().toEqualTypeOf<
-    string | undefined
+  expectTypeOf<
+    OptionalFieldPair<EmbeddingModelIdentity, PublicEmbeddingModelIdentity, "modelRevision">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<EmbeddingModelIdentity, PublicEmbeddingModelIdentity, "normalization">
+  >().toEqualTypeOf<
+    readonly [EmbeddingVectorNormalization | undefined, EmbeddingVectorNormalization | undefined]
   >();
-  expectTypeOf<Required<PublicEmbeddingModelIdentity>["modelRevision"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<EmbeddingModelIdentity>["normalization"]>().toEqualTypeOf<
-    EmbeddingVectorNormalization | undefined
-  >();
-  expectTypeOf<Required<PublicEmbeddingModelIdentity>["normalization"]>().toEqualTypeOf<
-    EmbeddingVectorNormalization | undefined
-  >();
-  expectTypeOf<Required<EmbeddingModelIdentity>["instructionVersion"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<PublicEmbeddingModelIdentity>["instructionVersion"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<EmbeddingModelIdentity>["embeddingSpaceFingerprint"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<PublicEmbeddingModelIdentity>["embeddingSpaceFingerprint"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<EmbeddingModelIdentity>["dimensionsParam"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<PublicEmbeddingModelIdentity>["dimensionsParam"]>().toEqualTypeOf<
-    number | undefined
-  >();
+  expectTypeOf<
+    OptionalFieldPair<EmbeddingModelIdentity, PublicEmbeddingModelIdentity, "instructionVersion">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      EmbeddingModelIdentity,
+      PublicEmbeddingModelIdentity,
+      "embeddingSpaceFingerprint"
+    >
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<EmbeddingModelIdentity, PublicEmbeddingModelIdentity, "dimensionsParam">
+  >().toEqualTypeOf<readonly [number | undefined, number | undefined]>();
 }
 
 it("preserves source and public EmbeddingIdentity option presence with truthful types", (): void => {
@@ -1598,36 +1593,33 @@ it("preserves source and public EmbeddingIdentity option presence with truthful 
 });
 
 function assertContextualRetrievalPresentUndefinedTypes(): void {
-  expectTypeOf<Required<CapsuleContextualRetrievalSettings>["modelId"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<PublicContextualRetrieval>["modelId"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<CapsuleContextualRetrievalSettings>["promptVersion"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<PublicContextualRetrieval>["promptVersion"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<CapsuleContextualRetrievalSettings>["strict"]>().toEqualTypeOf<
-    boolean | undefined
-  >();
-  expectTypeOf<Required<PublicContextualRetrieval>["strict"]>().toEqualTypeOf<
-    boolean | undefined
-  >();
-  expectTypeOf<Required<CapsuleContextualRetrievalSettings>["maxContextChars"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<PublicContextualRetrieval>["maxContextChars"]>().toEqualTypeOf<
-    number | undefined
-  >();
   expectTypeOf<
-    Required<CapsuleContextualRetrievalSettings>["documentContextMaxChars"]
-  >().toEqualTypeOf<number | undefined>();
-  expectTypeOf<Required<PublicContextualRetrieval>["documentContextMaxChars"]>().toEqualTypeOf<
-    number | undefined
-  >();
+    OptionalFieldPair<CapsuleContextualRetrievalSettings, PublicContextualRetrieval, "modelId">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      CapsuleContextualRetrievalSettings,
+      PublicContextualRetrieval,
+      "promptVersion"
+    >
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<CapsuleContextualRetrievalSettings, PublicContextualRetrieval, "strict">
+  >().toEqualTypeOf<readonly [boolean | undefined, boolean | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      CapsuleContextualRetrievalSettings,
+      PublicContextualRetrieval,
+      "maxContextChars"
+    >
+  >().toEqualTypeOf<readonly [number | undefined, number | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      CapsuleContextualRetrievalSettings,
+      PublicContextualRetrieval,
+      "documentContextMaxChars"
+    >
+  >().toEqualTypeOf<readonly [number | undefined, number | undefined]>();
 }
 
 it("preserves source and public ContextualRetrieval option presence with truthful types", (): void => {

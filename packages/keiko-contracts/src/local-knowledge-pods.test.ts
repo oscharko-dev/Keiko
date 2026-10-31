@@ -1,3 +1,4 @@
+import { expectRetainedWithRefusal } from "./__tests__/support/checked-envelope.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { happySummary } from "./__tests__/support/knowledge-array-fixtures.js";
 import type {
@@ -735,14 +736,10 @@ function consumePublicSummary(input: unknown): void {
 it("public summary consumer retains redaction and policy declarations and references", () => {
   const input = happySummary();
   consumePublicSummary(input);
-  const result = publicValidateSummary(input);
-  expect(result.ok).toBe(true);
-  if (!result.ok) return;
-  expect(result.value).toBe(input);
-  expect(result.value.modelUsePolicy).toBe(input.modelUsePolicy);
-  expect(
-    publicValidateSummary({ ...input, privacy: { ...input.privacy, rawContentExposed: true } }).ok,
-  ).toBe(false);
+  expectRetainedWithRefusal(publicValidateSummary, input, "modelUsePolicy", {
+    ...input,
+    privacy: { ...input.privacy, rawContentExposed: true },
+  });
 });
 
 function futureRemoteSummary(reasonCodes: readonly string[]): unknown {

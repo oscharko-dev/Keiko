@@ -1,3 +1,4 @@
+import { expectRetainedWithRefusal } from "./__tests__/support/checked-envelope.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   knowledgeCapturedExtentMembers,
@@ -409,14 +410,10 @@ function consumePublicActivity(input: unknown): void {
 it("public retrieval consumer retains closed privacy/state/count declarations", () => {
   const input = happyActivity();
   consumePublicActivity(input);
-  const result = publicValidateActivity(input);
-  expect(result.ok).toBe(true);
-  if (!result.ok) return;
-  expect(result.value).toBe(input);
-  expect(result.value.pods).toBe(input.pods);
-  expect(
-    publicValidateActivity({ ...input, privacy: { ...input.privacy, rawQueryExposed: true } }).ok,
-  ).toBe(false);
+  expectRetainedWithRefusal(publicValidateActivity, input, "pods", {
+    ...input,
+    privacy: { ...input.privacy, rawQueryExposed: true },
+  });
 });
 
 import type { LocalKnowledgeValidation as PublicKnowledgeValidation } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";

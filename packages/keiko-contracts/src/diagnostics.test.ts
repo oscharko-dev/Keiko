@@ -2469,30 +2469,44 @@ it("retains the public binding predicate's closed outcome guarantee", () => {
 });
 
 it("diagnostic ingress responsibility pins independent source and public predicate targets", () => {
-  expectTypeOf<typeof isClientDiagnosticIngestRequest>().toEqualTypeOf<
-    (value: unknown) => value is SourceDiagnosticReport
+  expectTypeOf<
+    [
+      typeof isClientDiagnosticIngestRequest,
+      typeof publicDiagnosticReport,
+      Parameters<typeof isClientDiagnosticIngestRequest>[0],
+      Parameters<typeof publicDiagnosticReport>[0],
+      SourceDiagnosticReport["message"],
+      PublicDiagnosticReport["message"],
+      SourceDiagnosticReport["codingRunRestore"],
+      PublicDiagnosticReport["codingRunRestore"],
+      SourceRunRestore["timelineCount"],
+      PublicRunRestore["timelineCount"],
+      SourceRunRestore["historyTruncated"],
+      PublicRunRestore["historyTruncated"],
+    ]
+  >().toEqualTypeOf<
+    [
+      (value: unknown) => value is SourceDiagnosticReport,
+      (value: unknown) => value is PublicDiagnosticReport,
+      unknown,
+      unknown,
+      string,
+      string,
+      SourceRunRestore | undefined,
+      PublicRunRestore | undefined,
+      number,
+      number,
+      boolean,
+      boolean,
+    ]
   >();
-  expectTypeOf<typeof publicDiagnosticReport>().toEqualTypeOf<
-    (value: unknown) => value is PublicDiagnosticReport
-  >();
-  expectTypeOf<Parameters<typeof isClientDiagnosticIngestRequest>[0]>().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicDiagnosticReport>[0]>().not.toBeAny();
-  expectTypeOf<SourceDiagnosticReport>().not.toBeAny();
-  expectTypeOf<PublicDiagnosticReport>().not.toBeAny();
-  expectTypeOf<SourceDiagnosticReport["message"]>().toEqualTypeOf<string>();
-  expectTypeOf<PublicDiagnosticReport["message"]>().toEqualTypeOf<string>();
-  expectTypeOf<PublicDiagnosticReport["message"]>().not.toBeAny();
-  expectTypeOf<SourceDiagnosticReport["codingRunRestore"]>().toEqualTypeOf<
-    SourceRunRestore | undefined
-  >();
-  expectTypeOf<PublicDiagnosticReport["codingRunRestore"]>().toEqualTypeOf<
-    PublicRunRestore | undefined
-  >();
-  expectTypeOf<SourceRunRestore["timelineCount"]>().toEqualTypeOf<number>();
-  expectTypeOf<PublicRunRestore["timelineCount"]>().not.toBeAny();
-  expectTypeOf<PublicRunRestore["timelineCount"]>().toEqualTypeOf<number>();
-  expectTypeOf<SourceRunRestore["historyTruncated"]>().toEqualTypeOf<boolean>();
-  expectTypeOf<PublicRunRestore["historyTruncated"]>().toEqualTypeOf<boolean>();
+  // A union containing `any` is `any`, so one matcher covers every listed type.
+  expectTypeOf<
+    | SourceDiagnosticReport
+    | PublicDiagnosticReport
+    | PublicDiagnosticReport["message"]
+    | PublicRunRestore["timelineCount"]
+  >().not.toBeAny();
 });
 
 it("diagnostic ingress responsibility preserves admitted restoration identity through both predicates", () => {
@@ -2547,32 +2561,40 @@ it("diagnostic ingress responsibility refuses malformed root and restoration fie
 });
 
 it("binding ingress responsibility pins independent source and public predicate targets", () => {
-  expectTypeOf<typeof isClientBindingIngestRequest>().toEqualTypeOf<
-    (value: unknown) => value is SourceBindingReport
-  >();
-  expectTypeOf<typeof publicBindingReport>().toEqualTypeOf<
-    (value: unknown) => value is PublicBindingReport
-  >();
-  expectTypeOf<Parameters<typeof isClientBindingIngestRequest>[0]>().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicBindingReport>[0]>().not.toBeAny();
-  expectTypeOf<SourceBindingReport>().not.toBeAny();
-  expectTypeOf<PublicBindingReport>().not.toBeAny();
-  expectTypeOf<SourceBindingReport["candidateCount"]>().toEqualTypeOf<number | undefined>();
-  expectTypeOf<PublicBindingReport["candidateCount"]>().toEqualTypeOf<number | undefined>();
-  expectTypeOf<PublicBindingReport["candidateCount"]>().not.toBeAny();
-  expectTypeOf<SourceBindingReport["relatedCorrelationIds"]>().toEqualTypeOf<
-    readonly string[] | undefined
-  >();
-  expectTypeOf<PublicBindingReport["relatedCorrelationIds"]>().toEqualTypeOf<
-    readonly string[] | undefined
-  >();
   expectTypeOf<
-    NonNullable<SourceBindingReport["relatedCorrelationIds"]>[number]
-  >().toEqualTypeOf<string>();
-  expectTypeOf<NonNullable<PublicBindingReport["relatedCorrelationIds"]>[number]>().not.toBeAny();
+    [
+      typeof isClientBindingIngestRequest,
+      typeof publicBindingReport,
+      Parameters<typeof isClientBindingIngestRequest>[0],
+      Parameters<typeof publicBindingReport>[0],
+      SourceBindingReport["candidateCount"],
+      PublicBindingReport["candidateCount"],
+      SourceBindingReport["relatedCorrelationIds"],
+      PublicBindingReport["relatedCorrelationIds"],
+      NonNullable<SourceBindingReport["relatedCorrelationIds"]>[number],
+      NonNullable<PublicBindingReport["relatedCorrelationIds"]>[number],
+    ]
+  >().toEqualTypeOf<
+    [
+      (value: unknown) => value is SourceBindingReport,
+      (value: unknown) => value is PublicBindingReport,
+      unknown,
+      unknown,
+      number | undefined,
+      number | undefined,
+      readonly string[] | undefined,
+      readonly string[] | undefined,
+      string,
+      string,
+    ]
+  >();
+  // A union containing `any` is `any`, so one matcher covers every listed type.
   expectTypeOf<
-    NonNullable<PublicBindingReport["relatedCorrelationIds"]>[number]
-  >().toEqualTypeOf<string>();
+    | SourceBindingReport
+    | PublicBindingReport
+    | PublicBindingReport["candidateCount"]
+    | NonNullable<PublicBindingReport["relatedCorrelationIds"]>[number]
+  >().not.toBeAny();
 });
 
 it("binding ingress responsibility preserves admitted offer and related correlation identities", () => {
