@@ -98,7 +98,9 @@ external ancestors of that edge, including peer-coupled ancestors, through the e
 bundle/archive representation. Their existing edges to delivered siblings and pinned leaves become
 exact peers. Unchanged children remain registry dependencies and are promoted from the actual
 lockfile owner, retaining required or optional reachability; a required origin wins. The current
-exception contains five Java parser ancestors, not the complete third-party runtime closure.
+exception contains five Java parser ancestors plus the three TUF ancestors (`@tufjs/models`,
+`tuf-js`, `@sigstore/tuf`) affected by the reviewed minimatch 11.0.1 security pin (#4090),
+not the complete third-party runtime closure.
 The planner accepts only exact flat pins selected by the reviewed lockfile; unsupported alias
 identity changes fail closed. Upstream source and license bytes are preserved, lifecycle scripts
 are removed from staged manifests, and installed/source manifests are never rewritten. Clean npm
