@@ -22,8 +22,10 @@ import {
   withCodingJiraServer,
 } from "./codingJiraPodBinding.js";
 
-/** A backlog draft is approved as one reviewed tree in Chat; Coding runs never offer it (#4178). */
-const CODING_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter((operation) => operation !== "jira.draft");
+/** A draft is approved as one reviewed tree in Chat (#4178) and an attachment reads Chat-connected files (#4176); Coding runs offer neither. */
+const CODING_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
+  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
+);
 
 const BINDING = {
   podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
@@ -44,6 +46,7 @@ describe("the run's Jira server definition", () => {
         .map(([n]) => n),
     ).toEqual(CODING_MUTATIONS);
     expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.draft"]);
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.attach"]);
   });
 
   it("reaches the policy as jira_<tool> without any two tools sharing an action", () => {

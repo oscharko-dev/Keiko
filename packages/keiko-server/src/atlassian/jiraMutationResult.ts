@@ -28,6 +28,7 @@ const RECEIPT_KEYS: ReadonlySet<string> = new Set([
   "issueId",
   "commentId",
   "transitionId",
+  "attachmentId",
 ]);
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
@@ -37,6 +38,7 @@ const REQUIRED_RECEIPTS: Readonly<
   "jira.assign": ["issueKey"],
   "jira.comment": ["issueKey", "commentId"],
   "jira.transition": ["issueKey", "transitionId"],
+  "jira.attach": ["issueKey", "attachmentId"],
   // A draft is never one attempt: each item is a journaled jira.create with its own receipt.
   "jira.draft": ["issueKey", "issueId"],
 };

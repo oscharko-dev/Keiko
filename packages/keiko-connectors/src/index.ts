@@ -27,6 +27,8 @@ export {
 } from "./atlassian-credential-custody.js";
 export {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
+  ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
+  type AtlassianHttpUpload,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpBodyResult,
@@ -195,6 +197,14 @@ export {
   isJiraIssueLinkWrite,
 } from "./jira-issue-links.js";
 export {
+  parseJiraAttachmentArguments,
+  type JiraAttachmentContent,
+  type JiraAttachmentSource,
+  type JiraAttachmentSourceRequest,
+  type JiraAttachmentSourceResult,
+  type JiraAttachmentArguments,
+} from "./jira-attachments.js";
+export {
   JIRA_DRAFT_IDENTITY_PREFIX,
   excludedJiraDraftRefs,
   jiraDraftDependencies,
@@ -205,7 +215,11 @@ export {
   type JiraDraftLink,
   type JiraDraftParent,
 } from "./jira-draft.js";
-export { executeJiraDraftItem, findJiraDraftItem } from "./jira-managed-mutations.js";
+export {
+  executeJiraDraftItem,
+  findJiraDraftItem,
+  readJiraAttachmentLimit,
+} from "./jira-managed-mutations.js";
 export { jiraBrowseUrl } from "./jira-browse-url.js";
 export {
   JIRA_TEMPLATE_FINDING_CODES,

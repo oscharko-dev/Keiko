@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JiraFieldMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { parseJiraFieldMetadata, validateJiraFieldChanges } from "./jira-field-metadata.js";
 
 function field(
@@ -310,6 +311,207 @@ describe("Jira scalar, reference and metadata edge cases", () => {
     expect(validateJiraFieldChanges(meta.fields, {}, "transition", "data-center")).toMatchObject({
       ok: false,
       reason: "required-field",
+    });
+  });
+
+  // #4176 lab (S17): Jira sets the reporter to the caller when it is absent, although create
+  // metadata lists it as required without a default. No other required field gets that grace.
+  describe("the reporter of a new issue", () => {
+    const meta = (): readonly JiraFieldMetadata[] => {
+      const result = parseJiraFieldMetadata([
+        field("summary", "string", { required: true }),
+        field("reporter", "user", { required: true, hasDefaultValue: false }),
+      ]);
+      if (!result.ok) throw new Error("Invalid fixture");
+      return result.fields;
+    };
+    it("may be omitted on create and is then not sent", () => {
+      expect(validateJiraFieldChanges(meta(), { summary: "S" }, "create", "data-center")).toEqual({
+        ok: true,
+        fields: { summary: "S" },
+        update: {},
+      });
+    });
+    it("is still required for a transition and any other required field is still refused", () => {
+      expect(validateJiraFieldChanges(meta(), {}, "create", "data-center")).toMatchObject({
+        ok: false,
+        reason: "required-field",
+        fieldId: "summary",
+      });
+      expect(
+        validateJiraFieldChanges(meta(), { summary: "S" }, "transition", "data-center"),
+      ).toMatchObject({ ok: false, reason: "required-field", fieldId: "reporter" });
+    });
+    it("is validated like any user when supplied", () => {
+      const supplied = (reporter: unknown): unknown =>
+        validateJiraFieldChanges(meta(), { summary: "S", reporter }, "create", "data-center");
+      expect(supplied("x".repeat(257))).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "reporter",
+      });
+      expect(supplied("")).toMatchObject({ ok: false, fieldId: "reporter" });
+      expect(supplied(null)).toMatchObject({ ok: false, fieldId: "reporter" });
+      expect(supplied("keiko-admin")).toMatchObject({
+        ok: true,
+        fields: { reporter: { name: "keiko-admin" } },
+      });
+    });
+  });
+
+  // #4176 lab (S05): models send the user or choice itself, not Jira's reference object. A bare
+  // string is canonicalized to the one reference the deployment and the offered choices admit.
+  describe("bare user and option values", () => {
+    const parse = (...fields: Record<string, unknown>[]): readonly JiraFieldMetadata[] => {
+      const result = parseJiraFieldMetadata(fields);
+      if (!result.ok) throw new Error("Invalid fixture");
+      return result.fields;
+    };
+    const check = (
+      fields: readonly JiraFieldMetadata[],
+      value: unknown,
+      id: string,
+      deployment: "data-center" | "cloud" = "data-center",
+    ): unknown => validateJiraFieldChanges(fields, { [id]: value }, "edit", deployment);
+    const OPTIONS = [
+      { id: "10", value: "Blue" },
+      { id: "11", value: "Green" },
+      { id: "12", value: "Green" },
+      { id: "Green-id", value: "Other" },
+    ];
+    const choice = (allowedValues?: unknown[]): readonly JiraFieldMetadata[] =>
+      parse(
+        field("customfield_5", "option", {
+          schema: {
+            type: "option",
+            custom: "com.atlassian.jira.plugin.system.customfieldtypes:select",
+          },
+          ...(allowedValues === undefined ? {} : { allowedValues }),
+        }),
+      );
+    it("turns a bare user name into the deployment's user key", () => {
+      const fields = parse(field("reporter", "user"));
+      expect(check(fields, "keiko-admin", "reporter")).toMatchObject({
+        ok: true,
+        fields: { reporter: { name: "keiko-admin" } },
+      });
+      expect(check(fields, "5b10ac8d82e05b22cc7d4ef5", "reporter", "cloud")).toMatchObject({
+        ok: true,
+        fields: { reporter: { accountId: "5b10ac8d82e05b22cc7d4ef5" } },
+      });
+      expect(check(fields, { name: "keiko-admin" }, "reporter")).toMatchObject({ ok: true });
+    });
+    it.each(["", " ", "x".repeat(257), "line\nbreak"])("refuses the bare user %j", (value) => {
+      expect(check(parse(field("reporter", "user")), value, "reporter")).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+      });
+    });
+    it("keeps a bare user inside the offered users", () => {
+      const fields = parse(
+        field("reporter", "user", { allowedValues: [{ name: "alice", accountId: "cloud-a" }] }),
+      );
+      expect(check(fields, "alice", "reporter")).toMatchObject({ ok: true });
+      expect(check(fields, "bob", "reporter")).toMatchObject({ ok: false });
+      expect(check(fields, "cloud-a", "reporter", "cloud")).toMatchObject({ ok: true });
+      expect(check(fields, "alice", "reporter", "cloud")).toMatchObject({ ok: false });
+    });
+    it("accepts bare users in a user list", () => {
+      const fields = parse(
+        field("customfield_6", "array", {
+          schema: {
+            type: "array",
+            items: "user",
+            custom: "com.atlassian.jira.plugin.system.customfieldtypes:multiuserpicker",
+          },
+        }),
+      );
+      expect(check(fields, ["alice", { name: "bob" }], "customfield_6")).toMatchObject({
+        ok: true,
+        fields: { customfield_6: [{ name: "alice" }, { name: "bob" }] },
+      });
+    });
+    it("matches a bare option by id, then by exact value, and canonicalizes to the id", () => {
+      const fields = choice(OPTIONS);
+      expect(check(fields, "10", "customfield_5")).toMatchObject({
+        ok: true,
+        fields: { customfield_5: { id: "10" } },
+      });
+      expect(check(fields, "Blue", "customfield_5")).toMatchObject({
+        ok: true,
+        fields: { customfield_5: { id: "10" } },
+      });
+      // An id match wins over a value match: "Green-id" is an id, "Other" its value.
+      expect(check(fields, "Green-id", "customfield_5")).toMatchObject({
+        ok: true,
+        fields: { customfield_5: { id: "Green-id" } },
+      });
+    });
+    it("refuses a string that is one choice's id and another choice's name, with a message", () => {
+      const fields = choice([
+        { id: "10", value: "Blue" },
+        { id: "11", value: "10" },
+      ]);
+      const ambiguous = check(fields, "10", "customfield_5") as { message?: string };
+      expect(ambiguous).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "customfield_5",
+      });
+      expect(ambiguous.message).toContain("more than one offered choice");
+      expect(check(fields, "Blue", "customfield_5")).toMatchObject({ ok: true });
+      const unknown = check(fields, "nothing", "customfield_5") as { message?: string };
+      expect(unknown).toMatchObject({ ok: false });
+      expect(unknown.message).toContain("none of the offered choices");
+    });
+    it.each([
+      ["an ambiguous value", "Green"],
+      ["a value that is not offered", "Purple"],
+      ["a different case", "blue"],
+    ])("refuses a bare option with %s", (_label, value) => {
+      expect(check(choice(OPTIONS), value, "customfield_5")).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+      });
+    });
+    it("takes only a numeric id when no choices are listed", () => {
+      const fields = choice();
+      expect(check(fields, "10", "customfield_5")).toMatchObject({
+        ok: true,
+        fields: { customfield_5: { id: "10" } },
+      });
+      expect(check(fields, "Blue", "customfield_5")).toMatchObject({ ok: false });
+      expect(check(fields, "10; drop", "customfield_5")).toMatchObject({ ok: false });
+    });
+    it("accepts bare choices in an option list and keeps the object form", () => {
+      const fields = parse(
+        field("components", "array", {
+          schema: { type: "array", items: "component", system: "components" },
+          allowedValues: [
+            { id: "1", name: "Backend" },
+            { id: "2", name: "Frontend" },
+          ],
+        }),
+      );
+      expect(check(fields, ["Backend", "2", { id: "1" }], "components")).toMatchObject({
+        ok: true,
+        fields: { components: [{ id: "1" }, { id: "2" }, { id: "1" }] },
+      });
+      expect(check(fields, ["Missing"], "components")).toMatchObject({ ok: false });
+    });
+    it("matches a bare priority or issue type by its name", () => {
+      const fields = parse(
+        field("priority", "priority", {
+          allowedValues: [
+            { id: "1", name: "High" },
+            { id: "2", name: "Low" },
+          ],
+        }),
+      );
+      expect(check(fields, "High", "priority")).toMatchObject({
+        ok: true,
+        fields: { priority: { id: "1" } },
+      });
     });
   });
 

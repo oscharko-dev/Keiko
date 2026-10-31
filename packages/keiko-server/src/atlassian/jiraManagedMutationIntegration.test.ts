@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyPort,
+  JiraAttachmentSource,
   JiraManagedMutationExecutor,
 } from "@oscharko-dev/keiko-connectors";
 import {
@@ -84,7 +85,12 @@ const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
     fields: { customfield_10000: "Screen value" },
   },
   "jira.draft": DRAFT,
+  "jira.attach": {
+    issueKey: "SYN-1",
+    source: { kind: "connected-file", path: "docs/report.txt" },
+  },
 };
+const ATTACHED = new TextEncoder().encode("synthetic attachment body");
 const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
   "jira.create": {
     fields: {
@@ -98,6 +104,7 @@ const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
   "jira.assign": { fields: { assignee: { name: "synthetic-user" } } },
   "jira.comment": { comment: "Synthetic comment" },
   "jira.transition": { fields: { status: { id: "3" }, customfield_10000: "Screen value" } },
+  "jira.attach": { fields: { attachment: [{ id: "10300", size: ATTACHED.length }] } },
 };
 function database(): {
   journal: ReturnType<typeof createChatToolMutationStore>;
@@ -171,7 +178,7 @@ function remote(
           ? mode === "readback-denied" && writes > 0
             ? response({}, 403)
             : fixtureRead(path, state)
-          : fixtureWrite(path, await request.text(), state);
+          : await fixtureWriteResult(request, path, state);
       if (request.method !== "GET" && mode === "lost-response")
         throw new TypeError("Synthetic connection loss after commit");
       if (result.kind !== "response") throw new Error("Expected synthetic HTTP response");
@@ -181,6 +188,20 @@ function remote(
       });
     },
   };
+}
+/** A governed upload reaches Jira as one multipart POST that carries the XSRF opt-out header. */
+async function fixtureWriteResult(
+  request: Request,
+  path: string,
+  state: SyntheticJira,
+): Promise<ReturnType<typeof fixtureWrite>> {
+  if (!request.headers.get("content-type")?.startsWith("multipart/form-data; boundary=keiko-"))
+    return fixtureWrite(path, await request.text(), state);
+  expect(request.headers.get("x-atlassian-token")).toBe("no-check");
+  expect(request.method).toBe("POST");
+  return fixtureWrite(path, undefined, state, {
+    bytes: new Uint8Array(await request.arrayBuffer()),
+  });
 }
 function mutationCredentials(fetchImpl: typeof fetch): {
   credentials: AtlassianConnectorCredentialDeps;
@@ -284,6 +305,13 @@ async function fixture(
       http: vi.fn(() => {
         throw new Error("Mutation must use the journal-owned HTTP port");
       }),
+      attachmentSource: (): ReturnType<JiraAttachmentSource> => {
+        const sha256 = createHash("sha256").update(ATTACHED).digest("hex");
+        return Promise.resolve({
+          ok: true,
+          content: { name: "report.txt", bytes: ATTACHED, sha256 },
+        });
+      },
     }),
     JIRA_MUTATION_OPERATIONS,
     executeMutation,

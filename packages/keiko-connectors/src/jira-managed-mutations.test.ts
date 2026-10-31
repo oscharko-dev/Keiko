@@ -3,6 +3,7 @@ import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtim
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import type { JiraAttachmentSource } from "./jira-attachments.js";
 
 import {
   field,
@@ -15,7 +16,7 @@ import {
   type SyntheticJira,
 } from "../../../tests/support/jira-managed-remote.js";
 
-function fixture(): {
+function fixture(attachmentSource?: JiraAttachmentSource): {
   controller: AbortController;
   beforeEffect: ReturnType<typeof vi.fn<() => boolean>>;
   http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
@@ -38,7 +39,7 @@ function fixture(): {
     return Promise.resolve(
       request.method === "GET"
         ? fixtureRead(path, state)
-        : fixtureWrite(path, request.bodyJson, state),
+        : fixtureWrite(path, request.bodyJson, state, request.upload),
     );
   });
   const controller = new AbortController();
@@ -57,7 +58,12 @@ function fixture(): {
           signal: controller.signal,
           beforeEffect,
         },
-        { deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http },
+        {
+          deployment: "data-center",
+          baseUrl: "https://jira.example.invalid/context",
+          http,
+          ...(attachmentSource === undefined ? {} : { attachmentSource }),
+        },
       ),
   };
 }
@@ -998,6 +1004,87 @@ it("does not write a link the issue already has (#4176)", async () => {
       },
     },
   ]);
+});
+// #4176 lab (S05): a model that names the reporter by user name must not be refused for the shape.
+it("sends a bare reporter name to Jira as the user reference the deployment expects", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, field("reporter", "user")],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", reporter: "keiko-admin" },
+    }),
+  ).toMatchObject({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    fields: { reporter: { name: "keiko-admin" } },
+  });
+});
+// #4176 lab (S17): Jira assigns the caller as reporter, so a create without one is not refused.
+it("creates without the reporter that create metadata lists as required, and sends none", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, field("reporter", "user", true)],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+    }),
+  ).toMatchObject({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    fields: { summary: "Synthetic" },
+  });
+  expect(dispatched?.bodyJson).not.toContain("reporter");
+});
+it("still refuses a create that omits another required field or supplies an invalid reporter", async () => {
+  const f = fixture();
+  const metadata = (): ReturnType<typeof response> =>
+    response({
+      values: [...FIELDS, field("reporter", "user", true)],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    });
+  f.http.mockResolvedValueOnce(metadata());
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic" },
+    }),
+  ).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+    detail: { validation: "required-field", fieldId: "customfield_10000" },
+  });
+  f.http.mockResolvedValueOnce(metadata());
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", reporter: "x".repeat(257) },
+    }),
+  ).toMatchObject({ ok: false, detail: { validation: "invalid-field", fieldId: "reporter" } });
+  expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
 });
 it("creates an issue with links when create metadata offers them (#4176)", async () => {
   const f = fixture();

@@ -37,7 +37,11 @@ export interface SyntheticJira {
   fields: Record<string, unknown>;
   comment: string;
 }
+/** The instance's own attachment switch and upload limit (#4176). */
+export const SYNTHETIC_UPLOAD_LIMIT = 1_048_576;
 export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
+  if (path.endsWith("/attachment/meta"))
+    return response({ enabled: true, uploadLimit: SYNTHETIC_UPLOAD_LIMIT });
   if (path.includes("createmeta"))
     return response({ values: FIELDS, start: 0, size: 100, last: true, total: FIELDS.length });
   if (path.endsWith("editmeta"))
@@ -113,6 +117,32 @@ function fixtureLinkUpdates(mutation: Record<string, unknown>, state: SyntheticJ
   for (const { add } of (mutation.update as LinkOperations)?.issuelinks ?? [])
     fixtureStoreLink(state, add);
 }
+/** The byte length of the one file part in a multipart body (#4176). */
+export function multipartFileSize(bytes: Uint8Array): number {
+  const text = Buffer.from(bytes).toString("latin1");
+  const start = text.indexOf("\r\n\r\n") + 4;
+  const end = text.lastIndexOf("\r\n--");
+  return end - start;
+}
+/**
+ * The name this synthetic Jira stores: the plain `filename=` parameter only. It deliberately does
+ * not honour RFC 5987 `filename*`, the conservative behaviour a Data Center whose upload parser
+ * ignores the extended form would show; the connector's readback must accept it.
+ */
+function multipartFilename(bytes: Uint8Array): string {
+  const head = Buffer.from(bytes.subarray(0, 1024)).toString("latin1");
+  return /; filename="([^"]*)"/u.exec(head)?.[1] ?? "unnamed";
+}
+function fixtureAttach(
+  path: string,
+  upload: { readonly bytes: Uint8Array },
+  state: SyntheticJira,
+): AtlassianHttpBodyResult {
+  const size = multipartFileSize(upload.bytes);
+  const stored = [{ id: "10300", filename: multipartFilename(upload.bytes), size }];
+  state.fields.attachment = stored;
+  return path.endsWith("/SYN-1/attachments") ? response(stored) : response({}, 404);
+}
 /**
  * `POST /rest/api/2/issueLink`: `inwardIssue` is the source of the link, as a real Data Center
  * reads back (a link whose source is this issue lists the other under `outwardIssue`).
@@ -146,7 +176,9 @@ export function fixtureWrite(
   path: string,
   body: string | undefined,
   state: SyntheticJira,
+  upload?: { readonly bytes: Uint8Array },
 ): AtlassianHttpBodyResult {
+  if (upload !== undefined) return fixtureAttach(path, upload, state);
   const mutation = JSON.parse(body ?? "{}") as Record<string, unknown>;
   const refusal = fixtureLinkOperationRefusal(mutation);
   if (refusal !== undefined) return refusal;

@@ -388,8 +388,19 @@ unsupported; other fields remain usable, and a required field without a server d
 blocks creation. Plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
 opaque and issue fields offer only `set`, links only `add`, and unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
-Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
-Create may leave a Jira-declared default omitted without copying or fabricating it. Add/remove is
+A bare string is accepted for a user and for a choice and is canonicalized to the one reference the
+deployment admits (lab S05, #4176): a user name becomes `{ name }` on Data Center and
+`{ accountId }` on Cloud and stays bound by any listed users; a choice matches the offered
+`allowedValues` by exact id, value or name, only when exactly one entry matches, and becomes
+`{ id }` (a string that is one choice's id and another's value or name is refused as ambiguous,
+with a message for the model; without a list, only a numeric id is taken; anything else is
+refused). The
+object forms are unchanged. Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
+Create may leave a Jira-declared default omitted without copying or fabricating it. The system
+`reporter` is the one required field Keiko also lets a create omit: Jira assigns the authenticated
+caller as reporter when the field is absent although create metadata lists it as required without a
+default (lab S17, #4176). A supplied reporter is validated like any user; every other required
+field still blocks the create, and edit and transition are unaffected. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
 Cloud rich text uses the existing ADF composer; Data Center uses plain text, and user references
 respect each deployment's identity scheme. Fresh metadata, authority and dispatch remain separate
@@ -565,8 +576,72 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 The shared action vocabulary and registered outcome event include all twenty-one rows. The managed
 tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → `update-issue-fields`,
 `jira.assign` → `assign-issue`, `jira.comment` → `add-issue-comment`, and `jira.transition` →
-`transition-issue`. The ten read tools retain their names. Assignment has the same medium risk
+`transition-issue`, and `jira.attach` → `update-issue-fields`. The ten read tools retain their
+names. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
+
+**Attachments (#4176, 2026-10-31).** `jira.attach` maps to `update-issue-fields` (medium): it
+changes an existing issue exactly as an edit does and is governed, approved, journaled and
+confirmed as one. The file never comes from a host path the model names: the model gives a
+`connected-file` source, a path relative to a folder or file selection the human connected to the
+Chat, and the server admits it like a Files read (realpath containment, the deny list, no
+managed-task root, a descriptor bound to the admitted file). The selection is matched on the path
+asked for and again on the real location once symbolic links are resolved, so a link inside a
+selection cannot lead outside it. The bytes are raw, unredacted and unconverted, bounded by Keiko's
+20 MiB ceiling and by the instance's own `attachment/meta` switch and upload limit, whichever is
+lower; the limit is read before the review, so a file the human approves is never refused afterwards
+as too large. An empty file is refused. The name shown and sent is the name the model used (the
+link's own name, never its target's), unless it is not a plain file name.
+
+*Credential floor.* Attached bytes skip the redaction every other egress applies, and secret
+exfiltration is a mode-independent hard denial, so the content is classified and scanned at both the
+review and the send with the credential floor the redaction layer already uses
+(`containsCredentialShape` and `redactCredentialShapes`, plus a search for the configured secret
+literals in the raw bytes): text (valid UTF-8 without binary control characters) is scanned whole;
+PDF, Word and Excel documents are scanned through the Local Knowledge extractors, and a document
+whose text is clipped, absent or unreadable is refused; a PDF's own bytes are scanned as well, since
+an extractor surfaces only what a page shows; PNG, JPEG, GIF and WebP images, recognized by their
+signature, are allowed only when nothing hides in or behind them — their raw bytes are scanned like
+text (a metadata chunk, a comment or EXIF segment, or data appended after the image is where a
+polyglot carries a secret), and a PNG with bytes after IEND, a PNG that never reaches IEND, or a
+JPEG with bytes after its final EOI is refused as `unscannable`, since trailing data has no
+lawful use in an attachment; everything else — archives, databases, key stores, executables, unknown
+binary — is refused as `unscannable`, and a detected credential as `contains-credential`. The
+human therefore never approves such a file, and the tool description tells the model so. The scan is
+only as complete as the extractors and the byte scan: compressed image metadata chunks and an
+Office package's embedded objects are not read.
+
+*Review and send.* When the approval is requested the server reads the file and attaches its
+**name, size and SHA-256** to the approval view and so to the approval proof; the human is shown
+those, never the content. At send time the file is read again and must match the approved name, size
+and digest, otherwise nothing is sent and the model is told the file changed after review
+(`conflict`). Where policy requires a review and no approval is found (an expired record), the send
+is refused as `unreviewed`; a file that cannot be read for review gets no approval at all; under
+Full access the same admission, scan and bounds apply without a review. A refused or never-sent
+attachment leaves no remote effect and is not replayed: the journal retires its record (migration 55
+widens the operation check; the old record keeps its outcome under a retired action digest), so the
+retry in the same turn is a new attempt with a new review, while the replay of a dispatched or
+succeeded attachment is unchanged.
+
+*Upload.* One multipart `POST /rest/api/2/issue/{key}/attachments` with
+`X-Atlassian-Token: no-check`, dispatched at most once by the journal and built into a single
+pre-sized buffer (the file is held about twice at send: its bytes and the body). A name outside ASCII
+travels as an ASCII-sanitized `filename` plus the RFC 5987 `filename*`; whether a given Jira Data
+Center honours the extended form is not assumed, and the readback accepts the stored name spelled
+either way. Success needs Jira's reply and a direct readback of the stored attachment's id, name
+and size. The readback does not fetch the stored bytes, so it confirms Jira's record, not byte
+equality; the digest binds the bytes Keiko read, not the bytes Jira stored. The connector package
+performs no filesystem access: the server injects the source port. Source reads are recorded
+body-free on `jira.attachment.source` (stage, closed refusal, size; never path, name or content).
+Coding runs do not offer `jira.attach` and the Coding risk map neither lists nor defaults it: their
+files are governed by the run's own workspace authority, which this source does not consult.
+
+**Field-selectable search (#4176).** `jira.search` accepts the same bounded `fields` list as
+`jira.issue` (1–20 unique ids, system or custom) and returns, for every result, typed
+`fieldValues` projected through the instance's own `names` and `schema` (`expand=names,schema`); an
+id the instance does not describe reads as `unavailable`, an empty value as `empty`, and a value
+kind Keiko does not project as `unsupported`. Each result's field values are bounded to 16 KiB and
+the page keeps its prefix bound and `nextStartAt` continuation.
 
 **Backlog drafts (#4178, 2026-10-31).** `jira.draft` maps to `create-issue` (high): it proposes
 up to 32 related issues — the Chat journal's existing per-turn write bound, which a draft never

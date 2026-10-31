@@ -4,7 +4,10 @@ import type {
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import { validateChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
-import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraAttachmentPreview,
+  JiraMutationOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
 import { sameReadGrantAuthority, sameReadGrantSubject } from "./chatReadGrantState.js";
@@ -16,6 +19,8 @@ export interface ChatToolWriteActionIdentity {
 }
 export interface JiraChatWriteActionIdentity extends ChatToolWriteActionIdentity {
   readonly operation: JiraMutationOperation;
+  /** The reviewed file of a `jira.attach` approval; never part of the action's identity (#4176). */
+  readonly attachment?: JiraAttachmentPreview;
 }
 export interface ChatWriteApprovalEntry {
   readonly approval: ChatToolWriteApprovalView;

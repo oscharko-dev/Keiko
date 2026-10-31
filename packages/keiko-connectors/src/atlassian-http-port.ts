@@ -49,6 +49,15 @@ export type AtlassianHttpPort = (request: AtlassianHttpRequest) => Promise<Atlas
 // failure, and the server adapter re-checks it fail-closed (defense in depth).
 export const ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES = 1_000_000;
 
+// A governed file upload (#4176): one multipart/form-data POST whose bytes the caller already
+// admitted and bounded. The adapter accepts it only on POST, only with a multipart content type, and
+// adds the transport header Jira requires for it; it is mutually exclusive with `bodyJson`.
+export const ATLASSIAN_HTTP_UPLOAD_MAX_BYTES = 24 * 1024 * 1024;
+export interface AtlassianHttpUpload {
+  readonly contentType: string;
+  readonly bytes: Uint8Array<ArrayBuffer>;
+}
+
 export interface AtlassianHttpBodyRequest {
   // GET for reads; POST/PUT for the governed write executors (#2244). The adapter refuses a
   // request body on GET.
@@ -63,6 +72,8 @@ export interface AtlassianHttpBodyRequest {
   // Serialized JSON request body for POST/PUT, bounded by ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES.
   // Never a credential — the Authorization header is materialised by the adapter only.
   readonly bodyJson?: string | undefined;
+  // Bounded multipart upload for POST (#4176), bounded by ATLASSIAN_HTTP_UPLOAD_MAX_BYTES.
+  readonly upload?: AtlassianHttpUpload | undefined;
   // Run-level cancellation (ADR-0128 D5): the adapter composes this with its own timeout so an
   // aborted sync run tears down the in-flight request instead of waiting it out.
   readonly signal?: AbortSignal | undefined;

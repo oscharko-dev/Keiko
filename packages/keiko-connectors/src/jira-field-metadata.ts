@@ -308,10 +308,18 @@ export type JiraFieldValidationResult =
         | "invalid-operation"
         | "bounds-exceeded";
       readonly fieldId?: string;
+      /** One fixed sentence for the model; never a value from the request or from Jira. */
+      readonly message?: string;
     };
 
-type ValueResult = { readonly ok: true; readonly value: unknown } | { readonly ok: false };
+/** A refusal may carry one fixed sentence that tells the model how to correct the value. */
+type ValueResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly message?: string };
 const INVALID: ValueResult = { ok: false };
+function invalidWith(message: string): ValueResult {
+  return { ok: false, message };
+}
 function calendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(value) || value.startsWith("0000")) return false;
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -329,6 +337,33 @@ function referenceOf(
   if (allowed !== undefined && !allowed.some((entry) => entry[key] === ref)) return INVALID;
   return { ok: true, value: { [key]: ref } };
 }
+const AMBIGUOUS_OPTION =
+  "The value matches more than one offered choice; use the choice's id ({ id }) instead.";
+const UNKNOWN_OPTION = "The value matches none of the offered choices; use an offered id or value.";
+/**
+ * A bare option string names a choice by its id or by its exact value or name. It is accepted only
+ * when exactly one offered choice carries that spelling: a string that is one choice's id and
+ * another's name is ambiguous, and is refused rather than resolved by a silent preference.
+ */
+function bareOption(field: JiraFieldMetadata, value: string): ValueResult {
+  const allowed = field.allowedValues;
+  if (allowed === undefined)
+    return /^\d{1,32}$/u.test(value) ? { ok: true, value: { id: value } } : INVALID;
+  const matches = allowed.filter(
+    (entry) => entry.id === value || entry.name === value || entry.label === value,
+  );
+  if (matches.length > 1) return invalidWith(AMBIGUOUS_OPTION);
+  const id = matches[0]?.id;
+  return id === undefined ? invalidWith(UNKNOWN_OPTION) : { ok: true, value: { id } };
+}
+/** A bare user string is the deployment's user key; the allowed users, when listed, still bind it. */
+function bareUser(field: JiraFieldMetadata, value: string, key: "accountId" | "name"): ValueResult {
+  if (!boundedText(value, 256) || value.trim() !== value) return INVALID;
+  const listed = field.allowedValues;
+  return listed === undefined || listed.some((entry) => entry[key] === value)
+    ? { ok: true, value: { [key]: value } }
+    : INVALID;
+}
 function reference(
   field: JiraFieldMetadata,
   value: unknown,
@@ -336,6 +371,8 @@ function reference(
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
   const userKey = deployment === "cloud" ? "accountId" : "name";
+  if (typeof value === "string")
+    return user ? bareUser(field, value, userKey) : bareOption(field, value);
   return referenceOf(value, user ? userKey : "id", field.allowedValues);
 }
 /**
@@ -490,7 +527,7 @@ function arrayValue(
   const result: unknown[] = [];
   for (const entry of input) {
     const item = arrayItem(field, entry, deployment);
-    if (!item.ok) return INVALID;
+    if (!item.ok) return item;
     result.push(item.value);
   }
   return { ok: true, value: result };
@@ -544,10 +581,19 @@ function validateSets(
         ok: false,
         reason: "reason" in result ? result.reason : "invalid-field",
         fieldId: id,
+        ...(result.message === undefined ? {} : { message: result.message }),
       };
     fields[id] = result.value;
   }
   return { ok: true, fields };
+}
+/**
+ * Jira sets the reporter of a new issue to the authenticated caller when the field is absent, even
+ * though create metadata lists it as required without a default. This is the one field Keiko does
+ * not insist on; a supplied reporter is still validated like any other user.
+ */
+function jiraAssignsOnCreate(field: JiraFieldMetadata): boolean {
+  return field.id === "reporter";
 }
 function missingRequired(
   metadata: readonly JiraFieldMetadata[],
@@ -558,7 +604,7 @@ function missingRequired(
   for (const field of metadata) {
     if (
       !field.required ||
-      (purpose === "create" && field.hasDefaultValue) ||
+      (purpose === "create" && (field.hasDefaultValue || jiraAssignsOnCreate(field))) ||
       Object.hasOwn(fields, field.id)
     )
       continue;

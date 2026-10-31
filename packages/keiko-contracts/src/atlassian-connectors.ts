@@ -581,6 +581,8 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   "jira.transition": "transition-issue",
   // A draft only creates issues: it is governed exactly like one create.
   "jira.draft": "create-issue",
+  // An attachment changes the issue exactly as an edit does and is governed as one.
+  "jira.attach": "update-issue-fields",
 });
 function jiraReadActionValues<Value extends string>(
   value: Value,
@@ -1531,6 +1533,12 @@ export {
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";
 export {
+  JIRA_ATTACHMENT_MAX_BYTES,
+  JIRA_ATTACHMENT_NAME_MAX_BYTES,
+  JIRA_ATTACHMENT_SOURCE_KINDS,
+  isJiraAttachmentName,
+  isJiraAttachmentPreview,
+  type JiraAttachmentPreview,
   JIRA_DRAFT_ITEMS_MAX,
   JIRA_DRAFT_ITEM_STATES,
   JIRA_DRAFT_REF_PATTERN,

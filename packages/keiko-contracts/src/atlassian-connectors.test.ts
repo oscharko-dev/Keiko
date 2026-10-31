@@ -8,6 +8,7 @@ import {
   ATLASSIAN_CONNECTOR_ACTION_TYPES,
   JIRA_MANAGED_ACTION_TYPES,
   JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_OPERATIONS,
   ATLASSIAN_CONNECTOR_AUTH_SCHEMES,
   ATLASSIAN_CONNECTOR_PROVIDERS,
   ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON,
@@ -1351,7 +1352,9 @@ it.each([
 
 it("maps every managed Jira tool to one existing connector-policy action", () => {
   for (const name of JIRA_MANAGED_READ_TOOLS) expect(JIRA_MANAGED_ACTION_TYPES[name]).toBe(name);
-  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(16);
+  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(
+    JIRA_MANAGED_READ_TOOLS.length + JIRA_MUTATION_OPERATIONS.length,
+  );
   expect(JIRA_MANAGED_ACTION_TYPES).toMatchObject({
     "jira.create": "create-issue",
     // A backlog draft only creates issues and is governed like one create (#4178).
@@ -1360,5 +1363,7 @@ it("maps every managed Jira tool to one existing connector-policy action", () =>
     "jira.assign": "assign-issue",
     "jira.comment": "add-issue-comment",
     "jira.transition": "transition-issue",
+    // An attachment changes the issue exactly as an edit does and is governed as one (#4176).
+    "jira.attach": "update-issue-fields",
   });
 });

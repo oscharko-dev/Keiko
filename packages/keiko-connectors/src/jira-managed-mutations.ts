@@ -21,6 +21,12 @@ import {
 import { validateJiraFieldChanges } from "./jira-field-metadata.js";
 import { completeJiraLinkedMutation } from "./jira-issue-link-writes.js";
 import {
+  dispatchJiraAttachment,
+  jiraAttachmentLimit,
+  parseJiraAttachmentArguments,
+  verifiedJiraAttachmentContent,
+} from "./jira-attachments.js";
+import {
   jiraIssueLinkAdds,
   jiraIssueLinksOffered,
   parseJiraIssueLinks,
@@ -79,6 +85,7 @@ function validationFailure(
     detail: {
       validation: result.reason,
       ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+      ...(result.message === undefined ? {} : { messages: [result.message] }),
     },
   };
 }
@@ -133,7 +140,7 @@ export function requestFor(
     AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
   ]);
   const endpoints = atlassianApiEndpointsFor(baseUrl, "/rest/api/2/");
-  return (path, method, body, expect = "json") =>
+  return (path, method, body, expect, upload) =>
     executeAtlassianWriteRequest(
       {
         signal,
@@ -145,8 +152,9 @@ export function requestFor(
       {
         method: method ?? "GET",
         url: atlassianApiUrl(endpoints, path),
-        expect,
+        expect: expect ?? "json",
         ...(body === undefined ? {} : { bodyJson: JSON.stringify(body) }),
+        ...(upload === undefined ? {} : { upload }),
       },
     );
 }
@@ -535,6 +543,54 @@ async function addComment(
 }
 
 /**
+ * The upload limit the instance reports for attachments, read before a file is reviewed so the
+ * review and the send hold the file to the same bound (#4176). Read-only.
+ */
+export async function readJiraAttachmentLimit(
+  connection: JiraManagedConnection,
+  context: ManagedMcpInvocationContext,
+): Promise<{ readonly ok: true; readonly maxBytes: number } | { readonly ok: false }> {
+  if (connection.deployment !== "data-center") return { ok: false };
+  const limit = await jiraAttachmentLimit(requestFor(connection, context));
+  return limit.ok ? limit : { ok: false };
+}
+
+/**
+ * Attach one governed file (#4176): the instance's own limit bounds the read, the owner's source
+ * port supplies the bytes, and Jira's stored attachment is read back before success is claimed.
+ */
+async function attachFile(
+  request: JiraMutationRequest,
+  args: CatalogJsonObject,
+  connection: JiraManagedConnection,
+): Promise<JiraMutationAttempt> {
+  const parsed = parseJiraAttachmentArguments(args);
+  if (parsed === undefined) return INVALID;
+  if (connection.attachmentSource === undefined) return { ok: false, reason: "unavailable" };
+  const limit = await jiraAttachmentLimit(request);
+  if (!limit.ok) return limit;
+  const read = await connection.attachmentSource({
+    kind: "connected-file",
+    path: parsed.path,
+    ...(parsed.name === undefined ? {} : { name: parsed.name }),
+    maxBytes: limit.maxBytes,
+  });
+  if (!read.ok)
+    return {
+      ok: false,
+      reason: read.reason,
+      ...(read.detail === undefined ? {} : { detail: read.detail }),
+    };
+  const refused = verifiedJiraAttachmentContent(read.content, limit.maxBytes);
+  if (refused !== undefined) return refused;
+  return dispatchJiraAttachment(request, {
+    issueKey: parsed.issueKey,
+    content: read.content,
+    name: parsed.name ?? read.content.name,
+  });
+}
+
+/**
  * One backlog-draft item (#4178): its relations resolved to the keys earlier items received, then
  * reconciled against the issue its draft identity already names before anything is created.
  * A reconciled item sends no mutation; the server's journal records that nothing was dispatched.
@@ -625,6 +681,9 @@ export function executeJiraManagedMutation(
 ): Promise<JiraMutationAttempt> {
   if (connection.deployment !== "data-center")
     return Promise.resolve({ ok: false, reason: "unavailable" });
+  // An attachment changes no field a template describes: it takes no template check.
+  if (operation === "jira.attach")
+    return attachFile(requestFor(connection, context), structuredClone(source), connection);
   return dispatchMutation(operation, structuredClone(source), requestFor(connection, context), {
     templates: connection.issueTemplates,
     check: false,

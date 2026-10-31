@@ -19,6 +19,7 @@
 
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
+  ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
   AtlassianCredentialCustodyError,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyPort,
@@ -320,7 +321,24 @@ function composeBodyRequestSignal(request: AtlassianHttpBodyRequest): AbortSigna
 // POST/PUT and never exceeds the shared ceiling. The write executors enforce both rules with
 // typed results before ever calling the port; a violation reaching this adapter is a programming
 // error and fails closed on the same custody failure surface as an invalid URL.
+// A governed upload (#4176) is one multipart POST, bounded, never combined with a JSON body.
+const MULTIPART_CONTENT_TYPE = /^multipart\/form-data; boundary=[A-Za-z0-9_-]{1,70}$/u;
+function assertValidUpload(request: AtlassianHttpBodyRequest): void {
+  const upload = request.upload;
+  if (upload === undefined) return;
+  if (
+    request.method !== "POST" ||
+    request.bodyJson !== undefined ||
+    !MULTIPART_CONTENT_TYPE.test(upload.contentType) ||
+    exceedsBodyByteCeiling(upload.bytes.byteLength, ATLASSIAN_HTTP_UPLOAD_MAX_BYTES)
+  ) {
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "upload must be one bounded multipart POST",
+    ]);
+  }
+}
 function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
+  assertValidUpload(request);
   if (request.bodyJson === undefined) return;
   if (request.method === "GET") {
     throw new AtlassianCredentialCustodyError("invalid-input", [
@@ -333,6 +351,13 @@ function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
       "request body exceeds the write-channel size ceiling",
     ]);
   }
+}
+
+function requestBody(request: AtlassianHttpBodyRequest): {
+  readonly body?: string | Uint8Array<ArrayBuffer>;
+} {
+  if (request.upload !== undefined) return { body: request.upload.bytes };
+  return request.bodyJson === undefined ? {} : { body: request.bodyJson };
 }
 
 export function createGatewayAtlassianHttpBodyPort(
@@ -354,7 +379,7 @@ export function createGatewayAtlassianHttpBodyPort(
         method: request.method,
         prepareHeaders: lifecycle.prepareHeaders,
         singleAttempt: request.method !== "GET",
-        ...(request.bodyJson === undefined ? {} : { body: request.bodyJson }),
+        ...requestBody(request),
         signal: composeBodyRequestSignal(request),
         egress,
         log: processServerLogSink(),

@@ -1,5 +1,6 @@
 import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connectors.js";
 import type { JiraTemplateViolation } from "./jira-issue-template.js";
+import { compareStrings } from "./comparators.js";
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
@@ -9,6 +10,7 @@ export const JIRA_MUTATION_OPERATIONS = [
   "jira.comment",
   "jira.transition",
   "jira.draft",
+  "jira.attach",
 ] as const;
 export type JiraMutationOperation = (typeof JIRA_MUTATION_OPERATIONS)[number];
 
@@ -39,6 +41,54 @@ export const JIRA_DRAFT_ITEM_STATES = [
   "excluded",
 ] as const;
 export type JiraDraftItemState = (typeof JIRA_DRAFT_ITEM_STATES)[number];
+/**
+ * Attaching a file (#4176): the bytes come from a source Keiko already governs (a file under one of
+ * the Chat's connected folders), never from a host path the model names. Keiko's own ceiling is a
+ * hard bound; the instance's reported upload limit can only lower it for one upload.
+ */
+export const JIRA_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+export const JIRA_ATTACHMENT_NAME_MAX_BYTES = 255;
+export const JIRA_ATTACHMENT_SOURCE_KINDS = ["connected-file"] as const;
+/** What the human sees before a file leaves the machine: name, size and digest, never content. */
+export interface JiraAttachmentPreview {
+  readonly name: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+}
+// eslint-disable-next-line no-control-regex -- a file name is shown to people and sent in a header.
+const ATTACHMENT_NAME_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f"\\/]/u;
+/** A bare file name: no separators, quotes or control characters, bounded in UTF-8 bytes. */
+export function isJiraAttachmentName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length > 0 &&
+    value !== "." &&
+    value !== ".." &&
+    !ATTACHMENT_NAME_FORBIDDEN.test(value) &&
+    new TextEncoder().encode(value).length <= JIRA_ATTACHMENT_NAME_MAX_BYTES
+  );
+}
+const SHA256_HEX = /^[0-9a-f]{64}$/u;
+function isAttachmentSize(value: unknown): boolean {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= JIRA_ATTACHMENT_MAX_BYTES
+  );
+}
+export function isJiraAttachmentPreview(value: unknown): value is JiraAttachmentPreview {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const digest: unknown = Reflect.get(value, "sha256");
+  return (
+    Object.keys(value).sort(compareStrings).join() === "name,sha256,sizeBytes" &&
+    isJiraAttachmentName(Reflect.get(value, "name")) &&
+    isAttachmentSize(Reflect.get(value, "sizeBytes")) &&
+    typeof digest === "string" &&
+    SHA256_HEX.test(digest)
+  );
+}
 /** Rejected means a known local refusal before dispatch; non-2xx status alone remains unknown. */
 export const JIRA_MUTATION_OUTCOMES = [
   "not-dispatched",
@@ -60,6 +110,7 @@ export interface JiraMutationReceipt {
   readonly issueId?: string;
   readonly commentId?: string;
   readonly transitionId?: string;
+  readonly attachmentId?: string;
 }
 /** Why Keiko's own metadata validation refused a field before dispatch (#4176). */
 export const JIRA_FIELD_VALIDATION_FAILURES = [

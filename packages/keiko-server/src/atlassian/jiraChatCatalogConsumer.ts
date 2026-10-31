@@ -10,6 +10,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_MANAGED_ACTION_TYPES,
+  type JiraAttachmentPreview,
   type JiraManagedReadToolName,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -172,6 +173,10 @@ export interface JiraChatAdmissionOptions {
     action: JiraChatCatalogAction,
     context: JiraChatCatalogContext,
   ) => Promise<CatalogJsonObject | undefined>;
+  /** The file a `jira.attach` approval shows the human; absent when it cannot be reviewed (#4176). */
+  readonly attachmentPreview?: (
+    action: JiraChatCatalogAction,
+  ) => Promise<JiraAttachmentPreview | undefined>;
 }
 type AdmissionPorts = Pick<
   CatalogToolBinderInput<JiraChatCatalogConsumer>,

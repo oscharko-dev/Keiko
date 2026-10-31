@@ -1535,7 +1535,7 @@
       "lifecycleTransitions": ["end", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["atlassian.jira-report"],
+        "state": ["atlassian.jira-report", "jira.attachment.source"],
         "end": ["atlassian.action.outcome"],
         "failure": [],
         "loss": []
@@ -1548,10 +1548,18 @@
         {
           "op": "atlassian.jira-report",
           "mode": "correlation"
+        },
+        {
+          "op": "jira.attachment.source",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["atlassian.action.outcome", "atlassian.jira-report"],
+      "resourceSignals": [
+        "atlassian.action.outcome",
+        "atlassian.jira-report",
+        "jira.attachment.source"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -1738,6 +1746,48 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.jira-report.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "jira.attachment.source",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "sizeBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.attachment.source.line"],
           "replayReferences": [],
           "missingObligations": []
         }

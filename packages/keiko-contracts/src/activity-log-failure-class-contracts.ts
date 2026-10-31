@@ -134,16 +134,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["atlassian.jira-report"],
+      state: ["atlassian.jira-report", "jira.attachment.source"],
       end: ["atlassian.action.outcome"],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["atlassian.action.outcome", "atlassian.jira-report"],
+    requiredCausalOperations: [
+      "atlassian.action.outcome",
+      "atlassian.jira-report",
+      "jira.attachment.source",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["atlassian.action.outcome", "atlassian.jira-report"],
+    requiredProofOperations: [
+      "atlassian.action.outcome",
+      "atlassian.jira-report",
+      "jira.attachment.source",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["atlassian.action.outcome", "atlassian.jira-report"],
+    requiredResourceOperations: [
+      "atlassian.action.outcome",
+      "atlassian.jira-report",
+      "jira.attachment.source",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

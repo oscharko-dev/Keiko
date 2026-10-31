@@ -1,7 +1,9 @@
 import {
   JIRA_DRAFT_ITEMS_MAX,
   JIRA_MUTATION_OPERATIONS,
+  isJiraAttachmentPreview,
   isJiraDraftRef,
+  type JiraAttachmentPreview,
   type JiraMutationOperation,
 } from "./jira-tool-execution.js";
 import { isChatJiraPodId } from "./bff-wire.js";
@@ -360,6 +362,11 @@ export interface JiraChatToolWriteApprovalView {
   readonly state: ChatToolWriteApprovalState;
   /** Draft items the human deselected when approving a `jira.draft` (#4178). */
   readonly excludedItemRefs?: readonly string[];
+  /**
+   * The file a `jira.attach` approval covers, read by the server when the approval was requested:
+   * name, size and digest, never content. The upload is refused if the file no longer matches (#4176).
+   */
+  readonly attachment?: JiraAttachmentPreview;
 }
 export interface McpChatToolWriteApprovalView {
   readonly kind: "mcp-chat-write";
@@ -455,11 +462,26 @@ function validateWriteApprovalKeys(
     return;
   }
   const excluded = Object.hasOwn(value, "excludedItemRefs");
-  const keys = excluded ? [...WRITE_APPROVAL_KEYS, "excludedItemRefs"] : WRITE_APPROVAL_KEYS;
-  validateKeys(value, keys, errors, "chatWriteApproval");
-  if (!excluded) return;
-  validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
-  if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
+  const attached = Object.hasOwn(value, "attachment");
+  validateKeys(
+    value,
+    [
+      ...WRITE_APPROVAL_KEYS,
+      ...(excluded ? ["excludedItemRefs"] : []),
+      ...(attached ? ["attachment"] : []),
+    ],
+    errors,
+    "chatWriteApproval",
+  );
+  if (excluded) {
+    validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
+    if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
+  }
+  if (attached) {
+    if (!isJiraAttachmentPreview(value.attachment))
+      errors.push("chatWriteApproval.attachment is invalid");
+    if (value.operation !== "jira.attach") errors.push("chatWriteApproval.operation is invalid");
+  }
 }
 export function validateChatToolWriteApprovalView(
   value: unknown,

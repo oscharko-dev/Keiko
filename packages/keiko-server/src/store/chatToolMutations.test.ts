@@ -139,6 +139,59 @@ describe("durable mutation admission", () => {
       }),
     ).toBe(false);
   });
+  // #4176: an attachment that was refused or never sent left no remote effect, and the model is told
+  // to request it again; the retry in the same turn is a new attempt, not a replay of the refusal.
+  describe("retrying an attachment in the same turn", () => {
+    const attach = (f: Fixture): ChatToolMutationIntent => ({
+      ...f.intent,
+      operation: "jira.attach",
+    });
+    it.each(["rejected", "not-dispatched"] as const)(
+      "does not replay a %s attachment",
+      (outcome) => {
+        const f = fixture();
+        const first = attach(f);
+        f.journal.prepare(first);
+        f.journal.settle(first.invocationId, outcome);
+        const retry = { ...first, invocationId: "invocation-retry" };
+        expect(f.journal.prepare(retry)).toMatchObject({
+          kind: "prepared",
+          record: { invocationId: "invocation-retry", phase: "prepared" },
+        });
+        expect(f.journal.find(first.invocationId)).toMatchObject({ outcome, phase: "settled" });
+        expect(
+          f.journal.prepare({ ...retry, invocationId: "invocation-retry-again" }),
+        ).toMatchObject({
+          kind: "replayed",
+          record: { invocationId: "invocation-retry" },
+        });
+      },
+    );
+    it.each(["succeeded", "succeeded-unconfirmed"] as const)(
+      "still replays, or blocks after, a %s attachment",
+      (outcome) => {
+        const f = fixture();
+        const first = attach(f);
+        f.journal.prepare(first);
+        f.journal.beginDispatch(first.invocationId, () => true);
+        f.journal.acknowledge(first.invocationId, 200);
+        f.journal.settle(first.invocationId, outcome);
+        expect(f.journal.prepare({ ...first, invocationId: "invocation-retry" })).toMatchObject({
+          kind: "replayed",
+          record: { invocationId: first.invocationId, outcome },
+        });
+      },
+    );
+    it("does not retry any other refused operation", () => {
+      const f = fixture();
+      f.journal.prepare(f.intent);
+      f.journal.settle(f.intent.invocationId, "rejected");
+      expect(f.journal.prepare({ ...f.intent, invocationId: "invocation-retry" })).toMatchObject({
+        kind: "replayed",
+        record: { invocationId: f.intent.invocationId, outcome: "rejected" },
+      });
+    });
+  });
   it.each([
     { actorId: "another-actor" },
     { podId: "another-pod" },

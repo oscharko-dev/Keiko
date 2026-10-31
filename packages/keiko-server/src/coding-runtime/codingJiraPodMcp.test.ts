@@ -346,6 +346,23 @@ describe("serving the bound Pod through the relay", () => {
     expect(h.http).not.toHaveBeenCalled();
   });
 
+  // #4176: an attachment reads Chat-connected files, which a Coding run has no authority over, so
+  // the tool is neither offered nor defaulted to a risk; a call to it never reaches Jira.
+  it("neither offers nor accepts jira.attach and never touches Jira for it", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    expect(await client.list()).not.toContain("jira.attach");
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty("jira.attach");
+    await expect(
+      client.call("jira.attach", {
+        issueKey: "SYN-1",
+        source: { kind: "connected-file", path: "docs/report.txt" },
+      }),
+    ).resolves.toMatchObject({ isError: true });
+    expect(h.http).not.toHaveBeenCalled();
+    expect(h.begun).toEqual([]);
+  });
+
   it("reads an issue as untrusted data through the Pod's own transport and logs the call", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h)));

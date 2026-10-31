@@ -12,6 +12,7 @@ import {
   type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
 import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
+import { JiraAttachmentReview } from "./JiraAttachmentReview";
 import { JiraDecisionActions } from "./JiraDecisionActions";
 import { JiraDraftPreview } from "./JiraDraftPreview";
 import { jiraDraftExcluded, jiraDraftTree } from "./jiraDraftTree";
@@ -190,6 +191,7 @@ export function JiraWriteApproval({
         />
       )}
       <ExactPreview call={call} collapsed={draft.tree !== undefined} />
+      <JiraAttachmentReview approval={approval} />
       <output aria-live="polite">
         {t(state.busy ? "chat.jira.writeApproval.working" : status)}
       </output>

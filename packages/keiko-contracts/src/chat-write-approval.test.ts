@@ -106,3 +106,24 @@ describe("backlog draft deselection (#4178)", () => {
     expect(validateChatToolWriteApprovalView({ ...mcp, excludedItemRefs: [] }).ok).toBe(false);
   });
 });
+
+describe("the reviewed file of an attachment approval (#4176)", () => {
+  const attach = { ...approval(), operation: "jira.attach" as const };
+  const preview = { name: "report.txt", sizeBytes: 1024, sha256: "a".repeat(64) };
+  it("carries the file's name, size and digest on an attachment approval only", () => {
+    const value = { ...attach, attachment: preview };
+    expect(validateChatToolWriteApprovalView(value)).toEqual({ ok: true, value });
+    expect(validateChatToolWriteApprovalView({ ...value, operation: "jira.edit" }).ok).toBe(false);
+  });
+  it.each([
+    ["a path as the name", { ...preview, name: "docs/report.txt" }],
+    ["an empty file", { ...preview, sizeBytes: 0 }],
+    ["a file past the ceiling", { ...preview, sizeBytes: 20 * 1024 * 1024 + 1 }],
+    ["a malformed digest", { ...preview, sha256: "XYZ" }],
+    ["file content", { ...preview, content: "body" }],
+    ["a missing digest", { name: preview.name, sizeBytes: preview.sizeBytes }],
+    ["not an object", "report.txt"],
+  ])("refuses a preview with %s", (_label, attachment) => {
+    expect(validateChatToolWriteApprovalView({ ...attach, attachment }).ok).toBe(false);
+  });
+});

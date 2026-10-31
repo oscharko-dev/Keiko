@@ -6,7 +6,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -43,6 +43,7 @@ import {
   SYNTHETIC_JIRA_BASE_URL,
   syntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
+import { multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
 
 type ToolProof = boolean | "missing" | "stale" | "unsupported" | "mismatched";
 const MODEL = "synthetic-jira-chat";
@@ -144,17 +145,22 @@ const DRAFT_ARGUMENTS = {
     { ref: "loose", projectId: "10000", issueTypeId: "10001", fields: { summary: "Loose" } },
   ],
 };
-function offeredTool(mutation: boolean, draft: boolean): string {
+/** An attachment call names a connected file; `beforeCall` connects the folder as the model calls. */
+type Mutation = boolean | { readonly attach: string; beforeCall?: () => void };
+function offeredTool(mutation: Mutation, draft: boolean): string {
   if (draft) return "keiko.jira.draft";
+  if (typeof mutation === "object") return "keiko.jira.attach";
   return mutation ? "keiko.jira.comment" : "keiko.jira.projects";
 }
-function toolArguments(mutation: boolean, draft: boolean): Record<string, unknown> {
+function toolArguments(mutation: Mutation, draft: boolean): Record<string, unknown> {
   if (draft) return DRAFT_ARGUMENTS;
+  if (typeof mutation === "object")
+    return { issueKey: "KEIKO-1", source: { kind: "connected-file", path: mutation.attach } };
   return mutation ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" } : {};
 }
 function syntheticModel(
   calls: GatewayCallRequest[],
-  mutation: boolean,
+  mutation: Mutation,
   repeatTools: boolean,
   draft: boolean,
 ): ModelPort {
@@ -184,6 +190,7 @@ function syntheticModel(
       (entry) => entry.toolRef.canonicalId === offeredTool(mutation, draft),
     );
     if (tool === undefined) throw new Error("Missing offered Jira projects tool");
+    if (typeof mutation === "object") mutation.beforeCall?.();
     return {
       ...base,
       content: "",
@@ -209,7 +216,7 @@ async function* syntheticStream(
   yield { type: "done", response: resolved };
 }
 function fixture(
-  mutation = false,
+  mutation: Mutation = false,
   writeResponse?: Promise<void>,
   acknowledgeWrite = true,
   repeatTools = false,
@@ -223,6 +230,7 @@ function fixture(
   requests: () => number;
   writes: () => number;
   jira: ReturnType<typeof syntheticJira>;
+  uploads: readonly number[];
 } {
   const root = mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-"));
   const calls: GatewayCallRequest[] = [];
@@ -252,6 +260,7 @@ function fixture(
   let requests = 0;
   let writes = 0;
   const jira = syntheticJira();
+  const uploads: number[] = [];
   vi.spyOn(credentials, "httpBodyPortFactory").mockImplementation(
     (_metadata, correlationId, lifecycle) => {
       if (draft)
@@ -274,12 +283,11 @@ function fixture(
           writes++;
           await writeResponse;
         }
-        const status = write ? 201 : 200;
         if (write && !acknowledgeWrite) return { kind: "network-error" };
+        if (write && request.upload !== undefined)
+          uploads.push(multipartFileSize(request.upload.bytes));
+        const { status, bodyText } = syntheticReply(mutation, request, uploads);
         lifecycle.onResponse?.(request, status);
-        const bodyText = mutation
-          ? JSON.stringify({ id: "10001", body: "Synthetic approved comment" })
-          : "[]";
         return Promise.resolve({
           kind: "response",
           status,
@@ -299,6 +307,7 @@ function fixture(
     requests: () => (draft ? jira.fetch.mock.calls.length : requests),
     writes: () => (draft ? jira.posts().length : writes),
     jira,
+    uploads,
   };
 }
 // #4175: a turn that reaches its deadline after settling tool calls answers from its transcript on
@@ -354,6 +363,29 @@ it.each([false, true])(
   },
 );
 
+function syntheticReply(
+  mutation: Mutation,
+  request: Parameters<AtlassianHttpBodyPort>[0],
+  uploads: readonly number[],
+): { readonly status: number; readonly bodyText: string } {
+  const write = request.method !== "GET";
+  if (typeof mutation === "object")
+    return {
+      status: 200,
+      bodyText: attachmentBody(request.method, new URL(request.url).pathname, uploads),
+    };
+  return {
+    status: write ? 201 : 200,
+    bodyText: mutation ? JSON.stringify({ id: "10001", body: "Synthetic approved comment" }) : "[]",
+  };
+}
+/** Jira's attachment endpoints for the synthetic issue: the switch, the upload and the readback. */
+function attachmentBody(method: string, path: string, uploads: readonly number[]): string {
+  const stored = uploads.map((size) => ({ id: "10300", filename: "report.txt", size }));
+  if (path.endsWith("/attachment/meta")) return JSON.stringify({ enabled: true, uploadLimit: 1e6 });
+  if (method === "POST") return JSON.stringify(stored);
+  return JSON.stringify({ id: "10001", key: "KEIKO-1", fields: { attachment: stored } });
+}
 function send(
   f: ReturnType<typeof fixture>,
   clientTurnId: string,
@@ -1226,5 +1258,99 @@ describe.each([false, true])("Jira preparation failure settlement (stream=%s)", 
         expect(JSON.stringify([result, record.mock.calls])).not.toContain("fixture-secret");
       },
     );
+  });
+});
+
+describe("attaching a connected file through the ordinary Chat turn (#4176)", () => {
+  const BODY = "synthetic report body";
+  function attachFixture(path = "docs/report.txt"): ReturnType<typeof fixture> & {
+    readonly folder: string;
+  } {
+    // The connected folder lives beside, never inside, Keiko's own state directory.
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-jira-attach-folder-")));
+    cleanups.push(() => {
+      rmSync(folder, { recursive: true, force: true });
+      return Promise.resolve();
+    });
+    mkdirSync(join(folder, "docs"));
+    writeFileSync(join(folder, "docs", "report.txt"), BODY);
+    let connect = (): void => undefined;
+    const f = fixture({
+      attach: path,
+      beforeCall: () => {
+        connect();
+      },
+    });
+    // A Chat with connected sources answers through the grounded path; the folder is connected
+    // as the model calls, so the ordinary tool loop is what this proves.
+    connect = (): void => {
+      f.deps.store.updateChat(f.chatId, {
+        connectedScopes: [
+          { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
+        ],
+      });
+    };
+    return { ...f, folder };
+  }
+  it("shows the human the file's name, size and digest and uploads exactly that file once approved", async () => {
+    const f = attachFixture();
+    const pending = send(f, "attach-approved");
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    const exchange = firstToolExchange(f);
+    expect(exchange.approval).toMatchObject({
+      operation: "jira.attach",
+      attachment: { name: "report.txt", sizeBytes: BODY.length, sha256: sha256Hex(BODY) },
+    });
+    expect(JSON.stringify(exchange.call.arguments)).not.toContain(BODY);
+    expect(f.uploads).toEqual([BODY.length]);
+    expect(f.writes()).toBe(1);
+    expect(exchange.mutationOutcome).toBe("succeeded");
+    expect(exchange.result?.data).toMatchObject({ outcome: "succeeded", attachmentId: "10300" });
+  });
+  it("sends nothing when the file changed after the human reviewed it", async () => {
+    const f = attachFixture();
+    const pending = send(f, "attach-drift");
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await vi.waitFor(() => {
+      expect(firstToolExchange(f).approval?.state).toBe("pending");
+    });
+    writeFileSync(join(f.folder, "docs", "report.txt"), "changed after the human looked");
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    expect(f.uploads).toEqual([]);
+    expect(f.writes()).toBe(0);
+    expect(firstToolExchange(f).result?.data).toMatchObject({
+      outcome: "rejected",
+      reason: "conflict",
+      messages: [expect.stringContaining("changed after it was reviewed")],
+    });
+  });
+  it("offers no approval for a file that holds a credential, so the human never approves it", async () => {
+    const f = attachFixture("docs/secret.yml");
+    writeFileSync(
+      join(f.folder, "docs", "secret.yml"),
+      "key: |\n  -----BEGIN PRIVATE KEY-----\n  MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n  -----END PRIVATE KEY-----\n",
+    );
+    const pending = send(f, "attach-credential");
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(f.uploads).toEqual([]);
+    expect(f.writes()).toBe(0);
+  });
+  it("offers no approval for a file outside the connected folders and reads nothing", async () => {
+    const f = attachFixture("../escape.txt");
+    const pending = send(f, "attach-outside");
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(f.uploads).toEqual([]);
+    expect(f.writes()).toBe(0);
   });
 });

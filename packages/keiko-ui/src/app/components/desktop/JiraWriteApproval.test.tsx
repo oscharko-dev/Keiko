@@ -535,3 +535,57 @@ describe("Jira backlog draft approval (#4178)", () => {
     });
   });
 });
+
+it("shows an attachment approval's file by name, size and digest, never its content (#4176)", async () => {
+  const view: ChatToolWriteApprovalView = {
+    kind: "jira-chat-write",
+    approvalId: "approval-attach",
+    chatId: "chat-1",
+    podId: "11111111-1111-4111-8111-111111111111",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: "action-attach",
+    actionDigest: "a".repeat(64),
+    requestedAt: Date.now(),
+    expiresAt: Date.now() + 60000,
+    state: "pending",
+    operation: "jira.attach",
+    attachment: { name: "report.txt", sizeBytes: 12345, sha256: "b".repeat(64) },
+  };
+  const observe = vi.fn().mockResolvedValue(view);
+  const { container } = render(
+    <JiraWriteApproval
+      approval={view}
+      call={{
+        id: "call-2",
+        name: "jira_attach",
+        arguments: {
+          issueKey: "LAB-1",
+          source: { kind: "connected-file", path: "docs/report.txt" },
+        },
+      }}
+      turnState="pending"
+      observe={observe}
+      decide={vi.fn()}
+    />,
+  );
+  await ready();
+  const facts = screen.getByRole("list", { name: "Proposed action details" });
+  expect(facts).toHaveTextContent("report.txt");
+  expect(facts).toHaveTextContent(`${new Intl.NumberFormat().format(12345)} B`);
+  expect(facts).toHaveTextContent(`sha256 ${"b".repeat(64)}`);
+  expect(await axe(container)).toHaveNoViolations();
+});
+it("renders no file facts for an approval that carries no attachment", async () => {
+  render(
+    <JiraWriteApproval
+      approval={approval()}
+      call={call}
+      turnState="pending"
+      observe={vi.fn().mockResolvedValue(approval())}
+      decide={vi.fn()}
+    />,
+  );
+  await ready();
+  expect(screen.queryByRole("list")).toBeNull();
+});

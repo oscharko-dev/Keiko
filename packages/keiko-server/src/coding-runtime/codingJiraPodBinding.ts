@@ -38,9 +38,13 @@ export const CODING_JIRA_SERVER_NAME = "jira";
 
 export type CodingJiraTool =
   (typeof JIRA_MANAGED_READ_TOOLS)[number] | (typeof JIRA_MUTATION_OPERATIONS)[number];
-/** A backlog draft (#4178) is reviewed as a tree in Chat; Coding runs create issues one by one. */
+/**
+ * A backlog draft (#4178) is reviewed as a tree in Chat; Coding runs create issues one by one. An
+ * attachment (#4176) reads a file the Chat's connected folders govern; a Coding run's files are
+ * governed by its own workspace authority, which that source does not (yet) consult.
+ */
 const CODING_JIRA_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
-  (operation) => operation !== "jira.draft",
+  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
 );
 
 /** Reads are the human's grant; writes keep following the run's autonomy mode. */

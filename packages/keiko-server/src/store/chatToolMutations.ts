@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ServerLogSink } from "../observability/index.js";
@@ -201,6 +202,18 @@ function blockedTurn(
   if (rows.length >= MAX_MUTATIONS_PER_TURN) return { kind: "blocked", reason: "capacity" };
   return undefined;
 }
+function retryableAttachment(
+  prior: ChatToolMutationRecord,
+  intent: ChatToolMutationIntent,
+): boolean {
+  return (
+    prior.operation === "jira.attach" &&
+    prior.phase === "settled" &&
+    (prior.outcome === "rejected" || prior.outcome === "not-dispatched") &&
+    prior.invocationId !== intent.invocationId &&
+    sameMutationIdentity(prior, intent)
+  );
+}
 /** One SQLite commit precedes every possible external effect; nested savepoints are insufficient. */
 class MutationStore implements ChatToolMutationStore {
   constructor(
@@ -259,7 +272,8 @@ class MutationStore implements ChatToolMutationStore {
           )
           .get(intent.chatId, intent.turnRef, intent.actionDigest),
       );
-      if (prior !== undefined) {
+      if (prior !== undefined && retryableAttachment(prior, intent)) this.retire(prior);
+      else if (prior !== undefined) {
         if (!sameMutationIdentity(prior, intent)) throw journalConflict();
         return { kind: "replayed", record: prior };
       }
@@ -273,6 +287,21 @@ class MutationStore implements ChatToolMutationStore {
     });
     if (result.kind !== "blocked") recordChatToolMutation(this.log, result.record, result.kind);
     return result;
+  }
+  /**
+   * A refused or never-sent attachment left no remote effect, and the model is told to request it
+   * again after correcting the file; the retry is a new call and must not replay that refusal. The
+   * old record keeps its identity and outcome under a retired action digest (#4176).
+   */
+  private retire(record: ChatToolMutationRecord): void {
+    this.db
+      .prepare("UPDATE chat_tool_mutations SET action_digest = ? WHERE invocation_id = ?")
+      .run(
+        createHash("sha256")
+          .update(`${record.actionDigest}:retired:${record.invocationId}`)
+          .digest("hex"),
+        record.invocationId,
+      );
   }
   private insertPrepared(intent: ChatToolMutationIntent, createdAt: number): void {
     this.db

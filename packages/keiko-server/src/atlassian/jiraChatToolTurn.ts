@@ -4,8 +4,15 @@ import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ChatMessage } from "../store/index.js";
 import {
   JIRA_MUTATION_OPERATIONS,
+  type JiraAttachmentPreview,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { parseJiraAttachmentArguments } from "@oscharko-dev/keiko-connectors";
+import {
+  jiraChatAttachmentLimit,
+  previewJiraChatAttachment,
+  type JiraChatAttachmentDeps,
+} from "./jiraChatAttachment.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { ConversationModelNotReadyError } from "../conversation-readiness-admission.js";
@@ -38,6 +45,7 @@ import {
 } from "../chat-tool-turn.js";
 export { chatModelSupportsTools as jiraChatModelSupportsTools } from "../chat-tool-turn.js";
 type TurnDeps = JiraChatAuthorityDeps &
+  JiraChatAttachmentDeps &
   Pick<
     UiHandlerDeps,
     | "jiraChatCatalog"
@@ -94,6 +102,7 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
               writeArguments: (action) => this.proposedWriteArguments(action),
               readAllowed: () => !current.signal.aborted,
             }),
+            attachmentPreview: (action) => this.reviewedAttachment(action),
           }),
         }),
     });
@@ -112,6 +121,28 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       sha256Hex(canonicalise(args)) === action.argumentsDigest
       ? (args as CatalogJsonObject)
       : undefined;
+  }
+
+  /** The file the model proposes to attach, read now for the human's review (#4176). */
+  private async reviewedAttachment(action: {
+    readonly actionId: string;
+    readonly argumentsDigest: string;
+  }): Promise<JiraAttachmentPreview | undefined> {
+    const { deps, message, correlationId, authority, signal } = this.jiraOptions;
+    const args: unknown = this.writeExchange(action.actionId)?.call.arguments;
+    const parsed =
+      this.reviewableWrite(action) && typeof args === "object" && args !== null
+        ? parseJiraAttachmentArguments(args as CatalogJsonObject)
+        : undefined;
+    if (parsed === undefined) return undefined;
+    // The instance's own limit bounds the review exactly as it bounds the send.
+    const maxBytes = await jiraChatAttachmentLimit(deps, {
+      chatId: message.chatId,
+      authorityReference: authority.reference,
+      signal,
+      correlationId,
+    });
+    return previewJiraChatAttachment(deps, message.chatId, parsed, correlationId, maxBytes);
   }
 
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {

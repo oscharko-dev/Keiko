@@ -117,7 +117,8 @@ function selection(
   name: JiraManagedReadToolName,
   args: CatalogJsonObject,
 ): ReadSelection | undefined {
-  const fields = name === "jira.issue" ? selectedJiraReadFields(args.fields) : [];
+  const fields =
+    name === "jira.issue" || name === "jira.search" ? selectedJiraReadFields(args.fields) : [];
   if (fields === undefined) return undefined;
   const startAt = pageNumber(args.startAt, 0, 0, 1000000);
   const maxResults = pageNumber(args.maxResults, 25, 1, 100);
@@ -176,9 +177,13 @@ function searchPath(
 ): string | undefined {
   if (!text(args.jql, ATLASSIAN_JQL_MAX_CHARS)) return undefined;
   allowed.add("jql");
+  allowed.add("fields");
+  // Requested fields join the standard summary set; the instance names and types them in its reply.
+  const fields = jiraIssueFieldsQuery(JIRA_MANAGED_SEARCH_FIELDS, args.fields);
+  if (fields === undefined) return undefined;
   const query = new URLSearchParams({ jql: args.jql });
   for (const [key, value] of new URLSearchParams(paging)) query.set(key, value);
-  query.set("fields", JIRA_MANAGED_SEARCH_FIELDS);
+  for (const [key, value] of new URLSearchParams(fields)) query.set(key, value);
   return `search?${query.toString()}`;
 }
 

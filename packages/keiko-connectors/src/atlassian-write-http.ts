@@ -26,14 +26,18 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
+  ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyResult,
+  type AtlassianHttpUpload,
 } from "./atlassian-http-port.js";
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
 import { asRecord, parseJsonArray, parseJsonRecord } from "./atlassian-sync-classify.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
 export const ATLASSIAN_WRITE_ACTION_TIMEOUT_MS = 30_000;
+// A file upload moves megabytes, not a JSON body: its one request may use the transport's ceiling.
+export const ATLASSIAN_UPLOAD_ACTION_TIMEOUT_MS = 60_000;
 // KEIKO-0318: aggregate deadline across the entire retry loop for one write action. Sized to
 // bound the loop below the 3-minute worst case (5 × 30s per-request + 4 × 8s backoff = 182s)
 // that a hostile upstream could otherwise sustain by hanging every request at the per-request
@@ -52,6 +56,8 @@ export interface AtlassianWriteHttpRequest {
   readonly url: string;
   // Serialized JSON request body (POST/PUT only).
   readonly bodyJson?: string | undefined;
+  // One governed multipart upload (POST only, #4176); never combined with `bodyJson`.
+  readonly upload?: AtlassianHttpUpload | undefined;
   // Object/collection response shape, or status only. Both JSON shapes share the same byte cap.
   readonly expect: "json" | "json-array" | "none";
 }
@@ -176,6 +182,7 @@ async function issueOnce(
     timeoutMs,
     maxBodyBytes: ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
     ...(request.bodyJson === undefined ? {} : { bodyJson: request.bodyJson }),
+    ...(request.upload === undefined ? {} : { upload: request.upload }),
     // KEIKO-0318: thread the caller's cancellation into the transport call itself so an abort
     // tears down the in-flight request (AtlassianHttpBodyRequest.signal) instead of only being
     // observed between attempts — the between-attempt checks alone only stopped a LATER retry.
@@ -186,12 +193,18 @@ async function issueOnce(
 // KEIKO-0318: clamp the per-request timeout to whatever budget the aggregate deadline still
 // permits, but never below a small floor that guarantees the request has time to arrive.
 const PER_REQUEST_TIMEOUT_FLOOR_MS = 1_000;
-function clampedPerRequestTimeoutMs(deadlineAt: number, now: () => number): number {
+function clampedPerRequestTimeoutMs(
+  deadlineAt: number,
+  now: () => number,
+  ceilingMs: number = ATLASSIAN_WRITE_ACTION_TIMEOUT_MS,
+): number {
   const remaining = deadlineAt - now();
-  return Math.max(
-    PER_REQUEST_TIMEOUT_FLOOR_MS,
-    Math.min(ATLASSIAN_WRITE_ACTION_TIMEOUT_MS, remaining),
-  );
+  return Math.max(PER_REQUEST_TIMEOUT_FLOOR_MS, Math.min(ceilingMs, remaining));
+}
+function requestTimeoutCeilingMs(request: AtlassianWriteHttpRequest): number {
+  return request.upload === undefined
+    ? ATLASSIAN_WRITE_ACTION_TIMEOUT_MS
+    : ATLASSIAN_UPLOAD_ACTION_TIMEOUT_MS;
 }
 
 // KEIKO-0318: refuse to sleep past the aggregate deadline OR while a caller-requested abort is
@@ -234,9 +247,30 @@ async function driveRetryLoop(
     if (reasonToStopRetrying(now, isAborted, deadlineAt, delay, "after-sleep") !== undefined) {
       break;
     }
-    result = await issueOnce(deps, request, clampedPerRequestTimeoutMs(deadlineAt, now));
+    result = await issueOnce(
+      deps,
+      request,
+      clampedPerRequestTimeoutMs(deadlineAt, now, requestTimeoutCeilingMs(request)),
+    );
   }
   return result;
+}
+
+// A body over its byte ceiling, or a body shape the method cannot carry, never reaches the port.
+function requestBodyRefusal(
+  request: AtlassianWriteHttpRequest,
+): Extract<AtlassianWriteHttpOutcome, { ok: false }> | undefined {
+  if (request.upload !== undefined) {
+    if (request.method !== "POST" || request.bodyJson !== undefined)
+      return { ok: false, reason: "malformed-payload" };
+    return request.upload.bytes.byteLength > ATLASSIAN_HTTP_UPLOAD_MAX_BYTES
+      ? { ok: false, reason: "bounds-exceeded" }
+      : undefined;
+  }
+  return request.bodyJson !== undefined &&
+    UTF8_ENCODER.encode(request.bodyJson).byteLength > ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES
+    ? { ok: false, reason: "bounds-exceeded" }
+    : undefined;
 }
 
 // Execute one bounded write-lane request with the method-aware D3 retry discipline. Returns a
@@ -245,18 +279,18 @@ export async function executeAtlassianWriteRequest(
   deps: AtlassianWriteHttpDeps,
   request: AtlassianWriteHttpRequest,
 ): Promise<AtlassianWriteHttpOutcome> {
-  if (
-    request.bodyJson !== undefined &&
-    UTF8_ENCODER.encode(request.bodyJson).byteLength > ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES
-  ) {
-    return { ok: false, reason: "bounds-exceeded" };
-  }
+  const refusal = requestBodyRefusal(request);
+  if (refusal !== undefined) return refusal;
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? ((): number => Date.now());
   const deadlineAt = now() + ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS;
   const isAborted = (): boolean => deps.signal?.aborted === true;
   if (isAborted()) return { ok: false, reason: "timeout" };
-  const initial = await issueOnce(deps, request, clampedPerRequestTimeoutMs(deadlineAt, now));
+  const initial = await issueOnce(
+    deps,
+    request,
+    clampedPerRequestTimeoutMs(deadlineAt, now, requestTimeoutCeilingMs(request)),
+  );
   const result = await driveRetryLoop(deps, request, initial, deadlineAt, now, isAborted, sleep);
   if (result.kind !== "response") return classifyTransport(result);
   return classifyResponse(result, request.expect);

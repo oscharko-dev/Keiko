@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "41477824900a5ac3d3ed0eec3ec32b7421a31d6a50200d84e8a0b3c23d56f0d1"
+    "catalogDigest": "9a737dc496fc51d16de4d4e2f5b02c690a0f9947836221fa06e4d1cf31c317ff"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 621,
-    "proofCount": 644,
-    "resolvedProofCount": 644,
+    "operationCount": 622,
+    "proofCount": 645,
+    "resolvedProofCount": 645,
     "failureClassCount": 386,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -133,6 +133,7 @@
         "http.request.body.failed",
         "http.request.body.received",
         "http.request.body.rejected",
+        "jira.attachment.source",
         "jira.template.admission",
         "pr-description.chat.turn.admitted",
         "pr-description.chat.turn.denied",
@@ -2497,6 +2498,9 @@
     ],
     "indexing.start.refused.line": [
       "packages/keiko-server/src/local-knowledge-handlers.logging.test.ts"
+    ],
+    "jira.attachment.source.line": [
+      "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts"
     ],
     "jira.template.admission.line": [
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"

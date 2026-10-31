@@ -17,6 +17,8 @@ import {
   type ManagedProviderCatalog,
 } from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import { JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import {
   jiraChatCatalogRoutes,
@@ -29,6 +31,11 @@ import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
 import { recordJiraReportActivity } from "./jiraReportActivity.js";
+import {
+  attachmentReviewFor,
+  jiraChatAttachmentSource,
+  type JiraChatAttachmentReview,
+} from "./jiraChatAttachment.js";
 
 type ChatCatalog = ManagedProviderCatalog<JiraChatCatalogConsumer>;
 type CatalogInitialization =
@@ -133,6 +140,30 @@ function approvedDeselection(
     : [];
 }
 
+/**
+ * Whether this attachment needed a human review under the current policy and, if it did, the file
+ * the approval covers. Where review is required and no approval is found (an expired record), the
+ * answer is "required, nothing reviewed", which the source refuses.
+ */
+function attachmentReview(
+  deps: UiHandlerDeps,
+  envelope: Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>["envelope"],
+  context: CatalogHandlerContext<JiraChatCatalogConsumer>,
+): JiraChatAttachmentReview {
+  const policy = decideAtlassianEnvelopeAction(JIRA_MANAGED_ACTION_TYPES["jira.attach"], envelope);
+  const actionId = context.mutationGuard.write?.action.actionId;
+  const approval =
+    actionId === undefined
+      ? undefined
+      : deps.atlassianActionApprovalRegistry?.findChatWriteApproval(
+          envelope.subject,
+          context.authorityReference,
+          actionId,
+          context.correlationId,
+        )?.approval;
+  return attachmentReviewFor(policy.kind, approval);
+}
+
 function connection(
   deps: UiHandlerDeps,
   context: CatalogHandlerContext<JiraChatCatalogConsumer>,
@@ -154,6 +185,11 @@ function connection(
       beforeDispatch: () => context.beforeEffect(),
     }),
     issueTemplates: jiraIssueTemplateSource(deps.store),
+    attachmentSource: jiraChatAttachmentSource(deps, {
+      chatId: context.chatId,
+      correlationId: context.correlationId,
+      review: () => attachmentReview(deps, current.envelope, context),
+    }),
   };
 }
 

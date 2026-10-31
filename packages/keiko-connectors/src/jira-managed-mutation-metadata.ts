@@ -20,6 +20,7 @@ export type JiraMutationRequest = (
   method?: AtlassianWriteHttpRequest["method"],
   body?: Readonly<Record<string, unknown>>,
   expect?: AtlassianWriteHttpRequest["expect"],
+  upload?: AtlassianWriteHttpRequest["upload"],
 ) => Promise<AtlassianWriteHttpOutcome>;
 export type JiraMutationMetadata =
   | { readonly ok: true; readonly fields: readonly JiraFieldMetadata[] }

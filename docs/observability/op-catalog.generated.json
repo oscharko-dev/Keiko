@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "41477824900a5ac3d3ed0eec3ec32b7421a31d6a50200d84e8a0b3c23d56f0d1",
+    "catalogDigest": "9a737dc496fc51d16de4d4e2f5b02c690a0f9947836221fa06e4d1cf31c317ff",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10066,8 +10066,8 @@
         "failureClasses": ["coding-runtime-jira-pod"],
         "proofIds": ["coding-runtime.jira-pod.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:179",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:282"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:183",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:286"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30954,6 +30954,74 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "jira.attachment.source",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraChatAttachment.recordJiraAttachmentSource",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["review", "send"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["read", "refused"]
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "no-connected-folder",
+              "outside-connected-scope",
+              "not-found",
+              "denied",
+              "not-a-file",
+              "too-large",
+              "empty",
+              "invalid-name",
+              "changed-after-review",
+              "unreviewed",
+              "unstable",
+              "contains-credential",
+              "unscannable",
+              "limit-unavailable",
+              "failed",
+              "none"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-action-execution"],
+        "proofIds": ["jira.attachment.source.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:68",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraChatAttachment.ts:110"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "jira.template.admission",
         "category": "process",
         "owner": "keiko-server",
@@ -43954,16 +44022,28 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["atlassian.jira-report"],
+          "state": ["atlassian.jira-report", "jira.attachment.source"],
           "end": ["atlassian.action.outcome"],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["atlassian.action.outcome", "atlassian.jira-report"],
+        "requiredCausalOperations": [
+          "atlassian.action.outcome",
+          "atlassian.jira-report",
+          "jira.attachment.source"
+        ],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["atlassian.action.outcome", "atlassian.jira-report"],
+        "requiredProofOperations": [
+          "atlassian.action.outcome",
+          "atlassian.jira-report",
+          "jira.attachment.source"
+        ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["atlassian.action.outcome", "atlassian.jira-report"],
+        "requiredResourceOperations": [
+          "atlassian.action.outcome",
+          "atlassian.jira-report",
+          "jira.attachment.source"
+        ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -56418,7 +56498,7 @@
           "lifecycleTransitions": ["end", "state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["atlassian.jira-report"],
+            "state": ["atlassian.jira-report", "jira.attachment.source"],
             "end": ["atlassian.action.outcome"],
             "failure": [],
             "loss": []
@@ -56431,10 +56511,18 @@
             {
               "op": "atlassian.jira-report",
               "mode": "correlation"
+            },
+            {
+              "op": "jira.attachment.source",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["atlassian.action.outcome", "atlassian.jira-report"],
+          "resourceSignals": [
+            "atlassian.action.outcome",
+            "atlassian.jira-report",
+            "jira.attachment.source"
+          ],
           "replayReferences": [],
           "operations": [
             {
@@ -56621,6 +56709,48 @@
                 "causeChain": false
               },
               "proofIds": ["atlassian.jira-report.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "jira.attachment.source",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "refusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "sizeBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["jira.attachment.source.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -105508,7 +105638,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/files.ts:3177",
+      "site": "packages/keiko-server/src/files.ts:3218",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106717,7 +106847,7 @@
     {
       "op": "coding-runtime.jira-pod",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:182",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:186",
       "package": "keiko-server"
     },
     {
@@ -108466,6 +108596,26 @@
       "op": "invalidation-failed",
       "category": "memory",
       "site": "packages/keiko-server/src/memory-embedding.ts:517",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.attachment.source",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:71",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.attachment.source-log-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:129",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.attachment.source-read-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:249",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -110222,6 +110372,9 @@
     "indexing.start.accepted",
     "indexing.start.refused",
     "invalidation-failed",
+    "jira.attachment.source",
+    "jira.attachment.source-log-failed",
+    "jira.attachment.source-read-failed",
     "jira.mutation-execution-failed",
     "jira.template-preflight-failed",
     "jira.template.admission",

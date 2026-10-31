@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
+  ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpBodyResult,
@@ -393,6 +394,52 @@ it.each([{ items: [] }, { items: [{ id: "10000", key: "KEIKO" }] }])(
     expect(fixture.requests).toHaveLength(1);
   },
 );
+
+describe("governed uploads (#4176)", () => {
+  const upload = {
+    contentType: "multipart/form-data; boundary=keiko-test",
+    bytes: new Uint8Array(8),
+  };
+  it("sends one multipart POST with the upload's own request budget and never retries it", async () => {
+    const fixture = scriptedPort([response(503), response(200, "[]")]);
+    const outcome = await executeAtlassianWriteRequest(
+      { http: fixture.port },
+      { method: "POST", url: URL, expect: "json-array", upload },
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "unavailable" });
+    expect(fixture.requests).toHaveLength(1);
+    expect(fixture.requests[0]).toMatchObject({ method: "POST", upload, timeoutMs: 60_000 });
+    expect(fixture.requests[0]?.bodyJson).toBeUndefined();
+  });
+  it.each([
+    ["PUT", { method: "PUT" as const, upload }],
+    ["POST with a JSON body", { method: "POST" as const, upload, bodyJson: "{}" }],
+  ])("refuses an upload on %s before the port is called", async (_label, extra) => {
+    const fixture = scriptedPort([response(200, "[]")]);
+    await expect(
+      executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { url: URL, expect: "json-array", ...extra },
+      ),
+    ).resolves.toEqual({ ok: false, reason: "malformed-payload" });
+    expect(fixture.requests).toHaveLength(0);
+  });
+  it("refuses an upload past the transport ceiling before the port is called", async () => {
+    const fixture = scriptedPort([response(200, "[]")]);
+    await expect(
+      executeAtlassianWriteRequest(
+        { http: fixture.port },
+        {
+          method: "POST",
+          url: URL,
+          expect: "json-array",
+          upload: { ...upload, bytes: new Uint8Array(ATLASSIAN_HTTP_UPLOAD_MAX_BYTES + 1) },
+        },
+      ),
+    ).resolves.toEqual({ ok: false, reason: "bounds-exceeded" });
+    expect(fixture.requests).toHaveLength(0);
+  });
+});
 
 it.each([response(200, "{}"), response(200, "["), response(200, "[]", { truncated: true })])(
   "refuses malformed or truncated collection responses",
