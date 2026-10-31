@@ -94,16 +94,25 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
       arguments: args,
       deselected: approvedDeselection(deps, current.envelope.subject, context, intent),
       context,
-      connection: draftConnection(current.credential),
+      connection: jiraChatDraftConnection(deps, current.credential),
     });
   };
 }
 
-/** Only the routing a draft needs; credentials stay with the custody-owned HTTP port. */
-function draftConnection(
+/**
+ * Only the routing a draft needs; credentials stay with the custody-owned HTTP port. The template
+ * source is part of it: a draft item is a journaled create and passes the same write gate as
+ * `jira.create`, so a connection without the source would let a violating item through.
+ */
+export function jiraChatDraftConnection(
+  deps: Pick<UiHandlerDeps, "store">,
   credential: Pick<JiraManagedConnection, "baseUrl" | "deployment">,
 ): Omit<JiraManagedConnection, "http"> {
-  return { baseUrl: credential.baseUrl, deployment: credential.deployment };
+  return {
+    baseUrl: credential.baseUrl,
+    deployment: credential.deployment,
+    issueTemplates: jiraIssueTemplateSource(deps.store),
+  };
 }
 
 /** The items the human left out when approving this draft; none without an approval. */

@@ -642,7 +642,12 @@ export async function checkJiraManagedMutationTemplates(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraTemplateGateResult> {
-  if (connection.deployment !== "data-center") return { ok: true };
+  // Assignment and comments carry no field state; the check mode must never reach their write.
+  if (
+    connection.deployment !== "data-center" ||
+    !(operation === "jira.create" || operation === "jira.edit" || operation === "jira.transition")
+  )
+    return { ok: true };
   const attempt = await dispatchMutation(
     operation,
     structuredClone(source),

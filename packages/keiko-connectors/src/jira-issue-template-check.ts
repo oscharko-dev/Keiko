@@ -3,6 +3,7 @@ import {
   compileJiraTemplatePattern,
   jiraIssueTemplateLabel,
   normalizeJiraSectionHeading,
+  readJiraDescriptionSections,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
   type JiraTemplateViolation,
@@ -34,10 +35,8 @@ export interface JiraFieldCatalogEntry {
   readonly name: string;
 }
 
-const MATCH_INPUT_MAX = 1024;
-const PLACEHOLDER = /^(?:tbd|tba|todo|\.{3}|…|-|<[^<>]*>)$/iu;
-const MARKDOWN_HEADING = /^\s{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/u;
-const WIKI_HEADING = /^\s*h[1-6]\.[ \t]+(.+?)[ \t]*$/u;
+/** A Jira summary and a label are at most 255 characters; a longer text never reaches a pattern. */
+const MATCH_INPUT_MAX = 255;
 const VALUE_KEYS = ["name", "value", "key", "displayName", "id"] as const;
 
 function same(left: string | undefined, right: string): boolean {
@@ -100,6 +99,31 @@ export function matchingJiraIssueTemplates(
   );
 }
 
+/**
+ * Templates of this project and issue type that name a transition (or its target status) the
+ * write's metadata cannot be compared with: Jira reported no transition or status name. Such a
+ * template could govern the write, so the gate refuses instead of passing it unchecked.
+ */
+export function jiraTemplatesNeedingTransitionNames(
+  templates: readonly JiraIssueTemplate[],
+  subject: JiraTemplateSubject,
+): readonly JiraIssueTemplate[] {
+  const { transition } = subject;
+  if (subject.operation !== "transition" || transition === undefined) return [];
+  if (transition.name !== undefined && transition.targetStatusName !== undefined) return [];
+  return templates.filter(
+    (template) =>
+      same(subject.projectKey, template.project) &&
+      issueTypeMatches(template, subject) &&
+      template.activations.some(
+        (activation) =>
+          activation.kind === "transition" &&
+          activation.target !== undefined &&
+          !activationMatches(activation, subject),
+      ),
+  );
+}
+
 /** Ids a template reference names: an exact field id first, otherwise every same-named field. */
 export function resolveJiraTemplateFieldIds(
   reference: string,
@@ -110,26 +134,14 @@ export function resolveJiraTemplateFieldIds(
   return catalog.filter((entry) => same(entry.name, reference)).map((entry) => entry.id);
 }
 
-function sectionBodies(description: string): ReadonlyMap<string, string> {
-  const sections = new Map<string, string>();
-  let current: string | undefined;
-  for (const line of description.replace(/\r\n?/gu, "\n").split("\n")) {
-    const heading = MARKDOWN_HEADING.exec(line) ?? WIKI_HEADING.exec(line);
-    if (heading?.[1] !== undefined) {
-      current = normalizeJiraSectionHeading(heading[1]);
-      if (!sections.has(current)) sections.set(current, "");
-    } else if (current !== undefined) {
-      sections.set(current, `${sections.get(current) ?? ""}\n${line}`);
-    }
+/** Section name to whether it has content; a repeated heading merges into one section. */
+function sectionContent(description: string): ReadonlyMap<string, boolean> {
+  const sections = new Map<string, boolean>();
+  for (const section of readJiraDescriptionSections(description)) {
+    const key = normalizeJiraSectionHeading(section.title);
+    sections.set(key, (sections.get(key) ?? false) || section.hasContent);
   }
   return sections;
-}
-
-function sectionHasContent(body: string): boolean {
-  return body
-    .split("\n")
-    .map((line) => line.trim())
-    .some((line) => line.length > 0 && !PLACEHOLDER.test(line));
 }
 
 interface Context {
@@ -152,8 +164,9 @@ function textOf(context: Context, id: string): string {
 }
 
 function matchesPattern(pattern: string, value: string): boolean {
-  // A parsed template's pattern always compiles; a hand-built unsafe one throws, and the
-  // executor's correlated diagnostic records it while the write stays unsent.
+  // A parsed template's pattern is always matchable; a hand-built unsafe one throws, and the
+  // executor's correlated diagnostic records it while the write stays unsent. The matcher is
+  // an automaton simulation, so no pattern or text makes it slow.
   return compileJiraTemplatePattern(pattern).test(value.slice(0, MATCH_INPUT_MAX));
 }
 
@@ -169,11 +182,11 @@ function checkSummary(context: Context): void {
 }
 
 function checkSections(context: Context): void {
-  const bodies = sectionBodies(textOf(context, "description"));
+  const sections = sectionContent(textOf(context, "description"));
   for (const section of context.template.requiredSections) {
-    const body = bodies.get(normalizeJiraSectionHeading(section));
-    if (body === undefined) raise(context, "section-missing", section);
-    else if (!sectionHasContent(body)) raise(context, "section-empty", section);
+    const hasContent = sections.get(normalizeJiraSectionHeading(section));
+    if (hasContent === undefined) raise(context, "section-missing", section);
+    else if (!hasContent) raise(context, "section-empty", section);
   }
 }
 

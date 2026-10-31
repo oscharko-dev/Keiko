@@ -6,6 +6,7 @@ import {
 import {
   describeJiraTemplateParseErrors,
   isJiraIssueTemplateDocument,
+  mentionsJiraIssueTemplateMarker,
   parseJiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { invalidRequest, UiStoreError } from "./errors.js";
@@ -69,7 +70,15 @@ function boundedDisplayName(value: string): string {
 
 /** A document that declares itself a Jira issue template must be one: it becomes enforcement. */
 function assertValidJiraTemplate(body: string): void {
-  if (!isJiraIssueTemplateDocument(body)) return;
+  if (!isJiraIssueTemplateDocument(body)) {
+    // A marker line that is not in a front matter at the very top would silently govern nothing.
+    if (mentionsJiraIssueTemplateMarker(body)) {
+      throw invalidRequest(
+        "Jira issue template marker without a valid front matter: start the file with ---.",
+      );
+    }
+    return;
+  }
   const parsed = parseJiraIssueTemplate(body);
   if (!parsed.ok) {
     throw invalidRequest(

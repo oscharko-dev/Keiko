@@ -17,6 +17,7 @@ import {
   type SyntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import { jiraChatDraftConnection } from "./jiraChatCatalogRuntime.js";
 import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
@@ -416,5 +417,51 @@ describe("draft outcome", () => {
     const { journal, intent } = journalFixture();
     expect(observedJiraDraftOutcome(journal, intent, BACKLOG)).toBeUndefined();
     expect(observedJiraDraftOutcome(undefined, intent, BACKLOG)).toBeUndefined();
+  });
+});
+
+describe("the draft connection carries the customer's issue templates (#4177)", () => {
+  function connectionWith(...frontMatter: readonly string[]): JiraChatDraftExecution["connection"] {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    const store = buildUiStoreOverDatabase(db);
+    cleanup.push(() => {
+      store.close();
+    });
+    store.markdownSkills.import({
+      fileName: "story-template.md",
+      contentBase64: Buffer.from(
+        [
+          "---",
+          "keiko: jira-issue-template",
+          "version: 1",
+          "project: SYN",
+          "issueType: Story",
+          "activateOn: [create]",
+          ...frontMatter,
+          "---",
+          "# Story",
+        ].join("\n"),
+      ).toString("base64"),
+    });
+    return jiraChatDraftConnection({ store }, { baseUrl: BASE_URL, deployment: "data-center" });
+  }
+
+  it("refuses a violating item and never POSTs it", async () => {
+    const jira = syntheticJira();
+    const connection = connectionWith("summaryMinLength: 40");
+    const result = await executeJiraChatDraft({ ...execution(jira), connection });
+    expect(jira.posts()).toEqual([]);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.data)).toContain("summary-too-short");
+  });
+
+  it("still creates the items of a draft the template accepts", async () => {
+    const jira = syntheticJira();
+    const connection = connectionWith("summaryMinLength: 3");
+    const result = await executeJiraChatDraft({ ...execution(jira), connection });
+    expect(jira.posts()).toHaveLength(4);
+    expect(result.isError).toBeUndefined();
   });
 });

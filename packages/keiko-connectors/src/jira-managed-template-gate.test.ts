@@ -76,10 +76,15 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
     {
       suffix: "/transitions",
       body: {
-        transitions: [
-          { id: "31", name: "Start", to: { id: "3", name: "Ready" }, fields: {} },
-          { id: "41", name: "Park", to: { id: "4", name: "Parked" }, fields: {} },
-        ],
+        transitions: remote.unnamedTransitions
+          ? [
+              { id: "31", to: { id: "3" }, fields: {} },
+              { id: "41", to: { id: "4" }, fields: {} },
+            ]
+          : [
+              { id: "31", name: "Start", to: { id: "3", name: "Ready" }, fields: {} },
+              { id: "41", name: "Park", to: { id: "4", name: "Parked" }, fields: {} },
+            ],
       },
     },
     remote.fieldCatalog
@@ -91,6 +96,8 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
 interface Remote {
   issue: Record<string, unknown>;
   fieldCatalog: boolean;
+  /** Jira answered transitions without transition or status names. */
+  unnamedTransitions?: boolean;
 }
 function fixture(
   templates: JiraIssueTemplateSet | (() => JiraIssueTemplateSet) | undefined,
@@ -231,6 +238,21 @@ describe("create", () => {
     expect(f.http).not.toHaveBeenCalledWith(expect.objectContaining({ method: "POST" }));
   });
 
+  it("names the unreadable skills to the model, not only the library", async () => {
+    const f = fixture({
+      templates: [],
+      unreadable: 2,
+      unreadableNames: ["Story template", "Bug DoR"],
+    });
+    expect(await f.run("jira.create", CREATE)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [
+        { ruleId: "template-unreadable", subject: "Story template, Bug DoR", template: "*" },
+      ],
+    });
+  });
+
   it("fails closed, without writing, when the template source throws", async () => {
     const f = fixture(() => {
       throw new Error("store unavailable");
@@ -344,6 +366,59 @@ describe("transition", () => {
     expect(f.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
   });
 
+  it("fails closed when Jira names neither the transition nor its target status", async () => {
+    const f = fixture(SET(gated), {
+      fieldCatalog: true,
+      unnamedTransitions: true,
+      issue: {
+        project: { key: "SYN" },
+        issuetype: { id: "10001", name: "Story" },
+        status: { id: "1", name: "To Do" },
+        customfield_10016: 8,
+      },
+    });
+    // The issue conforms, so only the undecidable activation can refuse it.
+    expect(await f.run("jira.transition", { issueKey: "SYN-1", transitionId: "41" })).toEqual({
+      ok: false,
+      reason: "field-validation",
+      violations: [
+        { ruleId: "template-unreadable", subject: "transition name", template: "SYN/Story" },
+      ],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("still decides by transition id when the names are missing", async () => {
+    const byId = template(["activateOn: [transition:31]", "requiredFields: [Story Points]"], "# T");
+    const f = fixture(SET(byId), {
+      fieldCatalog: true,
+      unnamedTransitions: true,
+      issue: {
+        project: { key: "SYN" },
+        issuetype: { id: "10001", name: "Story" },
+        status: { id: "1", name: "To Do" },
+      },
+    });
+    expect(await f.run("jira.transition", { issueKey: "SYN-1", transitionId: "31" })).toMatchObject(
+      { violations: [{ ruleId: "field-missing" }] },
+    );
+  });
+
+  it("does not fail closed for a template of another project or issue type", async () => {
+    const other = { ...gated, project: "OTHER" };
+    const f = fixture(SET(other), {
+      fieldCatalog: true,
+      unnamedTransitions: true,
+      issue: {
+        project: { key: "SYN" },
+        issuetype: { id: "10001", name: "Story" },
+        status: { id: "1", name: "To Do" },
+      },
+    });
+    await f.run("jira.transition", { issueKey: "SYN-1", transitionId: "41" });
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue/SYN-1/transitions"]);
+  });
+
   it("does not activate for a transition into another status", async () => {
     const f = fixture(SET(gated));
     await f.run("jira.transition", { issueKey: "SYN-1", transitionId: "41" });
@@ -372,6 +447,16 @@ describe("dry run before approval", () => {
       ok: true,
     });
     expect(await f.check("jira.comment", { issueKey: "SYN-1", body: "hi" })).toEqual({ ok: true });
+  });
+
+  it("never writes in check mode, whatever the operation", async () => {
+    const f = fixture(SET(template(ALL_POINTS)));
+    expect(await f.check("jira.comment", { issueKey: "SYN-1", body: "hi" })).toEqual({ ok: true });
+    expect(await f.check("jira.assign", { issueKey: "SYN-1", assignee: "someone" })).toEqual({
+      ok: true,
+    });
+    expect(f.writes()).toEqual([]);
+    expect(f.paths()).toEqual([]);
   });
 });
 

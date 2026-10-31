@@ -1,12 +1,14 @@
-import type {
-  AtlassianConnectorWriteFailureReason,
-  JiraFieldMetadata,
-  JiraIssueTemplate,
-  JiraTemplateViolation,
+import {
+  jiraIssueTemplateLabel,
+  type AtlassianConnectorWriteFailureReason,
+  type JiraFieldMetadata,
+  type JiraIssueTemplate,
+  type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
   checkJiraIssueTemplates,
+  jiraTemplatesNeedingTransitionNames,
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
   type JiraFieldCatalogEntry,
@@ -25,6 +27,8 @@ export interface JiraIssueTemplateSet {
   readonly templates: readonly JiraIssueTemplate[];
   /** Template documents in the library that no longer parse. They fail closed. */
   readonly unreadable: number;
+  /** Display names of those documents, so the refusal tells the lead which skill to repair. */
+  readonly unreadableNames?: readonly string[];
 }
 export type JiraIssueTemplateSource = () => JiraIssueTemplateSet;
 
@@ -71,7 +75,8 @@ const BASE_FIELDS = [
   "labels",
   "issuelinks",
 ] as const;
-const SYSTEM_FIELDS: readonly JiraFieldCatalogEntry[] = [
+/** System fields every Jira instance has; the report resolves template references against them too. */
+export const JIRA_TEMPLATE_SYSTEM_FIELDS: readonly JiraFieldCatalogEntry[] = [
   { id: "summary", name: "Summary" },
   { id: "description", name: "Description" },
   { id: "labels", name: "Labels" },
@@ -87,11 +92,26 @@ const SYSTEM_FIELDS: readonly JiraFieldCatalogEntry[] = [
 ];
 const CATALOG_MAX = 5000;
 
-function unreadableRefusal(): JiraTemplateGateResult {
+function unreadableRefusal(names: readonly string[] | undefined): JiraTemplateGateResult {
+  // Model-facing only: the activity log records the closed rule id, never a skill name.
+  const subject = names === undefined || names.length === 0 ? "template library" : names.join(", ");
   return {
     ok: false,
     reason: "field-validation",
-    violations: [{ ruleId: "template-unreadable", subject: "template library", template: "*" }],
+    violations: [{ ruleId: "template-unreadable", subject: subject.slice(0, 120), template: "*" }],
+  };
+}
+
+/** A template activated by a transition name or status that Jira's metadata does not name. */
+function undecidableTransitionRefusal(labels: readonly string[]): JiraTemplateGateResult {
+  return {
+    ok: false,
+    reason: "field-validation",
+    violations: labels.map((template) => ({
+      ruleId: "template-unreadable" as const,
+      subject: "transition name",
+      template,
+    })),
   };
 }
 
@@ -155,7 +175,10 @@ function appliedLabels(
   return [...labels];
 }
 
-function linkTypeNames(prior: Readonly<Record<string, unknown>>): readonly string[] {
+/** Names of the link types an issue carries, from its `issuelinks` field. */
+export function jiraIssueLinkTypeNames(
+  prior: Readonly<Record<string, unknown>>,
+): readonly string[] {
   const names: string[] = [];
   for (const link of asArray(prior.issuelinks) ?? []) {
     const type = asRecord(asRecord(link)?.type);
@@ -179,7 +202,7 @@ function subjectOf(input: JiraTemplateGateInput, identity: Identity): JiraTempla
     ...(input.transition === undefined ? {} : { transition: input.transition }),
     fields,
     linkTypes: [
-      ...(input.operation === "create" ? [] : linkTypeNames(identity.prior)),
+      ...(input.operation === "create" ? [] : jiraIssueLinkTypeNames(identity.prior)),
       ...(input.links ?? []).map((link) => link.type),
     ],
   };
@@ -187,7 +210,7 @@ function subjectOf(input: JiraTemplateGateInput, identity: Identity): JiraTempla
 
 function metadataCatalog(metadata: readonly JiraFieldMetadata[]): readonly JiraFieldCatalogEntry[] {
   const known = new Map<string, JiraFieldCatalogEntry>();
-  for (const entry of SYSTEM_FIELDS) known.set(entry.id, entry);
+  for (const entry of JIRA_TEMPLATE_SYSTEM_FIELDS) known.set(entry.id, entry);
   for (const field of metadata) known.set(field.id, { id: field.id, name: field.name });
   return [...known.values()];
 }
@@ -249,7 +272,7 @@ export async function gateJiraMutationByTemplates(
   // diagnostic and an unavailable outcome, so the write still never reaches Jira.
   const set = input.source?.();
   if (set === undefined) return OK;
-  if (set.unreadable > 0) return unreadableRefusal();
+  if (set.unreadable > 0) return unreadableRefusal(set.unreadableNames);
   const candidates = set.templates.filter((template) =>
     template.activations.some((activation) => activation.kind === input.operation),
   );
@@ -258,7 +281,18 @@ export async function gateJiraMutationByTemplates(
     input.operation === "create"
       ? await createIdentity(input.request, input.target)
       : await issueIdentity(input.request, input.target.issueKey);
-  if ("ok" in first) return first;
+  return "ok" in first ? first : checkCandidates(input, candidates, first);
+}
+
+/** The templates that activate on this operation, judged against the write's state. */
+async function checkCandidates(
+  input: JiraTemplateGateInput,
+  candidates: readonly JiraIssueTemplate[],
+  first: Identity,
+): Promise<JiraTemplateGateResult> {
+  const undecidable = jiraTemplatesNeedingTransitionNames(candidates, subjectOf(input, first));
+  if (undecidable.length > 0)
+    return undecidableTransitionRefusal(undecidable.map(jiraIssueTemplateLabel));
   const matching = matchingJiraIssueTemplates(candidates, subjectOf(input, first));
   if (matching.length === 0) return OK;
   const catalog = await completeCatalog(input, matching);

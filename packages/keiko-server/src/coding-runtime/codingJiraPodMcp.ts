@@ -66,8 +66,11 @@ import {
  */
 
 export interface CodingJiraPodDeps extends JiraPodAccessDeps {
-  /** The skill library holds the customer-defined issue templates every Jira write is checked by. */
-  readonly store?: Pick<UiHandlerDeps["store"], "markdownSkills"> | undefined;
+  /**
+   * The skill library holds the customer-defined issue templates every Jira write is checked by.
+   * Required: a Pod wired without it would write unchecked, so that cannot be expressed.
+   */
+  readonly store: Pick<UiHandlerDeps["store"], "markdownSkills">;
   readonly atlassianConnectorCredentials?:
     Pick<AtlassianConnectorCredentialDeps, "custody" | "httpBodyPortFactory"> | undefined;
 }
@@ -342,17 +345,17 @@ class CodingJiraPodService implements CodingJiraPods {
     context: ManagedMcpInvocationContext,
   ): JiraManagedConnection {
     const credential = this.current(binding);
-    const factory = this.#deps?.atlassianConnectorCredentials?.httpBodyPortFactory;
-    if (credential === undefined || factory === undefined) throw NOT_ADMITTED();
+    const deps = this.#deps;
+    const factory = deps?.atlassianConnectorCredentials?.httpBodyPortFactory;
+    if (credential === undefined || factory === undefined || deps === undefined)
+      throw NOT_ADMITTED();
     return {
       baseUrl: credential.baseUrl,
       deployment: credential.deployment,
       http: factory(credential, context.correlationId, {
         beforeDispatch: () => this.admit(binding, context),
       }),
-      ...(this.#deps?.store === undefined
-        ? {}
-        : { issueTemplates: jiraIssueTemplateSource(this.#deps.store) }),
+      issueTemplates: jiraIssueTemplateSource(deps.store),
     };
   }
 

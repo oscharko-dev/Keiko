@@ -5,6 +5,7 @@ import {
   isJiraIssueTemplateDocument,
   jiraIssueTemplateLabel,
   jiraTemplatePatternIssue,
+  mentionsJiraIssueTemplateMarker,
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
 } from "./jira-issue-template.js";
@@ -189,6 +190,33 @@ describe("template identification", () => {
   it("does not detect it in ordinary skills or in the body", () => {
     expect(isJiraIssueTemplateDocument("# Skill\nkeiko: jira-issue-template")).toBe(false);
     expect(isJiraIssueTemplateDocument("---\nname: x\n---\nkeiko: jira-issue-template")).toBe(
+      false,
+    );
+  });
+
+  it("decides by one predicate whatever spacing or quoting surrounds the value", () => {
+    for (const line of [
+      "keiko:   jira-issue-template",
+      "keiko : jira-issue-template",
+      'keiko:\t"jira-issue-template"',
+      "keiko: jira-issue-template   ",
+    ]) {
+      const document = template([line, ...MINIMAL.slice(1), "activateOn: [create]"]);
+      expect(isJiraIssueTemplateDocument(document)).toBe(true);
+      expect(parseJiraIssueTemplate(document).ok).toBe(true);
+    }
+  });
+
+  it("finds a marker line that is not in a front matter, outside fenced code", () => {
+    const orphan = `\n---\n${MINIMAL.join("\n")}\nactivateOn: [create]\n---\n# Body`;
+    expect(isJiraIssueTemplateDocument(orphan)).toBe(false);
+    expect(mentionsJiraIssueTemplateMarker(orphan)).toBe(true);
+    expect(mentionsJiraIssueTemplateMarker(template(VALID))).toBe(true);
+    expect(mentionsJiraIssueTemplateMarker("# Skill\nkeiko: jira-issue-template")).toBe(true);
+    expect(mentionsJiraIssueTemplateMarker("# Skill\n```\nkeiko: jira-issue-template\n```\n")).toBe(
+      false,
+    );
+    expect(mentionsJiraIssueTemplateMarker("# Skill\nUse the jira-issue-template marker.")).toBe(
       false,
     );
   });

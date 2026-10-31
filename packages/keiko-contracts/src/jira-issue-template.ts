@@ -8,6 +8,18 @@
  * Parsing is deterministic and fails closed: any unknown key, malformed line or unsafe pattern
  * rejects the whole document. Errors carry closed codes, key names and line numbers, never text.
  */
+import { readJiraDescriptionSections } from "./jira-description-sections.js";
+import {
+  JIRA_TEMPLATE_PATTERN_CHARS_MAX,
+  jiraTemplatePatternIssue,
+} from "./jira-template-pattern.js";
+
+export {
+  compileJiraTemplatePattern,
+  jiraTemplatePatternIssue,
+  type JiraTemplatePatternMatcher,
+} from "./jira-template-pattern.js";
+
 export const JIRA_ISSUE_TEMPLATE_MARKER = "jira-issue-template";
 export const JIRA_ISSUE_TEMPLATE_VERSION = 1;
 
@@ -15,7 +27,7 @@ export const JIRA_ISSUE_TEMPLATE_LIMITS = Object.freeze({
   keyChars: 128,
   textChars: 120,
   labelChars: 255,
-  patternChars: 200,
+  patternChars: JIRA_TEMPLATE_PATTERN_CHARS_MAX,
   listItems: 50,
   activations: 20,
   sections: 50,
@@ -104,157 +116,6 @@ export interface JiraTemplateViolation {
 /** What a template check yields for the model: bounded, closed ids plus short names. */
 export const JIRA_TEMPLATE_VIOLATIONS_MAX = 25;
 
-interface PatternGroup {
-  inner: boolean;
-}
-interface PatternState {
-  readonly stack: PatternGroup[];
-  /** The previous token is an atom a quantifier may follow. */
-  repeatable: boolean;
-  /** The previous token was a quantifier, so `?` makes it lazy. */
-  lazyAllowed: boolean;
-}
-
-const BRACE_QUANTIFIER = /^\{(\d{1,3})(?:,(\d{0,3}))?\}/u;
-
-/** Index after a character class starting at `start`, or -1 when it never closes. */
-function classEnd(source: string, start: number): number {
-  for (let index = start + 1; index < source.length; index += 1) {
-    if (source[index] === "\\") index += 1;
-    else if (source[index] === "]") return index;
-  }
-  return -1;
-}
-
-/** Every `a-z` range between two plain characters must run upward. */
-function classRangesValid(body: string): boolean {
-  for (let index = 0; index < body.length; index += 1) {
-    if (body[index] === "\\") {
-      index += 1;
-    } else if (body[index + 1] === "-" && index + 2 < body.length && body[index + 2] !== "\\") {
-      if ((body[index] ?? "") > (body[index + 2] ?? "")) return false;
-      index += 2;
-    }
-  }
-  return true;
-}
-
-function atom(state: PatternState, next: number): number {
-  state.repeatable = true;
-  state.lazyAllowed = false;
-  return next;
-}
-
-function boundary(state: PatternState, next: number): number {
-  state.repeatable = false;
-  state.lazyAllowed = false;
-  return next;
-}
-
-function escapeStep(source: string, index: number, state: PatternState): number | undefined {
-  const escaped = source[index + 1];
-  if (escaped === undefined || /[1-9kK]/u.test(escaped)) return undefined;
-  return atom(state, index + 2);
-}
-
-function classStep(source: string, index: number, state: PatternState): number | undefined {
-  const end = classEnd(source, index);
-  if (end < 0 || !classRangesValid(source.slice(index + 1, end))) return undefined;
-  return atom(state, end + 1);
-}
-
-function openGroup(source: string, index: number, state: PatternState): number | undefined {
-  if (source[index + 1] === "?" && source[index + 2] !== ":") return undefined;
-  state.stack.push({ inner: false });
-  return boundary(state, source[index + 1] === "?" ? index + 3 : index + 1);
-}
-
-function closeGroup(source: string, index: number, state: PatternState): number | undefined {
-  const group = state.stack.pop();
-  if (group === undefined) return undefined;
-  const quantified = quantifierWidth(source, index + 1) > 0;
-  if (quantified && group.inner) return undefined;
-  const parent = state.stack.at(-1);
-  if (parent !== undefined && (quantified || group.inner)) parent.inner = true;
-  return atom(state, index + 1);
-}
-
-/** Width of the quantifier starting at `index`, or 0 when none starts there. */
-function quantifierWidth(source: string, index: number): number {
-  const character = source[index];
-  if (character === "*" || character === "+" || character === "?") return 1;
-  const brace = character === "{" ? BRACE_QUANTIFIER.exec(source.slice(index)) : null;
-  if (brace === null) return 0;
-  const [whole, low = "", high = ""] = brace;
-  return high !== "" && Number(low) > Number(high) ? -1 : whole.length;
-}
-
-function quantifierStep(source: string, index: number, state: PatternState): number | undefined {
-  const width = quantifierWidth(source, index);
-  if (width < 0) return undefined;
-  if (source[index] === "?" && state.lazyAllowed) return boundary(state, index + 1);
-  if (!state.repeatable) return undefined;
-  const group = state.stack.at(-1);
-  if (group !== undefined) group.inner = true;
-  state.repeatable = false;
-  state.lazyAllowed = true;
-  return index + width;
-}
-
-function plainStep(source: string, index: number, state: PatternState): number | undefined {
-  const character = source[index] ?? "";
-  if (character === "|") {
-    const group = state.stack.at(-1);
-    if (group !== undefined) group.inner = true;
-    return boundary(state, index + 1);
-  }
-  if (character === "^" || character === "$") return boundary(state, index + 1);
-  if (quantifierWidth(source, index) !== 0) return quantifierStep(source, index, state);
-  return atom(state, index + 1);
-}
-
-/** The next index to scan, or `undefined` when the construct is outside the safe grammar. */
-function patternStep(source: string, index: number, state: PatternState): number | undefined {
-  const character = source[index] ?? "";
-  if (character === "\\") return escapeStep(source, index, state);
-  if (character === "[") return classStep(source, index, state);
-  if (character === "(") return openGroup(source, index, state);
-  if (character === ")") return closeGroup(source, index, state);
-  return plainStep(source, index, state);
-}
-
-function unsafeGroupStructure(source: string): boolean {
-  const state: PatternState = { stack: [], repeatable: false, lazyAllowed: false };
-  let index = 0;
-  while (index < source.length) {
-    const next = patternStep(source, index, state);
-    if (next === undefined) return true;
-    index = next;
-  }
-  return state.stack.length > 0;
-}
-
-/**
- * Why a template pattern is refused, or `undefined` when it is safe to run. The grammar is a
- * closed subset of JavaScript regular expressions (literals, classes, `. ^ $ | ( ) (?: )`,
- * greedy and lazy quantifiers), validated without compiling it: a quantified group may not hold a
- * quantifier or an alternation (catastrophic backtracking), and lookarounds, back-references,
- * named groups and malformed quantifiers or ranges are refused. A pattern this accepts compiles.
- * The checker also bounds its input (a Jira summary or label is at most 255 characters).
- */
-export function jiraTemplatePatternIssue(source: string): string | undefined {
-  if (source.length === 0 || source.length > JIRA_ISSUE_TEMPLATE_LIMITS.patternChars)
-    return "pattern length";
-  return unsafeGroupStructure(source) ? "pattern structure" : undefined;
-}
-
-/** The compiled template pattern; callers must have accepted the pattern at parse time. */
-export function compileJiraTemplatePattern(source: string): RegExp {
-  const issue = jiraTemplatePatternIssue(source);
-  if (issue !== undefined) throw new TypeError(issue);
-  return new RegExp(source);
-}
-
 const KEYS = [
   "keiko",
   "version",
@@ -302,12 +163,39 @@ function frontMatterOf(lines: readonly string[]): FrontMatter {
   return { kind: "open" };
 }
 
-/** True when the document declares itself a Jira issue template (valid or not). */
+const MARKER_LINE = /^keiko\s*:\s*"?jira-issue-template"?\s*$/u;
+const MARKER_LINE_CHARS_MAX = 200;
+
+function isMarkerLine(line: string): boolean {
+  const text = line.trim();
+  return text.length <= MARKER_LINE_CHARS_MAX && MARKER_LINE.test(text);
+}
+
+/**
+ * True when the document declares itself a Jira issue template (valid or not). This is the one
+ * predicate: the library listing, enforcement and the upload check all decide by it, and the
+ * storage prefilter is only ever a superset of it.
+ */
 export function isJiraIssueTemplateDocument(markdown: string): boolean {
   const front = frontMatterOf(splitDocument(markdown));
   if (front.kind === "none") return false;
   const lines = front.kind === "found" ? front.lines : splitDocument(markdown).slice(1);
-  return lines.some((line) => /^keiko\s*:\s*"?jira-issue-template"?\s*$/u.test(line.trim()));
+  return lines.some(isMarkerLine);
+}
+
+/**
+ * True when the document carries the template marker line outside fenced code, wherever it sits.
+ * A document that does but is not `isJiraIssueTemplateDocument` (a leading blank line before the
+ * front matter, a second block) was meant as a template and would silently enforce nothing.
+ */
+export function mentionsJiraIssueTemplateMarker(markdown: string): boolean {
+  let fenced = false;
+  for (const line of splitDocument(markdown)) {
+    const text = line.trimStart();
+    if (text.startsWith("```") || text.startsWith("~~~")) fenced = !fenced;
+    else if (!fenced && isMarkerLine(line)) return true;
+  }
+  return false;
 }
 
 const QUOTED = /^"(?:[^"\\\p{Cc}]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"$/u;
@@ -350,19 +238,35 @@ function entryFor(key: string, raw: string, line: number): RawEntry | undefined 
     : { key, values: [value], list: false, line };
 }
 
+interface KeyedLine {
+  readonly key: string;
+  readonly value: string;
+}
+const KEY_NAME = /^[A-Za-z][A-Za-z0-9]*$/u;
+
+/** `key: value`, with the value separated by a blank; no backtracking expression. */
+function keyedLine(text: string): KeyedLine | undefined {
+  const colon = text.indexOf(":");
+  if (colon < 0) return undefined;
+  const key = text.slice(0, colon).trimEnd();
+  const rest = text.slice(colon + 1);
+  if (!KEY_NAME.test(key) || (rest.length > 0 && !/^\s/u.test(rest))) return undefined;
+  return { key, value: rest.trim() };
+}
+
 function addKeyedLine(scan: Scan, text: string, line: number): void {
-  const match = /^([A-Za-z][A-Za-z0-9]*)\s*:(?:\s+(.*))?$/u.exec(text);
-  if (match === null) {
+  const match = keyedLine(text);
+  if (match === undefined) {
     scan.errors.push({ code: "malformed-line", line });
     return;
   }
-  const key = match[1] ?? "";
+  const { key } = match;
   if (!KEY_SET.has(key)) {
     scan.errors.push({ code: "unknown-key", key, line });
   } else if (scan.entries.some((entry) => entry.key === key)) {
     scan.errors.push({ code: "duplicate-key", key, line });
   } else {
-    const entry = entryFor(key, (match[2] ?? "").trim(), line);
+    const entry = entryFor(key, match.value, line);
     if (entry === undefined) scan.errors.push({ code: "invalid-value", key, line });
     else scan.entries.push(entry);
   }
@@ -489,14 +393,16 @@ function readActivations(reader: Reader): readonly JiraTemplateActivation[] {
   return parsed.filter((item): item is JiraTemplateActivation => item !== undefined);
 }
 
-const HEADING = /^\s{0,3}##[ \t]+(.+?)[ \t]*#*[ \t]*$/u;
-const FENCE = /^\s{0,3}(```|~~~)/u;
+/** Removes a trailing run of colons and blanks without a backtracking expression. */
+function withoutTrailingColons(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text.charAt(end - 1) === ":" || /\s/u.test(text.charAt(end - 1)))) end -= 1;
+  return text.slice(0, end);
+}
 
 /** Normalised key shared by the template body and the description the checker reads. */
 export function normalizeJiraSectionHeading(heading: string): string {
-  return heading
-    .replace(/[*_`]/gu, "")
-    .replace(/[:\s]+$/u, "")
+  return withoutTrailingColons(heading.replace(/[*_`]/gu, ""))
     .replace(/\s+/gu, " ")
     .trim()
     .toLowerCase();
@@ -504,23 +410,14 @@ export function normalizeJiraSectionHeading(heading: string): string {
 
 function bodySections(lines: readonly string[], optional: ReadonlySet<string>): readonly string[] {
   const sections: string[] = [];
-  let fenced = false;
-  for (const line of lines) {
-    if (FENCE.test(line)) fenced = !fenced;
-    const heading = fenced ? null : HEADING.exec(line);
-    const title = heading?.[1]
-      ?.replace(/[*_`]/gu, "")
-      .replace(/[:\s]+$/u, "")
-      .trim();
-    if (title === undefined || title.length === 0) continue;
-    if (optional.has(normalizeJiraSectionHeading(title))) continue;
-    if (
-      !sections.some(
-        (seen) => normalizeJiraSectionHeading(seen) === normalizeJiraSectionHeading(title),
-      )
-    ) {
-      sections.push(title);
-    }
+  const seen = new Set<string>(optional);
+  for (const heading of readJiraDescriptionSections(lines.join("\n"))) {
+    if (heading.level !== 2) continue;
+    const title = withoutTrailingColons(heading.title.replace(/[*_`]/gu, "")).trim();
+    const key = normalizeJiraSectionHeading(title);
+    if (title.length === 0 || seen.has(key)) continue;
+    seen.add(key);
+    sections.push(title);
   }
   return sections;
 }
@@ -550,7 +447,7 @@ function readHeader(reader: Reader): { project: string; issueType: string } | un
     reader.errors.push({ code: "invalid-value", key: "keiko" });
   if (version !== undefined && version !== String(JIRA_ISSUE_TEMPLATE_VERSION))
     reader.errors.push({ code: "invalid-value", key: "version" });
-  if (project !== undefined && !/^[A-Za-z][A-Za-z0-9_]*$/u.test(project))
+  if (project !== undefined && !/^[A-Za-z]\w*$/u.test(project))
     reader.errors.push({ code: "invalid-value", key: "project" });
   if (project === undefined || issueType === undefined) return undefined;
   return { project: project.toUpperCase(), issueType };
@@ -654,12 +551,11 @@ export function parseJiraIssueTemplate(markdown: string): JiraIssueTemplateParse
 /** Body-free description of a parse failure: closed codes, key names and line numbers only. */
 export function describeJiraTemplateParseErrors(errors: readonly JiraTemplateParseError[]): string {
   return errors
-    .map(
-      (error) =>
-        `${error.code}${error.key === undefined ? "" : ` (${error.key})`}${
-          error.line === undefined ? "" : ` at line ${String(error.line)}`
-        }`,
-    )
+    .map((error) => {
+      const key = error.key === undefined ? "" : ` (${error.key})`;
+      const line = error.line === undefined ? "" : ` at line ${String(error.line)}`;
+      return `${error.code}${key}${line}`;
+    })
     .join("; ");
 }
 

@@ -10,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   isJiraIssueTemplateDocument,
+  JIRA_ISSUE_TEMPLATE_MARKER,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -81,7 +82,9 @@ function readSkill(
   return { ...row };
 }
 
-const TEMPLATE_MARKER_SQL = "keiko: jira-issue-template";
+// Only a superset of `isJiraIssueTemplateDocument` (which tolerates spacing and quotes around the
+// value), so the one predicate below decides what is listed and enforced.
+const TEMPLATE_MARKER_SQL = JIRA_ISSUE_TEMPLATE_MARKER;
 const TEMPLATE_CACHE_MAX = 256;
 const templateCache = new Map<string, JiraIssueTemplate | undefined>();
 

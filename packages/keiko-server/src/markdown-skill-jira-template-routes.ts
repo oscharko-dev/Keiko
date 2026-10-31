@@ -153,7 +153,7 @@ export function handleProposeJiraTemplates(
     const body = await readMutation(ctx, deps, 4096);
     if (body.kind === "rejected") return body.response;
     const { projectKey, podId } = body.value;
-    if (typeof projectKey !== "string" || !/^[A-Za-z][A-Za-z0-9_]{0,127}$/u.test(projectKey)) {
+    if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey)) {
       throw invalidRequest("Provide a Jira project key.");
     }
     const pod = readyPod(deps, podId);

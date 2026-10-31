@@ -226,6 +226,7 @@ describe("the template source", () => {
     expect(jiraIssueTemplateSource(store)()).toEqual({
       templates: [expect.objectContaining({ project: "SYN", issueType: "Story" })],
       unreadable: 0,
+      unreadableNames: [],
     });
     // A template stored before the grammar tightened must fail closed, not silently vanish.
     const stale = "---\nkeiko: jira-issue-template\nversion: 7\n---\n";
@@ -233,7 +234,60 @@ describe("the template source", () => {
       "UPDATE markdown_skill_revisions SET body = ?, digest = ?, byte_count = ? WHERE body LIKE '%SYN%'",
     ).run(stale, createHash("sha256").update(stale).digest("hex"), Buffer.byteLength(stale));
     expect(parseJiraIssueTemplate(stale).ok).toBe(false);
-    expect(jiraIssueTemplateSource(store)()).toEqual({ templates: [], unreadable: 1 });
+    expect(jiraIssueTemplateSource(store)()).toEqual({
+      templates: [],
+      unreadable: 1,
+      unreadableNames: ["Story"],
+    });
+  });
+});
+
+describe("the template marker", () => {
+  function libraryOf(): ReturnType<typeof buildUiStoreOverDatabase> {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    const store = buildUiStoreOverDatabase(db);
+    cleanup.push(() => {
+      store.close();
+    });
+    return store;
+  }
+  const importText = (store: ReturnType<typeof libraryOf>, text: string): void => {
+    store.markdownSkills.import({
+      fileName: "template.md",
+      contentBase64: Buffer.from(text).toString("base64"),
+    });
+  };
+
+  it.each([
+    "keiko:   jira-issue-template",
+    'keiko: "jira-issue-template"',
+    "keiko : jira-issue-template  ",
+  ])("lists and enforces a template whose marker is written %j", (marker) => {
+    const store = libraryOf();
+    importText(store, TEMPLATE.replace("keiko: jira-issue-template", marker));
+    expect(jiraIssueTemplateSource(store)().templates).toEqual([
+      expect.objectContaining({ project: "SYN", issueType: "Story" }),
+    ]);
+    expect(store.markdownSkills.jiraTemplates()).toHaveLength(1);
+  });
+
+  it("refuses an upload that carries the marker without a valid front matter", () => {
+    const store = libraryOf();
+    expect(() => {
+      importText(store, `\n${TEMPLATE}`);
+    }).toThrow(/marker without a valid front matter/u);
+    expect(store.markdownSkills.jiraTemplates()).toEqual([]);
+  });
+
+  it("still accepts an ordinary skill that only discusses the marker in prose or code", () => {
+    const store = libraryOf();
+    importText(
+      store,
+      "# Notes\nSay keiko: jira-issue-template in prose.\n```\nkeiko: jira-issue-template\n```\n",
+    );
+    expect(store.markdownSkills.jiraTemplates()).toEqual([]);
   });
 });
 

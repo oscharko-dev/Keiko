@@ -1566,6 +1566,7 @@ export {
   compileJiraTemplatePattern,
   describeJiraTemplateParseErrors,
   isJiraIssueTemplateDocument,
+  mentionsJiraIssueTemplateMarker,
   jiraIssueTemplateLabel,
   jiraTemplatePatternIssue,
   normalizeJiraSectionHeading,
@@ -1578,6 +1579,12 @@ export {
   type JiraTemplateRuleId,
   type JiraTemplateViolation,
 } from "./jira-issue-template.js";
+export {
+  JIRA_HEADING_LINE_CHARS_MAX,
+  readJiraDescriptionSections,
+  type JiraDescriptionSection,
+} from "./jira-description-sections.js";
+export type { JiraTemplatePatternMatcher } from "./jira-template-pattern.js";
 export {
   JIRA_REPORT_EXPORT_FORMATS,
   JIRA_REPORT_EXPORT_MEDIA_TYPES,

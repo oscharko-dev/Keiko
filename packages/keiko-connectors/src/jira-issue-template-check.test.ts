@@ -121,6 +121,59 @@ describe("description sections", () => {
   it("reads an absent description as no sections", () => {
     expect(ids(template, subject({}))).toHaveLength(2);
   });
+
+  it("does not take a heading from fenced code or a wiki code block", () => {
+    const fenced = "## Context\nWhy\n```\n## Acceptance criteria\nfake\n```\n";
+    expect(ids(template, subject({ description: fenced }))).toEqual([
+      "section-missing:Acceptance criteria",
+    ]);
+    const wiki = "## Context\nWhy\n{code}\nh2. Acceptance criteria\nfake\n{code}\n";
+    expect(ids(template, subject({ description: wiki }))).toEqual([
+      "section-missing:Acceptance criteria",
+    ]);
+  });
+
+  it("counts subsections as part of the section that holds them", () => {
+    const description =
+      "## Context\n### Background\nWhy\n### Impact\nWho\n## Acceptance criteria\n* ok";
+    expect(ids(template, subject({ description }))).toEqual([]);
+  });
+
+  it("still ends a section at the next heading of the same level", () => {
+    const description = "## Context\n## Acceptance criteria\n* ok";
+    expect(ids(template, subject({ description }))).toEqual(["section-empty:Context"]);
+  });
+
+  it("reads setext headings on the issue and in the template alike", () => {
+    const setext = parsed(
+      [],
+      "Context\n=======\nIgnored H1\n\nAcceptance criteria\n-------------------\n",
+    );
+    expect(setext.requiredSections).toEqual(["Acceptance criteria"]);
+    const description = "Acceptance criteria\n-------------------\n* ok\n";
+    expect(ids(setext, subject({ description }))).toEqual([]);
+    expect(ids(setext, subject({ description: "Acceptance criteria\n---\n" }))).toEqual([
+      "section-empty:Acceptance criteria",
+    ]);
+  });
+
+  it("reads an adversarial 100k character description in bounded time", () => {
+    const description = `# a${" ".repeat(100_000)}b\n## Context\nWhy`;
+    const started = performance.now();
+    ids(template, subject({ description }));
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+});
+
+describe("pattern rules cannot be made slow", () => {
+  it("evaluates a catastrophic pattern on a maximum-length summary in milliseconds", () => {
+    const hostile = parsed(["summaryPattern: ^.*.*.*.*!"], "# T");
+    const started = performance.now();
+    expect(ids(hostile, subject({ summary: "a".repeat(255) }))).toEqual([
+      "summary-pattern:^.*.*.*.*!",
+    ]);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
 });
 
 describe("required fields and the parent relation", () => {

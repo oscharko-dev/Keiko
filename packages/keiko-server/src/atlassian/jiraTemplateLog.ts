@@ -20,9 +20,11 @@ export function jiraIssueTemplateSource(
 ): JiraIssueTemplateSource {
   return () => {
     const entries = store.markdownSkills.jiraTemplates();
+    const broken = entries.filter((entry) => entry.template === undefined);
     return {
       templates: entries.flatMap((entry) => (entry.template === undefined ? [] : [entry.template])),
-      unreadable: entries.filter((entry) => entry.template === undefined).length,
+      unreadable: broken.length,
+      unreadableNames: broken.map((entry) => entry.skill.name),
     };
   };
 }

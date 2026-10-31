@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -27,6 +28,8 @@ import {
   type CodingJiraPodDeps,
   type CodingJiraPods,
 } from "./codingJiraPodMcp.js";
+import { buildUiStoreOverDatabase } from "../store/index.js";
+import { runMigrations } from "../store/schema.js";
 import { CODING_JIRA_TOOL_RISKS, type CodingJiraPodBinding } from "./codingJiraPodBinding.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -99,7 +102,37 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
 
-function harness(options: { readonly attach?: boolean } = {}): Harness {
+const EDIT_TEMPLATE = [
+  "---",
+  "keiko: jira-issue-template",
+  "version: 1",
+  "project: SYN",
+  "issueType: Story",
+  "activateOn: [edit]",
+  "summaryMinLength: 40",
+  "---",
+  "# Story",
+].join("\n");
+
+function templateStore(template: string | undefined): CodingJiraPodDeps["store"] {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  runMigrations(db);
+  const store = buildUiStoreOverDatabase(db);
+  cleanup.push(() => {
+    store.close();
+    return Promise.resolve();
+  });
+  if (template !== undefined) {
+    store.markdownSkills.import({
+      fileName: "story-template.md",
+      contentBase64: Buffer.from(template).toString("base64"),
+    });
+  }
+  return store;
+}
+
+function harness(options: { readonly attach?: boolean; readonly template?: string } = {}): Harness {
   const pod: PodState = {
     generation: 3,
     revision: 1,
@@ -110,6 +143,8 @@ function harness(options: { readonly attach?: boolean } = {}): Harness {
   const state: SyntheticJira = {
     fields: {
       summary: "Fix it",
+      project: { key: "SYN" },
+      issuetype: { id: "10001", name: "Story" },
       assignee: { name: "previous-user" },
       status: { id: "1" },
       labels: [],
@@ -129,6 +164,7 @@ function harness(options: { readonly attach?: boolean } = {}): Harness {
   const log: ServerLogSink = { write: (event) => void records.push(event) };
   const pods = createCodingJiraPods(log);
   const deps: CodingJiraPodDeps = {
+    store: templateStore(options.template),
     serverPrincipal: () => PRINCIPAL,
     atlassianConnectorCredentials: {
       custody: {
@@ -433,6 +469,39 @@ describe("serving the bound Pod through the relay", () => {
     expect(proofLines(h)).toEqual([
       expect.objectContaining({ outcome: "failed", reason: "tool-failed", level: "warn" }),
     ]);
+  });
+});
+
+describe("the customer's issue templates bind a Coding run's Jira writes (#4177)", () => {
+  const writes = (h: Harness): number =>
+    h.http.mock.calls.filter(([request]) => request.method !== "GET").length;
+
+  it("refuses an edit that leaves the issue violating its template, before any PUT", async () => {
+    const h = harness({ template: EDIT_TEMPLATE });
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "Too short" },
+    });
+    // The relay hands the model a generic tool error for any refused write; the point here is
+    // that the gate held: the same edit without a template (below) is sent.
+    expect(result.isError).toBe(true);
+    expect(writes(h)).toBe(0);
+  });
+
+  it("lets the same edit through when no template governs it", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    await client.call("jira.edit", { issueKey: "SYN-1", fields: { summary: "Too short" } });
+    expect(writes(h)).toBe(1);
+  });
+
+  it("cannot be attached without the skill library that holds the templates", () => {
+    const pods = createCodingJiraPods(undefined);
+    // @ts-expect-error `store` is required: a Pod wired without it would write unchecked.
+    const deps: CodingJiraPodDeps = { serverPrincipal: () => PRINCIPAL };
+    expect(deps.store).toBeUndefined();
+    expect(pods.resolve(POD)).toEqual({ ok: false, reason: "unavailable" });
   });
 });
 

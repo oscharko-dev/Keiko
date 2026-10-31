@@ -1,6 +1,7 @@
 import {
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
+  readJiraDescriptionSections,
   type AtlassianConnectorWriteFailureReason,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -35,9 +36,7 @@ const ROUTING_FIELDS: ReadonlySet<string> = new Set([
   "description",
   "reporter",
 ]);
-const PROJECT_KEY = /^[A-Za-z][A-Za-z0-9_]{0,127}$/u;
-const MARKDOWN_HEADING = /^\s{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/u;
-const WIKI_HEADING = /^\s*h[1-6]\.[ \t]+(.+?)[ \t]*$/u;
+const PROJECT_KEY = /^[A-Za-z]\w{0,127}$/u;
 
 interface ProjectFacts {
   readonly id: string;
@@ -171,9 +170,7 @@ export async function readJiraTemplateInstanceMetadata(
 
 function headingsOf(description: string): readonly string[] {
   const seen = new Map<string, string>();
-  for (const line of description.replace(/\r\n?/gu, "\n").split("\n")) {
-    const title = (MARKDOWN_HEADING.exec(line) ?? WIKI_HEADING.exec(line))?.[1];
-    if (title === undefined) continue;
+  for (const { title } of readJiraDescriptionSections(description)) {
     const key = normalizeJiraSectionHeading(title);
     if (key.length > 0 && key.length <= 120 && !seen.has(key)) seen.set(key, title.trim());
   }
