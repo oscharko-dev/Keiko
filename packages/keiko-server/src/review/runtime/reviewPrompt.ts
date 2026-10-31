@@ -145,7 +145,11 @@ export function neutralizeReviewDataMarkers(data: string): string {
     .join("");
 }
 
-function dataBlock(label: "rules" | "diff-package", nonce: string, data: string): string {
+function dataBlock(
+  label: "rules" | "diff-package" | "candidate",
+  nonce: string,
+  data: string,
+): string {
   return [
     `<review-data ${label} ${nonce}>`,
     neutralizeReviewDataMarkers(data),
@@ -181,4 +185,12 @@ export function renderReviewTask(input: ReviewTaskInput): ReviewTaskResult {
   const byteCount = Buffer.byteLength(text, "utf8");
   if (byteCount > REVIEW_TASK_MAX_BYTES) return { ok: false, reason: "task-too-large" };
   return { ok: true, text, byteCount };
+}
+
+/**
+ * One fenced, labelled, nonce-bound block of untrusted data, shared with the counter-check task
+ * (Issue #4136): its candidate block uses the same markers and neutralization.
+ */
+export function renderReviewDataBlock(label: "candidate", nonce: string, data: string): string {
+  return dataBlock(label, nonce, data);
 }

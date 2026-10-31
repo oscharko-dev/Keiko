@@ -23,6 +23,7 @@ import {
   REVIEW_FINDING_SEVERITIES,
   REVIEW_FINDING_TEXT_MAX_CHARS,
   REVIEW_FINDING_TITLE_MAX_CHARS,
+  REVIEW_CLIENT_REQUEST_ID_MAX_CHARS,
   REVIEW_LINE_MAX,
   REVIEW_MODEL_ID_MAX_CHARS,
   REVIEW_PRESENTED_FINDINGS_MAX,
@@ -38,6 +39,7 @@ import {
   type ReviewFindingReport,
   type ReviewModelPolicy,
   type ReviewRunSettlement,
+  type ReviewRunStartRequest,
   type ReviewTarget,
 } from "./pull-request-review.js";
 
@@ -534,4 +536,56 @@ export function validateReviewModelPolicy(
   checkModelId(own(value, "reviewerModelId"), "reviewerModelId", issues);
   checkModelId(own(value, "counterCheckerModelId"), "counterCheckerModelId", issues);
   return finish({ ...value } as unknown as ReviewModelPolicy, issues);
+}
+
+const CLIENT_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+
+function checkClientRequestId(value: unknown, issues: Issues): void {
+  if (typeof value !== "string") issues.push({ code: "wrong-type", path: "clientRequestId" });
+  else if (value.length > REVIEW_CLIENT_REQUEST_ID_MAX_CHARS) {
+    issues.push({ code: "too-long", path: "clientRequestId" });
+  } else if (!CLIENT_REQUEST_ID.test(value)) {
+    issues.push({ code: "invalid-identifier", path: "clientRequestId" });
+  }
+}
+
+function validateTargetRequest(value: unknown, issues: Issues): void {
+  if (!isRecord(value)) {
+    issues.push({ code: "not-an-object", path: "target" });
+    return;
+  }
+  const kind = own(value, "kind");
+  if (kind === "pull-request") {
+    checkKeys(value, ["kind", "number"], [], "target", issues);
+    const number = own(value, "number");
+    if (number === undefined) return;
+    checkInteger(number, REVIEW_PULL_REQUEST_NUMBER_MAX, "target.number", issues);
+    return;
+  }
+  if (kind === "local-range") {
+    checkKeys(value, ["kind", "baseRef", "headRef"], [], "target", issues);
+    checkRefName(own(value, "baseRef"), "target.baseRef", issues);
+    checkRefName(own(value, "headRef"), "target.headRef", issues);
+    return;
+  }
+  issues.push({ code: "unknown-enum-value", path: "target.kind" });
+}
+
+/**
+ * Validates a `POST /api/git-review/runs` body. The key set is closed: evaluation switches such as
+ * a disabled counter-check or a role swap are refused as unknown fields, never honoured.
+ */
+export function validateReviewRunStartRequest(
+  value: unknown,
+): ReviewContractValidation<ReviewRunStartRequest> {
+  if (!isRecord(value)) return notAnObject("");
+  const issues: Issues = [];
+  const required = ["target", "reviewerModelId", "counterCheckerModelId", "clientRequestId"];
+  checkKeys(value, required, ["dryRun"], "", issues);
+  validateTargetRequest(own(value, "target"), issues);
+  checkModelId(own(value, "reviewerModelId"), "reviewerModelId", issues);
+  checkModelId(own(value, "counterCheckerModelId"), "counterCheckerModelId", issues);
+  checkClientRequestId(own(value, "clientRequestId"), issues);
+  checkBoolean(own(value, "dryRun"), "dryRun", issues);
+  return finish({ ...value } as unknown as ReviewRunStartRequest, issues);
 }

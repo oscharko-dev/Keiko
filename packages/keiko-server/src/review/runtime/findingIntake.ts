@@ -94,7 +94,7 @@ function admissiblePath(path: string): boolean {
 class HeadFileReader {
   private readonly files = new Map<string, Promise<HeadFile>>();
 
-  public constructor(private readonly input: ReviewFindingIntakeInput) {}
+  public constructor(private readonly input: ReviewHeadReadInput) {}
 
   public read(path: string, signal: AbortSignal | undefined): Promise<HeadFile> {
     const cached = this.files.get(path);
@@ -226,3 +226,14 @@ export function createReviewFindingIntake(input: ReviewFindingIntakeInput): Revi
     rejections: () => ({ ...rejected }),
   };
 }
+
+// ─── Shared with the counter-check (Issue #4136) ─────────────────────────────
+
+/** What reading head-commit files needs: the worktree's object store, the head and the runner. */
+type ReviewHeadReadInput = Pick<ReviewFindingIntakeInput, "worktreeRoot" | "headSha" | "runner">;
+
+/**
+ * The head-commit file reader of the intake, shared with the counter-check, which verifies its
+ * verdict evidence against the same objects (cached per path, bounded per run).
+ */
+export { HeadFileReader as ReviewHeadFileReader };

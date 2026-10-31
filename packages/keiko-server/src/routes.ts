@@ -2,11 +2,26 @@ import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
 import {
   REVIEW_PULL_REQUEST_ROUTE,
   REVIEW_PULL_REQUESTS_ROUTE,
+  REVIEW_RUN_CANCEL_ROUTE,
+  REVIEW_RUN_DIFF_ROUTE,
+  REVIEW_RUN_EVENTS_ROUTE,
+  REVIEW_RUN_ROUTE,
+  REVIEW_RUNS_ROUTE,
+  REVIEW_STATES_ROUTE,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import {
   handleReviewPullRequestDetail,
   handleReviewPullRequestList,
 } from "./review/target/routes.js";
+import {
+  handleReviewRunCancel,
+  handleReviewRunDiff,
+  handleReviewRunEvents,
+  handleReviewRunGet,
+  handleReviewRunHistory,
+  handleReviewRunStart,
+  handleReviewStates,
+} from "./review/routes.js";
 import {
   handleListMarkdownSkills,
   handleReadMarkdownSkill,
@@ -824,6 +839,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // area: two fixed GraphQL reads, the repository addressed by `root` like every Git window read.
   { method: "GET", pattern: REVIEW_PULL_REQUESTS_ROUTE, handler: handleReviewPullRequestList },
   { method: "GET", pattern: REVIEW_PULL_REQUEST_ROUTE, handler: handleReviewPullRequestDetail },
+  // Issue #4136 (ADR-0182 D5/D6) — review runs: start (and dry run), records, history, per pull
+  // request review state, the reviewed diff, the progress stream and cancellation.
+  { method: "POST", pattern: REVIEW_RUNS_ROUTE, handler: handleReviewRunStart },
+  { method: "GET", pattern: REVIEW_RUNS_ROUTE, handler: handleReviewRunHistory },
+  { method: "GET", pattern: REVIEW_STATES_ROUTE, handler: handleReviewStates },
+  { method: "GET", pattern: REVIEW_RUN_ROUTE, handler: handleReviewRunGet },
+  { method: "GET", pattern: REVIEW_RUN_DIFF_ROUTE, handler: handleReviewRunDiff },
+  { method: "GET", pattern: REVIEW_RUN_EVENTS_ROUTE, handler: handleReviewRunEvents },
+  { method: "POST", pattern: REVIEW_RUN_CANCEL_ROUTE, handler: handleReviewRunCancel },
   // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
   // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted
   // task ids only (never free-form argv), workspace-contained cwd, output cap, timeout, cancellation,

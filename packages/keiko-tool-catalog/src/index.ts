@@ -25,6 +25,12 @@ export {
   CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT,
 } from "./child.js";
 export {
+  reviewCounterCheckRegistrationSet,
+  REVIEW_COUNTER_CHECK_HANDLER_REQUIREMENTS,
+  REVIEW_COUNTER_CHECK_PROFILE,
+  REVIEW_COUNTER_CHECK_TOOL_ALIASES,
+} from "./review-counter-check.js";
+export {
   opencodeRegistrationSet,
   nativeTextSnapshotRegistrationSet,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,

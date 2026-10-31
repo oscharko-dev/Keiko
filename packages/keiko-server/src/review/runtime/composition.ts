@@ -44,6 +44,7 @@ import { createCodingRuntimeSnapshotStore } from "../../coding-runtime/codingRun
 import { createAuthenticatedSessionStartConfirmationPlane } from "../../coding-runtime/codingRuntimeStartConfirmationPlane.js";
 import type { CodingRuntimeStartConfirmationConsumer } from "../../coding-runtime/codingRuntimeStartConfirmation.js";
 import { createProductionCodingRuntimeHost } from "../../coding-runtime/productionCodingRuntimeHost.js";
+import type { CodingRuntimeHostRunEffort } from "../../coding-runtime/codingRuntimeRunEffort.js";
 import {
   createProductionCodingRuntimeResolver,
   type ProductionCodingRuntimeResolverInput,
@@ -126,6 +127,8 @@ export interface ReviewRuntimeComposition {
   readonly facadePurpose: CodingRuntimePurpose | undefined;
   /** The deps the shared sidecar handlers read, with this instance's runtime capabilities. */
   readonly sidecarDeps: (base: UiHandlerDeps) => UiHandlerDeps;
+  /** A run's model effort (prompt tokens, model turns) as the runtime host accounted it (#4136). */
+  readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
   readonly close: () => void;
 }
 
@@ -317,6 +320,7 @@ function assembleComposition(
       return parts.facadePurpose();
     },
     sidecarDeps: (base): UiHandlerDeps => reviewSidecarDeps(base, controlPlane, gatewayEvidence),
+    runEffort: (runId) => parts.host.runEffort?.read(runId),
     close: (): void => {
       snapshots.db.close();
     },

@@ -18,6 +18,8 @@
 
 import { randomUUID } from "node:crypto";
 
+import { sha256Hex } from "@oscharko-dev/keiko-security";
+
 import type {
   ReviewProfileRefusalReason,
   ReviewReportRejectionReason,
@@ -78,13 +80,17 @@ type ReviewRuntimeRefusalReason =
   | "task-too-large"
   | "runtime-unavailable";
 
-type ReviewRuntimeRunResult =
+export type ReviewRuntimeRunResult =
   | {
       readonly ok: true;
       readonly outcome: ReviewRunDriveOutcome["outcome"];
       readonly runtimeRunId?: string | undefined;
       readonly failureCode?: string | undefined;
+      /** The Reviewer's prompt tokens and model turns as the runtime host accounted them (#4136). */
+      readonly effort?: ReviewRunDriveOutcome["effort"];
       readonly rules: ReviewRulesFileOutcome;
+      /** SHA-256 of the loaded rules text (#4136 run record); absent without rules. */
+      readonly rulesDigest?: string | undefined;
       readonly candidates: readonly ReviewCandidateFinding[];
       readonly rejections: Readonly<Record<ReviewReportRejectionReason, number>>;
     }
@@ -337,7 +343,11 @@ async function prepareAndRun(
   if (instance === undefined) {
     return { ok: false, reason: "runtime-unavailable", rules: rules.outcome };
   }
-  return runOnInstance(context, instance, request, { taskText: task.text, rules: rules.outcome });
+  const result = await runOnInstance(context, instance, request, {
+    taskText: task.text,
+    rules: rules.outcome,
+  });
+  return withRulesDigest(result, rules);
 }
 
 async function runOnInstance(
@@ -401,6 +411,7 @@ function collected(
     outcome: outcome.outcome,
     ...(outcome.runId === undefined ? {} : { runtimeRunId: outcome.runId }),
     ...(outcome.failureCode === undefined ? {} : { failureCode: outcome.failureCode }),
+    ...(outcome.effort === undefined ? {} : { effort: outcome.effort }),
     rules,
     candidates: intake?.candidates() ?? [],
     rejections: intake?.rejections() ?? {
@@ -411,4 +422,13 @@ function collected(
       "limit-reached": 0,
     },
   };
+}
+
+/** The run record's rules identity (Issue #4136): a digest of the loaded rules text, never text. */
+function withRulesDigest(
+  result: ReviewRuntimeRunResult,
+  rules: ReviewRulesReadResult,
+): ReviewRuntimeRunResult {
+  if (!result.ok || rules.outcome !== "loaded") return result;
+  return { ...result, rulesDigest: sha256Hex(rules.text) };
 }
