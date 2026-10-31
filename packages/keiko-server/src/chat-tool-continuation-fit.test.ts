@@ -84,7 +84,9 @@ describe("fitToolContinuation", () => {
       },
       "succeeded",
     );
-    const exchanges = [draft, EXCHANGES[3] as ChatToolExchange];
+    const newest = EXCHANGES.at(-1);
+    if (newest === undefined) throw new Error("Missing newest exchange");
+    const exchanges = [draft, newest];
     const fitted = fitToolContinuation(continuationOf(exchanges), exchanges, 0);
     expect(JSON.parse(fitted.messages[1]?.content ?? "")).toEqual({
       elided: true,
