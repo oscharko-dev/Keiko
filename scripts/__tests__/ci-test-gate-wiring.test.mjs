@@ -227,7 +227,7 @@ const HTML_MANUAL_FIXTURE_IDS = [
 describe("CI test/gate wiring guard", () => {
   it.each([
     ["packages", 5, ".vitest-reports"],
-    ["scripts", 2, ".vitest-reports-scripts"],
+    ["scripts", 3, ".vitest-reports-scripts"],
   ])("requires every native %s coverage shard before merging", (scope, count, directory) => {
     const workflow = parse(ci);
     const job = workflow.jobs[`coverage-${scope}`];

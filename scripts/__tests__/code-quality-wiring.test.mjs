@@ -535,7 +535,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     const workflow = parse(read(".github/workflows/ci.yml"));
     const compatibility = workflow.jobs["node-26-compatibility"];
     const runs = compatibility.steps.map((step) => step.run);
-    expect(runs).toContain("npm test -- --shard=${{ matrix.shard }}/2");
+    expect(runs).toContain("npm test -- --shard=${{ matrix.shard }}/3");
     expect(runs).not.toContain("npm run check:code-quality-policy:repository");
     const policy = workflow.jobs["code-quality-policy"];
     expect(policy["runs-on"]).toBe("ubuntu-24.04-arm");

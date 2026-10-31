@@ -749,7 +749,7 @@ jobs:
           retention-days: 1
 
   coverage-scripts:
-    name: Coverage shard (scripts ${{ matrix.shard }}/2)
+    name: Coverage shard (scripts ${{ matrix.shard }}/3)
     needs: verified-tree
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
@@ -757,12 +757,14 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-    # #4145: the anti-slop engine suites pushed the single scripts job past its 30-minute bound;
-    # two shards keep each job inside it, the same split the engine's epic branch measured.
+    # #4145: the anti-slop engine suites pushed the single scripts job past its 30-minute bound.
+    # The epic branch measured two shards, but dev's own scripts suite has grown since: both CI
+    # runs on 3a8884fda cancelled shard 1/2 at 30 minutes and shard 2/2 needed 29. Three shards
+    # restore the margin; the responsibilities suite alone runs about 20 minutes and cannot split.
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -805,7 +807,7 @@ jobs:
         run: npm run build:packages
       - name: Measure script coverage shard
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        run: npm run test:coverage:scripts:shard -- --shard=${{ matrix.shard }}/2 --reporter=github-actions
+        run: npm run test:coverage:scripts:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
       - name: Upload script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -967,7 +969,7 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: |
           set -euo pipefail
-          expected=2
+          expected=3
           actual=$(find .vitest-reports-scripts -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
           if [ "$actual" -ne "$expected" ]; then
             echo "Expected $expected script coverage shard blobs, found $actual."
@@ -1527,7 +1529,7 @@ jobs:
         run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
 
   node-26-compatibility:
-    name: Node 26 compatibility (shard ${{ matrix.shard }}/2)
+    name: Node 26 compatibility (shard ${{ matrix.shard }}/3)
     needs: [change-scope, verified-tree]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
@@ -1535,7 +1537,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     permissions:
       contents: read
     steps:
@@ -1565,7 +1567,7 @@ jobs:
       - name: Typecheck the complete package graph
         run: npm run typecheck
       - name: Run this shard of the complete hermetic test suite
-        run: npm test -- --shard=${{ matrix.shard }}/2
+        run: npm test -- --shard=${{ matrix.shard }}/3
       - name: Prepare packaged CLI
         run: npm run prepare:bin
       - name: Build UI (static export)
