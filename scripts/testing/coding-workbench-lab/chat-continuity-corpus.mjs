@@ -2,7 +2,7 @@
 import { sha256 as continuityDigest } from "../../lib/digest.mjs";
 export { continuityDigest };
 
-export const CONTINUITY_CORPUS_VERSION = "chat-continuity-v4";
+export const CONTINUITY_CORPUS_VERSION = "chat-continuity-v5";
 export const INITIAL_CONTEXT = [
   "Wir bearbeiten das Projekt Kestrel. Zuständig ist Mira Seidel.",
   "Die kurze Vorgangskennung lautet Q7-42. Das ursprüngliche Budget beträgt 7300 EUR.",
@@ -45,6 +45,12 @@ const FORBIDDEN = Object.freeze({
 });
 
 const DECISION_CLAUSES = /[,;.!?\n–—]|\b(?:aber|sondern|und)\b/iu;
+const OTHER_DECISION_SUBJECT = Object.freeze({
+  ersteEntscheidung: /(?<!\p{L})extern\p{L}*/iu,
+  verworfeneAlternative: /(?<!\p{L})(?:lokal\p{L}*|warteschlange|queue)(?!\p{L})/iu,
+});
+const DECISION_SUBJECT_PREFIX = /^\s*(?:(?:nicht|kein\p{L}*|ein\p{L}*|der|die|das)\s+)*$/iu;
+const DECISION_PARENTHESES = /\([^()]{0,512}\)/gu;
 const DECISION_POLARITY = Object.freeze({
   ersteEntscheidung: {
     opposite:
@@ -59,10 +65,29 @@ const DECISION_POLARITY = Object.freeze({
   },
 });
 
+function scopedDecisionText(key, value) {
+  const other = OTHER_DECISION_SUBJECT[key];
+  const scoped = value.replace(DECISION_PARENTHESES, (fragment) => {
+    const inner = fragment.slice(1, -1),
+      match = other.exec(inner);
+    // Modifier-only parentheses stay attached: "keine (lokale Warteschlange)"
+    // and "lokale Warteschlange (nicht)" must retain their negative polarity.
+    return match !== null &&
+      !EXPECTED[key].test(inner) &&
+      DECISION_SUBJECT_PREFIX.test(inner.slice(0, match.index))
+      ? `;${inner};`
+      : fragment;
+  });
+  return scoped
+    .split("/")
+    .map((part, index) => (index === 0 ? part : `${other.test(part) ? ";" : " "}${part}`))
+    .join("");
+}
+
 function decisionReversed(key, value) {
   const rule = DECISION_POLARITY[key];
   if (rule === undefined) return false;
-  return value
+  return scopedDecisionText(key, value)
     .split(DECISION_CLAUSES)
     .some(
       (clause) =>
@@ -114,12 +139,18 @@ export function continuityCorpusManifest() {
         expected: Object.entries(EXPECTED).map(([k, v]) => [k, String(v)]),
         forbidden: Object.entries(FORBIDDEN).map(([k, v]) => [k, String(v)]),
         decisionClauses: String(DECISION_CLAUSES),
+        decisionParentheses: String(DECISION_PARENTHESES),
+        decisionSubjectPrefix: String(DECISION_SUBJECT_PREFIX),
+        otherDecisionSubject: Object.entries(OTHER_DECISION_SUBJECT).map(([key, pattern]) => [
+          key,
+          String(pattern),
+        ]),
         decisionPolarity: Object.entries(DECISION_POLARITY).map(([key, rule]) => [
           key,
           String(rule.opposite),
           String(rule.allowedNegation),
         ]),
-        algorithm: "field-patterns-obsolete-exclusion-clause-polarity-v1",
+        algorithm: "field-patterns-obsolete-exclusion-subject-scoped-polarity-v2",
         textNormalization: "NFKC",
       }),
     ),

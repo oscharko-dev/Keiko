@@ -509,3 +509,39 @@ module set (results, campaign qualification, corpus and report builder). Each mo
 mutation must change the analysis digest. The running primary oracle remains v4. A
 reviewed parenthetical/slash polarity concern is open pending a separately versioned
 fix and common re-scoring; changing an oracle alone cannot count as product progress.
+
+## Owner-requested delivery closeout, 2026-10-31
+
+The owner superseded the iteration policy with an instruction to finish the current
+work and merge the reviewed, verified partial hardening into dev. No new optimization
+iteration or model campaign is started. The candidate campaign was terminated cleanly;
+the queued matching old-product control was canceled before launch. All captured
+failures and incomplete runs remain retained. This is not a measured plateau.
+
+The body-free `evidence/4155/closeout-summary.json` records the actual partial result.
+Technical progress is established by failure-first regressions: literal identifier
+recall, retrieval beyond the old scan window, a full-render local token ceiling,
+required private persistence, revision/CAS protection and audit-independent recovery.
+The full server run passed 24,900 tests before dev synchronization; the synchronized
+tree additionally passed 2,670 Gateway/Graph/continuity/store/script tests and 12,132 UI
+coverage tests (one skip). These counts are separate executed suites, not an invented
+aggregate production score.
+
+The historical Qwen Plain score remains 46/90 (5.1111/10). The candidate has three
+Qwen Plain post-compaction probes, 27/27 correct. It did not complete ten cycles,
+restart or five repetitions; raw configuration identity also differs. No causal
+quality increase, global grade of eight, or complete production-readiness claim follows.
+
+The final review correction versions the independent lexical oracle to v5. Explicit
+other-option parentheticals and slash clauses are separated, while negated target
+choices and modifier-only parentheses retain their polarity. Two positive regression
+cases fail before the fix; existing and new reversal denials remain green. All 37
+historical and 17 candidate retained answers were read-only hash-matched and re-scored
+under common v5: **zero score changes**. Model-facing initial, correction and recall
+texts remain byte-identical. Oracle correction is not awarded as product improvement.
+
+Open broader requirements remain recorded: full bounded source processing instead of
+16-turn sampling; adaptive protected working state and indirect continuation; complete
+MCP/source/attachment/skill freshness qualification; and actual final-request occupancy
+separate from cumulative tool-round consumption. They are not silently marked delivered
+by this partial PR. The reusable Lab and frozen evidence remain available for later work.

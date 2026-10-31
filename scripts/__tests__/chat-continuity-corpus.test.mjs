@@ -68,6 +68,14 @@ describe("predeclared chat continuity corpus", () => {
   it.each([
     ["ersteEntscheidung", "lokale Warteschlange verworfen"],
     ["ersteEntscheidung", "keine lokale Warteschlange"],
+    ["ersteEntscheidung", "keine (lokale Warteschlange)"],
+    ["ersteEntscheidung", "keine / lokale Warteschlange"],
+    ["ersteEntscheidung", "lokale Warteschlange (nicht)"],
+    ["ersteEntscheidung", "lokale Warteschlange / nicht gewählt"],
+    [
+      "ersteEntscheidung",
+      "lokale Warteschlange (nicht gewählt; stattdessen externe Volltextablage)",
+    ],
     ["ersteEntscheidung", "lokale Warteschlange nicht gewählt"],
     ["verworfeneAlternative", "externe Volltextablage gewählt"],
     ["verworfeneAlternative", "externe Volltextablage gewa\u0308hlt"],
@@ -80,6 +88,8 @@ describe("predeclared chat continuity corpus", () => {
   it.each([
     ["ersteEntscheidung", "lokale Warteschlange gewählt, externe Volltextablage verworfen"],
     ["ersteEntscheidung", "lokale Warteschlange nicht verworfen"],
+    ["ersteEntscheidung", "Lokale Warteschlange (keine externe Volltextablage)"],
+    ["ersteEntscheidung", "lokale Warteschlange / nicht extern"],
     ["verworfeneAlternative", "externe Volltextablage verworfen"],
     ["verworfeneAlternative", "externe Volltextablage nicht gewählt"],
   ])("keeps supported decision statements for %s: %s", (key, value) => {
