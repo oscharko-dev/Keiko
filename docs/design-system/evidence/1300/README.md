@@ -229,3 +229,14 @@ token fidelity with zero gated differences and all 14 reference captures, the se
 accessibility proof with zero serious/critical violations and zero unresolved incomplete findings,
 and all 108 running-app captures with zero page errors, unexpected API requests, missing selectors,
 crashed windows or unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## Anti-slop ratchet on the overridden tree (#4145) — 2026-10-31
+
+After `dev` `d273b65c6` (including the minimatch and glob overrides) was merged into PR #4165, its
+`package.json` and `package-lock.json` differ from `dev`'s by the `oxlint` devDependencies and the
+sharded script-coverage commands. The four original producers were rerun on that merged tree on
+Node 24.18.0 (macOS arm64), and all passed: component fidelity with zero gated differences and no
+missing selectors, editor token fidelity with zero gated differences and all 14 reference
+captures, the seven-mode accessibility proof with zero serious/critical violations and zero
+unresolved incomplete findings, and all 108 running-app captures. No gate, fixture or rule was
+changed.
