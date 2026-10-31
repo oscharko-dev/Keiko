@@ -1,0 +1,52 @@
+// Scenario catalog of epic #4173. The text is the acceptance contract; checks only grow stricter.
+export const SCENARIOS = Object.freeze([
+  {
+    id: "S01",
+    requirement: "AC1",
+    issue: 4177,
+    title: "Lead defines and activates issue templates",
+  },
+  {
+    id: "S02",
+    requirement: "beyond",
+    issue: 4177,
+    title: "Template proposed from an existing project",
+  },
+  {
+    id: "S03",
+    requirement: "beyond",
+    issue: 4180,
+    title: "Every project document format is usable",
+  },
+  { id: "S04", requirement: "AC2", issue: 4179, title: "All requirements listed with source" },
+  { id: "S05", requirement: "AC2", issue: 4178, title: "Epics per template in one approval" },
+  { id: "S06", requirement: "AC1/AC2", issue: 4177, title: "Violations repaired before any write" },
+  {
+    id: "S07",
+    requirement: "AC4",
+    issue: 4176,
+    title: "Tasks with required fields and parent relation",
+  },
+  { id: "S08", requirement: "AC4", issue: 4176, title: "Bug with relation and issue link" },
+  { id: "S09", requirement: "AC4", issue: 4176, title: "Sub-tasks under a task" },
+  { id: "S10", requirement: "AC3", issue: 4181, title: "Progress for a project of any size" },
+  { id: "S11", requirement: "AC3", issue: 4181, title: "Compliance of every issue" },
+  { id: "S12", requirement: "beyond", issue: 4181, title: "Requirement coverage matrix" },
+  { id: "S13", requirement: "beyond", issue: 4181, title: "Report export and Jira comment" },
+  {
+    id: "S14",
+    requirement: "beyond",
+    issue: 4179,
+    title: "Change impact of a new document version",
+  },
+  {
+    id: "S15",
+    requirement: "beyond",
+    issue: 4179,
+    title: "Requirement-quality findings on drafts",
+  },
+  { id: "S16", requirement: "beyond", issue: 4179, title: "Test cases per acceptance criterion" },
+  { id: "S17", requirement: "cross", issue: 4175, title: "Long backlog requests complete" },
+  { id: "S18", requirement: "cross", issue: 4178, title: "Modes and readable approval" },
+  { id: "S19", requirement: "cross", issue: 4178, title: "No duplicates on re-run" },
+]);
