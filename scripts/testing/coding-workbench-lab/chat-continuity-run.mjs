@@ -4,12 +4,9 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { arch, platform, totalmem, cpus } from "node:os";
 import { parseArgs } from "node:util";
-import { URL, URLSearchParams } from "node:url";
-import {
-  startContinuityRuntime,
-  privateContinuityOutput,
-  snapshotContinuityState,
-} from "./chat-continuity-runtime.mjs";
+import { URL, URLSearchParams, pathToFileURL } from "node:url";
+import { privateContinuityOutput } from "./chat-continuity-runtime.mjs";
+import { REPO_ROOT } from "./lab-common.mjs";
 import {
   continuityCorpusManifest,
   continuityDigest,
@@ -34,6 +31,7 @@ const { values } = parseArgs({
     output: { type: "string" },
     config: { type: "string" },
     phase: { type: "string" },
+    "subject-root": { type: "string" },
     "duration-ms": { type: "string", default: "7200000" },
     cycles: { type: "string", default: "10" },
     repetitions: { type: "string", default: "5" },
@@ -42,7 +40,6 @@ const { values } = parseArgs({
 if (!values.output || !values.config || !new Set(["baseline", "candidate"]).has(values.phase))
   throw new Error("explicit-output-config-and-phase-required");
 const output = privateContinuityOutput(values.output);
-mkdirSync(output, { mode: 0o700 });
 const requiredDuration = Number(values["duration-ms"]),
   requiredCycles = Number(values.cycles);
 const repetitions = Number(values.repetitions);
@@ -52,13 +49,32 @@ if (
   throw new Error("invalid-qualification-bounds");
 const ledger = [],
   physical = [];
+const subjectRoot = values["subject-root"] ?? REPO_ROOT;
+const subjectIdentity = readContinuityBuildIdentity(subjectRoot);
+const runtimeModule = join(
+  subjectRoot,
+  "scripts/testing/coding-workbench-lab/chat-continuity-runtime.mjs",
+);
+const {
+  startContinuityRuntime,
+  snapshotContinuityState,
+  privateContinuityOutput: subjectOutput,
+} = await import(pathToFileURL(runtimeModule).href);
+subjectOutput(output);
+mkdirSync(output, { mode: 0o700 });
 const metadata = {
   phase: values.phase,
-  ...readContinuityBuildIdentity(),
+  ...subjectIdentity,
   harnessDigests: Object.fromEntries(
     ["corpus", "runtime", "run", "campaign", "build"].map((part) => [
       part,
-      continuityDigest(readFileSync(new URL(`./chat-continuity-${part}.mjs`, import.meta.url))),
+      continuityDigest(
+        readFileSync(
+          part === "runtime"
+            ? runtimeModule
+            : new URL(`./chat-continuity-${part}.mjs`, import.meta.url),
+        ),
+      ),
     ]),
   ),
   corpus: continuityCorpusManifest(),
@@ -381,6 +397,8 @@ try {
   runtime = await startContinuityRuntime(join(output, "runtime"), values.config, physical, {
     signal: cancellation.signal,
   });
+  if (continuityDigest(readFileSync(values.config)) !== metadata.configurationDigest)
+    throw new Error("continuity-input-configuration-changed-during-startup");
   metadata.models = runtime.models;
   metadata.requestTimeoutByModel = runtime.requestTimeoutByModel;
   record({ id: "runtime-ready", models: runtime.models });

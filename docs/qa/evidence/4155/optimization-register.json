@@ -44,7 +44,15 @@
       "requiredCycles": 10,
       "repetitions": 5
     },
-    "configurationDigest": "2f7b312bdfcacea9215931a13b247e2a5e85a8e758c0d7d51c6f1bd85dc158cc"
+    "configurationDigest": "2f7b312bdfcacea9215931a13b247e2a5e85a8e758c0d7d51c6f1bd85dc158cc",
+    "historicalConfigurationDigestMatches": false,
+    "comparisonStatus": "blocked-until-fresh-matched-control",
+    "matchedControl": {
+      "subjectHead": "67638d66e2afb4501bb0187b55c47f8373f09b2e",
+      "configurationDigest": "2f7b312bdfcacea9215931a13b247e2a5e85a8e758c0d7d51c6f1bd85dc158cc",
+      "status": "queued-after-candidate-to-avoid-model-contention",
+      "historicalBaselinePreserved": true
+    }
   },
   "exploratoryReplay": {
     "scope": "retained-post-probe-state-after-cold-restart",

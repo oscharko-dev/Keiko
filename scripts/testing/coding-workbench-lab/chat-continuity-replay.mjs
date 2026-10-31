@@ -1,6 +1,7 @@
 // Replay an already measured state through a frozen product's ordinary Chat route.
 // Originals stay read-only; the measured question/answer are removed only from the clone.
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync } from "node:fs";
+import * as fs from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL, URL } from "node:url";
 import { performance } from "node:perf_hooks";
@@ -16,6 +17,11 @@ import { privateContinuityOutput } from "./chat-continuity-runtime.mjs";
 import { readContinuityBuildIdentity } from "./chat-continuity-build.mjs";
 import { parseCli, runMain } from "./lab-common.mjs";
 import { isMainModule } from "../../lib/is-main-module.mjs";
+import { writeContinuityJson } from "./chat-continuity-campaign.mjs";
+
+export function writeReplayCheckpoint(path, report, files = fs) {
+  writeContinuityJson(path, report, files);
+}
 
 function assertMeasuredAnswer(messages, question, answerDigest) {
   const answer = messages.at(-1);
@@ -274,8 +280,7 @@ export async function replayContinuityCases({
     pathToFileURL(join(subject, "scripts/testing/coding-workbench-lab/chat-continuity-runtime.mjs"))
       .href
   );
-  const save = () =>
-    writeFileSync(join(target, "replay.json"), JSON.stringify(report, null, 2), { mode: 0o600 });
+  const save = () => writeReplayCheckpoint(join(target, "replay.json"), report);
   save();
   return runReplayCases(
     {

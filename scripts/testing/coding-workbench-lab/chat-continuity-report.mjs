@@ -7,6 +7,23 @@ import { summarizeContinuityRun, compareContinuityRuns } from "./chat-continuity
 import { parseCli, runMain } from "./lab-common.mjs";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 
+export function continuityAnalysisIdentity(readBytes = readFileSync) {
+  const modules = Object.fromEntries(
+    [
+      "chat-continuity-results.mjs",
+      "chat-continuity-campaign.mjs",
+      "chat-continuity-corpus.mjs",
+      "chat-continuity-report.mjs",
+    ].map((name) => [
+      name,
+      createHash("sha256")
+        .update(readBytes(new URL(name, import.meta.url)))
+        .digest("hex"),
+    ]),
+  );
+  return { modules, digest: createHash("sha256").update(JSON.stringify(modules)).digest("hex") };
+}
+
 function loadLedger(path) {
   if (statSync(path).size > 128 * 1024 * 1024) throw new TypeError("lab-ledger-size-limit");
   const bytes = readFileSync(path);
@@ -38,12 +55,12 @@ export function writeContinuityReport({ baseline, candidate, output }) {
   const target = privateContinuityOutput(output);
   const before = loadLedger(baseline);
   const after = candidate === undefined ? undefined : loadLedger(candidate);
+  const analysis = continuityAnalysisIdentity();
   const report = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
-    analysisModuleDigest: createHash("sha256")
-      .update(readFileSync(new URL("./chat-continuity-results.mjs", import.meta.url)))
-      .digest("hex"),
+    analysisModuleDigest: analysis.digest,
+    analysisModules: analysis.modules,
     inputs: { baseline: before.input, ...(after === undefined ? {} : { candidate: after.input }) },
     baseline: before.summary,
     ...(after === undefined

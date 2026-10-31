@@ -4,7 +4,10 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { writeContinuityReport } from "../testing/coding-workbench-lab/chat-continuity-report.mjs";
+import {
+  writeContinuityReport,
+  continuityAnalysisIdentity,
+} from "../testing/coding-workbench-lab/chat-continuity-report.mjs";
 import {
   CONTINUITY_LAB_MODELS,
   summarizeContinuityRun,
@@ -183,6 +186,19 @@ describe("paired before/after comparison", () => {
 });
 
 describe("offline private laboratory reports", () => {
+  it.each(["results", "campaign", "corpus", "report"])(
+    "binds analysis provenance to the %s module",
+    (part) => {
+      const original = continuityAnalysisIdentity((url) => url.pathname);
+      const changed = continuityAnalysisIdentity((url) =>
+        url.pathname.endsWith(`chat-continuity-${part}.mjs`)
+          ? `${url.pathname}:changed`
+          : url.pathname,
+      );
+      expect(changed.digest).not.toBe(original.digest);
+      expect(continuityAnalysisIdentity((url) => url.pathname)).toEqual(original);
+    },
+  );
   it("runs the actual CLI successfully without copying private content", () => {
     const paths = files();
     const script = fileURLToPath(

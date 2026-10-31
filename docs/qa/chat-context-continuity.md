@@ -479,3 +479,33 @@ The Lab persists readiness/request/drain progress before waiting for the next
 operation. An unknown persisted readiness field must never be interpreted as
 proof that the request is still waiting for readiness. Missing or failed readiness
 prevents Chat dispatch, and incomplete replay exits nonzero.
+
+### Configuration identity is an admission condition, not a score adjustment
+
+The historical input-configuration hash differs from the input used by the
+current campaign. The strict comparison gate therefore stays closed. An offline
+common-v4 normalization verified all 37 historical retained answers with unchanged
+scores; it preserves the source ledger and does not erase the configuration drift.
+
+The current campaign's source bytes were still identical when captured into a
+separate private read-only input file. Both configured models resolve from that
+frozen file using the existing credential resolver; no credential is copied into
+evidence. A complete control on the frozen old product is queued **after** the
+current candidate finishes, using those exact input bytes and the same v4 corpus,
+schedule and hardware. A terminated candidate does not start that control.
+
+The Lab runner's optional `--subject-root <attested-checkout>` selects that product's
+existing native runtime without editing its source, dependencies or distribution.
+Provenance checks bind the actual subject and runtime module. Outputs must be
+external to both observer and subject. A changed input during startup stops before
+Chat dispatch; hermetic subprocess tests cover the selected runtime and that denial.
+The additional control is measurement for attempt 1, not another implementation or
+a counter reset. Historical 5.1111/10 stays visible. No higher causal score is claimed
+from differently configured campaigns.
+
+Review hardening reuses the existing atomic ledger writer for replay checkpoints,
+with an interrupted-write regression, and fingerprints the complete report-analysis
+module set (results, campaign qualification, corpus and report builder). Each module
+mutation must change the analysis digest. The running primary oracle remains v4. A
+reviewed parenthetical/slash polarity concern is open pending a separately versioned
+fix and common re-scoring; changing an oracle alone cannot count as product progress.

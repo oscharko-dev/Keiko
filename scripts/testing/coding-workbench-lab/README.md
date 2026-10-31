@@ -204,3 +204,11 @@ scenario was refused before a run started (it ends with `INCOMPLETE`), 2 for a u
 drivers talk to a loopback `http` dev server only, since they send a pairing attestation; the dev
 server serves pages on `localhost` and redirects `127.0.0.1` page loads, so the UI driver always
 browses `localhost`.
+
+For a paired control on an already attested frozen product, the continuity runner
+accepts `--subject-root <checkout>`. It loads that checkout's existing native BFF
+runtime, records its forced-build identity and actual runtime hash, checks output
+containment against both checkouts, and refuses input drift during startup. Keep
+input bytes frozen and run model campaigns serially. A changed configuration or
+oracle requires explicit reconciliation; the comparison gate never treats it as
+an automatic improvement. See the QA guide's bounded optimization protocol.

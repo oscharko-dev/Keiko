@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import * as fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   removeMeasuredProbe,
   sendReplayRequest,
+  writeReplayCheckpoint,
 } from "../testing/coding-workbench-lab/chat-continuity-replay.mjs";
 import {
   INITIAL_CONTEXT,
@@ -26,6 +30,31 @@ function fixture() {
 }
 
 describe("retained-state Chat replay", () => {
+  it("retains the previous replay checkpoint when a replacement write is interrupted", () => {
+    const root = fs.mkdtempSync(join(tmpdir(), "keiko-replay-checkpoint-"));
+    const path = join(root, "replay.json");
+    try {
+      writeReplayCheckpoint(path, { status: "running", cases: [1] });
+      const previous = fs.readFileSync(path, "utf8");
+      expect(() =>
+        writeReplayCheckpoint(
+          path,
+          { status: "running", cases: [1, 2] },
+          {
+            ...fs,
+            writeFileSync(target) {
+              fs.writeFileSync(target, '{"partial":');
+              throw new Error("injected-write-failure");
+            },
+          },
+        ),
+      ).toThrow("injected-write-failure");
+      expect(fs.readFileSync(path, "utf8")).toBe(previous);
+      expect(fs.readdirSync(root)).toEqual(["replay.json"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   it.each([200, 503])(
     "does not dispatch Chat when readiness is unavailable (%s)",
     async (status) => {
