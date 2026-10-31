@@ -70,6 +70,25 @@ function context(jira, act, truth = { fieldIds: { epicLink: EPIC_LINK }, issues:
   };
 }
 
+const identityOf = (n) => `keiko-draft-${n.toString(16).padStart(20, "0")}`;
+const draftEpic = (jira, requirementId, n) =>
+  jira.createEpic(requirementId, { labels: ["anforderung", identityOf(n)] });
+/** The completed `jira.draft` exchange of a turn; each item is `[state, issueKey?]`. */
+const draftExchange = (items) => ({
+  call: { id: "call-draft", name: "jira.draft", arguments: {} },
+  result: {
+    status: "completed",
+    data: {
+      outcome: "succeeded",
+      items: items.map(([state, issueKey], index) => ({
+        ref: `epic${index}`,
+        state,
+        ...(issueKey === undefined ? {} : { issueKey }),
+      })),
+    },
+  },
+});
+
 const run = (id, ctx) => JOURNEYS[id](ctx, { id: "chat" });
 
 describe("scenario verdict", () => {
@@ -202,6 +221,99 @@ describe("S05 epics in one approval", () => {
     expect(scenarioVerdict(scenario("S05"), [check]).status).toBe("partial");
     const probe = { layer: "probe", status: "green", covers: ["fields-writable"] };
     expect(scenarioVerdict(scenario("S05"), [probe, check]).status).toBe("green");
+  });
+});
+
+describe("S05 reruns reconciled by the draft", () => {
+  const ids = ["LH-001", "LH-002", "LH-003"];
+  const seeded = (jira) => ids.map((id, index) => draftEpic(jira, id, index + 1));
+
+  it("is green for a rerun in which every item is existing, reported as reconciled", async () => {
+    const jira = fakeJira();
+    const keys = seeded(jira);
+    const ctx = context(jira, () => ({
+      toolExchanges: [draftExchange(keys.map((key) => ["existing", key]))],
+    }));
+    const check = await run("S05", ctx);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain("3/3 conforming epics, 0 epics created, 3 reconciled");
+    expect(jira.issues).toHaveLength(3);
+  });
+
+  it("is green for a run that created some epics and reconciled the others", async () => {
+    const jira = fakeJira();
+    const first = draftEpic(jira, ids[0], 1);
+    const ctx = context(jira, () => {
+      const added = [draftEpic(jira, "LH-002", 2), draftEpic(jira, "LH-003", 3)];
+      return {
+        toolExchanges: [
+          draftExchange([["existing", first], ...added.map((key) => ["created", key])]),
+        ],
+      };
+    });
+    const check = await run("S05", ctx);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain("2 epics created, 1 reconciled");
+  });
+
+  it("counts neither an uncertain nor a failed item", async () => {
+    const jira = fakeJira();
+    const [one, two, three] = seeded(jira);
+    const uncertain = context(jira, () => ({
+      toolExchanges: [
+        draftExchange([
+          ["existing", one],
+          ["existing", two],
+          ["uncertain", three],
+        ]),
+      ],
+    }));
+    const check = await run("S05", uncertain);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("2/3 conforming epics, 0 epics created, 2 reconciled");
+    const failed = context(jira, () => ({
+      toolExchanges: [draftExchange([["existing", one], ["existing", two], ["failed"]])],
+    }));
+    expect((await run("S05", failed)).status).toBe("red");
+  });
+
+  it("does not credit a pre-existing epic the draft did not report", async () => {
+    const jira = fakeJira();
+    const [one, two] = seeded(jira);
+    const ctx = context(jira, () => ({
+      toolExchanges: [
+        draftExchange([
+          ["existing", one],
+          ["existing", two],
+        ]),
+      ],
+    }));
+    const check = await run("S05", ctx);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("2/3 conforming epics");
+  });
+
+  it("does not credit pre-existing epics when the turn holds no draft result", async () => {
+    const jira = fakeJira();
+    seeded(jira);
+    const check = await run(
+      "S05",
+      context(jira, () => ({ writes: 0 })),
+    );
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("0/3 conforming epics, 0 epics created, 0 reconciled");
+  });
+
+  it("is red for a duplicate of an already existing draft identity", async () => {
+    const jira = fakeJira();
+    seeded(jira);
+    const ctx = context(jira, () => {
+      const added = ids.map((id, index) => draftEpic(jira, id, index + 1));
+      return { toolExchanges: [draftExchange(added.map((key) => ["created", key]))] };
+    });
+    const check = await run("S05", ctx);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("3 duplicates");
   });
 });
 
@@ -548,5 +660,82 @@ describe("S17 long backlog request", () => {
       refusals: () => refusals,
     };
     expect((await run("S17", ctx)).status).toBe("red");
+  });
+});
+
+describe("S17 reruns reconciled by the draft", () => {
+  const seeded = (jira) => MUSS.map((id, index) => draftEpic(jira, id, index + 1));
+  const existing = (keys) => draftExchange(keys.map((key) => ["existing", key]));
+
+  it("is green for a rerun of only existing items whose keys the answer lists", async () => {
+    const jira = fakeJira();
+    const keys = seeded(jira);
+    const ctx = context(jira, () => ({
+      answer: `Bereits vorhanden: ${keys.join(", ")}`,
+      toolExchanges: [existing(keys)],
+    }));
+    const check = await run("S17", ctx);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain(`0 epics created, ${MUSS.length} reconciled`);
+  });
+
+  it("is green for a mixed run and requires the answer to list the reconciled keys too", async () => {
+    const mixed = (answerOf) => {
+      const jira = fakeJira();
+      const first = draftEpic(jira, MUSS[0], 1);
+      return context(jira, () => {
+        const added = MUSS.slice(1).map((id, index) => draftEpic(jira, id, index + 2));
+        return {
+          answer: answerOf([first, ...added]),
+          toolExchanges: [
+            draftExchange([["existing", first], ...added.map((key) => ["created", key])]),
+          ],
+        };
+      });
+    };
+    const omitted = await run(
+      "S17",
+      mixed((keys) => keys.slice(1).join(", ")),
+    );
+    expect(omitted.status).toBe("red");
+    expect(omitted.detail).toContain("1 reported keys missing from the answer");
+    const listed = await run(
+      "S17",
+      mixed((keys) => keys.join(", ")),
+    );
+    expect(listed.status).toBe("green");
+    expect(listed.detail).toContain(`${MUSS.length - 1} epics created, 1 reconciled`);
+  });
+
+  it("does not count an uncertain item nor an unreported pre-existing epic", async () => {
+    const jira = fakeJira();
+    const keys = seeded(jira);
+    const uncertain = context(jira, () => ({
+      answer: keys.join(", "),
+      toolExchanges: [
+        draftExchange([...keys.slice(1).map((key) => ["existing", key]), ["uncertain", keys[0]]]),
+      ],
+    }));
+    expect((await run("S17", uncertain)).status).toBe("red");
+    const unreported = context(jira, () => ({
+      answer: keys.join(", "),
+      toolExchanges: [existing(keys.slice(1))],
+    }));
+    expect((await run("S17", unreported)).status).toBe("red");
+  });
+
+  it("is red for a duplicate of an already existing draft identity", async () => {
+    const jira = fakeJira();
+    seeded(jira);
+    const ctx = context(jira, () => {
+      const added = MUSS.map((id, index) => draftEpic(jira, id, index + 1));
+      return {
+        answer: added.join(", "),
+        toolExchanges: [draftExchange(added.map((key) => ["created", key]))],
+      };
+    });
+    const check = await run("S17", ctx);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain(`${MUSS.length} duplicates`);
   });
 });

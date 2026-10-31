@@ -67,6 +67,68 @@ export function newIssues(beforeKeys, issues) {
   return issues.filter((issue) => !beforeKeys.has(issue.key));
 }
 
+// ---------- reconciled draft items ----------
+
+const DRAFT_TOOL = "jira.draft";
+/** States whose issue key is an issue the draft stands behind; the other states name no issue. */
+const CREDITED_DRAFT_STATES = new Set(["created", "existing"]);
+const DRAFT_IDENTITY = /^keiko-draft-[0-9a-f]{20}$/;
+
+const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The issue keys the completed `jira.draft` results of a turn report as `created` or `existing`.
+ * `jira.draft` reconciles an item whose deterministic identity label already exists (state
+ * `existing`) instead of creating it again: that is the correct product behaviour, so the key counts
+ * as the turn's issue. uncertain, failed, skipped and excluded items name no issue and count for
+ * nothing.
+ */
+export function draftReportedKeys(exchanges) {
+  const draftResults = (Array.isArray(exchanges) ? exchanges : []).filter(
+    (exchange) => exchange?.call?.name === DRAFT_TOOL && exchange.result?.status === "completed",
+  );
+  const items = draftResults.flatMap((exchange) => {
+    const list = exchange.result.data?.items;
+    return Array.isArray(list) ? list : [];
+  });
+  return new Set(
+    items
+      .filter((item) => isRecord(item) && CREDITED_DRAFT_STATES.has(item.state))
+      .map((item) => item.issueKey)
+      .filter((key) => typeof key === "string"),
+  );
+}
+
+/** The deterministic draft identity label of an issue, or undefined. */
+export const draftIdentity = (issue) =>
+  (issue.fields?.labels ?? []).find((label) => DRAFT_IDENTITY.test(label));
+
+/**
+ * The issues a turn produced, from the search after the turn. Credited are the issues new since the
+ * turn began (a draft's `created` items and single creates alike) and the issues the turn's own
+ * draft reported; an issue that existed before and that the draft did not report is not credited.
+ * `reconciled` are the credited issues that existed before the turn. `duplicates` are the new issues
+ * whose draft identity label already belonged to another issue.
+ */
+export function turnIssues({ before, issues, exchanges }) {
+  const reported = draftReportedKeys(exchanges);
+  const credited = issues.filter((issue) => !before.keys.has(issue.key) || reported.has(issue.key));
+  const seen = new Set(before.identities);
+  const duplicates = [];
+  for (const issue of newIssues(before.keys, issues)) {
+    const identity = draftIdentity(issue);
+    if (identity === undefined) continue;
+    if (seen.has(identity)) duplicates.push(issue.key);
+    seen.add(identity);
+  }
+  return {
+    credited,
+    created: credited.filter((issue) => !before.keys.has(issue.key)),
+    reconciled: credited.filter((issue) => before.keys.has(issue.key)),
+    duplicates,
+  };
+}
+
 export function sectionsPresent(description, sections) {
   return sections.every((name) =>
     new RegExp(String.raw`(^|\n)\s*(h\d\.|#+)?\s*\**${escapeRegExp(name)}`, "i").test(
