@@ -742,9 +742,17 @@ function projectVerifiedCommit(
 const PROTECTED_BRANCH_COMMIT_GUIDANCE =
   "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Create a task branch with keiko_git_branch (a new name such as feature/short-description; your uncommitted changes carry over), then stage, verify and commit again on it. Do not retry this commit unchanged and do not propose a push or pull request yet. If keiko_git_branch refuses, report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
 
+// AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier could
+// not run on the host and named the shell instead, and the model, seeing only `verification-missing`
+// on every commit, restaged and re-proposed until the deadline. The refusal names the model's step.
+const UNVERIFIED_COMMIT_GUIDANCE =
+  "The staged change has no verification yet; it is already staged. Do not stage again and do not retry this commit unchanged. Verify the staged change first: run keiko_verification, or, when it says to run the check in your shell, run the repository's own test command in your shell, where it counts for the staged change. Then propose the commit again.";
+
 function commitBlockGuidance(result: VerifiedCommitResult): { readonly guidance?: string } {
-  return result.status === "blocked" && result.blockReason === "protected-branch"
-    ? { guidance: PROTECTED_BRANCH_COMMIT_GUIDANCE }
+  if (result.status === "blocked" && result.blockReason === "protected-branch")
+    return { guidance: PROTECTED_BRANCH_COMMIT_GUIDANCE };
+  return result.status === "verification-failed" && result.reason === "verification-missing"
+    ? { guidance: UNVERIFIED_COMMIT_GUIDANCE }
     : {};
 }
 

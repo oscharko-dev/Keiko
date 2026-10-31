@@ -866,6 +866,54 @@ describe("CodingToolFacade", () => {
     expect(other).not.toHaveProperty("guidance");
   });
 
+  // AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier
+  // could not run on this host and named the shell instead, and the model, reading only
+  // `verification-missing` on each commit, restaged and re-proposed until the deadline. The refusal
+  // now names the one step that is the model's: verify the staged change, then commit again.
+  it("tells the model to verify the staged change when a commit has no verification (#3907)", async () => {
+    const digest = "a".repeat(64);
+    const verifiedCommit = {
+      schemaVersion: "1",
+      proposalId: "commit-unverified",
+      runId: "run-1",
+      envelopeDigest: digest,
+      runtimeAuthorityDigest: digest,
+      workspaceDigest: digest,
+      repositoryDigest: digest,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: digest,
+      verificationEvidenceId: "verification-1",
+      messageDigest: digest,
+      status: "verification-failed",
+      reason: "verification-missing",
+      recordedAt: "2026-10-31T08:30:56.000Z",
+    };
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], verifiedCommit }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const propose = (): Promise<unknown> =>
+      subject.execute({
+        body: requestBody({ action: "delivery", intent: "commit", phase: "propose", message: "m" }),
+        capability,
+      });
+
+    const result = await propose();
+    expect(result).toMatchObject({
+      status: "completed",
+      verifiedCommit: { status: "verification-failed", reason: "verification-missing" },
+    });
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+    expect(guidance).toContain("keiko_verification");
+    expect(guidance).toContain("in your shell");
+    expect(guidance).toContain("Do not stage again");
+
+    verifiedCommit.reason = "verification-failed";
+    expect(await propose()).not.toHaveProperty("guidance");
+  });
+
   it("keeps the delivery vocabulary out of every other action", async () => {
     const ports = facade();
     ports.delegate.execute = vi.fn(() =>
