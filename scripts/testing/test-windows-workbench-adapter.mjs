@@ -80,6 +80,21 @@ async function listener() {
   return { server, port: server.address().port, markers, connections: () => connections };
 }
 
+function reportTransport(verdict, allowed, hostile) {
+  console.log("Installed Workbench TCP probe:", verdict, "host connections:", {
+    allowed: allowed.connections(),
+    hostile: hostile.connections(),
+  });
+  if (verdict.allowed !== 0) {
+    const trace = spawnSync(
+      observer,
+      ["--trace-ports", process.execPath, String(allowed.port), String(hostile.port)],
+      { stdio: "inherit", timeout: 8000, windowsHide: true },
+    );
+    if (trace.status !== 0) console.log("WFP diagnostic unavailable");
+  }
+}
+
 async function qualifyTransport(source) {
   const allowed = await listener();
   let hostile;
@@ -111,10 +126,7 @@ async function qualifyTransport(source) {
     await Promise.all(
       [allowed.server, hostile.server].map((server) => promisify(server.close).call(server)),
     );
-    console.log("Installed Workbench TCP probe:", verdict, "host connections:", {
-      allowed: allowed.connections(),
-      hostile: hostile.connections(),
-    });
+    reportTransport(verdict, allowed, hostile);
     assert.equal(hostile.connections(), 1, "unattested port received a second connection");
     assert.equal(hostile.markers.join(""), "C");
     assert.ok(

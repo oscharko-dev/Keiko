@@ -45,14 +45,14 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm run build:packages
         shell: pwsh
-      - name: Exercise the installed service and Workbench native adapter
-        env:
-          VERIFY_TRANSPORT: ${{ inputs.verify_transport }}
-        run: ./scripts/testing/test-windows-gateway-scm.ps1 -VerifyTransport:($env:VERIFY_TRANSPORT -eq 'true')
-        shell: pwsh
       - name: Compile, analyze, validate and prove dynamic filter cleanup
         run: node scripts/testing/test-windows-gateway-filters.mjs --filter-lifecycle
       - name: Prove durable-deny guard cleanup after gateway permit revocation
         run: node scripts/testing/test-windows-gateway-filters.mjs --guarded-lifecycle
       - name: Prove real AppContainer gateway access and hostile loopback denial
         run: node scripts/testing/test-windows-gateway-filters.mjs --socket-proof
+      - name: Exercise the installed service and Workbench adapter transport
+        env:
+          VERIFY_TRANSPORT: ${{ (github.event_name == 'push' && github.ref_name == 'feature/4068-windows-workbench') || inputs.verify_transport }}
+        run: ./scripts/testing/test-windows-gateway-scm.ps1 -VerifyTransport:($env:VERIFY_TRANSPORT -eq 'true')
+        shell: pwsh

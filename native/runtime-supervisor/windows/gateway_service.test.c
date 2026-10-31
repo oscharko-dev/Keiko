@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <wchar.h>
 
+int gateway_trace_ports(const wchar_t *probe, const wchar_t *host, UINT16 allowed, UINT16 hostile);
+
 static DWORD observed_root(void) {
   for (int i = 0; i < 200; i++) {
     HANDLE job = OpenJobObjectW(JOB_OBJECT_QUERY, FALSE,
@@ -124,6 +126,9 @@ static DWORD diagnose_loopback(NETISO_ERROR_TYPE *missing) {
 }
 
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 5 && !wcscmp(argv[1], L"--trace-ports"))
+    return gateway_trace_ports(argv[0], argv[2], (UINT16)wcstoul(argv[3], NULL, 10),
+                              (UINT16)wcstoul(argv[4], NULL, 10));
   if (argc == 5 && !wcscmp(argv[1], L"--probe-ports")) {
     WSADATA data;
     if (WSAStartup(MAKEWORD(2, 2), &data)) return 1;

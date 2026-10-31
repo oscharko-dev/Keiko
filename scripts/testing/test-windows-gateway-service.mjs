@@ -32,6 +32,7 @@ if (operation === "build") {
       `/Fe:${probe}`,
       `/Fo:${root}\\`,
       resolve("native/runtime-supervisor/windows/gateway_service.test.c"),
+      resolve("native/runtime-supervisor/windows/gateway_transport_trace.test.c"),
       "/link",
       "/DEPENDENTLOADFLAG:0x800",
       "fwpuclnt.lib",
