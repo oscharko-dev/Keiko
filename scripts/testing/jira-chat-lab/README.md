@@ -578,3 +578,34 @@ Reconcile the retained identity before any cleanup. If the process itself is kil
 outage, the retained intent identifies the one container that must be restored before another
 laboratory group. Completed receipts contain only the closed scenario outcomes; preparation and
 unit tests do not establish native live acceptance.
+
+## Requirements scenario scorecard (epic #4173)
+
+`requirements/` holds the lab of epic #4173: the scenario catalog S01–S19, a model-free probe
+layer, end-to-end Chat journeys and the scorecard that combines them. Every check is graded by an
+independent oracle (Jira REST/JQL reads or the generated ground truth), never by the model's own
+answer. A scenario is green only when every check passed and an end-to-end journey exists.
+
+```sh
+# Once per session: the empty work project REQ and the report project RPT with known ground truth
+node scripts/testing/jira-chat-lab/requirements/seed-projects.mjs /absolute/private/session
+
+# Fast probes only (seconds, no model)
+node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session --project REQ
+
+# Probes plus Chat journeys through any configured Gateway model, for example local LiteLLM
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session \
+  --project REQ --model <chat-model-id> --embedding-model <embedding-model-id> [--only S04,S05]
+```
+
+The scorecard writes `requirements-scorecard/<timestamp>.json`, `latest.md` and `trend.tsv` into
+the private session. Before a group it checks the remaining license time: the published test
+license counts from Jira's start, so `requirements/license-window.mjs` stops and starts the
+session's containers (volumes retained) when the window runs low. It never changes clocks,
+licensing code or license data.
+
+The synthetic corpus (`requirements/corpus.mjs`) is a fictional requirements specification in two
+versions with seeded quality defects; `STRUCTURE_RULES` is the lab's stand-in for the issue
+templates a project lead defines. Lab code may know Jira Software's field schemas to seed ground
+truth; the product under test may not.
