@@ -1,12 +1,9 @@
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { DEFAULT_SEARCH_LIMITS, detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
@@ -21,13 +18,11 @@ import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js"
 import type { UiStore } from "../store/index.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
-import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 import {
   createOrdinaryWorkspaceRootAccess,
   grantedWorkspaceRootAccess,
   type WorkspaceRootAccessOutcome,
 } from "../task-workspace/workspace-root-access.js";
-import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import {
   handleEditorWorkspaceReplaceApply,
   handleEditorWorkspaceReplacePreview,
@@ -35,6 +30,10 @@ import {
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
 import { readWorkspaceFileForEditing } from "@oscharko-dev/keiko-workspace/internal/editor-read";
+import {
+  activeManagedWorkspaceProvisioning,
+  buildManagedGitWorktree,
+} from "../gitDelivery/_support.js";
 
 function rawPostContext(raw: string, path: string): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
@@ -118,61 +117,23 @@ async function managedSearchFixture(): Promise<{
   // a `.git` directory).
   const repositoryRoot = await mkdtemp(join(tmpdir(), "keiko-workspace-search-managed-source-"));
   managedSourceRoot = repositoryRoot;
-  execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
-  execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: repositoryRoot });
-  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
-  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
-  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repositoryRoot });
-  mkdirSync(dirname(managedWorktree), { recursive: true });
-  execFileSync(
-    "git",
-    [
-      "worktree",
-      "add",
-      "-q",
-      "-b",
-      "keiko/task/workspace-search-01234567",
-      managedWorktree,
-      "HEAD",
-    ],
-    { cwd: repositoryRoot },
+  const gitdirIdentity = buildManagedGitWorktree(
+    repositoryRoot,
+    managedWorktree,
+    "keiko/task/workspace-search-01234567",
   );
-  const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, repositoryRoot);
-  if (gitdirInspection === undefined) {
-    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
-  }
   await mkdir(join(managedWorktree, "src"), { recursive: true });
   await writeFile(join(managedWorktree, "src", "managed.ts"), "export const managedNeedle = 1;\n");
-  const timestamp = new Date(0).toISOString();
-  const instance: WorkspaceInstance = {
-    schemaVersion: "1",
+  const workspaceProvisioning = activeManagedWorkspaceProvisioning({
     workspaceId,
     taskId: "workspace-search",
     repositoryId,
     repositoryRoot,
-    baseBranch: "dev",
     taskBranch: "keiko/task/workspace-search-01234567",
     managedWorktreePath: managedWorktree,
-    gitdirIdentity: gitdirInspection.identity,
-    lifecycleState: "active",
-    health: "healthy",
-    lock: null,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    driftMarkers: [],
-    recoveryHints: [],
+    gitdirIdentity,
     auditCorrelationId: "corr_workspace_search",
-  };
-  const workspaceProvisioning = {
-    provision: (): never => {
-      throw new Error("not used in this test");
-    },
-    activate: (): never => {
-      throw new Error("not used in this test");
-    },
-    getInstance: (id: string): WorkspaceInstance | undefined =>
-      id === workspaceId ? instance : undefined,
-  } satisfies WorkspaceProvisioningService;
+  });
   const channel = createCodingAppSessionChannel({
     registry: createSessionRegistry(),
     pairingPort: createFakeSessionPairingPort(),

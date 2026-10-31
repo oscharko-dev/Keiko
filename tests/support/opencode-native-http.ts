@@ -3,6 +3,7 @@ import {
   type OpenCodeV2HttpClient,
 } from "../../packages/keiko-server/src/coding-runtime/opencodeV2HttpClient.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { expect } from "vitest";
 
 const MAX_FIXTURE_BODY_BYTES = 4 * 1_024 * 1_024;
 
@@ -201,12 +202,21 @@ export function nativeHttpLastRole(body: unknown): unknown {
   return Reflect.get(last, "role");
 }
 
+export interface NativeScriptedCall {
+  readonly name: string;
+  readonly arguments: Readonly<Record<string, unknown>>;
+}
+
 interface NativeScriptedGateway {
   toolTurns: number;
-  readonly call: {
-    readonly name: string;
-    readonly arguments: Readonly<Record<string, unknown>>;
-  };
+  readonly call: NativeScriptedCall;
+}
+
+export interface NativeScriptedGatewayStub extends NativeHttpStub {
+  /** Tool-call turns still to script; each answers one request whose last message is the user's. */
+  toolTurns: number;
+  /** The tool call a scripted turn issues; a test may replace it. */
+  call: NativeScriptedCall;
 }
 
 /** Own only the common wire policy; resource and native launch ownership stay with callers. */
@@ -224,6 +234,25 @@ export function writeNativeHttpScriptedTurn(
     return;
   }
   writeNativeHttpStreamedTurn(response, { content: "Fixture turn completed." }, "stop", streamId);
+}
+
+/** A gateway stub that answers every request through the scripted turn policy above. */
+export async function startNativeScriptedGateway(
+  toolIdPrefix: string,
+  streamId: string,
+  call: NativeScriptedCall,
+): Promise<NativeScriptedGatewayStub> {
+  const stub = await startNativeHttpStub((self, recorded, response) => {
+    writeNativeHttpScriptedTurn(
+      gateway,
+      recorded,
+      response,
+      () => `${toolIdPrefix}_${String(self.requests.length)}`,
+      streamId,
+    );
+  });
+  const gateway: NativeScriptedGatewayStub = Object.assign(stub, { toolTurns: 0, call });
+  return gateway;
 }
 
 export interface NativeService {
@@ -245,4 +274,115 @@ export function nativeServiceAt(endpoint: string, password: string): NativeServi
       return response.status === 204 ? undefined : ((await response.json()) as unknown);
     },
   };
+}
+
+export interface NativeSession {
+  readonly client: OpenCodeV2HttpClient;
+  /** The runtime version the pinned binary reported. */
+  readonly version: unknown;
+  readonly sessionId: string;
+}
+
+/** Opens one session in `workspace` on the runtime at `endpoint`. */
+export async function createNativeSession(
+  endpoint: string,
+  password: string,
+  workspace: string,
+): Promise<NativeSession> {
+  const client = createOpenCodeV2HttpClient({ endpoint, password });
+  const { version } = await client.info();
+  const session = await client.createSession(workspace);
+  if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
+  return { client, version, sessionId: session.id };
+}
+
+export interface NativeEventSession {
+  readonly client: OpenCodeV2HttpClient;
+  /** The runtime version the pinned binary reported. */
+  readonly version: unknown;
+  readonly sessionId: string;
+  /** Every event type the session's stream delivered, in order, until the signal aborts. */
+  readonly events: string[];
+  /** The Basic credential for raw fixture requests to the same runtime. */
+  readonly authorization: string;
+}
+
+/** Opens one session in `workspace` and records the runtime's event stream until `signal` aborts. */
+export async function openNativeEventSession(
+  endpoint: string,
+  password: string,
+  workspace: string,
+  signal: AbortSignal,
+): Promise<NativeEventSession> {
+  const { client, version, sessionId } = await createNativeSession(endpoint, password, workspace);
+  const events: string[] = [];
+  void (async (): Promise<void> => {
+    try {
+      for await (const event of client.events(signal)) events.push(String(event.type));
+    } catch {
+      // The stream ends when the run is torn down.
+    }
+  })();
+  const authorization = `Basic ${Buffer.from(`opencode:${password}`, "utf8").toString("base64")}`;
+  return { client, version, sessionId, events, authorization };
+}
+
+/** A plain JSON object as a read-only record copy; anything else is absent. */
+function nativeHttpRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return Object.fromEntries(Object.entries(value));
+}
+
+/** The object elements of a JSON array; a non-array has none. */
+function nativeHttpRecords(value: unknown): readonly Readonly<Record<string, unknown>>[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry: unknown) => {
+    const record = nativeHttpRecord(entry);
+    return record === undefined ? [] : [record];
+  });
+}
+
+/** The function declarations the runtime advertised to the model in its first request. */
+export function nativeHttpAdvertisedTools(
+  requests: readonly NativeRecordedRequest[],
+): readonly Readonly<Record<string, unknown>>[] {
+  return nativeHttpRecords(nativeHttpRecord(requests[0]?.body)?.tools).flatMap((tool) => {
+    const declaration = nativeHttpRecord(tool.function);
+    return declaration === undefined ? [] : [declaration];
+  });
+}
+
+/** The names of those advertised functions, in advertised order. */
+export function nativeHttpAdvertisedToolNames(
+  requests: readonly NativeRecordedRequest[],
+): readonly string[] {
+  return nativeHttpAdvertisedTools(requests)
+    .map((declaration) => declaration.name)
+    .filter((name): name is string => typeof name === "string");
+}
+
+/** What the runtime last sent back to the model as a tool result; empty when it sent none. */
+export function nativeHttpLastToolResult(requests: readonly NativeRecordedRequest[]): string {
+  const latest = nativeHttpRecords(nativeHttpRecord(requests.at(-1)?.body)?.messages);
+  const content = latest.filter((message) => message.role === "tool").at(-1)?.content;
+  return typeof content === "string" ? content : "";
+}
+
+/**
+ * Scripts `call` as the next tool turn, sends the prompt, waits for the tool turn and the reply that
+ * follows it, and returns what the model received as the tool's result.
+ */
+export async function runNativeScriptedTurn(
+  gateway: NativeScriptedGatewayStub,
+  call: NativeScriptedCall,
+  sendPrompt: () => Promise<unknown>,
+): Promise<string> {
+  const before = gateway.requests.length;
+  gateway.call = call;
+  gateway.toolTurns = 1;
+  await sendPrompt();
+  await expect
+    .poll(() => gateway.requests.length, { timeout: 60_000 })
+    .toBeGreaterThanOrEqual(before + 2);
+  return nativeHttpLastToolResult(gateway.requests);
 }

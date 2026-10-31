@@ -95,6 +95,27 @@ function controlledRunRecord(
   };
 }
 
+/**
+ * The turn port exposes the two run-port operations only together: neither without the run port's
+ * members, nor the first without the second. `members` reads both from a turn port.
+ */
+function expectOfferedOnlyAsPair(
+  base: OpenCodeRunPort,
+  first: Partial<OpenCodeRunPort>,
+  second: Partial<OpenCodeRunPort>,
+  members: (port: ReturnType<typeof createOpenCodeRuntimeTurnPort>) => readonly unknown[],
+): ReturnType<typeof createOpenCodeRuntimeTurnPort> {
+  expect(members(createOpenCodeRuntimeTurnPort(base))).toEqual([undefined, undefined]);
+  expect(members(createOpenCodeRuntimeTurnPort({ ...base, ...first }))[0]).toBeUndefined();
+  const offered = createOpenCodeRuntimeTurnPort({ ...base, ...first, ...second });
+  const expected = [...Object.values(first), ...Object.values(second)];
+  expect(members(offered)).toHaveLength(expected.length);
+  members(offered).forEach((member, index) => {
+    expect(member).toBe(expected[index]);
+  });
+  return offered;
+}
+
 describe("production coding runtime turn ports", () => {
   it("submits initial and follow-up OpenCode turns through the run-bound port", async () => {
     const submitted: string[] = [];
@@ -2643,13 +2664,10 @@ describe("turn revert admission (B3, S04)", () => {
     const revertTurn: NonNullable<OpenCodeRunPort["revertTurn"]> = () => Promise.resolve(APPLIED);
     const revertState: NonNullable<OpenCodeRunPort["revertState"]> = () =>
       Promise.resolve(undefined);
-
-    expect(createOpenCodeRuntimeTurnPort(base).revertTurn).toBeUndefined();
-    expect(createOpenCodeRuntimeTurnPort(base).revertState).toBeUndefined();
-    expect(createOpenCodeRuntimeTurnPort({ ...base, revertTurn }).revertTurn).toBeUndefined();
-    const offered = createOpenCodeRuntimeTurnPort({ ...base, revertTurn, revertState });
-    expect(offered.revertTurn).toBe(revertTurn);
-    expect(offered.revertState).toBe(revertState);
+    const offered = expectOfferedOnlyAsPair(base, { revertTurn }, { revertState }, (port) => [
+      port.revertTurn,
+      port.revertState,
+    ]);
     expect(offered.commitStagedRevert).toBeUndefined();
     // #3904 AC3: the commit the undo window needs travels with the other undo members only.
     const commitStagedRevert: NonNullable<OpenCodeRunPort["commitStagedRevert"]> = () =>
@@ -2891,15 +2909,13 @@ describe("pending message admission (S07)", () => {
   });
 
   it("exposes the inbox on the OpenCode turn port only when the run port offers both operations", () => {
-    const base = openCodeRunPort(() => Promise.resolve(true));
     const actOnInbox: NonNullable<OpenCodeRunPort["actOnInbox"]> = () => Promise.resolve(CANCELLED);
     const listInbox: NonNullable<OpenCodeRunPort["listInbox"]> = () => Promise.resolve(undefined);
-
-    expect(createOpenCodeRuntimeTurnPort(base).actOnInbox).toBeUndefined();
-    expect(createOpenCodeRuntimeTurnPort(base).listInbox).toBeUndefined();
-    expect(createOpenCodeRuntimeTurnPort({ ...base, actOnInbox }).actOnInbox).toBeUndefined();
-    const offered = createOpenCodeRuntimeTurnPort({ ...base, actOnInbox, listInbox });
-    expect(offered.actOnInbox).toBe(actOnInbox);
-    expect(offered.listInbox).toBe(listInbox);
+    expectOfferedOnlyAsPair(
+      openCodeRunPort(() => Promise.resolve(true)),
+      { actOnInbox },
+      { listInbox },
+      (port) => [port.actOnInbox, port.listInbox],
+    );
   });
 });

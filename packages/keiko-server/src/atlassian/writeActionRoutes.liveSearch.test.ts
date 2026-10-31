@@ -38,7 +38,6 @@ import {
 import {
   createInMemoryJiraFixture,
   JIRA_LIVE_SEARCH_TEMPLATE_JQL,
-  type AtlassianCredentialCustody,
   type AtlassianCredentialMetadata,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
@@ -48,6 +47,7 @@ import {
 import { listCapsules } from "@oscharko-dev/keiko-local-knowledge";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { RouteContext } from "../routes.js";
+import { readOnlyCredentialCustody } from "./_support.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
 import {
@@ -139,24 +139,14 @@ function guardWith(
     counter.requests.push(request);
     return fixture(request);
   };
-  const custody = {
-    updateLivePod: (): never => {
-      throw new Error("Unexpected Live Pod update");
-    },
-    beginVerification: (): undefined => undefined,
-    finishVerification: (): boolean => false,
-    observeAuthenticationFailure: (): boolean => false,
-    create: (): never => {
-      throw new Error("create not exercised");
-    },
-    getMetadata: (authRef: string): AtlassianCredentialMetadata | undefined => {
+  const custody = readOnlyCredentialCustody(
+    (authRef: string): AtlassianCredentialMetadata | undefined => {
       if (authRef === JIRA_AUTH_REF) return credential("jira");
       if (authRef === CONFLUENCE_AUTH_REF) return credential("confluence");
       return undefined;
     },
-    list: (): readonly AtlassianCredentialMetadata[] => [credential("jira")],
-    delete: (): boolean => false,
-  } satisfies AtlassianCredentialCustody;
+    [credential("jira")],
+  );
   return {
     custody,
     httpPortFactory: () => () => Promise.resolve({ kind: "network-error" as const }),

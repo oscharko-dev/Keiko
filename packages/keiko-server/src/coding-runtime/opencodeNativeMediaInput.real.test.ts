@@ -33,13 +33,10 @@ import { createInMemoryUiStore } from "../store/index.js";
 import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
-import {
-  createOpenCodeV2HttpClient,
-  openCodeV2PromptFileData,
-  type OpenCodeV2HttpClient,
-} from "./opencodeV2HttpClient.js";
+import { openCodeV2PromptFileData, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 import {
+  createNativeSession,
   startNativeHttpByteListener,
   parseNativeHttpJson,
   closeNativeHttpStub as closeStub,
@@ -563,14 +560,13 @@ async function withRun<M extends ModelEndpoint>(
           media,
         );
         await withNativeChild(launched.child, async (): Promise<void> => {
-          const client = createOpenCodeV2HttpClient({
-            endpoint: await childEndpoint(launched.child),
-            password: launched.password,
-          });
-          expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
-          const session = await client.createSession(fixture.workspace);
-          if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
-          await body({ fixture, model, client, sessionId: session.id, config: launched.config });
+          const { client, version, sessionId } = await createNativeSession(
+            await childEndpoint(launched.child),
+            launched.password,
+            fixture.workspace,
+          );
+          expect(version).toBe(OPENCODE_PINNED_VERSION);
+          await body({ fixture, model, client, sessionId, config: launched.config });
         });
       });
     });

@@ -31,10 +31,11 @@ import { readProjectConfigDocuments } from "./opencodeConfigDocuments.js";
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
-import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
+import { type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 import {
-  writeNativeHttpScriptedTurn,
+  createNativeSession,
+  startNativeScriptedGateway,
   startNativeHttpByteListener,
   parseNativeHttpJson,
   closeNativeHttpStub as closeStub,
@@ -120,18 +121,10 @@ async function startStub(
 }
 
 async function startGateway(): Promise<GatewayStub> {
-  const stub = await startStub((self, recorded, response) => {
-    const gateway = self as GatewayStub;
-    writeNativeHttpScriptedTurn(
-      gateway,
-      recorded,
-      response,
-      () => `call_formatter_${String(self.requests.length)}`,
-      "native-formatter",
-    );
+  return await startNativeScriptedGateway("call_formatter", "native-formatter", {
+    name: "read",
+    arguments: {},
   });
-  const call: ScriptedCall = { name: "read", arguments: {} };
-  return Object.assign(stub, { toolTurns: 0, call });
 }
 
 /** Allows every action the generated policy plugin asks about, as Full access would. */
@@ -444,14 +437,13 @@ async function withRun(options: LaunchOptions, body: (run: Run) => Promise<void>
           await projectDocuments(fixture),
         );
         await withNativeChild(launched.child, async (): Promise<void> => {
-          const client = createOpenCodeV2HttpClient({
-            endpoint: await childEndpoint(launched.child),
-            password: launched.password,
-          });
-          expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
-          const session = await client.createSession(fixture.workspace);
-          if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
-          await body({ fixture, gateway, facade, client, sessionId: session.id });
+          const { client, version, sessionId } = await createNativeSession(
+            await childEndpoint(launched.child),
+            launched.password,
+            fixture.workspace,
+          );
+          expect(version).toBe(OPENCODE_PINNED_VERSION);
+          await body({ fixture, gateway, facade, client, sessionId });
         });
       });
     });

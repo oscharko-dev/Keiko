@@ -344,6 +344,26 @@ async function agentWrote(state: OpenCodeRevertRun, file = FIXTURE_FILE): Promis
   await state.agentImages?.work;
 }
 
+/** Starts the notes edit turn and waits until its edit landed and the agent recorded it. */
+async function notesEditLanded(run: Run, state: OpenCodeRevertRun): Promise<void> {
+  run.gateway.call = editCall("original", "edited");
+  run.gateway.toolTurns = 1;
+  await run.service.client.prompt(run.sessionId, "Edit the notes file.");
+  await expect.poll(() => workspaceFile(run), { timeout: 30_000 }).toBe("revert fixture edited\n");
+  await agentWrote(state);
+}
+
+/** Undo puts the original notes back; restore brings the turn's edit back. */
+async function expectUndoThenRestore(
+  run: Run,
+  port: ReturnType<typeof keikoRevertPort>["port"],
+): Promise<void> {
+  expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
+  expect(workspaceFile(run)).toBe(ORIGINAL_CONTENT);
+  expect(await port.revertTurn("run", "restore")).toMatchObject({ ok: true, fileCount: 1 });
+  expect(workspaceFile(run)).toBe("revert fixture edited\n");
+}
+
 async function sessionRevert(run: Run): Promise<unknown> {
   const sessions = await run.service.client.sessions();
   return sessions.find((session) => session.id === run.sessionId)?.revert;
@@ -645,13 +665,7 @@ describe("pinned native OpenCode undo semantics", () => {
       await withRun(async (run) => {
         const { port, state, aborts } = keikoRevertPort(run);
         run.gateway.holdAfterTool = true;
-        run.gateway.call = editCall("original", "edited");
-        run.gateway.toolTurns = 1;
-        await run.service.client.prompt(run.sessionId, "Edit the notes file.");
-        await expect
-          .poll(() => workspaceFile(run), { timeout: 30_000 })
-          .toBe("revert fixture edited\n");
-        await agentWrote(state);
+        await notesEditLanded(run, state);
         expect(await sessionIsIdle(run)).toBe(false);
         expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
         expect(aborts).toHaveLength(1);
@@ -670,13 +684,7 @@ describe("pinned native OpenCode undo semantics", () => {
       await withRun(async (run) => {
         const { port, state, aborts } = keikoRevertPort(run);
         run.gateway.holdAfterTool = true;
-        run.gateway.call = editCall("original", "edited");
-        run.gateway.toolTurns = 1;
-        await run.service.client.prompt(run.sessionId, "Edit the notes file.");
-        await expect
-          .poll(() => workspaceFile(run), { timeout: 30_000 })
-          .toBe("revert fixture edited\n");
-        await agentWrote(state);
+        await notesEditLanded(run, state);
         // The model's final reply is held; meanwhile a human changes the file the turn edited.
         writeFileSync(join(run.fixture.workspace, FIXTURE_FILE), "a human edit while it runs\n");
         expect(await port.revertTurn("run", "undo")).toEqual({
@@ -760,10 +768,7 @@ describe("pinned native OpenCode undo semantics", () => {
         expect(state.revert).toBeUndefined();
         // Healthy control: once the file is as the turn left it, undo and restore both apply.
         writeFileSync(target, "revert fixture edited\n");
-        expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
-        expect(workspaceFile(run)).toBe(ORIGINAL_CONTENT);
-        expect(await port.revertTurn("run", "restore")).toMatchObject({ ok: true, fileCount: 1 });
-        expect(workspaceFile(run)).toBe("revert fixture edited\n");
+        await expectUndoThenRestore(run, port);
       });
     },
     180_000,
@@ -775,13 +780,7 @@ describe("pinned native OpenCode undo semantics", () => {
       await withRun(async (run) => {
         const { port, state } = keikoRevertPort(run);
         run.gateway.failAfterTool = true;
-        run.gateway.call = editCall("original", "edited");
-        run.gateway.toolTurns = 1;
-        await run.service.client.prompt(run.sessionId, "Edit the notes file.");
-        await expect
-          .poll(() => workspaceFile(run), { timeout: 30_000 })
-          .toBe("revert fixture edited\n");
-        await agentWrote(state);
+        await notesEditLanded(run, state);
         await expect.poll(() => sessionIsIdle(run), { timeout: 30_000 }).toBe(true);
         const messages = await run.service.client.messages(run.sessionId);
         expect(
@@ -789,10 +788,7 @@ describe("pinned native OpenCode undo semantics", () => {
         ).toBe(true);
         recordOpenCodeTurnImage(state, undefined);
         await state.turnImage;
-        expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
-        expect(workspaceFile(run)).toBe(ORIGINAL_CONTENT);
-        expect(await port.revertTurn("run", "restore")).toMatchObject({ ok: true, fileCount: 1 });
-        expect(workspaceFile(run)).toBe("revert fixture edited\n");
+        await expectUndoThenRestore(run, port);
       });
     },
     180_000,

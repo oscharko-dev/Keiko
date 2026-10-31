@@ -34,11 +34,7 @@ import { basename, dirname, join } from "node:path";
 import { ServerResponse, type IncomingMessage } from "node:http";
 import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import type {
-  KnowledgeCapsuleId,
-  KnowledgePodModelUsePolicy,
-  WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, KnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
   maxUtf8BytesForTokenBudget,
@@ -174,7 +170,7 @@ import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
 import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
-import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
+import { activeManagedWorkspaceProvisioning } from "./gitDelivery/_support.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -3522,35 +3518,16 @@ describe("handleGroundedAsk", () => {
     if (gitdirInspection === undefined) {
       throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
     }
-    const instance: WorkspaceInstance = {
-      schemaVersion: "1",
+    const workspaceProvisioning = activeManagedWorkspaceProvisioning({
       workspaceId,
       taskId: "managed-grounding",
       repositoryId,
       repositoryRoot: tmp,
-      baseBranch: "dev",
       taskBranch: "keiko/task/managed-grounding-01234567",
       managedWorktreePath: managedWorktree,
       gitdirIdentity: gitdirInspection.identity,
-      lifecycleState: "active",
-      health: "healthy",
-      lock: null,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-      driftMarkers: [],
-      recoveryHints: [],
       auditCorrelationId: "corr_managed_grounding",
-    };
-    const workspaceProvisioning = {
-      provision: (): never => {
-        throw new Error("not used in this test");
-      },
-      activate: (): never => {
-        throw new Error("not used in this test");
-      },
-      getInstance: (id: string): WorkspaceInstance | undefined =>
-        id === workspaceId ? instance : undefined,
-    } satisfies WorkspaceProvisioningService;
+    });
     const codingAppSessionChannel = createCodingAppSessionChannel({
       registry: createSessionRegistry(),
       pairingPort: createFakeSessionPairingPort(),

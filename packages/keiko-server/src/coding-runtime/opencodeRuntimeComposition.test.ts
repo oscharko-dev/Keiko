@@ -4471,6 +4471,24 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
         data: { sessionID: "ses_tool", assistantMessageID: "msg_assistant", ordinal: 0 },
       })}\n\n`,
     );
+  /** Each call hints a finished step on the first event stream and waits for a fresh history read. */
+  const historyRereader = (
+    streams: readonly ReadableStreamDefaultController<Uint8Array>[],
+    historyCalls: readonly unknown[],
+  ): (() => Promise<void>) => {
+    const stream = streams[0];
+    if (stream === undefined) throw new Error("expected the event stream");
+    let hints = 0;
+    return async (): Promise<void> => {
+      const reads = historyCalls.length;
+      hints += 1;
+      stream.enqueue(frame("session.step.ended", hints));
+      await vi.waitFor(() => {
+        expect(historyCalls.length).toBeGreaterThan(reads);
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+  };
   const policyAsk = (permission: string, callId: string): string =>
     JSON.stringify({
       action: "native-policy",
@@ -4516,18 +4534,7 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
       },
     );
     try {
-      const stream = streams[0];
-      if (stream === undefined) throw new Error("expected the event stream");
-      let hints = 0;
-      const reread = async (): Promise<void> => {
-        const reads = historyCalls.length;
-        hints += 1;
-        stream.enqueue(frame("session.step.ended", hints));
-        await vi.waitFor(() => {
-          expect(historyCalls.length).toBeGreaterThan(reads);
-        });
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      };
+      const reread = historyRereader(streams, historyCalls);
       await reread();
       // The policy refused the fetch (internet is a Full access capability): the runtime ends it as a
       // failed call, the later calls run, and one is still running when the history is read.
@@ -4882,18 +4889,7 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
         }),
       });
     try {
-      const stream = streams[0];
-      if (stream === undefined) throw new Error("expected the event stream");
-      let hints = 0;
-      const reread = async (): Promise<void> => {
-        const reads = historyCalls.length;
-        hints += 1;
-        stream.enqueue(frame("session.step.ended", hints));
-        await vi.waitFor(() => {
-          expect(historyCalls.length).toBeGreaterThan(reads);
-        });
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      };
+      const reread = historyRereader(streams, historyCalls);
       expect((await ask("edit", "msg_step_edit", "call_edit", "src/a.ts")).status).toBe(200);
       expect((await ask("shell", "msg_step_test", "call_test", "npm test")).status).toBe(200);
       steps = [

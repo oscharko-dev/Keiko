@@ -14,7 +14,10 @@ import {
   nativeChildEndpoint as childEndpoint,
   stopNativeChild as stopChild,
 } from "../../../../tests/support/opencode-native-child.js";
-import { nativeHttpEventFrame as frame } from "../../../../tests/support/opencode-native-http.js";
+import {
+  nativeHttpEventFrame as frame,
+  openNativeEventSession,
+} from "../../../../tests/support/opencode-native-http.js";
 import {
   CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES,
   validateCodingWorkbenchRuntimeCommandsChannelPayload,
@@ -272,19 +275,13 @@ async function withRun(
   const stream = new AbortController();
   try {
     const endpoint = await childEndpoint(launched.child);
-    const client = createOpenCodeV2HttpClient({ endpoint, password: launched.password });
-    expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
-    const session = await client.createSession(fixture.workspace);
-    if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
-    const events: string[] = [];
-    void (async (): Promise<void> => {
-      try {
-        for await (const event of client.events(stream.signal)) events.push(String(event.type));
-      } catch {
-        // The stream ends when the run is torn down.
-      }
-    })();
-    const authorization = `Basic ${Buffer.from(`opencode:${launched.password}`, "utf8").toString("base64")}`;
+    const { client, version, sessionId, events, authorization } = await openNativeEventSession(
+      endpoint,
+      launched.password,
+      fixture.workspace,
+      stream.signal,
+    );
+    expect(version).toBe(OPENCODE_PINNED_VERSION);
     const raw: Run["raw"] = async (method, path, payload) => {
       const response = await fetch(`${endpoint}${path}`, {
         method,
@@ -303,7 +300,7 @@ async function withRun(
       client,
       endpoint,
       password: launched.password,
-      sessionId: session.id,
+      sessionId,
       events,
       raw,
     });
@@ -314,6 +311,19 @@ async function withRun(
     // The runtime may still be flushing its state when the child exits; retry the removal.
     rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
+}
+
+/** The third model request carries the whole tool turn and then, last, the queued message. */
+function expectQueuedMessageAnsweredLast(run: Run): void {
+  const last = conversation(run.gateway.requests[2]);
+  expect(last.map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+    "tool",
+    "assistant",
+    "user",
+  ]);
+  expect(last.at(-1)?.content).toContain("Queued message");
 }
 
 const count = (events: readonly string[], type: string): number =>
@@ -498,15 +508,7 @@ describe("pinned native OpenCode prompt inputs", () => {
           "assistant",
           "tool",
         ]);
-        const last = conversation(run.gateway.requests[2]);
-        expect(last.map((message) => message.role)).toEqual([
-          "user",
-          "assistant",
-          "tool",
-          "assistant",
-          "user",
-        ]);
-        expect(last.at(-1)?.content).toContain("Queued message");
+        expectQueuedMessageAnsweredLast(run);
         expect(count(run.events, "session.execution.started")).toBe(1);
         expect(count(run.events, "session.execution.succeeded")).toBe(1);
       });
@@ -586,15 +588,7 @@ describe("pinned native OpenCode prompt inputs", () => {
         expect(await userMessagesWith(run, "Queued message")).toHaveLength(1);
         // The tool step finished without the message; it reached the model once, after the answer.
         expect(run.gateway.requests).toHaveLength(3);
-        const last = conversation(run.gateway.requests[2]);
-        expect(last.map((message) => message.role)).toEqual([
-          "user",
-          "assistant",
-          "tool",
-          "assistant",
-          "user",
-        ]);
-        expect(last.at(-1)?.content).toContain("Queued message");
+        expectQueuedMessageAnsweredLast(run);
         // Terminal ordering is the producer's: one execution served the first prompt and the queued
         // input, and it settled once, after the queued input was answered.
         expect(count(run.events, "session.execution.started")).toBe(1);

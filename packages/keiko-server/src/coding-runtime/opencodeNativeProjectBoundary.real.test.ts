@@ -42,7 +42,10 @@ import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 
 import {
-  writeNativeHttpScriptedTurn,
+  runNativeScriptedTurn,
+  nativeHttpAdvertisedToolNames,
+  nativeHttpLastToolResult,
+  startNativeScriptedGateway,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
   type NativeService,
@@ -112,17 +115,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
 }
 
 async function startGateway(): Promise<GatewayStub> {
-  const stub = await startStub((self, recorded, response) => {
-    const gateway = self as GatewayStub;
-    writeNativeHttpScriptedTurn(
-      gateway,
-      recorded,
-      response,
-      () => `call_boundary_${String(self.requests.length)}`,
-      "native-boundary",
-    );
-  });
-  return Object.assign(stub, { toolTurns: 0, call: READ_FIXTURE_CALL });
+  return await startNativeScriptedGateway("call_boundary", "native-boundary", READ_FIXTURE_CALL);
 }
 
 async function startRefusingStub(): Promise<Stub> {
@@ -428,27 +421,6 @@ function expectGatewayOnlyModelRoute(gateway: Stub, evil: Stub): void {
   }
 }
 
-/** The tool names the runtime advertised to the model in its first request of the run. */
-function advertisedToolNames(gateway: Stub): readonly string[] {
-  const tools = object(gateway.requests[0]?.body)?.tools;
-  if (!Array.isArray(tools)) return [];
-  return tools.flatMap((tool: unknown) => {
-    const name = object(object(tool)?.function)?.name;
-    return typeof name === "string" ? [name] : [];
-  });
-}
-
-/** What the runtime sent back to the model as the result of the scripted tool call. */
-function lastToolResult(gateway: Stub): string {
-  const messages = object(gateway.requests.at(-1)?.body)?.messages;
-  if (!Array.isArray(messages)) return "";
-  const result = messages
-    .map(object)
-    .filter((message) => message?.role === "tool")
-    .at(-1);
-  return typeof result?.content === "string" ? result.content : "";
-}
-
 const CODE_MODE_TOOL_NAMES = OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => tool.codemode).map(
   (tool) => tool.id,
 );
@@ -498,7 +470,7 @@ async function runShellAttempt(run: Run): Promise<string> {
   await expect
     .poll(() => run.gateway.requests.length, { timeout: 60_000 })
     .toBeGreaterThanOrEqual(before + 2);
-  return lastToolResult(run.gateway);
+  return nativeHttpLastToolResult(run.gateway.requests);
 }
 
 /**
@@ -563,14 +535,9 @@ function setProbeMode(run: Run, mode: Readonly<Record<string, unknown>>): void {
 
 /** Runs one scripted turn and returns what the model received as the tool result. */
 async function scriptedTurn(run: Run, call: ScriptedCall, prompt: string): Promise<string> {
-  const before = run.gateway.requests.length;
-  run.gateway.call = call;
-  run.gateway.toolTurns = 1;
-  await run.service.client.prompt(run.sessionId, prompt);
-  await expect
-    .poll(() => run.gateway.requests.length, { timeout: 60_000 })
-    .toBeGreaterThanOrEqual(before + 2);
-  return lastToolResult(run.gateway);
+  return await runNativeScriptedTurn(run.gateway, call, () =>
+    run.service.client.prompt(run.sessionId, prompt),
+  );
 }
 
 /** Runs Git in the fixture workspace with the same hermetic identity the fixture was created with. */
@@ -786,7 +753,7 @@ describe("pinned native OpenCode repository-configuration boundary", () => {
     async () => {
       await withRun({}, async (run) => {
         await driveTurn(run.service, run.sessionId, run.gateway, "Read the fixture file.");
-        expect(lastToolResult(run.gateway)).toContain("native boundary fixture");
+        expect(nativeHttpLastToolResult(run.gateway.requests)).toContain("native boundary fixture");
         const before = run.gateway.requests.length;
         run.gateway.call = {
           name: "edit",
@@ -1118,7 +1085,7 @@ describe("pinned native OpenCode Code Mode semantics", () => {
     async () => {
       await withRun({}, async (run) => {
         await driveTurn(run.service, run.sessionId, run.gateway, "Read the fixture file.");
-        const names = advertisedToolNames(run.gateway);
+        const names = nativeHttpAdvertisedToolNames(run.gateway.requests);
         expect(names).toEqual(expect.arrayContaining(["execute", "read", "edit", "shell"]));
         // The management tools exist only inside Code Mode, never as top-level tools.
         expect(names.filter((name) => name.startsWith("opencode_"))).toEqual([]);

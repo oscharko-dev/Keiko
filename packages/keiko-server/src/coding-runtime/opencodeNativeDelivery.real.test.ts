@@ -45,7 +45,10 @@ import {
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 
 import {
-  writeNativeHttpScriptedTurn,
+  runNativeScriptedTurn,
+  nativeHttpAdvertisedTools,
+  nativeHttpAdvertisedToolNames,
+  startNativeScriptedGateway,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
   type NativeHttpStub as Stub,
@@ -96,17 +99,10 @@ function object(value: unknown): Record<string, unknown> | undefined {
 }
 
 async function startGateway(): Promise<GatewayStub> {
-  const stub = await startStub((self, recorded, response) => {
-    const gateway = self as GatewayStub;
-    writeNativeHttpScriptedTurn(
-      gateway,
-      recorded,
-      response,
-      () => `call_delivery_${String(self.requests.length)}`,
-      "native-delivery",
-    );
+  return await startNativeScriptedGateway("call_delivery", "native-delivery", {
+    name: "read",
+    arguments: {},
   });
-  return Object.assign(stub, { toolTurns: 0, call: { name: "read", arguments: {} } });
 }
 
 /** What the fixture facade returns for a delivery request: the canonical result envelope. */
@@ -348,43 +344,11 @@ async function withRun(
   rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
 
-/** The tool names the runtime advertised to the model in its first request of the run. */
-function advertisedTools(gateway: Stub): readonly Record<string, unknown>[] {
-  const tools = object(gateway.requests[0]?.body)?.tools;
-  if (!Array.isArray(tools)) return [];
-  return tools.flatMap((tool: unknown) => {
-    const declaration = object(object(tool)?.function);
-    return declaration === undefined ? [] : [declaration];
-  });
-}
-
-function advertisedToolNames(gateway: Stub): readonly string[] {
-  return advertisedTools(gateway).flatMap((tool) =>
-    typeof tool.name === "string" ? [tool.name] : [],
-  );
-}
-
-/** What the runtime sent back to the model as the result of the scripted tool call. */
-function lastToolResult(gateway: Stub): string {
-  const messages = object(gateway.requests.at(-1)?.body)?.messages;
-  if (!Array.isArray(messages)) return "";
-  const result = messages
-    .map(object)
-    .filter((message) => message?.role === "tool")
-    .at(-1);
-  return typeof result?.content === "string" ? result.content : "";
-}
-
 /** Runs one scripted turn and returns what the model received as the tool result. */
 async function scriptedTurn(run: Run, call: ScriptedCall, prompt: string): Promise<string> {
-  const before = run.gateway.requests.length;
-  run.gateway.call = call;
-  run.gateway.toolTurns = 1;
-  await run.service.client.prompt(run.sessionId, prompt);
-  await expect
-    .poll(() => run.gateway.requests.length, { timeout: 60_000 })
-    .toBeGreaterThanOrEqual(before + 2);
-  return lastToolResult(run.gateway);
+  return await runNativeScriptedTurn(run.gateway, call, () =>
+    run.service.client.prompt(run.sessionId, prompt),
+  );
 }
 
 /** A scripted call to a delivery tool, with the arguments a model would send. */
@@ -401,7 +365,7 @@ function deliveryNames(names: readonly string[]): readonly string[] {
 function advertisedDefinitions(
   gateway: Stub,
 ): readonly { name: string; description: string; parameters: Record<string, unknown> }[] {
-  return advertisedTools(gateway).flatMap((tool) => {
+  return nativeHttpAdvertisedTools(gateway.requests).flatMap((tool) => {
     const { name, description, parameters } = tool;
     const schema = object(parameters);
     return typeof name === "string" && typeof description === "string" && schema !== undefined
@@ -445,7 +409,7 @@ describe("pinned native OpenCode Git delivery tools", () => {
         );
         expect(ready).toBe(true);
         await scriptedTurn(run, { name: "read", arguments: { path: FIXTURE_FILE } }, "Read it.");
-        const names = advertisedToolNames(run.gateway);
+        const names = nativeHttpAdvertisedToolNames(run.gateway.requests);
         expect(deliveryNames(names)).toEqual([...OPENCODE_NATIVE_DELIVERY_TOOL_NAMES].sort());
         expect(names).toEqual(expect.arrayContaining(["read", "edit", "shell", "execute"]));
         // The tool contract the gateway admits for this very advertisement (ADR-0175 D2).
@@ -485,7 +449,7 @@ describe("pinned native OpenCode Git delivery tools", () => {
         );
         expect(ready).toBe(false);
         await scriptedTurn(run, { name: "read", arguments: { path: FIXTURE_FILE } }, "Read it.");
-        expect(deliveryNames(advertisedToolNames(run.gateway))).toEqual([]);
+        expect(deliveryNames(nativeHttpAdvertisedToolNames(run.gateway.requests))).toEqual([]);
       });
     },
     180_000,

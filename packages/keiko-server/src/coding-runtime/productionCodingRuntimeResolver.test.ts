@@ -12,7 +12,7 @@ import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/ru
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -876,24 +876,7 @@ describe("production coding runtime resolver", () => {
     );
 
     it("refuses a plan request for a Codex subscription run, which has no agent concept", () => {
-      const fixture = workspaceFixture();
-      const confirmations = confirmationFixture();
-      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
-        backendRun(input.request.runId),
-      );
-      const host = createProductionCodingRuntimeHost(
-        resolverFor(fixture, createRun, confirmations.consumer, undefined, {
-          backend: { createRun, toolProfile: "native" },
-        }),
-      );
-      if (host === undefined) throw new Error("expected qualified host");
-      const request = {
-        ...launchRequest(fixture.workspace),
-        runtimePreference: "codex-subscription" as const,
-      };
-      confirmations.issue(
-        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
-      );
+      const { host, createRun, request } = confirmedCodexSubscriptionLaunch();
 
       expect(() => host.launchResolver.resolve({ ...request, agent: "plan" })).toThrow(
         CodingRuntimeAgentUnsupportedError,
@@ -1000,24 +983,7 @@ describe("production coding runtime resolver", () => {
       );
 
       it("refuses references and a command for a Codex subscription run, which takes neither", () => {
-        const fixture = workspaceFixture();
-        const confirmations = confirmationFixture();
-        const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
-          backendRun(input.request.runId),
-        );
-        const host = createProductionCodingRuntimeHost(
-          resolverFor(fixture, createRun, confirmations.consumer, undefined, {
-            backend: { createRun, toolProfile: "native" },
-          }),
-        );
-        if (host === undefined) throw new Error("expected qualified host");
-        const request = {
-          ...launchRequest(fixture.workspace),
-          runtimePreference: "codex-subscription" as const,
-        };
-        confirmations.issue(
-          resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
-        );
+        const { host, createRun, request } = confirmedCodexSubscriptionLaunch();
 
         expect(() => host.launchResolver.resolve({ ...request, references })).toThrow(
           CodingRuntimeInputsUnsupportedError,
@@ -1153,14 +1119,7 @@ describe("production coding runtime resolver", () => {
     const fixture = workspaceFixture();
     // The capability store and its authentication read the process clock; hold it on the fixture's
     // clock from before the host is composed, so both judge the run's capabilities at one instant.
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(fixture.nowMs());
-    ciRepairBudgetOverride.current = {
-      admitTool: () => undefined,
-      canChargePrompt: () => ({ accepted: true }),
-      chargePrompt: () => ({ accepted: true }),
-      observed: () => undefined,
-    };
+    holdClockAndAdmitEveryCharge(fixture);
     const { host, request, createRun } = launchedManagedRuntimeFixture(fixture);
     const backend = createRun.mock.calls[0]?.[0];
     const ledger = host.runtimeCapabilityAuthenticator;
@@ -1211,28 +1170,23 @@ describe("production coding runtime resolver", () => {
   // terminal calls reach the SAME effort owner the facade's own calls reach, once per call.
   it("counts a run's native tool calls from the runtime's terminal reports once, for its effort roll-up", () => {
     const fixture = workspaceFixture();
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(fixture.nowMs());
-    ciRepairBudgetOverride.current = {
-      admitTool: () => undefined,
-      canChargePrompt: () => ({ accepted: true }),
-      chargePrompt: () => ({ accepted: true }),
-      observed: () => undefined,
-    };
+    holdClockAndAdmitEveryCharge(fixture);
     const { host, request, createRun } = launchedManagedRuntimeFixture(fixture);
     const settlement = createRun.mock.calls[0]?.[0].toolFacade.nativeSettlement;
     if (settlement === undefined) throw new Error("expected the composed run's native evidence");
 
-    const call = (callId: string, tool: string, state: "succeeded" | "failed"): void => {
+    const reports = [
+      ["call_read_1", "read", "succeeded"],
+      ["call_edit_1", "edit", "succeeded"],
+      ["call_read_2", "read", "succeeded"],
+      // A history read after a reconnect reports the same calls again; a failed edit did not apply.
+      ["call_read_1", "read", "succeeded"],
+      ["call_edit_1", "edit", "succeeded"],
+      ["call_edit_2", "edit", "failed"],
+    ] as const;
+    for (const [callId, tool, state] of reports) {
       settlement.settled({ messageId: "msg_1", callId, tool, state });
-    };
-    call("call_read_1", "read", "succeeded");
-    call("call_edit_1", "edit", "succeeded");
-    call("call_read_2", "read", "succeeded");
-    // A history read after a reconnect reports the same calls again; a failed edit did not apply.
-    call("call_read_1", "read", "succeeded");
-    call("call_edit_1", "edit", "succeeded");
-    call("call_edit_2", "edit", "failed");
+    }
     expect(host.runEffort?.read(request.runId)).toMatchObject({
       toolInvocationCount: 4,
       workspaceReadCount: 2,
@@ -1242,6 +1196,45 @@ describe("production coding runtime resolver", () => {
     expect(host.runEffort?.read("run-other")).toBeUndefined();
   });
 });
+
+/** A started Codex subscription host whose one-use start confirmation is already issued. */
+function confirmedCodexSubscriptionLaunch(): {
+  readonly host: NonNullable<ReturnType<typeof createProductionCodingRuntimeHost>>;
+  readonly createRun: Mock<(input: ProductionRuntimeBackendInput) => ReturnType<typeof backendRun>>;
+  readonly request: Omit<ReturnType<typeof launchRequest>, "runtimePreference"> & {
+    readonly runtimePreference: "codex-subscription";
+  };
+} {
+  const fixture = workspaceFixture();
+  const confirmations = confirmationFixture();
+  const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+    backendRun(input.request.runId),
+  );
+  const host = createProductionCodingRuntimeHost(
+    resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+      backend: { createRun, toolProfile: "native" },
+    }),
+  );
+  if (host === undefined) throw new Error("expected qualified host");
+  const request = {
+    ...launchRequest(fixture.workspace),
+    runtimePreference: "codex-subscription" as const,
+  };
+  confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+  return { host, createRun, request };
+}
+
+/** Holds the process clock on the fixture's clock and lets the CI budget admit every charge. */
+function holdClockAndAdmitEveryCharge(fixture: ReturnType<typeof workspaceFixture>): void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(fixture.nowMs());
+  ciRepairBudgetOverride.current = {
+    admitTool: () => undefined,
+    canChargePrompt: () => ({ accepted: true }),
+    chargePrompt: () => ({ accepted: true }),
+    observed: () => undefined,
+  };
+}
 
 function launchedManagedRuntimeFixture(fixture: ReturnType<typeof workspaceFixture>): {
   host: ProductionCodingRuntimeHost;

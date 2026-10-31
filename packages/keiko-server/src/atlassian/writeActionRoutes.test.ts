@@ -37,13 +37,13 @@ import {
   validateAtlassianConnectorPendingApproval,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 import type {
-  AtlassianCredentialCustody,
   AtlassianCredentialMetadata,
   AtlassianHttpBodyPort,
   AtlassianHttpBodyRequest,
   AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
 import type { RouteContext } from "../routes.js";
+import { readOnlyCredentialCustody } from "./_support.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   editorAgentAuthorityRegistry,
@@ -124,24 +124,14 @@ function guardWith(
   counter: FetchCounter,
   override?: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined,
 ): AtlassianConnectorCredentialDeps {
-  const custody = {
-    updateLivePod: (): never => {
-      throw new Error("Unexpected Live Pod update");
-    },
-    beginVerification: (): undefined => undefined,
-    finishVerification: (): boolean => false,
-    observeAuthenticationFailure: (): boolean => false,
-    create: (): never => {
-      throw new Error("create not exercised");
-    },
-    getMetadata: (authRef: string): AtlassianCredentialMetadata | undefined => {
+  const custody = readOnlyCredentialCustody(
+    (authRef: string): AtlassianCredentialMetadata | undefined => {
       if (authRef === JIRA_AUTH_REF) return credential("jira");
       if (authRef === CONFLUENCE_AUTH_REF) return credential("confluence");
       return undefined;
     },
-    list: (): readonly AtlassianCredentialMetadata[] => [credential("jira")],
-    delete: (): boolean => false,
-  } satisfies AtlassianCredentialCustody;
+    [credential("jira")],
+  );
   return {
     custody,
     httpPortFactory: () => () => Promise.resolve({ kind: "network-error" as const }),

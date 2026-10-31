@@ -1,12 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import {
   buildRedactor,
   createInMemoryUiStore,
@@ -24,10 +21,12 @@ import type { RouteContext } from "../routes.js";
 import type { UiStore } from "../store/index.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
-import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
-import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import { handleRuntimeCapabilities } from "./capabilityRoutes.js";
 import { type HostExecutableProbe, type HostExecutableProbeResult } from "./capabilityDetector.js";
+import {
+  activeManagedWorkspaceProvisioning,
+  buildManagedGitWorktree,
+} from "../gitDelivery/_support.js";
 
 let root: string;
 let managedSourceRoot: string | undefined;
@@ -147,62 +146,22 @@ describe("GET /api/runtime/capabilities", () => {
     // cleaned up by afterEach below), not the shared `root` fixture.
     const repositoryRoot = await mkdtemp(join(tmpdir(), "keiko-runtime-route-managed-source-"));
     managedSourceRoot = repositoryRoot;
-    execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
-    execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: repositoryRoot });
-    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
-    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
-    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], {
-      cwd: repositoryRoot,
-    });
-    mkdirSync(dirname(managedWorktree), { recursive: true });
-    execFileSync(
-      "git",
-      [
-        "worktree",
-        "add",
-        "-q",
-        "-b",
-        "keiko/task/runtime-capabilities-01234567",
-        managedWorktree,
-        "HEAD",
-      ],
-      { cwd: repositoryRoot },
+    const gitdirIdentity = buildManagedGitWorktree(
+      repositoryRoot,
+      managedWorktree,
+      "keiko/task/runtime-capabilities-01234567",
     );
-    const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, repositoryRoot);
-    if (gitdirInspection === undefined) {
-      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
-    }
     await writeFile(join(managedWorktree, "package.json"), '{"name":"managed-fixture"}\n');
-    const now = new Date(0).toISOString();
-    const instance: WorkspaceInstance = {
-      schemaVersion: "1",
+    const workspaceProvisioning = activeManagedWorkspaceProvisioning({
       workspaceId,
       taskId: "runtime-capabilities",
       repositoryId,
       repositoryRoot,
-      baseBranch: "dev",
       taskBranch: "keiko/task/runtime-capabilities-01234567",
       managedWorktreePath: managedWorktree,
-      gitdirIdentity: gitdirInspection.identity,
-      lifecycleState: "active",
-      health: "healthy",
-      lock: null,
-      createdAt: now,
-      updatedAt: now,
-      driftMarkers: [],
-      recoveryHints: [],
+      gitdirIdentity,
       auditCorrelationId: "corr_runtime_capabilities",
-    };
-    const workspaceProvisioning = {
-      provision: (): never => {
-        throw new Error("not used in this test");
-      },
-      activate: (): never => {
-        throw new Error("not used in this test");
-      },
-      getInstance: (id: string): WorkspaceInstance | undefined =>
-        id === workspaceId ? instance : undefined,
-    } satisfies WorkspaceProvisioningService;
+    });
     const codingAppSessionChannel = createCodingAppSessionChannel({
       registry: createSessionRegistry(),
       pairingPort: createFakeSessionPairingPort(),

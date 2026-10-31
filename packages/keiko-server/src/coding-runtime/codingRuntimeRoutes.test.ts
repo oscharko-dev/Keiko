@@ -367,6 +367,21 @@ function registerRuntimeReadAuthorityTests(
   });
 }
 
+/** The readiness body for Supervised workspace, without an orchestrator, under `overrides`. */
+function supervisedReadinessBody(
+  overrides: Partial<Record<string, unknown>>,
+): Record<string, unknown> {
+  return handleCodingRuntimeReadiness(
+    context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+    runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
+  ).body as Record<string, unknown>;
+}
+
+/** Runtime overrides whose composed OpenCode registry states `toolProfile`. */
+function profileRegistry(toolProfile: string): Record<string, unknown> {
+  return { openCodeGatewayReadinessRegistry: { toolProfile } };
+}
+
 describe("coding runtime routes", () => {
   it("mounts the inline follow-up, question, and pause/resume operations behind the runtime group", () => {
     const patterns = API_ROUTES.map(({ pattern }) => pattern);
@@ -1499,26 +1514,18 @@ describe("coding runtime routes", () => {
   });
 
   it("computes the selectable agents from the composed OpenCode tool profile (#3897)", () => {
-    const selectable = (overrides: Partial<Record<string, unknown>>): unknown => {
-      const result = handleCodingRuntimeReadiness(
-        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
-        runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
-      );
-      return (result.body as { selectableAgents?: unknown }).selectableAgents;
-    };
-    const registry = (toolProfile: string): Record<string, unknown> => ({
-      openCodeGatewayReadinessRegistry: { toolProfile },
-    });
+    const selectable = (overrides: Partial<Record<string, unknown>>): unknown =>
+      supervisedReadinessBody(overrides).selectableAgents;
 
     // Only the native service can honour OpenCode's read-only plan agent.
-    expect(selectable({ codingRuntimeHostQualified: true, ...registry("native") })).toEqual([
+    expect(selectable({ codingRuntimeHostQualified: true, ...profileRegistry("native") })).toEqual([
       "build",
       "plan",
     ]);
     for (const profile of ["direct", "code-mode"]) {
-      expect(selectable({ codingRuntimeHostQualified: true, ...registry(profile) })).toEqual([
-        "build",
-      ]);
+      expect(selectable({ codingRuntimeHostQualified: true, ...profileRegistry(profile) })).toEqual(
+        ["build"],
+      );
     }
     // No composed registry (unqualified host, or an unthreaded dependency) fails closed to build.
     expect(selectable({ codingRuntimeHostQualified: true })).toEqual(["build"]);
@@ -1530,27 +1537,23 @@ describe("coding runtime routes", () => {
   });
 
   it("computes the prompt inputs from the composed OpenCode tool profile (ADR-0137 D10)", () => {
-    const promptInputs = (overrides: Partial<Record<string, unknown>>): unknown => {
-      const result = handleCodingRuntimeReadiness(
-        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
-        runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
-      );
-      return (result.body as { promptInputs?: unknown }).promptInputs;
-    };
-    const registry = (toolProfile: string): Record<string, unknown> => ({
-      openCodeGatewayReadinessRegistry: { toolProfile },
-    });
+    const promptInputs = (overrides: Partial<Record<string, unknown>>): unknown =>
+      supervisedReadinessBody(overrides).promptInputs;
 
     // Only the native service can steer, queue and read a referenced file under its own policy.
     // The same holds for the runtime's slash commands.
-    expect(promptInputs({ codingRuntimeHostQualified: true, ...registry("native") })).toEqual({
+    expect(
+      promptInputs({ codingRuntimeHostQualified: true, ...profileRegistry("native") }),
+    ).toEqual({
       delivery: true,
       references: true,
       commands: true,
       mentions: true,
     });
     for (const profile of ["direct", "code-mode"]) {
-      expect(promptInputs({ codingRuntimeHostQualified: true, ...registry(profile) })).toEqual({
+      expect(
+        promptInputs({ codingRuntimeHostQualified: true, ...profileRegistry(profile) }),
+      ).toEqual({
         delivery: false,
         references: false,
         commands: false,
@@ -1593,20 +1596,17 @@ describe("coding runtime routes", () => {
   // activation verified, and never one for a runtime that is not available.
   it("reports the activated runtime's version facts only while the runtime is available", () => {
     const runtimeVersion = { opencode: "2.0.10", pinned: "2.1.4", origin: "npm-runtime-package" };
-    const read = (overrides: Partial<Record<string, unknown>>): Record<string, unknown> =>
-      handleCodingRuntimeReadiness(
-        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
-        runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
-      ).body as Record<string, unknown>;
 
-    const available = read({
+    const available = supervisedReadinessBody({
       codingRuntimeHostQualified: true,
       codingRuntimeVersion: runtimeVersion,
     });
     expect(available.runtimeVersion).toEqual(runtimeVersion);
     expect(validateCodingWorkbenchRuntimeReadiness(available)).toMatchObject({ ok: true });
-    expect(read({ codingRuntimeHostQualified: true })).not.toHaveProperty("runtimeVersion");
-    const unavailable = read({
+    expect(supervisedReadinessBody({ codingRuntimeHostQualified: true })).not.toHaveProperty(
+      "runtimeVersion",
+    );
+    const unavailable = supervisedReadinessBody({
       codingRuntimeHostQualified: false,
       codingRuntimeVersion: runtimeVersion,
     });

@@ -40,7 +40,7 @@ import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencod
 import { RIPGREP_RUNTIME_MANIFEST } from "./ripgrepRuntime.js";
 
 import {
-  writeNativeHttpScriptedTurn,
+  startNativeScriptedGateway,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
 } from "../../../../tests/support/opencode-native-http.js";
@@ -97,17 +97,10 @@ function object(value: unknown): Record<string, unknown> | undefined {
 }
 
 async function startGateway(): Promise<GatewayStub> {
-  const stub = await startStub((self, recorded, response) => {
-    const gateway = self as GatewayStub;
-    writeNativeHttpScriptedTurn(
-      gateway,
-      recorded,
-      response,
-      () => `call_ripgrep_${String(self.requests.length)}`,
-      "ripgrep-real",
-    );
+  return await startNativeScriptedGateway("call_ripgrep", "ripgrep-real", {
+    name: "glob",
+    arguments: {},
   });
-  return Object.assign(stub, { toolTurns: 0, call: { name: "glob", arguments: {} } });
 }
 
 async function startFacade(): Promise<Stub> {

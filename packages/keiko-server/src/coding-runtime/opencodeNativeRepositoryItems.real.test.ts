@@ -29,7 +29,10 @@ import {
   nativeChildEndpoint as childEndpoint,
   stopNativeChild as stopChild,
 } from "../../../../tests/support/opencode-native-child.js";
-import { nativeHttpEventFrame as frame } from "../../../../tests/support/opencode-native-http.js";
+import {
+  nativeHttpEventFrame as frame,
+  openNativeEventSession,
+} from "../../../../tests/support/opencode-native-http.js";
 import {
   buildRuntimeGatewaySeatbeltCommand,
   resolveDarwinGitExecutable,
@@ -71,7 +74,7 @@ import {
 import { bindNativeMcpRelays } from "./opencodeNativeMcpRelay.js";
 import { createRemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
-import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
+import { type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 import type {
   SecureWorkspaceNativeListResult,
   SecureWorkspaceTextReadPort,
@@ -599,19 +602,13 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
   const stream = new AbortController();
   try {
     const endpoint = await childEndpoint(started.child);
-    const client = createOpenCodeV2HttpClient({ endpoint, password: started.password });
-    expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
-    const session = await client.createSession(fixture.workspace);
-    if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
-    const events: string[] = [];
-    void (async (): Promise<void> => {
-      try {
-        for await (const event of client.events(stream.signal)) events.push(String(event.type));
-      } catch {
-        // The stream ends when the run is torn down.
-      }
-    })();
-    const authorization = `Basic ${Buffer.from(`opencode:${started.password}`, "utf8").toString("base64")}`;
+    const { client, version, sessionId, events, authorization } = await openNativeEventSession(
+      endpoint,
+      started.password,
+      fixture.workspace,
+      stream.signal,
+    );
+    expect(version).toBe(OPENCODE_PINNED_VERSION);
     const listing: Run["listing"] = async (path) => {
       const query = `location%5Bdirectory%5D=${encodeURIComponent(fixture.workspace)}`;
       const response = await fetch(`${endpoint}${path}?${query}`, {
@@ -630,7 +627,7 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
       evil,
       facade,
       client,
-      sessionId: session.id,
+      sessionId,
       events,
       admission,
       listing,
@@ -1570,8 +1567,14 @@ function answerOAuth(
 }
 
 // The protected MCP server: a bearer token, then initialize and one tool.
-function answerMcp(request: IncomingMessage, body: unknown, response: ServerResponse): void {
-  if (request.headers.authorization !== `Bearer ${OAUTH_ACCESS_TOKEN}`) {
+function answerMcp(
+  request: IncomingMessage,
+  body: unknown,
+  response: ServerResponse,
+  token = OAUTH_ACCESS_TOKEN,
+  serverName = "fixture",
+): void {
+  if (request.headers.authorization !== `Bearer ${token}`) {
     response.writeHead(401).end();
     return;
   }
@@ -1586,7 +1589,7 @@ function answerMcp(request: IncomingMessage, body: unknown, response: ServerResp
       ? {
           protocolVersion: params?.protocolVersion,
           capabilities: { tools: {} },
-          serverInfo: { name: "fixture", version: "1" },
+          serverInfo: { name: serverName, version: "1" },
         }
       : { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] };
   json(response, 200, { jsonrpc: "2.0", id: message.id, result });
@@ -1797,25 +1800,7 @@ async function startStaticMcpFixture(): Promise<StaticMcpFixture> {
         credentialed: request.headers.authorization === `Bearer ${STATIC_MCP_SECRET}`,
         relayHeader: request.headers["x-keiko-mcp-relay"] !== undefined,
       });
-      if (request.headers.authorization !== `Bearer ${STATIC_MCP_SECRET}`) {
-        response.writeHead(401).end();
-        return;
-      }
-      const message = object(body);
-      if (request.method !== "POST" || message?.id === undefined) {
-        response.writeHead(request.method === "POST" ? 202 : 405).end();
-        return;
-      }
-      const params = object(message.params);
-      const result =
-        message.method === "initialize"
-          ? {
-              protocolVersion: params?.protocolVersion,
-              capabilities: { tools: {} },
-              serverInfo: { name: "wiki", version: "1" },
-            }
-          : { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] };
-      json(response, 200, { jsonrpc: "2.0", id: message.id, result });
+      answerMcp(request, body, response, STATIC_MCP_SECRET, "wiki");
     });
   });
   fixture.base = `http://127.0.0.1:${String(await listen(fixture.server))}`;

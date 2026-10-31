@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
+import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 
 /**
  * A genuine `git worktree add` linkage rooted at `sourceRepo` at `worktreePath`, returning its real
@@ -27,4 +29,49 @@ export function buildManagedGitWorktree(
     throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
   }
   return inspection.identity;
+}
+
+/** The identity fields of one active managed workspace record. */
+type ActiveManagedWorkspaceFields = Pick<
+  WorkspaceInstance,
+  | "workspaceId"
+  | "taskId"
+  | "repositoryId"
+  | "repositoryRoot"
+  | "taskBranch"
+  | "managedWorktreePath"
+  | "gitdirIdentity"
+  | "auditCorrelationId"
+>;
+
+/**
+ * A provisioning service that holds one active, healthy managed workspace on `dev` and refuses to
+ * provision or activate another.
+ */
+export function activeManagedWorkspaceProvisioning(
+  fields: ActiveManagedWorkspaceFields,
+): WorkspaceProvisioningService {
+  const timestamp = new Date(0).toISOString();
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    ...fields,
+    baseBranch: "dev",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    driftMarkers: [],
+    recoveryHints: [],
+  };
+  return {
+    provision: (): never => {
+      throw new Error("not used in this test");
+    },
+    activate: (): never => {
+      throw new Error("not used in this test");
+    },
+    getInstance: (id: string): WorkspaceInstance | undefined =>
+      id === fields.workspaceId ? instance : undefined,
+  };
 }
