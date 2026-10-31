@@ -274,6 +274,18 @@ const VETTED_BUILD_TOOLS: Readonly<Record<string, ReadonlySet<string>>> = {
     "describe",
     "grep",
     "shortlog",
+    // Reserved subcommands whose read-only forms stay available (READ_ONLY_GIT_FORMS). The reserved
+    // check runs before vetting, so only those forms reach this set; their writes stay refused.
+    "branch",
+    "stash",
+    "remote",
+    "tag",
+    "worktree",
+    "submodule",
+    "config",
+    "symbolic-ref",
+    "reflog",
+    "notes",
   ]),
 };
 const VETTED_INSPECTION_TOOLS = new Set([

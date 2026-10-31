@@ -247,9 +247,8 @@ describe("native policy effects per autonomy mode", () => {
       'grep -rn "git push" docs',
       "echo 'git commit is done by Keiko'",
     ]) {
-      expect(effectOf("supervised-coding", "shell", [command]), command).not.toBe(
-        "deny:delivery-reserved",
-      );
+      // Read-only Git runs as vetted inspection (opencode-capability-parity.md), not as an ask.
+      expect(effectOf("supervised-coding", "shell", [command]), command).toBe("allow");
     }
     for (const command of [
       "git branch feature/x",
@@ -298,9 +297,7 @@ describe("native policy effects per autonomy mode", () => {
       "git notes list",
       "git notes show HEAD",
     ])
-      expect(effectOf("supervised-coding", "shell", [command]), command).not.toBe(
-        "deny:delivery-reserved",
-      );
+      expect(effectOf("supervised-coding", "shell", [command]), command).toBe("allow");
   });
 
   it("checks the searched directory of glob and grep, not their pattern (#3897 audit)", () => {
