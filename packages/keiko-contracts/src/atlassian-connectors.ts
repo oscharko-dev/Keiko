@@ -1537,4 +1537,10 @@ export {
   type JiraMutationResultState,
   type JiraMutationReceipt,
   type JiraMutationAttempt,
+  JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_MUTATION_DETAIL_LIMITS,
+  sanitizeJiraMutationFailureDetail,
+  type JiraFieldValidationFailure,
+  type JiraMutationFailureDetail,
+  type JiraMutationFieldError,
 } from "./jira-tool-execution.js";

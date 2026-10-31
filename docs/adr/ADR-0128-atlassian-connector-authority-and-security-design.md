@@ -339,12 +339,25 @@ remote effect or imply rollback, and an orphaned pending record never authorizes
 **Bounded Jira field validation (#4083).** The connector owns one metadata-driven field matrix
 for its managed Jira provider. It admits standard text, finite numbers, calendar dates,
 millisecond datetime values, user/option references and explicit bounded list types. Core Jira
-custom-field types are named explicitly; an unknown plugin type is unsupported even if its base
-schema looks familiar. A choice list above 500 entries makes only that field unsupported; other
-fields remain usable, and a required unsupported field without a server default still blocks
-creation. Unsupported plugin choice structures are not interpreted. Known-field structural errors
+custom-field types are named explicitly; a core custom type without an explicit entry takes the
+kind its declared schema type states. Every field Jira offers is writable (owner decision
+2026-10-31, #4176): a plugin field (any custom type outside Jira's own namespace, e.g. Epic Name,
+Epic Link, Sprint) and a non-routing system field without an explicit entry are `opaque`. Their
+meaning is never guessed from a familiar base schema: an opaque value is bounded plain JSON
+(depth 4, 100 items, 50 keys, 4096 characters per string, 16 KiB serialized, no control characters
+or prototype keys), forwarded as given, never converted to rich text, and Jira's own validation is
+authoritative; read-back confirms presence or clearing, not equality, because Jira reshapes such
+values on read. The system `parent` field is an `issue` reference (`{ key }`, `{ id }` or a bare
+key, canonicalized to one identity). `attachment`, `issuelinks`, `comment`, routing and computed
+system fields stay outside plain field writes and are written through their own tools. Field
+metadata projects Jira's declared `schemaType` so a caller can shape an opaque value. A refused
+write returns, to the model only, the refused field with Keiko's closed validation reason, or
+Jira's own bounded field errors and messages (at most 8 and 3, 200 characters each, control
+characters removed); none of it is logged. A choice list above 500 entries makes only that field
+unsupported; other fields remain usable, and a required field without a server default still
+blocks creation. Plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
-unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
+opaque and issue fields offer only `set`, and unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
 Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
 Create may leave a Jira-declared default omitted without copying or fabricating it. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
@@ -355,7 +368,8 @@ provider obligations; the pure validator grants no execution authority.
 Issue reads may select at most 20 additional field IDs. Their `names`/`schema` expansion is
 interpreted by the same field matrix and value validator; no edit permission is inferred from
 readable values. Missing values or schemas remain unavailable, null/empty values remain empty,
-and unknown plugin values remain unsupported without exposing their content. User/option
+and opaque values are returned as bounded serialized JSON text; an issue reference reads as its
+key. User/option
 references retain only the deployment identity and bounded display label; email addresses and
 self links are omitted. Datetimes accept both ISO offsets and Jira's compact offset representation.
 The expanded `jira.issue` input/result contract is version 3; its ordinary unexpanded read remains

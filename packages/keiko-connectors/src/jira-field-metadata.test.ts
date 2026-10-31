@@ -83,17 +83,80 @@ describe("bounded Jira metadata field/operation matrix", () => {
     ).toMatchObject({ ok: false, reason: "required-field" });
   });
 
+  // Owner decision 2026-10-31 (#4176, ADR-0128 bounded field validation): plugin fields are writable, but their meaning
+  // is still never guessed from a familiar base type. The value stays opaque — no text semantics,
+  // no rich-text conversion, no read-back equality claim — and Jira's validation decides.
   it("never guesses unknown plugin types from a familiar base type", () => {
     const result = parseJiraFieldMetadata([
       field("customfield_9", "string", {
         schema: { type: "string", custom: "external.plugin:script" },
       }),
     ]);
-    expect(result).toMatchObject({ ok: true, fields: [{ kind: "unsupported" }] });
+    expect(result).toMatchObject({
+      ok: true,
+      fields: [{ kind: "opaque", richText: false, schemaType: "string" }],
+    });
     if (!result.ok) throw new Error("Invalid fixture");
     expect(
       validateJiraFieldChanges(result.fields, { customfield_9: "value" }, "edit", "data-center"),
-    ).toMatchObject({ ok: false, reason: "unsupported-field" });
+    ).toEqual({ ok: true, fields: { customfield_9: "value" }, update: {} });
+    expect(
+      validateJiraFieldChanges(result.fields, { customfield_9: "value" }, "edit", "cloud"),
+    ).toEqual({ ok: true, fields: { customfield_9: "value" }, update: {} });
+  });
+
+  it.each([
+    { customfield_9: JSON.parse('{"__proto__":{"polluted":true}}') as unknown },
+    { customfield_9: "x".repeat(4097) },
+    { customfield_9: [[[[["too deep"]]]]] },
+    { customfield_9: Array.from({ length: 101 }, (_, index) => index) },
+    { customfield_9: "control\u0000character" },
+    { customfield_9: Number.POSITIVE_INFINITY },
+  ])("bounds an opaque plugin value: %j", (changes) => {
+    const result = parseJiraFieldMetadata([
+      field("customfield_9", "any", { schema: { type: "any", custom: "vendor:link" } }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(validateJiraFieldChanges(result.fields, changes, "edit", "data-center")).toMatchObject({
+      ok: false,
+      reason: "invalid-field",
+      fieldId: "customfield_9",
+    });
+  });
+
+  it("writes a parent issue reference only as one canonical key or id", () => {
+    const result = parseJiraFieldMetadata([
+      field("parent", "issuelink", { schema: { type: "issuelink", system: "parent" } }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(result.fields[0]).toMatchObject({ kind: "issue", operations: ["set"] });
+    const write = (parent: unknown): unknown =>
+      validateJiraFieldChanges(result.fields, { parent }, "edit", "data-center");
+    expect(write("REQ-12")).toMatchObject({ ok: true, fields: { parent: { key: "REQ-12" } } });
+    expect(write({ id: "10001" })).toMatchObject({ ok: true, fields: { parent: { id: "10001" } } });
+    for (const invalid of ["REQ", "12", { key: "REQ-1", id: "1" }, { key: "REQ 1" }])
+      expect(write(invalid)).toMatchObject({ ok: false, reason: "invalid-field" });
+  });
+
+  it("keeps dedicated system fields out of plain field writes", () => {
+    const result = parseJiraFieldMetadata([
+      field("attachment", "array", {
+        schema: { type: "array", items: "attachment", system: "attachment" },
+      }),
+      field("issuelinks", "array", {
+        schema: { type: "array", items: "issuelinks", system: "issuelinks" },
+        operations: ["add"],
+      }),
+      field("timetracking", "timetracking", {
+        schema: { type: "timetracking", system: "timetracking" },
+      }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(result.fields.map((item) => [item.id, item.kind, item.operations])).toEqual([
+      ["attachment", "unsupported", []],
+      ["issuelinks", "unsupported", []],
+      ["timetracking", "opaque", ["set"]],
+    ]);
   });
 
   it.each([
@@ -297,7 +360,8 @@ it("does not parse plugin-specific choice structures for unsupported field kinds
   ]);
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error("Unrelated field lost");
-  expect(result.fields[1]).toMatchObject({ kind: "unsupported", operations: [] });
+  // The plugin value stays opaque: its choice structure is never parsed and only "set" exists.
+  expect(result.fields[1]).toMatchObject({ kind: "opaque", operations: ["set"] });
   expect(result.fields[1]).not.toHaveProperty("allowedValues");
 });
 

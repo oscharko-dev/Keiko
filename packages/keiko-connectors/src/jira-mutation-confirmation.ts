@@ -69,7 +69,32 @@ export function jiraMutationFieldSelection(
     ]),
   ];
 }
-function comparable(field: JiraFieldMetadata, value: unknown): string | undefined {
+/** An issue reference compares by key and, when only an id was written, by id. */
+function issueComparable(value: unknown, expected: unknown): string | undefined {
+  if (value === null) return "null";
+  const raw = asRecord(value);
+  const wanted = asRecord(expected);
+  if (raw === undefined) return undefined;
+  if (wanted?.id !== undefined) return typeof raw.id === "string" ? `id:${raw.id}` : undefined;
+  return typeof raw.key === "string" ? `key:${raw.key.toUpperCase()}` : undefined;
+}
+// Jira reshapes opaque values on read (a sprint id reads back as a sprint object), so only
+// presence is confirmed; Jira's own write validation is authoritative for the content.
+function opaqueComparable(value: unknown): string {
+  return value === null || (Array.isArray(value) && value.length === 0) || value === ""
+    ? "null"
+    : "present";
+}
+function comparable(
+  field: JiraFieldMetadata,
+  value: unknown,
+  expected: unknown = value,
+): string | undefined {
+  if (field.kind === "issue") return issueComparable(value, expected);
+  if (field.kind === "opaque") return opaqueComparable(value);
+  return typedComparable(field, value);
+}
+function typedComparable(field: JiraFieldMetadata, value: unknown): string | undefined {
   const projected = projectJiraFieldReadValue(field, value);
   if (projected.state === "empty") return "null";
   if (projected.state !== "value") return undefined;
@@ -94,7 +119,7 @@ function setsMatch(input: JiraFieldConfirmation, current: Record<string, unknown
     const field = input.metadata.find((value) => value.id === id);
     if (field === undefined || !Object.hasOwn(current, id)) return false;
     const wanted = comparable(field, expected);
-    return wanted !== undefined && comparable(field, current[id]) === wanted;
+    return wanted !== undefined && comparable(field, current[id], expected) === wanted;
   });
 }
 function updatedLabels(values: JiraValidatedMutationFields): ReadonlyMap<string, boolean> {
@@ -133,10 +158,13 @@ function relevantChange(input: JiraFieldConfirmation, current: Record<string, un
       asRecord(prior.fields.status)?.id !== input.targetStatusId &&
       isSafeAtlassianIdentifier(asRecord(prior.fields.status)?.id)
     );
-  const setsChanged = Object.keys(input.values.fields).some((id) => {
+  const setsChanged = Object.entries(input.values.fields).some(([id, expected]) => {
     const field = input.metadata.find((value) => value.id === id);
-    const before = field === undefined ? undefined : comparable(field, prior.fields[id]);
-    return before !== undefined && field !== undefined && before !== comparable(field, current[id]);
+    if (field === undefined) return false;
+    if (field.kind === "opaque")
+      return JSON.stringify(prior.fields[id] ?? null) !== JSON.stringify(current[id] ?? null);
+    const before = comparable(field, prior.fields[id], expected);
+    return before !== undefined && before !== comparable(field, current[id], expected);
   });
   const beforeLabels = labels(prior.fields.labels);
   return (

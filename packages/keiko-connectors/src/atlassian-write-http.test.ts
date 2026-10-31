@@ -92,6 +92,48 @@ describe("executeAtlassianWriteRequest — classification", () => {
     expect(delays).toEqual([]);
   });
 
+  it("returns Jira's own bounded client-error explanation with the closed reason (#4176)", async () => {
+    const body = JSON.stringify({
+      errorMessages: ["Issue does not exist", "  ", 7],
+      errors: {
+        customfield_10105: "Number value expected as the Sprint id.",
+        summary: `bad\u0000value ${"x".repeat(400)}`,
+        "not a field": "dropped",
+      },
+    });
+    const outcome = await executeAtlassianWriteRequest(
+      { http: scriptedPort([response(400, body)]).port },
+      request({ method: "POST" }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      httpStatus: 400,
+      remote: {
+        fieldErrors: [
+          { fieldId: "customfield_10105", message: "Number value expected as the Sprint id." },
+          { fieldId: "summary", message: expect.stringMatching(/^bad value x+…$/u) },
+        ],
+        messages: ["Issue does not exist"],
+      },
+    });
+    if (outcome.ok || outcome.remote?.fieldErrors === undefined) throw new Error("Expected detail");
+    expect(outcome.remote.fieldErrors[1]?.message).toHaveLength(200);
+  });
+
+  it.each([
+    response(400, "not json"),
+    response(400, '{"errors":{}}'),
+    response(400, '{"errorMessages":["x"]}', { truncated: true }),
+    response(503, '{"errorMessages":["server side"]}'),
+  ])("omits an absent, empty, truncated or server-side explanation", async (result) => {
+    const outcome = await executeAtlassianWriteRequest(
+      { http: scriptedPort([result]).port },
+      request(),
+    );
+    expect(outcome).not.toHaveProperty("remote");
+  });
+
   it("classifies transport failures as typed timeout/unavailable", async () => {
     const timeout = await executeAtlassianWriteRequest(
       { http: scriptedPort([{ kind: "timeout" }]).port },

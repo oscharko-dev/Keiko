@@ -42,6 +42,27 @@ const INVALID = { ok: false, reason: "field-validation" } as const;
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+type HttpFailure = Extract<AtlassianWriteHttpOutcome, { ok: false }>;
+/** The dispatch's own refusal, with Jira's explanation when it gave one. */
+function dispatchFailure(response: HttpFailure): Extract<JiraMutationAttempt, { ok: false }> {
+  return {
+    ok: false,
+    reason: response.reason,
+    ...(response.remote === undefined ? {} : { detail: response.remote }),
+  };
+}
+/** Keiko's own pre-dispatch refusal names the field and the closed reason. */
+function validationFailure(
+  result: Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: false }>,
+): Extract<JiraMutationAttempt, { ok: false }> {
+  return {
+    ...INVALID,
+    detail: {
+      validation: result.reason,
+      ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+    },
+  };
+}
 function numericId(value: unknown): value is string {
   return typeof value === "string" && /^\d{1,32}$/u.test(value);
 }
@@ -92,7 +113,7 @@ async function statusMutation(
   body: Readonly<Record<string, unknown>>,
 ): Promise<MutationValidation> {
   const response = await request(path, method, body, "none");
-  if (!response.ok) return response;
+  if (!response.ok) return dispatchFailure(response);
   return response.status === 204 ? { ok: true } : MALFORMED;
 }
 function isCreateRoutingField(id: string): boolean {
@@ -129,12 +150,12 @@ async function createIssue(
     "create",
     "data-center",
   );
-  if (!validated.ok) return INVALID;
+  if (!validated.ok) return validationFailure(validated);
   const response = await request("issue", "POST", {
     fields: validated.fields,
     update: validated.update,
   });
-  if (!response.ok) return response;
+  if (!response.ok) return dispatchFailure(response);
   return confirmCreatedIssue(request, response, metadata.fields, validated);
 }
 function confirmCreatedIssue(
@@ -189,7 +210,7 @@ async function fieldMutation(
     "data-center",
     args.updates ?? [],
   );
-  if (!validated.ok) return INVALID;
+  if (!validated.ok) return validationFailure(validated);
   const transitionId =
     purpose === "transition" && typeof args.transitionId === "string"
       ? args.transitionId
@@ -336,7 +357,7 @@ async function addComment(
   )
     return INVALID;
   const response = await request(`issue/${encodeURIComponent(issueKey)}/comment`, "POST", { body });
-  if (!response.ok) return response;
+  if (!response.ok) return dispatchFailure(response);
   const id = response.body?.id;
   return response.status === 201 && numericId(id)
     ? confirmJiraComment(request, issueKey, id, body)
