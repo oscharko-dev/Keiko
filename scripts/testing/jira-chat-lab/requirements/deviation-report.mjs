@@ -118,7 +118,7 @@ const FINE_RE = new RegExp(FINE, "iu");
  * Whether a clause denies a deviation instead of describing one. "Nicht korrekt" and "is not
  * compliant" describe a deviation; a fine-claim that no negator in reach flips is a denial.
  */
-export function deniesDeviation(clause) {
+function deniesDeviation(clause) {
   if (NOTHING_FOUND_RE.test(clause)) return true;
   return FINE_RE.test(clause.replaceAll(NEGATED_FINE, " "));
 }

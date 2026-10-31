@@ -22,6 +22,7 @@ import {
   activityErrorFields,
   activityStateLevel,
   definedActivityFields,
+  type ActivityActionLine,
 } from "../activity-line-fields.js";
 
 /**
@@ -258,18 +259,17 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
-export interface CodingJiraPodLine {
-  readonly action: (typeof JIRA_POD_ACTIONS)[number];
-  readonly outcome: (typeof JIRA_POD_OUTCOMES)[number];
-  readonly reason?: (typeof JIRA_POD_REASONS)[number] | undefined;
+export interface CodingJiraPodLine extends ActivityActionLine<
+  (typeof JIRA_POD_ACTIONS)[number],
+  (typeof JIRA_POD_OUTCOMES)[number],
+  (typeof JIRA_POD_REASONS)[number]
+> {
   readonly tool?: CodingJiraTool | undefined;
   readonly risk?: McpToolRisk | undefined;
   readonly toolCount?: number | undefined;
   readonly linkRequestedCount?: number | undefined;
   readonly linkCreatedCount?: number | undefined;
   readonly linkFailedCount?: number | undefined;
-  readonly durationMs?: number | undefined;
-  readonly error?: unknown;
 }
 
 /** Closed values and counts only: never a Pod id or name, a URL, an issue key or any text. */

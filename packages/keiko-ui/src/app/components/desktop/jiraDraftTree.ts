@@ -4,7 +4,7 @@
 // Everything shown is read from the exact request the human approves: target project and issue
 // type, the relation field and every field value, so two drafts that differ anywhere differ here.
 
-export interface JiraDraftTreeLink {
+interface JiraDraftTreeLink {
   readonly type: string;
   readonly direction: "inward" | "outward";
   /** Another draft item's ref, or an existing issue key. */
@@ -16,11 +16,11 @@ export type JiraDraftValue =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "list"; readonly items: readonly JiraDraftListEntry[] };
 /** A list entry keeps its 1-based place in the request, which is also its stable key. */
-export interface JiraDraftListEntry {
+interface JiraDraftListEntry {
   readonly position: number;
   readonly value: JiraDraftValue;
 }
-export interface JiraDraftField {
+interface JiraDraftField {
   readonly id: string;
   readonly value: JiraDraftValue;
 }

@@ -1,38 +1,30 @@
 // Minimal deterministic ZIP writer for hand-written OOXML packages (epic #4173, #4174).
 // Fixed DOS timestamp and a fixed entry order make the bytes reproducible.
 import { Buffer } from "node:buffer";
-import { deflateRawSync } from "node:zlib";
+import { crc32, deflateRawSync } from "node:zlib";
 
 const DOS_TIME = 0;
 const DOS_DATE = (0 << 9) | (1 << 5) | 1; // 1980-01-01
 const UTF8_FLAG = 0x0800;
 const METHOD_DEFLATE = 8;
 
-const CRC_TABLE = new Uint32Array(256).map((_, index) => {
-  let value = index;
-  for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-  return value >>> 0;
-});
-
-/** CRC-32 (IEEE 802.3) of a buffer. */
-export function crc32(buffer) {
-  let crc = 0xffffffff;
-  for (const byte of buffer) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  return (crc ^ 0xffffffff) >>> 0;
+/** The fields a local and a central header share, written from the general-purpose flag on. */
+function writeEntryFields(header, entry, at) {
+  header.writeUInt16LE(UTF8_FLAG, at);
+  header.writeUInt16LE(METHOD_DEFLATE, at + 2);
+  header.writeUInt16LE(DOS_TIME, at + 4);
+  header.writeUInt16LE(DOS_DATE, at + 6);
+  header.writeUInt32LE(entry.crc, at + 8);
+  header.writeUInt32LE(entry.packed.length, at + 12);
+  header.writeUInt32LE(entry.size, at + 16);
+  header.writeUInt16LE(entry.name.length, at + 20);
 }
 
 function localHeader(entry) {
   const header = Buffer.alloc(30);
   header.writeUInt32LE(0x04034b50, 0);
   header.writeUInt16LE(20, 4);
-  header.writeUInt16LE(UTF8_FLAG, 6);
-  header.writeUInt16LE(METHOD_DEFLATE, 8);
-  header.writeUInt16LE(DOS_TIME, 10);
-  header.writeUInt16LE(DOS_DATE, 12);
-  header.writeUInt32LE(entry.crc, 14);
-  header.writeUInt32LE(entry.packed.length, 18);
-  header.writeUInt32LE(entry.size, 22);
-  header.writeUInt16LE(entry.name.length, 26);
+  writeEntryFields(header, entry, 6);
   return header;
 }
 
@@ -41,14 +33,7 @@ function centralHeader(entry) {
   header.writeUInt32LE(0x02014b50, 0);
   header.writeUInt16LE(20, 4);
   header.writeUInt16LE(20, 6);
-  header.writeUInt16LE(UTF8_FLAG, 8);
-  header.writeUInt16LE(METHOD_DEFLATE, 10);
-  header.writeUInt16LE(DOS_TIME, 12);
-  header.writeUInt16LE(DOS_DATE, 14);
-  header.writeUInt32LE(entry.crc, 16);
-  header.writeUInt32LE(entry.packed.length, 20);
-  header.writeUInt32LE(entry.size, 24);
-  header.writeUInt16LE(entry.name.length, 28);
+  writeEntryFields(header, entry, 8);
   header.writeUInt32LE(entry.offset, 42);
   return header;
 }

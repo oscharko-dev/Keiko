@@ -9,6 +9,18 @@ export interface ActivityStateLine {
   readonly error?: unknown;
 }
 
+/** A state line that names its closed action and reason and may carry its duration. */
+export interface ActivityActionLine<
+  Action extends string,
+  Outcome extends string,
+  Reason extends string,
+> extends ActivityStateLine {
+  readonly action: Action;
+  readonly outcome: Outcome;
+  readonly reason?: Reason | undefined;
+  readonly durationMs?: number | undefined;
+}
+
 /** A refusal or failure is a warning; a failure is also an internal error. */
 export function activityStateLevel(outcome: string): {
   readonly level?: "warn";

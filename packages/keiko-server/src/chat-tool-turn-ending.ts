@@ -157,6 +157,8 @@ export function chatToolTurnPartialAnswer(
   ].join("\n");
 }
 
+const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+
 const TURN_ENDED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -167,13 +169,13 @@ const TURN_ENDED = defineActivityLogOperation({
   fields: {
     messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     reason: { type: "string", dataClass: "closed-enum", required: true, values: REASONS },
-    exchangeCount: { type: "integer", dataClass: "count", required: true },
-    succeededWriteCount: { type: "integer", dataClass: "count", required: true },
-    unconfirmedWriteCount: { type: "integer", dataClass: "count", required: true },
-    unsettledCount: { type: "integer", dataClass: "count", required: true },
-    readCount: { type: "integer", dataClass: "count", required: true },
-    refusedCount: { type: "integer", dataClass: "count", required: true },
-    maxToolCalls: { type: "integer", dataClass: "count", required: true },
+    exchangeCount: COUNT_FIELD,
+    succeededWriteCount: COUNT_FIELD,
+    unconfirmedWriteCount: COUNT_FIELD,
+    unsettledCount: COUNT_FIELD,
+    readCount: COUNT_FIELD,
+    refusedCount: COUNT_FIELD,
+    maxToolCalls: COUNT_FIELD,
     maxRuntimeMs: { type: "integer", dataClass: "duration", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },

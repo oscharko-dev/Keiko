@@ -6,14 +6,12 @@ import {
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
-import type {
-  JiraFieldCatalogEntry,
-  JiraTemplateInstanceMetadata,
-} from "./jira-issue-template-check.js";
+import type { JiraTemplateInstanceMetadata } from "./jira-issue-template-check.js";
 import {
   jiraCreateMutationMetadata,
   type JiraMutationRequest,
 } from "./jira-managed-mutation-metadata.js";
+import { readJiraFieldCatalog } from "./jira-managed-template-gate.js";
 
 /**
  * Read-only instance facts for the Jira Pod template settings (#4177): what a template is
@@ -25,7 +23,6 @@ export type JiraTemplateInstanceRead<T> =
   | { readonly ok: false; readonly reason: AtlassianConnectorWriteFailureReason };
 
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
-const FIELD_LIST_MAX = 5000;
 const SAMPLE_SIZE = 25;
 const ISSUE_TYPES_MAX = 12;
 const SECTIONS_MAX = 8;
@@ -73,20 +70,6 @@ async function readProject(
   }
   const project = projectFacts(response.body);
   return project === undefined ? MALFORMED : { ok: true, project };
-}
-
-async function readFieldCatalog(
-  request: JiraMutationRequest,
-): Promise<readonly JiraFieldCatalogEntry[] | undefined> {
-  const response = await request("field", "GET", undefined, "json-array");
-  const items = response.ok ? response.items : undefined;
-  if (items === undefined || items.length > FIELD_LIST_MAX) return undefined;
-  return items.flatMap((item): readonly JiraFieldCatalogEntry[] => {
-    const record = asRecord(item);
-    return typeof record?.id === "string" && typeof record.name === "string"
-      ? [{ id: record.id, name: record.name }]
-      : [];
-  });
 }
 
 async function readLinkTypes(
@@ -151,7 +134,7 @@ export async function readJiraTemplateInstanceMetadata(
   const read = await readProject(request, template.project);
   if (!read.ok) return read;
   const { project } = read;
-  const fields = await readFieldCatalog(request);
+  const fields = await readJiraFieldCatalog(request);
   const linkTypes = await readLinkTypes(request);
   const statuses =
     project === undefined ? undefined : await readStatuses(request, template, project);

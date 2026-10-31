@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1286381815ebe02331a89bf66dc27888d1637aabd7f3ca0337e5ab355c5779ab",
+    "catalogDigest": "41477824900a5ac3d3ed0eec3ec32b7421a31d6a50200d84e8a0b3c23d56f0d1",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3058,8 +3058,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.context-fitted.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:227",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:261"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:229",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:263"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3146,8 +3146,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.ended.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:160",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:203"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:162",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:205"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10066,7 +10066,7 @@
         "failureClasses": ["coding-runtime-jira-pod"],
         "proofIds": ["coding-runtime.jira-pod.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:178",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:179",
         "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:282"]
       },
       {
@@ -10456,7 +10456,7 @@
         "failureClasses": ["coding-runtime-mcp-relay"],
         "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:203",
+        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:204",
         "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:275"]
       },
       {
@@ -106095,13 +106095,13 @@
     {
       "op": "chat.tool-turn.context-fitted",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:230",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:232",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.ended",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:163",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:165",
       "package": "keiko-server"
     },
     {
@@ -106717,7 +106717,7 @@
     {
       "op": "coding-runtime.jira-pod",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:181",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:182",
       "package": "keiko-server"
     },
     {
@@ -106741,7 +106741,7 @@
     {
       "op": "coding-runtime.mcp-relay",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:206",
+      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:207",
       "package": "keiko-server"
     },
     {

@@ -18,7 +18,7 @@ function remainingSeconds(license) {
 }
 
 /** Remaining license seconds; 0 while Jira is unreachable or starting (fetch rejects as TypeError). */
-export async function licenseRemainingSeconds(session) {
+async function licenseRemainingSeconds(session) {
   try {
     const result = await labRequest(
       session,

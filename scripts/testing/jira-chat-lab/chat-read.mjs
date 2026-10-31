@@ -98,7 +98,9 @@ function failedStage(name, status, failure) {
 }
 // A buffered Chat turn sends its response headers only when the turn ends. Global fetch gives up
 // on headers after five minutes, which is shorter than an accepted turn's Authority Envelope
-// (#4175), so loopback JSON requests use node:http without a response timeout.
+// (#4175), so loopback JSON requests use node:http without a response timeout. A global fetch the
+// caller replaced (instrumentation or a test transport) is honoured as given.
+const NATIVE_FETCH = globalThis.fetch;
 function loopbackJson(origin, cookie, path, body, method, signal) {
   const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
@@ -132,7 +134,7 @@ function loopbackJson(origin, cookie, path, body, method, signal) {
   });
 }
 export async function jsonRequest(origin, cookie, name, path, body, method = "POST", signal) {
-  if (!origin.startsWith("http:"))
+  if (!origin.startsWith("http:") || globalThis.fetch !== NATIVE_FETCH)
     return (await request(origin, cookie, name, path, body, method, signal)).json();
   const { status, text } = await loopbackJson(origin, cookie, path, body, method, signal);
   const ok = status >= 200 && status < 300;

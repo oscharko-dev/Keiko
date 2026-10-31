@@ -83,7 +83,7 @@ const isRecord = (value) => typeof value === "object" && value !== null && !Arra
  * as the turn's issue. uncertain, failed, skipped and excluded items name no issue and count for
  * nothing.
  */
-export function draftReportedKeys(exchanges) {
+function draftReportedKeys(exchanges) {
   const draftResults = (Array.isArray(exchanges) ? exchanges : []).filter((exchange) =>
     completedToolExchange(exchange, "jira.draft"),
   );

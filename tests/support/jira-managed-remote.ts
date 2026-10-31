@@ -81,7 +81,7 @@ function fixtureLabelUpdates(mutation: Record<string, unknown>, state: Synthetic
 }
 type LinkOperations = { issuelinks?: { add: Record<string, unknown> }[] } | undefined;
 /** The synthetic issue every fixture request is about. */
-export const SYNTHETIC_ISSUE_KEY = "SYN-1";
+const SYNTHETIC_ISSUE_KEY = "SYN-1";
 /**
  * Jira Data Center and Cloud both take ONE `issuelinks` operation per create/edit request (the
  * unresolved JRASERVER-66329); a lab Data Center 10.3 answers HTTP 400 with this message. The

@@ -222,7 +222,8 @@ function references(templates: readonly JiraIssueTemplate[]): readonly string[] 
   ]);
 }
 
-async function instanceCatalog(
+/** The instance field list (`GET field`), or nothing when it is unreadable or over its bound. */
+export async function readJiraFieldCatalog(
   request: JiraMutationRequest,
 ): Promise<readonly JiraFieldCatalogEntry[] | undefined> {
   const response = await request("field", "GET", undefined, "json-array");
@@ -246,7 +247,7 @@ async function completeCatalog(
     (reference) => resolveJiraTemplateFieldIds(reference, local).length === 0,
   );
   if (!unresolved) return local;
-  const remote = await instanceCatalog(input.request);
+  const remote = await readJiraFieldCatalog(input.request);
   return remote === undefined ? local : [...local, ...remote];
 }
 
