@@ -5,7 +5,7 @@
 // (newlines are escaped as `\n`), so a single `data:` line is always valid — no regex, no manual
 // escaping. A synthetic `ready` message is sent after the buffered replay.
 
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { StreamEvent } from "./sink.js";
 import type { Redactor } from "./deps.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
@@ -129,6 +129,59 @@ export function openPlainNamespacedSseStream(
     onBackpressure,
     correlationId,
   );
+}
+
+/** The runner subscription a plain namespaced stream reads its events from. */
+export interface PlainNamespacedSubscriber {
+  subscribe(listener: (event: { readonly kind: string }) => void): () => void;
+}
+
+/** Opens one runner's plain namespaced stream on `res`, with an optional stalled-reader observer. */
+export type PlainNamespacedStreamOpener = (
+  res: ServerResponse,
+  manager: PlainNamespacedSubscriber,
+  redactor: Redactor,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
+) => void;
+
+// GEN-PERF-FANOUT-001: the stream redacts and serializes each event once across all subscribers;
+// only the per-connection `id:` cursor differs between them. Production passes no observer; unit
+// tests pass one, which runs once after the canonical no-drain deadline, before the controller
+// aborts and the socket is destroyed.
+export function plainNamespacedStreamOpener(
+  namespace: "command" | "verification" | "container",
+): PlainNamespacedStreamOpener {
+  return (res, manager, redactor, onBackpressure, correlationId): void => {
+    openPlainNamespacedSseStream(
+      res,
+      namespace,
+      redactor,
+      (listener) => manager.subscribe(listener),
+      onBackpressure,
+      correlationId,
+    );
+  };
+}
+
+/**
+ * Opens a runner's plain namespaced stream on a route's response and ends the response when the
+ * request closes.
+ */
+export function openPlainNamespacedRouteStream(
+  ctx: {
+    readonly req: IncomingMessage;
+    readonly res: ServerResponse;
+    readonly correlationId?: string | undefined;
+  },
+  open: PlainNamespacedStreamOpener,
+  manager: PlainNamespacedSubscriber,
+  redactor: Redactor,
+): void {
+  open(ctx.res, manager, redactor, undefined, ctx.correlationId);
+  ctx.req.on("close", () => {
+    ctx.res.end();
+  });
 }
 
 // The synthetic message sent once the buffered replay completes, signalling the client that it is
