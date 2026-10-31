@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
   GENERIC_TOOL_ARGUMENT_LIMITS,
@@ -14,6 +13,13 @@ import { GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES } from "@oscharko-dev/keiko-
 /** A whole native tool advertisement is captured with its own budget, never a call's (#3897). */
 const MAX_ADVERTISEMENT_COPY_BYTES = GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES;
 
+const ENCODER = new TextEncoder();
+const NON_ASCII = /\P{ASCII}/u;
+
+function utf8Bytes(text: string): number {
+  return NON_ASCII.test(text) ? ENCODER.encode(text).length : text.length;
+}
+
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 interface CopyBudget {
   readonly maxBytes: number;
@@ -24,11 +30,11 @@ interface CopyBudget {
 }
 
 export function catalogBytes(value: CatalogJsonValue): number {
-  return Buffer.byteLength(JSON.stringify(value), "utf8");
+  return utf8Bytes(JSON.stringify(value));
 }
 
 function charge(budget: CopyBudget, text: string): void {
-  budget.bytes += Buffer.byteLength(text, "utf8");
+  budget.bytes += utf8Bytes(text);
   requireCatalog(budget.bytes <= budget.maxBytes, "input-bound");
 }
 
@@ -42,7 +48,7 @@ function scalar(value: unknown, budget: CopyBudget): CatalogJsonValue {
   );
   if (typeof value === "number") requireCatalog(Number.isFinite(value), "invalid-shape");
   if (typeof value === "string")
-    requireCatalog(Buffer.byteLength(value, "utf8") <= budget.maxStringBytes, "input-bound");
+    requireCatalog(utf8Bytes(value) <= budget.maxStringBytes, "input-bound");
   const result = value;
   charge(budget, JSON.stringify(result));
   return result;
