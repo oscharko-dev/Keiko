@@ -255,6 +255,59 @@ function fixture(
     writes: () => writes,
   };
 }
+// #4175: a turn that reaches its deadline after settling tool calls answers from its transcript on
+// the buffered and the streamed path; the deadline admits no further model or tool work.
+function stallAfterFirstRound(f: ReturnType<typeof fixture>): void {
+  const original = f.model.callStream;
+  if (original === undefined) throw new Error("Missing stream port");
+  let rounds = 0;
+  const stalled = (signal: AbortSignal): AsyncIterable<GatewayStreamChunk> => ({
+    async *[Symbol.asyncIterator](): AsyncIterator<GatewayStreamChunk> {
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+        });
+      });
+      yield* [];
+    },
+  });
+  const callStream: NonNullable<ModelPort["callStream"]> = (request, signal) => {
+    rounds++;
+    return rounds === 1 ? original(request, signal) : stalled(signal);
+  };
+  Object.assign(f.model, {
+    callStream,
+    call: async (request: GatewayCallRequest, signal: AbortSignal): Promise<NormalizedResponse> => {
+      for await (const chunk of callStream(request, signal))
+        if (chunk.type === "done") return chunk.response;
+      throw new Error("Missing done chunk");
+    },
+  });
+}
+it.each([false, true])(
+  "delivers the transcript answer when the turn reaches its deadline (stream=%s)",
+  async (stream) => {
+    const f = fixture(false, undefined, true, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 1_500 } });
+    stallAfterFirstRound(f);
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `deadline-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    const result = await pending;
+    expect(f.requests()).toBe(1);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.toolTranscript?.exchanges).toHaveLength(1);
+    expect(assistant?.content).toContain("this turn reached its time limit");
+    expect(assistant?.content).toContain("Reads completed: 1.");
+    if (stream) expect(response.body()).toContain("event: done");
+    else expect(result).toMatchObject({ status: 200 });
+  },
+);
+
 function send(
   f: ReturnType<typeof fixture>,
   clientTurnId: string,

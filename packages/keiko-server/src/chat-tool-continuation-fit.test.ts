@@ -67,6 +67,37 @@ describe("fitToolContinuation", () => {
     expect(fitted.messages.filter((message) => message.role === "assistant")).toHaveLength(4);
   });
 
+  it("keeps every backlog draft item's key and state when the draft result is compacted", () => {
+    const draft = exchange(
+      5,
+      {
+        status: "completed",
+        data: {
+          outcome: "succeeded",
+          items: [
+            { ref: "epic", state: "created", issueKey: "REQ-21", summary: BULK },
+            { ref: "story", state: "existing", issueKey: "REQ-22" },
+            { ref: "task", state: "uncertain" },
+            { ref: "bad", state: "invented", issueKey: "REQ-23" },
+          ],
+        },
+      },
+      "succeeded",
+    );
+    const exchanges = [draft, EXCHANGES[3] as ChatToolExchange];
+    const fitted = fitToolContinuation(continuationOf(exchanges), exchanges, 0);
+    expect(JSON.parse(fitted.messages[1]?.content ?? "")).toEqual({
+      elided: true,
+      status: "completed",
+      mutationOutcome: "succeeded",
+      items: [
+        { state: "created", issueKey: "REQ-21" },
+        { state: "existing", issueKey: "REQ-22" },
+        { state: "uncertain" },
+      ],
+    });
+  });
+
   it("drops untrusted values that are not closed identifiers", () => {
     const hostile = [
       exchange(1, {

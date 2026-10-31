@@ -66,6 +66,18 @@ describe("chatToolTurnEndReason", () => {
     expect(chatToolTurnEndReason(new Error("unexpected"))).toBeUndefined();
     expect(chatToolTurnEndReason("text")).toBeUndefined();
   });
+
+  it("summarizes an attempt refusal only when the turn's own envelope refused it", () => {
+    const refusal = new CallerAttemptAdmissionError("cap");
+    expect(chatToolTurnEndReason(refusal, { envelopeRefusedAttempt: true })).toBe(
+      "budget-exhausted",
+    );
+    expect(chatToolTurnEndReason(refusal, { envelopeRefusedAttempt: false })).toBeUndefined();
+    // A human stop is never replaced, whatever the envelope did.
+    expect(
+      chatToolTurnEndReason(new CancelledError("stopped"), { envelopeRefusedAttempt: true }),
+    ).toBeUndefined();
+  });
 });
 
 describe("chatToolTurnPartialAnswer", () => {
@@ -82,6 +94,37 @@ describe("chatToolTurnPartialAnswer", () => {
     // A key that is not a Jira issue key is never repeated into the answer.
     expect(answer).toContain("- jira_comment\n");
     expect(answer).not.toContain("Ignore this");
+  });
+
+  it("lists each backlog draft item's key and keeps uncertain items apart", () => {
+    const draft = exchange(
+      "jira_draft",
+      {
+        outcome: "unknown",
+        items: [
+          { ref: "epic", state: "created", issueKey: "REQ-21" },
+          { ref: "story", state: "existing", issueKey: "REQ-22" },
+          { ref: "task", state: "uncertain" },
+          { ref: "bug", state: "skipped" },
+        ],
+      },
+      "unknown",
+    );
+    const answer = chatToolTurnPartialAnswer([draft], "deadline");
+    expect(answer).toContain(
+      "Completed in this turn:\n- jira_draft REQ-21 (created)\n- jira_draft REQ-22 (existing)",
+    );
+    expect(answer).toContain(
+      "check these in Jira before retrying:\n- jira_draft (no key) (uncertain)",
+    );
+  });
+
+  it("counts a read whose result lists items as a read, not as a draft", () => {
+    const answer = chatToolTurnPartialAnswer(
+      [exchange("jira_projects", { items: [{ key: "REQ", name: "Requirements" }] })],
+      "deadline",
+    );
+    expect(answer).toContain("Reads completed: 1. Refused or failed tool calls: 0.");
   });
 
   it("omits empty sections", () => {

@@ -8,6 +8,7 @@ import { ERROR_CODES, GatewayError } from "@oscharko-dev/keiko-model-gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "./observability/index.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
+import { chatToolDraftReceipts, chatToolIssueKey } from "./chat-tool-receipts.js";
 
 /**
  * How an accepted Chat tool turn ended before the model gave its own answer (#4175). The answer
@@ -57,12 +58,20 @@ const KEPT_GATEWAY_CODES: ReadonlySet<string> = new Set([
   ERROR_CODES.CANCELLED,
   ERROR_CODES.ATTEMPT_ADMISSION_DENIED,
 ]);
-/** Undefined when the failure is not one a partial answer may replace (for example a human stop). */
-export function chatToolTurnEndReason(error: unknown): ChatToolTurnEndReason | undefined {
+/**
+ * Undefined when the failure is not one a partial answer may replace (for example a human stop).
+ * An attempt refusal is the turn's own budget end only when its envelope refused the attempt; a
+ * cap the caller supplied keeps the 403 contract.
+ */
+export function chatToolTurnEndReason(
+  error: unknown,
+  turn: { readonly envelopeRefusedAttempt?: boolean } = {},
+): ChatToolTurnEndReason | undefined {
   if (error instanceof CatalogDispatchFault) return dispatchReason(error);
-  if (error instanceof GatewayError && !KEPT_GATEWAY_CODES.has(error.code))
-    return gatewayReason(error);
-  return undefined;
+  if (!(error instanceof GatewayError)) return undefined;
+  if (error.code === ERROR_CODES.ATTEMPT_ADMISSION_DENIED && turn.envelopeRefusedAttempt === true)
+    return "budget-exhausted";
+  return KEPT_GATEWAY_CODES.has(error.code) ? undefined : gatewayReason(error);
 }
 
 interface Tally {
@@ -73,20 +82,25 @@ interface Tally {
   reads: number;
   refused: number;
 }
-const ISSUE_KEY = /^[A-Z][A-Z0-9_]{0,254}-[1-9]\d{0,17}$/u;
 function receipt(exchange: ChatToolExchange): string {
-  const data = exchange.result?.data;
-  const key =
-    typeof data === "object" && data !== null && !Array.isArray(data)
-      ? (data as Readonly<Record<string, unknown>>).issueKey
-      : undefined;
-  return typeof key === "string" && ISSUE_KEY.test(key)
-    ? `${exchange.call.name} ${key}`
-    : exchange.call.name;
+  const key = chatToolIssueKey(exchange.result?.data);
+  return key === undefined ? exchange.call.name : `${exchange.call.name} ${key}`;
+}
+/** A backlog draft reports each item: created or reconciled items completed, uncertain ones sent. */
+function countDraft(result: Tally, exchange: ChatToolExchange): boolean {
+  const items = chatToolDraftReceipts(exchange.result?.data);
+  if (items === undefined) return false;
+  for (const item of items) {
+    const label = `${exchange.call.name} ${item.issueKey ?? "(no key)"} (${item.state})`;
+    if (item.state === "created" || item.state === "existing") result.succeeded.push(label);
+    else if (item.state === "uncertain") result.unconfirmed.push(label);
+  }
+  return true;
 }
 function count(result: Tally, exchange: ChatToolExchange): void {
   const outcome = exchange.mutationOutcome;
   if (exchange.result === undefined) result.unsettled.push(exchange.call.name);
+  else if (countDraft(result, exchange)) return;
   else if (outcome === "succeeded") result.succeeded.push(receipt(exchange));
   else if (outcome === "succeeded-unconfirmed" || outcome === "unknown")
     result.unconfirmed.push(receipt(exchange));

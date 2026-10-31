@@ -268,9 +268,13 @@ another model failure), its answer is built from the stored transcript, not from
 the acknowledged writes with their issue keys, unconfirmed writes separately, calls that started
 but never settled (one may have reached Jira before bookkeeping failed), and the counts of reads and
 refused calls; a human stop is not replaced. `chat.tool-turn.ended` records the closed reason, those
-counts (including `unsettledCount`) and the envelope bounds. Older tool results in the copy sent to the model are
+counts (including `unsettledCount`) and the envelope bounds. A backlog draft contributes each
+item's key and state. An attempt refusal by the turn's own envelope (for example its cumulative
+prompt tokens) ends the turn as `budget-exhausted` with that answer; a cap the caller supplied keeps
+its nonretryable 403. A deadline answer is delivered on the streamed path too: it is already built
+from the stored transcript and admits no further tool or model work. Older tool results in the copy sent to the model are
 compacted, oldest first and never the newest, to a closed record (status, reason, mutation outcome,
-issue key) when the continuation would exceed its share of the model window;
+issue key, and each draft item's key and state) when the continuation would exceed its share of the model window;
 `chat.tool-turn.context-fitted` records the count. The stored transcript is unchanged. A dispatch
 fault on the grounded route maps to the same closed response as the desktop route. A deterministic identity derived from the stored Chat/message pair makes duplicate minting
 idempotent, with the registry refusing any changed envelope under that identity. The stored human

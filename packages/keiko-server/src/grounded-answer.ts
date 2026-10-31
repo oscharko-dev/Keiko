@@ -43,10 +43,23 @@ export interface GroundedSynthesisCallBudget {
   readonly tryReserve: () => boolean;
   readonly pendingUsage: () => GroundedAnswerUsage;
   readonly recordUsage: (usage: GroundedAnswerUsage) => void;
+  /**
+   * A confirmed Jira/MCP tool round is orchestration of the Chat tool turn (#4175): its usage stays
+   * in the reported total but leaves the synthesis grant, because the turn's Authority Envelope
+   * already charges and bounds every tool round.
+   */
+  readonly recordToolRoundUsage: (usage: GroundedAnswerUsage) => void;
   readonly takeUsage: () => GroundedAnswerUsage;
   readonly releaseReservation: () => void;
   readonly reservedOutputTokens: () => number;
   readonly recordOutputReservation: (tokens: number) => void;
+}
+
+function addUsage(left: GroundedAnswerUsage, right: GroundedAnswerUsage): GroundedAnswerUsage {
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+  };
 }
 
 export function createGroundedSynthesisCallBudget(): GroundedSynthesisCallBudget {
@@ -54,6 +67,7 @@ export function createGroundedSynthesisCallBudget(): GroundedSynthesisCallBudget
   let completed = 0;
   let reservedOutput = 0;
   let usage: GroundedAnswerUsage = { promptTokens: 0, completionTokens: 0 };
+  let toolRounds: GroundedAnswerUsage = { promptTokens: 0, completionTokens: 0 };
   return {
     completed: (): number => completed,
     recordCompleted(): void {
@@ -72,16 +86,20 @@ export function createGroundedSynthesisCallBudget(): GroundedSynthesisCallBudget
       calls += 1;
       return true;
     },
-    pendingUsage: (): GroundedAnswerUsage => ({ ...usage }),
+    pendingUsage: (): GroundedAnswerUsage => ({
+      promptTokens: Math.max(0, usage.promptTokens - toolRounds.promptTokens),
+      completionTokens: Math.max(0, usage.completionTokens - toolRounds.completionTokens),
+    }),
     recordUsage(next): void {
-      usage = {
-        promptTokens: usage.promptTokens + next.promptTokens,
-        completionTokens: usage.completionTokens + next.completionTokens,
-      };
+      usage = addUsage(usage, next);
+    },
+    recordToolRoundUsage(next): void {
+      toolRounds = addUsage(toolRounds, next);
     },
     takeUsage(): GroundedAnswerUsage {
       const pending = usage;
       usage = { promptTokens: 0, completionTokens: 0 };
+      toolRounds = { promptTokens: 0, completionTokens: 0 };
       return pending;
     },
   };
@@ -206,30 +224,30 @@ function synthesisAttemptReservation(
   confirmToolRound(): boolean;
 } {
   let settled = false;
-  let observed = false;
+  let observed: GroundedAnswerUsage | undefined;
   return {
     maxOutputTokens,
     confirmToolRound(): boolean {
-      if (!observed) return false;
-      observed = false;
+      if (observed === undefined) return false;
+      budget.recordToolRoundUsage(observed);
+      observed = undefined;
       budget.releaseReservation();
       return true;
     },
     settle(reported, dispatched, outputState = "observed"): void {
       if (settled) return;
       settled = true;
-      observed = dispatched && outputState === "observed";
       if (dispatched && outputState === "unknown") budget.recordOutputReservation(maxOutputTokens);
-      if (dispatched)
-        budget.recordUsage(
-          groundedSynthesisAttemptUsage(
-            promptTokens,
-            outputState === "unknown"
-              ? { ...reported, completionTokens: maxOutputTokens }
-              : reported,
-          ),
-        );
-      else budget.releaseReservation();
+      if (!dispatched) {
+        budget.releaseReservation();
+        return;
+      }
+      const usage = groundedSynthesisAttemptUsage(
+        promptTokens,
+        outputState === "unknown" ? { ...reported, completionTokens: maxOutputTokens } : reported,
+      );
+      budget.recordUsage(usage);
+      if (outputState === "observed") observed = usage;
     },
   };
 }

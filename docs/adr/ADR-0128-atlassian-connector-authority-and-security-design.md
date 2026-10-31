@@ -620,7 +620,8 @@ action digest, arguments and current subject generations; the mutation journal c
 once at actual mutation dispatch, after metadata reads. Every mode still needs first-read consent,
 including the metadata reads required to prepare a mutation. Mixed Data-Pod/Jira turns preserve
 existing grounding citations and attribute Jira results separately; their orchestration phases share
-the original turn budgets.
+the accepted turn's Authority Envelope, while the grounded answer keeps its own synthesis grant
+(ADR-0181, amended for #4175).
 
 ### D5 — Sync bounds and lifecycle
 

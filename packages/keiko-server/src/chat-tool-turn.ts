@@ -117,6 +117,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private readonly callIds = new Set<string>();
   private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
   private uncertainBudget = false;
+  /** The turn's own envelope refused a model attempt; the caller's caps are not this turn's. */
+  private envelopeRefusedAttempt = false;
+  /** The transcript-built answer of a turn that ended early; it may outlive the turn's signal. */
+  private endedAnswer: NormalizedResponse | undefined;
   private readonly abortController = new AbortController();
   private promptTokens = 0;
   private completionTokens = 0;
@@ -226,8 +230,13 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       );
   }
   private readonly admitAttempt: ModelAttempt = ({ promptTokens }) => {
-    if (this.counters.modelCalls >= this.limits.maxModelCalls || !this.reservePrompt(promptTokens))
+    if (
+      this.counters.modelCalls >= this.limits.maxModelCalls ||
+      !this.reservePrompt(promptTokens)
+    ) {
+      this.envelopeRefusedAttempt = true;
       return undefined;
+    }
     this.counters.modelCalls++;
     let settled = false;
     return {
@@ -390,7 +399,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       request,
       signal,
     );
-    requireDispatch(!signal.aborted && !this.context.signal.aborted, "denied", "authority-invalid");
+    // A deadline answer is already built from the stored transcript and admits no further work.
+    requireDispatch(
+      response === this.endedAnswer || (!signal.aborted && !this.context.signal.aborted),
+      "denied",
+      "authority-invalid",
+    );
     if (response.content.length > 0) yield { type: "delta", token: response.content };
     yield { type: "done", response };
   }
@@ -456,7 +470,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const { deps, message, correlationId, budget } = this.options;
     const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
-    const reason = expired ? "deadline" : chatToolTurnEndReason(error);
+    const reason = expired
+      ? "deadline"
+      : chatToolTurnEndReason(error, { envelopeRefusedAttempt: this.envelopeRefusedAttempt });
     // Unsettled calls stay in the answer: one may have reached Jira before bookkeeping failed.
     const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
     const settled = exchanges.some((exchange) => exchange.result !== undefined);
@@ -468,7 +484,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       exchanges,
       budget,
     });
-    return {
+    this.endedAnswer = {
       modelId,
       content: chatToolTurnPartialAnswer(exchanges, reason),
       finishReason: "stop",
@@ -482,6 +498,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         costClass: "low",
       },
     };
+    return this.endedAnswer;
+  }
+
+  /** True once the turn answered from its transcript; callers must deliver, not cancel, it. */
+  public get endedEarly(): boolean {
+    return this.endedAnswer !== undefined;
   }
 
   private roundRequest(
@@ -572,7 +594,14 @@ async function collectToolRound(
 /** Consumer-facing turn operations, independent of a provider adapter's private fields. */
 export type ChatToolTurnPort = Pick<
   ChatToolTurn,
-  "onTranscript" | "hasUsableObservation" | "meter" | "stream" | "call" | "signal" | "deadlineAtMs"
+  | "onTranscript"
+  | "hasUsableObservation"
+  | "meter"
+  | "stream"
+  | "call"
+  | "signal"
+  | "deadlineAtMs"
+  | "endedEarly"
 >;
 
 /** Source-specific authority adapters use the same catalog/log/budget and invocation registry wiring. */

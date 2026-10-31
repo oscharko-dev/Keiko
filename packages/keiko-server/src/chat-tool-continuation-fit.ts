@@ -1,25 +1,27 @@
 import type { ChatMessage as GatewayMessage } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { chatToolDraftReceipts, chatToolIssueKey } from "./chat-tool-receipts.js";
 
 /**
  * Keeps a long Chat tool turn inside the model window (#4175). The oldest settled tool results are
  * replaced, oldest first, by a compact record that keeps what the model needs to continue — the
- * status, the closed reason, the mutation outcome and the issue key — so completed writes are never
+ * status, the closed reason, the mutation outcome and the issue keys (per item for a backlog draft,
+ * with each item's state) — so completed writes are never
  * repeated and the turn is not stopped merely because it did a lot of work. The newest result is
  * always kept whole. Only the copy sent to the model changes; the stored transcript is untouched.
  */
-const ISSUE_KEY = /^[A-Z][A-Z0-9_]{0,254}-[1-9]\d{0,17}$/u;
 
 function closedString(value: unknown): string | undefined {
   return typeof value === "string" && /^[a-z][a-z0-9-]{0,63}$/u.test(value) ? value : undefined;
 }
-function issueKeyOf(data: unknown): object {
-  const key =
-    typeof data === "object" && data !== null && !Array.isArray(data)
-      ? (data as Readonly<Record<string, unknown>>).issueKey
-      : undefined;
-  return typeof key === "string" && ISSUE_KEY.test(key) ? { issueKey: key } : {};
+function receiptsOf(data: unknown): object {
+  const issueKey = chatToolIssueKey(data);
+  const items = chatToolDraftReceipts(data);
+  return {
+    ...(issueKey === undefined ? {} : { issueKey }),
+    ...(items === undefined ? {} : { items }),
+  };
 }
 /** Compacted from the stored, structured exchange — never re-parsed from the sent text. */
 function compactExchange(exchange: ChatToolExchange): string {
@@ -29,7 +31,7 @@ function compactExchange(exchange: ChatToolExchange): string {
     status: closedString(result?.status),
     reason: closedString(result?.reason),
     mutationOutcome: closedString(exchange.mutationOutcome),
-    ...issueKeyOf(result?.data),
+    ...receiptsOf(result?.data),
   });
 }
 export function estimateGatewayMessageTokens(messages: readonly GatewayMessage[]): number {
