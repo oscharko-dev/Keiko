@@ -794,10 +794,36 @@ fixture with MSVC static analysis. The expected image passed using long and shor
 paths, a different approved image and an anonymous caller were refused, and a second
 listener could not take the endpoint. These executions used a synthetic named pipe.
 
-The SCM service, supervisor-to-service authentication, challenge-bound job admission,
-WFP installation and verified acknowledgement before resume still need to be wired
-and exercised together. Windows Workbench gateway launches remain refused at the
-production boundary. Release-owner approval for the changed supervisor remains open.
+### Installed SCM broker and suspended child on Windows Server 2025
+
+The [privileged Windows run for `8ebb24d38`](https://github.com/oscharko-dev/Keiko/actions/runs/41220096642/job/124592675721)
+passed on the `windows-2025` image `20261021.278.1` with Node 24.18.0.
+`scripts/testing/test-windows-gateway-scm.ps1` built the supervisor, installed it
+under Program Files as the manual-start LocalSystem service `KeikoRuntimeGateway`,
+started it through SCM and removed the temporary service and files after the proof.
+
+The native `--gateway-supervised` path validates the pipe server against the running
+SCM process. The broker authenticates the installed supervisor and issues a fresh
+challenge. The supervisor creates a challenge-specific AppContainer profile and
+places its suspended root atomically into a kill-on-close job. The broker duplicates
+the authenticated peer's job handle, reads the root's token SID, validates the policy
+digest, installs the filters and reads them back before returning the challenge-bound
+acknowledgement. The supervisor resumes the root only after validating that reply.
+
+- With the service absent, the supervisor returned an error and no child marker appeared.
+- With the policy withheld, a separate process observed a root in the job and no marker.
+  An invalid digest then caused refusal and no marker appeared before supervisor exit.
+- With a valid digest, the child ran. An independent BFE query for the live job root's
+  token SID found persistent outbound blocks for IPv4 and IPv6 and the TCP permit for
+  `127.0.0.1:1`. The child exited successfully and the supervisor reported zero
+  active job processes. The subsequent filter cleanup, guarded lifecycle and
+  AppContainer socket proof also passed.
+
+This run covers a single tree with a temporary service on an elevated Windows runner.
+Customer installation, standard-user launches, concurrent trees, crash reconciliation
+and release-owner approval remain open. The Workbench still refuses Windows launches
+at the application boundary; its verified temporary helper copy is distinct from the
+protected SCM-installed supervisor image.
 
 ## Update impact
 
@@ -809,5 +835,5 @@ Windows runtime supervisor startup failure caused by expired process-attribute s
 "Refuse redirected retained-session directories before restoring or removing session state."
 Target release version and release-owner
 approval are pending; catalog insertion is deferred to the release-cut PR under the
-[release-impact runbook](../release/release-impact-runbook.md). This does not itself enable the
-still-unimplemented Windows gateway service.
+[release-impact runbook](../release/release-impact-runbook.md). The SCM qualification above
+adds an opt-in native supervisor entry point and a service dependency on Windows BFE.

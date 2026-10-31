@@ -13,6 +13,17 @@ try {
   if ($LASTEXITCODE) { throw "Supervisor build failed" }
   node scripts/testing/test-windows-gateway-service.mjs build $helper
   if ($LASTEXITCODE) { throw "Observer build failed" }
+  $os = Get-CimInstance Win32_OperatingSystem
+  $volume = Get-Volume -DriveLetter $install[0]
+  [ordered]@{
+    windows = $os.Caption
+    version = $os.Version
+    arch = $os.OSArchitecture
+    filesystem = $volume.FileSystem
+    node = (node --version)
+    supervisorSha256 = (Get-FileHash -LiteralPath $helper).Hash
+    observerSha256 = (Get-FileHash -LiteralPath (Join-Path $install "gateway-service-probe.exe")).Hash
+  } | ConvertTo-Json -Compress
   node scripts/testing/test-windows-gateway-service.mjs unavailable $helper
   if ($LASTEXITCODE) { throw "Absent-service proof failed" }
   New-Service -Name $serviceName -BinaryPathName ('"' + $helper + '" --gateway-service') -StartupType Manual -DependsOn BFE | Out-Null
