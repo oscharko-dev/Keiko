@@ -35,6 +35,11 @@ import type {
 } from "@oscharko-dev/keiko-connectors";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { handleDecideChatReadConsent } from "./chatReadConsentRoutes.js";
+import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import {
+  SYNTHETIC_JIRA_BASE_URL,
+  syntheticJira,
+} from "../../../../tests/support/jira-synthetic-draft-remote.js";
 
 type ToolProof = boolean | "missing" | "stale" | "unsupported" | "mismatched";
 const MODEL = "synthetic-jira-chat";
@@ -122,10 +127,33 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
     },
   };
 }
+// A backlog of three items: Story depends on Epic; Loose stands alone (#4178).
+const DRAFT_ARGUMENTS = {
+  items: [
+    { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+    {
+      ref: "story",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Story" },
+      parent: { fieldId: "parent", ref: "epic" },
+    },
+    { ref: "loose", projectId: "10000", issueTypeId: "10001", fields: { summary: "Loose" } },
+  ],
+};
+function offeredTool(mutation: boolean, draft: boolean): string {
+  if (draft) return "keiko.jira.draft";
+  return mutation ? "keiko.jira.comment" : "keiko.jira.projects";
+}
+function toolArguments(mutation: boolean, draft: boolean): Record<string, unknown> {
+  if (draft) return DRAFT_ARGUMENTS;
+  return mutation ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" } : {};
+}
 function syntheticModel(
   calls: GatewayCallRequest[],
   mutation: boolean,
   repeatTools: boolean,
+  draft: boolean,
 ): ModelPort {
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
     calls.push(request);
@@ -150,8 +178,7 @@ function syntheticModel(
     expect(reservation).toBeDefined();
     const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     const tool = request.toolCatalog.projection.tools.find(
-      (entry) =>
-        entry.toolRef.canonicalId === (mutation ? "keiko.jira.comment" : "keiko.jira.projects"),
+      (entry) => entry.toolRef.canonicalId === offeredTool(mutation, draft),
     );
     if (tool === undefined) throw new Error("Missing offered Jira projects tool");
     return {
@@ -162,7 +189,7 @@ function syntheticModel(
         bridge.bind({
           id: `call-${String(calls.length)}`,
           name: tool.alias,
-          arguments: mutation ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" } : {},
+          arguments: toolArguments(mutation, draft),
         }),
       ],
     };
@@ -183,6 +210,7 @@ function fixture(
   writeResponse?: Promise<void>,
   acknowledgeWrite = true,
   repeatTools = false,
+  draft = false,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
@@ -191,10 +219,11 @@ function fixture(
   model: ModelPort;
   requests: () => number;
   writes: () => number;
+  jira: ReturnType<typeof syntheticJira>;
 } {
   const root = mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-"));
   const calls: GatewayCallRequest[] = [];
-  const model = syntheticModel(calls, mutation, repeatTools);
+  const model = syntheticModel(calls, mutation, repeatTools, draft);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(root, "evidence"),
@@ -219,9 +248,21 @@ function fixture(
   vi.spyOn(credentials.custody, "list").mockImplementation(() => [metadata(deps)]);
   let requests = 0;
   let writes = 0;
+  const jira = syntheticJira();
   vi.spyOn(credentials, "httpBodyPortFactory").mockImplementation(
-    (_metadata, _correlationId, lifecycle) =>
-      async (request): ReturnType<AtlassianHttpBodyPort> => {
+    (_metadata, correlationId, lifecycle) => {
+      if (draft)
+        return createGatewayAtlassianHttpBodyPort({
+          ...lifecycle,
+          correlationId,
+          baseUrl: SYNTHETIC_JIRA_BASE_URL,
+          authRef: "synthetic-ref",
+          credentials: {
+            resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-test-pat" }),
+          },
+          fetchImpl: jira.fetch,
+        });
+      return async (request): ReturnType<AtlassianHttpBodyPort> => {
         if (lifecycle?.beforeDispatch?.(request) !== true)
           throw new Error("Expected dispatch admission");
         requests++;
@@ -243,7 +284,8 @@ function fixture(
           bodyBytes: Buffer.byteLength(bodyText),
           truncated: false,
         });
-      },
+      };
+    },
   );
   return {
     deps,
@@ -251,8 +293,9 @@ function fixture(
     root,
     calls,
     model,
-    requests: () => requests,
-    writes: () => writes,
+    requests: () => (draft ? jira.fetch.mock.calls.length : requests),
+    writes: () => (draft ? jira.posts().length : writes),
+    jira,
   };
 }
 // #4175: a turn that reaches its deadline after settling tool calls answers from its transcript on
@@ -704,6 +747,7 @@ it.each([false, true])(
 async function decidePendingWrite(
   f: ReturnType<typeof fixture>,
   decision: "approve" | "reject",
+  excludedItemRefs?: readonly string[],
 ): Promise<void> {
   await vi.waitFor(() => {
     expect(
@@ -717,7 +761,11 @@ async function decidePendingWrite(
     (
       await handleDecideChatWriteApproval(
         context(
-          { decision, actionDigest: approval.actionDigest },
+          {
+            decision,
+            actionDigest: approval.actionDigest,
+            ...(excludedItemRefs === undefined ? {} : { excludedItemRefs }),
+          },
           { approvalId: approval.approvalId },
         ),
         f.deps,
@@ -775,6 +823,39 @@ describe("normal Chat write approval and durable outcome", () => {
       expect(f.writes()).toBe(1);
     },
   );
+});
+
+// #4178: the human's deselection is part of the one approval. Saving the approved view with it
+// must not conflict with the pending view, or the persisted approval stays pending and no item runs.
+it("executes only the selected backlog items and persists the deselection through every state", async () => {
+  const f = fixture(true, undefined, true, false, true);
+  const saved: { state: string; excluded: readonly string[] | undefined }[] = [];
+  const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
+  vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
+    (id, change, correlationId) => {
+      if (change.kind === "write-approval" && change.approval.kind === "jira-chat-write")
+        saved.push({ state: change.approval.state, excluded: change.approval.excludedItemRefs });
+      update(id, change, correlationId);
+    },
+  );
+  const pending = handleSendDesktopChat(sendContext(f, "deselected-draft"), f.deps);
+  void pending.catch(() => undefined);
+  await approveReadForWrite(f);
+  await decidePendingWrite(f, "approve", ["epic"]);
+  expect((await pending).status).toBe(200);
+  // The Epic is deselected and the Story that depends on it follows; only the Loose item is sent.
+  expect(f.jira.posts().map((post) => post.fields)).toMatchObject([{ summary: "Loose" }]);
+  expect(saved.map((entry) => entry.state)).toEqual(["pending", "approved", "claimed"]);
+  expect(saved.map((entry) => entry.excluded)).toEqual([undefined, ["epic"], ["epic"]]);
+  const exchange = firstToolExchange(f);
+  expect(exchange.approval).toMatchObject({
+    operation: "jira.draft",
+    state: "claimed",
+    excludedItemRefs: ["epic"],
+  });
+  expect(exchange.result?.status).toBe("completed");
+  expect(exchange.mutationOutcome).toBe("succeeded");
+  expect(JSON.stringify(exchange.result?.data)).toContain('"excludedCount":2');
 });
 
 it("keeps a rejected normal Chat write free of remote effects", async () => {

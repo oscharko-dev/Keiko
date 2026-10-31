@@ -552,7 +552,13 @@ never dispatched. The server runs each selected item, in dependency order, as it
 item already sent is never sent again on replay. The draft's one approval is claimed once at the
 first item's dispatch and covers its remaining items. The approving human may deselect items; the
 deselection is bound into the approval proof and extends to every item that depends on a deselected
-one. Before creating an item the connector searches by a deterministic identity label
+one. The stored approval view carries it as `excludedItemRefs`, and the transcript store admits
+exactly one change besides the state: the pending-to-approved transition of a `jira.draft` may add
+a non-empty, unique subset of the reviewed draft's own item refs. Every other difference still
+conflicts: another operation, a deselection added at any other transition or on a first save, and
+a deselection that is dropped or changed after it was recorded. The action digest and subject
+identity checks are unchanged. Draft results report one row per item, so the tool's
+`maxResultCount` is the item ceiling (32), not 1. Before creating an item the connector searches by a deterministic identity label
 (`keiko-draft-<20 hex>` from project, issue type, normalized summary and the item's relation
 scope — its parent field and target, and its links, each resolved to the existing issue's key or to
 the target draft item's own identity, never to the draft-local `ref`; items identical in all of that

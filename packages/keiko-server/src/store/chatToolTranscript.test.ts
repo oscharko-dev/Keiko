@@ -438,6 +438,145 @@ describe("durable Chat mutation projections", () => {
   });
 });
 
+const draftCall = {
+  id: "draft-call",
+  name: "jira_draft",
+  arguments: {
+    items: [
+      { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+      {
+        ref: "task",
+        projectId: "10000",
+        issueTypeId: "10002",
+        fields: { summary: "Task" },
+        parent: { fieldId: "parent", ref: "epic" },
+      },
+    ],
+  },
+};
+function draftApproval(f: ReturnType<typeof fixture>): ChatToolWriteApprovalView {
+  return {
+    ...approval(f),
+    invocationId: sha256Hex(canonicalise({ messageId: f.id, callId: draftCall.id })),
+    operation: "jira.draft",
+    actionDigest: sha256Hex(
+      canonicalise({
+        operation: "jira.draft",
+        argumentsDigest: sha256Hex(canonicalise(draftCall.arguments)),
+      }),
+    ),
+  };
+}
+function saveDraftApproval(f: ReturnType<typeof fixture>, view: ChatToolWriteApprovalView): void {
+  f.store.updateChatToolTranscript(
+    f.id,
+    { kind: "write-approval", callId: draftCall.id, approval: view },
+    "draft-transcript",
+  );
+}
+function startDraft(f: ReturnType<typeof fixture>): ChatToolWriteApprovalView {
+  const view = draftApproval(f);
+  f.store.updateChatToolTranscript(f.id, { kind: "started", call: draftCall }, "draft-transcript");
+  saveDraftApproval(f, view);
+  return view;
+}
+function storedDraftApproval(f: ReturnType<typeof fixture>): unknown {
+  return f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval;
+}
+
+describe("a backlog draft's deselection is part of the one approval (#4178)", () => {
+  it("admits the approving transition's deselection and pins it through every later state", () => {
+    const f = fixture();
+    const view = startDraft(f);
+    const approved = { ...view, state: "approved", excludedItemRefs: ["task"] } as const;
+    saveDraftApproval(f, approved);
+    saveDraftApproval(f, approved);
+    saveDraftApproval(f, { ...approved, state: "claimed" });
+    expect(storedDraftApproval(f)).toMatchObject({ state: "claimed", excludedItemRefs: ["task"] });
+    saveDraftApproval(f, { ...approved, state: "revoked" });
+    expect(storedDraftApproval(f)).toMatchObject({ state: "revoked", excludedItemRefs: ["task"] });
+  });
+
+  it.each([
+    ["dropped when claimed", "claimed", undefined],
+    ["changed when claimed", "claimed", ["epic"]],
+    ["extended when claimed", "claimed", ["task", "epic"]],
+    ["dropped when expired", "expired", undefined],
+  ] as const)("refuses an approved deselection %s", (_name, state, excluded) => {
+    const f = fixture();
+    const view = startDraft(f);
+    saveDraftApproval(f, { ...view, state: "approved", excludedItemRefs: ["task"] });
+    expect(() => {
+      saveDraftApproval(f, {
+        ...view,
+        state,
+        ...(excluded === undefined ? {} : { excludedItemRefs: excluded }),
+      });
+    }).toThrow("identity conflict");
+    expect(storedDraftApproval(f)).toMatchObject({ state: "approved", excludedItemRefs: ["task"] });
+  });
+
+  it.each(["pending", "claimed", "rejected", "expired", "revoked"] as const)(
+    "refuses a deselection added when the approval becomes %s",
+    (state) => {
+      const f = fixture();
+      const view = startDraft(f);
+      expect(() => {
+        saveDraftApproval(f, { ...view, state, excludedItemRefs: ["task"] });
+      }).toThrow("identity conflict");
+      expect(storedDraftApproval(f)).toMatchObject({ state: "pending" });
+    },
+  );
+
+  it("refuses a deselection added after the approval was already recorded without one", () => {
+    const f = fixture();
+    const view = startDraft(f);
+    saveDraftApproval(f, { ...view, state: "approved" });
+    expect(() => {
+      saveDraftApproval(f, { ...view, state: "claimed", excludedItemRefs: ["task"] });
+    }).toThrow("identity conflict");
+  });
+
+  it.each([
+    ["an unknown ref", ["ghost"]],
+    ["a repeated ref", ["task", "task"]],
+  ] as const)("refuses an approving deselection with %s", (_name, excluded) => {
+    const f = fixture();
+    const view = startDraft(f);
+    expect(() => {
+      saveDraftApproval(f, { ...view, state: "approved", excludedItemRefs: excluded });
+    }).toThrow();
+    expect(storedDraftApproval(f)).toMatchObject({ state: "pending" });
+  });
+
+  it("refuses a deselection on a first save and any other difference alongside it", () => {
+    const f = fixture();
+    f.store.updateChatToolTranscript(f.id, { kind: "started", call: draftCall }, "draft-first");
+    const view = draftApproval(f);
+    expect(() => {
+      saveDraftApproval(f, { ...view, state: "approved", excludedItemRefs: ["task"] });
+    }).toThrow("identity conflict");
+    saveDraftApproval(f, view);
+    expect(() => {
+      saveDraftApproval(f, {
+        ...view,
+        state: "approved",
+        excludedItemRefs: ["task"],
+        expiresAt: 2001,
+      });
+    }).toThrow("identity conflict");
+    expect(storedDraftApproval(f)).toMatchObject({ state: "pending" });
+  });
+
+  it("refuses a deselection on an operation that is not a backlog draft", () => {
+    const f = fixture();
+    const view = startWrite(f);
+    expect(() => {
+      saveApproval(f, { ...view, state: "approved", excludedItemRefs: ["task"] });
+    }).toThrow();
+  });
+});
+
 function observedMutationFixture(): ReturnType<typeof fixture> & {
   intent: ChatToolMutationIntent;
 } {

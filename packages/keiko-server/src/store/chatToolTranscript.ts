@@ -7,7 +7,6 @@ import {
 import type {
   ChatToolReadGrantView,
   ChatToolWriteApprovalView,
-  ChatToolWriteApprovalState,
 } from "@oscharko-dev/keiko-contracts";
 import {
   JIRA_MUTATION_OUTCOMES,
@@ -31,6 +30,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
+import { admitsApprovalTransition, admitsFirstApproval } from "./chatToolApprovalTransition.js";
 import { invalidRequest, notFound } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
 
@@ -134,16 +134,6 @@ const MUTATION_ALIASES = new Map<string, string>(
     `keiko.${operation}`,
   ]),
 );
-const APPROVAL_STATES: Readonly<
-  Record<ChatToolWriteApprovalState, ReadonlySet<ChatToolWriteApprovalState>>
-> = {
-  pending: new Set(["pending", "approved", "claimed", "rejected", "expired", "revoked"]),
-  approved: new Set(["approved", "claimed", "expired", "revoked"]),
-  claimed: new Set(["claimed", "expired", "revoked"]),
-  rejected: new Set(["rejected"]),
-  expired: new Set(["expired"]),
-  revoked: new Set(["revoked"]),
-};
 function matchesApprovalCall(
   approval: ChatToolWriteApprovalView,
   call: ChatToolExchange["call"],
@@ -389,13 +379,11 @@ function applyApproval(
     !matchesApprovalCall(approval, exchange.call, { messageId, chatId })
   )
     throw invalidRequest("Tool approval identity conflict.");
-  if (
-    exchange.approval !== undefined &&
-    (canonicalise({ ...exchange.approval, state: "pending" }) !==
-      canonicalise({ ...approval, state: "pending" }) ||
-      !APPROVAL_STATES[exchange.approval.state].has(approval.state))
-  )
-    throw invalidRequest("Tool approval identity conflict.");
+  const admitted =
+    exchange.approval === undefined
+      ? admitsFirstApproval(approval)
+      : admitsApprovalTransition(exchange.approval, approval, exchange.call);
+  if (!admitted) throw invalidRequest("Tool approval identity conflict.");
   return {
     ...current,
     exchanges: current.exchanges.map((entry) =>
