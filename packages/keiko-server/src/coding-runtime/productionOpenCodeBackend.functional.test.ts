@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -416,6 +417,12 @@ async function assertLiveReadiness(baseUrl: string): Promise<void> {
     effectiveMode: "autonomous-delivery",
     runtimeAvailable: true,
     runtimeEvidenceClass: "functional-not-platform-qualified",
+    // #3904 AC4: the version the verified staged sidecar names, from the pin it must match.
+    runtimeVersion: {
+      opencode: OPENCODE_PINNED_VERSION,
+      pinned: OPENCODE_PINNED_VERSION,
+      origin: "dev-checkout",
+    },
     // Derived from the production entry points, not restated: the platform picks the profile.
     selectableAgents: openCodeSelectableAgents(productionOpenCodeToolProfile()),
     promptInputs: openCodePromptInputs(productionOpenCodeToolProfile()),
