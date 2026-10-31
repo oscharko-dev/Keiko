@@ -4,17 +4,14 @@ import {
   existsSync,
   linkSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -92,31 +89,12 @@ import {
   targetRuntime,
   type PortableTarget,
 } from "./portable-shared.js";
+import { policyAllowedRoot } from "./test-support/policy-allowed-root.js";
 
 const tempRoots: string[] = [];
-const REAL_TMPDIR = realpathSync(tmpdir());
-
-function pathInsideRepository(path: string): boolean {
-  let cursor = path;
-  for (;;) {
-    if (existsSync(join(cursor, ".git"))) return true;
-    const parent = dirname(cursor);
-    if (parent === cursor) return false;
-    cursor = parent;
-  }
-}
 
 function makePolicyAllowedRoot(): string {
-  const cwdParent = dirname(process.cwd());
-  const parent =
-    cwdParent === dirname(cwdParent) ||
-    cwdParent.startsWith(REAL_TMPDIR) ||
-    pathInsideRepository(cwdParent)
-      ? homedir()
-      : cwdParent;
-  const root = mkdtempSync(join(parent, ".keiko-portable-upgrade-test-"));
-  tempRoots.push(root);
-  return root;
+  return policyAllowedRoot(".keiko-portable-upgrade-test-", tempRoots);
 }
 
 function seedPortableRoot(

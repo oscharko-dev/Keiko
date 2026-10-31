@@ -215,6 +215,14 @@ const { version: packageVersion } = createRequire(import.meta.url)("../package.j
   version: string;
 };
 
+/** Each named export of `module` is a function; the names are checked against its type. */
+function expectFunctionExports<M extends object>(
+  module: M,
+  names: readonly (keyof M & string)[],
+): void {
+  for (const name of names) expect(typeof module[name], name).toBe("function");
+}
+
 describe("keiko-contracts package surface", () => {
   it("exports governed attachment MIME normalization through the package entrypoint", () => {
     expect(MAX_ATTACHMENT_MIME_BYTES).toBe(255);
@@ -527,17 +535,19 @@ describe("keiko-contracts package surface", () => {
     expect(mod.MEMORY_UPDATE_FIELDS).toContain("body");
     expect(mod.MEMORY_STRUCTURED_PAYLOAD_KINDS).toContain("string-list");
     expect(mod.MEMORY_STATUS_TRANSITIONS.proposed).toContain("accepted");
-    expect(typeof mod.checkStatusTransition).toBe("function");
-    expect(typeof mod.validateMemoryRecord).toBe("function");
-    expect(typeof mod.validateMemoryProposal).toBe("function");
-    expect(typeof mod.validateMemoryAuditRecord).toBe("function");
-    expect(typeof mod.isMemoryRecord).toBe("function");
-    expect(typeof mod.isMemoryEdge).toBe("function");
-    expect(typeof mod.isScopeReachable).toBe("function");
-    expect(typeof mod.assertNeverMemoryType).toBe("function");
-    expect(typeof mod.looksLikeSecretShape).toBe("function");
-    expect(typeof mod.hasPaymentCardPanShape).toBe("function");
-    expect(typeof mod.hasStaleModelMetadata).toBe("function");
+    expectFunctionExports(mod, [
+      "checkStatusTransition",
+      "validateMemoryRecord",
+      "validateMemoryProposal",
+      "validateMemoryAuditRecord",
+      "isMemoryRecord",
+      "isMemoryEdge",
+      "isScopeReachable",
+      "assertNeverMemoryType",
+      "looksLikeSecretShape",
+      "hasPaymentCardPanShape",
+      "hasStaleModelMetadata",
+    ]);
   });
 
   it("memory contract types remain available at their declared public surface (#205)", async () => {
@@ -725,16 +735,18 @@ describe("keiko-contracts package surface", () => {
     expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
       ["applyChangeset", "applyPatch", "applyTextEdits", "format", "save"].sort(),
     );
-    expect(typeof mod.isEditorAgentEvent).toBe("function");
-    expect(typeof mod.isEditorAgentBridgeDecisionCapability).toBe("function");
-    expect(typeof mod.isEditorAgentActiveBufferActionType).toBe("function");
-    expect(typeof mod.isEditorAgentActionOrigin).toBe("function");
-    expect(typeof mod.resolveEditorAgentActionOrigin).toBe("function");
-    expect(typeof mod.isEditorAgentWriteActionType).toBe("function");
-    expect(typeof mod.editorAgentWritePreconditionError).toBe("function");
-    expect(typeof mod.editorAgentActionHasWritePrecondition).toBe("function");
-    expect(typeof mod.isEditorAgentConflictCode).toBe("function");
-    expect(typeof mod.isEditorAgentFailureCode).toBe("function");
+    expectFunctionExports(mod, [
+      "isEditorAgentEvent",
+      "isEditorAgentBridgeDecisionCapability",
+      "isEditorAgentActiveBufferActionType",
+      "isEditorAgentActionOrigin",
+      "resolveEditorAgentActionOrigin",
+      "isEditorAgentWriteActionType",
+      "editorAgentWritePreconditionError",
+      "editorAgentActionHasWritePrecondition",
+      "isEditorAgentConflictCode",
+      "isEditorAgentFailureCode",
+    ]);
     // Issue #2114 (ADR-0125 D3): the applyChangeset public contract surface — caps, changeset/
     // conflict/file-result guards, and the authority/approval reference guards — is re-exported
     // through the barrel so downstream packages import named symbols instead of re-deriving them.
@@ -743,19 +755,21 @@ describe("keiko-contracts package surface", () => {
     expect(mod.EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES).toBe(8 * 1_048_576);
     expect(mod.EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS).toBe(2_000);
     expect(mod.EDITOR_AGENT_REFERENCE_ID_MAX_CHARS).toBe(128);
-    expect(typeof mod.isEditorAgentChangeset).toBe("function");
-    expect(typeof mod.isEditorAgentChangesetFile).toBe("function");
-    expect(typeof mod.isEditorAgentConflictDetail).toBe("function");
-    expect(typeof mod.isEditorAgentDiagnostic).toBe("function");
-    expect(typeof mod.isEditorAgentDiagnosticsDetail).toBe("function");
-    expect(typeof mod.isEditorAgentFileActionResult).toBe("function");
-    expect(typeof mod.isEditorAgentGovernedAuthorityReference).toBe("function");
-    expect(typeof mod.isEditorAgentOneUseApprovalReference).toBe("function");
-    expect(typeof mod.isEditorAgentPreparedChangeset).toBe("function");
-    expect(typeof mod.isEditorAgentRootAttribution).toBe("function");
-    expect(typeof mod.isEditorAgentRootBinding).toBe("function");
-    expect(typeof mod.isEditorAgentSessionsRequest).toBe("function");
-    expect(typeof mod.editorAgentRootBindingDenyReason).toBe("function");
+    expectFunctionExports(mod, [
+      "isEditorAgentChangeset",
+      "isEditorAgentChangesetFile",
+      "isEditorAgentConflictDetail",
+      "isEditorAgentDiagnostic",
+      "isEditorAgentDiagnosticsDetail",
+      "isEditorAgentFileActionResult",
+      "isEditorAgentGovernedAuthorityReference",
+      "isEditorAgentOneUseApprovalReference",
+      "isEditorAgentPreparedChangeset",
+      "isEditorAgentRootAttribution",
+      "isEditorAgentRootBinding",
+      "isEditorAgentSessionsRequest",
+      "editorAgentRootBindingDenyReason",
+    ]);
   });
 
   it("editor-agent types remain available at their declared public surface (#1391)", async () => {
@@ -1044,9 +1058,11 @@ describe("keiko-contracts package surface", () => {
     expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(6);
     expect(m.GIT_PR_REJECTION_REASONS).toHaveLength(9);
 
-    expect(typeof m.synthesizePullRequestMetadata).toBe("function");
-    expect(typeof m.gitPullRequestReadinessFor).toBe("function");
-    expect(typeof m.gitPullRequestRecommendationFor).toBe("function");
+    expectFunctionExports(m, [
+      "synthesizePullRequestMetadata",
+      "gitPullRequestReadinessFor",
+      "gitPullRequestRecommendationFor",
+    ]);
     expect(m.gitPrRejectionToErrorCode("rate-limited")).toBe("network-failure");
     expect(m.gitPrRejectionToDisposition("validation-error")).toBe("user-fixable");
 
@@ -1369,11 +1385,13 @@ describe("keiko-contracts package surface", () => {
     expect(m.WORKSPACE_BINDING_V2_SCHEMA_VERSION).toBe("2");
     expect(m.WORKSPACE_TRUST_LEVELS).toEqual(["trusted", "restricted"]);
     expect(m.EDITOR_LOCAL_HISTORY_MAX_ENTRIES).toBe(512);
-    expect(typeof m.validateWorkspaceManifest).toBe("function");
-    expect(typeof m.validateWorkspaceRootDispatch).toBe("function");
-    expect(typeof m.validateWorkspaceTrustRecord).toBe("function");
-    expect(typeof m.resolveEditorM11Settings).toBe("function");
-    expect(typeof m.validateWorkspaceProfileManifest).toBe("function");
+    expectFunctionExports(m, [
+      "validateWorkspaceManifest",
+      "validateWorkspaceRootDispatch",
+      "validateWorkspaceTrustRecord",
+      "resolveEditorM11Settings",
+      "validateWorkspaceProfileManifest",
+    ]);
     expect(m.EDITOR_M11_DEFAULT_PROFILE_REF).toBe("profile-default");
     expect(typeof m.isWorkspaceProfileDisplayName).toBe("function");
     expect(typeof m.isAssignableWorkspaceProfileDisplayName).toBe("function");
