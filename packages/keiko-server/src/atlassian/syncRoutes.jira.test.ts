@@ -1,7 +1,7 @@
-import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { withSyncActivityLog } from "./syncActivityLog.test-support.js";
 import {
-  formatActivityLogProofLine,
   expectActivityLogProof,
+  singleActivityLogEventLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 // Issue #2243 — Jira sync composition tests: routes + service + Jira adapter + shared sync lane +
@@ -809,21 +809,12 @@ it.each(["{", "[]"])(
         truncated: false,
       }),
     );
-    const logs = createBufferedServerLogSink();
-    const credentials = deps.atlassianConnectorCredentials;
-    if (credentials === undefined) throw new Error("Missing fixture credentials");
-    const started = await startSync(
-      { ...deps, atlassianConnectorCredentials: { ...credentials, activityLog: logs } },
-      credential,
-      { projectKeys: ["PLAT"] },
-    );
+    const logged = withSyncActivityLog(deps);
+    const { logs } = logged;
+    const started = await startSync(logged.deps, credential, { projectKeys: ["PLAT"] });
     const terminal = await awaitTerminal(started.job.jobId);
     expect(terminal).toMatchObject({ status: "failed", failureReason: "malformed-payload" });
-    const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
-    expect(events).toHaveLength(1);
-    const event = events[0];
-    if (event === undefined) throw new Error("Missing sync outcome");
-    const line = formatActivityLogProofLine(event);
+    const line = singleActivityLogEventLine(logs.events, "atlassian.action.outcome");
     expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
       actionType: "sync-project",
       outcome: "failed",
@@ -841,23 +832,14 @@ it("retains a malformed item failure in the registered partial-sync outcome", as
     projects: [{ key: "PLAT", issues: [plainIssue(1), { ...plainIssue(2), malformedBody: true }] }],
   });
   const { deps, credential } = depsFor(port);
-  const logs = createBufferedServerLogSink();
-  const credentials = deps.atlassianConnectorCredentials;
-  if (credentials === undefined) throw new Error("Missing fixture credentials");
-  const started = await startSync(
-    { ...deps, atlassianConnectorCredentials: { ...credentials, activityLog: logs } },
-    credential,
-    { projectKeys: ["PLAT"] },
-  );
+  const logged = withSyncActivityLog(deps);
+  const { logs } = logged;
+  const started = await startSync(logged.deps, credential, { projectKeys: ["PLAT"] });
   expect(await awaitTerminal(started.job.jobId)).toMatchObject({
     status: "partial",
     failureReasons: ["malformed-payload"],
   });
-  const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
-  expect(events).toHaveLength(1);
-  const event = events[0];
-  if (event === undefined) throw new Error("Missing partial outcome");
-  const line = formatActivityLogProofLine(event);
+  const line = singleActivityLogEventLine(logs.events, "atlassian.action.outcome");
   expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
     actionType: "sync-project",
     outcome: "partial",

@@ -1,4 +1,7 @@
-import { createSseResponseObservation } from "../../../tests/support/sse-subscription-observations.js";
+import {
+  createSseResponseObservation,
+  defineSessionSseBackpressureContract,
+} from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // ADR-0018 D8 — /api/terminal/* route integration tests. A FakeTerminalExecutionManager replaces
@@ -752,10 +755,6 @@ function makeFakeSseRes(): FakeSseRes {
 }
 
 describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   const completed = (executionId: string): TerminalEventEnvelope =>
     ({
       kind: "execution-completed",
@@ -763,135 +762,21 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
       payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
     }) as unknown as TerminalEventEnvelope;
 
-  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeTerminalExecutionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openTerminalSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    // A false write is flow control: the stream stays open and keeps queueing frames.
-    manager.emitExternal(completed("exec-bp"));
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
-
-    // The abort unsubscribed, so a second event produces no further writes or destroys.
-    const writesAfterKill = fake.writes.length;
-    manager.emitExternal(completed("exec-bp-2"));
-    expect(fake.writes).toHaveLength(writesAfterKill);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-
-    // close firing after an abort-driven unsubscribe must not double-unsubscribe or throw.
-    expect(() => {
-      fake.emitClose();
-    }).not.toThrow();
-  });
-
-  it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
-    // The ready frame is written before any manager event. If it is queued and the reader never
-    // drains it, the stalled-reader bound must still tear the stream down without a later event.
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeTerminalExecutionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openTerminalSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    expect(fake.writes.length).toBeGreaterThan(0);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    // Destroyed and signalled at the bound, with no manager event required.
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-  });
-
-  it("kills a stalled reader on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
-    // The complementary path: ready frame accepted, a later event frame queued and never drained.
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeTerminalExecutionManager();
-    const signals: SseBackpressureSignal[] = [];
-    openTerminalSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    expect(fake.destroyCount).toBe(0);
-
-    fake.writeReturns = false;
-    manager.emitExternal(completed("exec-late"));
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-  });
-
-  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeTerminalExecutionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openTerminalSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    fake.emitDrain();
-    fake.writeReturns = true;
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
-
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    const writesBefore = fake.writes.length;
-    manager.emitExternal(completed("exec-drain"));
-    expect(fake.writes).toHaveLength(writesBefore + 1);
-    expect(fake.destroyCount).toBe(0);
+  defineSessionSseBackpressureContract({
+    response: makeFakeSseRes,
+    scenario: (name) => {
+      const manager = new FakeTerminalExecutionManager();
+      return {
+        open: (res, onBackpressure): void => {
+          openTerminalSseStream(res, manager, (value) => value, onBackpressure);
+        },
+        emit: (sequence): void => {
+          manager.emitExternal(
+            completed(sequence === 1 ? `exec-${name}` : `exec-${name}-${String(sequence)}`),
+          );
+        },
+      };
+    },
   });
 
   it("keeps the normal write path intact when res.write returns true", () => {

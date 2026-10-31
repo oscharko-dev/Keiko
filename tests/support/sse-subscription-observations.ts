@@ -314,6 +314,36 @@ export function defineSseSubscriptionObservationContract<
   registerReadyStall(binding);
 }
 
+/** The stalled-reader bound tears the stream down exactly at its deadline, signalling once. */
+function expectStalledReaderTeardown(
+  fake: SseResponseObservation,
+  signals: readonly SseBackpressureSignal[],
+): void {
+  vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+  expect(fake.destroyCount).toBe(0);
+  expect(signals).toHaveLength(0);
+  vi.advanceTimersByTime(1);
+  expect(fake.destroyCount).toBe(1);
+  expect(signals).toHaveLength(1);
+}
+
+/** A drain after a false write keeps the stream open and subscribed for the next event. */
+function expectDrainRecovery(
+  fake: SseResponseObservation,
+  signals: readonly SseBackpressureSignal[],
+  emitNext: () => void,
+): void {
+  fake.emitDrain();
+  fake.writeReturns = true;
+  vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+  expect(fake.destroyCount).toBe(0);
+  expect(signals).toHaveLength(0);
+  const writesBefore = fake.writes.length;
+  emitNext();
+  expect(fake.writes).toHaveLength(writesBefore + 1);
+  expect(fake.destroyCount).toBe(0);
+}
+
 interface BackpressureBinding<Manager> {
   readonly manager: () => Manager;
   readonly open: (
@@ -364,12 +394,7 @@ function registerReadyFrameStall<Manager>(binding: BackpressureBinding<Manager>)
     expect(fake.writes).toHaveLength(1);
     expect(fake.destroyCount).toBe(0);
     expect(signals).toHaveLength(0);
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
+    expectStalledReaderTeardown(fake, signals);
     expect(signals[0]?.accepted).toBe(false);
     // The stall bound aborted the stream before any event: nothing further is written or destroyed.
     const writesAfterKill = fake.writes.length;
@@ -393,13 +418,7 @@ function registerEventFrameStall<Manager>(binding: BackpressureBinding<Manager>)
     expect(fake.writes[1]).toContain(binding.firstKind);
     expect(fake.destroyCount).toBe(0);
     expect(signals).toHaveLength(0);
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    // The socket is destroyed once and the observer fired exactly once.
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
+    expectStalledReaderTeardown(fake, signals);
     expect(signals[0]?.accepted).toBe(false);
     expect(signals[0]?.frameBytes).toBeGreaterThan(0);
     // The abort unsubscribed from the manager, so a second event produces no further work.
@@ -421,15 +440,9 @@ function registerDrainAndHealthyWrites<Manager>(binding: BackpressureBinding<Man
     const { fake, manager, signals } = openBackpressureStream(binding);
     fake.writeReturns = false;
     binding.emitFirst(manager, "run-drain");
-    fake.emitDrain();
-    fake.writeReturns = true;
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    const writesBefore = fake.writes.length;
-    binding.emitNext(manager, "run-drain");
-    expect(fake.writes).toHaveLength(writesBefore + 1);
-    expect(fake.destroyCount).toBe(0);
+    expectDrainRecovery(fake, signals, () => {
+      binding.emitNext(manager, "run-drain");
+    });
   });
   it("keeps the normal write path intact when res.write returns true", () => {
     const { fake, manager, signals } = openBackpressureStream(binding);
@@ -450,4 +463,106 @@ export function defineSseBackpressureContract<Manager>(
   registerReadyFrameStall(binding);
   registerEventFrameStall(binding);
   registerDrainAndHealthyWrites(binding);
+}
+
+export interface SessionStreamScenario {
+  /** Opens the scenario's stream on `res`, reporting backpressure to `onBackpressure`. */
+  readonly open: (
+    res: ServerResponse,
+    onBackpressure: (signal: SseBackpressureSignal) => void,
+  ) => void;
+  /** Emits the scenario's `sequence`-th session event through its own fresh manager. */
+  readonly emit: (sequence: number) => void;
+}
+
+interface SessionBackpressureBinding {
+  /** The response observation the suite already uses for its streams. */
+  readonly response: () => SseResponseObservation;
+  /** A stream over a fresh manager for one named scenario: "bp", "ready", "late" or "drain". */
+  readonly scenario: (name: string) => SessionStreamScenario;
+}
+
+function openSessionScenario(
+  binding: SessionBackpressureBinding,
+  name: string,
+  stallReady: boolean,
+): {
+  readonly fake: SseResponseObservation;
+  readonly stream: SessionStreamScenario;
+  readonly signals: SseBackpressureSignal[];
+} {
+  vi.useFakeTimers();
+  const fake = binding.response();
+  const stream = binding.scenario(name);
+  const signals: SseBackpressureSignal[] = [];
+  if (stallReady) fake.writeReturns = false;
+  stream.open(fake.res, (signal) => {
+    signals.push(signal);
+  });
+  return { fake, stream, signals };
+}
+
+function registerSessionStall(binding: SessionBackpressureBinding): void {
+  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
+    const { fake, stream, signals } = openSessionScenario(binding, "bp", true);
+    // A false write is flow control: the stream stays open and keeps queueing frames.
+    stream.emit(1);
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    expectStalledReaderTeardown(fake, signals);
+    expect(signals[0]?.accepted).toBe(false);
+    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
+    // The abort unsubscribed, so a second event produces no further writes or destroys.
+    const writesAfterKill = fake.writes.length;
+    stream.emit(2);
+    expect(fake.writes).toHaveLength(writesAfterKill);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    // close firing after an abort-driven unsubscribe must not double-unsubscribe or throw.
+    expect(() => {
+      fake.emitClose();
+    }).not.toThrow();
+  });
+}
+
+function registerSessionFrameStalls(binding: SessionBackpressureBinding): void {
+  it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
+    // The ready frame is written before any manager event. If it is queued and the reader never
+    // drains it, the stalled-reader bound must still tear the stream down without a later event.
+    const { fake, signals } = openSessionScenario(binding, "ready", true);
+    expect(fake.writes.length).toBeGreaterThan(0);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    expectStalledReaderTeardown(fake, signals);
+  });
+  it("kills a stalled reader on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
+    // The complementary path: ready frame accepted, a later event frame queued and never drained.
+    const { fake, stream, signals } = openSessionScenario(binding, "late", false);
+    expect(fake.destroyCount).toBe(0);
+    fake.writeReturns = false;
+    stream.emit(1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    expectStalledReaderTeardown(fake, signals);
+  });
+}
+
+function registerSessionDrain(binding: SessionBackpressureBinding): void {
+  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
+    const { fake, stream, signals } = openSessionScenario(binding, "drain", true);
+    expectDrainRecovery(fake, signals, () => {
+      stream.emit(1);
+    });
+  });
+}
+
+/** Registers the stalled-reader cases every session-scoped SSE stream must satisfy (KEIKO-0142). */
+export function defineSessionSseBackpressureContract(binding: SessionBackpressureBinding): void {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  registerSessionStall(binding);
+  registerSessionFrameStalls(binding);
+  registerSessionDrain(binding);
 }

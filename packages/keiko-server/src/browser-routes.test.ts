@@ -1,4 +1,7 @@
-import { createSseResponseObservation } from "../../../tests/support/sse-subscription-observations.js";
+import {
+  createSseResponseObservation,
+  defineSessionSseBackpressureContract,
+} from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // ADR-0017 D8 — /api/browser/* route integration tests. A FakeBrowserSessionManager replaces
@@ -17,7 +20,7 @@ import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import type { ServerResponse } from "node:http";
 import { handleBrowserEvents, openBrowserSseStream } from "./browser.js";
-import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "./sse-write.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -704,137 +707,20 @@ function browserEvent(sessionId: string, kind: string, seq: number): BrowserEven
 }
 
 describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeBrowserSessionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openBrowserSseStream(
-      fake.res,
-      manager,
-      "session-bp",
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    // A false write is flow control: the stream stays open and keeps queueing frames.
-    manager.emit("session-bp", browserEvent("session-bp", "navigated", 1));
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
-
-    const writesAfterKill = fake.writes.length;
-    manager.emit("session-bp", browserEvent("session-bp", "navigated", 2));
-    expect(fake.writes).toHaveLength(writesAfterKill);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-
-    expect(() => {
-      fake.emitClose();
-    }).not.toThrow();
-  });
-
-  it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeBrowserSessionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openBrowserSseStream(
-      fake.res,
-      manager,
-      "session-ready",
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    expect(fake.writes.length).toBeGreaterThan(0);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-  });
-
-  it("kills a stalled reader on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeBrowserSessionManager();
-    const signals: SseBackpressureSignal[] = [];
-    openBrowserSseStream(
-      fake.res,
-      manager,
-      "session-late",
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    expect(fake.destroyCount).toBe(0);
-
-    fake.writeReturns = false;
-    manager.emit("session-late", browserEvent("session-late", "navigated", 1));
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-  });
-
-  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeBrowserSessionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openBrowserSseStream(
-      fake.res,
-      manager,
-      "session-drain",
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    fake.emitDrain();
-    fake.writeReturns = true;
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
-
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    const writesBefore = fake.writes.length;
-    manager.emit("session-drain", browserEvent("session-drain", "navigated", 1));
-    expect(fake.writes).toHaveLength(writesBefore + 1);
-    expect(fake.destroyCount).toBe(0);
+  defineSessionSseBackpressureContract({
+    response: makeFakeSseRes,
+    scenario: (name) => {
+      const manager = new FakeBrowserSessionManager();
+      const sessionId = `session-${name}`;
+      return {
+        open: (res, onBackpressure): void => {
+          openBrowserSseStream(res, manager, sessionId, (value) => value, onBackpressure);
+        },
+        emit: (sequence): void => {
+          manager.emit(sessionId, browserEvent(sessionId, "navigated", sequence));
+        },
+      };
+    },
   });
 
   it("keeps the session-closed early-return intact while wired to the controller", () => {
