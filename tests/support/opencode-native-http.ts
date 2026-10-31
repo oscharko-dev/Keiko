@@ -1,3 +1,7 @@
+import {
+  createOpenCodeV2HttpClient,
+  type OpenCodeV2HttpClient,
+} from "../../packages/keiko-server/src/coding-runtime/opencodeV2HttpClient.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 const MAX_FIXTURE_BODY_BYTES = 4 * 1_024 * 1_024;
@@ -220,4 +224,25 @@ export function writeNativeHttpScriptedTurn(
     return;
   }
   writeNativeHttpStreamedTurn(response, { content: "Fixture turn completed." }, "stop", streamId);
+}
+
+export interface NativeService {
+  readonly client: OpenCodeV2HttpClient;
+  request(method: "GET" | "POST", path: string): Promise<unknown>;
+}
+
+/** The pinned runtime's typed client plus a raw authenticated JSON request for a fixture. */
+export function nativeServiceAt(endpoint: string, password: string): NativeService {
+  const authorization = `Basic ${Buffer.from(`opencode:${password}`, "utf8").toString("base64")}`;
+  return {
+    client: createOpenCodeV2HttpClient({ endpoint, password }),
+    request: async (method, path): Promise<unknown> => {
+      const response = await fetch(`${endpoint}${path}`, {
+        method,
+        headers: { Authorization: authorization },
+      });
+      if (!response.ok) throw new Error(`fixture-request-failed:${String(response.status)}`);
+      return response.status === 204 ? undefined : ((await response.json()) as unknown);
+    },
+  };
 }

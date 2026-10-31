@@ -1,4 +1,11 @@
-import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
+import {
+  materializeNativeConfiguration,
+  nativeChildEnvironment,
+  nativeFixtureLaunchProfile,
+  nativeFixturePolicy,
+  initializeFixtureGitWorkspace,
+} from "../../../../tests/support/opencode-native-launch.js";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -25,7 +32,6 @@ import {
 import { nativeHttpEventFrame as frame } from "../../../../tests/support/opencode-native-http.js";
 import {
   buildRuntimeGatewaySeatbeltCommand,
-  createRuntimeGatewayConfinement,
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
@@ -64,7 +70,6 @@ import {
 } from "../mcp/mcpCredentialRelay.js";
 import { bindNativeMcpRelays } from "./opencodeNativeMcpRelay.js";
 import { createRemoteSkillsPort } from "./opencodeRemoteSkills.js";
-import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 import type {
@@ -355,16 +360,7 @@ function createFixture(): Fixture {
   mkdirSync(workspace, { recursive: true });
   mkdirSync(state, { recursive: true, mode: 0o700 });
   writeFileSync(join(workspace, "README.md"), "repository items fixture\n");
-  const git = resolveDarwinGitExecutable();
-  const initialized = spawnSync(git.path, ["init", "-q", workspace], {
-    env: {
-      HOME: state,
-      PATH: dirname(git.path),
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: "/dev/null",
-    },
-  });
-  if (initialized.status !== 0) throw new Error("fixture-git-initialization-failed");
+  initializeFixtureGitWorkspace(workspace, state);
   return {
     root,
     workspace,
@@ -442,21 +438,6 @@ interface Launched {
   readonly password: string;
 }
 
-function materializePrivateConfiguration(state: string, config: string): void {
-  const configRoot = join(state, "config", "opencode");
-  for (const path of [
-    join(configRoot, "plugins"),
-    join(state, "home"),
-    join(state, "state"),
-    join(state, "tmp"),
-  ])
-    mkdirSync(path, { recursive: true, mode: 0o700 });
-  writeFileSync(join(configRoot, "opencode.json"), config, { mode: 0o600 });
-  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native"))) {
-    writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
-  }
-}
-
 interface Ports {
   readonly gateway: number;
   readonly facade: number;
@@ -470,36 +451,18 @@ function launch(
   mcp?: OpenCodeNativeMcpAdmission["config"],
   agentModels?: OpenCodeAgentModelsInput,
 ): { readonly profile: ReturnType<typeof buildOpenCodeLaunchProfile>; start: () => Launched } {
-  const profile = buildOpenCodeLaunchProfile({
-    executable: binary,
-    stateRoot: fixture.state,
-    toolProfile: "native",
+  const profile = nativeFixtureLaunchProfile(binary, fixture.state, {
     ...(mcp === undefined ? {} : { mcp }),
     ...(agentModels === undefined ? {} : { agentModels }),
-    contextGeometry: {
-      contextWindowTokens: 32_768,
-      maxInputTokens: 24_000,
-      maxOutputTokens: 4_096,
-    },
   });
-  if (!profile.ok) throw new Error("fixture-profile-invalid");
-  materializePrivateConfiguration(fixture.state, profile.config);
+  materializeNativeConfiguration(fixture.state, profile.config);
   const git = resolveDarwinGitExecutable();
-  const policy = createRuntimeGatewayConfinement({
+  const policy = nativeFixturePolicy({
     gatewayUrl: `http://127.0.0.1:${String(ports.gateway)}/v1`,
     runId: RUN_ID,
-    treeBindingId: "a".repeat(64),
-    envelopeDigest: "b".repeat(64),
-    runtimeArtifactDigest: "c".repeat(64),
-    modelProfileDigest: "d".repeat(64),
-    profile: "keiko-native",
-    filesystem: {
-      workspaceRoot: fixture.workspace,
-      workspaceAccess: "read-write",
-      privateStateRoot: fixture.state,
-      runtimeReadRoot: runtimeRoot,
-      protectedWriteRoots: [openCodeConfigDirectory(fixture.state)],
-    },
+    workspace: fixture.workspace,
+    state: fixture.state,
+    runtimeRoot,
   });
   const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
@@ -510,16 +473,15 @@ function launch(
       password,
       child: spawn(command.command, [...command.args], {
         cwd: fixture.workspace,
-        env: {
-          ...profile.env,
-          PATH: `${dirname(git.path)}:/usr/bin:/bin`,
-          KEIKO_MODEL_GATEWAY_URL: `http://127.0.0.1:${String(ports.gateway)}/v1`,
-          KEIKO_MODEL_GATEWAY_CAPABILITY: GATEWAY_CAPABILITY,
-          KEIKO_TOOL_FACADE_URL: `http://127.0.0.1:${String(ports.facade)}/native-policy`,
-          KEIKO_TOOL_FACADE_CAPABILITY: FACADE_CAPABILITY,
-          KEIKO_CODING_RUN_ID: RUN_ID,
-          KEIKO_CODING_MODE: "governed-assist",
-        },
+        env: nativeChildEnvironment(profile.env, {
+          path: `${dirname(git.path)}:/usr/bin:/bin`,
+          gatewayUrl: `http://127.0.0.1:${String(ports.gateway)}/v1`,
+          gatewayCapability: GATEWAY_CAPABILITY,
+          facadeUrl: `http://127.0.0.1:${String(ports.facade)}/native-policy`,
+          facadeCapability: FACADE_CAPABILITY,
+          runId: RUN_ID,
+          mode: "governed-assist",
+        }),
         stdio: ["ignore", "pipe", "pipe"],
       }),
     }),

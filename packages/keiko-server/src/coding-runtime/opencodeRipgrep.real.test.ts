@@ -1,4 +1,10 @@
-import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
+import {
+  nativeFixtureLaunchProfile,
+  prepareNativeConfigurationRoot,
+  initializeFixtureGitWorkspace,
+  removeFixtureRootAfterFailure,
+} from "../../../../tests/support/opencode-native-launch.js";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -21,7 +27,7 @@ import {
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
 import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
-import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
+import { openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
 import {
   resolveOpenCodeRipgrep,
   ripgrepLaunchEnvironment,
@@ -41,6 +47,7 @@ import {
 import {
   nativeChildEndpoint as childEndpoint,
   withNativeChild,
+  NATIVE_FIXTURE_DIGESTS,
 } from "../../../../tests/support/opencode-native-child.js";
 
 /**
@@ -125,39 +132,15 @@ function createFixture(): Fixture {
     mkdirSync(state, { recursive: true, mode: 0o700 });
     writeFileSync(join(workspace, "README.md"), "ripgrep launch fixture\n");
     writeFileSync(join(workspace, "src", "notes.txt"), `alpha\n${NEEDLE} beta\n`);
-    const git = resolveDarwinGitExecutable();
-    const initialized = spawnSync(git.path, ["init", "-q", workspace], {
-      env: {
-        HOME: state,
-        PATH: dirname(git.path),
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-      },
-    });
-    if (initialized.status !== 0) throw new Error("fixture-git-initialization-failed");
+    initializeFixtureGitWorkspace(workspace, state);
     return { root, workspace, state };
   } catch (error) {
-    try {
-      rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-    } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], "fixture-root-cleanup-failed", {
-        cause: cleanupError,
-      });
-    }
-    throw error;
+    removeFixtureRootAfterFailure(temporaryRoot, error);
   }
 }
 
 function materializePrivateConfiguration(state: string, config: string): void {
-  const configRoot = join(state, "config", "opencode");
-  for (const path of [
-    join(configRoot, "plugins"),
-    join(state, "home"),
-    join(state, "state"),
-    join(state, "tmp"),
-  ])
-    mkdirSync(path, { recursive: true, mode: 0o700 });
-  writeFileSync(join(configRoot, "opencode.json"), config, { mode: 0o600 });
+  const configRoot = prepareNativeConfigurationRoot(state, config);
   for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native")))
     writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
 }
@@ -189,17 +172,7 @@ function launch(
   resolution: OpenCodeRipgrepResolution,
   allowlist: KernelAllowlist,
 ): Launched {
-  const profile = buildOpenCodeLaunchProfile({
-    executable: binary,
-    stateRoot: fixture.state,
-    toolProfile: "native",
-    contextGeometry: {
-      contextWindowTokens: 32_768,
-      maxInputTokens: 24_000,
-      maxOutputTokens: 4_096,
-    },
-  });
-  if (!profile.ok) throw new Error("fixture-profile-invalid");
+  const profile = nativeFixtureLaunchProfile(binary, fixture.state);
   materializePrivateConfiguration(fixture.state, profile.config);
   const git = resolveDarwinGitExecutable();
   const launcher = launcherPath();
@@ -210,10 +183,7 @@ function launch(
   const policy = createRuntimeGatewayConfinement({
     gatewayUrl: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
     runId: "run-ripgrep-real",
-    treeBindingId: "a".repeat(64),
-    envelopeDigest: "b".repeat(64),
-    runtimeArtifactDigest: "c".repeat(64),
-    modelProfileDigest: "d".repeat(64),
+    ...NATIVE_FIXTURE_DIGESTS,
     profile: "keiko-native",
     filesystem: {
       workspaceRoot: fixture.workspace,

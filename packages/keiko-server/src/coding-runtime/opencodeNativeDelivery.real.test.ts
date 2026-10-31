@@ -1,4 +1,13 @@
-import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
+import {
+  nativeFixtureLaunchProfile,
+  prepareNativeConfigurationRoot,
+  spawnConfinedNativeChild,
+  type ConfinedNativeChild,
+  withPinnedNativeSession,
+  initializeFixtureGitWorkspace,
+  removeFixtureRootAfterFailure,
+} from "../../../../tests/support/opencode-native-launch.js";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -11,20 +20,11 @@ import {
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import {
-  buildRuntimeGatewaySeatbeltCommand,
-  createRuntimeGatewayConfinement,
-  resolveDarwinGitExecutable,
-} from "@oscharko-dev/keiko-sandbox";
+import { resolveDarwinGitExecutable } from "@oscharko-dev/keiko-sandbox";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { isGatewayNativeToolAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import {
-  buildOpenCodeLaunchProfile,
-  openCodeConfigDirectory,
-  openCodePlanDirectory,
-} from "./opencodeLaunchProfile.js";
+import { openCodeConfigDirectory, openCodePlanDirectory } from "./opencodeLaunchProfile.js";
 import {
   OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
   OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE,
@@ -43,19 +43,14 @@ import {
   hasExactOpenCodeVisibleToolContract,
 } from "./opencodeToolSchemas.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
-import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
-import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 import {
   writeNativeHttpScriptedTurn,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
   type NativeHttpStub as Stub,
+  type NativeService,
 } from "../../../../tests/support/opencode-native-http.js";
-import {
-  nativeChildEndpoint as childEndpoint,
-  withNativeChild,
-} from "../../../../tests/support/opencode-native-child.js";
 
 /**
  * Original-runtime proof of Git delivery for native runs (#3897, T12/B1): the pinned OpenCode loads
@@ -184,26 +179,10 @@ function createFixture(): Fixture {
     mkdirSync(workspace, { recursive: true });
     mkdirSync(state, { recursive: true, mode: 0o700 });
     writeFileSync(join(workspace, FIXTURE_FILE), "native delivery fixture\n");
-    const git = resolveDarwinGitExecutable();
-    const initialized = spawnSync(git.path, ["init", "-q", workspace], {
-      env: {
-        HOME: state,
-        PATH: dirname(git.path),
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-      },
-    });
-    if (initialized.status !== 0) throw new Error("fixture-git-initialization-failed");
+    initializeFixtureGitWorkspace(workspace, state);
     return { root, workspace, state };
   } catch (error) {
-    try {
-      rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-    } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], "fixture-root-cleanup-failed", {
-        cause: cleanupError,
-      });
-    }
-    throw error;
+    removeFixtureRootAfterFailure(temporaryRoot, error);
   }
 }
 
@@ -225,10 +204,7 @@ function workspaceGit(
   return { status: result.status, stdout: result.stdout };
 }
 
-interface Launched {
-  readonly child: ChildProcessByStdio<null, Readable, Readable>;
-  readonly password: string;
-}
+type Launched = ConfinedNativeChild;
 
 interface LaunchOptions {
   /** `on` loads a throwaway observation plugin beside the generated ones (never product code). */
@@ -242,15 +218,7 @@ function materializePrivateConfiguration(
   config: string,
   options: LaunchOptions,
 ): void {
-  const configRoot = join(state, "config", "opencode");
-  for (const path of [
-    join(configRoot, "plugins"),
-    join(state, "home"),
-    join(state, "state"),
-    join(state, "tmp"),
-  ])
-    mkdirSync(path, { recursive: true, mode: 0o700 });
-  writeFileSync(join(configRoot, "opencode.json"), config, { mode: 0o600 });
+  const configRoot = prepareNativeConfigurationRoot(state, config);
   for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native"))) {
     if (name === OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE && options.deliveryPlugin === "absent")
       continue;
@@ -269,75 +237,22 @@ function launch(
   stubs: { readonly gateway: Stub; readonly facade: FacadeStub },
   options: LaunchOptions,
 ): Launched {
-  const profile = buildOpenCodeLaunchProfile({
-    executable: binary,
-    stateRoot: fixture.state,
-    toolProfile: "native",
-    contextGeometry: {
-      contextWindowTokens: 32_768,
-      maxInputTokens: 24_000,
-      maxOutputTokens: 4_096,
-    },
-  });
-  if (!profile.ok) throw new Error("fixture-profile-invalid");
+  const profile = nativeFixtureLaunchProfile(binary, fixture.state);
   materializePrivateConfiguration(fixture.state, profile.config, options);
-  const git = resolveDarwinGitExecutable();
-  const policy = createRuntimeGatewayConfinement({
+  return spawnConfinedNativeChild({
+    binary,
+    profile,
+    gitPath: resolveDarwinGitExecutable().path,
+    workspace: fixture.workspace,
+    state: fixture.state,
+    runtimeRoot,
     gatewayUrl: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
+    gatewayCapability: GATEWAY_CAPABILITY,
+    facadeUrl: `http://127.0.0.1:${String(stubs.facade.port)}/facade`,
+    facadeCapability: FACADE_CAPABILITY,
     runId: RUN_ID,
-    treeBindingId: "a".repeat(64),
-    envelopeDigest: "b".repeat(64),
-    runtimeArtifactDigest: "c".repeat(64),
-    modelProfileDigest: "d".repeat(64),
-    profile: "keiko-native",
-    filesystem: {
-      workspaceRoot: fixture.workspace,
-      workspaceAccess: "read-write",
-      privateStateRoot: fixture.state,
-      runtimeReadRoot: runtimeRoot,
-      protectedWriteRoots: [openCodeConfigDirectory(fixture.state)],
-    },
+    mode: stubs.facade.mode,
   });
-  const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
-  const password = profile.env.OPENCODE_SERVER_PASSWORD;
-  if (password === undefined) throw new Error("fixture-password-missing");
-  return {
-    password,
-    child: spawn(command.command, [...command.args], {
-      cwd: fixture.workspace,
-      env: {
-        ...profile.env,
-        PATH: `${dirname(git.path)}:/usr/bin:/bin`,
-        KEIKO_MODEL_GATEWAY_URL: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
-        KEIKO_MODEL_GATEWAY_CAPABILITY: GATEWAY_CAPABILITY,
-        KEIKO_TOOL_FACADE_URL: `http://127.0.0.1:${String(stubs.facade.port)}/facade`,
-        KEIKO_TOOL_FACADE_CAPABILITY: FACADE_CAPABILITY,
-        KEIKO_CODING_RUN_ID: RUN_ID,
-        KEIKO_CODING_MODE: stubs.facade.mode,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  };
-}
-
-interface Service {
-  readonly client: OpenCodeV2HttpClient;
-  request(method: "GET" | "POST", path: string): Promise<unknown>;
-}
-
-function serviceAt(endpoint: string, password: string): Service {
-  const authorization = `Basic ${Buffer.from(`opencode:${password}`, "utf8").toString("base64")}`;
-  return {
-    client: createOpenCodeV2HttpClient({ endpoint, password }),
-    request: async (method, path): Promise<unknown> => {
-      const response = await fetch(`${endpoint}${path}`, {
-        method,
-        headers: { Authorization: authorization },
-      });
-      if (!response.ok) throw new Error(`fixture-request-failed:${String(response.status)}`);
-      return response.status === 204 ? undefined : ((await response.json()) as unknown);
-    },
-  };
 }
 
 /**
@@ -376,7 +291,7 @@ interface Run {
   readonly fixture: Fixture;
   readonly gateway: GatewayStub;
   readonly facade: FacadeStub;
-  readonly service: Service;
+  readonly service: NativeService;
   readonly sessionId: string;
 }
 
@@ -414,12 +329,8 @@ async function withRun(
           { gateway, facade },
           options,
         );
-        await withNativeChild(launched.child, async (): Promise<void> => {
-          const service = serviceAt(await childEndpoint(launched.child), launched.password);
-          expect((await service.client.info()).version).toBe(OPENCODE_PINNED_VERSION);
-          const session = await service.client.createSession(fixture.workspace);
-          if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
-          await body({ fixture, gateway, facade, service, sessionId: session.id });
+        await withPinnedNativeSession(launched, fixture.workspace, async (service, sessionId) => {
+          await body({ fixture, gateway, facade, service, sessionId });
         });
       });
     });

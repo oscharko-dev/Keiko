@@ -91,3 +91,11 @@ export function assertNativeCleanupFailure(failure: unknown, primary: Error, cle
   assert.strictEqual(errors[0], primary);
   assert.strictEqual(errors[1], cleanup);
 }
+
+/** The fixture identities every real-binary suite binds its native confinement policy to. */
+export const NATIVE_FIXTURE_DIGESTS = {
+  treeBindingId: "a".repeat(64),
+  envelopeDigest: "b".repeat(64),
+  runtimeArtifactDigest: "c".repeat(64),
+  modelProfileDigest: "d".repeat(64),
+} as const;

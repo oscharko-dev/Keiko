@@ -198,6 +198,25 @@ function clientDiagnosticEvents(sink: BufferedServerLogSink): readonly ServerLog
   return sink.events.filter((event) => event.op === "client.diagnostic");
 }
 
+// A routine report burst past its budget is never refused and overflows into one routine
+// rate-limit notice, while a failure report after it still has its own, untouched budget.
+async function expectRoutineBurstSparesFailureBudget(
+  sink: BufferedServerLogSink,
+  routineBody: string,
+): Promise<void> {
+  for (let index = 1; index <= 61; index += 1) {
+    await handleClientDiagnosticIngest(context(routineBody));
+  }
+  expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
+  const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+  expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+  expect(clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary")).toBe(
+    true,
+  );
+  const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+  expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+}
+
 function clientDiagnosticLine(sink: BufferedServerLogSink): Record<string, unknown> {
   const index = sink.events.findIndex((event) => event.op === "client.diagnostic");
   expect(index).toBeGreaterThanOrEqual(0);
@@ -1382,20 +1401,7 @@ describe("POST /api/diagnostics/client", () => {
       correlationId: "ui_repo-discarded-0001",
       gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
     });
-    for (let index = 1; index <= 61; index += 1) {
-      await handleClientDiagnosticIngest(context(settled));
-    }
-    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
-
-    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
-    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
-    expect(
-      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
-    ).toBe(true);
-    // The routine burst itself stays bounded: its overflow is one routine rate-limit notice, and
-    // the failure budget was never touched.
-    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
-    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+    await expectRoutineBurstSparesFailureBudget(sink, settled);
   });
 
   // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits —
@@ -1525,19 +1531,7 @@ describe("POST /api/diagnostics/client", () => {
       },
     });
     // One more than a budget admits in a window: the burst spends the routine budget alone.
-    for (let index = 1; index <= 61; index += 1) {
-      await handleClientDiagnosticIngest(context(restored));
-    }
-    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
-
-    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
-    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
-    expect(
-      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
-    ).toBe(true);
-    // The routine burst itself stays bounded: its overflow is one routine rate-limit notice.
-    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
-    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+    await expectRoutineBurstSparesFailureBudget(sink, restored);
   });
 
   it("refuses a restored coding run's report whose counts cannot describe one restoration", async () => {
@@ -1766,17 +1760,7 @@ describe("POST /api/diagnostics/client", () => {
       },
     });
     // One more than a budget admits in a window: the burst spends the routine budget alone.
-    for (let index = 1; index <= 61; index += 1) {
-      await handleClientDiagnosticIngest(context(toggled));
-    }
-
-    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
-    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
-    expect(
-      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
-    ).toBe(true);
-    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
-    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+    await expectRoutineBurstSparesFailureBudget(sink, toggled);
   });
 
   // #4109: a runtime request the Workbench gave up on at its own deadline is one warn line that
@@ -2469,20 +2453,7 @@ describe("POST /api/diagnostics/client", () => {
       kind: "other",
       selectDismissal: { reason: "escape", focus: "option" },
     });
-    for (let index = 1; index <= 61; index += 1) {
-      await handleClientDiagnosticIngest(context(dismissed));
-    }
-    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
-
-    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
-    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
-    expect(
-      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
-    ).toBe(true);
-    // The routine burst itself stays bounded: its overflow is one routine rate-limit notice, and
-    // the failure budget was never touched.
-    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
-    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+    await expectRoutineBurstSparesFailureBudget(sink, dismissed);
   });
 
   it("rejects an invalid correlationId and retains the validated ingest correlation", async () => {
