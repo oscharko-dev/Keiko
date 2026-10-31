@@ -2,9 +2,9 @@ import {
   isSafeAtlassianIdentifier,
   JIRA_FIELD_ID_PATTERN,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-contracts";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
+import { compareCodePoints } from "./jira-report-order.js";
 import type { JiraReportHttp } from "./jira-report-http.js";
 import type { JiraReportFieldCatalogEntry } from "./jira-report-types.js";
 
@@ -66,14 +66,9 @@ export async function discoverHierarchyFields(
     parentFieldIds: fields
       .filter((field) => field.custom === EPIC_LINK_TYPE || field.custom === PARENT_LINK_TYPE)
       .map((field) => field.id)
-      .sort(compareStrings),
+      .sort(compareCodePoints),
     epicNameFieldId: fields.find((field) => field.custom === EPIC_NAME_TYPE)?.id,
   };
-}
-
-function requirementState(read: number, wanted: number): JiraReportRequiredFields["state"] {
-  if (read === wanted) return "applied";
-  return read === 0 ? "unavailable" : "partial";
 }
 
 export interface JiraReportRequiredFields {
@@ -134,6 +129,11 @@ async function typeRequirements(
   return reason === undefined ? { fields: requiredIds(values) } : { reason };
 }
 
+function requiredState(read: number, expected: number): JiraReportRequiredFields["state"] {
+  if (read === expected) return "applied";
+  return read === 0 ? "unavailable" : "partial";
+}
+
 /** Fields the instance requires on create, per issue type of a project (current metadata). */
 export async function loadRequiredFields(
   http: JiraReportHttp,
@@ -162,9 +162,6 @@ export async function loadRequiredFields(
     if ("fields" in item && id !== undefined) byType.set(id, item.fields);
     else if ("reason" in item) reason = item.reason;
   });
-  return {
-    state: requirementState(byType.size, ids.length),
-    ...(reason === undefined ? {} : { reason }),
-    byType,
-  };
+  const state = requiredState(byType.size, ids.length);
+  return { state, ...(reason === undefined ? {} : { reason }), byType };
 }

@@ -1,28 +1,13 @@
-const HIGH_SURROGATE_START = 0xd800;
-const LOW_SURROGATE_END = 0xdfff;
-
-function isSurrogate(unit: number): boolean {
-  return unit >= HIGH_SURROGATE_START && unit <= LOW_SURROGATE_END;
-}
-function compareWholeCodePoints(left: string, right: string): number {
-  const a = Array.from(left, (char) => char.codePointAt(0) ?? 0);
-  const b = Array.from(right, (char) => char.codePointAt(0) ?? 0);
-  const shared = Math.min(a.length, b.length);
-  for (let index = 0; index < shared; index += 1) {
-    const difference = (a[index] ?? 0) - (b[index] ?? 0);
-    if (difference !== 0) return difference;
-  }
-  return a.length - b.length;
-}
-
 /** Locale-free order by Unicode code point, so a digest never depends on the host's ICU. */
 export function compareCodePoints(left: string, right: string): number {
-  const shared = Math.min(left.length, right.length);
-  for (let index = 0; index < shared; index += 1) {
-    const a = left.charCodeAt(index);
-    const b = right.charCodeAt(index);
-    if (a === b) continue;
-    return isSurrogate(a) || isSurrogate(b) ? compareWholeCodePoints(left, right) : a - b;
+  const a = left[Symbol.iterator]();
+  const b = right[Symbol.iterator]();
+  for (;;) {
+    const x = a.next();
+    const y = b.next();
+    if (x.done === true || y.done === true)
+      return Number(x.done !== true) - Number(y.done !== true);
+    const difference = (x.value.codePointAt(0) ?? 0) - (y.value.codePointAt(0) ?? 0);
+    if (difference !== 0) return difference;
   }
-  return left.length - right.length;
 }

@@ -145,7 +145,10 @@ function csvOf(report: JiraReport): string {
 // line breaks are collapsed so a value cannot start a new block (heading, list, table row).
 const MARKDOWN_SPECIAL = /[\\`*_{}[\]()#+!<>|&~]/gu;
 function markdownText(value: string | number): string {
-  return String(value).replaceAll(/\s+/gu, " ").trim().replaceAll(MARKDOWN_SPECIAL, "\\$&");
+  return String(value)
+    .replaceAll(/\s+/gu, " ")
+    .trim()
+    .replaceAll(MARKDOWN_SPECIAL, String.raw`\$&`);
 }
 function cell(value: string | number): string {
   return markdownText(value);
@@ -317,20 +320,28 @@ function keyList(label: string, keys: readonly string[]): string {
     keys.length > COMMENT_LIST_MAX ? ` and ${String(keys.length - COMMENT_LIST_MAX)} more` : "";
   return `${label} (${String(keys.length)}): ${shown}${more}`;
 }
+function stateText(report: JiraReport): string {
+  const { completeness } = report;
+  return completeness.complete ? "complete" : `incomplete: ${completeness.reason ?? "unknown"}`;
+}
+function readText(report: JiraReport): string {
+  const { issuesRead, issuesTotal } = report.completeness;
+  const total = issuesTotal === undefined ? "" : ` of ${String(issuesTotal)}`;
+  return `${String(issuesRead)}${total}`;
+}
+function estimateUnitText(report: JiraReport): string {
+  const { estimateUnit, estimateFieldId } = report.scope;
+  return estimateUnit === "seconds" ? "seconds" : `unit of ${estimateFieldId ?? "field"}`;
+}
 /** Numbers and issue keys only, so the text is safe in a Jira comment and cannot carry markup. */
 export function jiraReportCommentText(report: JiraReport): string {
   const { project, unassigned, overdue } = report.progress;
-  const { completeness, compliance, coverage } = report;
-  const state = completeness.complete
-    ? "complete"
-    : "incomplete: " + (completeness.reason ?? "unknown");
-  const total =
-    completeness.issuesTotal === undefined ? "" : " of " + String(completeness.issuesTotal);
+  const { compliance, coverage } = report;
   const lines = [
-    `Keiko Jira report ${report.scope.projectKey ?? ""} (${state}), digest ${report.digest}`,
-    `Issues read: ${String(completeness.issuesRead)}${total}`,
+    `Keiko Jira report ${report.scope.projectKey ?? ""} (${stateText(report)}), digest ${report.digest}`,
+    `Issues read: ${readText(report)}`,
     `Progress: ${String(project.total)} issues, ${String(project.new)} to do, ${String(project.indeterminate)} in progress, ${String(project.done)} done (${String(project.donePercent)}%), ${String(project.noCategory)} without category`,
-    `Estimate (${report.scope.estimateUnit === "seconds" ? "seconds" : `unit of ${report.scope.estimateFieldId ?? "field"}`}): ${String(project.estimate.total)} total, ${String(project.estimate.done)} done, ${String(project.estimate.remaining)} remaining`,
+    `Estimate (${estimateUnitText(report)}): ${String(project.estimate.total)} total, ${String(project.estimate.done)} done, ${String(project.estimate.remaining)} remaining`,
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,
     `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesChecked)} issues deviate (${String(compliance.deviationCount)} deviations)`,
     ...compliance.byRule.map((item) => `Rule ${item.ruleId}: ${String(item.count)} issues`),

@@ -58,8 +58,7 @@ function epicIssue(epic: number): FixtureIssue {
   };
 }
 export function syntheticProject(size: number): readonly FixtureIssue[] {
-  const issues: FixtureIssue[] = [];
-  for (let epic = 1; epic <= 4; epic += 1) issues.push(epicIssue(epic));
+  const issues: FixtureIssue[] = [1, 2, 3, 4].map(epicIssue);
   let lastStory = 4;
   for (let index = 5; index <= size; index += 1) {
     const key = `REP-${String(index)}`;
@@ -73,6 +72,19 @@ export function syntheticProject(size: number): readonly FixtureIssue[] {
       );
   }
   return issues;
+}
+function epicIssue(epic: number): FixtureIssue {
+  return {
+    key: `REP-${String(epic)}`,
+    type: "Epic",
+    category: epic === 3 ? "done" : "indeterminate",
+    status: epic === 3 ? "Closed" : "Working",
+    summary: epic <= 3 ? `Epic ${String(epic)} for REQ-00${String(epic)}.` : "Epic without members",
+    links: [],
+    assignee: epic !== 2,
+    acceptance: "n/a",
+    labels: epic === 1 ? ["REQ-004"] : [],
+  };
 }
 function storyIssue(index: number, key: string): FixtureIssue {
   const withEpic = index % 9 !== 0;

@@ -8,9 +8,9 @@ import {
   JIRA_REPORT_SECTIONS,
   type JiraReportSection,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { jqlClause } from "./jira-report-jql.js";
+import { compareCodePoints } from "./jira-report-order.js";
 import type { JiraReportRequest } from "./jira-report-session.js";
 
 export const JIRA_REPORT_SECTION_PAGE_DEFAULT = 25;
@@ -41,12 +41,7 @@ const SCOPE_KEYS: ReadonlySet<string> = new Set([
   "parentFieldIds",
   "requirementIds",
 ]);
-const CONTINUE_KEYS: ReadonlySet<string> = new Set([
-  "reportId",
-  "section",
-  "startAt",
-  "maxResults",
-]);
+const CONTINUE_KEYS = new Set(["reportId", "section", "startAt", "maxResults"]);
 
 function stringList(value: unknown, max: number, pattern: RegExp): readonly string[] | undefined {
   if (value === undefined) return [];
@@ -55,7 +50,7 @@ function stringList(value: unknown, max: number, pattern: RegExp): readonly stri
   const valid = items.filter(
     (item): item is string => typeof item === "string" && pattern.test(item),
   );
-  return valid.length === items.length ? [...new Set(valid)].sort(compareStrings) : undefined;
+  return valid.length === items.length ? [...new Set(valid)].sort(compareCodePoints) : undefined;
 }
 function optionalField(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;

@@ -4,7 +4,6 @@ import {
   JIRA_REPORT_STATUS_CATEGORIES,
   type JiraReportStatusCategory,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { compareCodePoints } from "./jira-report-order.js";
 import type {
@@ -67,7 +66,7 @@ function linkedKeysOf(fields: Record<string, unknown>): readonly string[] {
       if (key !== undefined) keys.add(key);
     }
   }
-  return [...keys].sort(compareStrings);
+  return [...keys].sort(compareCodePoints);
 }
 function estimateOf(
   fields: Record<string, unknown>,
@@ -125,8 +124,8 @@ function dedupeDeviations(items: readonly JiraReportDeviation[]): readonly JiraR
       compareCodePoints(left.fieldId ?? "", right.fieldId ?? ""),
   );
 }
-/** Drops a trailing run of `.`, `_` and `-` without a backtracking expression. */
-function withoutTrailingPunctuation(token: string): string {
+/** A trailing dot, dash or underscore ends a sentence, not an identifier. */
+function trimTrailingSeparators(token: string): string {
   let end = token.length;
   while (end > 0 && ".-_".includes(token.charAt(end - 1))) end -= 1;
   return token.slice(0, end);
@@ -142,11 +141,11 @@ function referencedRequirements(
   const found = new Set<string>();
   for (const text of [summary, ...labels, description]) {
     for (const match of text.matchAll(TOKEN_PATTERN)) {
-      const token = withoutTrailingPunctuation(match[0]);
+      const token = trimTrailingSeparators(match[0]);
       if (plan.requirementIds.has(token)) found.add(token);
     }
   }
-  return [...found].sort(compareStrings);
+  return [...found].sort(compareCodePoints);
 }
 function checkerFacts(
   key: string,
