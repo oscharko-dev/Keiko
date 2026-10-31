@@ -14,6 +14,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { compareByCodeUnit } from "./adf-to-text.js";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { JIRA_ISSUE_LINKS_MAX, parseJiraIssueLinks } from "./jira-issue-links.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
@@ -226,7 +227,7 @@ function identitySignature(
           scope: relationScope(link, identities),
         }),
       )
-      .sort(),
+      .sort(compareByCodeUnit),
   });
 }
 /**
