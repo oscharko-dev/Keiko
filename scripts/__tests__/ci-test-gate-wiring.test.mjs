@@ -226,51 +226,54 @@ const HTML_MANUAL_FIXTURE_IDS = [
 
 describe("CI test/gate wiring guard", () => {
   it.each([
-    ["packages", 5, ".vitest-reports"],
-    ["scripts", 3, ".vitest-reports-scripts"],
-  ])("requires every native %s coverage shard before merging", (scope, count, directory) => {
-    const workflow = parse(ci);
-    const job = workflow.jobs[`coverage-${scope}`];
-    expect(job.strategy["fail-fast"]).toBe(false);
-    expect(job.strategy.matrix.shard).toEqual(Array.from({ length: count }, (_, i) => i + 1));
-    expect(job["timeout-minutes"]).toBe(30);
-    expect(job.steps.find((step) => step.run?.includes(`test:coverage:${scope}:shard`)).run).toBe(
-      `npm run test:coverage:${scope}:shard -- --shard=${"${{ matrix.shard }}"}/${count} --reporter=github-actions`,
-    );
-    const finalizer = workflow.jobs["coverage-sonar"].steps;
-    const admission = finalizer.find(
-      (step) =>
-        step.name ===
-        `Verify every ${scope === "packages" ? "package" : "script"} coverage shard delivered its evidence`,
-    );
-    expect(admission).toBeDefined();
-    const root = mkdtempSync(join(tmpdir(), "keiko-coverage-admission-"));
-    try {
-      const scratch = join(root, directory);
-      // Exercise the actual workflow admission shell; do not substitute a test-only checker.
-      const run = () => spawnSync("bash", ["-c", admission.run], { cwd: root, encoding: "utf8" });
-      expect(run().status).not.toBe(0);
-      mkdirSync(scratch);
-      for (let i = 1; i <= count; i += 1)
-        writeFileSync(join(scratch, `blob-${i}-${count}.json`), "{}");
-      expect(run().status).toBe(0);
-      rmSync(join(scratch, `blob-${count}-${count}.json`));
-      expect(run().status).not.toBe(0);
-      writeFileSync(join(scratch, "blob-foreign.json"), "{}");
-      expect(run().status).not.toBe(0);
-      writeFileSync(join(scratch, `blob-${count}-${count}.json`), "{}");
-      expect(run().status).not.toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-    const merge = finalizer.findIndex(
-      (step) => step.run === `npm run test:coverage:${scope}:merge`,
-    );
-    expect(merge).toBeGreaterThan(finalizer.indexOf(admission));
-    expect(
-      finalizer.findIndex((step) => step.run === "npm run check:coverage:quality"),
-    ).toBeGreaterThan(merge);
-  });
+    ["packages", 5, 30, ".vitest-reports"],
+    ["scripts", 3, 45, ".vitest-reports-scripts"],
+  ])(
+    "requires every native %s coverage shard before merging",
+    (scope, count, minutes, directory) => {
+      const workflow = parse(ci);
+      const job = workflow.jobs[`coverage-${scope}`];
+      expect(job.strategy["fail-fast"]).toBe(false);
+      expect(job.strategy.matrix.shard).toEqual(Array.from({ length: count }, (_, i) => i + 1));
+      expect(job["timeout-minutes"]).toBe(minutes);
+      expect(job.steps.find((step) => step.run?.includes(`test:coverage:${scope}:shard`)).run).toBe(
+        `npm run test:coverage:${scope}:shard -- --shard=${"${{ matrix.shard }}"}/${count} --reporter=github-actions`,
+      );
+      const finalizer = workflow.jobs["coverage-sonar"].steps;
+      const admission = finalizer.find(
+        (step) =>
+          step.name ===
+          `Verify every ${scope === "packages" ? "package" : "script"} coverage shard delivered its evidence`,
+      );
+      expect(admission).toBeDefined();
+      const root = mkdtempSync(join(tmpdir(), "keiko-coverage-admission-"));
+      try {
+        const scratch = join(root, directory);
+        // Exercise the actual workflow admission shell; do not substitute a test-only checker.
+        const run = () => spawnSync("bash", ["-c", admission.run], { cwd: root, encoding: "utf8" });
+        expect(run().status).not.toBe(0);
+        mkdirSync(scratch);
+        for (let i = 1; i <= count; i += 1)
+          writeFileSync(join(scratch, `blob-${i}-${count}.json`), "{}");
+        expect(run().status).toBe(0);
+        rmSync(join(scratch, `blob-${count}-${count}.json`));
+        expect(run().status).not.toBe(0);
+        writeFileSync(join(scratch, "blob-foreign.json"), "{}");
+        expect(run().status).not.toBe(0);
+        writeFileSync(join(scratch, `blob-${count}-${count}.json`), "{}");
+        expect(run().status).not.toBe(0);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+      const merge = finalizer.findIndex(
+        (step) => step.run === `npm run test:coverage:${scope}:merge`,
+      );
+      expect(merge).toBeGreaterThan(finalizer.indexOf(admission));
+      expect(
+        finalizer.findIndex((step) => step.run === "npm run check:coverage:quality"),
+      ).toBeGreaterThan(merge);
+    },
+  );
 
   it("keeps package coverage blob paths aligned with the governed Vitest 4 reporter", () => {
     expect(rootManifest.scripts["test:coverage:packages:shard"]).toContain("--reporter=blob");

@@ -754,13 +754,15 @@ jobs:
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     # #4145: the anti-slop engine suites pushed the single scripts job past its 30-minute bound.
-    # The epic branch measured two shards, but dev's own scripts suite has grown since: both CI
-    # runs on 3a8884fda cancelled shard 1/2 at 30 minutes and shard 2/2 needed 29. Three shards
-    # restore the margin; the responsibilities suite alone runs about 20 minutes and cannot split.
+    # Three shards spread the rest of the suite, but a shard cannot split one file. Under coverage,
+    # code-quality-symbols.test.mjs ran past 29 minutes and code-quality-responsibilities.test.mjs
+    # needed up to 27 (883 s and 595 s without coverage). Both CI runs on 082463ff5 cancelled the
+    # shard holding the symbols suite at 30 minutes. The cap therefore matches the 45 minutes of
+    # Node 26 compatibility, which runs the same suites. Coverage shards for packages keep 30.
     strategy:
       fail-fast: false
       matrix:
