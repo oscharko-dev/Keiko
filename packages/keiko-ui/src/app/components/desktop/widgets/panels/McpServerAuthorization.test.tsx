@@ -18,7 +18,7 @@ function panel(authorized = false): ReturnType<typeof vi.fn> {
   return changed;
 }
 it("opens the validated sign-in URL and observes completion without repeating the start", async () => {
-  let finish: ((answer: unknown) => void) | undefined;
+  const status = Promise.withResolvers<unknown>();
   api
     .mockResolvedValueOnce({
       outcome: "started",
@@ -26,19 +26,14 @@ it("opens the validated sign-in URL and observes completion without repeating th
       authorizationUrl: "https://identity.example.test/authorize",
       expiresAtMs: Date.now() + 300_000,
     })
-    .mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
+    .mockReturnValueOnce(status.promise);
   const changed = panel();
   fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
   const link = await screen.findByRole("link", { name: "Open sign-in page" });
   expect(link).toHaveAttribute("href", "https://identity.example.test/authorize");
   expect(link).toHaveAttribute("rel", "noopener noreferrer");
   await act(async () => {
-    finish?.({ state: "complete" });
+    status.resolve({ state: "complete" });
   });
   await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
   expect(api.mock.calls.filter(([path]) => path.endsWith("/authorization"))).toHaveLength(1);
