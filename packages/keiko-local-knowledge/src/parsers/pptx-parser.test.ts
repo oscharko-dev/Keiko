@@ -124,6 +124,110 @@ describe("pptxParser", () => {
     ]);
   });
 
+  describe("long titles", () => {
+    const filler = "A".repeat(120);
+
+    it("shortens only the section label and keeps the complete title in the indexed text", async () => {
+      const title = `${filler} LH-099 Required control`;
+      const bytes = buildPptx([
+        slide("slide1.xml", "rId1", [
+          shapeXml("title", paragraphXml(title)),
+          shapeXml(undefined, paragraphXml("Body line")),
+        ]),
+      ]);
+      const result = await parse(bytes);
+
+      expect(result.diagnostics).toEqual([]);
+      expect(result.sections[0]?.sectionPath).toEqual([`Slide 1: ${filler}`]);
+      expect(textOf(result)).toContain("LH-099 Required control");
+      expect(textOf(result)).toContain(`${title}\nBody line`);
+    });
+
+    it("keeps every paragraph of a multi-paragraph title that exceeds the label length", async () => {
+      const bytes = buildPptx([
+        slide("slide1.xml", "rId1", [
+          shapeXml(
+            "ctrTitle",
+            paragraphXml(`${filler} first`),
+            paragraphXml("second LH-100"),
+            paragraphXml("third LH-101"),
+          ),
+        ]),
+      ]);
+      const result = await parse(bytes);
+      const text = textOf(result);
+
+      expect(result.sections[0]?.sectionPath[0]).toBe(`Slide 1: ${filler}`);
+      expect(text).toContain(`${filler} first\nsecond LH-100\nthird LH-101`);
+    });
+
+    it("does not repeat a title that fits the label", async () => {
+      const bytes = buildPptx([
+        slide("slide1.xml", "rId1", [
+          shapeXml("title", paragraphXml("Short"), paragraphXml("title")),
+        ]),
+      ]);
+      const text = textOf(await parse(bytes));
+
+      expect(text).toBe("Slide 1: Short title");
+    });
+  });
+
+  describe("XML-aware tokenization", () => {
+    const rawSlide = (...shapes: readonly string[]): readonly FixtureSlide[] => [
+      { file: "slide1.xml", relationshipId: "rId1", xml: slidePartXml(...shapes) },
+    ];
+    const specShape = (ph: string, text: string): string =>
+      `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Shape"/><p:cNvSpPr/><p:nvPr>${ph}</p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/>${paragraphXml(text)}</p:txBody></p:sp>`;
+
+    it("ignores element-looking text inside comments", async () => {
+      const ghost = `<!-- ${shapeXml(undefined, paragraphXml("Fictional shape"))} -->`;
+      const inside = "<a:p><a:r><!-- <a:t>ghost run</a:t> --><a:t>real</a:t></a:r></a:p>";
+      const bytes = buildPptx(
+        rawSlide(ghost, shapeXml(undefined, inside), "<!-- <!DOCTYPE x> <?pi?> -->"),
+      );
+      const result = await parse(bytes);
+
+      expect(result.diagnostics).toEqual([]);
+      expect(textOf(result)).toBe("Slide 1\nreal");
+    });
+
+    it("emits CDATA as literal character data without its wrapper", async () => {
+      const cdata = "<a:p><a:r><a:t>x <![CDATA[a <b> &amp; &#65; c]]> y</a:t></a:r></a:p>";
+      const bytes = buildPptx(rawSlide(shapeXml(undefined, cdata)));
+      const text = textOf(await parse(bytes));
+
+      expect(text).toBe("Slide 1\nx a <b> &amp; &#65; c y");
+      expect(text).not.toContain("CDATA");
+    });
+
+    it("keeps a quoted > inside an attribute value within its tag", async () => {
+      const bytes = buildPptx(
+        rawSlide(specShape('<p:ph name="a > b" type="title"/>', "Quoted title")),
+      );
+
+      expect((await parse(bytes)).sections[0]?.sectionPath).toEqual(["Slide 1: Quoted title"]);
+    });
+
+    it("reads an attribute by its own name, not from text inside another value", async () => {
+      const bytes = buildPptx(
+        rawSlide(specShape(`<p:ph name="x type='title'" type="body"/>`, "Body text")),
+      );
+      const result = await parse(bytes);
+
+      expect(result.sections[0]?.sectionPath).toEqual(["Slide 1"]);
+      expect(textOf(result)).toBe("Slide 1\nBody text");
+    });
+
+    it("decodes predefined entities and numeric references in attribute values", async () => {
+      const bytes = buildPptx(
+        rawSlide(specShape(`<p:ph name="&lt;" type="&#116;itle"/>`, "Decoded title")),
+      );
+
+      expect((await parse(bytes)).sections[0]?.sectionPath).toEqual(["Slide 1: Decoded title"]);
+    });
+  });
+
   it("treats a table without a header row as positional columns", async () => {
     const bytes = buildPptx([
       slide("slide1.xml", "rId1", [
@@ -199,6 +303,27 @@ describe("pptxParser", () => {
       ]);
 
       expect(codes(await parse(bytes))).toEqual(["MALFORMED_INPUT"]);
+    });
+
+    it.each([
+      ["an unmatched start tag before a closing tag", "<p:sld><p:cSld><broken</p:cSld></p:sld>"],
+      ["a start tag cut off before its end", "<p:sld><p:cSld></p:cSld></p:sld><broken"],
+      ["an unquoted attribute value", "<p:sld><p:ph type=title/></p:sld>"],
+      ["an unterminated attribute value", '<p:sld><p:ph type="title/></p:sld>'],
+      ["a repeated attribute", '<p:sld><p:ph type="a" type="b"/></p:sld>'],
+      ["attributes without separating whitespace", '<p:sld><p:ph type="a"id="b"/></p:sld>'],
+      ["a bare < in character data", "<p:sld><a:t>1 < 2</a:t></p:sld>"],
+      ["an unterminated comment", "<p:sld><!-- never closed </p:sld>"],
+      ["an unterminated CDATA section", "<p:sld><a:t><![CDATA[never closed</a:t></p:sld>"],
+      ["a processing instruction", "<p:sld><?target data?><a:t>x</a:t></p:sld>"],
+      ["an XML declaration after the start", '<p:sld><?xml version="1.0"?></p:sld>'],
+      ["attributes on a closing tag", '<p:sld></p:sld type="a">'],
+    ])("rejects %s", async (_label, xml) => {
+      const bytes = buildPptx([{ file: "slide1.xml", relationshipId: "rId1", xml }]);
+      const result = await parse(bytes);
+
+      expect(codes(result)).toEqual(["MALFORMED_INPUT"]);
+      expect(result.units).toEqual([]);
     });
 
     it("rejects bytes that are not a zip archive", async () => {

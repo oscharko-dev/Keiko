@@ -195,15 +195,27 @@ function projectTable(item: Extract<PartItem, { kind: "table" }>): readonly stri
     });
 }
 
-function titleOf(items: readonly PartItem[]): string {
-  const words: string[] = [];
-  for (const item of items) {
-    if (item.kind === "shape" && TITLE_PLACEHOLDERS.has(item.placeholder ?? "")) {
-      words.push(...item.paragraphs);
-    }
-  }
-  const title = words.join(" ").replaceAll(/\s+/gu, " ").trim();
-  return Array.from(title).slice(0, MAX_TITLE_CHARACTERS).join("");
+function titleParagraphsOf(items: readonly PartItem[]): readonly string[] {
+  return items.flatMap((item) =>
+    item.kind === "shape" && TITLE_PLACEHOLDERS.has(item.placeholder ?? "") ? item.paragraphs : [],
+  );
+}
+
+interface SlideTitle {
+  /** Shortened title for the section label (the citation path); never the indexed content. */
+  readonly label: string;
+  /** Complete title paragraphs that the shortened label cannot carry; empty when it fits. */
+  readonly overflow: readonly string[];
+}
+
+function titleOf(items: readonly PartItem[]): SlideTitle {
+  const paragraphs = titleParagraphsOf(items);
+  const title = paragraphs.join(" ").replaceAll(/\s+/gu, " ").trim();
+  const characters = Array.from(title);
+  return {
+    label: characters.slice(0, MAX_TITLE_CHARACTERS).join(""),
+    overflow: characters.length > MAX_TITLE_CHARACTERS ? paragraphs : [],
+  };
 }
 
 function bodyLines(items: readonly PartItem[]): readonly string[] {
@@ -235,10 +247,12 @@ function slideTextOf(
   notesItems: readonly PartItem[],
 ): SlideText | undefined {
   const title = titleOf(slideItems);
-  const lines = [...bodyLines(slideItems), ...noteLines(notesItems)];
-  if (title.length === 0 && lines.length === 0) return undefined;
+  const lines = [...title.overflow, ...bodyLines(slideItems), ...noteLines(notesItems)];
+  if (title.label.length === 0 && lines.length === 0) return undefined;
   const label =
-    title.length === 0 ? `Slide ${String(number)}` : `Slide ${String(number)}: ${title}`;
+    title.label.length === 0
+      ? `Slide ${String(number)}`
+      : `Slide ${String(number)}: ${title.label}`;
   return { label, lines };
 }
 
