@@ -280,7 +280,7 @@ function normalized(path: string): string | undefined {
 /** A directory selection covers what is inside it; a files selection only the files it lists. */
 function scopeCovers(scope: ChatConnectedScope, path: string): boolean {
   if (scope.kind === "workspace-root") return true;
-  const selected = scope.relativePaths.map(normalized);
+  const selected = scope.relativePaths.map((path) => normalized(path));
   if (scope.kind === "files") return selected.includes(path);
   return selected.some(
     (directory) =>

@@ -192,7 +192,9 @@ async function readbackAttachment(
   if (!response.ok) return requestFailure(response);
   const attachments = asArray(asRecord(response.body?.fields)?.attachment);
   if (response.status !== 200 || attachments === undefined) return MALFORMED;
-  const stored = attachments.map(asRecord).find((value) => value?.id === expected.id);
+  const stored = attachments
+    .map((value) => asRecord(value))
+    .find((value) => value?.id === expected.id);
   const names = [expected.name, jiraAttachmentAsciiName(expected.name)];
   const matches =
     stored?.size === expected.size &&
