@@ -4,7 +4,8 @@
 # time-boxed decision with a recorded reason, not a blanket suppression. `ignoreUntil` forces the
 # entry back through this gate on that date, so a stale waiver cannot outlive its justification.
 # Nothing here weakens the scan for shipped dependencies — only build-time-only findings may be
-# recorded: ones with no upstream fix, or whose patched release cannot be adopted without a separately
+# recorded: ones with no upstream fix, ones whose patched release no published release of the
+# consuming package can load, or ones whose patched release cannot be adopted without a separately
 # governed gate change (that entry names the change and its follow-up). Each must state why it cannot
 # reach a user.
 #
@@ -44,4 +45,37 @@ Revisit condition: drop this entry as soon as braces publishes a patched release
 @next/eslint-plugin-next stops depending on micromatch. Recorded during #3534 (PR #3679): GitHub
 reviewed the advisory on 2026-10-02 at 22:36 UTC, after the last green scan on dev, and OSV began
 matching it minutes later.
+"""
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2026-11-30
+reason = """
+minimatch denial of service through globparts amplification (CVE-2026-118764, medium; CVSS 4.0
+6.9). The advisory
+covers every release before 11.0.1. The other affected instance, the shipped
+node_modules/minimatch (via @sigstore/tuf -> tuf-js -> @tufjs/models) and its build-time consumers,
+is moved to 11.0.3 by the root `minimatch@10` override, so this entry covers only the instance that
+cannot follow it.
+
+Reach: the remaining instance is minimatch@3.1.5 at
+node_modules/eslint-config-next/node_modules/minimatch, flagged dev, required by
+eslint-plugin-import@2.32.0, eslint-plugin-jsx-a11y@6.10.2 and eslint-plugin-react@7.37.5 under the
+keiko-ui devDependency eslint-config-next@16.4.2. `npm ls --omit=dev --all minimatch` lists only
+11.0.3. Those rules call minimatch only while the keiko-ui lint runs, with glob patterns taken from
+the ESLint rule options this repository authors; the advisory's amplification is driven by the
+pattern. Neither the distributed package nor the UI's static export contains it, so no user and
+no untrusted pattern reaches it; the worst case is a lint process stalled by a pattern a
+committer wrote.
+
+No adoptable fix exists for this instance: the latest eslint-plugin-import (2.32.0),
+eslint-plugin-jsx-a11y (6.10.2) and eslint-plugin-react (7.37.5) all require minimatch ^3.1.2, and
+the latest eslint-config-next (16.4.3) still requires them. They call `require("minimatch")` as a
+function or through its default export, and eslint-plugin-import's no-internal-modules calls
+`minimatch.makeRe`. minimatch dropped the default export in 9.0 and `makeRe` in 11.0, so an
+override to 11.x makes those rules throw a TypeError.
+
+Revisit condition: drop this entry as soon as minimatch publishes a patched 3.x release, or once
+those three plugins (or eslint-config-next) accept minimatch 11. Recorded on 2026-10-31: GitHub
+published the advisory on 2026-10-30 at 23:09 UTC, after the last green scan on dev.
 """
