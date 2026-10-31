@@ -686,6 +686,41 @@ describe("a governed task branch in a local checkout (#3907)", () => {
     expect(service.admitTaskBranch(instance.workspaceId)).toBe("admitted");
   });
 
+  it("restores the instance and rethrows when reading the adopted checkout fails", () => {
+    const uiStore = createInMemoryUiStore();
+    uiStore.createProject(root, "local-checkout-fixture");
+    const instances = buildWorkspaceInstanceStoreOverDatabase(db);
+    const pointer = buildActiveWorkspacePointerStoreOverDatabase(db);
+    const failure = new Error("active-read-failed");
+    const managed = {
+      list: (): readonly [] => [],
+      listAll: (): readonly [] => [],
+      getActive: (): never => {
+        throw failure;
+      },
+      clearActive: (): void => {
+        pointer.clear();
+      },
+    } as unknown as WorkspaceLifecycleService;
+    const service = withLocalCheckout(managed, pointer, uiStore, instances, {
+      evidenceStore: capturingEvidenceStore(),
+      redactString: (value): string => value,
+      now: Date.now,
+    });
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("switch", "-c", "task/x");
+    service.clearActive();
+    expect(() =>
+      service.adoptTaskBranch({
+        workspaceId: instance.workspaceId,
+        branch: "task/x",
+        baseBranch: "main",
+      }),
+    ).toThrow(failure);
+    git("switch", "main");
+    expect(service.admitTaskBranch(instance.workspaceId)).toBe("admitted");
+  });
+
   it("refuses to adopt a branch in an unknown workspace", () => {
     const service = fixture();
     expect(() =>

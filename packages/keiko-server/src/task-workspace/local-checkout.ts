@@ -501,10 +501,17 @@ function adoptLocalTaskBranch(
     lastVerifiedAt: atIso,
     lastVerifiedHead: head,
   });
-  const active = getActive();
+  // The record goes back on its base branch with the checkout the caller restores, whether the
+  // adopted checkout reads as inactive or the read itself fails, so a run that rolled back can ask
+  // for its task branch again (#4170 review).
+  let active: ActiveWorkspaceView | undefined;
+  try {
+    active = getActive();
+  } catch (error) {
+    instances.upsert(instance);
+    throw error;
+  }
   if (active === undefined) {
-    // The record goes back on its base branch with the checkout the caller restores, so a run
-    // that rolled back can ask for its task branch again (#4170 review).
     instances.upsert(instance);
     throw new TaskWorkspaceError("POINTER_DRIFT", "The local checkout could not be verified.");
   }
