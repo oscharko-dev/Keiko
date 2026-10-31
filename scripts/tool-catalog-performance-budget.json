@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "target": "tool-catalog",
   "policy": "reviewed-non-widening-ceilings-v1",
-  "calibrationSha256": "c375dda88e833935a342786fb52c671829fb53024bab386ef27e3c82c86d2499",
+  "calibrationSha256": "10acdba62712c3ea6062198bf6815fe70155854bba363d1aa5cb3e2bcd13a85f",
   "ceilingP95Ms": {
     "legacy-native-6-tool": {
       "coldCompileMs": 10.366624999999658,
