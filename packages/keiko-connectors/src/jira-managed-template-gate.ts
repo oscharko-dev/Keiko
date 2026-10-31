@@ -293,7 +293,9 @@ async function checkCandidates(
 ): Promise<JiraTemplateGateResult> {
   const undecidable = jiraTemplatesNeedingTransitionNames(candidates, subjectOf(input, first));
   if (undecidable.length > 0)
-    return undecidableTransitionRefusal(undecidable.map(jiraIssueTemplateLabel));
+    return undecidableTransitionRefusal(
+      undecidable.map((template) => jiraIssueTemplateLabel(template)),
+    );
   const matching = matchingJiraIssueTemplates(candidates, subjectOf(input, first));
   if (matching.length === 0) return OK;
   const catalog = await completeCatalog(input, matching);
