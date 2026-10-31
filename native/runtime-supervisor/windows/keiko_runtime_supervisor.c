@@ -1,6 +1,5 @@
 /* KRP1/KRC1/KRS1 no-shell Windows Job Object runtime supervisor. */
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include "gateway_service.h"
 #include <fcntl.h>
 #include <io.h>
 #include <stdint.h>
@@ -326,33 +325,57 @@ static HANDLE configured_job(const char *recovery_handle, HANDLE *completion_por
   return job;
 }
 
-static int initialize_startup_info(STARTUPINFOEXW *startup, HANDLE inherited[3], HANDLE *job) {
+static int initialize_startup_info(STARTUPINFOEXW *startup, HANDLE inherited[3], HANDLE *job,
+                                   SECURITY_CAPABILITIES *capabilities) {
   SIZE_T attribute_size = 0;
+  DWORD attributes = capabilities ? 3 : 2;
   memset(startup, 0, sizeof(*startup));
   startup->StartupInfo.cb = sizeof(*startup);
   startup->StartupInfo.dwFlags = STARTF_USESTDHANDLES;
   startup->StartupInfo.hStdInput = inherited[0];
   startup->StartupInfo.hStdOutput = inherited[1];
   startup->StartupInfo.hStdError = inherited[2];
-  InitializeProcThreadAttributeList(NULL, 2, 0, &attribute_size);
+  InitializeProcThreadAttributeList(NULL, attributes, 0, &attribute_size);
   startup->lpAttributeList = calloc(1, attribute_size);
   if (startup->lpAttributeList == NULL) return 0;
-  if (InitializeProcThreadAttributeList(startup->lpAttributeList, 2, 0, &attribute_size)) {
+  if (InitializeProcThreadAttributeList(startup->lpAttributeList, attributes, 0, &attribute_size)) {
     /* Bind the suspended child to its kill-on-close job in CreateProcessW itself. A
      * supervisor crash must never strand a process between creation and job assignment. */
     if (UpdateProcThreadAttribute(startup->lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
                                   job, sizeof(*job), NULL, NULL) &&
         UpdateProcThreadAttribute(startup->lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                                  inherited, 3 * sizeof(HANDLE), NULL, NULL)) return 1;
+                                  inherited, 3 * sizeof(HANDLE), NULL, NULL) &&
+        (!capabilities || UpdateProcThreadAttribute(startup->lpAttributeList, 0,
+          PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, capabilities, sizeof(*capabilities),
+          NULL, NULL))) return 1;
     DeleteProcThreadAttributeList(startup->lpAttributeList);
   }
   free(startup->lpAttributeList);
   return 0;
 }
 
+static int admit_gateway(struct keiko_gateway_connection *gateway, HANDLE job,
+                         const struct launch_request *request) {
+  BYTE frame[KEIKO_GATEWAY_OPEN_BYTES];
+  HANDLE control = (HANDLE)_get_osfhandle(3);
+  ULONGLONG deadline = GetTickCount64() + 4000;
+  DWORD available;
+  while (PeekNamedPipe(control, NULL, 0, NULL, &available, NULL)) {
+    if (available >= sizeof(frame))
+      return read_exact(3, frame, sizeof(frame)) &&
+             !memcmp(frame + 44, request->recovery_handle, KRP_RECOVERY_HANDLE_BYTES) &&
+             keiko_gateway_confirm(gateway, job, frame);
+    if (GetTickCount64() >= deadline) break;
+    Sleep(10);
+  }
+  return 0;
+}
+
 static int launch_in_job(const struct launch_request *request, HANDLE job,
-                         PROCESS_INFORMATION *process) {
+                         PROCESS_INFORMATION *process, struct keiko_gateway_connection *gateway) {
   STARTUPINFOEXW startup;
+  SECURITY_CAPABILITIES capabilities = {0};
+  if (gateway) capabilities.AppContainerSid = gateway->sid;
   /* UpdateProcThreadAttribute retains this pointer through CreateProcessW. A callee-local array
    * expires when startup initialization returns, causing ERROR_INVALID_PARAMETER without inlining. */
   HANDLE inherited[3] = {GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
@@ -365,10 +388,11 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
                 EXTENDED_STARTUPINFO_PRESENT;
   BOOL created = FALSE;
   if (executable != NULL && cwd != NULL && line != NULL && environment != NULL &&
-      initialize_startup_info(&startup, inherited, &job)) {
+      initialize_startup_info(&startup, inherited, &job, gateway ? &capabilities : NULL)) {
     created = CreateProcessW(executable, line, NULL, NULL, TRUE, flags, environment, cwd,
                              &startup.StartupInfo, process);
-    if (created && ResumeThread(process->hThread) == (DWORD)-1) {
+    if (created && ((gateway && !admit_gateway(gateway, job, request)) ||
+                    ResumeThread(process->hThread) == (DWORD)-1)) {
       TerminateJobObject(job, 127);
       created = FALSE;
     }
@@ -543,6 +567,8 @@ cleanup:
 }
 
 int wmain(int argc, wchar_t **argv) {
+  struct keiko_gateway_connection gateway = {0};
+  int confined = argc == 2 && wcscmp(argv[1], L"--gateway-supervised") == 0;
   struct launch_request request;
   PROCESS_INFORMATION process;
   HANDLE job = NULL, completion_port = NULL;
@@ -556,6 +582,7 @@ int wmain(int argc, wchar_t **argv) {
    * close the remaining search-path surface for any later LoadLibrary-style dependency.
    */
   if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) || !SetDllDirectoryW(L"")) return 1;
+  if (argc == 2 && wcscmp(argv[1], L"--gateway-service") == 0) return keiko_gateway_dispatch();
   if (argc == 2 && wcscmp(argv[1], L"--probe-stdio-owner") == 0) {
     puts("{\"schemaVersion\":1,\"ownedStdio\":\"windows-job\"}");
     return 0;
@@ -563,7 +590,7 @@ int wmain(int argc, wchar_t **argv) {
   if (argc >= 2 && wcscmp(argv[1], L"--stdio-owner") == 0) return mcp_stdio_owner(argc, argv);
   memset(&process, 0, sizeof(process));
   if (argc == 3 && wcscmp(argv[1], L"--reconcile") == 0) return reconcile_job(argv[2]);
-  if (argc != 1) {
+  if (argc != 1 && !confined) {
     (void)send_error(ERROR_PROTOCOL);
     return 1;
   }
@@ -571,12 +598,16 @@ int wmain(int argc, wchar_t **argv) {
     send_error(ERROR_PROTOCOL);
     return 1;
   }
+  if (confined && !keiko_gateway_connect(&gateway)) {
+    send_error(ERROR_PROTOCOL);
+    goto cleanup;
+  }
   job = configured_job(request.recovery_handle, &completion_port);
   if (job == NULL) {
     send_error(ERROR_JOB_CREATE);
     goto cleanup;
   }
-  if (!launch_in_job(&request, job, &process)) {
+  if (!launch_in_job(&request, job, &process, confined ? &gateway : NULL)) {
     send_error(ERROR_PROCESS_CREATE);
     goto cleanup;
   }
@@ -591,6 +622,7 @@ int wmain(int argc, wchar_t **argv) {
   write_u32(proof + 4, active_processes);
   result = send_response(RESPONSE_REAPED, proof, sizeof(proof)) ? 0 : 1;
 cleanup:
+  keiko_gateway_disconnect(&gateway);
   if (result != 0 && job != NULL) TerminateJobObject(job, 137);
   if (process.hProcess != NULL) CloseHandle(process.hProcess);
   if (completion_port != NULL) CloseHandle(completion_port);

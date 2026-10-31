@@ -377,8 +377,8 @@ process.exit(41);
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
-  $supervisorObject = Join-Path $scratch "keiko-runtime-supervisor.obj"
-  & cl.exe @c11Flags $productionMTFlag "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor /link @productionLinkFlags
+  $gatewaySources = @("gateway_service", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
   # #4068 W2/W5: compiling a Job Object supervisor does not prove descendant cleanup. Exercise

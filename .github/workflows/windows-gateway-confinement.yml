@@ -4,7 +4,7 @@ name: Windows gateway confinement development proof
 # Development proof only; this does not qualify the production runtime.
 on:
   push:
-    branches: [fix/3666-windows-coding-runtime]
+    branches: [fix/3666-windows-coding-runtime, feature/4068-windows-workbench]
   workflow_dispatch:
 
 permissions: {}
@@ -34,6 +34,9 @@ jobs:
             throw "The native WFP proof requires an administrator token on the hosted runner."
           }
           if ((Get-Service BFE).Status -ne 'Running') { throw "BFE is not running." }
+      - name: Prove SCM admission before child execution with the installed supervisor
+        run: ./scripts/testing/test-windows-gateway-scm.ps1
+        shell: pwsh
       - name: Compile, analyze, validate and prove dynamic filter cleanup
         run: node scripts/testing/test-windows-gateway-filters.mjs --filter-lifecycle
       - name: Prove durable-deny guard cleanup after gateway permit revocation

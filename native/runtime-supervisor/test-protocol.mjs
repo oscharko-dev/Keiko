@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
+import {
+  windowsGatewaySources,
+  windowsGatewayLibraries,
+} from "../../scripts/build-runtime-supervisor.mjs";
 // KEIKO-0304: the codec and process helpers below used to live in a per-platform copy alongside a
 // second copy under `macos/test-protocol.mjs` that had drifted in six observable ways. Both now
 // import them from `./protocol-harness.mjs`, which reconciled each divergence deliberately (see
@@ -68,8 +72,11 @@ async function compile(sourcePath, output) {
     "/D_UNICODE",
     "/D_CRT_SECURE_NO_WARNINGS",
     `/Fe:${output}`,
-    `/Fo:${objectPath}`,
+    `/Fo:${sourcePath === source ? dirname(output) + "\\" : objectPath}`,
     sourcePath,
+    ...(sourcePath === source
+      ? [...windowsGatewaySources, "/link", ...windowsGatewayLibraries]
+      : []),
   ]);
   assert.equal(
     result.code,
@@ -246,7 +253,7 @@ function runSourceContractOn(rawSource) {
   const codeText = stripStringLiteralBodies(preparedText);
   assert.match(codeText, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/u);
   assert.match(codeText, /CREATE_SUSPENDED/u);
-    assert.match(codeText, /PROC_THREAD_ATTRIBUTE_JOB_LIST,\s*job, sizeof\(\*job\)/u);
+  assert.match(codeText, /PROC_THREAD_ATTRIBUTE_JOB_LIST,\s*job, sizeof\(\*job\)/u);
   assert.match(codeText, /ResumeThread\(process->hThread\)/u);
   assert.match(codeText, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
   assert.match(codeText, /accounting\.ActiveProcesses == 0/u);
