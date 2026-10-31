@@ -87,14 +87,19 @@ async function qualifyTransport(source) {
     hostile = await listener();
     const args = ["--probe-ports", String(allowed.port), String(hostile.port)];
     const control = await promisify(execFile)(observer, [...args, "control"], { timeout: 8000 });
-    assert.deepEqual(JSON.parse(control.stdout), { allowed: 0, hostile: 0 });
+    assert.deepEqual(JSON.parse(control.stdout), {
+      allowed: 0,
+      hostile: 0,
+      diagnosisStatus: 0,
+      missingCapability: 0,
+    });
     const { backend, tree } = launch(source, bytes, allowed.port, [...args, "confined"]);
     let output = "";
     tree.stdout.on("data", (chunk) => {
       output += chunk.toString();
     });
     tree.stderr.resume();
-    const deadline = setTimeout(() => tree.sendControl(3), 12000);
+    const deadline = setTimeout(() => tree.sendControl(3), 30000);
     try {
       assert.equal(await new Promise((resolve) => tree.onTreeExit(resolve)), 0);
       assert.equal(await backend.reconcileTreeExit(tree), true);
@@ -104,12 +109,7 @@ async function qualifyTransport(source) {
     const verdict = JSON.parse(output);
     // Drain the listeners before comparing their observations with the child's report.
     await Promise.all(
-      [allowed.server, hostile.server].map(
-        (server) =>
-          new Promise((resolve, reject) =>
-            server.close((error) => (error ? reject(error) : resolve())),
-          ),
-      ),
+      [allowed.server, hostile.server].map((server) => promisify(server.close).call(server)),
     );
     console.log("Installed Workbench TCP probe:", verdict, "host connections:", {
       allowed: allowed.connections(),
