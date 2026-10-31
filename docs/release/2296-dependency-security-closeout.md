@@ -59,6 +59,15 @@ one explicitly recorded legacy finding. This is not a claim that the upstream
 advisory has been corrected. No package-wide override or indefinite suppression is
 introduced. The earlier security snapshots below remain historical evidence.
 
+The first customer-shape CI run exposed a delivery mismatch: the version-qualified
+modern override installed 11.0.1 locally but was not handled by the existing exact-flat-pin
+runtime staging planner. The real installed-closure test reproduced `missing: ["minimatch"]`.
+Using the supported exact `minimatch: "11.0.1"` pin fixes that test without changing the
+lockfile or installed versions; the earlier version-qualified legacy brace-expansion exception
+still retains 3.1.5 for the lint plugins. Staging now delivers the three affected TUF ancestors
+with exact sibling/leaf peers, preserving their upstream source and license bytes. The package
+test asserts both the bounded archive inventory and the actual staged 11.0.1 dependency.
+
 | Source                     | Result                                                                                                |
 | -------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `npm audit --json`         | Rechecked 2026-10-06: 6 dev-only nodes for 2 recorded advisories; production audit: 0 vulnerabilities |

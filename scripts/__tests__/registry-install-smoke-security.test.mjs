@@ -645,9 +645,12 @@ describe("installable package smoke optional-dependency coverage", () => {
         expect(bundled.filter((name) => !name.startsWith("@oscharko-dev/")).sort()).toEqual([
           "@chevrotain/cst-dts-gen",
           "@chevrotain/gast",
+          "@sigstore/tuf",
+          "@tufjs/models",
           "chevrotain",
           "chevrotain-allstar",
           "java-parser",
+          "tuf-js",
         ]);
       } finally {
         artifact?.cleanup();
@@ -3387,6 +3390,9 @@ describe("installable package smoke optional-dependency coverage", () => {
     // Actual archive bytes/peer edges are pinned by stage-publish-package.test; real consumers
     // separately prove the published runtime. This test retains the installed-closure oracle.
     const plan = prepareRuntimeStagingPlan(ROOT);
+    const tufModels = plan.packages.find((record) => record.manifest.name === "@tufjs/models");
+    expect(tufModels?.stagedManifest.peerDependencies.minimatch).toBe("11.0.1");
+    expect(plan.rootManifest.dependencies.minimatch).toBe("11.0.1");
     const { packages, stubs, missing } = resolveVendorClosure(
       join(ROOT, "node_modules"),
       plan.rootManifest,
