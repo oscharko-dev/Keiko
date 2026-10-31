@@ -19,6 +19,11 @@ import {
   type AtlassianWriteHttpOutcome,
 } from "./atlassian-write-http.js";
 import { validateJiraFieldChanges } from "./jira-field-metadata.js";
+import {
+  jiraIssueLinkUpdate,
+  parseJiraIssueLinks,
+  type JiraIssueLinkRequest,
+} from "./jira-issue-links.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import {
   jiraCreateMutationMetadata,
@@ -61,6 +66,29 @@ function validationFailure(
       validation: result.reason,
       ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
     },
+  };
+}
+type Validated = Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: true }>;
+type Linked =
+  | {
+      readonly ok: true;
+      readonly values: JiraValidatedMutationFields;
+      readonly update: Readonly<Record<string, unknown>>;
+    }
+  | Extract<JiraMutationAttempt, { ok: false }>;
+/** Requested links join Jira's own update; confirmation then reads them back (#4176). */
+function withLinks(
+  metadata: readonly JiraFieldMetadata[],
+  validated: Validated,
+  links: readonly JiraIssueLinkRequest[],
+): Linked {
+  if (links.length === 0) return { ok: true, values: validated, update: validated.update };
+  const linkUpdate = jiraIssueLinkUpdate(metadata, links);
+  if (!linkUpdate.ok) return linkUpdate;
+  return {
+    ok: true,
+    values: { ...validated, links },
+    update: { ...validated.update, issuelinks: linkUpdate.update },
   };
 }
 function numericId(value: unknown): value is string {
@@ -128,20 +156,33 @@ function createContextFields(fields: readonly JiraFieldMetadata[]): readonly Jir
       : field,
   );
 }
+function createArgumentsValid(
+  args: CatalogJsonObject,
+  fields: Record<string, unknown> | undefined,
+  links: readonly JiraIssueLinkRequest[] | undefined,
+): boolean {
+  return (
+    keysAllowed(args, ["projectId", "issueTypeId", "fields", "links"]) &&
+    fields !== undefined &&
+    links !== undefined &&
+    !Object.keys(fields).some(isCreateRoutingField)
+  );
+}
 async function createIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
 ): Promise<JiraMutationAttempt> {
   const { projectId, issueTypeId } = args;
   const fields = fieldsInput(args.fields);
+  const links = parseJiraIssueLinks(args.links);
   if (
-    !keysAllowed(args, ["projectId", "issueTypeId", "fields"]) ||
+    !createArgumentsValid(args, fields, links) ||
     !numericId(projectId) ||
     !numericId(issueTypeId) ||
-    fields === undefined
+    fields === undefined ||
+    links === undefined
   )
     return INVALID;
-  if (Object.keys(fields).some(isCreateRoutingField)) return INVALID;
   const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
   if (!metadata.ok) return metadata;
   const validated = validateJiraFieldChanges(
@@ -151,12 +192,14 @@ async function createIssue(
     "data-center",
   );
   if (!validated.ok) return validationFailure(validated);
+  const linked = withLinks(metadata.fields, validated, links);
+  if (!linked.ok) return linked;
   const response = await request("issue", "POST", {
     fields: validated.fields,
-    update: validated.update,
+    update: linked.update,
   });
   if (!response.ok) return dispatchFailure(response);
-  return confirmCreatedIssue(request, response, metadata.fields, validated);
+  return confirmCreatedIssue(request, response, metadata.fields, linked.values);
 }
 function confirmCreatedIssue(
   request: JiraMutationRequest,
@@ -194,6 +237,27 @@ function fieldMutationTarget(
         receipt: { issueKey, transitionId },
       };
 }
+function transitionArgument(args: CatalogJsonObject): string | undefined {
+  return typeof args.transitionId === "string" ? args.transitionId : undefined;
+}
+function linkedFieldChanges(
+  fields: readonly JiraFieldMetadata[],
+  args: CatalogJsonObject,
+  purpose: "edit" | "transition",
+):
+  | (Extract<Linked, { ok: true }> & { readonly validated: Validated })
+  | Extract<Linked, { ok: false }> {
+  const validated = validateJiraFieldChanges(
+    fields,
+    args.fields ?? {},
+    purpose,
+    "data-center",
+    args.updates ?? [],
+  );
+  if (!validated.ok) return validationFailure(validated);
+  const linked = withLinks(fields, validated, parseJiraIssueLinks(args.links) ?? []);
+  return linked.ok ? { ...linked, validated } : linked;
+}
 async function fieldMutation(
   request: JiraMutationRequest,
   metadata: JiraMutationMetadata,
@@ -203,28 +267,20 @@ async function fieldMutation(
   targetStatusId?: string,
 ): Promise<JiraMutationAttempt> {
   if (!metadata.ok) return metadata;
-  const validated = validateJiraFieldChanges(
-    metadata.fields,
-    args.fields ?? {},
-    purpose,
-    "data-center",
-    args.updates ?? [],
-  );
-  if (!validated.ok) return validationFailure(validated);
-  const transitionId =
-    purpose === "transition" && typeof args.transitionId === "string"
-      ? args.transitionId
-      : undefined;
+  const linked = linkedFieldChanges(metadata.fields, args, purpose);
+  if (!linked.ok) return linked;
+  const { validated } = linked;
+  const transitionId = purpose === "transition" ? transitionArgument(args) : undefined;
   const target = fieldMutationTarget(issueKey, transitionId);
   const prior = await readJiraMutationIssue(
     request,
     issueKey,
-    jiraMutationFieldSelection(validated, transitionId !== undefined),
+    jiraMutationFieldSelection(linked.values, transitionId !== undefined),
   );
   if (!prior.ok) return prior;
   const acknowledged = await statusMutation(request, target.path, target.method, {
     fields: validated.fields,
-    update: validated.update,
+    update: linked.update,
     ...target.body,
   });
   if (!acknowledged.ok) return acknowledged;
@@ -232,7 +288,7 @@ async function fieldMutation(
     issueKey,
     receipt: target.receipt,
     metadata: metadata.fields,
-    values: validated,
+    values: linked.values,
     prior,
     ...(targetStatusId === undefined ? {} : { targetStatusId }),
   });
@@ -244,11 +300,13 @@ async function editIssue(
 ): Promise<JiraMutationAttempt> {
   const fields = fieldsInput(args.fields ?? {});
   const updates = asArray(args.updates ?? []);
+  const links = parseJiraIssueLinks(args.links);
   if (
-    !keysAllowed(args, ["issueKey", "fields", "updates"]) ||
+    !keysAllowed(args, ["issueKey", "fields", "updates", "links"]) ||
     fields === undefined ||
     updates === undefined ||
-    (Object.keys(fields).length === 0 && updates.length === 0)
+    links === undefined ||
+    Object.keys(fields).length + updates.length + links.length === 0
   )
     return INVALID;
   return fieldMutation(

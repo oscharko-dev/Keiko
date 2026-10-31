@@ -154,9 +154,40 @@ describe("bounded Jira metadata field/operation matrix", () => {
     if (!result.ok) throw new Error("Invalid fixture");
     expect(result.fields.map((item) => [item.id, item.kind, item.operations])).toEqual([
       ["attachment", "unsupported", []],
-      ["issuelinks", "unsupported", []],
+      ["issuelinks", "links", ["add"]],
       ["timetracking", "opaque", ["set"]],
     ]);
+    // Links travel only on the dedicated links argument (#4176), never as a plain field write.
+    expect(
+      validateJiraFieldChanges(
+        result.fields,
+        { issuelinks: [{ type: { name: "Blocks" }, outwardIssue: { key: "REQ-2" } }] },
+        "edit",
+        "data-center",
+      ),
+    ).toEqual({ ok: false, reason: "invalid-operation", fieldId: "issuelinks" });
+    expect(
+      validateJiraFieldChanges(result.fields, { attachment: [] }, "edit", "data-center"),
+    ).toEqual({ ok: false, reason: "unsupported-field", fieldId: "attachment" });
+  });
+
+  it("offers issue links only with an add operation on the canonical schema", () => {
+    const result = parseJiraFieldMetadata([
+      field("issuelinks", "array", {
+        schema: { type: "array", items: "issuelinks", system: "issuelinks" },
+        operations: ["set"],
+      }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(result.fields.map((item) => [item.kind, item.operations])).toEqual([["links", []]]);
+    const malformed = parseJiraFieldMetadata([
+      field("issuelinks", "array", {
+        schema: { type: "array", items: "string", system: "issuelinks" },
+        operations: ["add"],
+      }),
+    ]);
+    if (!malformed.ok) throw new Error("Invalid fixture");
+    expect(malformed.fields[0]?.kind).toBe("unsupported");
   });
 
   it.each([

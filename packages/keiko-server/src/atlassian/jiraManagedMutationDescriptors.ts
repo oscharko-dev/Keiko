@@ -10,7 +10,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { object, text } from "./jiraManagedSchemas.js";
-import { JIRA_METADATA_MAX_UPDATES } from "@oscharko-dev/keiko-connectors";
+import { JIRA_ISSUE_LINKS_MAX, JIRA_METADATA_MAX_UPDATES } from "@oscharko-dev/keiko-connectors";
 
 const ISSUE_KEY = { ...text(128), minLength: 1 };
 const NUMERIC_ID = { ...text(32), pattern: "^[0-9]{1,32}$" };
@@ -32,6 +32,20 @@ const UPDATES = {
     ["fieldId", "operation", "value"],
   ),
 };
+const LINKS = {
+  type: "array",
+  maxItems: JIRA_ISSUE_LINKS_MAX,
+  description:
+    'Issue links to add, by Jira link type name (for example "Relates" or "Blocks"). outward means this issue → issueKey (this issue blocks issueKey); inward means issueKey → this issue. Requires the issuelinks field in current metadata; existing links are kept.',
+  items: object(
+    {
+      type: { ...text(255), minLength: 1 },
+      direction: { type: "string", enum: ["inward", "outward"] },
+      issueKey: ISSUE_KEY,
+    },
+    ["type", "direction", "issueKey"],
+  ),
+};
 const DEFINITIONS: Readonly<
   Record<
     JiraMutationOperation,
@@ -44,16 +58,17 @@ const DEFINITIONS: Readonly<
   "jira.create": {
     description:
       "Create one issue using numeric project and issue-type IDs and current required fields. Routing identities cannot be overridden inside fields.",
-    input: object({ projectId: NUMERIC_ID, issueTypeId: NUMERIC_ID, fields: FIELDS }, [
-      "projectId",
-      "issueTypeId",
-      "fields",
-    ]),
+    input: object(
+      { projectId: NUMERIC_ID, issueTypeId: NUMERIC_ID, fields: FIELDS, links: LINKS },
+      ["projectId", "issueTypeId", "fields"],
+    ),
   },
   "jira.edit": {
     description:
-      "Edit selected issue fields using current edit metadata. Supply at least one replacement or supported label update; project and issue type cannot be changed.",
-    input: object({ issueKey: ISSUE_KEY, fields: FIELDS, updates: UPDATES }, ["issueKey"]),
+      "Edit selected issue fields using current edit metadata. Supply at least one replacement, supported label update or link; project and issue type cannot be changed.",
+    input: object({ issueKey: ISSUE_KEY, fields: FIELDS, updates: UPDATES, links: LINKS }, [
+      "issueKey",
+    ]),
   },
   "jira.assign": {
     description:

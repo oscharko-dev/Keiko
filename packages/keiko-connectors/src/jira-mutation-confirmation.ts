@@ -13,6 +13,7 @@ import {
   type JiraFieldValidationResult,
 } from "./jira-field-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { jiraIssueLinksPresent, type JiraIssueLinkRequest } from "./jira-issue-links.js";
 
 type Failure = Extract<JiraMutationAttempt, { ok: false }>;
 export type JiraIssueReadback =
@@ -22,7 +23,9 @@ export type JiraIssueReadback =
       readonly id: string;
       readonly fields: Record<string, unknown>;
     };
-export type JiraValidatedMutationFields = Extract<JiraFieldValidationResult, { ok: true }>;
+export type JiraValidatedMutationFields = Extract<JiraFieldValidationResult, { ok: true }> & {
+  readonly links?: readonly JiraIssueLinkRequest[];
+};
 export interface JiraFieldConfirmation {
   readonly issueKey: string;
   readonly receipt: JiraMutationReceipt;
@@ -65,6 +68,7 @@ export function jiraMutationFieldSelection(
     ...new Set([
       ...Object.keys(values.fields),
       ...Object.keys(values.update),
+      ...((values.links?.length ?? 0) > 0 ? ["issuelinks"] : []),
       ...(transition ? ["status"] : []),
     ]),
   ];
@@ -143,12 +147,31 @@ function updatesMatch(
   values: JiraValidatedMutationFields,
   current: Record<string, unknown>,
 ): boolean {
+  if (values.links !== undefined && !jiraIssueLinksPresent(current.issuelinks, values.links))
+    return false;
   const expected = updatedLabels(values);
   if (expected.size === 0) return true;
   const actual = labels(current.labels);
   return (
     actual !== undefined && [...expected].every(([label, present]) => actual.has(label) === present)
   );
+}
+function fieldChanged(
+  metadata: readonly JiraFieldMetadata[],
+  id: string,
+  expected: unknown,
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): boolean {
+  const field = metadata.find((value) => value.id === id);
+  if (field === undefined) return false;
+  if (field.kind === "opaque")
+    return JSON.stringify(before[id] ?? null) !== JSON.stringify(after[id] ?? null);
+  const prior = comparable(field, before[id], expected);
+  return prior !== undefined && prior !== comparable(field, after[id], expected);
+}
+function linksAdded(values: JiraValidatedMutationFields, before: Record<string, unknown>): boolean {
+  return (values.links ?? []).some((link) => !jiraIssueLinksPresent(before.issuelinks, [link]));
 }
 function relevantChange(input: JiraFieldConfirmation, current: Record<string, unknown>): boolean {
   const prior = input.prior;
@@ -158,17 +181,13 @@ function relevantChange(input: JiraFieldConfirmation, current: Record<string, un
       asRecord(prior.fields.status)?.id !== input.targetStatusId &&
       isSafeAtlassianIdentifier(asRecord(prior.fields.status)?.id)
     );
-  const setsChanged = Object.entries(input.values.fields).some(([id, expected]) => {
-    const field = input.metadata.find((value) => value.id === id);
-    if (field === undefined) return false;
-    if (field.kind === "opaque")
-      return JSON.stringify(prior.fields[id] ?? null) !== JSON.stringify(current[id] ?? null);
-    const before = comparable(field, prior.fields[id], expected);
-    return before !== undefined && before !== comparable(field, current[id], expected);
-  });
+  const setsChanged = Object.entries(input.values.fields).some(([id, expected]) =>
+    fieldChanged(input.metadata, id, expected, prior.fields, current),
+  );
   const beforeLabels = labels(prior.fields.labels);
   return (
     setsChanged ||
+    linksAdded(input.values, prior.fields) ||
     (beforeLabels !== undefined &&
       [...updatedLabels(input.values)].some(
         ([label, present]) => beforeLabels.has(label) !== present,

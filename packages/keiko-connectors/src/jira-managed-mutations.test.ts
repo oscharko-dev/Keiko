@@ -8,6 +8,7 @@ import {
   field,
   REQUIRED_CUSTOM,
   FIELDS,
+  LINKS_FIELD,
   response,
   fixtureRead,
   fixtureWrite,
@@ -799,4 +800,105 @@ it("forwards an opaque plugin value and returns Jira's field error when it refus
   expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
     fields: { customfield_10105: "S1" },
   });
+});
+
+it("adds issue links on Jira's own update and confirms them in their direction (#4176)", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [
+        { type: "Blocks", direction: "outward", issueKey: "SYN-2" },
+        { type: "blocks", direction: "outward", issueKey: "syn-2" },
+        { type: "Relates", direction: "inward", issueKey: "SYN-3" },
+      ],
+    }),
+  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "PUT")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toEqual({
+    fields: {},
+    update: {
+      issuelinks: [
+        { add: { type: { name: "blocks" }, outwardIssue: { key: "syn-2" } } },
+        { add: { type: { name: "Relates" }, inwardIssue: { key: "SYN-3" } } },
+      ],
+    },
+  });
+});
+it("creates an issue with links when create metadata offers them (#4176)", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, LINKS_FIELD],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+      links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
+    }),
+  ).toMatchObject({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    update: {
+      issuelinks: [{ add: { type: { name: "Relates" }, outwardIssue: { key: "SYN-9" } } }],
+    },
+  });
+});
+it("refuses links before dispatch when current metadata does not offer them (#4176)", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+      links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
+    }),
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "issuelinks", validation: "unsupported-field" },
+  });
+  expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+});
+it.each([
+  [{ type: "Blocks", direction: "sideways", issueKey: "SYN-2" }],
+  [{ type: "Blocks", direction: "outward", issueKey: "not a key" }],
+  [{ type: "Blocks\n", direction: "outward", issueKey: "SYN-2" }],
+  [{ type: "Blocks", direction: "outward", issueKey: "SYN-2", extra: true }],
+  Array.from({ length: 21 }, (_, index) => ({
+    type: "Relates",
+    direction: "outward",
+    issueKey: `SYN-${String(index + 2)}`,
+  })),
+])("refuses malformed links without contacting Jira (#4176)", async (...links) => {
+  const f = fixture();
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", links })).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+  });
+  expect(f.http).not.toHaveBeenCalled();
+});
+it("does not confirm an edit whose requested link is missing on readback (#4176)", async () => {
+  const f = fixture();
+  f.http.mockImplementation((request) => {
+    const path = new URL(request.url).pathname;
+    if (request.method !== "GET") return Promise.resolve(response(undefined, 204));
+    return Promise.resolve(
+      fixtureRead(path, { fields: { summary: "Original", issuelinks: [] }, comment: "" }),
+    );
+  });
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [{ type: "Blocks", direction: "outward", issueKey: "SYN-2" }],
+    }),
+  ).toEqual({ ok: false, reason: "conflict" });
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
 });

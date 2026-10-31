@@ -108,10 +108,32 @@ function opaqueReadValue(value: unknown): CatalogJsonObject {
     ? { state: "value", text }
     : { state: "unavailable" };
 }
+function nested(raw: Record<string, unknown> | undefined, key: string, name: string): unknown {
+  return asRecord(raw?.[key])?.[name];
+}
+function linkReadEntry(entry: unknown): CatalogJsonObject[] {
+  const raw = asRecord(entry);
+  const type = nested(raw, "type", "name");
+  const outward = nested(raw, "outwardIssue", "key");
+  const issueKey = outward ?? nested(raw, "inwardIssue", "key");
+  return typeof type === "string" && typeof issueKey === "string"
+    ? [{ type, direction: outward === undefined ? "inward" : "outward", issueKey }]
+    : [];
+}
+/** Links read as `{ type, direction, issueKey }` JSON text from this issue's perspective. */
+function linksReadValue(value: unknown): CatalogJsonObject {
+  const entries = asArray(value);
+  if (value === null || entries?.length === 0) return { state: "empty" };
+  if (entries === undefined) return { state: "unavailable" };
+  const links = entries.slice(0, 100).flatMap(linkReadEntry);
+  const text = JSON.stringify(links);
+  return jiraProjectionTextFits(text) ? { state: "value", text } : { state: "unavailable" };
+}
 export function projectJiraFieldReadValue(
   field: JiraFieldMetadata,
   value: unknown,
 ): CatalogJsonObject {
+  if (field.kind === "links") return linksReadValue(value);
   if (field.kind === "issue") return issueReadValue(value);
   if (field.kind === "opaque") return opaqueReadValue(value);
   return typedReadValue(field, value);

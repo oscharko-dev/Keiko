@@ -59,7 +59,6 @@ const SCHEMA_TYPE: Readonly<Record<string, JiraFieldKind>> = {
 const DEDICATED_SYSTEM_FIELDS: ReadonlySet<string> = new Set([
   "attachment",
   "comment",
-  "issuelinks",
   "issuekey",
   "project",
   "issuetype",
@@ -103,6 +102,7 @@ function systemKind(id: string, schema: Record<string, unknown>): JiraFieldKind 
   if (schema.system !== id) return undefined;
   if (Object.hasOwn(STANDARD, id)) return STANDARD[id];
   if (id === "parent") return "issue";
+  if (id === "issuelinks") return "links";
   return DEDICATED_SYSTEM_FIELDS.has(id) ? undefined : "opaque";
 }
 function declaredKind(id: string, schema: Record<string, unknown>): JiraFieldKind | undefined {
@@ -122,11 +122,25 @@ function expectedItem(id: string, item: string): string {
   if (id === "components") return "component";
   return id === "versions" || id === "fixVersions" ? "version" : item;
 }
+// Kinds whose shape is fixed by one Jira schema type (and item type).
+const STRUCTURAL: Readonly<Partial<Record<JiraFieldKind, readonly [string, unknown]>>> = {
+  issue: ["issuelink", undefined],
+  links: ["array", "issuelinks"],
+};
 function fieldKind(id: string, schema: Record<string, unknown>): JiraFieldKind {
   const kind = declaredKind(id, schema);
   if (kind === undefined) return "unsupported";
   if (kind === "opaque") return kind;
-  if (kind === "issue") return schema.type === "issuelink" ? kind : "unsupported";
+  const structural = STRUCTURAL[kind];
+  if (structural !== undefined)
+    return schema.type === structural[0] && schema.items === structural[1] ? kind : "unsupported";
+  return typedKind(id, kind, schema);
+}
+function typedKind(
+  id: string,
+  kind: JiraFieldKind,
+  schema: Record<string, unknown>,
+): JiraFieldKind {
   const item = ARRAY_ITEM[kind];
   if (item !== undefined)
     return schema.type === "array" && schema.items === expectedItem(id, item)
@@ -181,6 +195,7 @@ function supportedOperations(
   operations: readonly JiraFieldOperation[],
 ): readonly JiraFieldOperation[] {
   if (kind === "unsupported") return [];
+  if (kind === "links") return operations.includes("add") ? ["add"] : [];
   return [
     ...new Set(
       operations.filter(

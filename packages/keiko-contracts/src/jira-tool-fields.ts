@@ -16,6 +16,8 @@ export const JIRA_FIELD_KINDS = [
   /** A field whose value shape Jira's metadata does not describe beyond its schema type; a bounded
    * JSON value is forwarded and Jira's own validation is authoritative (#4176). */
   "opaque",
+  /** The system `issuelinks` field: links are added through a create/edit `links` argument. */
+  "links",
   "unsupported",
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];

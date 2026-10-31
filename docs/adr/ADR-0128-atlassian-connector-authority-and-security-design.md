@@ -349,7 +349,14 @@ or prototype keys), forwarded as given, never converted to rich text, and Jira's
 authoritative; read-back confirms presence or clearing, not equality, because Jira reshapes such
 values on read. The system `parent` field is an `issue` reference (`{ key }`, `{ id }` or a bare
 key, canonicalized to one identity). `attachment`, `issuelinks`, `comment`, routing and computed
-system fields stay outside plain field writes and are written through their own tools. Field
+system fields stay outside plain field writes and are written through their own tools or
+arguments. Issue links are the `links` kind: `jira.create` and `jira.edit` take a bounded `links`
+argument (at most 20 `{ type, direction, issueKey }` entries; duplicates collapse) only when current
+metadata offers `add` on the canonical `array:issuelinks` field. Keiko translates it into Jira's own
+`update.issuelinks` add operations in the same create or edit request, so no new operation or
+approval path exists; `outward` means this issue → `issueKey`. Jira validates the link type and the
+target; read-back confirms every requested link in its requested direction, existing links are
+kept, and a link read returns `{ type, direction, issueKey }` JSON text. Field
 metadata projects Jira's declared `schemaType` so a caller can shape an opaque value. A refused
 write returns, to the model only, the refused field with Keiko's closed validation reason, or
 Jira's own bounded field errors and messages (at most 8 and 3, 200 characters each, control
@@ -357,7 +364,7 @@ characters removed); none of it is logged. A choice list above 500 entries makes
 unsupported; other fields remain usable, and a required field without a server default still
 blocks creation. Plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
-opaque and issue fields offer only `set`, and unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
+opaque and issue fields offer only `set`, links only `add`, and unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
 Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
 Create may leave a Jira-declared default omitted without copying or fabricating it. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.

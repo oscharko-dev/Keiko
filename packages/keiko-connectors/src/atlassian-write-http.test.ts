@@ -112,12 +112,13 @@ describe("executeAtlassianWriteRequest — classification", () => {
       remote: {
         fieldErrors: [
           { fieldId: "customfield_10105", message: "Number value expected as the Sprint id." },
-          { fieldId: "summary", message: expect.stringMatching(/^bad value x+…$/u) },
+          { fieldId: "summary" },
         ],
         messages: ["Issue does not exist"],
       },
     });
     if (outcome.ok || outcome.remote?.fieldErrors === undefined) throw new Error("Expected detail");
+    expect(outcome.remote.fieldErrors[1]?.message).toMatch(/^bad value x+…$/u);
     expect(outcome.remote.fieldErrors[1]?.message).toHaveLength(200);
   });
 
