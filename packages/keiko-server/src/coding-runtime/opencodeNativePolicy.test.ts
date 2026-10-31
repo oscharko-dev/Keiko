@@ -247,9 +247,8 @@ describe("native policy effects per autonomy mode", () => {
       'grep -rn "git push" docs',
       "echo 'git commit is done by Keiko'",
     ]) {
-      expect(effectOf("supervised-coding", "shell", [command]), command).not.toBe(
-        "deny:delivery-reserved",
-      );
+      // Read-only Git runs as vetted inspection (opencode-capability-parity.md), not as an ask.
+      expect(effectOf("supervised-coding", "shell", [command]), command).toBe("allow");
     }
     for (const command of [
       "git branch feature/x",
@@ -262,6 +261,43 @@ describe("native policy effects per autonomy mode", () => {
         "deny:delivery-reserved",
       );
     }
+  });
+
+  // Plumbing that writes refs or repository configuration reaches the same outcome as the
+  // porcelain it stands in for: `update-ref` moves a protected branch past the verified commit,
+  // `config remote.origin.url` re-targets Keiko's own push (#3907).
+  it("refuses ref and configuration writes through Git plumbing in every mode (#3907)", () => {
+    const writes = [
+      "git update-ref refs/heads/main 0123abcd",
+      "git symbolic-ref HEAD refs/heads/feature",
+      "git config remote.origin.url https://example.invalid/x.git",
+      "git config --global core.hooksPath hooks",
+      "git config --unset user.email",
+      "git reflog expire --expire=now --all",
+      "git replace 0123abcd 4567ef01",
+      "git notes add -m x",
+      "git fast-import",
+      "git send-pack origin main",
+      "git pack-refs --all",
+    ];
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"])
+      for (const command of writes)
+        expect(effectOf(mode, "shell", [command]), `${mode}: ${command}`).toBe(
+          "deny:delivery-reserved",
+        );
+    for (const command of [
+      "git config --get user.name",
+      "git config --list",
+      "git config -l --show-origin",
+      "git config --get-all remote.origin.fetch",
+      "git symbolic-ref HEAD",
+      "git symbolic-ref --short HEAD",
+      "git reflog",
+      "git reflog show main",
+      "git notes list",
+      "git notes show HEAD",
+    ])
+      expect(effectOf("supervised-coding", "shell", [command]), command).toBe("allow");
   });
 
   it("checks the searched directory of glob and grep, not their pattern (#3897 audit)", () => {

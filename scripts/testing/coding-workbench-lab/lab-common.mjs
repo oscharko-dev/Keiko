@@ -7,7 +7,7 @@
 // dev server happens to have selected.
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { parseArgs } from "node:util";
@@ -259,6 +259,14 @@ export function checkoutRequest(repo, branch) {
 }
 
 /**
+ * The body that binds an ordinary folder in place (POST /api/task-workspaces/folder, as the UI's
+ * `selectFolderWorkspace`): a folder that is not a Git repository has no branch to select.
+ */
+export function folderRequest(root) {
+  return { root, requestedBy: "studio-operator" };
+}
+
+/**
  * The body that registers the lab copy as a project (POST /api/projects, as the UI's
  * `createProject`). It carries no `selectionIntent`: the first registration with
  * "explicit-folder-selection" also grants package-script trust, which would silently consume the
@@ -325,9 +333,26 @@ export async function registerLabRepository(post, repo) {
  */
 export async function selectLabCheckout(post, repo, branch) {
   const root = await registerLabRepository(post, repo);
+  if (!(await isGitCheckout(root))) {
+    const folder = await post("/api/task-workspaces/folder", folderRequest(root));
+    log("folder workspace", folder.status);
+    assertCheckoutSelected(folder.status, folder.json);
+    return;
+  }
   const selected = await post("/api/task-workspaces/local", checkoutRequest(root, branch));
   log("local checkout", selected.status);
   assertCheckoutSelected(selected.status, selected.json);
+}
+
+/** A lab copy is a Git checkout when it has a `.git` entry (a directory, or a worktree's file). */
+export async function isGitCheckout(root) {
+  try {
+    await stat(join(root, ".git"));
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 /** Normalizes `run-123...` or a trailing part of the id; refuses suffixes that would match the whole log. */

@@ -899,6 +899,8 @@ interface PreparedRun {
   ready: boolean;
   /** A qualified native client retained for operator undo after productive monitoring stops. */
   revertReady: boolean;
+  /** Advances when an interrupt of the run's session begins and ends (`OpenCodeRevertRun`). */
+  interruptSeq: number;
 }
 
 interface ReadyRun extends PreparedRun {
@@ -1697,6 +1699,8 @@ function createAbortTask(
   return async (runId): Promise<boolean> => {
     const run = readyRun(runId);
     if (run === undefined) return false;
+    // Odd while the interrupt runs: a state read it overtakes is not a failure (`revertState`).
+    run.interruptSeq += 1;
     try {
       // The whole native session tree: a background child keeps running when only the parent is
       // interrupted, and its end would start another turn of the parent (`interruptNativeTree`).
@@ -1722,6 +1726,8 @@ function createAbortTask(
     } catch {
       run.runtimeAdapter.cancelTurn();
       return false;
+    } finally {
+      run.interruptSeq += 1;
     }
   };
 }
@@ -1796,6 +1802,13 @@ function lifecycleAdapter(
             run.ready = false;
             dispose();
           };
+    },
+    // A stop revokes the runtime and reaps it seconds later; the operator revert client closes
+    // first, so a revert-state read in between is unavailable instead of failing on the dying
+    // runtime (#3907). Disposal closes it again.
+    beginStop: (runId): void => {
+      const run = runs.get(runId);
+      if (run !== undefined) run.revertReady = false;
     },
     dispose: (runId, signal, settlement): Promise<boolean> =>
       disposeRun(input, bridge, runs, runId, signal, settlement),
@@ -2471,6 +2484,7 @@ function preparedRun(
     initialTurnBaselineStable: false,
     ready: false,
     revertReady: false,
+    interruptSeq: 0,
   };
 }
 

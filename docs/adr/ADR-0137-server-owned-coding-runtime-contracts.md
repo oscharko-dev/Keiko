@@ -679,6 +679,17 @@ and the existing `coding-runtime.tool-result-rendered` operation records the clo
 outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
 report keeps a verification that did not pass.
 
+An explicit Stop or takeover keeps the run's live safe-activity feed, as standalone OpenCode keeps
+the tool steps of an aborted session (owner decision 2026-10-30, #3907 F3). Until then both ends
+purged the feed, so a stopped run lost every tool row the human had just watched while the
+transcript kept only text. Now the calls that had not settled are shown as `cancelled`, every
+settled call keeps its verdict, and a later native restatement of an aborted call cannot replace
+that verdict. The feed then expires like any settled run's feed, by its TTL, a workspace switch,
+a new run or server shutdown; a recovery retry and the dismissal of an already settled run still
+purge. The existing `coding-runtime.safe-activity` operation records the settlement as
+`event=interrupted` with the closed `reason` (`stop`, `takeover`) and the number of calls it
+settled as `occurrenceCount`; no tool name, argument or path enters the line.
+
 The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
 in the existing local UI conversation store. Native V2 history is validated and captured continuously
 through the armed runtime's capture port, independently of the live display projection's TTL, turn
@@ -2025,6 +2036,32 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   which is equivalent only while the verified base and head agree; when they differ it fails closed
   before any ref update. A distinct base keeps its separate `verify` line in the same atomic
   transaction.
+  A red check is the commit gate in Ask for approval and Supervised workspace, and failing
+  evidence in Full access (owner decision 2026-10-30, #3907 AC3). The same parity lane asked for a
+  branch, commit and push while the repository's own `npm run check` was already red; standalone
+  committed and pushed, Keiko refused every commit until the run's deadline. A verification that
+  ran every check to its own end (a non-zero exit, no signal, no breached limit) on the unchanged
+  staged candidate now forms failing evidence alongside the passing proof. In Full access, whose
+  policy already commits without per-action approval, that evidence admits the commit the task
+  asked for; the receipt keeps the failing `verificationEvidenceId`, and the `git.verified-commit`
+  approval line records `passed: false` beside it, so nothing reports the commit as verified green.
+  A denied, cancelled, timed-out, limit-breached or entirely skipped run, a candidate that changed
+  during its verification, an unstaged candidate and unsaved editor buffers still refuse. A mode
+  lowered after the proposal turns the red checks back into the gate before the Git effect.
+  Untracked files outside the staged candidate follow the same owner decision (#3907 AC3, lab lane
+  T17): the model's own `npm install` left an untracked `package-lock.json`, the model rightly kept
+  it out of the commit, and every verification answered `candidate-not-staged` until the run's
+  deadline while standalone committed the staged change. In Full access a verification of a staged
+  candidate with nothing unstaged and no unsaved buffer, beside untracked files, now runs and forms
+  evidence that never proves the commit: the `git.verified-commit` verification line records
+  `passed: false`, `reason: candidate-not-staged` and the untracked count, the model reads
+  `commitProof: "admitted"` with the untracked paths, and the commit carries only the staged tree.
+  The proposal, its review and the execution recheck the same staged candidate and leave the
+  untracked files out of the comparison; any other mode, an unstaged change, or Full access ending
+  before execution still refuses. The same comparison covers untracked files that appear after a
+  verification passed on a clean tree (lab lane T19: the model's next pytest run left its cache):
+  in Full access the passing proof still describes the unchanged staged tree and the commit
+  proceeds; in any other mode the later untracked file remains drift.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the
@@ -2332,7 +2369,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   change made while a turn ran, to a file no edit of that turn wrote, is the one change Keiko cannot
   tell apart from the turn's own once the turn settled; the runtime's snapshot counts it as the
   turn's. Evidence is `coding-runtime.revert.applied`, `.refused` and `.dispatch-failed`: counts
-  and closed words, never a path, patch or message.
+  and closed words, never a path, patch or message. A revert-state read that
+  a stop overtook (the run disposed under it, #4119, or its session interrupted before the disposal,
+  #3907: `abortTask` advances the run's `interruptSeq` around the interrupt) ends like a read of a gone
+  run, with no `.refused` line; a failure on a live, uninterrupted run still logs it. A stop closes
+  the read before it revokes anything (`OpenCodeLifecycleAdapter.beginStop`, #3907), so a read
+  between the revocation and the reaping never reaches the dying runtime.
 - **A healthy settled native run keeps its undo for a bounded window (#3904 AC3).** A run used to settle when its turn ended and to remove its private state,
   snapshots included, so a settled turn could not be undone, unlike standalone OpenCode. Now a
   native run that succeeded or failed with an undoable newest turn (`session.diff` names a file, or an undo

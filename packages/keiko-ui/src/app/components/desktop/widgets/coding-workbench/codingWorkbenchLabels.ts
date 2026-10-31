@@ -71,6 +71,19 @@ function sourceUnavailableReasonKey(
   return SOURCE_UNAVAILABLE_REASON_KEYS[source.unavailableReason];
 }
 
+// #3907 AC3: a check the server is running is not a failure. It is narrated as "checking", never
+// joins the run's status sentence as "unavailable" and raises no alert; the start blocker and the
+// readiness details still name it.
+function sourceVerificationPending(
+  source: CodingWorkbenchRuntimeState["source"]["value"],
+): boolean {
+  return (
+    source !== null &&
+    !source.available &&
+    source.unavailableReason === "model-verification-pending"
+  );
+}
+
 /** The operator-facing sentence for an unavailable source's reason, or null when it has none. */
 function sourceUnavailableReasonText(
   source: CodingWorkbenchRuntimeState["source"]["value"],
@@ -221,7 +234,9 @@ function readinessKeys(state: CodingWorkbenchRuntimeState): readonly CodingWorkb
   const runtimeAvailable = state.runtime.value?.runtimeAvailable === true;
   return [
     pairingKey(state),
-    readinessKey("modelSource", state.source.status, sourceAvailable),
+    sourceVerificationPending(state.source.value)
+      ? "codingWorkbench.announcement.modelSource.checking"
+      : readinessKey("modelSource", state.source.status, sourceAvailable),
     sourceUnavailableReasonKey(state.source.value),
     authenticationKey(state),
     readinessKey("workspace", state.workspace.status, workspaceAvailable),
@@ -684,7 +699,9 @@ function standingConditionAlert(
   // the remedy existed for the sr-only live region alone (#3381 review). Ungated by `setupVisible`,
   // unlike the runtime note below: the bootstrap setup card states the runtime posture itself but
   // says nothing about the model source, so there is nothing to duplicate.
-  const sourceReason = sourceUnavailableReasonText(state.source.value, t);
+  const sourceReason = sourceVerificationPending(state.source.value)
+    ? null
+    : sourceUnavailableReasonText(state.source.value, t);
   if (sourceReason !== null) return sourceReason;
   // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
   // states the same condition itself, and duplicating it would announce it twice to assistive

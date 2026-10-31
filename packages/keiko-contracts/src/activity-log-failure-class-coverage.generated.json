@@ -15549,6 +15549,12 @@
               "required": true
             },
             {
+              "name": "readinessRenewal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "reasoningFrames",
               "type": "integer",
               "dataClass": "count",

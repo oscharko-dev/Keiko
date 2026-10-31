@@ -12,7 +12,10 @@ import {
   isCodingRuntimeGitResult,
   type CodingRuntimeGitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
-import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import {
+  isVerifiedCommitResult,
+  type VerifiedCommitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
 import {
@@ -566,7 +569,12 @@ const COMMIT_PROOF_NEXT_ACTIONS: ReadonlyMap<unknown, string> = new Map([
 function isCodingToolCommitProofResult(value: unknown): value is CodingToolCommitProofResult {
   if (!isRecord(value)) return false;
   if (value.commitProof === "recorded") return Object.keys(value).length === 1;
-  if (value.commitProof !== "unavailable") return false;
+  if (value.commitProof === "admitted")
+    return Object.keys(value).length === 2 && isVerifiedCommitBlockingPaths(value.blocking);
+  return value.commitProof === "unavailable" && isUnavailableCommitProof(value);
+}
+
+function isUnavailableCommitProof(value: Record<string, unknown>): boolean {
   const nextAction = COMMIT_PROOF_NEXT_ACTIONS.get(value.reasonCode);
   if (nextAction === undefined || value.nextAction !== nextAction) return false;
   if (value.reasonCode !== "candidate-not-staged" || value.blocking === undefined) {
@@ -716,10 +724,24 @@ function projectVerifiedCommit(
           evidence: [{ kind: "governed-delegate", code: value.verifiedCommit.status }],
           verifiedCommit: value.verifiedCommit,
           ...(disposition === undefined ? {} : { approvalDisposition: disposition }),
+          ...commitBlockGuidance(value.verifiedCommit),
         }
       : projected("failed");
   }
   return undefined;
+}
+
+// Coding Workbench Jira lab, 2026-10-30: a Local checkout on `main` had its commit blocked as
+// `protected-branch` and the model, seeing only the code, looped on the pull request until the run
+// timed out. Keiko neither commits to a protected branch nor creates branches for a run, so the one
+// step left to the model is to report it; the other policy blocks keep their bare codes.
+const PROTECTED_BRANCH_COMMIT_GUIDANCE =
+  "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Keiko does not create or switch branches during a run. Do not retry the commit and do not propose a push or pull request: report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
+
+function commitBlockGuidance(result: VerifiedCommitResult): { readonly guidance?: string } {
+  return result.status === "blocked" && result.blockReason === "protected-branch"
+    ? { guidance: PROTECTED_BRANCH_COMMIT_GUIDANCE }
+    : {};
 }
 
 // A search's OWN outcome (`ok: false`, e.g. scope-denied/file-too-large/cancelled/timeout) is

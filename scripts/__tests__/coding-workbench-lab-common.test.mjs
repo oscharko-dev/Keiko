@@ -24,6 +24,9 @@ import {
   assertProjectRegistered,
   browserBaseUrl,
   checkoutRequest,
+  folderRequest,
+  isGitCheckout,
+  selectLabCheckout,
   describeRefusal,
   describeSnapshot,
   exitCodeForState,
@@ -203,6 +206,38 @@ describe("lab repository (fail closed)", () => {
     expect(() => assertCheckoutSelected(204)).not.toThrow();
     for (const status of [199, 300, 400, 409, 500]) {
       expect(() => assertCheckoutSelected(status)).toThrow(/not starting a run/u);
+    }
+  });
+
+  it("binds a copy without Git in place as a folder workspace, and a Git copy as its checkout", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lab-select-"));
+    try {
+      const folder = join(dir, "folder");
+      const repo = join(dir, "repo");
+      mkdirSync(folder);
+      mkdirSync(join(repo, ".git"), { recursive: true });
+      const calls = [];
+      const post = async (path, body) => {
+        calls.push([path, body]);
+        return { status: path === "/api/projects" ? 201 : 200, json: {} };
+      };
+      expect(await isGitCheckout(folder)).toBe(false);
+      expect(await isGitCheckout(repo)).toBe(true);
+      await selectLabCheckout(post, folder, "main");
+      await selectLabCheckout(post, repo, "main");
+      const selections = calls.filter(([path]) => path !== "/api/projects");
+      expect(selections.map(([path]) => path)).toEqual([
+        "/api/task-workspaces/folder",
+        "/api/task-workspaces/local",
+      ]);
+      expect(Object.keys(selections[0][1])).toEqual(["root", "requestedBy"]);
+      expect(folderRequest("/f")).toEqual({ root: "/f", requestedBy: "studio-operator" });
+      const refused = async (path) => ({ status: path === "/api/projects" ? 201 : 409, json: {} });
+      await expect(selectLabCheckout(refused, folder, "main")).rejects.toThrow(
+        /not starting a run/u,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
