@@ -483,6 +483,10 @@ it("stops renewing an idle model and renews it again while it is in use", async 
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
   const deps = composition();
+  // The review services' startup sweep (ADR-0182) arms their own daily retention interval once
+  // it settles. Settled here, before the fake clock, so the count below still proves that the
+  // readiness renewal itself leaves no timer behind.
+  await deps.reviewServices?.startup();
   vi.useFakeTimers();
   const fetch = vi.fn(() => Promise.resolve(chatProbeAnswer()));
   vi.stubGlobal("fetch", fetch);
