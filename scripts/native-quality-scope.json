@@ -176,6 +176,26 @@
       ]
     },
     {
+      "path": "native/runtime-supervisor/windows/gateway_peer.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "gateway-filter-policy-behavior"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/windows/gateway_peer.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "gateway-filter-policy-behavior"
+      ]
+    },
+    {
       "path": "native/runtime-supervisor/windows/keiko_runtime_supervisor.c",
       "language": "c",
       "platforms": ["windows"],

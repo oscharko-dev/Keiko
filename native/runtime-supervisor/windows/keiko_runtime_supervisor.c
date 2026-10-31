@@ -326,20 +326,28 @@ static HANDLE configured_job(const char *recovery_handle, HANDLE *completion_por
   return job;
 }
 
-static int initialize_startup_info(STARTUPINFOEXW *startup, SIZE_T *attribute_size,
-                                   HANDLE inherited[3]) {
+static int initialize_startup_info(STARTUPINFOEXW *startup, HANDLE inherited[3], HANDLE *job) {
+  SIZE_T attribute_size = 0;
   memset(startup, 0, sizeof(*startup));
   startup->StartupInfo.cb = sizeof(*startup);
   startup->StartupInfo.dwFlags = STARTF_USESTDHANDLES;
   startup->StartupInfo.hStdInput = inherited[0];
   startup->StartupInfo.hStdOutput = inherited[1];
   startup->StartupInfo.hStdError = inherited[2];
-  InitializeProcThreadAttributeList(NULL, 1, 0, attribute_size);
-  startup->lpAttributeList = calloc(1, *attribute_size);
-  return startup->lpAttributeList != NULL &&
-         InitializeProcThreadAttributeList(startup->lpAttributeList, 1, 0, attribute_size) &&
-         UpdateProcThreadAttribute(startup->lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                                   inherited, 3 * sizeof(HANDLE), NULL, NULL);
+  InitializeProcThreadAttributeList(NULL, 2, 0, &attribute_size);
+  startup->lpAttributeList = calloc(1, attribute_size);
+  if (startup->lpAttributeList == NULL) return 0;
+  if (InitializeProcThreadAttributeList(startup->lpAttributeList, 2, 0, &attribute_size)) {
+    /* Bind the suspended child to its kill-on-close job in CreateProcessW itself. A
+     * supervisor crash must never strand a process between creation and job assignment. */
+    if (UpdateProcThreadAttribute(startup->lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+                                  job, sizeof(*job), NULL, NULL) &&
+        UpdateProcThreadAttribute(startup->lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                  inherited, 3 * sizeof(HANDLE), NULL, NULL)) return 1;
+    DeleteProcThreadAttributeList(startup->lpAttributeList);
+  }
+  free(startup->lpAttributeList);
+  return 0;
 }
 
 static int launch_in_job(const struct launch_request *request, HANDLE job,
@@ -349,7 +357,6 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
    * expires when startup initialization returns, causing ERROR_INVALID_PARAMETER without inlining. */
   HANDLE inherited[3] = {GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
                          GetStdHandle(STD_ERROR_HANDLE)};
-  SIZE_T attribute_size = 0;
   wchar_t *executable = wide_string(request->executable);
   wchar_t *cwd = wide_string(request->cwd);
   wchar_t *line = executable == NULL ? NULL : command_line(request, executable);
@@ -358,13 +365,9 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
                 EXTENDED_STARTUPINFO_PRESENT;
   BOOL created = FALSE;
   if (executable != NULL && cwd != NULL && line != NULL && environment != NULL &&
-      initialize_startup_info(&startup, &attribute_size, inherited)) {
+      initialize_startup_info(&startup, inherited, &job)) {
     created = CreateProcessW(executable, line, NULL, NULL, TRUE, flags, environment, cwd,
                              &startup.StartupInfo, process);
-    if (created && !AssignProcessToJobObject(job, process->hProcess)) {
-      TerminateProcess(process->hProcess, 127);
-      created = FALSE;
-    }
     if (created && ResumeThread(process->hThread) == (DWORD)-1) {
       TerminateJobObject(job, 127);
       created = FALSE;

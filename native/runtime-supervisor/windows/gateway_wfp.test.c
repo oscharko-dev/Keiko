@@ -7,6 +7,8 @@
 #include <stdlib.h>
 
 int gateway_socket_proof(void);
+int gateway_peer_tests(void);
+int gateway_peer_client(const char *pipe_name, int anonymous);
 int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile);
 
@@ -192,7 +194,9 @@ static int guarded_lifecycle_test(UINT16 family) {
 }
 
 int main(int argc, char **argv) {
-  if (argc == 1) return validation_tests();
+  if (argc == 1) return validation_tests() || gateway_peer_tests();
+  if (argc == 4 && strcmp(argv[1], "--peer-client") == 0)
+    return gateway_peer_client(argv[2], atoi(argv[3]));
   if (argc == 2 && strcmp(argv[1], "--guard-held") == 0) return guarded_child();
   if (argc == 2 && strcmp(argv[1], "--socket-proof") == 0) return gateway_socket_proof();
   if (argc == 5 && strcmp(argv[1], "--socket-child") == 0) {

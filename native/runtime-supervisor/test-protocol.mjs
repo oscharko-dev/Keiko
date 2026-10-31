@@ -246,7 +246,7 @@ function runSourceContractOn(rawSource) {
   const codeText = stripStringLiteralBodies(preparedText);
   assert.match(codeText, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/u);
   assert.match(codeText, /CREATE_SUSPENDED/u);
-  assert.match(codeText, /AssignProcessToJobObject\(job, process->hProcess\)/u);
+    assert.match(codeText, /PROC_THREAD_ATTRIBUTE_JOB_LIST,\s*job, sizeof\(\*job\)/u);
   assert.match(codeText, /ResumeThread\(process->hThread\)/u);
   assert.match(codeText, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
   assert.match(codeText, /accounting\.ActiveProcesses == 0/u);

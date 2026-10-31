@@ -386,7 +386,7 @@ process.exit(41);
   node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs") --helper $supervisorOut
   if ($LASTEXITCODE -ne 0) { throw "Windows runtime-supervisor process-tree qualification failed" }
 
-  # The default invocation validates policy inputs only; it never opens WFP or changes filters.
+  # Default mode validates job/policy inputs and authenticates real local pipe clients without opening WFP.
   node (Join-Path $root "scripts/testing/test-windows-gateway-filters.mjs")
   if ($LASTEXITCODE -ne 0) { throw "Windows gateway policy validation failed" }
 

@@ -771,6 +771,34 @@ The fixture retained no job or engine handle. This default validation mode insta
 no filters. Installed-service recovery, positive and negative socket isolation, and
 the production Workbench launch remain outside this run.
 
+## Integrated dev and local broker transport on 2026-10-31
+
+Merge `d018f5c29` incorporates `dev` at `6194949d5`. The merged source uses the
+range-scoped dependency overrides and the corresponding lockfile. On Windows x64,
+the four visual fixture producers passed (427 component probes, 14 editor captures,
+seven accessibility modes and 108 browser captures). The UI package's 281 stylesheet
+and evidence tests passed.
+
+On Windows 11 Home build 26200 x64 (NTFS, Node 24.18.0), the coding supervisor now
+places the suspended workbench child in its kill-on-close Job Object inside
+`CreateProcessW` using `PROC_THREAD_ATTRIBUTE_JOB_LIST`. This closes the orphan
+window if the supervisor dies between process creation and job assignment.
+`node native/runtime-supervisor/test-protocol.mjs` passed ordinary and detached
+descendant cancellation and control-channel EOF.
+
+The broker transport incorporates the OS peer checks from the gateway development
+branch at `cc91d1e1a`. The single-instance local message pipe grants authenticated
+clients read and message-write access without granting pipe-instance creation. On the
+same host, `node scripts/testing/test-windows-gateway-filters.mjs` built the native
+fixture with MSVC static analysis. The expected image passed using long and short
+paths, a different approved image and an anonymous caller were refused, and a second
+listener could not take the endpoint. These executions used a synthetic named pipe.
+
+The SCM service, supervisor-to-service authentication, challenge-bound job admission,
+WFP installation and verified acknowledgement before resume still need to be wired
+and exercised together. Windows Workbench gateway launches remain refused at the
+production boundary. Release-owner approval for the changed supervisor remains open.
+
 ## Update impact
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows
