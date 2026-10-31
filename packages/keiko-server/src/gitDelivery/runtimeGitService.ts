@@ -57,7 +57,12 @@ import {
 } from "../coding-runtime/codingRuntimeGitIpc.js";
 import { buildSyncPreview, runSyncExecute, type GitDeliverySyncSeams } from "./syncExecution.js";
 import { persistGitSyncResult } from "./syncEvidence.js";
-import { runTaskBranch, type RuntimeGitTaskBranchPort } from "./runtimeGitBranch.js";
+import {
+  adoptionFailedResult,
+  runTaskBranch,
+  TaskBranchAdoptionFailure,
+  type RuntimeGitTaskBranchPort,
+} from "./runtimeGitBranch.js";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import type { GovernedSyncHead } from "../coding-runtime/governedSyncHeads.js";
 import { describeError } from "../diagnostics-log.js";
@@ -693,19 +698,25 @@ export class RuntimeGitService {
     branchName: string,
     headSha: string,
   ): Promise<CodingRuntimeGitBranch> {
-    const run = await runTaskBranch({
-      context,
-      mutationDeps: this.options.mutationDeps,
-      execution: this.options.execution ?? {},
-      port: this.options.taskBranch,
-      headSha,
-      branchName,
-    });
-    if (run.result.status === "succeeded") this.invalidateAfterBranchChange();
-    // The cause of a failed adoption is not in the result the model reads; it goes to the log as
-    // the structured failure it is, under the same correlation, before the result line.
-    if (run.cause !== undefined) this.logBranchRebindFailure(context, run.cause);
-    return run.result;
+    let result: CodingRuntimeGitBranch;
+    try {
+      result = await runTaskBranch({
+        context,
+        mutationDeps: this.options.mutationDeps,
+        execution: this.options.execution ?? {},
+        port: this.options.taskBranch,
+        headSha,
+        branchName,
+      });
+    } catch (error) {
+      if (!(error instanceof TaskBranchAdoptionFailure)) throw error;
+      // The cause of a failed adoption is not in the result the model reads; it goes to the log as
+      // the structured failure it is, under the same correlation, before the result line.
+      this.logBranchRebindFailure(context, error.cause);
+      return adoptionFailedResult(branchName);
+    }
+    if (result.status === "succeeded") this.invalidateAfterBranchChange();
+    return result;
   }
   private logBranchRebindFailure(context: VerifiedCommitRunContext, cause: unknown): void {
     const detail = describeError(cause);

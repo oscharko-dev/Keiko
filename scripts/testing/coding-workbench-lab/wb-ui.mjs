@@ -124,15 +124,17 @@ async function reopenWorkbench(page) {
 }
 
 // A model under a background readiness re-probe is briefly not offered; a human waits for it to
-// return, so the driver retries for up to two minutes before it fails the task.
+// return. Readiness re-probes a stale observation on a cadence of about two minutes (AC3 lab,
+// 2026-10-31: T2, T31 and the Jira run missed it by seconds), so the driver waits up to five.
 export async function chooseOption(page, comboName, optionLabel) {
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 300_000;
   for (;;) {
     try {
       await chooseOptionOnce(page, comboName, optionLabel);
       return;
     } catch (error) {
-      if (Date.now() > deadline || !String(error?.message).includes("no option is labelled")) throw error;
+      if (Date.now() > deadline || !String(error?.message).includes("no option is labelled"))
+        throw error;
       await page.keyboard.press("Escape");
       await sleep(3000);
     }

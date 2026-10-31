@@ -210,41 +210,55 @@ async function switchBack(input: RuntimeGitBranchInput): Promise<void> {
   await mutate(input, { kind: "branch-switch", branchName: input.context.baseRef });
 }
 
-/** The task-branch step's result and, when it failed on a thrown cause, that cause. */
-export interface RuntimeGitBranchRun {
-  readonly result: CodingRuntimeGitBranch;
-  readonly cause?: unknown;
-}
-
-function adopted(
-  input: RuntimeGitBranchInput,
-): { readonly ok: true } | { readonly ok: false; readonly cause?: unknown } {
-  try {
-    return input.port?.adopt({
-      runId: input.context.runId,
-      workspaceDigest: input.context.workspaceDigest,
-      branch: input.branchName,
-      baseBranch: input.context.baseRef,
-      headSha: input.headSha,
-    }) === true
-      ? { ok: true }
-      : { ok: false };
-  } catch (cause) {
-    return { ok: false, cause };
+/**
+ * A run that could not adopt the branch it was just switched to. The checkout is back on the base
+ * branch when this reaches the caller; the caller records the cause on its own log port.
+ */
+export class TaskBranchAdoptionFailure extends Error {
+  public constructor(cause: unknown) {
+    super("task-branch-adoption-failed", { cause });
+    this.name = "TaskBranchAdoptionFailure";
   }
 }
 
-/** Runs the whole governed task-branch step; never throws for a refusal, only for a Git fault. */
-export async function runTaskBranch(input: RuntimeGitBranchInput): Promise<RuntimeGitBranchRun> {
+/** The closed result the model reads when the run could not adopt its new branch. */
+export function adoptionFailedResult(name: string): CodingRuntimeGitBranch {
+  return branchResult("failed", "rebind-failed", name);
+}
+
+function adopt(input: RuntimeGitBranchInput): boolean {
+  try {
+    return (
+      input.port?.adopt({
+        runId: input.context.runId,
+        workspaceDigest: input.context.workspaceDigest,
+        branch: input.branchName,
+        baseBranch: input.context.baseRef,
+        headSha: input.headSha,
+      }) === true
+    );
+  } catch (cause) {
+    throw new TaskBranchAdoptionFailure(cause);
+  }
+}
+
+/**
+ * Runs the whole governed task-branch step. A refusal is a result; a Git fault throws, and so does
+ * an adoption that threw (TaskBranchAdoptionFailure), after the checkout is back on its base.
+ */
+export async function runTaskBranch(input: RuntimeGitBranchInput): Promise<CodingRuntimeGitBranch> {
   const name = input.branchName;
   const refusal = taskBranchNameRefusal(name) ?? scopeRefusal(input);
-  if (refusal !== undefined) return { result: branchResult("blocked", refusal, name) };
+  if (refusal !== undefined) return branchResult("blocked", refusal, name);
   const existing = await existingBranch(input);
-  if (existing === "elsewhere") return { result: branchResult("blocked", "branch-exists", name) };
+  if (existing === "elsewhere") return branchResult("blocked", "branch-exists", name);
   const stepped = await createAndSwitch(input, existing);
-  if (!stepped.done) return { result: stepped.result };
-  const adoption = adopted(input);
-  if (adoption.ok) return { result: branchResult("succeeded", "none", name) };
-  await switchBack(input);
-  return { result: branchResult("failed", "rebind-failed", name), cause: adoption.cause };
+  if (!stepped.done) return stepped.result;
+  let adopted = false;
+  try {
+    adopted = adopt(input);
+  } finally {
+    if (!adopted) await switchBack(input);
+  }
+  return adopted ? branchResult("succeeded", "none", name) : adoptionFailedResult(name);
 }
