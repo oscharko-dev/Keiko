@@ -69,6 +69,10 @@ export async function request(origin, cookie, name, path, body, method = "POST",
         stage: name,
         status: response.status,
         code: failure.error?.code,
+        message:
+          typeof failure.error?.message === "string"
+            ? failure.error.message.slice(0, 240)
+            : undefined,
       }),
     );
     throw new TypeError("Live Chat HTTP stage failed");
@@ -109,7 +113,27 @@ function selectedGatewayProvider(modelId) {
   if (typeof apiKey !== "string" || apiKey.length === 0)
     throw new TypeError("Configured laboratory model credential is unavailable");
   const token = modelId.replace(/[^A-Za-z0-9]/gu, "_").toUpperCase();
-  return { provider, env: { [`KEIKO_MODEL_${token}_API_KEY`]: apiKey } };
+  // The configured capability (window, output bound) is the model's own; the laboratory must not
+  // shrink it, or every long Jira turn fails on a limit the product never chose (#4175).
+  const capability = config.capabilities?.find((entry) => entry.id === modelId);
+  return { provider, capability, env: { [`KEIKO_MODEL_${token}_API_KEY`]: apiKey } };
+}
+// KEIKO_JIRA_LAB_CONTEXT_WINDOW deliberately simulates a smaller model on the same endpoint.
+function chatCapability(modelId, configured) {
+  const simulated = Number(process.env.KEIKO_JIRA_LAB_CONTEXT_WINDOW ?? "");
+  const base = {
+    ...createDefaultChatCapability(modelId),
+    contextWindow: configured?.contextWindow ?? 32768,
+    maxOutputTokens: configured?.maxOutputTokens ?? 2048,
+  };
+  return {
+    ...base,
+    ...(Number.isSafeInteger(simulated) && simulated > 0
+      ? { contextWindow: simulated, maxOutputTokens: Math.min(base.maxOutputTokens, simulated / 8) }
+      : {}),
+    streaming: true,
+    toolCalling: true,
+  };
 }
 function liveModelProviders(modelId, { modelRetries = 0, embeddingModelId } = {}) {
   assertLiveModelOptions(modelId, modelRetries, embeddingModelId);
@@ -117,6 +141,7 @@ function liveModelProviders(modelId, { modelRetries = 0, embeddingModelId } = {}
     (id) => {
       const selected = selectedGatewayProvider(id);
       return {
+        capability: selected?.capability,
         provider: {
           ...(selected?.provider ?? {
             modelId: id,
@@ -133,10 +158,13 @@ function liveModelProviders(modelId, { modelRetries = 0, embeddingModelId } = {}
   );
   return {
     provider: sources[0].provider,
+    capability: chatCapability(modelId, sources[0].capability),
     env: Object.assign({}, ...sources.map((source) => source.env)),
     additionalProviders: sources.slice(1).map((source) => source.provider),
     embeddingCapabilities:
-      embeddingModelId === undefined ? [] : [createDefaultEmbeddingCapability(embeddingModelId)],
+      embeddingModelId === undefined
+        ? []
+        : [sources[1].capability ?? createDefaultEmbeddingCapability(embeddingModelId)],
   };
 }
 function prepareLiveModel(root, session, modelId, options) {
@@ -148,15 +176,8 @@ function prepareLiveModel(root, session, modelId, options) {
   };
 }
 export async function configureModel(deps, modelId, session, configPath, options, prepared) {
-  const { provider, additionalProviders, embeddingCapabilities, env } =
+  const { provider, capability, additionalProviders, embeddingCapabilities, env } =
     prepared ?? liveModelProviders(modelId, options);
-  const capability = {
-    ...createDefaultChatCapability(modelId),
-    contextWindow: 32768,
-    maxOutputTokens: 2048,
-    streaming: true,
-    toolCalling: true,
-  };
   const raw = {
     providers: [provider, ...additionalProviders],
     capabilities: [capability, ...embeddingCapabilities],

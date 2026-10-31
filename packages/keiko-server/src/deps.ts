@@ -1709,6 +1709,26 @@ function setRuntimeGateway(
   state.listeners.notify(correlationId);
 }
 
+// Capabilities live beside the providers, so identical providers mean identical connections.
+function sameCatalogConnections(
+  current: GatewayConfig | undefined,
+  active: GatewayConfig,
+): boolean {
+  return (
+    current !== undefined && JSON.stringify(current.providers) === JSON.stringify(active.providers)
+  );
+}
+
+function refineRuntimeCatalog(
+  state: RuntimeGatewayState,
+  next: GatewayConfig,
+  correlationId?: string,
+): void {
+  state.configured = mergeConfiguredGateway(state, next);
+  state.config = next;
+  state.listeners.notify(correlationId);
+}
+
 function replaceRuntimeCatalog(
   state: RuntimeGatewayState,
   active: GatewayConfig,
@@ -1716,6 +1736,12 @@ function replaceRuntimeCatalog(
   correlationId?: string,
 ): boolean {
   if (state.generation !== observedGeneration) return false;
+  if (sameCatalogConnections(state.config, active)) {
+    // A capability-only refinement of unchanged connections (a readiness or tool-calling proof)
+    // keeps the generation: turns admitted against these exact connections remain valid (#4175).
+    refineRuntimeCatalog(state, active, correlationId);
+    return true;
+  }
   const previous = new Map(state.config?.providers.map((provider) => [provider.modelId, provider]));
   const next = new Map(active.providers.map((provider) => [provider.modelId, provider]));
   state.configured = mergeConfiguredGateway(state, active);
@@ -1773,9 +1799,7 @@ function runtimeCatalogFacets(
     replaceCatalog: (active, generation, correlationId): boolean =>
       replaceRuntimeCatalog(state, active, generation, correlationId),
     refine(next, correlationId): void {
-      state.configured = mergeConfiguredGateway(state, next);
-      state.config = next;
-      state.listeners.notify(correlationId);
+      refineRuntimeCatalog(state, next, correlationId);
     },
   };
 }

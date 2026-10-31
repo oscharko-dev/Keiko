@@ -243,8 +243,13 @@ write and runtime replacement. Missing, stale, invented, mismatched, or concurre
 values fail closed. The `json_schema` observation reconciles both `structuredOutput` and the
 provider-facing `supportsResponseFormat` flag because both describe the same verified request shape.
 The observation is consumed only after the credential-safe atomic writer succeeds, so a storage
-failure remains retryable without another provider call. A successful write replaces the runtime
-generation and clears every remaining observation.
+failure remains retryable without another provider call. A successful write that only refines the
+`capability` metadata of the same ordered connections (same model ids, endpoints, credentials and
+every other connection field) keeps the runtime generation, the coarse verification state and the
+remaining observations, then consumes the applied fields; a conversation turn admitted against those
+connections stays admitted (#4175: a readiness proof landing mid-turn refused the turn as
+`generation-changed`). A write that changes any connection field, the model list or its order
+replaces the runtime generation and clears every remaining observation.
 
 ### D4 — Whole-gateway verification remains independent
 
