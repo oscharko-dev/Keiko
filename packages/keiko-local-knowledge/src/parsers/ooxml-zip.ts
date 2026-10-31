@@ -134,12 +134,12 @@ function destroyStream(readStream: NodeJS.ReadableStream, error: Error): void {
   }
 }
 
-function readEntryText(
+function readEntryBytes(
   zip: yauzl.ZipFile,
   entry: yauzl.Entry,
   plan: OoxmlZipReadPlan,
   remainingTotal: number,
-): Promise<string> {
+): Promise<Buffer> {
   const ceiling = Math.min(plan.maxEntryInflatedBytes, remainingTotal);
   return new Promise((resolve, reject) => {
     zip.openReadStream(entry, (error, stream) => {
@@ -169,7 +169,7 @@ function readEntryText(
       readStream.on("end", () => {
         if (settled) return;
         settled = true;
-        resolve(Buffer.concat(chunks).toString("utf8"));
+        resolve(Buffer.concat(chunks));
       });
       readStream.on("error", rejectOnce);
     });
@@ -177,7 +177,7 @@ function readEntryText(
 }
 
 interface ScanProgress {
-  readonly parts: Map<string, string>;
+  readonly parts: Map<string, Buffer>;
   entriesSeen: number;
   totalInflated: number;
 }
@@ -196,9 +196,9 @@ async function inflateWantedEntry(
     plan.maxTotalInflatedBytes === undefined
       ? Number.POSITIVE_INFINITY
       : plan.maxTotalInflatedBytes - progress.totalInflated;
-  const text = await readEntryText(zip, entry, plan, remaining);
-  progress.totalInflated += Buffer.byteLength(text, "utf8");
-  progress.parts.set(entry.fileName, text);
+  const bytes = await readEntryBytes(zip, entry, plan, remaining);
+  progress.totalInflated += bytes.byteLength;
+  progress.parts.set(entry.fileName, bytes);
 }
 
 interface EntryWalk {
@@ -232,7 +232,7 @@ async function walkEntry(
   }
 }
 
-function walkEntries(zip: yauzl.ZipFile, limits: ScanLimits): Promise<ReadonlyMap<string, string>> {
+function walkEntries(zip: yauzl.ZipFile, limits: ScanLimits): Promise<ReadonlyMap<string, Buffer>> {
   const { plan } = limits;
   return new Promise((resolve, reject) => {
     const progress: ScanProgress = { parts: new Map(), entriesSeen: 0, totalInflated: 0 };
@@ -257,16 +257,16 @@ function walkEntries(zip: yauzl.ZipFile, limits: ScanLimits): Promise<ReadonlyMa
 }
 
 /**
- * Inflates the wanted parts of an OOXML package into memory, keyed by part name. Throws on a
- * malformed archive, an exceeded inflate bound, an exhausted scan budget or a caller abort;
- * {@link classifyOoxmlZipError} names which.
+ * Inflates the wanted parts of an OOXML package into memory as raw bytes, keyed by part name.
+ * Throws on a malformed archive, an exceeded inflate bound, an exhausted scan budget or a caller
+ * abort; {@link classifyOoxmlZipError} names which.
  */
-export async function readOoxmlZipEntries(
+export async function readOoxmlZipEntryBytes(
   bytes: Uint8Array,
   options: ParserOptions,
   startedAt: number,
   plan: OoxmlZipReadPlan,
-): Promise<ReadonlyMap<string, string>> {
+): Promise<ReadonlyMap<string, Buffer>> {
   const zip = await openZip(bytes, plan.format);
   try {
     return await walkEntries(zip, { plan, options, startedAt });
@@ -274,4 +274,15 @@ export async function readOoxmlZipEntries(
     // A buffer-backed archive releases no descriptor; close only marks it closed.
     zip.close();
   }
+}
+
+/** {@link readOoxmlZipEntryBytes}, with every part decoded as UTF-8 text. */
+export async function readOoxmlZipEntries(
+  bytes: Uint8Array,
+  options: ParserOptions,
+  startedAt: number,
+  plan: OoxmlZipReadPlan,
+): Promise<ReadonlyMap<string, string>> {
+  const parts = await readOoxmlZipEntryBytes(bytes, options, startedAt, plan);
+  return new Map([...parts].map(([name, part]) => [name, part.toString("utf8")]));
 }

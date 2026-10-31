@@ -634,6 +634,7 @@
     "keiko-harness/version",
     "keiko-local-knowledge/_support",
     "keiko-local-knowledge/bounded-document-extraction",
+    "keiko-local-knowledge/bounded-ooxml-package",
     "keiko-local-knowledge/capsule-lifecycle",
     "keiko-local-knowledge/capsule-set-lifecycle",
     "keiko-local-knowledge/chunking/_support",

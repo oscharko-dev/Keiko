@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+import { deflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { docxOf, pdfOf, zipTextEntries } from "../../../../tests/support/zip-fixture.js";
 import { admitAttachmentContent } from "./jiraAttachmentContentPolicy.js";
@@ -197,15 +199,120 @@ describe("an image is allowed only when its bytes hold nothing hidden", () => {
   });
 });
 
+// Independent review (#4176): a compressed carrier, an unread package part or a stream the
+// extractor never draws is where a credential rides past a scan of the visible text.
+const GHP = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+const deflated = (value: string): Uint8Array => deflateSync(Buffer.from(value, "utf8"));
+const keywordCompressed = (keyword: string, value: string): Uint8Array =>
+  Uint8Array.from([...text(keyword), 0, 0, ...deflated(value)]);
+const docxWith = (...parts: readonly { name: string; content: string }[]): Uint8Array =>
+  docxOf("Quarterly planning notes", parts);
+/** A text-layer PDF with one more object: a Flate stream the page never draws. */
+function pdfWithFlateStream(stream: Uint8Array): Uint8Array {
+  const pdf = Buffer.from(pdfOf("Hello PDF")).toString("latin1");
+  const at = pdf.indexOf("xref");
+  const object = `6 0 obj << /Length ${String(stream.length)} /Filter /FlateDecode >> stream\n${Buffer.from(stream).toString("latin1")}\nendstream endobj\n`;
+  return Buffer.from(pdf.slice(0, at) + object + pdf.slice(at), "latin1");
+}
+
+describe("compressed and unread carriers are scanned or refused", () => {
+  it.each([
+    ["a Word comment", docxWith({ name: "word/comments.xml", content: `<w:t>${GHP}</w:t>` })],
+    ["a Word header", docxWith({ name: "word/header1.xml", content: `<w:t>${GHP}</w:t>` })],
+    ["any other package entry", docxWith({ name: "secret.txt", content: GHP })],
+  ])("refuses a credential in %s", async (_label, bytes) => {
+    expect(await admit(bytes, "n.docx")).toEqual(CREDENTIAL);
+  });
+  it("refuses a package part that is neither text nor a checked image", async () => {
+    const embedded = docxWith({ name: "word/embeddings/o.bin", content: "\u0001\u0002\u0003" });
+    expect(await admit(embedded, "n.docx")).toEqual(UNSCANNABLE);
+  });
+  it("keeps a Word document whose every part is clean", async () => {
+    const clean = docxWith({ name: "word/comments.xml", content: "<w:t>looks good</w:t>" });
+    expect(await admit(clean, "n.docx")).toEqual({ ok: true });
+  });
+  it.each([
+    ["zTXt", png(pngChunk("zTXt", keywordCompressed("Comment", GHP)))],
+    ["iCCP", png(pngChunk("iCCP", keywordCompressed("profile", GHP)))],
+    [
+      "compressed iTXt",
+      png(
+        pngChunk(
+          "iTXt",
+          Uint8Array.from([...text("XML:com.adobe.xmp"), 0, 1, 0, 0, 0, ...deflated(GHP)]),
+        ),
+      ),
+    ],
+  ])("refuses a credential deflated into a PNG %s chunk", async (_label, bytes) => {
+    expect(await admit(bytes, "shot.png")).toEqual(CREDENTIAL);
+  });
+  it.each([
+    ["an unknown PNG chunk", png(pngChunk("prVt", deflated(GHP)))],
+    [
+      "a second zlib stream behind a PNG carrier",
+      png(
+        pngChunk(
+          "zTXt",
+          Uint8Array.from([...keywordCompressed("Comment", "fine"), ...deflated(GHP)]),
+        ),
+      ),
+    ],
+    [
+      "a JPEG with deflated bytes appended that end in an EOI marker",
+      Uint8Array.from([...jpeg(), ...deflated(GHP), 0xff, 0xd9]),
+    ],
+    [
+      "a GIF with trailing bytes",
+      Uint8Array.from([...text("GIF89a"), 1, 0, 1, 0, 0, 0, 0, 0x3b, ...deflated(GHP)]),
+    ],
+    ["a WebP", Uint8Array.from([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x45, 0x42, 0x50])],
+  ])("refuses %s as unscannable", async (_label, bytes) => {
+    expect(await admit(bytes, "shot.png")).toEqual(UNSCANNABLE);
+  });
+  it("refuses a credential in a PDF Flate stream the page never draws", async () => {
+    expect(await admit(pdfWithFlateStream(deflated(`/Annot (${GHP})`)), "n.pdf")).toEqual(
+      CREDENTIAL,
+    );
+  });
+  it("refuses a PDF stream under a filter it cannot read, and an embedded file", async () => {
+    const lzw = Buffer.from(
+      Buffer.from(pdfWithFlateStream(deflated("x")))
+        .toString("latin1")
+        .replace("/FlateDecode", "/LZWDecode"),
+      "latin1",
+    );
+    expect(await admit(lzw, "n.pdf")).toEqual(UNSCANNABLE);
+    const embedded = Buffer.from(
+      Buffer.from(pdfOf("Hello PDF"))
+        .toString("latin1")
+        .replace("/Type /Catalog", "/Type /Catalog /Names << /EmbeddedFiles 6 0 R >>"),
+      "latin1",
+    );
+    expect(await admit(embedded, "n.pdf")).toEqual(UNSCANNABLE);
+  });
+  it("keeps a PDF whose Flate streams are clean", async () => {
+    expect(await admit(pdfWithFlateStream(deflated("BT (fine) Tj ET")), "n.pdf")).toEqual({
+      ok: true,
+    });
+  });
+});
+
 describe("what is allowed", () => {
   it.each([
     ["a PNG", png(), "a.png"],
     ["a JPEG", jpeg(), "a.jpg"],
-    ["a GIF", Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 1, 0]), "a.gif"],
     [
-      "a WebP",
-      Uint8Array.from([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x45, 0x42, 0x50]),
-      "a.webp",
+      "a PNG with a clean compressed text chunk and an Apple screenshot chunk",
+      png(
+        pngChunk("zTXt", keywordCompressed("Comment", "a screenshot")),
+        pngChunk("iDOT", new Uint8Array(28)),
+      ),
+      "a.png",
+    ],
+    [
+      "a JPEG with scan data, a stuffed byte and a restart marker",
+      jpeg(jpegSegment(0xda, new Uint8Array(4)), [1, 0xff, 0x00, 2, 0xff, 0xd0, 3]),
+      "a.jpg",
     ],
   ])("%s by its signature", async (_label, bytes, name) => {
     expect(await admit(bytes, name)).toEqual({ ok: true });

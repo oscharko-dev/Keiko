@@ -3,8 +3,11 @@ import { zipTextEntries } from "../../packages/keiko-local-knowledge/src/parsers
 
 export { zipTextEntries };
 
-/** A one-paragraph Word document whose body is `text`. */
-export function docxOf(text: string): Uint8Array {
+/** A one-paragraph Word document whose body is `text`, with any further package parts. */
+export function docxOf(
+  text: string,
+  parts: readonly { readonly name: string; readonly content: string }[] = [],
+): Uint8Array {
   return zipTextEntries([
     {
       name: "[Content_Types].xml",
@@ -15,6 +18,7 @@ export function docxOf(text: string): Uint8Array {
       name: "word/document.xml",
       content: `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`,
     },
+    ...parts,
   ]);
 }
 

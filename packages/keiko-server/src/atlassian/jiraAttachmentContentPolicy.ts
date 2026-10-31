@@ -1,6 +1,10 @@
 import { Buffer, isUtf8 } from "node:buffer";
 import { extname } from "node:path";
-import { extractBoundedDocumentText } from "@oscharko-dev/keiko-local-knowledge";
+import { inflateSync } from "node:zlib";
+import {
+  extractBoundedDocumentText,
+  readBoundedOoxmlPackage,
+} from "@oscharko-dev/keiko-local-knowledge";
 import { containsCredentialShape, redactCredentialShapes } from "@oscharko-dev/keiko-security";
 
 /**
@@ -9,16 +13,24 @@ import { containsCredentialShape, redactCredentialShapes } from "@oscharko-dev/k
  * themselves are classified and scanned with the same credential floor the redaction layer uses:
  *
  * - text (valid UTF-8, no NUL): the whole text is scanned;
- * - PDF, Word and Excel documents: their text is extracted with the Local Knowledge extractors and
- *   scanned; a document whose text cannot be extracted completely is not scannable;
- * - PNG, JPEG, GIF and WebP images, recognized by their signature: allowed only when nothing hides
- *   in them — their raw bytes are scanned like text (a metadata chunk, a comment or EXIF segment, or
- *   data appended after the image is where a polyglot carries a secret), and a PNG with bytes after
- *   IEND or a JPEG with bytes after its final EOI is refused, since trailing data has no lawful
- *   use in an attachment;
- * - everything else (archives, databases, key stores, executables, unknown binary): refused.
+ * - Word and Excel documents: their text is extracted with the Local Knowledge extractors and
+ *   scanned, and then every part of the package (comments, headers, footers, properties, embedded
+ *   media, any other entry) is inflated and scanned as text or checked as an image; a part that is
+ *   neither, or a package that cannot be read whole, is not scannable;
+ * - PDF documents: the page text is extracted and scanned, the file's own bytes are scanned, and
+ *   every Flate stream (object streams, annotations, form values, metadata) is inflated and
+ *   scanned; a stream under any other filter except a well-formed JPEG, an encrypted PDF and a PDF
+ *   carrying an embedded file are not scannable;
+ * - PNG and JPEG images, recognized by their signature: their raw bytes are scanned like text,
+ *   their structure is walked to its end, and every compressed text carrier (zTXt, compressed
+ *   iTXt, iCCP) is inflated and scanned; a chunk or segment outside the known set, a malformed
+ *   structure or bytes after the image are not scannable;
+ * - everything else (GIF, WebP, archives, databases, key stores, executables, unknown binary):
+ *   refused.
  *
- * Configured secret literals are also searched in the raw bytes of every kind of file.
+ * Configured secret literals are also searched in the raw bytes of every kind of file. The scan
+ * finds credentials where a file naturally carries text; it does not claim to find a secret that
+ * was deliberately encoded into pixel data or any other opaque representation.
  */
 export type AttachmentContentVerdict =
   | { readonly ok: true }
@@ -35,52 +47,171 @@ const DOCUMENT_MAX_INPUT_BYTES = 8 * 1024 * 1024;
 const DOCUMENT_MAX_TEXT_BYTES = 4 * 1024 * 1024;
 const DOCUMENT_MAX_UNITS = 100_000;
 const DOCUMENT_TIMEOUT_MS = 15_000;
+const PACKAGE_MAX_ENTRIES = 4096;
 
 function startsWith(bytes: Uint8Array, signature: readonly number[], offset = 0): boolean {
   return signature.every((byte, index) => bytes[offset + index] === byte);
 }
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG = [0xff, 0xd8, 0xff];
-const GIF_87 = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61];
-const GIF_89 = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+const GIF = [0x47, 0x49, 0x46, 0x38];
 const RIFF = [0x52, 0x49, 0x46, 0x46];
-const WEBP = [0x57, 0x45, 0x42, 0x50];
 const PDF = [0x25, 0x50, 0x44, 0x46, 0x2d];
 const ZIP = [0x50, 0x4b, 0x03, 0x04];
 
-function isImage(bytes: Uint8Array): boolean {
+// Compressed parts are inflated within one budget per attachment, so a crafted file cannot make the
+// scan unbounded.
+const INFLATE_MAX_BYTES = 64 * 1024 * 1024;
+interface InflateBudget {
+  remaining: number;
+}
+
+interface InflateInfo {
+  readonly buffer: Buffer;
+  readonly engine: { readonly bytesWritten: number };
+}
+// With `info`, zlib also reports how much input it consumed; its declared return type omits that.
+function isInflateInfo(value: unknown): value is InflateInfo {
+  if (typeof value !== "object" || value === null) return false;
+  const { buffer, engine } = value as Partial<Record<"buffer" | "engine", unknown>>;
   return (
-    startsWith(bytes, PNG) ||
-    startsWith(bytes, JPEG) ||
-    startsWith(bytes, GIF_87) ||
-    startsWith(bytes, GIF_89) ||
-    (startsWith(bytes, RIFF) && startsWith(bytes, WEBP, 8))
+    Buffer.isBuffer(buffer) &&
+    typeof engine === "object" &&
+    engine !== null &&
+    typeof (engine as Partial<Record<"bytesWritten", unknown>>).bytesWritten === "number"
   );
+}
+
+/**
+ * One zlib stream inflated within the remaining budget. Undefined when the data is not exactly one
+ * zlib stream (a second stream or other bytes after its end would go unscanned) or is too large.
+ */
+function inflateBounded(data: Uint8Array, budget: InflateBudget): Buffer | undefined {
+  if (budget.remaining <= 0) return undefined;
+  let result: unknown;
+  try {
+    result = inflateSync(data, { maxOutputLength: budget.remaining, info: true });
+  } catch {
+    // Not a zlib stream, or larger than the budget: the caller refuses the file as unscannable.
+    return undefined;
+  }
+  if (!isInflateInfo(result) || result.engine.bytesWritten !== data.length) return undefined;
+  budget.remaining -= result.buffer.length;
+  return result.buffer;
 }
 
 const PNG_CHUNKS_START = 8;
 const PNG_CHUNK_OVERHEAD = 12; // length, type and checksum around the data
-function pngHasTrailingData(bytes: Uint8Array): boolean {
+// Chunks whose data is image structure or uncompressed text the raw scan already reads.
+const PNG_PLAIN_CHUNKS: ReadonlySet<string> = new Set([
+  "IHDR",
+  "PLTE",
+  "IDAT",
+  "tRNS",
+  "cHRM",
+  "gAMA",
+  "sBIT",
+  "sRGB",
+  "cICP",
+  "mDCV",
+  "cLLI",
+  "tEXt",
+  "bKGD",
+  "hIST",
+  "pHYs",
+  "sPLT",
+  "eXIf",
+  "tIME",
+]);
+// Apple's screenshot chunk: a fixed 28-byte layout.
+const PNG_APPLE_IDOT_BYTES = 28;
+
+/** The compressed payload after `keyword NUL method`, or undefined when the layout is wrong. */
+function afterKeywordAndMethod(data: Uint8Array): Uint8Array | undefined {
+  const keywordEnd = data.indexOf(0);
+  if (keywordEnd < 1 || data[keywordEnd + 1] !== 0) return undefined;
+  return data.subarray(keywordEnd + 2);
+}
+
+/** The compressed text of an iTXt chunk, an empty array for an uncompressed one, or undefined. */
+function internationalText(data: Uint8Array): Uint8Array | undefined {
+  const keywordEnd = data.indexOf(0);
+  const flag = data[keywordEnd + 1];
+  if (keywordEnd < 1 || (flag !== 0 && flag !== 1)) return undefined;
+  if (flag === 0) return new Uint8Array(0);
+  const language = data.indexOf(0, keywordEnd + 3);
+  const translated = language < 0 ? -1 : data.indexOf(0, language + 1);
+  return data[keywordEnd + 2] !== 0 || translated < 0 ? undefined : data.subarray(translated + 1);
+}
+
+/** What a PNG chunk contributes: nothing, a compressed text carrier, or undefined when refused. */
+function pngChunkCarrier(type: string, data: Uint8Array): Uint8Array | undefined {
+  if (PNG_PLAIN_CHUNKS.has(type)) return new Uint8Array(0);
+  if (type === "iDOT") return data.length === PNG_APPLE_IDOT_BYTES ? new Uint8Array(0) : undefined;
+  if (type === "zTXt" || type === "iCCP") return afterKeywordAndMethod(data);
+  return type === "iTXt" ? internationalText(data) : undefined;
+}
+
+/** The compressed text carriers of a well-formed PNG, or undefined when it is not one. */
+function pngCarriers(bytes: Uint8Array): readonly Uint8Array[] | undefined {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+  const carriers: Uint8Array[] = [];
   let position = PNG_CHUNKS_START;
   while (position + PNG_CHUNK_OVERHEAD <= bytes.length) {
-    const end = position + PNG_CHUNK_OVERHEAD + view.getUint32(position);
+    const length = view.getUint32(position);
+    const end = position + PNG_CHUNK_OVERHEAD + length;
+    if (end > bytes.length) return undefined;
     const type = Buffer.from(bytes.subarray(position + 4, position + 8)).toString("latin1");
-    if (type === "IEND") return end !== bytes.length;
+    if (type === "IEND") return end === bytes.length ? carriers : undefined;
+    const carrier = pngChunkCarrier(type, bytes.subarray(position + 8, position + 8 + length));
+    if (carrier === undefined) return undefined;
+    if (carrier.length > 0) carriers.push(carrier);
     position = end;
   }
   // No IEND reached: a truncated or malformed PNG cannot be vouched for.
-  return true;
+  return undefined;
 }
-function jpegHasTrailingData(bytes: Uint8Array): boolean {
-  const end = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).lastIndexOf(
-    Uint8Array.of(0xff, 0xd9),
-  );
-  return end < 0 || end + 2 !== bytes.length;
+
+const JPEG_MARKER = 0xff;
+const JPEG_EOI = 0xd9;
+const JPEG_SOS = 0xda;
+function isStandaloneJpegMarker(marker: number): boolean {
+  return (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01;
 }
-function hasTrailingData(bytes: Uint8Array): boolean {
-  if (startsWith(bytes, PNG)) return pngHasTrailingData(bytes);
-  return startsWith(bytes, JPEG) ? jpegHasTrailingData(bytes) : false;
+
+/** The offset of the next marker after entropy-coded data, skipping stuffed bytes and restarts. */
+function afterEntropyData(bytes: Uint8Array, start: number): number {
+  for (let position = start; position + 1 < bytes.length; position += 1) {
+    const next = bytes[position + 1] ?? 0;
+    if (bytes[position] === JPEG_MARKER && next !== 0 && !isStandaloneJpegMarker(next)) {
+      return position;
+    }
+  }
+  return bytes.length;
+}
+
+/** The offset after one marker segment, or undefined when the segment is malformed. */
+function afterJpegSegment(bytes: Uint8Array, position: number, marker: number): number | undefined {
+  if (marker === JPEG_MARKER) return position + 1; // a fill byte before the marker
+  if (isStandaloneJpegMarker(marker)) return position + 2;
+  const length = ((bytes[position + 2] ?? 0) << 8) | (bytes[position + 3] ?? 0);
+  if (length < 2 || position + 2 + length > bytes.length) return undefined;
+  const end = position + 2 + length;
+  return marker === JPEG_SOS ? afterEntropyData(bytes, end) : end;
+}
+
+/** A JPEG whose segments run from SOI to a final EOI with nothing between or after them. */
+function isWellFormedJpeg(bytes: Uint8Array): boolean {
+  let position = JPEG.length - 1; // the first marker after SOI
+  while (position + 2 <= bytes.length) {
+    if (bytes[position] !== JPEG_MARKER) return false;
+    const marker = bytes[position + 1] ?? 0;
+    if (marker === JPEG_EOI) return position + 2 === bytes.length;
+    const next = afterJpegSegment(bytes, position, marker);
+    if (next === undefined) return false;
+    position = next;
+  }
+  return false;
 }
 
 function containsLiteral(bytes: Uint8Array, secrets: readonly string[]): boolean {
@@ -113,7 +244,7 @@ function documentExtension(bytes: Uint8Array, name: string): "pdf" | "docx" | "x
   return extension === "docx" || extension === "xlsx" ? extension : undefined;
 }
 
-async function documentVerdict(
+async function extractedTextVerdict(
   bytes: Uint8Array,
   extension: "pdf" | "docx" | "xlsx",
   secrets: readonly string[],
@@ -133,19 +264,151 @@ async function documentVerdict(
   );
   // Text that was clipped, absent or unreadable leaves part of the document unexamined.
   if (result.outcome !== "extracted" || result.truncated) return UNSCANNABLE;
-  if (textHoldsCredential(result.text, secrets)) return CREDENTIAL;
-  // An extractor surfaces what a page shows; text a PDF carries outside the page or in an
-  // uncompressed stream is also read from the file's own bytes.
-  return extension === "pdf" && textHoldsCredential(Buffer.from(bytes).toString("latin1"), secrets)
-    ? CREDENTIAL
-    : ALLOWED;
+  return textHoldsCredential(result.text, secrets) ? CREDENTIAL : ALLOWED;
 }
 
-/** An image's raw bytes are scanned like text, then its structure must end where the image does. */
-function imageVerdict(bytes: Uint8Array, secrets: readonly string[]): AttachmentContentVerdict {
+/** One package part: text is scanned, a PNG or JPEG is checked as an image, anything else refused. */
+function packagePartVerdict(
+  part: Uint8Array,
+  secrets: readonly string[],
+  budget: InflateBudget,
+): AttachmentContentVerdict {
+  const text = decodeText(part);
+  if (text !== undefined) return textHoldsCredential(text, secrets) ? CREDENTIAL : ALLOWED;
+  return imageVerdict(part, secrets, budget) ?? UNSCANNABLE;
+}
+
+/** Every part of an OOXML package, not only the parts the text extractor reads. */
+async function packageVerdict(
+  bytes: Uint8Array,
+  secrets: readonly string[],
+  budget: InflateBudget,
+  signal: AbortSignal | undefined,
+): Promise<AttachmentContentVerdict> {
+  const read = await readBoundedOoxmlPackage(bytes, {
+    maxInputBytes: DOCUMENT_MAX_INPUT_BYTES,
+    maxEntries: PACKAGE_MAX_ENTRIES,
+    maxInflatedBytes: INFLATE_MAX_BYTES,
+    timeoutMs: DOCUMENT_TIMEOUT_MS,
+    now: Date.now,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!read.ok) return UNSCANNABLE;
+  for (const part of read.parts.values()) {
+    const verdict = packagePartVerdict(part, secrets, budget);
+    if (!verdict.ok) return verdict;
+  }
+  return ALLOWED;
+}
+
+const PDF_STREAM = /(?<!end)stream\r?\n/gu;
+const PDF_FILTER = /\/Filter\s*(\[[^\]]*\]|\/[A-Za-z0-9]+)/u;
+const PDF_NAME = /\/([A-Za-z0-9]+)/gu;
+// The one end-of-line marker a stream may carry before `endstream`.
+const PDF_STREAM_EOL = /(?:\r\n|\r|\n)$/u;
+
+/** The filter names of the stream whose dictionary ends where its `stream` keyword starts. */
+function pdfStreamFilters(raw: string, streamStart: number): readonly string[] {
+  const dictionary = raw.slice(Math.max(0, raw.lastIndexOf("obj", streamStart)), streamStart);
+  const filter = PDF_FILTER.exec(dictionary)?.[1] ?? "";
+  return [...filter.matchAll(PDF_NAME)].map((match) => match[1] ?? "");
+}
+
+/** A Flate stream, optionally holding a JPEG: inflated and scanned, or checked as a whole JPEG. */
+function flateStreamVerdict(
+  data: Uint8Array,
+  inner: string | undefined,
+  secrets: readonly string[],
+  budget: InflateBudget,
+): AttachmentContentVerdict {
+  if (inner !== undefined && inner !== "DCTDecode") return UNSCANNABLE;
+  const inflated = inflateBounded(data, budget);
+  if (inflated === undefined) return UNSCANNABLE;
+  if (inner === "DCTDecode") return isWellFormedJpeg(inflated) ? ALLOWED : UNSCANNABLE;
+  return textHoldsCredential(inflated.toString("latin1"), secrets) ? CREDENTIAL : ALLOWED;
+}
+
+/** One stream: no filter is covered by the raw scan, Flate is inflated, a JPEG must be whole. */
+function pdfStreamVerdict(
+  data: Uint8Array,
+  filters: readonly string[],
+  secrets: readonly string[],
+  budget: InflateBudget,
+): AttachmentContentVerdict {
+  const [first, second, ...rest] = filters;
+  if (first === undefined) return ALLOWED;
+  if (rest.length > 0) return UNSCANNABLE;
+  if (first === "FlateDecode") return flateStreamVerdict(data, second, secrets, budget);
+  return first === "DCTDecode" && second === undefined && isWellFormedJpeg(data)
+    ? ALLOWED
+    : UNSCANNABLE;
+}
+
+/** The file's own bytes and every stream; an encrypted PDF or an embedded file is not scannable. */
+function pdfBytesVerdict(
+  bytes: Uint8Array,
+  secrets: readonly string[],
+  budget: InflateBudget,
+): AttachmentContentVerdict {
   const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString("latin1");
   if (textHoldsCredential(raw, secrets)) return CREDENTIAL;
-  return hasTrailingData(bytes) ? UNSCANNABLE : ALLOWED;
+  if (raw.includes("/Encrypt") || raw.includes("/EmbeddedFile")) return UNSCANNABLE;
+  for (const match of raw.matchAll(PDF_STREAM)) {
+    const start = match.index + match[0].length;
+    const end = raw.indexOf("endstream", start);
+    if (end < 0) return UNSCANNABLE;
+    const body = raw.slice(start, end).replace(PDF_STREAM_EOL, "");
+    const data = bytes.subarray(start, start + body.length);
+    const verdict = pdfStreamVerdict(data, pdfStreamFilters(raw, match.index), secrets, budget);
+    if (!verdict.ok) return verdict;
+  }
+  return ALLOWED;
+}
+
+async function documentVerdict(
+  bytes: Uint8Array,
+  extension: "pdf" | "docx" | "xlsx",
+  secrets: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<AttachmentContentVerdict> {
+  const text = await extractedTextVerdict(bytes, extension, secrets, signal);
+  if (!text.ok) return text;
+  const budget: InflateBudget = { remaining: INFLATE_MAX_BYTES };
+  return extension === "pdf"
+    ? pdfBytesVerdict(bytes, secrets, budget)
+    : packageVerdict(bytes, secrets, budget, signal);
+}
+
+/** Text carriers inflated and scanned; a carrier that does not inflate is not scannable. */
+function inflatedCarriersVerdict(
+  carriers: readonly Uint8Array[],
+  secrets: readonly string[],
+  budget: InflateBudget,
+): AttachmentContentVerdict {
+  for (const carrier of carriers) {
+    const inflated = inflateBounded(carrier, budget);
+    if (inflated === undefined) return UNSCANNABLE;
+    if (textHoldsCredential(inflated.toString("latin1"), secrets)) return CREDENTIAL;
+  }
+  return ALLOWED;
+}
+
+/**
+ * A PNG or JPEG: its raw bytes are scanned like text, its structure must end where the image does,
+ * and a PNG's compressed text carriers are inflated and scanned. Other images are not scannable.
+ */
+function imageVerdict(
+  bytes: Uint8Array,
+  secrets: readonly string[],
+  budget: InflateBudget,
+): AttachmentContentVerdict | undefined {
+  const png = startsWith(bytes, PNG);
+  if (!png && !startsWith(bytes, JPEG)) return undefined;
+  const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString("latin1");
+  if (textHoldsCredential(raw, secrets)) return CREDENTIAL;
+  if (!png) return isWellFormedJpeg(bytes) ? ALLOWED : UNSCANNABLE;
+  const carriers = pngCarriers(bytes);
+  return carriers === undefined ? UNSCANNABLE : inflatedCarriersVerdict(carriers, secrets, budget);
 }
 
 /** Classify the bytes and refuse a credential or anything that cannot be scanned. */
@@ -158,7 +421,10 @@ export async function admitAttachmentContent(input: {
 }): Promise<AttachmentContentVerdict> {
   const { bytes, name, secrets, signal } = input;
   if (containsLiteral(bytes, secrets)) return CREDENTIAL;
-  if (isImage(bytes)) return imageVerdict(bytes, secrets);
+  const image = imageVerdict(bytes, secrets, { remaining: INFLATE_MAX_BYTES });
+  if (image !== undefined) return image;
+  // GIF and WebP (RIFF) images carry compressed data whose structure Keiko does not walk.
+  if (startsWith(bytes, GIF) || startsWith(bytes, RIFF)) return UNSCANNABLE;
   const extension = documentExtension(bytes, name);
   if (extension !== undefined) return documentVerdict(bytes, extension, secrets, signal);
   const text = decodeText(bytes);

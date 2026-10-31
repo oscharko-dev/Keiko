@@ -599,17 +599,26 @@ review and the send with the credential floor the redaction layer already uses
 (`containsCredentialShape` and `redactCredentialShapes`, plus a search for the configured secret
 literals in the raw bytes): text (valid UTF-8 without binary control characters) is scanned whole;
 PDF, Word and Excel documents are scanned through the Local Knowledge extractors, and a document
-whose text is clipped, absent or unreadable is refused; a PDF's own bytes are scanned as well, since
-an extractor surfaces only what a page shows; PNG, JPEG, GIF and WebP images, recognized by their
-signature, are allowed only when nothing hides in or behind them — their raw bytes are scanned like
-text (a metadata chunk, a comment or EXIF segment, or data appended after the image is where a
-polyglot carries a secret), and a PNG with bytes after IEND, a PNG that never reaches IEND, or a
-JPEG with bytes after its final EOI is refused as `unscannable`, since trailing data has no
-lawful use in an attachment; everything else — archives, databases, key stores, executables, unknown
-binary — is refused as `unscannable`, and a detected credential as `contains-credential`. The
-human therefore never approves such a file, and the tool description tells the model so. The scan is
-only as complete as the extractors and the byte scan: compressed image metadata chunks and an
-Office package's embedded objects are not read.
+whose text is clipped, absent or unreadable is refused. Because an extractor reads only what a page
+shows or the body parts a parser needs, the whole file is read as well: every part of a Word or Excel
+package (comments, headers, footers, properties, embedded media, any other entry) is inflated with
+the shared bounded OOXML reader and scanned as text or checked as an image, and a part that is
+neither refuses the file; a PDF's own bytes are scanned and every Flate stream (object streams,
+annotations, form values, metadata) is inflated and scanned, while a stream under any other filter
+except a well-formed JPEG (`DCTDecode`), an encrypted PDF and a PDF carrying an embedded file are
+refused. PNG and JPEG images, recognized by their signature, are allowed only when nothing hides in
+or behind them: their raw bytes are scanned like text, a PNG's chunks are walked from IHDR to a
+final IEND against a known set (a fixed-size Apple `iDOT` included) and its compressed text carriers
+(`zTXt`, compressed `iTXt`, `iCCP`) are inflated and scanned, and a JPEG's segments are walked from
+SOI through its entropy-coded data to a final EOI; an unknown chunk, a malformed structure or any
+byte after the image is refused as `unscannable`, since trailing data has no lawful use in an
+attachment. Every inflation must consume its carrier exactly, so a second stream behind the first
+is refused, and all inflation shares one 64 MiB budget per file. GIF and WebP, archives, databases,
+key stores, executables and unknown binary are refused as `unscannable`, and a detected credential
+as `contains-credential`. The human therefore never approves such a file, and the tool description
+tells the model so. The scan finds credentials where a file naturally carries text; it does not
+claim to find a secret deliberately encoded into pixel data or another opaque representation
+(independent review of #4176, 2026-10-31).
 
 *Review and send.* When the approval is requested the server reads the file and attaches its
 **name, size and SHA-256** to the approval view and so to the approval proof; the human is shown
