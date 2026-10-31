@@ -78,12 +78,41 @@ interface CodingRuntimeGitSyncFacts {
   readonly behind?: number;
   readonly truncated: boolean;
 }
+/**
+ * The closed outcome of `keiko_git_branch` (#3907, owner decision 2026-10-31): the run created a
+ * task branch at its current commit and switched to it (`succeeded`), or Keiko refused or could not
+ * (`blocked`, `failed`, `recovery-required`) and says why in one closed word. The branch name is
+ * the model's own argument echoed back, and only when it is a safe Git ref name.
+ */
+export const CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS = {
+  succeeded: ["none"],
+  blocked: [
+    "invalid-name",
+    "protected-name",
+    "branch-exists",
+    "not-on-base",
+    "not-local-checkout",
+    "executable-filters",
+    "authority-denied",
+    "policy-block",
+    "preflight-block",
+  ],
+  failed: ["execution-failed", "rebind-failed"],
+  "recovery-required": ["execution-uncertain"],
+} as const;
+export interface CodingRuntimeGitBranch {
+  readonly kind: "branch";
+  readonly status: keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS;
+  readonly reason: (typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS)[keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS][number];
+  readonly branch?: string;
+}
 export type CodingRuntimeGitResult =
   | CodingRuntimeGitStatus
   | CodingRuntimeGitDiff
   | CodingRuntimeGitStage
   | CodingRuntimeGitUnstage
-  | CodingRuntimeGitSync;
+  | CodingRuntimeGitSync
+  | CodingRuntimeGitBranch;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -177,6 +206,22 @@ function sync(value: Record<string, unknown>): boolean {
     typeof value.truncated === "boolean"
   );
 }
+function branch(value: Record<string, unknown>): boolean {
+  return (
+    keys(value, ["kind", "status", "reason", "branch"]) &&
+    typeof value.status === "string" &&
+    Object.hasOwn(CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS, value.status) &&
+    (
+      CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS[
+        value.status as keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS
+      ] as readonly unknown[]
+    ).includes(value.reason) &&
+    (value.branch === undefined ||
+      (typeof value.branch === "string" &&
+        isSafeGitRefName(value.branch) &&
+        !value.branch.startsWith("-")))
+  );
+}
 function stageStatusReason(status: unknown, reason: unknown): boolean {
   if (typeof status !== "string" || !Object.hasOwn(STAGE_STATUS_REASONS, status)) return false;
   const allowed: readonly unknown[] =
@@ -187,6 +232,7 @@ function resultOfKind(value: Record<string, unknown>): boolean {
   if (value.kind === "status") return status(value);
   if (value.kind === "stage" || value.kind === "unstage") return proposal(value, value.kind);
   if (value.kind === "fetch" || value.kind === "pull") return sync(value);
+  if (value.kind === "branch") return branch(value);
   return (
     value.kind === "diff" &&
     keys(value, ["kind", "diff"]) &&

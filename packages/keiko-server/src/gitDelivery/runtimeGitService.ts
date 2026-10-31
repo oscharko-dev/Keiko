@@ -1,4 +1,5 @@
 import type {
+  CodingRuntimeGitBranch,
   CodingRuntimeGitResult,
   CodingRuntimeGitStage,
   CodingRuntimeGitSync,
@@ -56,6 +57,7 @@ import {
 } from "../coding-runtime/codingRuntimeGitIpc.js";
 import { buildSyncPreview, runSyncExecute, type GitDeliverySyncSeams } from "./syncExecution.js";
 import { persistGitSyncResult } from "./syncEvidence.js";
+import { runTaskBranch, type RuntimeGitTaskBranchPort } from "./runtimeGitBranch.js";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import type { GovernedSyncHead } from "../coding-runtime/governedSyncHeads.js";
 import { describeError } from "../diagnostics-log.js";
@@ -109,6 +111,14 @@ const RUNTIME_GIT_REASON_FIELD = {
     "run-not-live",
     "guard-rejected",
     "mode-unavailable",
+    // #3907: the closed reasons of a refused or failed `keiko_git_branch`.
+    "invalid-name",
+    "protected-name",
+    "branch-exists",
+    "not-on-base",
+    "not-local-checkout",
+    "executable-filters",
+    "rebind-failed",
   ],
 } as const;
 
@@ -150,6 +160,7 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
         "unstage-execute",
         "fetch",
         "pull",
+        "branch",
       ],
     },
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
@@ -206,6 +217,7 @@ type RuntimeGitPhase =
   | "stage-execute"
   | "unstage-propose"
   | "unstage-execute"
+  | "branch"
   | RuntimeGitSyncOperation;
 /** A proposal's result: staging, or its inverse unstaging (#3902 AC2), on one lifecycle. */
 type IndexProposalResult = CodingRuntimeGitStage | CodingRuntimeGitUnstage;
@@ -219,7 +231,10 @@ interface RuntimeGitActivityFields {
     | "withheld"
     | "failed";
   readonly reason?:
-    CodingRuntimeGitStage["reason"] | RuntimeGitRefusalReason | RuntimeGitRefusalCondition;
+    | CodingRuntimeGitStage["reason"]
+    | CodingRuntimeGitBranch["reason"]
+    | RuntimeGitRefusalReason
+    | RuntimeGitRefusalCondition;
   readonly proposalId?: string;
   readonly pathCount?: number;
   readonly fileCount?: number;
@@ -296,6 +311,10 @@ interface RuntimeGitOptions extends VerifiedCommitServiceOptions {
   readonly sync?: Pick<GitDeliverySyncSeams, "runner" | "now" | "maxBytes" | "timeoutMs">;
   /** Records the head a governed fast-forward wrote (governedSyncHeads.ts). */
   readonly recordGovernedSyncHead?: ((head: GovernedSyncHead) => void) | undefined;
+  /** The run's workspace for a governed task branch (runtimeGitBranch.ts, #3907). */
+  readonly taskBranch?: RuntimeGitTaskBranchPort | undefined;
+  /** Forgets what a branch change made stale: open commit and push proposals, verification (#3907). */
+  readonly invalidateDelivery?: (() => void) | undefined;
 }
 function buildStageProposal(
   context: VerifiedCommitRunContext,
@@ -401,8 +420,9 @@ function syncEvidence(result: CodingRuntimeGitSync): RuntimeGitActivityFields {
 }
 
 /** The log outcome of a result: a sync that settled anywhere but Git's success is a warning. */
-function resultOutcome(result: RuntimeGitOutcome): "ok" | "refused" {
+function resultOutcome(result: RuntimeGitOutcome): "ok" | "refused" | "failed" {
   if (result.kind === "refused") return "refused";
+  if (result.kind === "branch") return branchOutcome(result);
   return (result.kind === "fetch" || result.kind === "pull") &&
     result.status !== "succeeded" &&
     result.status !== "up-to-date"
@@ -410,8 +430,15 @@ function resultOutcome(result: RuntimeGitOutcome): "ok" | "refused" {
     : "ok";
 }
 
+// A task branch Keiko refused is a governance outcome; one it could not make is a failure.
+function branchOutcome(result: CodingRuntimeGitBranch): "ok" | "refused" | "failed" {
+  if (result.status === "succeeded") return "ok";
+  return result.status === "blocked" ? "refused" : "failed";
+}
+
 function resultEvidence(result: RuntimeGitOutcome): RuntimeGitActivityFields {
   if (result.kind === "refused") return { state: "refused", reason: result.reason };
+  if (result.kind === "branch") return { state: result.status, reason: result.reason };
   if (result.kind === "fetch" || result.kind === "pull") return syncEvidence(result);
   if (result.kind === "stage" || result.kind === "unstage")
     return {
@@ -598,8 +625,10 @@ export class RuntimeGitService {
     guard: CodingToolMutationGuard,
   ): Promise<RuntimeGitOutcome> {
     const execution = this.options.execution ?? {};
-    await readVerifiedCommitFacts(context, execution);
+    const facts = await readVerifiedCommitFacts(context, execution);
     if (request.operation === "status") return runtimeGitStatus(context, execution);
+    if (request.operation === "branch")
+      return this.branch(context, request.branchName, facts.headSha);
     if (request.operation === "fetch" || request.operation === "pull")
       return this.sync(context, request.operation);
     if (request.operation === "diff")
@@ -655,6 +684,51 @@ export class RuntimeGitService {
       ...(result.behind === undefined ? {} : { behind: result.behind }),
       truncated: result.truncated,
     };
+  }
+  // #3907: one governed task branch for a run standing on its base branch (runtimeGitBranch.ts).
+  // Whatever the branch change made stale, commit and push proposals and the verification they
+  // rest on, is invalidated here, after the run's branch has moved and not before.
+  private async branch(
+    context: VerifiedCommitRunContext,
+    branchName: string,
+    headSha: string,
+  ): Promise<CodingRuntimeGitBranch> {
+    const run = await runTaskBranch({
+      context,
+      mutationDeps: this.options.mutationDeps,
+      execution: this.options.execution ?? {},
+      port: this.options.taskBranch,
+      headSha,
+      branchName,
+    });
+    if (run.result.status === "succeeded") this.invalidateAfterBranchChange();
+    // The cause of a failed adoption is not in the result the model reads; it goes to the log as
+    // the structured failure it is, under the same correlation, before the result line.
+    if (run.cause !== undefined) this.logBranchRebindFailure(context, run.cause);
+    return run.result;
+  }
+  private logBranchRebindFailure(context: VerifiedCommitRunContext, cause: unknown): void {
+    const detail = describeError(cause);
+    this.log(
+      context,
+      "branch",
+      {
+        state: "failed",
+        reason: "rebind-failed",
+        failureKind: gitDeliveryActivityFailureKind(errorKindOf(cause)),
+        errorClass: detail.errorClass,
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
+      "failed",
+    );
+  }
+  private invalidateAfterBranchChange(): void {
+    // Not `invalidate()`: that closes the generation this very call stands on.
+    this.proposals.clear();
+    this.leases = new WeakMap();
+    this.options.invalidateVerification();
+    this.options.invalidateDelivery?.();
   }
   // #3902 AC2: the fast-forward moved the run's branch to a head Keiko itself wrote. The workspace's
   // verified head and the run's sync receipt both record it, so the run's authority stands on it as

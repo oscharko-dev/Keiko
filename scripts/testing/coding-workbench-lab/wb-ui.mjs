@@ -123,7 +123,23 @@ async function reopenWorkbench(page) {
   return waitForWorkbench(page);
 }
 
+// A model under a background readiness re-probe is briefly not offered; a human waits for it to
+// return, so the driver retries for up to two minutes before it fails the task.
 export async function chooseOption(page, comboName, optionLabel) {
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    try {
+      await chooseOptionOnce(page, comboName, optionLabel);
+      return;
+    } catch (error) {
+      if (Date.now() > deadline || !String(error?.message).includes("no option is labelled")) throw error;
+      await page.keyboard.press("Escape");
+      await sleep(3000);
+    }
+  }
+}
+
+async function chooseOptionOnce(page, comboName, optionLabel) {
   await page.getByRole("combobox", { name: comboName }).click();
   // An option's accessible name is its label followed directly by its description, so the label
   // element is compared on its own and only an exact label is chosen: an offered near-match (a
@@ -245,6 +261,9 @@ export async function answerGates(page, runId, snapshot, { approve, decided }) {
 async function declineQuestion(page) {
   const section = page.getByRole("region", { name: "Runtime questions" });
   const reject = section.getByRole("button", { name: "Reject question", exact: true }).first();
+  // isVisible answers at once; isEnabled waits for a missing button up to the action timeout,
+  // which delayed every approval of a run without a question by ~20 s.
+  if (!(await reject.isVisible().catch(() => false))) return;
   if (!(await reject.isEnabled().catch(() => false))) return;
   log("question asked via UI; its text follows, then the driver declines it");
   console.log(

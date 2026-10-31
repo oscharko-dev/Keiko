@@ -676,6 +676,7 @@ function projectRuntimeGit(
           evidence: [{ kind: "governed-delegate", code: "completed" }],
           git: value.git,
           ...stageGuidance(value.git),
+          ...branchGuidance(value.git),
         }
       : projected("failed");
   return undefined;
@@ -733,10 +734,13 @@ function projectVerifiedCommit(
 
 // Coding Workbench Jira lab, 2026-10-30: a Local checkout on `main` had its commit blocked as
 // `protected-branch` and the model, seeing only the code, looped on the pull request until the run
-// timed out. Keiko neither commits to a protected branch nor creates branches for a run, so the one
-// step left to the model is to report it; the other policy blocks keep their bare codes.
+// timed out. Keiko never commits to a protected branch, but since the owner decision of 2026-10-31
+// (#3907) the model can give the run a task branch itself: `keiko_git_branch` creates one at the
+// current commit and switches the run to it, through Keiko's Git kernel. When that tool refuses
+// too (a managed worktree, an existing name, ...), the operator report stays the fallback; the
+// other policy blocks keep their bare codes.
 const PROTECTED_BRANCH_COMMIT_GUIDANCE =
-  "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Keiko does not create or switch branches during a run. Do not retry the commit and do not propose a push or pull request: report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
+  "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Create a task branch with keiko_git_branch (a new name such as feature/short-description; your uncommitted changes carry over), then stage, verify and commit again on it. Do not retry this commit unchanged and do not propose a push or pull request yet. If keiko_git_branch refuses, report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
 
 function commitBlockGuidance(result: VerifiedCommitResult): { readonly guidance?: string } {
   return result.status === "blocked" && result.blockReason === "protected-branch"
@@ -817,8 +821,10 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, and the
     // model picked another verifier at once without knowing why. A run cancelled after a passing
     // step still checked something, so the guidance claims no more than the named steps (PR #3452).
+    // A Python repository read "add the script" as an order and gained a package.json the task
+    // forbade (AC3 lab T19, #3907); the shell command is the verification that already counts.
     VERIFICATION_NOT_RUN:
-      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier, or the repository has no package.json at all: choose a verifier the repository defines, or run the repository's own command for that check in your shell (for example python3 -m unittest or pytest), where its result counts as that verification. Never add a package.json or a script only to satisfy this verifier. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
   },
   // Push and pull request proposals (CodingRuntimeDeliveryResult, contracts). Each names the true
   // cause and the one next step that is the model's to take; none suggests another remote or URL.
@@ -918,6 +924,34 @@ const UNSTAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
   "proposal-limit":
     "Too many stage and unstage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
 };
+
+// A task branch Keiko refused, with the one step that is the model's to take (#3907).
+const BRANCH_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
+  "invalid-name":
+    "That is not a branch name Keiko will create. Use a short name of letters, digits, '-', '_', '.' and '/', such as feature/short-description, without spaces or '..', and not starting with '-'.",
+  "protected-name":
+    "Keiko never creates or commits on a protected branch such as main or dev. Choose a new task branch name such as feature/short-description.",
+  "branch-exists":
+    "A branch with that name already exists at a different commit (or is the current branch). Choose a new name; Keiko never moves, resets or deletes an existing branch.",
+  "not-on-base":
+    "This run already works on its own task branch, so no further branch is created. Continue on it: stage, verify and commit there.",
+  "not-local-checkout":
+    "Keiko creates a task branch only in a Local checkout that stands on its base branch. This run's workspace is not one, so keep working here and report the result to the operator.",
+  "executable-filters":
+    "This checkout has executable Git filters, so Keiko will not switch its branch. Report to the operator that a task branch must be created outside Keiko.",
+  "authority-denied":
+    "The run's authority no longer covers this step. Report this blocker; do not retry or route around it.",
+  "policy-block":
+    "The repository's Git policy does not allow this branch to be created. Report this blocker to the operator.",
+  "preflight-block":
+    "Git reports a repository condition that blocks the branch (for example a merge in progress). Read keiko_git_status, resolve nothing yourself, and report the blocker.",
+};
+
+function branchGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
+  if (result.kind !== "branch") return {};
+  const guidance = result.status === "blocked" ? BRANCH_BLOCKED_GUIDANCE[result.reason] : undefined;
+  return guidance === undefined ? {} : { guidance };
+}
 
 function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
   const table = result.kind === "unstage" ? UNSTAGE_BLOCKED_GUIDANCE : STAGE_BLOCKED_GUIDANCE;

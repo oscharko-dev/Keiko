@@ -1,4 +1,5 @@
 import { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { RuntimeGitTaskBranchPort } from "../gitDelivery/runtimeGitBranch.js";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeEvent,
@@ -14,6 +15,7 @@ import type {
 } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { GovernedSyncHead } from "./governedSyncHeads.js";
+import type { GovernedTaskBranch } from "./governedTaskBranches.js";
 import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 export interface VerifiedCommitRuntimeDependencies extends Omit<
@@ -24,6 +26,8 @@ export interface VerifiedCommitRuntimeDependencies extends Omit<
   readonly buffersClean: (root: string, runId: string) => boolean;
   /** Records the head a governed fast-forward of a run wrote (governedSyncHeads.ts, #3902 AC2). */
   readonly recordGovernedSyncHead?: ((head: GovernedSyncHead) => void) | undefined;
+  /** The task branch Keiko moved a run onto, if any (governedTaskBranches.ts, #3907). */
+  readonly governedTaskBranch?: ((runId: string) => GovernedTaskBranch | undefined) | undefined;
 }
 export interface VerifiedCommitRuntimeBinding {
   readonly runId: string;
@@ -46,6 +50,19 @@ export function createProductionVerifiedCommitService(
         policyAllowsWithoutApproval: binding.policyAllowsWithoutApproval ?? ((): boolean => false),
       });
 }
+// One seam for commit, push, pull-request and CI: a run Keiko moved onto a task branch delivers from
+// that branch, against the base it started from, while the envelope still names the branch it
+// started on (#3907).
+function runBranches(
+  deps: VerifiedCommitRuntimeDependencies,
+  binding: VerifiedCommitRuntimeBinding,
+): Pick<VerifiedCommitRunContext, "baseRef" | "headRef"> {
+  const moved = deps.governedTaskBranch?.(binding.runId);
+  return moved === undefined
+    ? { baseRef: binding.context.branch.baseRef, headRef: binding.context.branch.headRef }
+    : { baseRef: moved.baseBranch, headRef: moved.taskBranch };
+}
+
 export function resolveVerifiedCommitContext(
   deps: VerifiedCommitRuntimeDependencies,
   binding: VerifiedCommitRuntimeBinding,
@@ -70,8 +87,7 @@ export function resolveVerifiedCommitContext(
       ? {}
       : { repositoryKind: context.repositoryIdentity.kind }),
     workspace,
-    baseRef: context.branch.baseRef,
-    headRef: context.branch.headRef,
+    ...runBranches(deps, binding),
     correlationId: correlationIdOrUnknown(binding.runId),
     signal: binding.signal,
     stillAuthorized: binding.stillAuthorized,
@@ -118,6 +134,10 @@ export function createProductionRuntimeGitService(
   binding: VerifiedCommitRuntimeBinding,
   mode: () => CodingWorkbenchMode | undefined,
   invalidateVerification: () => void,
+  taskBranch?: {
+    readonly port: RuntimeGitTaskBranchPort | undefined;
+    readonly invalidateDelivery: () => void;
+  },
 ): RuntimeGitService | undefined {
   return deps === undefined
     ? undefined
@@ -126,6 +146,9 @@ export function createProductionRuntimeGitService(
         context: () => resolveVerifiedCommitContext(deps, binding),
         mode,
         invalidateVerification,
+        ...(taskBranch === undefined
+          ? {}
+          : { taskBranch: taskBranch.port, invalidateDelivery: taskBranch.invalidateDelivery }),
       });
 }
 export function requestRuntimeStageApproval(

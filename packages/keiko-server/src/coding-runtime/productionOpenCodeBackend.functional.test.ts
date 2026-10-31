@@ -40,6 +40,10 @@ import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.j
 import { createVerificationRunnerManager } from "../editor/verificationRunner.js";
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../task-workspace/active-store.js";
+import {
+  withLocalCheckout,
+  type LocalCheckoutLifecycle,
+} from "../task-workspace/local-checkout.js";
 import { createWorkspaceLifecycleService } from "../task-workspace/lifecycle.js";
 import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { createWorkspaceProvisioningService } from "../task-workspace/provisioning.js";
@@ -74,6 +78,8 @@ import {
   FUNCTIONAL_INDEX_AFTER_MARKER,
   FUNCTIONAL_INDEX_PATH,
   FUNCTIONAL_INDEX_STAGED_MARKER,
+  FUNCTIONAL_BRANCH_HEAD_MARKER,
+  FUNCTIONAL_BRANCH_NAME,
   FUNCTIONAL_SYNC_HEAD_MARKER,
   FUNCTIONAL_WEBSEARCH_QUERY,
   FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
@@ -99,6 +105,10 @@ interface FunctionalWorkspaceFixture {
   readonly db: DatabaseSync;
   readonly lifecycle: ReturnType<typeof createWorkspaceLifecycleService>;
   readonly provisioning: ReturnType<typeof createWorkspaceProvisioningService>;
+  /** The persistence a Local checkout of the same repository is selected over (#3907). */
+  readonly instances: ReturnType<typeof buildWorkspaceInstanceStoreOverDatabase>;
+  readonly activePointerStore: ReturnType<typeof buildActiveWorkspacePointerStoreOverDatabase>;
+  readonly evidenceStore: EvidenceStore;
   readonly managedRoot: string;
   readonly workspace: string;
   readonly target: string;
@@ -295,6 +305,34 @@ function devLaneDiscoveryFunctionalEnabled(): boolean {
   );
 }
 
+/** A Local checkout of the fixture repository, selected the way the Workbench selects one (#3907). */
+interface FunctionalLocalCheckout {
+  readonly root: string;
+  readonly lifecycle: LocalCheckoutLifecycle;
+  readonly store: ReturnType<typeof createInMemoryUiStore>;
+}
+
+function selectLocalCheckout(
+  fixture: FunctionalWorkspaceFixture,
+  branch: string,
+): FunctionalLocalCheckout {
+  const store = createInMemoryUiStore();
+  store.createProject(fixture.repository, "functional");
+  const lifecycle = withLocalCheckout(
+    fixture.lifecycle,
+    fixture.activePointerStore,
+    store,
+    fixture.instances,
+    {
+      evidenceStore: fixture.evidenceStore,
+      redactString: (value) => value,
+      now: Date.now,
+    },
+  );
+  lifecycle.selectLocal({ root: fixture.repository, branch, requestedBy: "functional" });
+  return { root: fixture.repository, lifecycle, store };
+}
+
 /**
  * Boots the BFF with production composition only: activation must discover the dev-lane payload
  * staged for this repository checkout (`npm run dev:coding-runtime:stage`). The absence of the
@@ -305,12 +343,19 @@ async function bootDiscoveryPipeline(
   fixture: FunctionalWorkspaceFixture,
   observeGatewayRequest?: (request: GatewayRequest) => void,
   operatorEnv?: Readonly<Record<string, string>>,
+  localCheckout?: FunctionalLocalCheckout,
 ): Promise<FunctionalPipeline> {
-  const verification = createVerification(fixture.workspace);
+  const verification = createVerification(localCheckout?.root ?? fixture.workspace);
   const port = await reserveLoopbackPort();
   const deps = productionDiscoveryBffDeps({
     stateRoot: join(fixture.root, "bff-state"),
-    workspaceLifecycle: fixture.lifecycle,
+    workspaceLifecycle: localCheckout?.lifecycle ?? fixture.lifecycle,
+    ...(localCheckout === undefined
+      ? {}
+      : {
+          store: localCheckout.store,
+          codingRuntimeSnapshotStore: createCodingRuntimeSnapshotStore(fixture.db),
+        }),
     // The run's Git preparation re-proves the managed workspace through the same provisioning
     // owner that created it, as the composed server does.
     workspaceProvisioning: fixture.provisioning,
@@ -937,6 +982,9 @@ function setupWorkspace(
         db,
         lifecycle,
         provisioning,
+        instances: store,
+        activePointerStore,
+        evidenceStore: evidence,
         managedRoot,
         workspace,
         target,
@@ -1755,6 +1803,82 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         expect(git(fixture.workspace, ["rev-parse", "HEAD"])).toBe(remoteHead);
         expect(asked.filter((kind) => kind === "git-fetch" || kind === "git-pull")).toEqual(
           mode === "autonomous-delivery" ? [] : ["git-fetch", "git-pull"],
+        );
+      },
+      300_000,
+    );
+  },
+);
+
+// #3907 (owner decision 2026-10-31): the original runtime on a Local checkout of `main`. Its shell's
+// own `git checkout -b` stays refused in every mode and names the governed tool; `keiko_git_branch`
+// creates the task branch and switches the run to it through Keiko's Git kernel, below Full access
+// only after the operator approves the exact branch name. Keiko's own `keiko_git_status` answers
+// afterwards, which it can only do once the run's authority stands on the new branch, and the
+// workspace record keeps `main` as the base. No external network is reached.
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode task branch through Keiko in a Local checkout (#3907)",
+  () => {
+    it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+      "creates and switches to a task branch through Keiko in %s, while the shell's own checkout -b stays refused",
+      async (mode) => {
+        const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+        const local = selectLocalCheckout(fixture, "main");
+        fixture.script.mode = "branch";
+        const transcripts: string[] = [];
+        const pipeline = await bootDiscoveryPipeline(
+          fixture,
+          (request) => {
+            transcripts.push(JSON.stringify(request.messages));
+          },
+          undefined,
+          local,
+        );
+        const runId = await startRun(pipeline, {
+          requestId: `branch-${mode}`,
+          taskIntent: SECRET,
+          requestedMode: mode,
+        });
+        // The operator approves whatever the run asks; the asks are recorded by what they are.
+        const asked: string[] = [];
+        await vi.waitFor(
+          async () => {
+            const snapshot = pipeline.orchestrator.getSnapshot(runId);
+            const pending = snapshot?.pendingPermission;
+            if (snapshot?.state === "awaiting-approval" && pending !== undefined) {
+              asked.push(pending.actionKind ?? "native");
+              await pipeline.orchestrator.decideApproval(runId, {
+                requestId: pending.requestId,
+                decision: "approved",
+                expectedRevision: snapshot.revision,
+              });
+            }
+            expect(transcripts.join("\n")).toContain(
+              `${FUNCTIONAL_BRANCH_HEAD_MARKER}${FUNCTIONAL_BRANCH_NAME}`,
+            );
+          },
+          { timeout: 180_000, interval: 200 },
+        );
+        await stopRun(pipeline.baseUrl, runId);
+        const transcript = transcripts.join("\n");
+        // The shell's `git checkout -b` was refused with the pointer to the governed tool.
+        expect(transcript).toContain("Create and switch to a task branch with keiko_git_branch");
+        expect(transcript).toMatch(/kind\\*":\\*"branch\\*",\\*"status\\*":\\*"succeeded/u);
+        // Keiko's status read after the switch names the new branch: the run's authority follows it.
+        expect(transcript).toMatch(/kind\\*":\\*"status[\s\S]*?branch\\*":\\*"feature\/x/u);
+        expect(git(fixture.repository, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+          FUNCTIONAL_BRANCH_NAME,
+        );
+        // The edit travelled with the checkout; the workspace record keeps `main` as its base.
+        expect(readFile(join(fixture.repository, FUNCTIONAL_INDEX_PATH))).toContain(
+          "edited by the agent",
+        );
+        expect(local.lifecycle.getActive()?.instance).toMatchObject({
+          taskBranch: FUNCTIONAL_BRANCH_NAME,
+          baseBranch: "main",
+        });
+        expect(asked.filter((kind) => kind === "git-branch")).toEqual(
+          mode === "autonomous-delivery" ? [] : ["git-branch"],
         );
       },
       300_000,

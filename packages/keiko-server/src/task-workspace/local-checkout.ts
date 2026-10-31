@@ -38,6 +38,8 @@ import type { WorkspaceInstanceStore } from "./store.js";
 import type {
   ActiveWorkspaceView,
   SetActiveWorkspaceRequest,
+  TaskBranchAdmission,
+  TaskBranchAdoption,
   WorkspaceLifecycleService,
 } from "./types.js";
 
@@ -246,6 +248,8 @@ function localView(
 }
 
 export interface LocalCheckoutLifecycle extends WorkspaceLifecycleService {
+  readonly admitTaskBranch: (workspaceId: string) => TaskBranchAdmission;
+  readonly adoptTaskBranch: (request: TaskBranchAdoption) => ActiveWorkspaceView;
   readonly selectLocal: (request: {
     readonly root: string;
     readonly branch: string;
@@ -356,7 +360,14 @@ function localInstance(
     taskId: `coding-workbench-local-${identity.slice(0, 16)}`,
     repositoryId: deriveRepositoryId(root),
     repositoryRoot: root,
-    baseBranch: branch,
+    // Re-selecting the branch a task already works on keeps the base it was made from (#3907): a
+    // checkout Keiko moved from `main` onto `feature/x` is still based on `main`.
+    baseBranch:
+      previous?.executionLocation === "local" &&
+      previous.workspaceKind !== "folder" &&
+      previous.taskBranch === branch
+        ? previous.baseBranch
+        : branch,
     taskBranch: branch,
     executionLocation: "local",
     managedWorktreePath: root,
@@ -440,6 +451,60 @@ function selectLocalCheckout(
     recordLocalSelection(deps, request, identity, { startedAt, fromState, error });
     throw error;
   }
+}
+
+function localCheckoutInstance(
+  instances: WorkspaceInstanceStore,
+  workspaceId: string,
+): WorkspaceInstance | undefined {
+  const instance = instances.getById(workspaceId);
+  return instance?.executionLocation === "local" && instance.workspaceKind !== "folder"
+    ? instance
+    : undefined;
+}
+
+function admitLocalTaskBranch(
+  instances: WorkspaceInstanceStore,
+  workspaceId: string,
+): TaskBranchAdmission {
+  const instance = localCheckoutInstance(instances, workspaceId);
+  if (instance === undefined) return "not-local-checkout";
+  if (instance.taskBranch !== instance.baseBranch) return "not-on-base";
+  return hasExecutableFilters(instance.repositoryRoot) ? "executable-filters" : "admitted";
+}
+
+function adoptLocalTaskBranch(
+  request: TaskBranchAdoption,
+  instances: WorkspaceInstanceStore,
+  getActive: () => ActiveWorkspaceView | undefined,
+): ActiveWorkspaceView {
+  const instance = localCheckoutInstance(instances, request.workspaceId);
+  if (
+    instance?.taskBranch !== request.baseBranch ||
+    instance.baseBranch !== request.baseBranch ||
+    request.branch === request.baseBranch
+  )
+    throw new TaskWorkspaceError(
+      "BRANCH_CONFLICT",
+      "The local checkout is not on its base branch.",
+    );
+  const root = instance.repositoryRoot;
+  if (currentBranch(root) !== request.branch)
+    throw new TaskWorkspaceError("BRANCH_CONFLICT", "The local checkout is not on the new branch.");
+  const head = verifiedLocalHead(root, instance.gitdirIdentity);
+  const atIso = new Date().toISOString();
+  instances.upsert({
+    ...instance,
+    taskBranch: request.branch,
+    baseBranch: request.baseBranch,
+    updatedAt: atIso,
+    lastVerifiedAt: atIso,
+    lastVerifiedHead: head,
+  });
+  const active = getActive();
+  if (active === undefined)
+    throw new TaskWorkspaceError("POINTER_DRIFT", "The local checkout could not be verified.");
+  return active;
 }
 
 function logInvalidatedLocalPointer(
@@ -603,6 +668,10 @@ export function withLocalCheckout(
     getActive,
     setActive: (request): Promise<ActiveWorkspaceView> =>
       setActiveWithLocal(request, managed, store, instances, pointerStore, getActive, activityLog),
+    admitTaskBranch: (workspaceId): TaskBranchAdmission =>
+      admitLocalTaskBranch(instances, workspaceId),
+    adoptTaskBranch: (request): ActiveWorkspaceView =>
+      adoptLocalTaskBranch(request, instances, getActive),
     selectLocal: (request): ActiveWorkspaceView =>
       selectLocalCheckout(request, store, instances, pointerStore, getActive, activityLog),
     selectFolder: (request): ActiveWorkspaceView =>

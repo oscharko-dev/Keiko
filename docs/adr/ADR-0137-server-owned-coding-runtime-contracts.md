@@ -358,6 +358,43 @@ persist records while delivering nothing. Without evidence the run settles `fail
 `delivery-not-evidenced`. Ad-hoc runs are exempt, because one legitimately ends with no commit and
 inferring delivery intent from free text would turn honest successes into false failures.
 
+**A run on its base branch makes its own task branch (owner decision, 2026-10-31, #3907).** A
+Local checkout of `main` or `dev` starts with a task branch equal to its base branch, so the governed
+commit is blocked `protected-branch` and a draft delivery would refuse `head-equals-base`. Standalone
+OpenCode solves that with `git checkout -b`; Keiko keeps the shell's branch writes reserved
+(`RESERVED_GIT_SUBCOMMANDS`) and gives the model one governed tool instead: `keiko_git_branch`
+(`keiko.git.branch`, input `{ name }`). `RuntimeGitService.branch` (`runtimeGitBranch.ts`) drives
+Keiko's Git kernel twice through `executeGovernedMutation`, the live snapshot, preflight, policy
+pack, hardened adapter and evidence ledger of the Git Client's own branch actions: `branch-create` at
+the run's current commit, then `branch-switch`; uncommitted changes carry over. It refuses, with a
+closed reason on the result and on the `git.runtime-action` line (`phase: branch`), an invalid name
+(`isSafeGitRefName`, no leading `-`), a protected name (`dev`, `main`, the default pack's patterns),
+an existing branch at another commit or the branch the run stands on (`branch-exists`; a branch at
+exactly the current commit is only switched to, which makes a retried step idempotent), a run that
+is not on its base branch (`not-on-base`), a workspace that is not a Local checkout
+(`not-local-checkout`, which includes managed worktrees and a service composed without the
+workspace port) and a checkout with executable Git filters (`executable-filters`), and it reports
+the kernel's own policy and preflight blocks (`policy-block`, `preflight-block`,
+`authority-denied`). The authority is the facade's alone: Full access creates the branch inside the
+validated envelope; Supervised workspace and Ask for approval ask the operator about the exact
+branch name first, on the governed ask lane of `git-fetch`/`git-pull` (action `git-branch`,
+`command-execution`, risk `medium`; the approval is bound to `branch:<sha256 of the name>`, so the
+name is never in the approval record or the log). The Authority Envelope stays immutable. What
+changes is recorded server-side, only after Keiko's own successful switch, in three places that move
+together and undo each other: the run's Git delivery authority projection follows the run to the new
+branch with the base unchanged (`rebindGitDeliveryBranch`), the per-run record
+(`governedTaskBranches.ts`, bounded to 256 runs, modelled on `governedSyncHeads.ts`) states that this
+run stands on that branch, and the Local checkout's workspace instance takes the branch as its task
+branch and keeps the old one as its base (`adoptTaskBranch`; a re-selection of the same branch keeps
+that base). `trustedBranchMatches` accepts the live instance only through that record, for that run,
+that workspace and that base, and from then on never again through the envelope's own branch;
+`resolveVerifiedCommitContext` reads both refs from the record, the one seam commit, push, pull
+request and CI share. If the run cannot adopt the branch, the checkout is switched back to the base
+branch and the result is `rebind-failed`. Open stage and commit proposals, the verification and
+draft-delivery proposals are invalidated after a switch. A commit blocked as `protected-branch`
+therefore now tells the model to create a task branch with `keiko_git_branch` and commit again; the
+operator report remains the fallback when that tool refuses too.
+
 **A run with no issue binding delivers by pushing its own task branch (owner decision,
 2026-10-30).** The Coding Workbench works without any issue binding; the binding is a legacy
 leftover and is not a delivery precondition. The draft delivery context of such a run resolves like
@@ -1926,15 +1963,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   tools). The native profile therefore registers exactly one group of Keiko tools, through the
   generated `keiko.native-delivery` plugin (`keiko_native_delivery.ts`): `keiko_git_status`,
   `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`, `keiko_git_push`,
-  `keiko_pull_request`, `keiko_git_execute`, `keiko_git_sync`, `keiko_ci_status` and
-  `keiko_verification` (`opencodeNativeDeliveryTools.ts` holds the list once).
+  `keiko_pull_request`, `keiko_git_execute`, `keiko_git_sync`, `keiko_git_branch`,
+  `keiko_ci_status` and `keiko_verification` (`opencodeNativeDeliveryTools.ts` holds the list once).
   `keiko_git_push` proposes pushing the run's verified commit to its own task branch on `origin`,
   any Git remote and no issue needed (ADR-0085 D1b); `keiko_pull_request` opens a draft pull request
   from that task branch on a verified GitHub origin, no issue needed (an accepted issue only links
   it), and otherwise returns `github-origin-required` or `remote-required` (ADR-0086 D13).
   `keiko_git_sync` fetches the upstream or fast-forwards the run's branch to it through the Git
   sync owner, under the owner's own mode decision (ADR-0138 D3 item 5); the shell's own fetch and
-  pull stay refused (#3902 AC2). The managed worktree's Git directory is
+  pull stay refused (#3902 AC2). `keiko_git_branch` is the one governed way a run gets a task
+  branch (owner decision 2026-10-31, #3907; see "A run on its base branch makes its own task
+  branch" below); the shell's own `git checkout -b`, `switch` and `branch` stay refused. The
+  managed worktree's Git directory is
   read-only to the run, so its own Git reads status, diff, log, show and blame but cannot write the
   index; `keiko_git_stage` with `unstage: true` gives staged paths back to the worktree through
   the same proposal, approval and redemption as staging (`unstage-<n>`, redeemed as
