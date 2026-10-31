@@ -1,5 +1,6 @@
+import { runIsolatedControl } from "./__tests__/support/isolated-control.js";
+import { expectUnchangedAdmission } from "./__tests__/support/checked-envelope.js";
 import { describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
 
 import {
   HTML_MANUAL_REFRESH_SCHEMA_VERSION,
@@ -205,14 +206,9 @@ describe("substantive refresh validation", () => {
   it.each(REFRESH_ERROR_RECORDING_CASES)(
     "checks %s independently of error recording",
     (operation, ok) => {
-      const child = spawnSync(
-        process.execPath,
-        ["--input-type=module", "--eval", REFRESH_ERROR_RECORDING_CONTROL, operation],
-        { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 },
+      expect(runIsolatedControl(REFRESH_ERROR_RECORDING_CONTROL, operation)).toBe(
+        `${JSON.stringify({ ok })}\n`,
       );
-      expect(child.error).toBeUndefined();
-      expect(child.status).toBe(0);
-      expect(child.stdout).toBe(`${JSON.stringify({ ok })}\n`);
     },
     15_000,
   );
@@ -226,15 +222,7 @@ describe("manual refresh preservation", () => {
       Object.freeze(input.reasonCodes);
       Object.freeze(input);
     }
-    const before = JSON.stringify(input);
-    const result = validateManualRefreshChangeSummary(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value).toBe(input);
-      expect(result.value.counts).toBe(input.counts);
-      expect(result.value.reasonCodes).toBe(input.reasonCodes);
-    }
-    expect(JSON.stringify(input)).toBe(before);
+    expectUnchangedAdmission(validateManualRefreshChangeSummary, input, ["counts", "reasonCodes"]);
   });
 });
 

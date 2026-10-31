@@ -71,6 +71,15 @@ const FORBIDDEN_SUBSTRINGS: readonly string[] = [
   "canexecute",
 ];
 
+/** A collection whose first member is foreign while its own filter/some report the canonical plan. */
+function substitutedMembers(canonical: readonly unknown[]): unknown[] {
+  const entries: unknown[] = [42, ...canonical.slice(1)];
+  Object.defineProperties(entries, {
+    filter: { value: () => [...canonical] },
+    some: { value: () => false },
+  });
+  return entries;
+}
 describe("schema version", () => {
   it("is the literal '1'", () => {
     expect(DISCUSSION_INTELLIGENCE_SCHEMA_VERSION).toBe("1");
@@ -734,11 +743,7 @@ describe("discussion actual raw collection admission", () => {
           ? { discussionModePlan, validateDiscussionModePlan }
           : await import("@oscharko-dev/keiko-contracts/runtime/discussion-intelligence");
       const plan = api.discussionModePlan("challenge");
-      const entries: unknown[] = [42, ...plan.mandatedFacets.slice(1)];
-      Object.defineProperties(entries, {
-        filter: { value: () => [...plan.mandatedFacets] },
-        some: { value: () => false },
-      });
+      const entries = substitutedMembers(plan.mandatedFacets);
       expect(api.validateDiscussionModePlan({ ...plan, mandatedFacets: entries }).ok).toBe(false);
     },
   );
@@ -750,11 +755,7 @@ describe("discussion actual raw collection admission", () => {
           ? { discussionModePlan, validateDiscussionModePlan }
           : await import("@oscharko-dev/keiko-contracts/runtime/discussion-intelligence");
       const plan = api.discussionModePlan("challenge");
-      const entries: unknown[] = [42, ...plan.groundingDirectives.slice(1)];
-      Object.defineProperties(entries, {
-        filter: { value: () => [...plan.groundingDirectives] },
-        some: { value: () => false },
-      });
+      const entries = substitutedMembers(plan.groundingDirectives);
       expect(api.validateDiscussionModePlan({ ...plan, groundingDirectives: entries })).toEqual({
         ok: false,
         reasons: ["groundingDirectives: disagrees with canonical plan"],

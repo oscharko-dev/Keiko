@@ -1,5 +1,6 @@
+import { runIsolatedControl } from "./__tests__/support/isolated-control.js";
+import { expectUnchangedAdmission } from "./__tests__/support/checked-envelope.js";
 import { describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
 import {
   DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
   type DocumentationIndexingApproval,
@@ -426,14 +427,9 @@ describe("substantive manual source validation", () => {
   ])(
     "checks %s independently of error recording",
     (operation, ok) => {
-      const child = spawnSync(
-        process.execPath,
-        ["--input-type=module", "--eval", SOURCE_ERROR_RECORDING_CONTROL, operation],
-        { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 },
+      expect(runIsolatedControl(SOURCE_ERROR_RECORDING_CONTROL, operation)).toBe(
+        `${JSON.stringify({ ok })}\n`,
       );
-      expect(child.error).toBeUndefined();
-      expect(child.status).toBe(0);
-      expect(child.stdout).toBe(`${JSON.stringify({ ok })}\n`);
     },
     15_000,
   );
@@ -446,15 +442,7 @@ describe("manual source preservation", () => {
       Object.freeze(input.scope);
       Object.freeze(input);
     }
-    const before = JSON.stringify(input);
-    const result = validateHtmlManualSource(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value).toBe(input);
-      expect(result.value.scope).toBe(input.scope);
-      expect(result.value.limits).toBe(input.limits);
-    }
-    expect(JSON.stringify(input)).toBe(before);
+    expectUnchangedAdmission(validateHtmlManualSource, input, ["scope", "limits"]);
   });
 
   it("retains accepted own undefined without promising a string", () => {

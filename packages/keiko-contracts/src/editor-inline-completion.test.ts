@@ -8,10 +8,9 @@ import {
 } from "./editor-inline-completion.js";
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 import {
-  registerCapturedRequestIdentity,
+  describeRequestParserSurfaces,
   registerCapturedRootAdmission,
   registerDocumentRequestPrefix,
-  registerRequestContextProjection,
   registerTriggerMembership,
 } from "../../../tests/support/editor-request-parser-contract.js";
 
@@ -376,16 +375,11 @@ describe.each([
   );
 });
 
-describe.each([
-  ["source", parseEditorInlineCompletionRequest],
-  ["public", publicOwner.parseEditorInlineCompletionRequest],
-] as const)("#3918 captured request identity through %s", (_surface, parse) => {
-  registerCapturedRequestIdentity(parse, baseRequest, "document");
-});
-
-describe.each([
-  ["source", parseEditorInlineCompletionRequest],
-  ["public", publicOwner.parseEditorInlineCompletionRequest],
-] as const)("%s parser admission and context projection", (_surface, parse): void => {
-  registerRequestContextProjection(parse, baseRequest, "document");
-});
+describeRequestParserSurfaces(
+  [
+    ["source", parseEditorInlineCompletionRequest],
+    ["public", publicOwner.parseEditorInlineCompletionRequest],
+  ],
+  baseRequest,
+  "document",
+);

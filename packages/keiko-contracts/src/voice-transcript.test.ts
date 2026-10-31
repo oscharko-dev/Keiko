@@ -1,3 +1,4 @@
+import { expectCatalogGuardWithoutCoercion } from "./__tests__/support/catalog-guard.js";
 // Regression tests for the Voice Digital Twin transcript segment lifecycle contract (Issue #500,
 // ADR-0105). These pin the acceptance criteria as executable, mutation-resistant invariants:
 //   AC4 — provider corrections replace prior text deterministically (a corrected segment supersedes the
@@ -408,27 +409,6 @@ it.each([
 ] as const)(
   "%s accepts catalog strings without coercing foreign candidates",
   (_name, guard, catalog): void => {
-    for (const legal of catalog) expect(guard(legal)).toBe(true);
-    let coercions = 0;
-    const coercionCandidate = {
-      [Symbol.toPrimitive](): never {
-        coercions += 1;
-        throw new TypeError("voice catalog candidate must not be coerced");
-      },
-    };
-    const boxed: unknown = Object(catalog[0]);
-    const refused: readonly unknown[] = [
-      "foreign-voice-catalog-entry",
-      "",
-      undefined,
-      null,
-      0,
-      true,
-      Symbol("voice-catalog-candidate"),
-      boxed,
-      coercionCandidate,
-    ];
-    for (const candidate of refused) expect(guard(candidate)).toBe(false);
-    expect(coercions).toBe(0);
+    expectCatalogGuardWithoutCoercion(guard, catalog);
   },
 );

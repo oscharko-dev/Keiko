@@ -1659,6 +1659,27 @@ describe("Atlassian sync public parsers (#3918)", () => {
   });
 
   it("retains lifecycle counts failure reasons and literal domain result identities", () => {
+    expectTypeOf<{
+      readonly validatePublicSyncSummary: ReturnType<typeof validatePublicSyncSummary>;
+      readonly validatePublicSyncJob: ReturnType<typeof validatePublicSyncJob>;
+      readonly validatePublicPodSource: ReturnType<typeof validatePublicPodSource>;
+      readonly parsePublicAtlassianSyncChangeSummary: ReturnType<
+        typeof parsePublicAtlassianSyncChangeSummary
+      >;
+      readonly parsePublicAtlassianSyncJobState: ReturnType<
+        typeof parsePublicAtlassianSyncJobState
+      >;
+      readonly parsePublicAtlassianConnectorPodSource: ReturnType<
+        typeof parsePublicAtlassianConnectorPodSource
+      >;
+    }>().toEqualTypeOf<{
+      readonly validatePublicSyncSummary: PublicValidation<PublicSyncSummary>;
+      readonly validatePublicSyncJob: PublicValidation<PublicSyncJob>;
+      readonly validatePublicPodSource: PublicValidation<PublicPodSource>;
+      readonly parsePublicAtlassianSyncChangeSummary: PublicValidation<PublicSyncSummary>;
+      readonly parsePublicAtlassianSyncJobState: PublicValidation<PublicSyncJob>;
+      readonly parsePublicAtlassianConnectorPodSource: PublicValidation<PublicPodSource>;
+    }>();
     for (const status of ["pending", "running", "succeeded", "partial", "failed", "cancelled"]) {
       const input = job(status);
       const result = parsePublicAtlassianSyncJobState(input);
@@ -1679,22 +1700,6 @@ describe("Atlassian sync public parsers (#3918)", () => {
     expect(
       parsePublicAtlassianConnectorPodSource(podSource({ scopeLabels: ["ENG", "ENG"] })).ok,
     ).toBe(false);
-    expectTypeOf(validatePublicSyncSummary).returns.toEqualTypeOf<
-      PublicValidation<PublicSyncSummary>
-    >();
-    expectTypeOf(validatePublicSyncJob).returns.toEqualTypeOf<PublicValidation<PublicSyncJob>>();
-    expectTypeOf(validatePublicPodSource).returns.toEqualTypeOf<
-      PublicValidation<PublicPodSource>
-    >();
-    expectTypeOf(parsePublicAtlassianSyncChangeSummary).returns.toEqualTypeOf<
-      PublicValidation<PublicSyncSummary>
-    >();
-    expectTypeOf(parsePublicAtlassianSyncJobState).returns.toEqualTypeOf<
-      PublicValidation<PublicSyncJob>
-    >();
-    expectTypeOf(parsePublicAtlassianConnectorPodSource).returns.toEqualTypeOf<
-      PublicValidation<PublicPodSource>
-    >();
   });
 });
 
@@ -1778,6 +1783,23 @@ describe("Atlassian approved-scope public parsers (#3918)", () => {
   });
 
   it("retains narrow-only JQL boundaries and exact public domain result types", () => {
+    expectTypeOf<{
+      readonly validatePublicDescriptor: ReturnType<typeof validatePublicDescriptor>;
+      readonly validatePublicSyncBounds: ReturnType<typeof validatePublicSyncBounds>;
+      readonly validatePublicSyncScope: ReturnType<typeof validatePublicSyncScope>;
+      readonly parsePublicAtlassianConnectorDescriptor: ReturnType<
+        typeof parsePublicAtlassianConnectorDescriptor
+      >;
+      readonly parsePublicAtlassianSyncBounds: ReturnType<typeof parsePublicAtlassianSyncBounds>;
+      readonly parsePublicAtlassianSyncScope: ReturnType<typeof parsePublicAtlassianSyncScope>;
+    }>().toEqualTypeOf<{
+      readonly validatePublicDescriptor: PublicValidation<PublicDescriptor>;
+      readonly validatePublicSyncBounds: PublicValidation<PublicSyncBounds>;
+      readonly validatePublicSyncScope: PublicValidation<PublicSyncScope>;
+      readonly parsePublicAtlassianConnectorDescriptor: PublicValidation<PublicDescriptor>;
+      readonly parsePublicAtlassianSyncBounds: PublicValidation<PublicSyncBounds>;
+      readonly parsePublicAtlassianSyncScope: PublicValidation<PublicSyncScope>;
+    }>();
     expect(parsePublicAtlassianSyncBounds(DEFAULT_ATLASSIAN_SYNC_BOUNDS)).toEqual({
       ok: true,
       value: DEFAULT_ATLASSIAN_SYNC_BOUNDS,
@@ -1796,47 +1818,8 @@ describe("Atlassian approved-scope public parsers (#3918)", () => {
     expect(parsePublicAtlassianSyncScope(confluenceScope({ spaceKeys: ["ENG", "ENG"] })).ok).toBe(
       false,
     );
-    expectTypeOf(validatePublicDescriptor).returns.toEqualTypeOf<
-      PublicValidation<PublicDescriptor>
-    >();
-    expectTypeOf(validatePublicSyncBounds).returns.toEqualTypeOf<
-      PublicValidation<PublicSyncBounds>
-    >();
-    expectTypeOf(validatePublicSyncScope).returns.toEqualTypeOf<
-      PublicValidation<PublicSyncScope>
-    >();
-    expectTypeOf(parsePublicAtlassianConnectorDescriptor).returns.toEqualTypeOf<
-      PublicValidation<PublicDescriptor>
-    >();
-    expectTypeOf(parsePublicAtlassianSyncBounds).returns.toEqualTypeOf<
-      PublicValidation<PublicSyncBounds>
-    >();
-    expectTypeOf(parsePublicAtlassianSyncScope).returns.toEqualTypeOf<
-      PublicValidation<PublicSyncScope>
-    >();
   });
 });
-
-export function parsePublicAtlassianConnectorActivityRecord(
-  input: unknown,
-): PublicValidation<PublicActivity> {
-  const result = validatePublicActivity(input);
-  return result;
-}
-
-export function parsePublicAtlassianConnectorPendingApproval(
-  input: unknown,
-): PublicValidation<PublicApproval> {
-  const result = validatePublicApproval(input);
-  return result;
-}
-
-export function parsePublicAtlassianConnectorActionExecutionResult(
-  input: unknown,
-): PublicValidation<PublicExecution> {
-  const result = validatePublicExecution(input);
-  return result;
-}
 
 function pendingApproval(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const decision = decideAtlassianConnectorAction("create-issue", "governed-assist", [
@@ -1862,18 +1845,48 @@ function pendingApproval(overrides: Record<string, unknown> = {}): Record<string
 }
 
 function assertGovernedPublicTypes(): void {
-  expectTypeOf(validatePublicActivity).returns.toEqualTypeOf<PublicValidation<PublicActivity>>();
-  expectTypeOf(validatePublicApproval).returns.toEqualTypeOf<PublicValidation<PublicApproval>>();
-  expectTypeOf(validatePublicExecution).returns.toEqualTypeOf<PublicValidation<PublicExecution>>();
-  expectTypeOf(parsePublicAtlassianConnectorActivityRecord).returns.toEqualTypeOf<
-    PublicValidation<PublicActivity>
-  >();
-  expectTypeOf(parsePublicAtlassianConnectorPendingApproval).returns.toEqualTypeOf<
-    PublicValidation<PublicApproval>
-  >();
-  expectTypeOf(parsePublicAtlassianConnectorActionExecutionResult).returns.toEqualTypeOf<
-    PublicValidation<PublicExecution>
-  >();
+  expectTypeOf<{
+    readonly validatePublicActivity: ReturnType<typeof validatePublicActivity>;
+    readonly validatePublicApproval: ReturnType<typeof validatePublicApproval>;
+    readonly validatePublicExecution: ReturnType<typeof validatePublicExecution>;
+    readonly parsePublicAtlassianConnectorActivityRecord: ReturnType<
+      typeof parsePublicAtlassianConnectorActivityRecord
+    >;
+    readonly parsePublicAtlassianConnectorPendingApproval: ReturnType<
+      typeof parsePublicAtlassianConnectorPendingApproval
+    >;
+    readonly parsePublicAtlassianConnectorActionExecutionResult: ReturnType<
+      typeof parsePublicAtlassianConnectorActionExecutionResult
+    >;
+  }>().toEqualTypeOf<{
+    readonly validatePublicActivity: PublicValidation<PublicActivity>;
+    readonly validatePublicApproval: PublicValidation<PublicApproval>;
+    readonly validatePublicExecution: PublicValidation<PublicExecution>;
+    readonly parsePublicAtlassianConnectorActivityRecord: PublicValidation<PublicActivity>;
+    readonly parsePublicAtlassianConnectorPendingApproval: PublicValidation<PublicApproval>;
+    readonly parsePublicAtlassianConnectorActionExecutionResult: PublicValidation<PublicExecution>;
+  }>();
+}
+
+export function parsePublicAtlassianConnectorActivityRecord(
+  input: unknown,
+): PublicValidation<PublicActivity> {
+  const result = validatePublicActivity(input);
+  return result;
+}
+
+export function parsePublicAtlassianConnectorPendingApproval(
+  input: unknown,
+): PublicValidation<PublicApproval> {
+  const result = validatePublicApproval(input);
+  return result;
+}
+
+export function parsePublicAtlassianConnectorActionExecutionResult(
+  input: unknown,
+): PublicValidation<PublicExecution> {
+  const result = validatePublicExecution(input);
+  return result;
 }
 
 describe("Atlassian governed-action public parsers (#3918)", () => {
@@ -1986,6 +1999,20 @@ describe("Atlassian governed-action public parsers (#3918)", () => {
   });
 });
 
+function assertLivePublicTypes(): void {
+  expectTypeOf<{
+    readonly validatePublicLiveRequest: ReturnType<typeof validatePublicLiveRequest>;
+    readonly validatePublicLiveResult: ReturnType<typeof validatePublicLiveResult>;
+    readonly parsePublicJiraLiveSearchRequest: ReturnType<typeof parsePublicJiraLiveSearchRequest>;
+    readonly parsePublicJiraLiveSearchResult: ReturnType<typeof parsePublicJiraLiveSearchResult>;
+  }>().toEqualTypeOf<{
+    readonly validatePublicLiveRequest: PublicValidation<PublicLiveRequest>;
+    readonly validatePublicLiveResult: PublicValidation<PublicLiveResult>;
+    readonly parsePublicJiraLiveSearchRequest: PublicValidation<PublicLiveRequest>;
+    readonly parsePublicJiraLiveSearchResult: PublicValidation<PublicLiveResult>;
+  }>();
+}
+
 export function parsePublicJiraLiveSearchRequest(
   input: unknown,
 ): PublicValidation<PublicLiveRequest> {
@@ -1998,21 +2025,6 @@ export function parsePublicJiraLiveSearchResult(
 ): PublicValidation<PublicLiveResult> {
   const result = validatePublicLiveResult(input);
   return result;
-}
-
-function assertLivePublicTypes(): void {
-  expectTypeOf(validatePublicLiveRequest).returns.toEqualTypeOf<
-    PublicValidation<PublicLiveRequest>
-  >();
-  expectTypeOf(validatePublicLiveResult).returns.toEqualTypeOf<
-    PublicValidation<PublicLiveResult>
-  >();
-  expectTypeOf(parsePublicJiraLiveSearchRequest).returns.toEqualTypeOf<
-    PublicValidation<PublicLiveRequest>
-  >();
-  expectTypeOf(parsePublicJiraLiveSearchResult).returns.toEqualTypeOf<
-    PublicValidation<PublicLiveResult>
-  >();
 }
 
 describe("Atlassian live-query public parsers (#3918)", () => {

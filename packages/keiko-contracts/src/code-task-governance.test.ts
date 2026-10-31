@@ -1188,9 +1188,15 @@ describe("governed action public parser (#3918)", () => {
   });
 
   it("pins source public and forwarding checked return types", () => {
-    expectTypeOf(validateGovernedActionV1).returns.toEqualTypeOf<SourceGovernedActionParse>();
-    expectTypeOf(publicGovernedAction).returns.toEqualTypeOf<PublicGovernedActionParse>();
-    expectTypeOf(parsePublicGovernedAction).returns.toEqualTypeOf<PublicGovernedActionParse>();
+    expectTypeOf<{
+      readonly validateGovernedActionV1: ReturnType<typeof validateGovernedActionV1>;
+      readonly publicGovernedAction: ReturnType<typeof publicGovernedAction>;
+      readonly parsePublicGovernedAction: ReturnType<typeof parsePublicGovernedAction>;
+    }>().toEqualTypeOf<{
+      readonly validateGovernedActionV1: SourceGovernedActionParse;
+      readonly publicGovernedAction: PublicGovernedActionParse;
+      readonly parsePublicGovernedAction: PublicGovernedActionParse;
+    }>();
     const result = parsePublicGovernedAction(allowedAction());
     if (!result.ok) throw new TypeError("healthy governed action types refused");
     expectTypeOf(result.value.taskId).toEqualTypeOf<PublicGovernedActionV1["taskId"]>();

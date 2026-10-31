@@ -1608,42 +1608,33 @@ import type {
 import type * as atlasEnumRuntimeForIndex from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 it("preserves Atlassian root TYPE callable domains through existing runtime selectors (#3918)", () => {
-  expectTypeOf<typeof RootAtlasVerificationGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianConnectionVerificationStatus
-  >();
-  expectTypeOf<typeof RootAtlasTemplateGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianLiveSearchTemplateId
-  >();
-  expectTypeOf<typeof RootAtlasProviderGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorProvider
-  >();
-  expectTypeOf<typeof RootAtlasAuthGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorAuthScheme
-  >();
-  expectTypeOf<typeof RootAtlasActionGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorActionType
-  >();
-  expectTypeOf<typeof RootAtlasJobGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianSyncJobStatus
-  >();
-  expectTypeOf<typeof RootAtlasTerminalGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianSyncTerminalStatus
-  >();
-  expectTypeOf<typeof RootAtlasSyncFailureGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianSyncFailureReason
-  >();
-  expectTypeOf<typeof RootAtlasReviewGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorActionReviewReason
-  >();
-  expectTypeOf<typeof RootAtlasWriteFailureGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorWriteFailureReason
-  >();
-  expectTypeOf<typeof RootAtlasAuthorityFailureGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorAuthorityFailureReason
-  >();
-  expectTypeOf<typeof RootAtlasRegistryFailureGuard>().toEqualTypeOf<
-    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorRegistryFailureReason
-  >();
+  expectTypeOf<{
+    readonly verification: typeof RootAtlasVerificationGuard;
+    readonly template: typeof RootAtlasTemplateGuard;
+    readonly provider: typeof RootAtlasProviderGuard;
+    readonly auth: typeof RootAtlasAuthGuard;
+    readonly action: typeof RootAtlasActionGuard;
+    readonly job: typeof RootAtlasJobGuard;
+    readonly terminal: typeof RootAtlasTerminalGuard;
+    readonly syncFailure: typeof RootAtlasSyncFailureGuard;
+    readonly review: typeof RootAtlasReviewGuard;
+    readonly writeFailure: typeof RootAtlasWriteFailureGuard;
+    readonly authorityFailure: typeof RootAtlasAuthorityFailureGuard;
+    readonly registryFailure: typeof RootAtlasRegistryFailureGuard;
+  }>().toEqualTypeOf<{
+    readonly verification: typeof atlasEnumRuntimeForIndex.isAtlassianConnectionVerificationStatus;
+    readonly template: typeof atlasEnumRuntimeForIndex.isAtlassianLiveSearchTemplateId;
+    readonly provider: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorProvider;
+    readonly auth: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorAuthScheme;
+    readonly action: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorActionType;
+    readonly job: typeof atlasEnumRuntimeForIndex.isAtlassianSyncJobStatus;
+    readonly terminal: typeof atlasEnumRuntimeForIndex.isAtlassianSyncTerminalStatus;
+    readonly syncFailure: typeof atlasEnumRuntimeForIndex.isAtlassianSyncFailureReason;
+    readonly review: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorActionReviewReason;
+    readonly writeFailure: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorWriteFailureReason;
+    readonly authorityFailure: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorAuthorityFailureReason;
+    readonly registryFailure: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorRegistryFailureReason;
+  }>();
 });
 
 import type {

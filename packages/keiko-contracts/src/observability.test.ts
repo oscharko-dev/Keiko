@@ -783,6 +783,34 @@ describe("Support owned refusal and field observation admission", () => {
     ],
     ["public", publicSupportAdmission],
   ] as const) {
+    /** A registered event whose `extra` getter answers `extra(readCount, originalFields)`. */
+    function extraObservedEvent(extra: (reads: number, original: object) => unknown): {
+      readonly event: object;
+      readonly operation: object;
+      readonly reads: () => number;
+    } {
+      const operation = api.activityLogOperationSchema("gateway.instance.reused");
+      if (operation === undefined) throw new TypeError("canonical operation required");
+      const result: unknown = Reflect.apply(api.activityLogEvent, undefined, [
+        operation,
+        {},
+        { generation: 1 },
+      ]);
+      if (typeof result !== "object" || result === null)
+        throw new TypeError("event object required");
+      const event = result;
+      const originalFields: unknown = Reflect.get(event, "extra");
+      if (typeof originalFields !== "object" || originalFields === null)
+        throw new TypeError("event fields required");
+      let reads = 0;
+      Object.defineProperty(event, "extra", {
+        get(): unknown {
+          reads += 1;
+          return extra(reads, originalFields);
+        },
+      });
+      return { event, operation, reads: () => reads };
+    }
     function markerEvent(kind: unknown, unreadable = false): { event: object; reads: number } {
       const operation = api.activityLogOperationSchema("gateway.instance.reused");
       if (operation === undefined) throw new TypeError("canonical operation required");
@@ -851,54 +879,21 @@ describe("Support owned refusal and field observation admission", () => {
       );
     });
     it(`${surface}: preserves the fourth healthy extra observation`, () => {
-      const operation = api.activityLogOperationSchema("gateway.instance.reused");
-      if (operation === undefined) throw new TypeError("canonical operation required");
-      const result: unknown = Reflect.apply(api.activityLogEvent, undefined, [
-        operation,
-        {},
-        { generation: 1 },
-      ]);
-      if (typeof result !== "object" || result === null)
-        throw new TypeError("event object required");
-      const event = result;
-      const originalFields: unknown = Reflect.get(event, "extra");
-      if (typeof originalFields !== "object" || originalFields === null)
-        throw new TypeError("event fields required");
-      let reads = 0;
-      Object.defineProperty(event, "extra", {
-        get(): object {
-          reads += 1;
-          return { ...originalFields, generation: reads === 4 ? 2 : 1 };
-        },
-      });
+      const { event, operation, reads } = extraObservedEvent((count, original) => ({
+        ...original,
+        generation: count === 4 ? 2 : 1,
+      }));
       expect(api.validateRegisteredActivityLogEvent(event)).toBe(operation);
-      expect(reads).toBe(4);
+      expect(reads()).toBe(4);
     });
     it(`${surface}: refuses malformed fourth extra with its closed field diagnostic`, () => {
-      const operation = api.activityLogOperationSchema("gateway.instance.reused");
-      if (operation === undefined) throw new TypeError("canonical operation required");
-      const result: unknown = Reflect.apply(api.activityLogEvent, undefined, [
-        operation,
-        {},
-        { generation: 1 },
-      ]);
-      if (typeof result !== "object" || result === null)
-        throw new TypeError("event object required");
-      const event = result;
-      const originalFields: unknown = Reflect.get(event, "extra");
-      if (typeof originalFields !== "object" || originalFields === null)
-        throw new TypeError("event fields required");
-      let reads = 0;
-      Object.defineProperty(event, "extra", {
-        get(): unknown {
-          reads += 1;
-          return reads === 4 ? null : originalFields;
-        },
-      });
+      const { event, reads } = extraObservedEvent((count, original) =>
+        count === 4 ? null : original,
+      );
       expect(() => api.validateRegisteredActivityLogEvent(event)).toThrow(
         new api.ActivityLogEventValidationError("fields-not-object"),
       );
-      expect(reads).toBe(4);
+      expect(reads()).toBe(4);
     });
   }
 });

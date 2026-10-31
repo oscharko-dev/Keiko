@@ -1129,38 +1129,71 @@ export function recheckPublicWorkspaceCleanup(value: PublicWorkspaceState): bool
   return result;
 }
 
+type Signature = (...args: never[]) => unknown;
+/** Parameters, then results, of a source, public and forwarding function triple. */
+type ForwardingSignatures<
+  S extends Signature,
+  P extends Signature,
+  W extends Signature,
+> = readonly [
+  Parameters<S>,
+  Parameters<P>,
+  Parameters<W>,
+  ReturnType<S>,
+  ReturnType<P>,
+  ReturnType<W>,
+];
+
 describe("typed public workspace rechecks (#3918)", () => {
   it("pins canonical source public and forwarding parameter and result contracts", () => {
-    expectTypeOf(isLegalTaskWorkspaceTransition).parameters.toEqualTypeOf<
-      [SourceWorkspaceState, SourceWorkspaceState]
+    expectTypeOf<
+      ForwardingSignatures<
+        typeof isLegalTaskWorkspaceTransition,
+        typeof publicTransition,
+        typeof recheckPublicWorkspaceTransition
+      >
+    >().toEqualTypeOf<
+      readonly [
+        [SourceWorkspaceState, SourceWorkspaceState],
+        [PublicWorkspaceState, PublicWorkspaceState],
+        [PublicWorkspaceState, PublicWorkspaceState],
+        boolean,
+        boolean,
+        boolean,
+      ]
     >();
-    expectTypeOf(publicTransition).parameters.toEqualTypeOf<
-      [PublicWorkspaceState, PublicWorkspaceState]
+    expectTypeOf<
+      ForwardingSignatures<
+        typeof nextLegalTaskWorkspaceStates,
+        typeof publicNext,
+        typeof recheckPublicWorkspaceNext
+      >
+    >().toEqualTypeOf<
+      readonly [
+        [SourceWorkspaceState],
+        [PublicWorkspaceState],
+        [PublicWorkspaceState],
+        readonly SourceWorkspaceState[],
+        readonly PublicWorkspaceState[],
+        readonly PublicWorkspaceState[],
+      ]
     >();
-    expectTypeOf(recheckPublicWorkspaceTransition).parameters.toEqualTypeOf<
-      [PublicWorkspaceState, PublicWorkspaceState]
+    expectTypeOf<
+      ForwardingSignatures<
+        typeof isCleanupEligibleLifecycleState,
+        typeof publicCleanupEligible,
+        typeof recheckPublicWorkspaceCleanup
+      >
+    >().toEqualTypeOf<
+      readonly [
+        [SourceWorkspaceState],
+        [PublicWorkspaceState],
+        [PublicWorkspaceState],
+        boolean,
+        boolean,
+        boolean,
+      ]
     >();
-    expectTypeOf(isLegalTaskWorkspaceTransition).returns.toEqualTypeOf<boolean>();
-    expectTypeOf(publicTransition).returns.toEqualTypeOf<boolean>();
-    expectTypeOf(recheckPublicWorkspaceTransition).returns.toEqualTypeOf<boolean>();
-    expectTypeOf(nextLegalTaskWorkspaceStates).parameters.toEqualTypeOf<[SourceWorkspaceState]>();
-    expectTypeOf(publicNext).parameters.toEqualTypeOf<[PublicWorkspaceState]>();
-    expectTypeOf(recheckPublicWorkspaceNext).parameters.toEqualTypeOf<[PublicWorkspaceState]>();
-    expectTypeOf(nextLegalTaskWorkspaceStates).returns.toEqualTypeOf<
-      readonly SourceWorkspaceState[]
-    >();
-    expectTypeOf(publicNext).returns.toEqualTypeOf<readonly PublicWorkspaceState[]>();
-    expectTypeOf(recheckPublicWorkspaceNext).returns.toEqualTypeOf<
-      readonly PublicWorkspaceState[]
-    >();
-    expectTypeOf(isCleanupEligibleLifecycleState).parameters.toEqualTypeOf<
-      [SourceWorkspaceState]
-    >();
-    expectTypeOf(isCleanupEligibleLifecycleState).returns.toEqualTypeOf<boolean>();
-    expectTypeOf(publicCleanupEligible).parameters.toEqualTypeOf<[PublicWorkspaceState]>();
-    expectTypeOf(recheckPublicWorkspaceCleanup).parameters.toEqualTypeOf<[PublicWorkspaceState]>();
-    expectTypeOf(publicCleanupEligible).returns.toEqualTypeOf<boolean>();
-    expectTypeOf(recheckPublicWorkspaceCleanup).returns.toEqualTypeOf<boolean>();
   });
 
   it("preserves every finite transition row reference and cleanup disposition through public forwarding", () => {

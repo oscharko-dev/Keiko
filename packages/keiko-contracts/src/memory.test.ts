@@ -1,3 +1,4 @@
+import { receiverCheckedReads } from "./__tests__/support/checked-envelope.js";
 // Unit tests for the Governed Enterprise Memory Vault contracts (Epic #204, Issue #205).
 // Each negative test mutates exactly one field of a known-good fixture so failures point
 // precisely at the broken invariant — the same mutation-robust pattern used by
@@ -1811,10 +1812,8 @@ describe("public memory observation preservation", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toBe(input);
-    expect(result.value.scope).toBe(record.scope);
-    expect(result.value.provenance).toBe(record.provenance);
-    expect(result.value.validity).toBe(record.validity);
-    expect(result.value.tags).toBe(record.tags);
+    for (const key of ["scope", "provenance", "validity", "tags"] as const)
+      expect(result.value[key]).toBe(record[key]);
     expect(result.value.retentionHint).toBe(input.retentionHint);
     expect(result.value.payload).toBe(payload);
     expect(JSON.stringify(result.value)).toBe(bytes);
@@ -1898,21 +1897,9 @@ describe("public memory observation preservation", () => {
   });
 
   it("reads scope through its original Proxy receiver in order", () => {
-    const reads: string[] = [];
-    const scope = new Proxy(
-      { kind: "user", userId: "user" },
-      {
-        get(target, key, receiver): unknown {
-          expect(receiver).toBe(scope);
-          reads.push(String(key));
-          return Reflect.get(target, key, receiver);
-        },
-      },
-    );
-    const result = publicMemory.validateMemoryScope(scope);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(scope);
-    expect(reads).toEqual(["kind", "kind", "userId"]);
+    expect(
+      receiverCheckedReads(publicMemory.validateMemoryScope, { kind: "user", userId: "user" }),
+    ).toEqual(["kind", "kind", "userId"]);
   });
 
   it("retains repeated validity reads including a changing final getter", () => {
@@ -2040,18 +2027,7 @@ describe("public memory optional and root observation preservation", () => {
   });
 
   it("retains root field observation order and receiver", () => {
-    const reads: string[] = [];
-    const input = new Proxy(happyRecord(), {
-      get(target, key, receiver): unknown {
-        expect(receiver).toBe(input);
-        reads.push(String(key));
-        return Reflect.get(target, key, receiver);
-      },
-    });
-    const result = publicMemory.validateMemoryRecord(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(input);
-    expect(reads).toEqual([
+    expect(receiverCheckedReads(publicMemory.validateMemoryRecord, happyRecord())).toEqual([
       "schemaVersion",
       "scope",
       "id",
@@ -2106,48 +2082,38 @@ it("keeps own-undefined expiry in the public presence-branch type", () => {
 });
 
 it("keeps the proven public optional types honest under required presence", () => {
-  expectTypeOf<Required<publicMemory.MemoryValidityInterval>["validUntil"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryModelIdentity>["modelRevision"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceConversationId"]>().toEqualTypeOf<
-    publicMemory.ConversationId | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceWorkflowRunId"]>().toEqualTypeOf<
-    publicMemory.WorkflowRunId | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryProvenance>["sourceEvidenceManifestId"]>().toEqualTypeOf<
-    publicMemory.EvidenceManifestId | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryProvenance>["modelIdentity"]>().toEqualTypeOf<
-    publicMemory.MemoryModelIdentity | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryProvenance>["captureRationale"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryRetentionHint>["retainUntil"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryRetentionHint>["notes"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryRecord>["payload"]>().toEqualTypeOf<
-    publicMemory.MemoryStructuredPayload | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryRecord>["staleReason"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryRecord>["retentionHint"]>().toEqualTypeOf<
-    publicMemory.MemoryRetentionHint | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryEdge>["confidence"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<publicMemory.MemoryEdge>["provenanceSummary"]>().toEqualTypeOf<
-    string | undefined
-  >();
+  expectTypeOf<{
+    readonly "MemoryValidityInterval.validUntil": Required<publicMemory.MemoryValidityInterval>["validUntil"];
+    readonly "MemoryModelIdentity.modelRevision": Required<publicMemory.MemoryModelIdentity>["modelRevision"];
+    readonly "MemoryProvenance.sourceConversationId": Required<publicMemory.MemoryProvenance>["sourceConversationId"];
+    readonly "MemoryProvenance.sourceWorkflowRunId": Required<publicMemory.MemoryProvenance>["sourceWorkflowRunId"];
+    readonly "MemoryProvenance.sourceEvidenceManifestId": Required<publicMemory.MemoryProvenance>["sourceEvidenceManifestId"];
+    readonly "MemoryProvenance.modelIdentity": Required<publicMemory.MemoryProvenance>["modelIdentity"];
+    readonly "MemoryProvenance.captureRationale": Required<publicMemory.MemoryProvenance>["captureRationale"];
+    readonly "MemoryRetentionHint.retainUntil": Required<publicMemory.MemoryRetentionHint>["retainUntil"];
+    readonly "MemoryRetentionHint.notes": Required<publicMemory.MemoryRetentionHint>["notes"];
+    readonly "MemoryRecord.payload": Required<publicMemory.MemoryRecord>["payload"];
+    readonly "MemoryRecord.staleReason": Required<publicMemory.MemoryRecord>["staleReason"];
+    readonly "MemoryRecord.retentionHint": Required<publicMemory.MemoryRecord>["retentionHint"];
+    readonly "MemoryEdge.confidence": Required<publicMemory.MemoryEdge>["confidence"];
+    readonly "MemoryEdge.provenanceSummary": Required<publicMemory.MemoryEdge>["provenanceSummary"];
+  }>().toEqualTypeOf<{
+    readonly "MemoryValidityInterval.validUntil": number | undefined;
+    readonly "MemoryModelIdentity.modelRevision": string | undefined;
+    readonly "MemoryProvenance.sourceConversationId": publicMemory.ConversationId | undefined;
+    readonly "MemoryProvenance.sourceWorkflowRunId": publicMemory.WorkflowRunId | undefined;
+    readonly "MemoryProvenance.sourceEvidenceManifestId":
+      publicMemory.EvidenceManifestId | undefined;
+    readonly "MemoryProvenance.modelIdentity": publicMemory.MemoryModelIdentity | undefined;
+    readonly "MemoryProvenance.captureRationale": string | undefined;
+    readonly "MemoryRetentionHint.retainUntil": number | undefined;
+    readonly "MemoryRetentionHint.notes": string | undefined;
+    readonly "MemoryRecord.payload": publicMemory.MemoryStructuredPayload | undefined;
+    readonly "MemoryRecord.staleReason": string | undefined;
+    readonly "MemoryRecord.retentionHint": publicMemory.MemoryRetentionHint | undefined;
+    readonly "MemoryEdge.confidence": number | undefined;
+    readonly "MemoryEdge.provenanceSummary": string | undefined;
+  }>();
 });
 
 // MEM4013-HOSTILE-EVERY-001 / MEM4013-HOSTILE-PUSH-001: intrinsic mutations stay
@@ -2715,6 +2681,12 @@ function expectRemainingMemoryIdentity(own: RemainingMemoryCase): void {
   expect(Object.hasOwn(explicit, own.optionalField)).toBe(true);
 }
 
+/** A source and public declaration of the same optional field, with presence made required. */
+type OptionalFieldPair<Source, Public, Key extends keyof Source & keyof Public> = readonly [
+  Required<Source>[Key],
+  Required<Public>[Key],
+];
+
 function assertRemainingInitialMemoryTypes(): void {
   expectTypeOf<
     readonly [
@@ -2947,24 +2919,17 @@ describe("Memory remaining public parsers (#3918)", () => {
 });
 
 function assertProposalPresentUndefinedTypes(): void {
-  expectTypeOf<Required<SourceMemoryProposal>["payload"]>().toEqualTypeOf<
-    MemoryStructuredPayload | undefined
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryProposal, PublicMemoryProposal, "payload">
+  >().toEqualTypeOf<
+    readonly [MemoryStructuredPayload | undefined, MemoryStructuredPayload | undefined]
   >();
-  expectTypeOf<Required<PublicMemoryProposal>["payload"]>().toEqualTypeOf<
-    MemoryStructuredPayload | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryProposal>["retentionHint"]>().toEqualTypeOf<
-    MemoryRetentionHint | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryProposal>["retentionHint"]>().toEqualTypeOf<
-    MemoryRetentionHint | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryProposal>["captureReason"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryProposal>["captureReason"]>().toEqualTypeOf<
-    string | undefined
-  >();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryProposal, PublicMemoryProposal, "retentionHint">
+  >().toEqualTypeOf<readonly [MemoryRetentionHint | undefined, MemoryRetentionHint | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryProposal, PublicMemoryProposal, "captureReason">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
 }
 
 it("preserves source and public Proposal option presence with truthful types", (): void => {
@@ -2997,30 +2962,20 @@ it("preserves source and public Proposal option presence with truthful types", (
 });
 
 function assertAcceptancePresentUndefinedTypes(): void {
-  expectTypeOf<Required<SourceMemoryAcceptance>["bodyOverride"]>().toEqualTypeOf<
-    string | undefined
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryAcceptance, PublicMemoryAcceptance, "bodyOverride">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryAcceptance, PublicMemoryAcceptance, "sensitivityOverride">
+  >().toEqualTypeOf<readonly [MemorySensitivity | undefined, MemorySensitivity | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryAcceptance, PublicMemoryAcceptance, "validityOverride">
+  >().toEqualTypeOf<
+    readonly [MemoryValidityInterval | undefined, MemoryValidityInterval | undefined]
   >();
-  expectTypeOf<Required<PublicMemoryAcceptance>["bodyOverride"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryAcceptance>["sensitivityOverride"]>().toEqualTypeOf<
-    MemorySensitivity | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryAcceptance>["sensitivityOverride"]>().toEqualTypeOf<
-    MemorySensitivity | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryAcceptance>["validityOverride"]>().toEqualTypeOf<
-    MemoryValidityInterval | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryAcceptance>["validityOverride"]>().toEqualTypeOf<
-    MemoryValidityInterval | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryAcceptance>["reviewerNote"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryAcceptance>["reviewerNote"]>().toEqualTypeOf<
-    string | undefined
-  >();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryAcceptance, PublicMemoryAcceptance, "reviewerNote">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
 }
 
 it("preserves source and public Acceptance option presence with truthful types", (): void => {
@@ -3066,20 +3021,17 @@ it("preserves source and public Acceptance option presence with truthful types",
 });
 
 function assertUpdateContentPresentUndefinedTypes(): void {
-  expectTypeOf<Required<SourceMemoryUpdate>["bodyPatch"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<PublicMemoryUpdate>["bodyPatch"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<SourceMemoryUpdate>["payloadPatch"]>().toEqualTypeOf<
-    MemoryStructuredPayload | undefined
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryUpdate, PublicMemoryUpdate, "bodyPatch">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryUpdate, PublicMemoryUpdate, "payloadPatch">
+  >().toEqualTypeOf<
+    readonly [MemoryStructuredPayload | undefined, MemoryStructuredPayload | undefined]
   >();
-  expectTypeOf<Required<PublicMemoryUpdate>["payloadPatch"]>().toEqualTypeOf<
-    MemoryStructuredPayload | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryUpdate>["tagsPatch"]>().toEqualTypeOf<
-    readonly string[] | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryUpdate>["tagsPatch"]>().toEqualTypeOf<
-    readonly string[] | undefined
-  >();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryUpdate, PublicMemoryUpdate, "tagsPatch">
+  >().toEqualTypeOf<readonly [readonly string[] | undefined, readonly string[] | undefined]>();
 }
 
 it("preserves source and public UpdateContent option presence with truthful types", (): void => {
@@ -3113,26 +3065,20 @@ it("preserves source and public UpdateContent option presence with truthful type
 });
 
 function assertUpdateMetadataPresentUndefinedTypes(): void {
-  expectTypeOf<Required<SourceMemoryUpdate>["validityPatch"]>().toEqualTypeOf<
-    MemoryValidityInterval | undefined
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryUpdate, PublicMemoryUpdate, "validityPatch">
+  >().toEqualTypeOf<
+    readonly [MemoryValidityInterval | undefined, MemoryValidityInterval | undefined]
   >();
-  expectTypeOf<Required<PublicMemoryUpdate>["validityPatch"]>().toEqualTypeOf<
-    MemoryValidityInterval | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryUpdate>["sensitivityPatch"]>().toEqualTypeOf<
-    MemorySensitivity | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryUpdate>["sensitivityPatch"]>().toEqualTypeOf<
-    MemorySensitivity | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryUpdate>["retentionHintPatch"]>().toEqualTypeOf<
-    MemoryRetentionHint | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryUpdate>["retentionHintPatch"]>().toEqualTypeOf<
-    MemoryRetentionHint | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryUpdate>["reviewerNote"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<PublicMemoryUpdate>["reviewerNote"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryUpdate, PublicMemoryUpdate, "sensitivityPatch">
+  >().toEqualTypeOf<readonly [MemorySensitivity | undefined, MemorySensitivity | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryUpdate, PublicMemoryUpdate, "retentionHintPatch">
+  >().toEqualTypeOf<readonly [MemoryRetentionHint | undefined, MemoryRetentionHint | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryUpdate, PublicMemoryUpdate, "reviewerNote">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
 }
 
 it("preserves source and public UpdateMetadata option presence with truthful types", (): void => {
@@ -3177,30 +3123,22 @@ it("preserves source and public UpdateMetadata option presence with truthful typ
 });
 
 function assertRetrievalFiltersPresentUndefinedTypes(): void {
-  expectTypeOf<Required<SourceMemoryRetrievalRequest>["typeFilter"]>().toEqualTypeOf<
-    readonly MemoryType[] | undefined
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryRetrievalRequest, PublicMemoryRetrievalRequest, "typeFilter">
+  >().toEqualTypeOf<
+    readonly [readonly MemoryType[] | undefined, readonly MemoryType[] | undefined]
   >();
-  expectTypeOf<Required<PublicMemoryRetrievalRequest>["typeFilter"]>().toEqualTypeOf<
-    readonly MemoryType[] | undefined
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryRetrievalRequest, PublicMemoryRetrievalRequest, "statusFilter">
+  >().toEqualTypeOf<
+    readonly [readonly MemoryStatus[] | undefined, readonly MemoryStatus[] | undefined]
   >();
-  expectTypeOf<Required<SourceMemoryRetrievalRequest>["statusFilter"]>().toEqualTypeOf<
-    readonly MemoryStatus[] | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryRetrievalRequest>["statusFilter"]>().toEqualTypeOf<
-    readonly MemoryStatus[] | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryRetrievalRequest>["textQuery"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryRetrievalRequest>["textQuery"]>().toEqualTypeOf<
-    string | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryRetrievalRequest>["tagsFilter"]>().toEqualTypeOf<
-    readonly string[] | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryRetrievalRequest>["tagsFilter"]>().toEqualTypeOf<
-    readonly string[] | undefined
-  >();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryRetrievalRequest, PublicMemoryRetrievalRequest, "textQuery">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryRetrievalRequest, PublicMemoryRetrievalRequest, "tagsFilter">
+  >().toEqualTypeOf<readonly [readonly string[] | undefined, readonly string[] | undefined]>();
 }
 
 it("preserves source and public RetrievalFilters option presence with truthful types", (): void => {
@@ -3237,30 +3175,22 @@ it("preserves source and public RetrievalFilters option presence with truthful t
 });
 
 function assertRetrievalBudgetsPresentUndefinedTypes(): void {
-  expectTypeOf<Required<SourceMemoryRetrievalRequest>["maxResults"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryRetrievalRequest>["maxResults"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryRetrievalRequest>["maxBodyChars"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryRetrievalRequest>["maxBodyChars"]>().toEqualTypeOf<
-    number | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryRetrievalRequest>["includeArchived"]>().toEqualTypeOf<
-    boolean | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryRetrievalRequest>["includeArchived"]>().toEqualTypeOf<
-    boolean | undefined
-  >();
-  expectTypeOf<Required<SourceMemoryRetrievalRequest>["includeSuperseded"]>().toEqualTypeOf<
-    boolean | undefined
-  >();
-  expectTypeOf<Required<PublicMemoryRetrievalRequest>["includeSuperseded"]>().toEqualTypeOf<
-    boolean | undefined
-  >();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryRetrievalRequest, PublicMemoryRetrievalRequest, "maxResults">
+  >().toEqualTypeOf<readonly [number | undefined, number | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryRetrievalRequest, PublicMemoryRetrievalRequest, "maxBodyChars">
+  >().toEqualTypeOf<readonly [number | undefined, number | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryRetrievalRequest, PublicMemoryRetrievalRequest, "includeArchived">
+  >().toEqualTypeOf<readonly [boolean | undefined, boolean | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      SourceMemoryRetrievalRequest,
+      PublicMemoryRetrievalRequest,
+      "includeSuperseded"
+    >
+  >().toEqualTypeOf<readonly [boolean | undefined, boolean | undefined]>();
 }
 
 it("preserves source and public RetrievalBudgets option presence with truthful types", (): void => {
@@ -3302,12 +3232,15 @@ it("preserves source and public RetrievalBudgets option presence with truthful t
 });
 
 function assertLifecycleReasonPresentUndefinedTypes(): void {
-  expectTypeOf<Required<SourceMemoryPin>["reason"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<PublicMemoryPin>["reason"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<SourceMemoryUnpin>["reason"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<PublicMemoryUnpin>["reason"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<SourceMemoryArchive>["reason"]>().toEqualTypeOf<string | undefined>();
-  expectTypeOf<Required<PublicMemoryArchive>["reason"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<OptionalFieldPair<SourceMemoryPin, PublicMemoryPin, "reason">>().toEqualTypeOf<
+    readonly [string | undefined, string | undefined]
+  >();
+  expectTypeOf<OptionalFieldPair<SourceMemoryUnpin, PublicMemoryUnpin, "reason">>().toEqualTypeOf<
+    readonly [string | undefined, string | undefined]
+  >();
+  expectTypeOf<
+    OptionalFieldPair<SourceMemoryArchive, PublicMemoryArchive, "reason">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
 }
 
 it("preserves source and public lifecycle reason presence with truthful types", (): void => {

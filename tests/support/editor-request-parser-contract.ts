@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "../../packages/keiko-contracts/src/editor-agent.js";
 import type { EditorCompletionContextSelectors } from "../../packages/keiko-contracts/src/editor-completion.js";
 
@@ -493,4 +493,18 @@ function identityFaultReads(
   return fault === "root-second"
     ? ["root:1", "session:1", payloadKey, "root:2"]
     : ["root:1", "session:1", payloadKey, "root:2", "session:2", "session:3"];
+}
+
+/** Declares the captured-identity and context-projection suites over each parser surface. */
+export function describeRequestParserSurfaces<Value extends RequestValue>(
+  surfaces: Surfaces<Value>,
+  makeRequest: () => Record<string, unknown>,
+  payloadKey: Extract<keyof Value, "document" | "target">,
+): void {
+  describe.each(surfaces)("#3918 captured request identity through %s", (_surface, parse) => {
+    registerCapturedRequestIdentity(parse, makeRequest, payloadKey);
+  });
+  describe.each(surfaces)("%s parser admission and context projection", (_surface, parse): void => {
+    registerRequestContextProjection(parse, makeRequest, payloadKey);
+  });
 }

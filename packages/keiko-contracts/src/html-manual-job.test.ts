@@ -1,5 +1,5 @@
+import { runIsolatedControl } from "./__tests__/support/isolated-control.js";
 import { describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
 import {
   validateHtmlManualPodCreateRequest,
   validateHtmlManualPodRefreshRequest,
@@ -41,14 +41,7 @@ console.log(JSON.stringify({
 `;
 
 function observeArrayInteractions(operation: string): string {
-  const child = spawnSync(
-    process.execPath,
-    ["--input-type=module", "--eval", ARRAY_INTERACTION_CONTROL, operation],
-    { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 },
-  );
-  expect(child.error).toBeUndefined();
-  expect(child.status).toBe(0);
-  return child.stdout;
+  return runIsolatedControl(ARRAY_INTERACTION_CONTROL, operation);
 }
 
 describe("validateHtmlManualPodRefreshRequest", () => {
