@@ -24,7 +24,10 @@ import {
   continuityCaseId,
   continuityTrialResult,
 } from "./chat-continuity-campaign.mjs";
-import { readContinuityBuildIdentity } from "./chat-continuity-build.mjs";
+import {
+  readContinuityBuildIdentity,
+  readContinuityHarnessIdentity,
+} from "./chat-continuity-build.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -51,6 +54,10 @@ const ledger = [],
   physical = [];
 const subjectRoot = values["subject-root"] ?? REPO_ROOT;
 const subjectIdentity = readContinuityBuildIdentity(subjectRoot);
+const harnessIdentity = {
+  observer: readContinuityHarnessIdentity(),
+  subject: readContinuityHarnessIdentity(subjectRoot),
+};
 const runtimeModule = join(
   subjectRoot,
   "scripts/testing/coding-workbench-lab/chat-continuity-runtime.mjs",
@@ -65,6 +72,7 @@ mkdirSync(output, { mode: 0o700 });
 const metadata = {
   phase: values.phase,
   ...subjectIdentity,
+  harnessIdentity,
   harnessDigests: Object.fromEntries(
     ["corpus", "runtime", "run", "campaign", "build"].map((part) => [
       part,
@@ -131,6 +139,11 @@ function assertQualificationInputs() {
     throw new Error("continuity-input-configuration-changed");
   if (!isDeepStrictEqual(readContinuityBuildIdentity(subjectRoot), subjectIdentity))
     throw new Error("continuity-subject-changed");
+  if (
+    !isDeepStrictEqual(readContinuityHarnessIdentity(), harnessIdentity.observer) ||
+    !isDeepStrictEqual(readContinuityHarnessIdentity(subjectRoot), harnessIdentity.subject)
+  )
+    throw new Error("continuity-harness-changed");
 }
 async function checked(method, path, body) {
   cancellation.signal.throwIfAborted();
@@ -400,6 +413,7 @@ async function runRepetitions() {
   return passed;
 }
 try {
+  assertQualificationInputs();
   runtime = await startContinuityRuntime(join(output, "runtime"), values.config, physical, {
     signal: cancellation.signal,
   });

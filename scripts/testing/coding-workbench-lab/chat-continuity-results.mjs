@@ -57,6 +57,28 @@ function validateRun(run) {
   if (!Number.isFinite(Date.parse(run.updatedAt))) throw new TypeError("invalid-lab-clock");
 }
 
+function harnessBound(run) {
+  return ["observer", "subject"].every((key) => {
+    const item = run.harnessIdentity?.[key];
+    return (
+      item?.method === "complete-scripts-tree-sha256-v1" &&
+      DIGEST.test(item.digest) &&
+      Number.isSafeInteger(item.files) &&
+      item.files > 0
+    );
+  });
+}
+
+function harnessProjection(run) {
+  if (!harnessBound(run)) return null;
+  return Object.fromEntries(
+    ["observer", "subject"].map((key) => {
+      const { method, digest, files } = run.harnessIdentity[key];
+      return [key, { method, digest, files }];
+    }),
+  );
+}
+
 function recall(probes) {
   const correct = probes.reduce((sum, { score }) => sum + score.correct, 0);
   const total = probes.reduce((sum, { score }) => sum + score.total, 0);
@@ -85,7 +107,9 @@ function lane(run, model, kind) {
   const probes = state?.probes ?? [];
   const cycles = probes.filter(({ phase }) => phase === "cycle");
   const qualified =
-    state !== undefined && continuityCampaignQualified(state, run, Date.parse(run.updatedAt));
+    harnessBound(run) &&
+    state !== undefined &&
+    continuityCampaignQualified(state, run, Date.parse(run.updatedAt));
   return {
     model,
     kind,
@@ -151,6 +175,7 @@ export function summarizeContinuityRun(run) {
     globalSystemScore: null,
     sourceStatus: run.status,
     configuredRosterMatches,
+    harnessIdentity: harnessProjection(run),
     fixtureQualification: qualified ? "passed" : "incomplete",
     lanes,
     repetitions: repeats,
@@ -158,7 +183,10 @@ export function summarizeContinuityRun(run) {
 }
 
 function requireComparable(baseline, candidate) {
+  if (!harnessBound(baseline) || !harnessBound(candidate))
+    throw new TypeError("lab-harness-unbound");
   const keys = [
+    "harnessIdentity",
     "configurationDigest",
     "models",
     "hardware",

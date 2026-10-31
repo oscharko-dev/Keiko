@@ -14,7 +14,10 @@ import {
   evaluateContinuityAnswer,
 } from "./chat-continuity-corpus.mjs";
 import { privateContinuityOutput } from "./chat-continuity-runtime.mjs";
-import { readContinuityBuildIdentity } from "./chat-continuity-build.mjs";
+import {
+  readContinuityBuildIdentity,
+  readContinuityHarnessIdentity,
+} from "./chat-continuity-build.mjs";
 import { parseCli, runMain } from "./lab-common.mjs";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { writeContinuityJson } from "./chat-continuity-campaign.mjs";
@@ -121,6 +124,10 @@ function replayReport(input, subject, config) {
     inheritedDerivedState: "preserved-identically-between-replays",
     sourceLedgerDigest: input.sourceLedgerDigest,
     subject: readContinuityBuildIdentity(subject),
+    harnessIdentity: {
+      observer: readContinuityHarnessIdentity(),
+      subject: readContinuityHarnessIdentity(subject),
+    },
     corpus: input.corpus,
     observerDigest: continuityDigest(readFileSync(new URL(import.meta.url))),
     configDigest: continuityDigest(readFileSync(config)),
@@ -227,9 +234,11 @@ async function runReplayCase(context, index) {
   save();
   let runtime;
   try {
+    assertReplayInputs(context, context.subject);
     runtime = await subjectRuntime.startContinuityRuntime(dir, config, report.physical, {
       signal: cancellation.signal,
     });
+    assertReplayInputs(context, context.subject);
     await sendReplayRequest(runtime, prepared, row.model, index, result, save);
   } finally {
     try {
@@ -246,7 +255,11 @@ async function runReplayCases(context, subject) {
   process.once("SIGTERM", cancel);
   process.once("SIGINT", cancel);
   try {
-    for (const index of input.selected) await runReplayCase(context, index);
+    for (const index of input.selected) {
+      assertReplayInputs(context, subject);
+      await runReplayCase(context, index);
+      assertReplayInputs(context, subject);
+    }
     const after = readContinuityBuildIdentity(subject);
     if (JSON.stringify(after) !== JSON.stringify(report.subject))
       throw new Error("replay-subject-changed");
@@ -263,6 +276,18 @@ async function runReplayCases(context, subject) {
     save();
   }
   return report;
+}
+
+function assertReplayInputs({ config, report }, subject) {
+  if (continuityDigest(readFileSync(config)) !== report.configDigest)
+    throw new Error("replay-input-configuration-changed");
+  if (
+    JSON.stringify(readContinuityHarnessIdentity()) !==
+      JSON.stringify(report.harnessIdentity.observer) ||
+    JSON.stringify(readContinuityHarnessIdentity(subject)) !==
+      JSON.stringify(report.harnessIdentity.subject)
+  )
+    throw new Error("replay-harness-changed");
 }
 
 export async function replayContinuityCases({
@@ -291,6 +316,7 @@ export async function replayContinuityCases({
       subjectRuntime,
       ledgerPath,
       config,
+      subject,
       cancellation: new globalThis.AbortController(),
       save,
     },

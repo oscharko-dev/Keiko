@@ -49,6 +49,15 @@ function distributionFiles(root, directory) {
     return [relative(root, path).replaceAll("\\", "/")];
   });
 }
+// Conservative closure: every repository script, including transitively imported shared helpers.
+export function readContinuityHarnessIdentity(root = REPO_ROOT) {
+  const paths = distributionFiles(root, join(root, "scripts"));
+  return {
+    method: "complete-scripts-tree-sha256-v1",
+    digest: digestPaths(root, paths),
+    files: paths.length,
+  };
+}
 function currentIdentity(root) {
   const configs = JSON.parse(readFileSync(join(root, "tsconfig.packages.json"), "utf8"));
   const paths = configs.references.flatMap(({ path }) => {

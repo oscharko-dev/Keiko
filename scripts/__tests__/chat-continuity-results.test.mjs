@@ -42,6 +42,10 @@ function probes(cycles) {
 function fixture() {
   return {
     status: "completed",
+    harnessIdentity: {
+      observer: { method: "complete-scripts-tree-sha256-v1", digest: "b".repeat(64), files: 10 },
+      subject: { method: "complete-scripts-tree-sha256-v1", digest: "c".repeat(64), files: 10 },
+    },
     models: [...CONTINUITY_LAB_MODELS],
     configurationDigest: "a".repeat(64),
     hardware: { arch: "arm64", platform: "darwin", memoryBytes: 1024, cpus: 4 },
@@ -242,4 +246,19 @@ describe("offline private laboratory reports", () => {
     writeFileSync(paths.baseline, "SYNTHETIC_INVALID_PRIVATE_CANARY");
     expect(() => writeContinuityReport(paths)).toThrow("invalid-lab-ledger-json");
   });
+});
+
+it("keeps legacy unbound harness runs descriptive and refuses their comparison", () => {
+  const run = fixture();
+  delete run.harnessIdentity;
+  expect(summarizeContinuityRun(run).fixtureQualification).toBe("incomplete");
+  expect(() => compareContinuityRuns(run, run)).toThrow("lab-harness-unbound");
+});
+it("refuses a comparison across changed executed helper identities", () => {
+  const before = fixture(),
+    after = fixture();
+  after.harnessIdentity.subject.digest = "d".repeat(64);
+  expect(() => compareContinuityRuns(before, after)).toThrow(
+    "lab-environment-or-schedule-mismatch",
+  );
 });

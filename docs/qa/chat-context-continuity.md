@@ -554,3 +554,16 @@ both identities again before accepting completion. Three hermetic subprocess/clo
 regressions fail before the repairs and pass afterward. The final Lab suite passes
 130 tests across eight files. These are evidence-integrity corrections; no new
 model campaign or optimization iteration was started.
+
+Final evidence admission also binds both observer and subject to a conservative
+SHA-256 manifest of the complete repository scripts tree. This includes shared
+transitive helpers such as `lab-common.mjs`, the chaos proxy and the Chat skills
+runtime. The runner validates it before runtime admission, after startup and
+before accepting completion. Replay checks configuration and helper identities
+before each case, immediately before/after runtime startup and after each case.
+Any drift fails the run; no further case receives a mismatched input.
+Legacy ledgers without this binding remain descriptive and cannot qualify or
+enter a causal comparison. Report output projects the same body-free identities
+that comparison admission validates; unrelated script edits conservatively
+invalidate a comparison as well. No model-facing prompt or existing answer score
+is changed by these evidence-integrity corrections.

@@ -25,7 +25,11 @@ function subject(runtime) {
   put("packages/probe/tsconfig.json", "{}");
   put("packages/probe/dist/index.js", "export const probe = 1;");
   put("node_modules/@typescript/native/package.json", '{"version":"7.0.2"}');
-  put("scripts/testing/coding-workbench-lab/chat-continuity-runtime.mjs", runtime);
+  put("scripts/testing/helper.mjs", "export const helper = true;");
+  put(
+    "scripts/testing/coding-workbench-lab/chat-continuity-runtime.mjs",
+    `import "../helper.mjs";\n${runtime}`,
+  );
   const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
   git(["init"]);
   git(["add", "."]);
@@ -100,18 +104,23 @@ it("refuses input drift before any Chat or provider request", () => {
   expect(JSON.parse(readFileSync(join(output, "ledger.json"))).status).toBe("failed");
 });
 
-it.each(["configuration", "subject"])("rejects %s drift at the final campaign boundary", (kind) => {
-  const mutation =
-    kind === "configuration"
-      ? "writeFileSync(config,'changed')"
-      : "writeFileSync(join(dir,'..','..','package.json'),'changed')";
-  const root = subject(`${COMMON}\nexport async function startContinuityRuntime(dir,config) {
+it.each(["configuration", "subject", "helper"])(
+  "rejects %s drift at the final campaign boundary",
+  (kind) => {
+    const mutation =
+      kind === "configuration"
+        ? "writeFileSync(config,'changed')"
+        : kind === "subject"
+          ? "writeFileSync(join(dir,'..','..','package.json'),'changed')"
+          : "writeFileSync(join(dir,'..','..','scripts','testing','helper.mjs'),'changed')";
+    const root = subject(`${COMMON}\nexport async function startContinuityRuntime(dir,config) {
     return {models:[],async restart(){${mutation};},async drain(){return undefined;},async close(){return undefined;}};
   }`);
-  const { result, output } = run(root);
-  expect(result.status).toBe(1);
-  expect(JSON.parse(readFileSync(join(output, "ledger.json"))).status).toBe("failed");
-});
+    const { result, output } = run(root);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(readFileSync(join(output, "ledger.json"))).status).toBe("failed");
+  },
+);
 
 it("rejects replay output in a separate subject checkout before creating it", async () => {
   const runtime = COMMON.replace(
@@ -131,4 +140,34 @@ it("rejects replay output in a separate subject checkout before creating it", as
     replayContinuityCases({ ledger, subject: root, config, output, indices: "0" }),
   ).rejects.toThrow("subject-output-rejected");
   expect(existsSync(output)).toBe(false);
+});
+
+it("rejects configuration drift before the first replay snapshot or model call", async () => {
+  const runtime = COMMON.replace(
+    "value => value",
+    "value => {writeFileSync(new URL('../../../input.json',import.meta.url),'changed');return value;}",
+  );
+  const root = subject(runtime),
+    output = join(root, "replay-result");
+  const ledger = join(root, "source-ledger.json"),
+    config = join(root, "input.json");
+  writeFileSync(
+    ledger,
+    JSON.stringify({ corpus: continuityCorpusManifest(), ledger: [{ kind: "plain", score: {} }] }),
+  );
+  writeFileSync(config, "{}");
+  await expect(
+    replayContinuityCases({ ledger, subject: root, config, output, indices: "0" }),
+  ).rejects.toThrow("replay-input-configuration-changed");
+  expect(JSON.parse(readFileSync(join(output, "replay.json"))).status).toBe("failed");
+});
+
+it("rejects a helper changed during subject import before starting a runtime", () => {
+  const root = subject(
+    `${COMMON}\nwriteFileSync(new URL('../helper.mjs',import.meta.url),'changed');\nexport async function startContinuityRuntime(dir){writeFileSync(join(dir,'..','dispatch.flag'),'bad');throw Error('unexpected-start');}`,
+  );
+  const { result, output } = run(root);
+  expect(result.status).toBe(1);
+  expect(existsSync(join(output, "dispatch.flag"))).toBe(false);
+  expect(JSON.parse(readFileSync(join(output, "ledger.json"))).status).toBe("failed");
 });
