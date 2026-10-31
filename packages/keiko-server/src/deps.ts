@@ -5032,6 +5032,17 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       mcpConnections,
     ),
   };
+  return attachComposedUiHandlerDeps(args, services, prDescriptionGeneration, codingJiraPods, deps);
+}
+
+/** The surfaces that attach to the composed graph itself, in their required order. */
+function attachComposedUiHandlerDeps(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+  prDescriptionGeneration: ReturnType<typeof createProductionPrDescriptionGeneration>,
+  codingJiraPods: CodingJiraPods | undefined,
+  deps: UiHandlerDeps,
+): UiHandlerDeps {
   attachWorkbenchDescriptionSupport(
     args,
     services.codingRuntimeControlPlane,
