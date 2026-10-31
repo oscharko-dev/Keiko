@@ -31,6 +31,8 @@ const REQUIRED_RECEIPTS: Readonly<
   "jira.assign": ["issueKey"],
   "jira.comment": ["issueKey", "commentId"],
   "jira.transition": ["issueKey", "transitionId"],
+  // A draft is never one attempt: each item is a journaled jira.create with its own receipt.
+  "jira.draft": ["issueKey", "issueId"],
 };
 
 function confirmed(value: unknown): boolean {

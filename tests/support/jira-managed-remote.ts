@@ -55,6 +55,8 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
     });
   if (path.endsWith("assignable/search"))
     return response([{ name: "synthetic-user", active: true }]);
+  // A draft item's identity search: the synthetic project holds no earlier draft issue.
+  if (path.endsWith("/search")) return response({ issues: [] });
   if (path.endsWith("/comment/10002")) return response({ id: "10002", body: state.comment });
   if (path.endsWith("/issue/SYN-1"))
     return response({ id: "10001", key: "SYN-1", fields: state.fields });

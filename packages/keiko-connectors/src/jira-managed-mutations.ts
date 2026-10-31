@@ -26,6 +26,13 @@ import {
 } from "./jira-issue-links.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import {
+  jiraDraftIdentity,
+  reconcileJiraDraftItem,
+  resolveJiraDraftItem,
+  withJiraDraftIdentity,
+  type JiraDraftItem,
+} from "./jira-draft.js";
+import {
   jiraCreateMutationMetadata,
   jiraEditMutationMetadata,
   jiraTransitionMutationMetadata,
@@ -185,21 +192,34 @@ async function createIssue(
     return INVALID;
   const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
   if (!metadata.ok) return metadata;
+  return createWithMetadata(request, { projectId, issueTypeId, fields, links }, metadata.fields);
+}
+interface CreateRequest {
+  readonly projectId: string;
+  readonly issueTypeId: string;
+  readonly fields: Readonly<Record<string, unknown>>;
+  readonly links: readonly JiraIssueLinkRequest[];
+}
+async function createWithMetadata(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+): Promise<JiraMutationAttempt> {
   const validated = validateJiraFieldChanges(
-    createContextFields(metadata.fields),
-    { ...fields, project: { id: projectId }, issuetype: { id: issueTypeId } },
+    createContextFields(metadata),
+    { ...create.fields, project: { id: create.projectId }, issuetype: { id: create.issueTypeId } },
     "create",
     "data-center",
   );
   if (!validated.ok) return validationFailure(validated);
-  const linked = withLinks(metadata.fields, validated, links);
+  const linked = withLinks(metadata, validated, create.links);
   if (!linked.ok) return linked;
   const response = await request("issue", "POST", {
     fields: validated.fields,
     update: linked.update,
   });
   if (!response.ok) return dispatchFailure(response);
-  return confirmCreatedIssue(request, response, metadata.fields, linked.values);
+  return confirmCreatedIssue(request, response, metadata, linked.values);
 }
 function confirmCreatedIssue(
   request: JiraMutationRequest,
@@ -420,6 +440,52 @@ async function addComment(
   return response.status === 201 && numericId(id)
     ? confirmJiraComment(request, issueKey, id, body)
     : MALFORMED;
+}
+
+/**
+ * One backlog-draft item (#4178): its relations resolved to the keys earlier items received, then
+ * reconciled against the issue its draft identity already names before anything is created.
+ * A reconciled item sends no mutation; the server's journal records that nothing was dispatched.
+ */
+export async function executeJiraDraftItem(
+  item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<JiraMutationAttempt> {
+  if (connection.deployment !== "data-center") return { ok: false, reason: "unavailable" };
+  const resolved = resolveJiraDraftItem(item, keys);
+  const links = parseJiraIssueLinks(resolved?.links);
+  const fields = fieldsInput(resolved?.fields);
+  if (resolved === undefined || links === undefined || fields === undefined) return INVALID;
+  const request = requestFor(connection, context);
+  const metadata = await jiraCreateMutationMetadata(request, item.projectId, item.issueTypeId);
+  if (!metadata.ok) return metadata;
+  const found = await reconcileJiraDraftItem(request, item, metadata.fields);
+  if (found.kind !== "absent") return found.attempt;
+  const identified = withJiraDraftIdentity(fields, metadata.fields, jiraDraftIdentity(item));
+  return createWithMetadata(
+    request,
+    { projectId: item.projectId, issueTypeId: item.issueTypeId, fields: identified, links },
+    metadata.fields,
+  );
+}
+
+/**
+ * Read-only: the issue a draft item already created, found by its draft identity. A replayed item
+ * keeps its journal outcome but not its receipt, so this recovers the key its dependents need.
+ */
+export async function findJiraDraftItem(
+  item: JiraDraftItem,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<JiraMutationAttempt> {
+  if (connection.deployment !== "data-center") return { ok: false, reason: "unavailable" };
+  const request = requestFor(connection, context);
+  const metadata = await jiraCreateMutationMetadata(request, item.projectId, item.issueTypeId);
+  if (!metadata.ok) return metadata;
+  const found = await reconcileJiraDraftItem(request, item, metadata.fields);
+  return found.kind === "absent" ? { ok: false, reason: "not-found" } : found.attempt;
 }
 
 /** Fresh capability metadata and one mutation request. Durability/authority remain server-owned. */

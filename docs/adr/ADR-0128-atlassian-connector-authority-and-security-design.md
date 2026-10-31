@@ -543,6 +543,21 @@ tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → 
 `transition-issue`. The nine read tools retain their names. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
 
+**Backlog drafts (#4178, 2026-10-31).** `jira.draft` maps to `create-issue` (high): it proposes
+up to 32 related issues — the Chat journal's existing per-turn write bound, which a draft never
+widens — that reference each other by a local `ref` and are approved once. The draft itself is
+never dispatched. The server runs each selected item, in dependency order, as its own journaled
+`jira.create` under a child identity derived from the draft's invocation and action digest, so an
+item already sent is never sent again on replay. The draft's one approval is claimed once at the
+first item's dispatch and covers its remaining items. The approving human may deselect items; the
+deselection is bound into the approval proof and extends to every item that depends on a deselected
+one. Before creating an item the connector searches by a deterministic identity label
+(`keiko-draft-<20 hex>` from project, issue type and normalized summary; the exact summary when the
+create screen offers no labels): one match is reconciled without a write, several are refused as a
+conflict. An item whose parent or linked item has no key is skipped; an item whose outcome is
+uncertain stops the draft, because the journal admits no further write in that turn. Coding runs
+do not offer `jira.draft`.
+
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
 Additive, non-destructive writes with no lasting external side effect beyond their own content

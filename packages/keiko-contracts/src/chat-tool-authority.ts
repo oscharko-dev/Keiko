@@ -1,4 +1,9 @@
-import { JIRA_MUTATION_OPERATIONS, type JiraMutationOperation } from "./jira-tool-execution.js";
+import {
+  JIRA_DRAFT_ITEMS_MAX,
+  JIRA_MUTATION_OPERATIONS,
+  isJiraDraftRef,
+  type JiraMutationOperation,
+} from "./jira-tool-execution.js";
 import { isChatJiraPodId } from "./bff-wire.js";
 import { exactKeys, isRecord } from "./contract-validation-primitives.js";
 import {
@@ -353,6 +358,8 @@ export interface JiraChatToolWriteApprovalView {
   readonly requestedAt: number;
   readonly expiresAt: number;
   readonly state: ChatToolWriteApprovalState;
+  /** Draft items the human deselected when approving a `jira.draft` (#4178). */
+  readonly excludedItemRefs?: readonly string[];
 }
 export interface McpChatToolWriteApprovalView {
   readonly kind: "mcp-chat-write";
@@ -375,6 +382,17 @@ export type ChatToolWriteApprovalView =
 export interface ChatToolWriteApprovalDecision {
   readonly decision: "approve" | "reject";
   readonly actionDigest: string;
+  /** Draft items to leave out of an approved `jira.draft`; their dependents follow (#4178). */
+  readonly excludedItemRefs?: readonly string[];
+}
+function validateExcludedItemRefs(value: unknown, path: string, errors: string[]): void {
+  if (
+    !Array.isArray(value) ||
+    value.length > JIRA_DRAFT_ITEMS_MAX ||
+    !value.every(isJiraDraftRef) ||
+    new Set(value).size !== value.length
+  )
+    errors.push(`${path} is invalid`);
 }
 const WRITE_APPROVAL_KEYS = [
   "kind",
@@ -427,18 +445,29 @@ function validateWriteApprovalSubject(value: Record<string, unknown>, errors: st
       errors.push("chatWriteApproval.operation is invalid");
   }
 }
+function validateWriteApprovalKeys(
+  value: Record<string, unknown>,
+  mcp: boolean,
+  errors: string[],
+): void {
+  if (mcp) {
+    validateKeys(value, MCP_WRITE_APPROVAL_KEYS, errors, "chatWriteApproval");
+    return;
+  }
+  const excluded = Object.hasOwn(value, "excludedItemRefs");
+  const keys = excluded ? [...WRITE_APPROVAL_KEYS, "excludedItemRefs"] : WRITE_APPROVAL_KEYS;
+  validateKeys(value, keys, errors, "chatWriteApproval");
+  if (!excluded) return;
+  validateExcludedItemRefs(value.excludedItemRefs, "chatWriteApproval.excludedItemRefs", errors);
+  if (value.operation !== "jira.draft") errors.push("chatWriteApproval.operation is invalid");
+}
 export function validateChatToolWriteApprovalView(
   value: unknown,
 ): CodingWorkbenchValidationResult<ChatToolWriteApprovalView> {
   if (!isRecord(value)) return invalid("chatWriteApproval must be an object");
   const errors: string[] = [];
   const mcp = value.kind === "mcp-chat-write";
-  validateKeys(
-    value,
-    mcp ? MCP_WRITE_APPROVAL_KEYS : WRITE_APPROVAL_KEYS,
-    errors,
-    "chatWriteApproval",
-  );
+  validateWriteApprovalKeys(value, mcp, errors);
   if (!mcp && value.kind !== "jira-chat-write") errors.push("chatWriteApproval.kind is invalid");
   for (const key of ["approvalId", "chatId", "invocationId"])
     validateSafeId(value[key], `chatWriteApproval.${key}`, errors, 128);
@@ -453,9 +482,19 @@ export function validateChatToolWriteApprovalDecision(
 ): CodingWorkbenchValidationResult<ChatToolWriteApprovalDecision> {
   if (!isRecord(value)) return invalid("chatWriteDecision must be an object");
   const errors: string[] = [];
-  validateKeys(value, ["decision", "actionDigest"], errors, "chatWriteDecision");
+  const excluded = Object.hasOwn(value, "excludedItemRefs");
+  validateKeys(
+    value,
+    excluded ? ["decision", "actionDigest", "excludedItemRefs"] : ["decision", "actionDigest"],
+    errors,
+    "chatWriteDecision",
+  );
   if (value.decision !== "approve" && value.decision !== "reject")
     errors.push("chatWriteDecision.decision is invalid");
+  if (excluded) {
+    validateExcludedItemRefs(value.excludedItemRefs, "chatWriteDecision.excludedItemRefs", errors);
+    if (value.decision !== "approve") errors.push("chatWriteDecision.decision is invalid");
+  }
   validateDigest(value.actionDigest, "chatWriteDecision.actionDigest", errors);
   return result(value, errors);
 }

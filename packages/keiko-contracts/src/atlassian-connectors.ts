@@ -579,6 +579,8 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   "jira.assign": "assign-issue",
   "jira.comment": "add-issue-comment",
   "jira.transition": "transition-issue",
+  // A draft only creates issues: it is governed exactly like one create.
+  "jira.draft": "create-issue",
 });
 function jiraReadActionValues<Value extends string>(
   value: Value,
@@ -1529,6 +1531,11 @@ export {
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";
 export {
+  JIRA_DRAFT_ITEMS_MAX,
+  JIRA_DRAFT_ITEM_STATES,
+  JIRA_DRAFT_REF_PATTERN,
+  isJiraDraftRef,
+  type JiraDraftItemState,
   JIRA_MUTATION_OPERATIONS,
   JIRA_MUTATION_OUTCOMES,
   JIRA_MUTATION_RESULT_STATES,

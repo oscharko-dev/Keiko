@@ -59,3 +59,50 @@ describe("concrete Jira Chat write approval", () => {
     expect(validateChatToolWriteApprovalDecision({ ...value, actor: "caller" }).ok).toBe(false);
   });
 });
+
+describe("backlog draft deselection (#4178)", () => {
+  const draft = { ...approval(), operation: "jira.draft" as const };
+  it("carries the deselected draft items on a draft approval only", () => {
+    const value = { ...draft, state: "approved" as const, excludedItemRefs: ["task-2", "bug_1"] };
+    expect(validateChatToolWriteApprovalView(value)).toEqual({ ok: true, value });
+    expect(validateChatToolWriteApprovalView({ ...value, operation: "jira.create" }).ok).toBe(
+      false,
+    );
+  });
+  it.each([
+    ["not an array", "task"],
+    ["an invalid reference", ["1task"]],
+    ["a duplicate", ["a", "a"]],
+    ["too many", Array.from({ length: 33 }, (_, index) => `r${String(index)}`)],
+  ])("refuses a deselection that is %s", (_name, excludedItemRefs) => {
+    expect(validateChatToolWriteApprovalView({ ...draft, excludedItemRefs }).ok).toBe(false);
+    expect(
+      validateChatToolWriteApprovalDecision({
+        decision: "approve",
+        actionDigest: "b".repeat(64),
+        excludedItemRefs,
+      }).ok,
+    ).toBe(false);
+  });
+  it("accepts a deselection only with an approval decision", () => {
+    const value = { decision: "approve", actionDigest: "b".repeat(64), excludedItemRefs: ["a"] };
+    expect(validateChatToolWriteApprovalDecision(value)).toEqual({ ok: true, value });
+    expect(validateChatToolWriteApprovalDecision({ ...value, decision: "reject" }).ok).toBe(false);
+  });
+  it("never accepts a deselection on a configured MCP approval", () => {
+    const mcp = {
+      kind: "mcp-chat-write",
+      approvalId: "approval-1",
+      chatId: "chat-1",
+      configurationDigest: "c".repeat(64),
+      invocationId: "action-1",
+      operation: "tool",
+      actionDigest: "a".repeat(64),
+      requestedAt: 1700000000000,
+      expiresAt: 1700000600000,
+      state: "pending",
+    };
+    expect(validateChatToolWriteApprovalView(mcp).ok).toBe(true);
+    expect(validateChatToolWriteApprovalView({ ...mcp, excludedItemRefs: [] }).ok).toBe(false);
+  });
+});

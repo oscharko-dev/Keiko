@@ -321,6 +321,8 @@ function mutationGuard(
           action,
           beforeMutation: (): boolean => {
             if (!check()) return false;
+            // One approval covers one action; a backlog draft dispatches its items under it (#4178).
+            if (claim !== undefined) return true;
             const result = claimJiraChatWrite(options, action);
             if (!result.ok) return false;
             claim = result.claim;

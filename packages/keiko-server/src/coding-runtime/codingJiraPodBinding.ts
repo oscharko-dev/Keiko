@@ -37,12 +37,16 @@ export const CODING_JIRA_SERVER_NAME = "jira";
 
 export type CodingJiraTool =
   (typeof JIRA_MANAGED_READ_TOOLS)[number] | (typeof JIRA_MUTATION_OPERATIONS)[number];
+/** A backlog draft (#4178) is reviewed as a tree in Chat; Coding runs create issues one by one. */
+const CODING_JIRA_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
+  (operation) => operation !== "jira.draft",
+);
 
 /** Reads are the human's grant; writes keep following the run's autonomy mode. */
 export const CODING_JIRA_TOOL_RISKS: Readonly<Record<string, McpToolRisk>> = Object.freeze(
   Object.fromEntries([
     ...JIRA_MANAGED_READ_TOOLS.map((tool): [string, McpToolRisk] => [tool, "read"]),
-    ...JIRA_MUTATION_OPERATIONS.map((tool): [string, McpToolRisk] => [tool, "write"]),
+    ...CODING_JIRA_MUTATIONS.map((tool): [string, McpToolRisk] => [tool, "write"]),
   ]),
 );
 

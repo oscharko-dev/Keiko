@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "680f9b0d2a54be22fcdefff02530e94ac50f141256fe88d6057049b47a64cca8",
+    "catalogDigest": "35fab5c9a7842e9549f82293a4bf29a1fdaffddb65f4a8e76ecc9d5b9ef6fd2b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -9872,8 +9872,8 @@
         "failureClasses": ["coding-runtime-jira-pod"],
         "proofIds": ["coding-runtime.jira-pod.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:174",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:267"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:178",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:271"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -106143,7 +106143,7 @@
     {
       "op": "coding-runtime.jira-pod",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:177",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:181",
       "package": "keiko-server"
     },
     {
@@ -107892,6 +107892,13 @@
       "op": "invalidation-failed",
       "category": "memory",
       "site": "packages/keiko-server/src/memory-embedding.ts:517",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.mutation-execution-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:154",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {

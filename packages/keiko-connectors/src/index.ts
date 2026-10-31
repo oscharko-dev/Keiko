@@ -190,3 +190,16 @@ export {
 } from "./jira-managed-tools.js";
 export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
 export { JIRA_ISSUE_LINKS_MAX } from "./jira-issue-links.js";
+export {
+  JIRA_DRAFT_IDENTITY_PREFIX,
+  excludedJiraDraftRefs,
+  jiraDraftDependencies,
+  jiraDraftIdentity,
+  parseJiraDraft,
+  type JiraDraft,
+  type JiraDraftItem,
+  type JiraDraftLink,
+  type JiraDraftParent,
+} from "./jira-draft.js";
+export { executeJiraDraftItem, findJiraDraftItem } from "./jira-managed-mutations.js";
+export { jiraBrowseUrl } from "./jira-browse-url.js";

@@ -7,8 +7,37 @@ export const JIRA_MUTATION_OPERATIONS = [
   "jira.assign",
   "jira.comment",
   "jira.transition",
+  "jira.draft",
 ] as const;
 export type JiraMutationOperation = (typeof JIRA_MUTATION_OPERATIONS)[number];
+
+/**
+ * A backlog draft (#4178): related issues proposed together, approved once, created in dependency
+ * order. Each item runs as its own journaled `jira.create`; the draft itself is never dispatched.
+ */
+// Every item is one journaled write, and the Chat journal admits at most 32 writes per turn.
+export const JIRA_DRAFT_ITEMS_MAX = 32;
+/** A model-chosen local reference that relations between draft items use before keys exist. */
+export const JIRA_DRAFT_REF_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,31}$";
+const DRAFT_REF = new RegExp(JIRA_DRAFT_REF_PATTERN, "u");
+export function isJiraDraftRef(value: unknown): value is string {
+  return typeof value === "string" && DRAFT_REF.test(value);
+}
+/**
+ * created: Jira acknowledged this item's create; existing: an issue with this item's draft
+ * identity already existed, so nothing was sent; failed: refused before or by Jira; uncertain:
+ * sent without an authoritative outcome (never retried automatically); skipped: an item it depends
+ * on did not produce a key; excluded: deselected by the human, directly or through a dependency.
+ */
+export const JIRA_DRAFT_ITEM_STATES = [
+  "created",
+  "existing",
+  "failed",
+  "uncertain",
+  "skipped",
+  "excluded",
+] as const;
+export type JiraDraftItemState = (typeof JIRA_DRAFT_ITEM_STATES)[number];
 /** Rejected means a known local refusal before dispatch; non-2xx status alone remains unknown. */
 export const JIRA_MUTATION_OUTCOMES = [
   "not-dispatched",
