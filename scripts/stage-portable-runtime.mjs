@@ -1656,20 +1656,31 @@ function stageLauncher(target, stageRoot, resourceRoot, options, hooks) {
   stageSupportLauncher(target, stageRoot);
 }
 
+// Builds a native executable at its fixed payload path and admits only a single-link regular file.
+function buildFixedNativeExecutable(resourceRoot, executablePath, build, label) {
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  build(destination);
+  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
+  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail(`${label} build did not produce the fixed executable`);
+  }
+  chmodLauncher(destination);
+  return { destination, entry };
+}
+
 function secureReadExecutablePath(target) {
   return `runtime/native/${SECURE_READ_NAME}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
 function stageSecureReadHelper(target, resourceRoot, options, hooks) {
   const executablePath = secureReadExecutablePath(target);
-  const destination = join(resourceRoot, ...executablePath.split("/"));
-  mkdirSync(dirname(destination), { recursive: true });
-  (hooks.buildSecureReadHelper ?? buildSecureReadHelper)(target, destination);
-  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
-  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
-    fail("secure workspace read helper build did not produce the fixed executable");
-  }
-  chmodLauncher(destination);
+  const { destination, entry } = buildFixedNativeExecutable(
+    resourceRoot,
+    executablePath,
+    (path) => (hooks.buildSecureReadHelper ?? buildSecureReadHelper)(target, path),
+    "secure workspace read helper",
+  );
   const unsignedSha256 = createHash("sha256").update(readFileSync(destination)).digest("hex");
   return nativeHelperMetadata({
     executablePath,
@@ -1704,9 +1715,8 @@ function provisionedUsearchRuntime(target) {
   return { approved, sourceBinary, sourceLicense };
 }
 
-function stageUsearchFiles(resourceRoot, runtime, copyFile) {
-  const executablePath = "runtime/native/usearch.node";
-  const licensePath = "runtime/licenses/usearch/LICENSE";
+// Copies a provisioned native binary and its license into the payload at their fixed paths.
+function stageProvisionedNativeFiles(resourceRoot, runtime, copyFile, executablePath, licensePath) {
   const destination = join(resourceRoot, ...executablePath.split("/"));
   const licenseDestination = join(resourceRoot, ...licensePath.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
@@ -1715,6 +1725,16 @@ function stageUsearchFiles(resourceRoot, runtime, copyFile) {
   copyFile(runtime.sourceLicense, licenseDestination);
   chmodLauncher(destination);
   return { destination, executablePath, licensePath };
+}
+
+function stageUsearchFiles(resourceRoot, runtime, copyFile) {
+  return stageProvisionedNativeFiles(
+    resourceRoot,
+    runtime,
+    copyFile,
+    "runtime/native/usearch.node",
+    "runtime/licenses/usearch/LICENSE",
+  );
 }
 
 function failUsearchStaging(onFailure, message) {
@@ -1792,16 +1812,13 @@ function provisionedRipgrepRuntime(target) {
 }
 
 function stageRipgrepFiles(resourceRoot, runtime, copyFile) {
-  const executablePath = ripgrepPortableExecutablePath(runtime.approved.targetKey);
-  const licensePath = RIPGREP_PORTABLE_LICENSE_PATH;
-  const destination = join(resourceRoot, ...executablePath.split("/"));
-  const licenseDestination = join(resourceRoot, ...licensePath.split("/"));
-  mkdirSync(dirname(destination), { recursive: true });
-  mkdirSync(dirname(licenseDestination), { recursive: true });
-  copyFile(runtime.sourceBinary, destination);
-  copyFile(runtime.sourceLicense, licenseDestination);
-  chmodLauncher(destination);
-  return { destination, executablePath, licensePath };
+  return stageProvisionedNativeFiles(
+    resourceRoot,
+    runtime,
+    copyFile,
+    ripgrepPortableExecutablePath(runtime.approved.targetKey),
+    RIPGREP_PORTABLE_LICENSE_PATH,
+  );
 }
 
 function failRipgrepStaging(onFailure, message) {
@@ -1913,14 +1930,12 @@ function runtimeSupervisorExecutablePath(target) {
 
 function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
   const executablePath = runtimeSupervisorExecutablePath(target);
-  const destination = join(resourceRoot, ...executablePath.split("/"));
-  mkdirSync(dirname(destination), { recursive: true });
-  (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
-  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
-  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
-    fail("runtime supervisor build did not produce the fixed executable");
-  }
-  chmodLauncher(destination);
+  const { destination, entry } = buildFixedNativeExecutable(
+    resourceRoot,
+    executablePath,
+    (path) => (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, path),
+    "runtime supervisor",
+  );
   if (target.nodePlatform === "darwin") validateMacosRuntimeSupervisorSurface(destination);
   const unsignedSha256 = createHash("sha256").update(readFileSync(destination)).digest("hex");
   const source = runtimeSupervisorSource(target);

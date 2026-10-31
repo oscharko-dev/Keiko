@@ -340,6 +340,59 @@ describe("collective public parser structural roots (#3918)", () => {
   }, 30_000);
 });
 
+// The enforced repository run refuses the unbound consumer and keeps its raw slot enforced.
+async function expectUnboundConsumerEnforced(own) {
+  const report = await executeCodeQualityPolicy({ scope: "repository", mode: "enforce" }, own.root);
+  expect(report.enforcementOutcome).toBe("failed");
+  expect(report.responsibilities.assessments[0].reasons).toContain(
+    "unbound-responsibility-consumer",
+  );
+  expect(report.adaptations).toEqual([]);
+  expect(report.violations.length).toBeGreaterThan(0);
+  expect(report.responsibilities.counts.qualified).toBe(0);
+}
+
+// Both records are structurally ready and statically clean, yet the qualifying CLI run exits 1
+// with `finding` and never reports a passed outcome.
+async function expectStaticReadyButSemanticRefused(own, finding) {
+  const staticReport = await executeCodeQualityPolicy(
+    { mode: "enforce", scope: "repository", json: true },
+    own.root,
+  );
+  expect(staticReport.violations).toEqual([]);
+  expect(staticReport.enforcementOutcome).toBe("passed");
+  expect(staticReport.responsibilities.counts).toMatchObject({
+    ready: 2,
+    qualified: 0,
+    pending: 2,
+  });
+  const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    expect(await codeQualityPolicyMain(["--json", "--qualify-responsibilities"], own.root)).toBe(1);
+    expect(stdout.mock.calls.join(" ")).not.toContain('"outcome":"passed"');
+    expect(stderr.mock.calls.join(" ")).toContain(finding);
+  } finally {
+    stdout.mockRestore();
+    stderr.mockRestore();
+  }
+  return staticReport;
+}
+
+// Collects the fixture subject and lets `inspect` read one proof resolver over the record's proofs,
+// closing it whatever `inspect` does.
+async function withProofResolver(own, owner, inspect) {
+  roots.push(own.root);
+  const subject = await collectPolicySubject(own.root);
+  const resolver = createSymbolResolver(subject, {}, [{ owner, paths: own.record.proofs }]);
+  try {
+    await inspect(resolver);
+  } finally {
+    resolver.close();
+  }
+  return subject;
+}
+
 function responsibilityOwnerCensus(report) {
   const native = report.census.filter(({ path }) => path.startsWith("native/"));
   expect(native.filter(({ rule }) => rule === "anti-slop/no-runtime-typeof")).toHaveLength(9);
@@ -901,17 +954,7 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
       'import { validate } from "alpha/runtime"; export function decoy(input: number): number { const result = validate(input); if (!result.ok) throw new TypeError("invalid"); return result.value; } export function consume(input: number): number { return input; }',
     );
     emitSymbolFixture(own.root, "packages/beta");
-    const report = await executeCodeQualityPolicy(
-      { scope: "repository", mode: "enforce" },
-      own.root,
-    );
-    expect(report.enforcementOutcome).toBe("failed");
-    expect(report.responsibilities.assessments[0].reasons).toContain(
-      "unbound-responsibility-consumer",
-    );
-    expect(report.adaptations).toEqual([]);
-    expect(report.violations.length).toBeGreaterThan(0);
-    expect(report.responsibilities.counts.qualified).toBe(0);
+    await expectUnboundConsumerEnforced(own);
   }, 60_000);
 
   it.each(["alias", "callback", "namespace", "reexport", "arrow", "expression"])(
@@ -958,17 +1001,7 @@ describe("v2 static enforcement keeps combined semantic qualification pending (#
       const own = createCrossOwnerEnforcementFixture();
       roots.push(own.root);
       replaceConsumerCallFixture(own, variant);
-      const report = await executeCodeQualityPolicy(
-        { scope: "repository", mode: "enforce" },
-        own.root,
-      );
-      expect(report.enforcementOutcome).toBe("failed");
-      expect(report.responsibilities.assessments[0].reasons).toContain(
-        "unbound-responsibility-consumer",
-      );
-      expect(report.adaptations).toEqual([]);
-      expect(report.violations.length).toBeGreaterThan(0);
-      expect(report.responsibilities.counts.qualified).toBe(0);
+      await expectUnboundConsumerEnforced(own);
     },
     60_000,
   );
@@ -1484,17 +1517,10 @@ describe("public diagnostic proof controls (#3918)", () => {
   });
   it("compiles the foreign owning proof before refusing diagnostic ownership", async () => {
     const own = createForeignDiagnosticFixture();
-    roots.push(own.root);
-    const subject = await collectPolicySubject(own.root);
-    const resolver = createSymbolResolver(subject, {}, [
-      { owner: "packages/beta", paths: own.record.proofs },
-    ]);
-    try {
+    const subject = await withProofResolver(own, "packages/beta", (resolver) => {
       expect(resolver.resolveProofConsumer(own.record.consumer).identities[0].owner).toBe("beta");
       expect(resolver.resolveProofExport(own.record.input).identities[0].owner).toBe("alpha");
-    } finally {
-      resolver.close();
-    }
+    });
     const report = assessPolicyResponsibilities(subject, own.policy);
     expect(report.assessments[0].reasons).toContain("foreign-responsibility-owner");
     expect(report.counts.qualified).toBe(0);
@@ -1764,33 +1790,19 @@ describe("closed public parser responsibility (#3918)", () => {
 describe("public parser owner and export refusal (#3918)", () => {
   it("compiles the genuine foreign proof before refusing its owner", async () => {
     const own = createPublicParserFixture("foreign-proof");
-    roots.push(own.root);
-    const subject = await collectPolicySubject(own.root);
-    const resolver = createSymbolResolver(subject, {}, [
-      { owner: "packages/beta", paths: own.record.proofs },
-    ]);
-    try {
+    const subject = await withProofResolver(own, "packages/beta", (resolver) => {
       expect(resolver.resolveProofConsumer(own.record.consumer).identities[0].owner).toBe("beta");
       expect(resolver.resolveProofExport(own.record.input).identities[0].owner).toBe("alpha");
-    } finally {
-      resolver.close();
-    }
+    });
     expect(assessPolicyResponsibilities(subject, own.policy).assessments[0].reasons).toContain(
       "foreign-responsibility-owner",
     );
   });
   it("refuses a type-only public entry with a type-correct proof", async () => {
     const own = createPublicParserFixture("type-only");
-    roots.push(own.root);
-    const subject = await collectPolicySubject(own.root);
-    const resolver = createSymbolResolver(subject, {}, [
-      { owner: "packages/alpha", paths: own.record.proofs },
-    ]);
-    try {
+    const subject = await withProofResolver(own, "packages/alpha", (resolver) => {
       expect(resolver.resolveProofConsumer(own.record.consumer).signatures).toHaveLength(1);
-    } finally {
-      resolver.close();
-    }
+    });
     expect(assessPolicyResponsibilities(subject, own.policy).assessments[0].structural).toBe(
       "incomplete",
     );
@@ -1802,17 +1814,10 @@ describe("public parser canonical producer premises (#3918)", () => {
     "keeps %s producer unsupported without raw slots",
     async (variant) => {
       const own = createPublicParserFixture(variant);
-      roots.push(own.root);
-      const subject = await collectPolicySubject(own.root);
-      const resolver = createSymbolResolver(subject, {}, [
-        { owner: "packages/alpha", paths: own.record.proofs },
-      ]);
-      try {
+      const subject = await withProofResolver(own, "packages/alpha", (resolver) => {
         expect(resolver.resolveProofConsumer(own.record.consumer).signatures).toHaveLength(1);
         expect(resolver.resolveProofExport(own.record.input).signatures).toHaveLength(1);
-      } finally {
-        resolver.close();
-      }
+      });
       const report = assessPolicyResponsibilities(subject, own.policy);
       expect(report.assessments[0].structural).toBe("incomplete");
       expect(report.assessments[0].slots).toEqual([]);
@@ -2119,32 +2124,12 @@ describe("collective public parser actual CLI qualification (#3918)", () => {
     "preserves structural applicability and fails whole semantic qualification for %s",
     async (variant) => {
       const own = await collectiveSemanticFixture(variant);
-      const staticReport = await executeCodeQualityPolicy(
-        { mode: "enforce", scope: "repository", json: true },
-        own.root,
+      await expectStaticReadyButSemanticRefused(
+        own,
+        variant.endsWith("unsafe")
+          ? "semantic-proof-execution-failed"
+          : "semantic-proof-assertion-missing",
       );
-      expect(staticReport.violations).toEqual([]);
-      expect(staticReport.enforcementOutcome).toBe("passed");
-      expect(staticReport.responsibilities.counts).toMatchObject({
-        ready: 2,
-        qualified: 0,
-        pending: 2,
-      });
-      const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
-      const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
-      try {
-        expect(
-          await codeQualityPolicyMain(["--json", "--qualify-responsibilities"], own.root),
-        ).toBe(1);
-        expect(stderr.mock.calls.join(" ")).toContain(
-          variant.endsWith("unsafe")
-            ? "semantic-proof-execution-failed"
-            : "semantic-proof-assertion-missing",
-        );
-      } finally {
-        stdout.mockRestore();
-        stderr.mockRestore();
-      }
     },
     195_000,
   );
@@ -2193,39 +2178,16 @@ describe("collective public parser actual CLI qualification (#3918)", () => {
     "returns a real nonzero CLI verdict for %s despite complete structural applicability",
     async (variant) => {
       const own = await collectiveSemanticFixture(variant);
-      const staticReport = await executeCodeQualityPolicy(
-        { mode: "enforce", scope: "repository", json: true },
-        own.root,
+      const staticReport = await expectStaticReadyButSemanticRefused(
+        own,
+        variant === "unsafe"
+          ? "semantic-proof-execution-failed"
+          : "semantic-proof-assertion-missing",
       );
       expect(staticReport.responsibilities.assessments.map((record) => record.reasons)).toEqual([
         [],
         [],
       ]);
-      expect(staticReport.violations).toEqual([]);
-      expect(staticReport.enforcementOutcome).toBe("passed");
-      expect(staticReport.responsibilities.counts).toMatchObject({
-        ready: 2,
-        qualified: 0,
-        pending: 2,
-      });
-      const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
-      const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
-      try {
-        const code = await codeQualityPolicyMain(
-          ["--json", "--qualify-responsibilities"],
-          own.root,
-        );
-        expect(code).toBe(1);
-        expect(stdout.mock.calls.join(" ")).not.toContain('"outcome":"passed"');
-        expect(stderr.mock.calls.join(" ")).toContain(
-          variant === "unsafe"
-            ? "semantic-proof-execution-failed"
-            : "semantic-proof-assertion-missing",
-        );
-      } finally {
-        stdout.mockRestore();
-        stderr.mockRestore();
-      }
     },
     195_000,
   );
@@ -2656,12 +2618,7 @@ describe("within-call role resolution deduplication", () => {
   );
   it("keeps proof consumers separate and normal-mode selectors cold across calls", async () => {
     const own = createDiagnosticFixture();
-    roots.push(own.root);
-    const subject = await collectPolicySubject(own.root);
-    const resolver = createSymbolResolver(subject, {}, [
-      { owner: "packages/alpha", paths: own.record.proofs },
-    ]);
-    try {
+    await withProofResolver(own, "packages/alpha", (resolver) => {
       const proof = vi.spyOn(resolver, "resolveProofExport");
       const consumer = vi.spyOn(resolver, "resolveProofConsumer");
       const normal = vi.spyOn(resolver, "resolveExport");
@@ -2673,9 +2630,7 @@ describe("within-call role resolution deduplication", () => {
       expect(() => resolveRoles(resolver, { ...own.record, kind: "validator" })).toThrow();
       expect(normal).toHaveBeenCalledTimes(1);
       expect(proof).toHaveBeenCalledTimes(1);
-    } finally {
-      resolver.close();
-    }
+    });
   });
   it("refuses changed source and missing exports after a successful role resolution", async () => {
     const own = createResponsibilityFixture();

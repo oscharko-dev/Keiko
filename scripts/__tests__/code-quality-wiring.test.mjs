@@ -72,6 +72,75 @@ function contractsAssertionFixture() {
   return root;
 }
 
+// A public forwarding proof record: its input is the transform's first parameter, the transform is
+// its output, and the consumer is the public proof that imports it.
+function expectPublicApiProofRecord(record) {
+  expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
+  expect(record.transform).toEqual(record.output);
+  expect(record.consumer).toMatchObject({
+    consumerPath: record.input.consumerPath,
+    specifier: record.input.specifier,
+    kind: "public-api-proof",
+    owner: record.owner,
+  });
+}
+
+// Every proof and every named proof assertion lives in the consumer's own test file.
+function expectConsumerOwnedProofs(record) {
+  expect(record.proofs).toEqual([record.input.consumerPath]);
+  for (const assertion of record.proofAssertions) {
+    expect(assertion.path).toBe(record.input.consumerPath);
+    expect(assertion.testName.length).toBeGreaterThan(0);
+  }
+}
+
+// Every named proof assertion names a test file the record lists as a proof.
+function expectProofAssertionsListed(record) {
+  for (const assertion of record.proofAssertions) {
+    expect(record.proofs).toContain(assertion.path);
+    expect(assertion.testName.length).toBeGreaterThan(0);
+  }
+}
+
+// Writes the original source and returns the contracts scope and the real policy, in which `id` is
+// active in exactly the contracts scope.
+async function contractsRuleScope(root, path, original, id) {
+  writeFileSync(join(root, path), original);
+  const inventory = await collectPolicyInventory(root);
+  const scope = selectPolicyScope(inventory.files, CONTRACTS_SCOPE, false);
+  const policy = JSON.parse(readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"));
+  expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
+  return { scope, policy };
+}
+
+// One activation proof: the rule reports exactly the appended finding, only once it is active in
+// the contracts scope, and the restored source is clean again.
+async function expectOutsideCoordinateActivation({ root, path, original, id, appended }) {
+  const { scope, policy } = await contractsRuleScope(root, path, original, id);
+  const inactive = structuredClone(policy);
+  inactive.rules.find((rule) => rule.id === id).activeScopes = [];
+  try {
+    writeFileSync(join(root, path), original + appended);
+    const scan = runNativePolicy(root, scope.files);
+    expect(scan.visited).toBe(scope.files.length);
+    const introduced = scan.diagnostics.filter(
+      (finding) => finding.rule === id && finding.path === path,
+    );
+    expect(introduced).toHaveLength(1);
+    const baseline = assessPolicyDiagnostics(scan.diagnostics, scope.files, inactive);
+    const activated = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
+    expect(baseline.census).toEqual(activated.census);
+    expect(baseline.violations.filter((finding) => finding.rule === id)).toEqual([]);
+    expect(activated.violations.filter((finding) => finding.rule === id)).toEqual(introduced);
+  } finally {
+    writeFileSync(join(root, path), original);
+  }
+  const restored = runNativePolicy(root, scope.files);
+  expect(restored.visited).toBe(scope.files.length);
+  expect(restored.diagnostics.filter((finding) => finding.rule === id)).toEqual([]);
+  expect(assessPolicyDiagnostics(restored.diagnostics, scope.files, policy).violations).toEqual([]);
+}
+
 describe("production code-quality invocation wiring (#3915)", () => {
   it("keeps synthetic fixture scope projection separate from the real contracts policy", () => {
     const production = JSON.parse(read("scripts/code-quality-policy.json"));
@@ -121,11 +190,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     const root = contractsAssertionFixture();
     const path = "packages/alpha/src/index.ts";
     const original = read("packages/keiko-contracts/src/memory-fixtures.ts");
-    writeFileSync(join(root, path), original);
-    const inventory = await collectPolicyInventory(root);
-    const scope = selectPolicyScope(inventory.files, CONTRACTS_SCOPE, false);
-    const policy = JSON.parse(readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"));
-    expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
+    const { scope, policy } = await contractsRuleScope(root, path, original, id);
     const assess = () => {
       const scan = runNativePolicy(root, scope.files);
       expect(scan.visited).toBe(scope.files.length);
@@ -151,40 +216,14 @@ describe("production code-quality invocation wiring (#3915)", () => {
     const root = contractsAssertionFixture();
     const path = "packages/alpha/src/index.ts";
     const original = read("packages/keiko-contracts/src/memory-fixtures.ts");
-    writeFileSync(join(root, path), original);
-    const inventory = await collectPolicyInventory(root);
-    const scope = selectPolicyScope(inventory.files, CONTRACTS_SCOPE, false);
-    const policy = JSON.parse(readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"));
-    const id = "anti-slop/no-reflect-get";
-    expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
-    const inactive = structuredClone(policy);
-    inactive.rules.find((rule) => rule.id === id).activeScopes = [];
-    try {
-      writeFileSync(
-        join(root, path),
-        original +
-          "\nexport function outsideObservation(value: object, key: PropertyKey): unknown { return Reflect.get(value, key); }\n",
-      );
-      const scan = runNativePolicy(root, scope.files);
-      expect(scan.visited).toBe(scope.files.length);
-      const introduced = scan.diagnostics.filter(
-        (finding) => finding.rule === id && finding.path === path,
-      );
-      expect(introduced).toHaveLength(1);
-      const baseline = assessPolicyDiagnostics(scan.diagnostics, scope.files, inactive);
-      const activated = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
-      expect(baseline.census).toEqual(activated.census);
-      expect(baseline.violations.filter((finding) => finding.rule === id)).toEqual([]);
-      expect(activated.violations.filter((finding) => finding.rule === id)).toEqual(introduced);
-    } finally {
-      writeFileSync(join(root, path), original);
-    }
-    const restored = runNativePolicy(root, scope.files);
-    expect(restored.visited).toBe(scope.files.length);
-    expect(restored.diagnostics.filter((finding) => finding.rule === id)).toEqual([]);
-    expect(assessPolicyDiagnostics(restored.diagnostics, scope.files, policy).violations).toEqual(
-      [],
-    );
+    await expectOutsideCoordinateActivation({
+      root,
+      path,
+      original,
+      id: "anti-slop/no-reflect-get",
+      appended:
+        "\nexport function outsideObservation(value: object, key: PropertyKey): unknown { return Reflect.get(value, key); }\n",
+    });
   });
 
   it.each([
@@ -201,41 +240,16 @@ describe("production code-quality invocation wiring (#3915)", () => {
       suffix === "src/index.ts"
         ? read("packages/keiko-contracts/src/memory-fixtures.ts")
         : "export {};\n";
-    writeFileSync(join(root, path), original);
-    const inventory = await collectPolicyInventory(root);
-    const scope = selectPolicyScope(inventory.files, CONTRACTS_SCOPE, false);
-    const policy = JSON.parse(readFileSync(join(root, "scripts/code-quality-policy.json"), "utf8"));
-    const inactive = structuredClone(policy);
-    inactive.rules.find((rule) => rule.id === id).activeScopes = [];
-    try {
-      writeFileSync(
-        join(root, path),
-        original +
-          (id === "anti-slop/no-unknown-returns"
-            ? "\nexport function outsideReturn(value: unknown): unknown { return value; }\n"
-            : "\nexport function outsideObject(value: object): object { return value; }\n"),
-      );
-      const scan = runNativePolicy(root, scope.files);
-      expect(scan.visited).toBe(scope.files.length);
-      const introduced = scan.diagnostics.filter(
-        (finding) => finding.rule === id && finding.path === path,
-      );
-      expect(introduced).toHaveLength(1);
-      const baseline = assessPolicyDiagnostics(scan.diagnostics, scope.files, inactive);
-      const activated = assessPolicyDiagnostics(scan.diagnostics, scope.files, policy);
-      expect(baseline.census).toEqual(activated.census);
-      expect(baseline.violations.filter((finding) => finding.rule === id)).toEqual([]);
-      expect(activated.violations.filter((finding) => finding.rule === id)).toEqual(introduced);
-      expect(policy.rules.find((rule) => rule.id === id).activeScopes).toEqual([CONTRACTS_SCOPE]);
-    } finally {
-      writeFileSync(join(root, path), original);
-    }
-    const restored = runNativePolicy(root, scope.files);
-    expect(restored.visited).toBe(scope.files.length);
-    expect(restored.diagnostics.filter((finding) => finding.rule === id)).toEqual([]);
-    expect(assessPolicyDiagnostics(restored.diagnostics, scope.files, policy).violations).toEqual(
-      [],
-    );
+    await expectOutsideCoordinateActivation({
+      root,
+      path,
+      original,
+      id,
+      appended:
+        id === "anti-slop/no-unknown-returns"
+          ? "\nexport function outsideReturn(value: unknown): unknown { return value; }\n"
+          : "\nexport function outsideObject(value: object): object { return value; }\n",
+    });
   });
 
   it("retains genuine finite child failures with body-free status", async () => {
@@ -826,19 +840,9 @@ describe("Workbench question and research responsibility wiring (#3918)", () => 
           : ["anti-slop/no-object-parameters"]),
       ]);
       expect(record.input.parameterIndex).toBe(0);
-      expect(record.transform).toEqual(record.output);
-      expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
-      expect(record.consumer).toMatchObject({
-        consumerPath: record.input.consumerPath,
-        specifier: record.input.specifier,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
+      expectPublicApiProofRecord(record);
       expect(record.proofs).toContain(record.input.consumerPath);
-      for (const assertion of record.proofAssertions) {
-        expect(record.proofs).toContain(assertion.path);
-        expect(assertion.testName.length).toBeGreaterThan(0);
-      }
+      expectProofAssertionsListed(record);
     }
     expect(records[1].proofAssertions).toContainEqual({
       path: "packages/keiko-server/src/coding-runtime/productionCodingRuntimeQuestionPort.test.ts",
@@ -959,10 +963,7 @@ describe("complete production qualification owner", () => {
       testName:
         "Support optional registration mandatory consumer public: refuses malformed loss registration before mandatory classification",
     });
-    for (const assertion of record.proofAssertions) {
-      expect(record.proofs).toContain(assertion.path);
-      expect(assertion.testName.length).toBeGreaterThan(0);
-    }
+    expectProofAssertionsListed(record);
   });
 
   it("admits a constructed exact validator shape without claiming proof execution", () => {
@@ -1121,18 +1122,8 @@ describe("governance public parser wiring (#3918)", () => {
       expect(record.input.specifier).toBe(
         "@oscharko-dev/keiko-contracts/runtime/code-task-governance",
       );
-      expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
-      expect(record.transform).toEqual(record.output);
-      expect(record.consumer).toMatchObject({
-        consumerPath: record.input.consumerPath,
-        specifier: record.input.specifier,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      for (const assertion of record.proofAssertions) {
-        expect(record.proofs).toContain(assertion.path);
-        expect(assertion.testName.length).toBeGreaterThan(0);
-      }
+      expectPublicApiProofRecord(record);
+      expectProofAssertionsListed(record);
     }
     expect(records[0].proofAssertions).toContainEqual({
       path: "packages/keiko-server/src/coding-runtime/researchApprovalIssuance.test.ts",
@@ -1161,19 +1152,8 @@ describe("run control public parser wiring (#3918)", () => {
       expect(record.input.specifier).toBe(
         "@oscharko-dev/keiko-contracts/runtime/code-task-run-control",
       );
-      expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
-      expect(record.transform).toEqual(record.output);
-      expect(record.consumer).toMatchObject({
-        consumerPath: record.input.consumerPath,
-        specifier: record.input.specifier,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([record.input.consumerPath]);
-      for (const assertion of record.proofAssertions) {
-        expect(assertion.path).toBe(record.input.consumerPath);
-        expect(assertion.testName.length).toBeGreaterThan(0);
-      }
+      expectPublicApiProofRecord(record);
+      expectConsumerOwnedProofs(record);
     }
     expect(records[0].proofAssertions).toContainEqual({
       path: records[0].input.consumerPath,
@@ -1205,19 +1185,8 @@ describe("acceptance and auxiliary public parser wiring (#3918)", () => {
       "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary",
     ]);
     for (const record of records) {
-      expect(record.input).toEqual({ ...record.transform, parameterIndex: 0 });
-      expect(record.transform).toEqual(record.output);
-      expect(record.consumer).toMatchObject({
-        consumerPath: record.input.consumerPath,
-        specifier: record.input.specifier,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([record.input.consumerPath]);
-      for (const assertion of record.proofAssertions) {
-        expect(assertion.path).toBe(record.input.consumerPath);
-        expect(assertion.testName.length).toBeGreaterThan(0);
-      }
+      expectPublicApiProofRecord(record);
+      expectConsumerOwnedProofs(record);
     }
     expect(records[1].proofAssertions).toContainEqual({
       path: records[1].input.consumerPath,

@@ -29,6 +29,21 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+// The fixture's one declared boundary readies exactly one slot carrying `slotFlag`; without the
+// record's declaration (`removeDeclaration`) the same subject readies nothing.
+async function expectDeclaredBoundaryReadiness(own, slotFlag, removeDeclaration) {
+  roots.push(own.root);
+  const subject = await collectPolicySubject(own.root);
+  const ready = assessPolicyResponsibilities(subject, own.policy);
+  expect(ready.counts).toMatchObject({ ready: 1, pending: 1 });
+  expect(ready.assessments[0].slots).toHaveLength(1);
+  expect(ready.assessments[0].slots[0][slotFlag]).toBe(true);
+  const absent = structuredClone(own.policy);
+  removeDeclaration(absent);
+  expect(assessPolicyResponsibilities(subject, absent).counts.ready).toBe(0);
+  return subject;
+}
+
 async function installSemanticFixtureTools(own) {
   roots.push(own.root);
   await installResponsibilityFixtureTools(own);
@@ -319,15 +334,13 @@ describe("optional object validator responsibility (#3918)", () => {
 
   it("requires the new declaration and identical actual producer roles", async () => {
     const own = createObjectValidatorFixture();
-    roots.push(own.root);
-    const subject = await collectPolicySubject(own.root);
-    const ready = assessPolicyResponsibilities(subject, own.policy);
-    expect(ready.counts).toMatchObject({ ready: 1, pending: 1 });
-    expect(ready.assessments[0].slots).toHaveLength(1);
-    expect(ready.assessments[0].slots[0].rawObjectValidatorInput).toBe(true);
-    const absent = structuredClone(own.policy);
-    delete absent.responsibilities[0].rawObjectInput;
-    expect(assessPolicyResponsibilities(subject, absent).counts.ready).toBe(0);
+    const subject = await expectDeclaredBoundaryReadiness(
+      own,
+      "rawObjectValidatorInput",
+      (policy) => {
+        delete policy.responsibilities[0].rawObjectInput;
+      },
+    );
     const wrong = structuredClone(own.policy);
     wrong.responsibilities[0].output.exportName = "consume";
     const refused = assessPolicyResponsibilities(subject, wrong).assessments[0];
@@ -443,16 +456,13 @@ describe("raw metadata source responsibility (#3918)", () => {
   });
 
   it("requires the explicit metadata-source boundary instead of legacy observer grants", async () => {
-    const own = createMetadataSourceFixture();
-    roots.push(own.root);
-    const subject = await collectPolicySubject(own.root);
-    const ready = assessPolicyResponsibilities(subject, own.policy);
-    expect(ready.counts).toMatchObject({ ready: 1, pending: 1 });
-    expect(ready.assessments[0].slots).toHaveLength(1);
-    expect(ready.assessments[0].slots[0].rawMetadataSourceInput).toBe(true);
-    const absent = structuredClone(own.policy);
-    delete absent.responsibilities[0].metadataSourceInput;
-    expect(assessPolicyResponsibilities(subject, absent).counts.ready).toBe(0);
+    await expectDeclaredBoundaryReadiness(
+      createMetadataSourceFixture(),
+      "rawMetadataSourceInput",
+      (policy) => {
+        delete policy.responsibilities[0].metadataSourceInput;
+      },
+    );
   });
 
   it("keeps pending tagged observations out of both adaptation dispatch paths", () => {

@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { pathToFileURL, URL } from "node:url";
 import { join } from "node:path";
 import {
+  bindForeignBetaProof,
   createSymbolFixture,
   emitSymbolFixture,
   publicParserRecord,
@@ -1282,21 +1283,7 @@ export function createForeignDiagnosticFixture() {
 function configureForeignDiagnosticFixture(own) {
   configureDiagnosticFixture(own);
   const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
-  own.put("packages/beta/tsconfig.json", config);
-  own.put("packages/beta/package.json", {
-    name: "beta",
-    type: "module",
-    version: "0.0.0",
-    exports: { ".": { types: "./dist/owner.d.ts", import: "./dist/owner.js" } },
-  });
-  own.put("packages/beta/src/owner.ts", "export const healthy = true;\n");
-  own.put("packages/beta/src/proof.test.ts", diagnosticProofSource("direct"));
-  symlinkSync(join(own.root, "packages/beta"), join(own.root, "node_modules/beta"));
-  const path = "packages/beta/src/proof.test.ts";
-  for (const role of ["input", "transform", "output", "consumer"])
-    own.record[role].consumerPath = path;
-  own.record.consumer.owner = "beta";
-  own.record.proofs = [path];
+  bindForeignBetaProof(own, config, diagnosticProofSource("direct"));
   return own;
 }
 

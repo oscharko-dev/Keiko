@@ -4,7 +4,10 @@ import { fileURLToPath, URL } from "node:url";
 import { policyDigest } from "../lib/code-quality-inventory.mjs";
 import { NATIVE_EFFECT_RULES } from "../lib/code-quality-policy.mjs";
 import { isMainModule } from "../lib/is-main-module.mjs";
-import { executePolicyWithDiagnostics } from "./code-quality-wiring-smoke.mjs";
+import {
+  assertEnforcedRepositoryReport,
+  executePolicyWithDiagnostics,
+} from "./code-quality-wiring-smoke.mjs";
 
 function assertQualifiedRecord(assessment, record) {
   assert.deepEqual(
@@ -27,30 +30,10 @@ function assertQualifiedRecord(assessment, record) {
 }
 
 function assertRepositoryScope(report, policyBytes) {
-  assert.deepEqual(
-    {
-      outcome: report.outcome,
-      enforcementOutcome: report.enforcementOutcome,
-      mode: report.mode,
-      scope: report.scope,
-    },
-    {
-      outcome: "passed",
-      enforcementOutcome: "passed",
-      mode: "enforce",
-      scope: { id: "repository", partial: false },
-    },
-  );
+  assertEnforcedRepositoryReport(report, { outcome: "passed", packages: 27 });
   assert.equal(report.subject, report.inventory.subject);
   assert.match(report.subject, /^[a-f0-9]{40}$/u);
   assert.equal(report.policySha256, policyDigest(policyBytes));
-  assert.equal(report.counts.expected, report.counts.visited);
-  assert.equal(report.counts.visited, report.inventory.files.length);
-  assert.ok(report.counts.visited > 0);
-  assert.equal(report.counts.packages, 27);
-  assert.equal(report.pack.length, 27);
-  assert.equal(report.rules.length, 22);
-  assert.equal(report.counts.violations, 0);
   assert.deepEqual(report.violations, []);
 }
 

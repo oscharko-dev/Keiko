@@ -171,16 +171,21 @@ function configurePublicParserOwnership(own, variant, config) {
     }
   }
   if (variant !== "foreign-proof") return;
+  bindForeignBetaProof(own, config, publicParserProof("direct"), { files: ["dist"] });
+}
+
+// Moves the record's proof and consumer into a separate linked `beta` package that owns them.
+export function bindForeignBetaProof(own, config, proofSource, manifestFields = {}) {
   own.put("packages/beta/tsconfig.json", config);
   own.put("packages/beta/package.json", {
     name: "beta",
     type: "module",
     version: "0.0.0",
-    files: ["dist"],
+    ...manifestFields,
     exports: { ".": { types: "./dist/owner.d.ts", import: "./dist/owner.js" } },
   });
   own.put("packages/beta/src/owner.ts", "export const healthy = true;\n");
-  own.put("packages/beta/src/proof.test.ts", publicParserProof("direct"));
+  own.put("packages/beta/src/proof.test.ts", proofSource);
   symlinkSync(join(own.root, "packages/beta"), join(own.root, "node_modules/beta"));
   const path = "packages/beta/src/proof.test.ts";
   for (const role of ["input", "transform", "output", "consumer"])

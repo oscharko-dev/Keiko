@@ -65,7 +65,9 @@ export async function isolatedPolicyReport(repositoryRoot, timeout = 180_000, pr
   return JSON.parse(stdout);
 }
 
-export function assertFixturePolicyReport(report, policy) {
+// A complete enforced repository run: every inventoried file visited, `packages` packages packed,
+// all 22 rules applied and no violation.
+export function assertEnforcedRepositoryReport(report, { outcome, packages }) {
   assert.deepEqual(
     {
       outcome: report.outcome,
@@ -74,7 +76,7 @@ export function assertFixturePolicyReport(report, policy) {
       scope: report.scope,
     },
     {
-      outcome: "failed",
+      outcome,
       enforcementOutcome: "passed",
       mode: "enforce",
       scope: { id: "repository", partial: false },
@@ -83,10 +85,14 @@ export function assertFixturePolicyReport(report, policy) {
   assert.equal(report.counts.expected, report.counts.visited);
   assert.equal(report.counts.visited, report.inventory.files.length);
   assert.ok(report.counts.visited > 0);
-  assert.equal(report.counts.packages, 1);
-  assert.equal(report.pack.length, 1);
+  assert.equal(report.counts.packages, packages);
+  assert.equal(report.pack.length, packages);
   assert.equal(report.counts.violations, 0);
   assert.equal(report.rules.length, 22);
+}
+
+export function assertFixturePolicyReport(report, policy) {
+  assertEnforcedRepositoryReport(report, { outcome: "failed", packages: 1 });
   assertFixtureResponsibilities(report, policy);
 }
 

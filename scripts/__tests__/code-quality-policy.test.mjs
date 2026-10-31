@@ -53,6 +53,17 @@ function expectPublicParserPolicyMetadata(
   expect(record.proofAssertions).toHaveLength(assertionCount);
 }
 
+// Removing the record at `index`, or rebinding its consumer to `reboundExport`, shrinks the
+// reviewed responsibility set.
+function expectRemovalAndReboundRefused(index, reboundExport) {
+  for (const mode of ["removed", "rebound"]) {
+    const changed = structuredClone(policy);
+    if (mode === "removed") changed.responsibilities.splice(index, 1);
+    else changed.responsibilities[index].consumer.exportName = reboundExport;
+    expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
+  }
+}
+
 function expectResponsibilityRemovalRefused(record) {
   const removed = structuredClone(policy);
   removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
@@ -102,12 +113,7 @@ function registerAtlassianPublicParserPins(cases, title, prefix, reboundExport) 
       assertionCount: 3,
     });
     expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-    for (const mode of ["removed", "rebound"]) {
-      const changed = structuredClone(policy);
-      if (mode === "removed") changed.responsibilities.splice(index, 1);
-      else changed.responsibilities[index].consumer.exportName = reboundExport;
-      expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-    }
+    expectRemovalAndReboundRefused(index, reboundExport);
   });
 }
 
@@ -492,12 +498,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     expect(
       record.proofAssertions.slice(0, 15).every((proof) => proof.path === selector.consumerPath),
     ).toBe(true);
-    for (const variant of ["removed", "rebound"]) {
-      const changed = structuredClone(policy);
-      if (variant === "removed") changed.responsibilities.splice(8, 1);
-      else changed.responsibilities[8].consumer.exportName = "unreviewedConsumer";
-      expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-    }
+    expectRemovalAndReboundRefused(8, "unreviewedConsumer");
   });
 
   it.each(["Status", "Diff"])(
@@ -519,12 +520,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         assertionCount: kind === "Status" ? 6 : 3,
       });
       expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-      for (const variant of ["removed", "rebound"]) {
-        const changed = structuredClone(policy);
-        if (variant === "removed") changed.responsibilities.splice(index, 1);
-        else changed.responsibilities[index].consumer.exportName = "unreviewedParser";
-        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-      }
+      expectRemovalAndReboundRefused(index, "unreviewedParser");
     },
   );
 
@@ -554,12 +550,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         assertionCount: 3,
       });
       expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-      for (const mode of ["removed", "rebound"]) {
-        const changed = structuredClone(policy);
-        if (mode === "removed") changed.responsibilities.splice(index, 1);
-        else changed.responsibilities[index].consumer.exportName = "unreviewedParser";
-        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-      }
+      expectRemovalAndReboundRefused(index, "unreviewedParser");
     },
   );
 
@@ -589,12 +580,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         witness: consumer,
         assertionCount: 3,
       });
-      for (const mode of ["removed", "rebound"]) {
-        const changed = structuredClone(policy);
-        if (mode === "removed") changed.responsibilities.splice(index, 1);
-        else changed.responsibilities[index].consumer.exportName = "unreviewedCatalogParser";
-        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-      }
+      expectRemovalAndReboundRefused(index, "unreviewedCatalogParser");
     },
   );
 
@@ -625,12 +611,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         witness: consumer,
         assertionCount: 3,
       });
-      for (const mode of ["removed", "rebound"]) {
-        const changed = structuredClone(policy);
-        if (mode === "removed") changed.responsibilities.splice(index, 1);
-        else changed.responsibilities[index].consumer.exportName = "unreviewedMemoryParser";
-        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-      }
+      expectRemovalAndReboundRefused(index, "unreviewedMemoryParser");
     },
   );
 
