@@ -29,7 +29,7 @@ findings per (file, rule). It compares those counts with the committed register
 | A register entry names a deleted or renamed file      | Fails as stale until the register is pruned       |
 | An inline `oxlint-disable` directive or nested config | Rejected by the engine; it cannot hide a finding  |
 
-The second output line reports the total before and after, for example `register: 46517 → 45239 (-1278)`.
+The second output line reports the total before and after, for example `register: 46560 → 45282 (-1278)`.
 
 **How to fix a failure.**
 
@@ -53,7 +53,7 @@ The second output line reports the total before and after, for example `register
   register (`packages/keiko-ui/eslint-suppressions.json`).
 - The ratchet does not run the epic's responsibility qualifications. A green ratchet means "no new
   findings", not "this code is qualified" or "this rule is enforced".
-- The baseline on `dev` `d273b65c6` was 46,517 findings. Epic workstreams and ordinary `dev` work
+- The baseline on `dev` `6194949d5` was 46,560 findings. Epic workstreams and ordinary `dev` work
   prune the register; #3991 removes it at zero and activates full enforcement.
 
 ## Engine
