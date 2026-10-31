@@ -240,7 +240,28 @@ review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too
 rules read `abandoned/interrupted`. A Reviewer that fails with an exhausted prompt allowance or
 authority budget is `incomplete/budget-exhausted`, with an exhausted envelope duration
 `incomplete/deadline-exceeded`, otherwise `incomplete/model-failed`; its candidates are still
-counter-checked, and findings confirmed before an incomplete settlement are presented. The
+counter-checked, and findings confirmed before an incomplete settlement are presented. A Reviewer
+runtime run that settled `recovery-required` is such a failed Reviewer, with one exception (#4136):
+the orchestrator's `succeededTurnReapUnproven` names a run whose turn settled `succeeded` and whose
+settlement stop revoked every authority but could not prove the process tree's exit
+(`CodingRuntimeManager.succeededStopReapUnproven`). That is every macOS gateway-profile run, whose end
+ADR-0140 D3 leaves unproven because the profile has no sandbox member. That Reviewer's work
+finished, so the run settles on its coverage, verdicts and findings like any completed Reviewer
+(`complete`, or the incomplete reason they name). A crash, a lost stream, a cancellation, an
+exhausted budget or deadline, a missing verification, an incomplete revocation, a disposal or
+release failure after a proven reap and every other recovery keep `incomplete/model-failed`. The
+runtime stays recovery-required and quarantined exactly as before. The cleanup is a warning beside
+the settlement, never a settlement reason: the closed `runtimeCleanup` (`proven`, `unproven`; absent
+when no Reviewer run started) on `review.run.settled`, which is written at `warn` whenever it is
+`unproven`, on the run record (migration 56, `review_runs.runtime_cleanup`) and as the optional
+`runtimeCleanup` of `ReviewRunView` for the review UI. An instance whose orchestrator still holds
+such a run would refuse the next start, so the next review of the repository does not reuse it: the
+instance is set aside untouched (no early release, acknowledgement or shutdown; it stays quarantined
+until its own idle stop, and `release` does not end it) and a fresh instance is composed beside it,
+recorded as `placement: beside-quarantined` on `review.run.runtime-started`. One review per
+repository at a time still holds. At most one quarantined instance per repository: a review that
+would need a second one is refused as `runtime-unavailable` and settles `skipped/model-unavailable`.
+The
 Reviewer's diff budget is sized so the task always fits the 64 KiB first-prompt bound beside the
 largest admitted rules file (the gateway estimator counts at least one token per 3.5 bytes); a
 larger task is refused, never truncated. A record that cannot be written (a full disk) settles the
@@ -250,7 +271,7 @@ startup sweep removes its worktree. The stale flag compares the reviewed head wi
 request's current head from the read-only detail (cached 30 seconds), at settlement and on every
 read; it never changes the settlement.
 
-The run records live in the server store (migration 55): `review_runs` (one row per run; a partial
+The run records live in the server store (migrations 55 and 56): `review_runs` (one row per run; a partial
 unique index allows one unsettled run per repository, and the repository id and client request id
 are unique, so a repeated start returns the same run), `review_coverage` (path, list, closed reason)
 and `review_findings` (fingerprint, report, verdict, verdict evidence, head anchoring, presented

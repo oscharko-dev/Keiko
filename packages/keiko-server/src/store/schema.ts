@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 55;
+export const SCHEMA_VERSION = 56;
 
 interface Migration {
   readonly version: number;
@@ -1912,6 +1912,13 @@ export const MIGRATIONS: readonly Migration[] = [
       PRIMARY KEY (run_id, fingerprint),
       CHECK ((presented = 1) = (presentation_rank IS NOT NULL))
     ) STRICT;`,
+  },
+  {
+    version: 56,
+    // ADR-0182 D6 (#4136): whether the Reviewer runtime's end was proven, a warning beside the
+    // settlement. NULL when no Reviewer run started and for every run recorded before this column.
+    sql: `ALTER TABLE review_runs ADD COLUMN runtime_cleanup TEXT
+      CHECK (runtime_cleanup IS NULL OR runtime_cleanup IN ('proven','unproven'));`,
   },
 ];
 

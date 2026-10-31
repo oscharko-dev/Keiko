@@ -573,6 +573,14 @@ export interface CodingRuntimeManager {
     requestId: string,
   ): CodingWorkbenchRuntimePendingApprovalReview | undefined;
   result(runId: string): CodingRuntimeRunResult | undefined;
+  /**
+   * True only while the run is recovery-required on exactly one fact (#4136, ADR-0140 D3): its
+   * orderly stop of a succeeded turn revoked every authority, but the process tree's exit could not
+   * be proven (a macOS gateway-profile run has no sandbox member, so its end stays unproven). A
+   * crash, a failed or cancelled stop, an incomplete revocation and a disposal or release failure
+   * after a proven reap all answer false. The runtime stays quarantined either way.
+   */
+  succeededStopReapUnproven?(runId: string): boolean;
 }
 
 interface PreflightOk {
@@ -632,6 +640,8 @@ interface ActiveRuntime {
   stopResultStatus: CodingRuntimeTerminalStatus;
   /** The first teardown was a `stop()` call, not an unexpected exit or a reconcile. */
   orderlyStop?: boolean;
+  /** The orderly stop revoked every authority, then could not prove the tree's exit (#4136). */
+  treeExitUnproven?: boolean;
   stopRequested: boolean;
   /**
    * Set synchronously by the FIRST teardown initiator (stop/takeover/reconcile OR handleExit) so
@@ -922,6 +932,9 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.openCodeLifecycleAdapter?.beginStop?.(active.context.runId);
     const receipt = await this.revokeAndTerminate(active);
     if (receipt === undefined) {
+      // `revokeAndTerminate` withholds the receipt for an incomplete revocation too; only a
+      // complete one leaves the tree's unproven exit as the single failure.
+      active.treeExitUnproven = active.shutdownBarrierComplete;
       await this.enterRecoveryRequired(active);
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
@@ -978,6 +991,17 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
 
   public result(runId: string): CodingRuntimeRunResult | undefined {
     return this.lastResult?.runId === runId ? this.lastResult.result : undefined;
+  }
+
+  public succeededStopReapUnproven(runId: string): boolean {
+    const active = this.active;
+    return (
+      active?.context.runId === runId &&
+      active.status === "recovery-required" &&
+      active.orderlyStop === true &&
+      active.stopResultStatus === "succeeded" &&
+      active.treeExitUnproven === true
+    );
   }
 
   private setPaused(runId: string, paused: boolean): CodingRuntimePauseResult {

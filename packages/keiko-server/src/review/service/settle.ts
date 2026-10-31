@@ -108,6 +108,7 @@ function persist(
       candidateCount: rows.length,
       reviewer: state.reviewerTotals,
       counterChecker: state.counterCheckerTotals,
+      runtimeCleanup: state.runtimeCleanup,
     });
     return true;
   } catch (error) {
@@ -177,6 +178,7 @@ export async function settleRunRecord(
     counterChecker: state.counterCheckerTotals,
     durationMs: deps.now() - ctx.startedAt,
     stale,
+    runtimeCleanup: state.runtimeCleanup,
   });
   return { settlement, presentedCount };
 }

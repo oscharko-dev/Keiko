@@ -1,7 +1,9 @@
 // The Keiko for Quality review runtime service (ADR-0182 D1/D2/D4, Issue #4135).
 //
 // One review instance per repository, started on demand when a review starts and stopped after an
-// idle period (default five minutes). Each instance is its own composition of the coding runtime
+// idle period (default five minutes). An instance left holding a recovery-required run is set aside
+// quarantined until its own idle stop, and a fresh one serves the repository (at most one
+// quarantined instance per repository, #4136). Each instance is its own composition of the coding runtime
 // (`composition.ts`) with its own orchestrator and run slot, so it serves one review run at a time
 // and never touches the user's Coding Workbench run, active workspace, run list or history.
 //
@@ -38,6 +40,7 @@ import {
   logReviewRulesFile,
   logReviewRuntimeStarted,
   logReviewRuntimeStopped,
+  type ReviewRuntimePlacement,
   type ReviewRuntimeStopTrigger,
 } from "./activity-log.js";
 import type { ReviewRuntimeComposition } from "./composition.js";
@@ -88,6 +91,8 @@ export type ReviewRuntimeRunResult =
       readonly failureCode?: string | undefined;
       /** The Reviewer's prompt tokens and model turns as the runtime host accounted them (#4136). */
       readonly effort?: ReviewRunDriveOutcome["effort"];
+      /** Whether the runtime's end was proven; absent when no runtime run started (#4136). */
+      readonly runtimeCleanup?: ReviewRunDriveOutcome["runtimeCleanup"];
       readonly rules: ReviewRulesFileOutcome;
       /** SHA-256 of the loaded rules text (#4136 run record); absent without rules. */
       readonly rulesDigest?: string | undefined;
@@ -184,6 +189,7 @@ function authenticates(
 
 class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
   public readonly instances = new Map<string, LiveInstance>();
+  public readonly quarantined = new Map<string, LiveInstance>();
   public readonly reserved = new Set<string>();
   private readonly now: () => number;
   private readonly idleMs: number;
@@ -201,13 +207,13 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
     capability: string,
     audience: "model-gateway" | "tool-facade",
   ): ReviewRuntimeComposition | undefined {
-    return [...this.instances.values()].find((live) =>
+    return [...this.instances.values(), ...this.quarantined.values()].find((live) =>
       authenticates(live.composition, capability, audience),
     )?.composition;
   }
 
   public instanceCount(): number {
-    return this.instances.size;
+    return this.instances.size + this.quarantined.size;
   }
 
   public async release(repositoryRoot: string, correlationId?: string): Promise<void> {
@@ -216,9 +222,22 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
 
   public async dispose(correlationId?: string): Promise<void> {
     for (const key of this.instances.keys()) await this.stop(key, "shutdown", correlationId);
+    for (const [key, live] of this.quarantined) {
+      await this.stopLive(key, live, "shutdown", correlationId);
+    }
   }
 
-  public start(key: string, correlationId?: string): LiveInstance | undefined {
+  /** Sets a quarantined instance aside until its own idle stop; no review uses it again. */
+  public quarantine(key: string, live: LiveInstance): void {
+    this.instances.delete(key);
+    this.quarantined.set(key, live);
+  }
+
+  public start(
+    key: string,
+    correlationId?: string,
+    placement?: ReviewRuntimePlacement,
+  ): LiveInstance | undefined {
     const startedAt = this.now();
     const slot: LiveInstance["slot"] = { intake: undefined, pending: undefined };
     const composition = this.deps.compose(randomUUID(), reviewReportPortFor(slot));
@@ -237,6 +256,7 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
       correlationId,
       composition.instanceId,
       this.now() - startedAt,
+      placement,
     );
     return live;
   }
@@ -247,7 +267,7 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
     const setTimer =
       this.deps.setTimer ?? ((callback, ms): unknown => setTimeout(callback, ms).unref());
     live.timer = setTimer(() => {
-      void this.stop(key, "idle");
+      void this.stopLive(key, live, "idle");
     }, this.idleMs);
   }
 
@@ -257,8 +277,26 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
     correlationId?: string,
   ): Promise<void> {
     const live = this.instances.get(key);
-    if (live === undefined || live.busy || this.reserved.has(key)) return;
-    this.instances.delete(key);
+    if (live !== undefined) await this.stopLive(key, live, trigger, correlationId);
+  }
+
+  /**
+   * Stops exactly `live`. The repository's serving instance is left alone while a review holds or
+   * is about to use it; a quarantined instance serves no review, so a review of the same
+   * repository never defers its idle stop.
+   */
+  private async stopLive(
+    key: string,
+    live: LiveInstance,
+    trigger: ReviewRuntimeStopTrigger,
+    correlationId?: string,
+  ): Promise<void> {
+    if (this.quarantined.get(key) === live) {
+      this.quarantined.delete(key);
+    } else {
+      if (this.instances.get(key) !== live || live.busy || this.reserved.has(key)) return;
+      this.instances.delete(key);
+    }
     this.clearTimer(live.timer);
     await live.composition.controlPlane.orchestrator.shutdown(correlationId);
     live.composition.close();
@@ -284,10 +322,38 @@ export function createReviewRuntimeService(deps: ReviewRuntimeServiceDeps): Revi
 interface ServiceContext {
   readonly deps: ReviewRuntimeServiceDeps;
   readonly instances: Map<string, LiveInstance>;
+  /** At most one quarantined instance per repository, kept until its own idle stop (#4136). */
+  readonly quarantined: Map<string, LiveInstance>;
   /** Repositories with a review in preparation or in flight. */
   readonly reserved: Set<string>;
-  start(key: string, correlationId?: string): LiveInstance | undefined;
+  start(
+    key: string,
+    correlationId?: string,
+    placement?: ReviewRuntimePlacement,
+  ): LiveInstance | undefined;
+  quarantine(key: string, live: LiveInstance): void;
   arm(key: string, live: LiveInstance): void;
+}
+
+/**
+ * The instance the next review of a repository runs on (#4136). An instance whose orchestrator
+ * still holds a run that never reached a terminal state (a Reviewer run left recovery-required,
+ * such as every macOS gateway-profile run whose end could not be proven) would refuse the next
+ * start, so it is set aside, quarantined exactly as it is until its own idle stop, and a fresh
+ * instance is composed beside it. At most one quarantined instance per repository: a second one is
+ * refused (`undefined`, settled `skipped/model-unavailable`) instead of growing without bound.
+ */
+function acquireInstance(
+  context: ServiceContext,
+  request: ReviewRuntimeRunRequest,
+): LiveInstance | undefined {
+  const key = request.repositoryRoot;
+  const live = context.instances.get(key);
+  if (live === undefined) return context.start(key, request.correlationId);
+  if (!live.composition.controlPlane.orchestrator.hasLiveRun()) return live;
+  if (context.quarantined.has(key)) return undefined;
+  context.quarantine(key, live);
+  return context.start(key, request.correlationId, "beside-quarantined");
 }
 
 async function readRules(
@@ -347,9 +413,7 @@ async function prepareAndRun(
     diffPackageText: request.diffPackageText,
   });
   if (!task.ok) return { ok: false, reason: "task-too-large", rules: rules.outcome };
-  const instance =
-    context.instances.get(request.repositoryRoot) ??
-    context.start(request.repositoryRoot, request.correlationId);
+  const instance = acquireInstance(context, request);
   if (instance === undefined) {
     return { ok: false, reason: "runtime-unavailable", rules: rules.outcome };
   }
@@ -416,12 +480,12 @@ function collected(
   rules: ReviewRulesFileOutcome,
 ): ReviewRuntimeRunResult {
   const intake = live.slot.intake;
+  // The drive's own facts (outcome, failure code, effort, runtime cleanup) pass through unchanged.
+  const { runId, ...facts } = outcome;
   return {
     ok: true,
-    outcome: outcome.outcome,
-    ...(outcome.runId === undefined ? {} : { runtimeRunId: outcome.runId }),
-    ...(outcome.failureCode === undefined ? {} : { failureCode: outcome.failureCode }),
-    ...(outcome.effort === undefined ? {} : { effort: outcome.effort }),
+    ...facts,
+    ...(runId === undefined ? {} : { runtimeRunId: runId }),
     rules,
     candidates: intake?.candidates() ?? [],
     rejections: intake?.rejections() ?? {

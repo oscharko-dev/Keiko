@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 import type {
   ReviewRunSettlement,
   ReviewRunView,
@@ -36,10 +37,41 @@ import {
   type RuntimeScript,
 } from "./reviewRunHarness.test-support.js";
 import type { CounterCheckOutcome } from "../counter-check/counterCheck.js";
+import { createReviewRuntimeService, type ReviewRuntimeService } from "../runtime/instance.js";
+import {
+  fakeReviewComposition,
+  newReviewRuntimeObservations,
+  reviewLayers,
+  type ScriptedReviewRun,
+} from "../runtime/reviewRuntimeFakes.test-support.js";
 import { createReviewRunService } from "./service.js";
 import { ReviewRunStore } from "./store.js";
 
 let harness: ReviewRunHarness | undefined;
+
+/**
+ * Reviewers on one real review runtime service and run driver, over scripted instances: one
+ * script per composed instance, in composition order (the last repeats).
+ */
+function reviewerOnRuntime(...scripts: readonly ScriptedReviewRun[]): RuntimeScript {
+  let runtime: ReviewRuntimeService | undefined;
+  let composed = 0;
+  return (request, h) => {
+    runtime ??= createReviewRuntimeService({
+      compose: (instanceId, port) => {
+        const script = scripts[Math.min(composed, scripts.length - 1)] ?? { reports: [] };
+        composed += 1;
+        return fakeReviewComposition(instanceId, port, script, newReviewRuntimeObservations());
+      },
+      layersFor: () => reviewLayers(),
+      runner: () => createGitReviewProcessRunner(),
+      activityLog: h.log.sink,
+      setTimer: () => undefined,
+      clearTimer: () => undefined,
+    });
+    return runtime.run(request);
+  };
+}
 
 afterEach(async () => {
   await harness?.cleanup();
@@ -228,6 +260,89 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
     const view = await settled(h, await start(h));
     expect(view.settlement).toEqual({ kind: "incomplete", reason: "budget-exhausted" });
     expect(view.presentedFindings).toHaveLength(1);
+  });
+
+  // #4136, first live run on macOS (issue comment 6536975223): both models finished, the Reviewer's
+  // finding was confirmed, and the review still settled incomplete/model-failed because the
+  // gateway profile's runtime end could not be proven (ADR-0140 D3) and the run settled
+  // recovery-required. The Reviewer runs on the real review runtime service and run driver here.
+  it("settles on coverage and findings when only the Reviewer runtime's reap is unproven", async () => {
+    const h = setUp({
+      runtime: reviewerOnRuntime({
+        reports: [reportAt(3, "high")],
+        terminal: "recovery-required",
+        reapUnproven: true,
+      }),
+      counterCheck: counterCheckBy({ 3: "confirmed" }),
+    });
+
+    const view = await settled(h, await start(h));
+
+    expect(view.settlement).toEqual({ kind: "complete" });
+    expect(view.runtimeCleanup).toBe("unproven");
+    expect(view.presentedFindings).toHaveLength(1);
+    const [line] = h.log.withOp("review.run.settled");
+    expect(line?.level).toBe("warn");
+    expect(line?.extra).toMatchObject({ settlement: "complete", runtimeCleanup: "unproven" });
+  });
+
+  it("keeps any other recovery of the Reviewer run incomplete/model-failed", async () => {
+    const h = setUp({
+      runtime: reviewerOnRuntime({
+        reports: [reportAt(3, "high")],
+        terminal: "recovery-required",
+        reapUnproven: false,
+      }),
+      counterCheck: counterCheckBy({ 3: "confirmed" }),
+    });
+
+    const view = await settled(h, await start(h));
+
+    expect(view.settlement).toEqual({ kind: "incomplete", reason: "model-failed" });
+    expect(view.runtimeCleanup).toBe("unproven");
+    expect(h.log.withOp("review.run.settled")[0]?.extra).toMatchObject({
+      reason: "model-failed",
+      runtimeCleanup: "unproven",
+    });
+  });
+
+  // #4136: the instance whose Reviewer run is left recovery-required stays quarantined, and the
+  // next review of the same repository runs on a fresh instance instead of being skipped.
+  it("settles the next review of the repository normally after an unproven reap", async () => {
+    const h = setUp({
+      runtime: reviewerOnRuntime(
+        { reports: [reportAt(3, "high")], terminal: "recovery-required", reapUnproven: true },
+        { reports: [reportAt(3, "high")] },
+      ),
+      counterCheck: counterCheckBy({ 3: "confirmed" }),
+    });
+
+    const first = await settled(h, await start(h));
+    const second = await settled(
+      h,
+      await start(h, startBody({ clientRequestId: "client-request-2" })),
+    );
+
+    expect(first).toMatchObject({ settlement: { kind: "complete" }, runtimeCleanup: "unproven" });
+    expect(second).toMatchObject({ settlement: { kind: "complete" }, runtimeCleanup: "proven" });
+    expect(second.presentedFindings).toHaveLength(1);
+    const started = h.log.withOp("review.run.runtime-started");
+    expect(started.map((event) => event.extra?.placement)).toEqual([
+      undefined,
+      "beside-quarantined",
+    ]);
+  });
+
+  it("records a proven runtime cleanup at info for a clean review", async () => {
+    const h = setUp({ runtime: reviewerOnRuntime({ reports: [] }) });
+
+    const view = await settled(h, await start(h));
+
+    expect(view.settlement).toEqual({ kind: "complete" });
+    expect(view.runtimeCleanup).toBe("proven");
+    const [line] = h.log.withOp("review.run.settled");
+    expect(line?.level).toBe("info");
+    expect(line?.extra).toMatchObject({ runtimeCleanup: "proven" });
   });
 
   it("abandons with interrupted on shutdown and at the next start after a restart", async () => {

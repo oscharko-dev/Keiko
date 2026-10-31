@@ -1,6 +1,6 @@
 // The Keiko for Quality review run records (ADR-0182 D6, Issue #4136), over the server's SQLite
-// store (schema migration 55): one row per run, its coverage entries and its candidate findings.
-// All SQL is module-scope constants with bound parameters. Paths and finding text are local
+// store (schema migrations 55 and 56): one row per run, its coverage entries and its candidate
+// findings. All SQL is module-scope constants with bound parameters. Paths and finding text are local
 // product data for the UI; this module never logs. One unsettled run per repository is enforced by
 // the `review_runs_active` unique index, so two concurrent starts can never both succeed.
 
@@ -15,6 +15,7 @@ import type {
   ReviewRoleTotals,
   ReviewRunPhase,
   ReviewRunSettlement,
+  ReviewRuntimeCleanup,
   ReviewTargetRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -41,6 +42,8 @@ export interface ReviewRunRow {
   readonly candidateCount: number;
   readonly reviewer: ReviewRoleTotals;
   readonly counterChecker: ReviewRoleTotals;
+  /** The Reviewer runtime's cleanup (migration 56); null when no Reviewer run started. */
+  readonly runtimeCleanup: ReviewRuntimeCleanup | null;
 }
 
 export interface ReviewFindingRow {
@@ -77,6 +80,8 @@ export interface ReviewRunSettle {
   readonly candidateCount: number;
   readonly reviewer: ReviewRoleTotals;
   readonly counterChecker: ReviewRoleTotals;
+  /** Absent or null when no Reviewer run started, or the run was settled on recovery. */
+  readonly runtimeCleanup?: ReviewRuntimeCleanup | null | undefined;
 }
 
 const PHASE_COLUMNS: Readonly<Partial<Record<ReviewRunPhase, string>>> = {
@@ -106,7 +111,7 @@ const SQL_FINDING = `INSERT INTO review_findings (run_id, fingerprint, reviewer_
 const SQL_SETTLE = `UPDATE review_runs SET phase = 'settled', settlement_kind = ?, settlement_reason = ?,
   settled_at = ?, candidate_count = ?, reviewer_prompt_count = ?, reviewer_completion_count = ?,
   reviewer_duration_ms = ?, counter_prompt_count = ?, counter_completion_count = ?,
-  counter_duration_ms = ? WHERE run_id = ? AND phase != 'settled'`;
+  counter_duration_ms = ?, runtime_cleanup = ? WHERE run_id = ? AND phase != 'settled'`;
 const SELECT_RUN = "SELECT * FROM review_runs";
 const SQL_GET = `${SELECT_RUN} WHERE run_id = ?`;
 const SQL_HISTORY = `${SELECT_RUN} WHERE repository_id = ? ORDER BY created_at DESC, run_id DESC LIMIT ?`;
@@ -175,6 +180,11 @@ function totals(row: Row, prefix: "reviewer" | "counter"): ReviewRoleTotals {
   };
 }
 
+function runtimeCleanupOf(row: Row): ReviewRuntimeCleanup | null {
+  const value = nullableText(row, "runtime_cleanup");
+  return value === "proven" || value === "unproven" ? value : null;
+}
+
 function runFromRow(row: Row): ReviewRunRow {
   return {
     runId: text(row, "run_id"),
@@ -199,6 +209,7 @@ function runFromRow(row: Row): ReviewRunRow {
     candidateCount: int(row, "candidate_count"),
     reviewer: totals(row, "reviewer"),
     counterChecker: totals(row, "counter"),
+    runtimeCleanup: runtimeCleanupOf(row),
   };
 }
 
@@ -337,6 +348,7 @@ export class ReviewRunStore {
           settle.counterChecker.promptTokens,
           settle.counterChecker.completionTokens,
           settle.counterChecker.durationMs,
+          settle.runtimeCleanup ?? null,
           runId,
         );
     });

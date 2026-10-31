@@ -432,6 +432,9 @@ function fixture(
       expiresAtMs: 1,
     })),
     declineApproval: vi.fn<NonNullable<CodingRuntimeManager["declineApproval"]>>(() => true),
+    succeededStopReapUnproven: vi.fn<
+      NonNullable<CodingRuntimeManager["succeededStopReapUnproven"]>
+    >(() => false),
     pause: vi.fn<CodingRuntimeManager["pause"]>(() => ({ ok: true, paused: true })),
     resume: vi.fn<CodingRuntimeManager["resume"]>(() => ({ ok: true, paused: false })),
     reconcile: vi.fn<CodingRuntimeManager["reconcile"]>(() =>
@@ -2495,6 +2498,61 @@ describe("CodingRuntimeOrchestrator", () => {
         state: "recovery-required",
         failureCode: "recovery-required",
       });
+    });
+  });
+
+  // #4136: a macOS gateway-profile run's end can never be proven (ADR-0140 D3). The run stays
+  // recovery-required, but the orchestrator names the one case a review may settle on its coverage:
+  // a succeeded turn whose settlement stop only could not prove the tree's exit.
+  describe("succeededTurnReapUnproven", () => {
+    async function settledWith(
+      outcome: "succeeded" | "failed",
+      // `undefined` keeps the fixture's stop, which stops and records the runtime's result.
+      stop: Awaited<ReturnType<CodingRuntimeManager["stop"]>> | undefined,
+      reapUnproven: boolean,
+    ): Promise<ReturnType<typeof fixture>> {
+      const f = fixture();
+      if (stop !== undefined) f.manager.stop.mockResolvedValueOnce(stop);
+      f.manager.succeededStopReapUnproven.mockReturnValue(reapUnproven);
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({
+        ok: true,
+        completion: Promise.resolve(outcome),
+      });
+      await f.orchestrator.start(start);
+      await vi.waitFor(() => {
+        expect(["recovery-required", "succeeded", "failed"]).toContain(
+          f.orchestrator.getSnapshot("run-1")?.state,
+        );
+      });
+      return f;
+    }
+    const UNPROVEN = { ok: false, failureCode: "runtime-reap-unproven", retryable: false } as const;
+
+    it("names a succeeded turn whose settlement stop only could not prove the tree's exit", async () => {
+      const f = await settledWith("succeeded", UNPROVEN, true);
+
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "recovery-required",
+        failureCode: "recovery-required",
+      });
+      expect(f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+      expect(f.manager.succeededStopReapUnproven).toHaveBeenCalledWith("run-1");
+      expect(f.orchestrator.succeededTurnReapUnproven("run-1")).toBe(true);
+      expect(f.orchestrator.succeededTurnReapUnproven("run-2")).toBe(false);
+    });
+
+    it("never names a failed turn, another stop failure or a stopped runtime", async () => {
+      const failedTurn = await settledWith("failed", UNPROVEN, true);
+      expect(failedTurn.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+      expect(failedTurn.orchestrator.succeededTurnReapUnproven("run-1")).toBe(false);
+
+      const otherFailure = await settledWith("succeeded", UNPROVEN, false);
+      expect(otherFailure.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+      expect(otherFailure.orchestrator.succeededTurnReapUnproven("run-1")).toBe(false);
+
+      const stopped = await settledWith("succeeded", undefined, true);
+      expect(stopped.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+      expect(stopped.orchestrator.succeededTurnReapUnproven("run-1")).toBe(false);
     });
   });
 

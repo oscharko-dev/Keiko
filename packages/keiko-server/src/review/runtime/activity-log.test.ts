@@ -60,6 +60,17 @@ describe("review runtime Activity Log proofs", () => {
     });
   });
 
+  // #4136: a fresh instance composed beside a quarantined one says so with a closed placement.
+  it("proves review.run.runtime-started beside a quarantined instance", () => {
+    const line = onlyLine((sink) => {
+      logReviewRuntimeStarted(sink, CORRELATION, INSTANCE, 42, "beside-quarantined");
+    });
+    expect(expectActivityLogProof("review.run.runtime-started.line", line)).toMatchObject({
+      runtimeInstanceId: INSTANCE,
+      placement: "beside-quarantined",
+    });
+  });
+
   it("proves review.run.runtime-stopped", () => {
     const line = onlyLine((sink) => {
       logReviewRuntimeStopped(sink, CORRELATION, {

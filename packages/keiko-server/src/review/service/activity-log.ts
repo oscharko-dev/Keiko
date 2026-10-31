@@ -15,6 +15,7 @@ import type {
   ReviewRunPhase,
   ReviewRunRefusalReason,
   ReviewRunSettlement,
+  ReviewRuntimeCleanup,
   ReviewTargetRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -53,6 +54,7 @@ export const REVIEW_RUN_LOG_SETTLEMENT_REASONS = [
   "policy-invalid",
   "model-unavailable",
 ] as const;
+export const REVIEW_RUN_LOG_RUNTIME_CLEANUP = ["proven", "unproven"] as const;
 export const REVIEW_RUN_LOG_REFUSAL_REASONS = [
   "active-review-exists",
   "policy-invalid",
@@ -165,6 +167,14 @@ const REVIEW_RUN_SETTLED = defineActivityLogOperation({
     counterCheckDurationMs: DURATION,
     durationMs: DURATION,
     stale: { type: "boolean", dataClass: "closed-enum", required: true },
+    // #4136: whether the Reviewer runtime's end was proven; absent when no Reviewer run started.
+    // `unproven` is a warning beside the settlement (a macOS gateway-profile run, ADR-0140 D3).
+    runtimeCleanup: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: REVIEW_RUN_LOG_RUNTIME_CLEANUP,
+    },
   },
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -279,6 +289,14 @@ export interface ReviewRunSettledLine {
   readonly counterChecker: ReviewRoleTotals;
   readonly durationMs: number;
   readonly stale: boolean;
+  readonly runtimeCleanup?: ReviewRuntimeCleanup | undefined;
+}
+
+/** A clean settlement is info; an unclean one, or an unproven runtime cleanup, is a warning. */
+function settledLevel(line: ReviewRunSettledLine): "info" | "warn" {
+  return line.settlement.kind === "complete" && line.runtimeCleanup !== "unproven"
+    ? "info"
+    : "warn";
 }
 
 function coverageCounts(coverage: ReviewDiffCoverageSummary | null): {
@@ -304,7 +322,7 @@ export function logReviewRunSettled(
   log.write(
     activityLogEvent(
       REVIEW_RUN_SETTLED,
-      { correlationId, level: settlement.kind === "complete" ? "info" : "warn" },
+      { correlationId, level: settledLevel(line) },
       {
         runDigest: reviewEvidenceDigest("run", line.runId),
         settlement: settlement.kind,
@@ -323,6 +341,7 @@ export function logReviewRunSettled(
         counterCheckDurationMs: Math.round(line.counterChecker.durationMs),
         durationMs: Math.max(0, Math.round(line.durationMs)),
         stale: line.stale,
+        ...(line.runtimeCleanup === undefined ? {} : { runtimeCleanup: line.runtimeCleanup }),
       },
     ),
   );

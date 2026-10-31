@@ -3931,6 +3931,62 @@ describe("coding runtime manager", () => {
     await expect(manager.reconcile("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
   });
 
+  // #4136: a macOS gateway-profile run has no sandbox member, so the end of every such run stays
+  // unproven (ADR-0140 D3). Only that one failure, after an orderly stop of a succeeded turn whose
+  // revocation completed, may be reported as an unproven cleanup; the runtime stays quarantined.
+  describe("succeededStopReapUnproven", () => {
+    async function stoppedRuntime(
+      resultStatus: Parameters<CodingRuntimeManager["stop"]>[1],
+      overrides: Partial<TestCodingRuntimeManagerDeps> & { readonly exits?: boolean } = {},
+    ): Promise<CodingRuntimeManager> {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      const { exits, ...deps } = overrides;
+      const manager = createTestCodingRuntimeManager({
+        supervisor: testSupervisor(
+          () => ({
+            ...child.handle,
+            kill: (signal): void => {
+              child.kills.push(signal);
+              if (exits === true) child.exit(0);
+            },
+          }),
+          { setTimer: (callback): unknown => (callback(), undefined) },
+        ),
+        processEnv: {},
+        ...deps,
+      });
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+      await expect(manager.stop("run-1988", resultStatus)).resolves.toMatchObject({
+        ok: false,
+        failureCode: "runtime-reap-unproven",
+      });
+      expect(manager.health()).toMatchObject({ status: "recovery-required" });
+      return manager;
+    }
+
+    it("names a succeeded orderly stop whose tree exit alone stayed unproven", async () => {
+      const manager = await stoppedRuntime("succeeded");
+
+      expect(manager.succeededStopReapUnproven?.("run-1988")).toBe(true);
+      expect(manager.succeededStopReapUnproven?.("run-other")).toBe(false);
+    });
+
+    it("never names a failed or cancelled stop, an incomplete revocation or a failed release", async () => {
+      expect((await stoppedRuntime("failed")).succeededStopReapUnproven?.("run-1988")).toBe(false);
+      expect((await stoppedRuntime(undefined)).succeededStopReapUnproven?.("run-1988")).toBe(false);
+      const revocationDenied = await stoppedRuntime("succeeded", { revokeRuntime: () => false });
+      expect(revocationDenied.succeededStopReapUnproven?.("run-1988")).toBe(false);
+      const releaseFailed = await stoppedRuntime("succeeded", {
+        exits: true,
+        releaseRuntimeAfterReap: () => false,
+      });
+      expect(releaseFailed.succeededStopReapUnproven?.("run-1988")).toBe(false);
+    });
+  });
+
   it("takeover revokes, invalidates approvals, and aborts actions before signalling", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();

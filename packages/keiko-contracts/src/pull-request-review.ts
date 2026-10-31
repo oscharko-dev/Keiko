@@ -108,6 +108,15 @@ export type ReviewRunSettlement =
   | { readonly kind: "abandoned"; readonly reason: ReviewAbandonedReason }
   | { readonly kind: "skipped"; readonly reason: ReviewSkippedReason };
 
+/**
+ * Whether the Reviewer runtime's process cleanup was proven when its run ended (#4136). `unproven`
+ * is a warning beside the settlement, never a settlement reason: a Reviewer whose turn completed
+ * settles on its coverage and findings even when the runtime's end could not be proven (a macOS
+ * gateway-profile run, ADR-0140 D3), and the runtime stays quarantined.
+ */
+export const REVIEW_RUNTIME_CLEANUP_STATES = ["proven", "unproven"] as const;
+export type ReviewRuntimeCleanup = (typeof REVIEW_RUNTIME_CLEANUP_STATES)[number];
+
 // ─── Findings ────────────────────────────────────────────────────────────────
 
 export const REVIEW_FINDING_CATEGORIES = [
@@ -896,6 +905,8 @@ export interface ReviewRunView {
   };
   /** The pull request's head moved after the review; display only, never a settlement. */
   readonly stale: boolean;
+  /** The Reviewer runtime's cleanup; absent when no Reviewer run started (#4136). */
+  readonly runtimeCleanup?: ReviewRuntimeCleanup | undefined;
 }
 
 export interface ReviewRunHistoryResponse {

@@ -1980,6 +1980,11 @@ export class CodingRuntimeOrchestrator {
    * state and its body-free result instead of an `idle` snapshot with no runId (#3257 Wave 0).
    */
   private settledRunId: string | undefined;
+  /**
+   * The run whose `succeeded` turn went recovery-required only because its settlement stop could
+   * not prove the process tree's exit (#4136); see `succeededTurnReapUnproven`.
+   */
+  private succeededTurnReapUnprovenRunId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
@@ -2236,6 +2241,20 @@ export class CodingRuntimeOrchestrator {
   getSnapshot(runId: string): PublicSnapshot | undefined {
     const snapshot = this.deps.snapshots.get(runId);
     return snapshot ? this.publicSnapshotWithDescription(snapshot) : undefined;
+  }
+
+  /**
+   * True when the run is recovery-required on exactly one fact (#4136): its turn settled
+   * `succeeded`, and the stop that settlement made revoked every authority but could not prove the
+   * process tree's exit (`CodingRuntimeManager.succeededStopReapUnproven`, ADR-0140 D3). A crash, a
+   * lost stream, a cancellation, an exhausted budget or deadline, a missing verification and any
+   * other recovery answer false. The run stays recovery-required and its runtime quarantined.
+   */
+  succeededTurnReapUnproven(runId: string): boolean {
+    return (
+      this.succeededTurnReapUnprovenRunId === runId &&
+      this.deps.snapshots.get(runId)?.state === "recovery-required"
+    );
   }
 
   submitFollowUp(
@@ -3476,6 +3495,7 @@ export class CodingRuntimeOrchestrator {
     verificationFailure?: VerificationFailureSettlement,
   ): void {
     if (!stopped || !this.runtimeAgrees(live.runId, outcome, cause)) {
+      this.noteSucceededTurnReapUnproven(live.runId, outcome, stopped);
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
@@ -3491,6 +3511,17 @@ export class CodingRuntimeOrchestrator {
     }
     const settledCause = target.failureCode === cause?.failureCode ? cause : undefined;
     this.transition(live, target.state, target.failureCode, undefined, settledCause);
+  }
+
+  /** Recorded before the recovery transition publishes, so its subscribers already see it. */
+  private noteSucceededTurnReapUnproven(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+    stopped: boolean,
+  ): void {
+    if (stopped || outcome !== "succeeded") return;
+    if (this.deps.manager.succeededStopReapUnproven?.(runId) !== true) return;
+    this.succeededTurnReapUnprovenRunId = runId;
   }
 
   private runtimeAgrees(
