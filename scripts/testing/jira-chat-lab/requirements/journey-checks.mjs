@@ -15,7 +15,6 @@ import {
   gradeDeviationReport,
   gradeRequirementListing,
   draftIdentity,
-  newIssues,
   sectionsPresent,
   structuredDeviations,
   turnIssues,
@@ -92,7 +91,7 @@ export const JOURNEYS = {
   },
   async S07(ctx, chat) {
     const query = "project = REQ AND issuetype = Task";
-    const before = (await snapshotBefore(ctx, query)).keys;
+    const before = await snapshotBefore(ctx, query);
     const turn = await ctx.turn(
       chat,
       "Lege im Jira-Projekt REQ zwei Umsetzungsaufgaben (Vorgangstyp Task) für die Anforderung LH-002 nach der Strukturvorgabe an und ordne sie dem Epic von LH-002 zu. Lege das Epic an, falls es fehlt. Melde die Schlüssel oder den genauen Fehler.",
@@ -103,16 +102,22 @@ export const JOURNEYS = {
       "summary",
     );
     const epicKeys = new Set(epics.map((epic) => epic.key));
-    const created = newIssues(before, await ctx.search(query, `summary,description,${link}`));
-    const good = created.filter(
+    const tasks = turnIssues({
+      before,
+      issues: await ctx.search(query, `summary,description,labels,${link}`),
+      exchanges: turn.toolExchanges,
+    });
+    const good = tasks.credited.filter(
       (task) =>
         epicKeys.has(task.fields[link]) &&
         sectionsPresent(task.fields.description, STRUCTURE_RULES.Task.sections),
     );
+    const tasksOk =
+      good.length === 2 && tasks.credited.length === 2 && tasks.duplicates.length === 0;
     return result(
-      good.length === 2 && created.length === 2 ? "green" : "red",
+      tasksOk ? "green" : "red",
       turn,
-      `${good.length} of ${created.length} tasks created in this turn linked to the LH-002 epic with required sections`,
+      `${good.length} of ${tasks.credited.length} tasks of this turn linked to the LH-002 epic with required sections, ${countsOf(tasks, "tasks")}`,
       ["tasks-created", "required-fields", "parent-relation"],
     );
   },

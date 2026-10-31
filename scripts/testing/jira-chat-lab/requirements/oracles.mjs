@@ -63,7 +63,7 @@ export { gradeDeviationReport, structuredDeviations } from "./deviation-report.m
 // ---------- creation oracles ----------
 
 /** Issues that appeared during this turn: present now, absent from the pre-turn key set. */
-export function newIssues(beforeKeys, issues) {
+function newIssues(beforeKeys, issues) {
   return issues.filter((issue) => !beforeKeys.has(issue.key));
 }
 

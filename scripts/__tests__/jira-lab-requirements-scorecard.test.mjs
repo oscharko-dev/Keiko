@@ -25,10 +25,11 @@ function fakeJira() {
         labels,
       });
     },
-    createTask(epicKey, { sections = STRUCTURE_RULES.Task.sections } = {}) {
+    createTask(epicKey, { sections = STRUCTURE_RULES.Task.sections, labels = [] } = {}) {
       return add("Task", {
         summary: "Umsetzung LH-002",
         description: wiki(sections),
+        labels,
         [EPIC_LINK]: epicKey,
       });
     },
@@ -341,7 +342,7 @@ describe("S07 tasks under the requirement epic", () => {
       context(jira, () => ({ writes: 0 })),
     );
     expect(second.status).toBe("red");
-    expect(second.detail).toContain("0 of 0 tasks created in this turn");
+    expect(second.detail).toContain("0 of 0 tasks of this turn");
   });
 
   it("verifies each of two rapid consecutive runs on its own two tasks", async () => {
@@ -379,6 +380,57 @@ describe("S07 tasks under the requirement epic", () => {
       return {};
     });
     expect((await run("S07", sparse)).status).toBe("red");
+  });
+});
+
+describe("S07 reruns reconciled by the draft", () => {
+  const draftTask = (jira, epic, n) => jira.createTask(epic, { labels: [identityOf(n)] });
+
+  it("is green when the draft reconciles one task and creates the other", async () => {
+    const jira = fakeJira();
+    const epic = jira.createEpic("LH-002");
+    const existing = draftTask(jira, epic, 1);
+    const ctx = context(jira, () => ({
+      toolExchanges: [
+        draftExchange([
+          ["existing", existing],
+          ["created", draftTask(jira, epic, 2)],
+        ]),
+      ],
+    }));
+    const check = await run("S07", ctx);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain("2 of 2 tasks of this turn");
+    expect(check.detail).toContain("1 tasks created, 1 reconciled");
+  });
+
+  it("does not credit a pre-existing task the draft did not report", async () => {
+    const jira = fakeJira();
+    const epic = jira.createEpic("LH-002");
+    draftTask(jira, epic, 1);
+    const ctx = context(jira, () => ({
+      toolExchanges: [draftExchange([["created", draftTask(jira, epic, 2)]])],
+    }));
+    const check = await run("S07", ctx);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("1 of 1 tasks of this turn");
+  });
+
+  it("is red for a new task that duplicates an existing draft identity", async () => {
+    const jira = fakeJira();
+    const epic = jira.createEpic("LH-002");
+    const existing = draftTask(jira, epic, 1);
+    const ctx = context(jira, () => ({
+      toolExchanges: [
+        draftExchange([
+          ["existing", existing],
+          ["created", draftTask(jira, epic, 1)],
+        ]),
+      ],
+    }));
+    const check = await run("S07", ctx);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain("1 duplicates");
   });
 });
 
