@@ -122,6 +122,68 @@ these observations.
 
 ## Measurement design
 
+### Reusable two-model laboratory and offline comparison
+
+The existing native laboratory runs both configured Chat subjects, Gemma and Qwen, through the
+same plain/grounded corpus. Model-specific outcomes remain separate. Required operational state,
+original-message eligibility and checkpoint safety are model-independent invariants; summary
+fidelity, effective token limits and latency still require qualification per model.
+
+Every campaign phase now carries its trial identity. Previously, pressure/cycle/failure identifiers
+omitted the repetition number, so separate short campaigns reused the same identifiers. The
+laboratory now persists an independent result, scored probes, failures and elapsed time for each
+repeat. Long-campaign outcomes are captured before short repetitions begin, so later work cannot
+change the point at which they were qualified. Existing interrupted artifacts remain unchanged.
+
+Offline analysis requires no BFF, model, browser or container:
+
+```bash
+node scripts/testing/coding-workbench-lab/chat-continuity-report.mjs \
+  --baseline /private/baseline/ledger.json --output /private/baseline-report.json
+node scripts/testing/coding-workbench-lab/chat-continuity-report.mjs \
+  --baseline /private/baseline/ledger.json --candidate /private/candidate/ledger.json \
+  --output /private/comparison.json
+```
+
+Reports bind their input and corpus manifests with SHA-256 and identify their analysis module.
+Outputs are fresh private files; existing reports and input ledgers cannot be overwritten. Raw
+answers, private chat objects and unknown input fields are not copied. Comparisons reject changed
+model rosters, configuration, hardware, content policy, schedule, prompt digests or oracle digests.
+Different oracle versions require a separately hash-matched common re-score before comparison;
+the report does not silently reinterpret them. Unequal observed probe coverage produces no numeric
+gain. Recall ledgers alone establish no causal latency improvement.
+
+The 0–10 observed score is ten times accepted critical answers divided by scored critical questions,
+reported separately for controls, cycle probes and restart. Missing measurements are null.
+Execution failures, planned/observed repetitions and qualification remain separate. An observed
+score of 10 does not erase failed requests or missing tests. This nine-field fixture supplies no
+global production-quality grade, supplementary-detail acceptance or complete source/security proof.
+
+All 37 retained native answers from the terminated unchanged baseline have now been re-scored
+under the same v4 oracle. Each answer hash matches its private canonical snapshot; each initial
+agreement remains stored, and no score changes. The observed cycle-probe results are:
+
+| Model / lane   | Correct / questions | Observed score / 10 | Cycles | Execution failures |
+| -------------- | ------------------- | ------------------- | ------ | ------------------ |
+| Gemma plain    | 27 / 27             | 10.00               | 3      | 3                  |
+| Gemma grounded | 90 / 90             | 10.00               | 10     | 2                  |
+| Qwen plain     | 46 / 90             | 5.11                | 10     | 0                  |
+| Qwen grounded  | 89 / 90             | 9.89                | 10     | 0                  |
+
+Qwen plain's final probe is 2/9 (2.22/10). Restart and five short repetitions are missing; every
+lane remains unqualified. Grounded questions here measure conversation facts rather than source
+answer accuracy. Improvements to laboratory accounting are not model-quality improvements.
+
+### Resumption delivery checks
+
+The earlier CI source-inventory failure is reproduced and repaired by refreshing only the source
+count, from 980 to 982 server files. Every coverage metric and governed floor remains unchanged.
+The support-code inventory is regenerated from current product sources. Repeated optional-field
+projection logic is extracted behind explicit key allowlists; unknown fields remain excluded and
+current redaction still applies. The semantic-duplication baseline only shrinks, from 921 to 917
+groups. The reported editor-breakpoint browser case is attempted locally but requires Linux
+Bubblewrap enforcement; macOS does not provide a success result for that required proof.
+
 The existing connected-chat laboratory supplies authenticated application pairing, native BFF and
 Gateway composition, the existing HTTP observation proxy, provider credential resolution, and
 graceful lifecycle cleanup. No customer chat or external source is used. Credentials stay in the
@@ -333,6 +395,11 @@ Provider-native features are compatibility-dependent comparators. Their existenc
 that the configured local providers implement them or that Keiko's current paths invoke them.
 
 Recent research informs explicit experiments, independently of provider guides:
+
+[LongMemEval (ICLR 2025)](https://arxiv.org/abs/2410.10813v2) motivates separate extraction,
+cross-session/temporal reasoning, updates and abstention cases. [LoCoMo](https://arxiv.org/abs/2402.17753)
+adds long-range event/causal continuity and multimodal evaluation as useful experiment dimensions.
+The current nine-field corpus does not claim to implement either complete benchmark.
 
 | Primary work                                                      | Published/version date                               | Implication to test in Keiko                                                                                                   |
 | ----------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |

@@ -22,9 +22,10 @@ import {
 import { activityLogSnapshot, readActivityLogSince } from "../../lib/activity-log-files.mjs";
 import {
   driveContinuityCampaigns,
-  continuityCampaignQualified,
   writeContinuityJson,
   installContinuityCancellation,
+  continuityCaseId,
+  continuityTrialResult,
 } from "./chat-continuity-campaign.mjs";
 import { readContinuityBuildIdentity } from "./chat-continuity-build.mjs";
 
@@ -186,6 +187,7 @@ async function send(state, content, id, score = false) {
     id,
     model: state.model,
     kind: state.kind,
+    repetition: state.repetition,
     status: result.status,
     elapsedMs: Date.now() - startedAt,
     answerDigest: continuityDigest(answer),
@@ -235,13 +237,9 @@ function contextEvents(logs, beforeLog) {
     .filter((event) => /^(chat\.(context|continuity)|gateway\.)/u.test(event.op));
 }
 async function establish(state) {
-  await send(state, INITIAL_CONTEXT, `${state.model}:${state.kind}:${state.repetition}:initial`);
-  await send(
-    state,
-    CORRECTION_CONTEXT,
-    `${state.model}:${state.kind}:${state.repetition}:correction`,
-  );
-  await probe(state, `${state.model}:${state.kind}:${state.repetition}:control`);
+  await send(state, INITIAL_CONTEXT, continuityCaseId(state, "initial"));
+  await send(state, CORRECTION_CONTEXT, continuityCaseId(state, "correction"));
+  await probe(state, continuityCaseId(state, "control"));
 }
 async function probe(state, id) {
   const original = runtime,
@@ -275,9 +273,10 @@ async function pressureCycle(state) {
   if (mode === "manual") {
     const compacted = (await checked("POST", "/api/chats/context/compact", address(state))).json;
     record({
-      id: `${state.model}:${state.kind}:cycle-${cycle}:manual`,
+      id: continuityCaseId(state, `cycle-${cycle}:manual`),
       model: state.model,
       kind: state.kind,
+      repetition: state.repetition,
       context: contextProjection(compacted),
     });
     status = compacted;
@@ -285,15 +284,16 @@ async function pressureCycle(state) {
   const observed = (status.compaction?.messagesCompacted ?? 0) > original;
   if (observed) state.cycles++;
   record({
-    id: `${state.model}:${state.kind}:cycle-${cycle}:observed`,
+    id: continuityCaseId(state, `cycle-${cycle}:observed`),
     model: state.model,
     kind: state.kind,
+    repetition: state.repetition,
     mode,
     observed,
     cycles: state.cycles,
   });
   if (!observed) state.failures++;
-  await probe(state, `${state.model}:${state.kind}:cycle-${cycle}:recall`);
+  await probe(state, continuityCaseId(state, `cycle-${cycle}:recall`));
   return observed;
 }
 async function fillContext(state, cycle, mode, status, original) {
@@ -305,7 +305,7 @@ async function fillContext(state, cycle, mode, status, original) {
     status = await send(
       state,
       continuityPressureNote(cycle, part, characters),
-      `${state.model}:${state.kind}:cycle-${cycle}:pressure-${part}`,
+      continuityCaseId(state, `cycle-${cycle}:pressure-${part}`),
     );
     if (pressureReached(mode, status, original)) break;
   }
@@ -323,9 +323,10 @@ async function runGuarded(state, operation) {
     if (cancellation.signal.aborted) throw error;
     state.failures++;
     record({
-      id: `${state.model}:${state.kind}:failed-${state.failures}`,
+      id: continuityCaseId(state, `failed-${state.failures}`),
       model: state.model,
       kind: state.kind,
+      repetition: state.repetition,
       errorClass: error.name,
       status: error.status,
       code: error.code ?? "operation-failed",
@@ -348,23 +349,13 @@ async function runCampaigns() {
   cancellation.signal.throwIfAborted();
   await runtime.restart();
   for (const state of states)
-    await runGuarded(state, () => probe(state, `${state.model}:${state.kind}:restart-recall`));
-  const campaignsPassed = states.every((state) =>
-    continuityCampaignQualified(state, { requiredCycles, requiredDuration }),
+    await runGuarded(state, () => probe(state, continuityCaseId(state, "restart-recall")));
+  const results = states.map((state) =>
+    continuityTrialResult(state, { requiredCycles, requiredDuration }),
   );
+  for (const result of results) record(result);
+  const campaignsPassed = results.every((result) => result.status === "passed");
   const repetitionsPassed = await runRepetitions();
-  for (const state of states)
-    record({
-      id: `${state.model}:${state.kind}:campaign-result`,
-      model: state.model,
-      kind: state.kind,
-      cycles: state.cycles,
-      elapsedMs: Date.now() - state.startedAt,
-      failures: state.failures,
-      status: continuityCampaignQualified(state, { requiredCycles, requiredDuration })
-        ? "passed"
-        : "incomplete",
-    });
   return { campaignsPassed, repetitionsPassed };
 }
 async function runRepetitions() {
@@ -376,14 +367,13 @@ async function runRepetitions() {
         await establish(state);
         await pressureCycle(state);
       });
-      if (
-        !continuityCampaignQualified(state, {
-          requiredCycles: 1,
-          requiredDuration: 0,
-          requireRestart: false,
-        })
-      )
-        passed = false;
+      const result = continuityTrialResult(state, {
+        requiredCycles: 1,
+        requiredDuration: 0,
+        requireRestart: false,
+      });
+      record(result);
+      if (result.status !== "passed") passed = false;
     }
   return passed;
 }

@@ -3,6 +3,12 @@ import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { continuityCorpusManifest } from "./chat-continuity-corpus.mjs";
 
+export function continuityCaseId({ model, kind, repetition }, phase) {
+  if (repetition !== "long" && (!Number.isSafeInteger(repetition) || repetition < 0))
+    throw new TypeError("invalid-continuity-trial");
+  return `${model}:${kind}:${repetition}:${phase}`;
+}
+
 export function installContinuityCancellation(target = process) {
   const controller = new globalThis.AbortController();
   let reason;
@@ -43,6 +49,21 @@ export function continuityCampaignQualified(state, bounds, now = Date.now()) {
     now - state.startedAt >= bounds.requiredDuration &&
     recallQualified(state, bounds.requireRestart !== false)
   );
+}
+
+export function continuityTrialResult(state, bounds, now = Date.now()) {
+  const phase = state.repetition === "long" ? "campaign-result" : "repetition-result";
+  return {
+    id: continuityCaseId(state, phase),
+    model: state.model,
+    kind: state.kind,
+    repetition: state.repetition,
+    cycles: state.cycles,
+    elapsedMs: now - state.startedAt,
+    failures: state.failures,
+    probes: structuredClone(state.probes ?? []),
+    status: continuityCampaignQualified(state, bounds, now) ? "passed" : "incomplete",
+  };
 }
 
 function recallQualified(state, requireRestart) {

@@ -9,6 +9,8 @@ import {
   continuityCampaignQualified,
   writeContinuityJson,
   installContinuityCancellation,
+  continuityCaseId,
+  continuityTrialResult,
 } from "../testing/coding-workbench-lab/chat-continuity-campaign.mjs";
 
 const roots = [];
@@ -16,6 +18,46 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 const BOUNDS = { requiredCycles: 2, requiredDuration: 100 };
+it.each([undefined, -1, 0.5, NaN])("rejects invalid trial identity %s", (repetition) => {
+  expect(() => continuityCaseId({ model: "gemma", kind: "plain", repetition }, "control")).toThrow(
+    "invalid-continuity-trial",
+  );
+});
+it("captures a trial result before later work can alter its timing or scores", () => {
+  const current = { ...state(), model: "gemma", kind: "plain", repetition: 2 };
+  const result = continuityTrialResult(current, BOUNDS, 101);
+  current.probes[0].score.correct = 0;
+  expect(result).toMatchObject({
+    id: "gemma:plain:2:repetition-result",
+    repetition: 2,
+    elapsedMs: 101,
+    status: "passed",
+  });
+  expect(result.probes[0].score.correct).toBe(9);
+});
+it("records unsuccessful repeats and requires restart only for long campaigns", () => {
+  const current = { ...state(), model: "qwen", kind: "plain", repetition: 0 };
+  current.probes = current.probes.filter((probe) => probe.phase !== "restart");
+  expect(continuityTrialResult(current, BOUNDS, 101).status).toBe("incomplete");
+  expect(continuityTrialResult(current, { ...BOUNDS, requireRestart: false }, 101).status).toBe(
+    "passed",
+  );
+  current.failures = 1;
+  expect(continuityTrialResult(current, { ...BOUNDS, requireRestart: false }, 101).status).toBe(
+    "incomplete",
+  );
+});
+it("keeps otherwise identical cycles from different repeated campaigns distinguishable", () => {
+  const cases = ["gemma", "qwen"].flatMap((model) =>
+    ["long", 0, 1, 2, 3, 4].flatMap((repetition) =>
+      ["control", "cycle-1:pressure-0", "cycle-1:recall", "restart-recall"].map((phase) =>
+        continuityCaseId({ model, kind: "plain", repetition }, phase),
+      ),
+    ),
+  );
+  expect(new Set(cases).size).toBe(48);
+  expect(cases).toContain("qwen:plain:3:cycle-1:recall");
+});
 it("turns operator signals into one cancellation and removes its listeners", () => {
   const target = new EventEmitter(),
     cancellation = installContinuityCancellation(target);

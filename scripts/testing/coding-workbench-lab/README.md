@@ -168,6 +168,8 @@ source admission and baseline/candidate procedure are documented in
 | `chat-continuity-corpus.mjs`    | Shared synthetic agreements, pressure notes, recall question, versioned lexical oracle and manifest; imported helper                           |
 | `chat-continuity-runtime.mjs`   | Shared native BFF, credential resolution, private snapshot and bounded response-observation helpers                                            |
 | `chat-continuity-campaign.mjs`  | Shared bounded campaign scheduling, qualification criteria and atomic ledger persistence                                                       |
+| `chat-continuity-results.mjs`   | Shared model-separated recall scoring, explicit incomplete qualification and strictly matched before/after comparisons                         |
+| `chat-continuity-report.mjs`    | Offline `--baseline <ledger.json> [--candidate <ledger.json>] --output <new-private-json>` report; starts no models or services                |
 
 | Script                      | What it does                                                                                                                         |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
