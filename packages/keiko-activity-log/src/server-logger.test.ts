@@ -40,6 +40,27 @@ function throwingSink(): ServerLogSink {
   };
 }
 
+/** Logs `input` at info through a debug child logger bound to the fixture correlation. */
+function loggedThroughChild(
+  buildLogger: typeof createServerLogger,
+  input: object,
+  missing: string,
+): ServerLogEvent {
+  const events: ServerLogEvent[] = [];
+  const logger = buildLogger({
+    sink: {
+      write(event): void {
+        events.push(event);
+      },
+    },
+    level: "debug",
+  }).child({ correlationId: "fixture-correlation" });
+  Reflect.apply(logger.info, logger, [input]);
+  const event = events[0];
+  if (event === undefined) throw new TypeError(missing);
+  return event;
+}
+
 describe("server logger levels", () => {
   it("emits at or above the threshold and suppresses below it", () => {
     const sink = createBufferedServerLogSink();
@@ -539,18 +560,7 @@ describe("Support logger raw metadata preservation", () => {
       ]);
       if (typeof input !== "object" || input === null) throw new TypeError("event object required");
       // Offer the actual producer to the logger rather than certifying a forged plain event.
-      const producerEvents: ServerLogEvent[] = [];
-      const logger = buildLogger({
-        sink: {
-          write(value): void {
-            producerEvents.push(value);
-          },
-        },
-        level: "debug",
-      }).child({ correlationId: "fixture-correlation" });
-      Reflect.apply(logger.info, logger, [input]);
-      const produced = producerEvents[0];
-      if (produced === undefined) throw new TypeError("producer event required");
+      const produced = loggedThroughChild(buildLogger, input, "producer event required");
       expect(produced.correlationId).toBe("fixture-correlation");
       expect(activityLogEventRegistration(produced)).toBe(registration);
       expect(formatActivityLogProofLine(produced)).toContain('"generation":1');
@@ -580,18 +590,7 @@ describe("Support logger raw metadata preservation", () => {
         { generation: "invalid" },
       ]);
       if (typeof input !== "object" || input === null) throw new TypeError("event object required");
-      const events: ServerLogEvent[] = [];
-      const logger = buildLogger({
-        sink: {
-          write(event): void {
-            events.push(event);
-          },
-        },
-        level: "debug",
-      }).child({ correlationId: "fixture-correlation" });
-      Reflect.apply(logger.info, logger, [input]);
-      const event = events[0];
-      if (event === undefined) throw new TypeError("refused event required");
+      const event = loggedThroughChild(buildLogger, input, "refused event required");
       expect(event.correlationId).toBe("fixture-correlation");
       expect(
         Object.getOwnPropertyDescriptor(

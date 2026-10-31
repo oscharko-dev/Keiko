@@ -1,11 +1,5 @@
 import type { KnowledgeLogEvent } from "./knowledge-log.js";
-import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
-import {
-  htmlManualSourceKindTag,
-  htmlManualSourceFingerprintTag,
-} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
-import { persistHtmlManualSourceMetadata } from "./manual-source-metadata.js";
-import { addSourceToCapsule } from "./source-lifecycle.js";
+import {} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 // Connector-backed Knowledge Pod sink tests (Issue #2242, Epic #2238, ADR-0128 D5).
 //
 // Hermetic and network-free: items arrive as normalized content (the shape the sync lane hands
@@ -26,7 +20,7 @@ import type {
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";
+import { DEFAULT_EMBEDDING, freshStore, seedCorruptMixedManualSource } from "./_support.js";
 import {
   applyConnectorSyncRun,
   createConnectorPodShell,
@@ -815,31 +809,7 @@ describe("resolveConnectorCitationTarget — fail-closed branches", () => {
 describe("connector summary evidence", () => {
   it("forwards the actual run correlation for an examined mixed manual source", () => {
     createShell();
-    const sourceId = "mixed-manual-summary" as KnowledgeSourceId;
-    addSourceToCapsule(store, CAPSULE_ID, {
-      id: sourceId,
-      displayName: "Fixture manual",
-      tags: [
-        htmlManualSourceKindTag("html-manual-http"),
-        htmlManualSourceFingerprintTag("fp-mixed"),
-      ],
-      scope: { kind: "folder", rootPath: "/fixture/manual", recursive: true },
-    });
-    persistHtmlManualSourceMetadata(store, CAPSULE_ID, sourceId, {
-      schemaVersion: "1",
-      scope: {
-        kind: "html-manual-http",
-        origin: "https://manual.example.invalid",
-        pathPrefix: null,
-      },
-      limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-      sourceFingerprint: "fp-mixed",
-      proposedPodName: "Fixture manual",
-    });
-    // Historical/corrupt row after a healthy public source write.
-    store._internal.db
-      .prepare("UPDATE html_manual_sources SET last_change_summary_json = :bytes")
-      .run({ bytes: "{fixture-corrupt" });
+    seedCorruptMixedManualSource(store, CAPSULE_ID);
     const events: KnowledgeLogEvent[] = [];
     const result = recordUnappliedConnectorSyncRun(
       {

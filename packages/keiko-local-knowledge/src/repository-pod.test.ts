@@ -1,10 +1,4 @@
-import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
-import {
-  htmlManualSourceKindTag,
-  htmlManualSourceFingerprintTag,
-} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
-import { persistHtmlManualSourceMetadata } from "./manual-source-metadata.js";
-import { addSourceToCapsule } from "./source-lifecycle.js";
+import {} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import {
   existsSync,
   mkdirSync,
@@ -41,7 +35,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";
+import { DEFAULT_EMBEDDING, freshStore, seedCorruptMixedManualSource } from "./_support.js";
 import { documentIdFor } from "./discovery/types.js";
 import {
   listRepositoryChunkLineRanges,
@@ -782,31 +776,7 @@ describe("repository pod evidence vocabulary parity (M2.12)", () => {
 describe("repository summary evidence", () => {
   it("forwards the actual run correlation for an examined mixed manual source", async () => {
     createShell();
-    const sourceId = "mixed-manual-summary" as KnowledgeSourceId;
-    addSourceToCapsule(store, CAPSULE_ID, {
-      id: sourceId,
-      displayName: "Fixture manual",
-      tags: [
-        htmlManualSourceKindTag("html-manual-http"),
-        htmlManualSourceFingerprintTag("fp-mixed"),
-      ],
-      scope: { kind: "folder", rootPath: "/fixture/manual", recursive: true },
-    });
-    persistHtmlManualSourceMetadata(store, CAPSULE_ID, sourceId, {
-      schemaVersion: "1",
-      scope: {
-        kind: "html-manual-http",
-        origin: "https://manual.example.invalid",
-        pathPrefix: null,
-      },
-      limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-      sourceFingerprint: "fp-mixed",
-      proposedPodName: "Fixture manual",
-    });
-    // Historical/corrupt row after a healthy public source write.
-    store._internal.db
-      .prepare("UPDATE html_manual_sources SET last_change_summary_json = :bytes")
-      .run({ bytes: "{fixture-corrupt" });
+    seedCorruptMixedManualSource(store, CAPSULE_ID);
     const events: KnowledgeLogEvent[] = [];
     const result = await refreshRepositoryPod(
       indexingDeps(countingAdapter(), { logSink: { write: (event) => events.push(event) } }),

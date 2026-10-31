@@ -58,6 +58,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** One failure callback received exactly these inputs, after one counted sink-failure loss. */
+function expectOneSinkFailureLoss(
+  callbackInputs: readonly (readonly unknown[])[],
+  lossSnapshots: readonly number[],
+  expected: readonly [unknown, unknown, unknown],
+): void {
+  expect(callbackInputs).toHaveLength(1);
+  expect(callbackInputs[0]?.[0]).toBe(expected[0]);
+  expect(callbackInputs[0]?.[1]).toBe(expected[1]);
+  expect(callbackInputs[0]?.[2]).toBe(expected[2]);
+  expect(lossSnapshots).toEqual([1]);
+  expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+  expect(activityLogLossCounters()["port-unwired"]).toBe(0);
+}
+
 describe("nullSecurityLogSink", () => {
   it("accepts an event without throwing and returns a shared instance", () => {
     const sink = nullSecurityLogSink();
@@ -481,13 +496,7 @@ describe("#3918 actual source and public synchronous primary delivery", (): void
         expect(trace).toEqual(["write-get", "callback"]);
         expect(getterReceivers).toHaveLength(1);
         expect(getterReceivers[0]).toBe(sink);
-        expect(callbackInputs).toHaveLength(1);
-        expect(callbackInputs[0]?.[0]).toBe(sink);
-        expect(callbackInputs[0]?.[1]).toBe(event);
-        expect(callbackInputs[0]?.[2]).toBe(failure);
-        expect(lossSnapshots).toEqual([1]);
-        expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
-        expect(activityLogLossCounters()["port-unwired"]).toBe(0);
+        expectOneSinkFailureLoss(callbackInputs, lossSnapshots, [sink, event, failure]);
       } finally {
         resetActivityLogLossCountersForTests();
       }
@@ -569,13 +578,7 @@ describe("#3918 actual source and public synchronous primary delivery", (): void
         }
         expect(caught).toBe(callbackFailure);
         expect(trace).toEqual(["write", "callback"]);
-        expect(callbackInputs).toHaveLength(1);
-        expect(callbackInputs[0]?.[0]).toBe(sink);
-        expect(callbackInputs[0]?.[1]).toBe(event);
-        expect(callbackInputs[0]?.[2]).toBe(writeFailure);
-        expect(lossSnapshots).toEqual([1]);
-        expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
-        expect(activityLogLossCounters()["port-unwired"]).toBe(0);
+        expectOneSinkFailureLoss(callbackInputs, lossSnapshots, [sink, event, writeFailure]);
       } finally {
         resetActivityLogLossCountersForTests();
       }

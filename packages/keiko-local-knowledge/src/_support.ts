@@ -4,6 +4,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import {
+  htmlManualSourceFingerprintTag,
+  htmlManualSourceKindTag,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import { persistHtmlManualSourceMetadata } from "./manual-source-metadata.js";
+import { addSourceToCapsule } from "./source-lifecycle.js";
 
 import type {
   CapsuleAnswerGroundingPolicy,
@@ -129,4 +136,31 @@ export function sampleSourceInput(id: string): {
       recursive: true,
     },
   };
+}
+
+/**
+ * Adds an HTML manual source over a folder scope to `capsuleId`, then corrupts its stored change
+ * summary as a historical row would be after a healthy public source write.
+ */
+export function seedCorruptMixedManualSource(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+): void {
+  const sourceId = "mixed-manual-summary" as KnowledgeSourceId;
+  addSourceToCapsule(store, capsuleId, {
+    id: sourceId,
+    displayName: "Fixture manual",
+    tags: [htmlManualSourceKindTag("html-manual-http"), htmlManualSourceFingerprintTag("fp-mixed")],
+    scope: { kind: "folder", rootPath: "/fixture/manual", recursive: true },
+  });
+  persistHtmlManualSourceMetadata(store, capsuleId, sourceId, {
+    schemaVersion: "1",
+    scope: { kind: "html-manual-http", origin: "https://manual.example.invalid", pathPrefix: null },
+    limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+    sourceFingerprint: "fp-mixed",
+    proposedPodName: "Fixture manual",
+  });
+  store._internal.db
+    .prepare("UPDATE html_manual_sources SET last_change_summary_json = :bytes")
+    .run({ bytes: "{fixture-corrupt" });
 }
