@@ -7,6 +7,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import {
+  EPIC_LINK,
   fixtureJira,
   syntheticProject,
   type FixtureIssue,
@@ -76,13 +77,15 @@ function project(): {
 async function reportOf(
   source: JiraIssueTemplateSource | undefined,
   options: Partial<FixtureOptions> = {},
+  extraArgs: CatalogJsonObject = {},
 ): Promise<JiraReport> {
   const { issues } = project();
-  // No create metadata: the instance's own required-field rule must not mix into the template's.
-  const fixture = fixtureJira({ issues, noRequiredMetadata: true, ...options });
+  // Create metadata that requires nothing: the instance's own required-field rule must not mix
+  // into the template's, and the metadata stays readable so the report can complete.
+  const fixture = fixtureJira({ issues, noRequiredFields: true, ...options });
   const store = createJiraReportStore({ now: () => NOW });
   const result = await executeJiraReportTool(
-    { projectKey: "REP" },
+    { projectKey: "REP", ...extraArgs },
     CONTEXT,
     {
       deployment: "data-center",
@@ -253,7 +256,9 @@ describe("template field references", () => {
   });
 
   it("states the check unavailable when a name cannot be resolved because the list was not read", async () => {
-    const report = await reportOf(byName, { omitFieldList: true });
+    // Without the field list the hierarchy cannot be discovered; naming the parent field takes
+    // that responsibility, which is the only way a report completes without the list.
+    const report = await reportOf(byName, { omitFieldList: true }, { parentFieldIds: [EPIC_LINK] });
     expect(report.compliance).toMatchObject({ checker: "unavailable", deviationCount: 0 });
     expect(report.completeness).toMatchObject({ complete: false, reason: "template-unreadable" });
   });

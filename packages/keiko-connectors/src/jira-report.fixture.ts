@@ -44,19 +44,6 @@ function category(index: number): FixtureCategory {
  * sub-tasks have a parent. Requirement ids REQ-001..REQ-005 are named by the first four epics and
  * two stories; REQ-006 is named by nothing.
  */
-function epicIssue(epic: number): FixtureIssue {
-  return {
-    key: `REP-${String(epic)}`,
-    type: "Epic",
-    category: epic === 3 ? "done" : "indeterminate",
-    status: epic === 3 ? "Closed" : "Working",
-    summary: epic <= 3 ? `Epic ${String(epic)} for REQ-00${String(epic)}.` : "Epic without members",
-    links: [],
-    assignee: epic !== 2,
-    acceptance: "n/a",
-    labels: epic === 1 ? ["REQ-004"] : [],
-  };
-}
 export function syntheticProject(size: number): readonly FixtureIssue[] {
   const issues: FixtureIssue[] = [1, 2, 3, 4].map(epicIssue);
   let lastStory = 4;
@@ -202,6 +189,8 @@ export interface FixtureOptions {
   readonly failSearchAt?: number;
   readonly omitFieldList?: boolean;
   readonly noRequiredMetadata?: boolean;
+  /** Create metadata is readable but requires nothing beyond the always-present system fields. */
+  readonly noRequiredFields?: boolean;
 }
 export interface FixtureJira {
   readonly http: AtlassianHttpBodyPort;
@@ -219,7 +208,12 @@ const ISSUE_TYPES = [
   { id: "12", name: "Bug", subtask: false },
   { id: "13", name: "Sub-task", subtask: true },
 ];
-function createMetaFields(typeId: string, mixedCase: boolean): readonly unknown[] {
+function createMetaFields(
+  typeId: string,
+  mixedCase: boolean,
+  nothingRequired: boolean,
+): readonly unknown[] {
+  if (nothingRequired) return [{ fieldId: "summary", required: true, hasDefaultValue: false }];
   return [
     { fieldId: "summary", required: true, hasDefaultValue: false },
     { fieldId: "issuetype", required: true, hasDefaultValue: false },
@@ -259,7 +253,11 @@ function createMeta(path: string, options: FixtureOptions): AtlassianHttpBodyRes
   if (path.startsWith("issue/createmeta/REP/issuetypes/")) {
     const typeId = path.slice(path.lastIndexOf("/") + 1);
     return response({
-      values: createMetaFields(typeId, options.requireFixVersions === true),
+      values: createMetaFields(
+        typeId,
+        options.requireFixVersions === true,
+        options.noRequiredFields === true,
+      ),
       isLast: true,
       total: 5,
     });
