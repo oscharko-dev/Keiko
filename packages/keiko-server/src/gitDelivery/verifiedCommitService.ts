@@ -40,6 +40,7 @@ import {
 import {
   readVerifiedCommitFacts,
   sameVerifiedCommitFacts,
+  untrackedOutsideCandidate,
   verifiedCommitMessageDigest,
 } from "./verifiedCommitFacts.js";
 import { reconcileVerifiedCommit } from "./verifiedCommitRecovery.js";
@@ -326,23 +327,6 @@ function failingEvidence(
     commitVerificationReportFailed(report, before.startedAtMs, now) &&
     sameVerifiedCommitFacts(before.facts, after) &&
     now - before.startedAtMs < TTL_MS
-  );
-}
-
-// Full access commits the staged candidate while untracked files lie outside it, as a plain `git
-// commit` does (owner decision 2026-10-30, #3907): the parity lane's own `npm install` had left an
-// untracked package-lock.json, and the model, which rightly kept it out of the commit, read
-// candidate-not-staged until the run's deadline. Unstaged changes and unsaved buffers still refuse.
-function untrackedOutsideCandidate(
-  context: VerifiedCommitRunContext,
-  facts: VerifiedCommitFacts,
-): boolean {
-  const blocking = facts.blocking;
-  return (
-    !facts.clean &&
-    blocking?.unstagedCount === 0 &&
-    blocking.untrackedCount > 0 &&
-    context.buffersClean()
   );
 }
 

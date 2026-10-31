@@ -2123,6 +2123,14 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   before any verification of that staged candidate is refused as `verification-missing`, not
   `candidate-not-staged`: the untracked files are admitted, so only the verification is missing (lab
   lane T17, round H: the old answer sent the model to restage the same candidate until the deadline).
+  The coding tool facade answers that refusal with one fixed guidance sentence: the change is
+  already staged, so verify it (`keiko_verification`, or the repository's own command in the shell
+  when the verifier names the shell) and propose the commit again (round I: given only the code,
+  the model restaged and re-proposed until the deadline).
+  The push of that Full-access commit re-reads the same facts and admits the same untracked files:
+  it sends the verified commit alone, so an untracked file beside it is no remote drift. Unstaged
+  changes, unsaved buffers and every other mode still refuse the push (round I: the committed run's
+  every push was refused as `remote-drift` over the lockfile its own `npm install` left).
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

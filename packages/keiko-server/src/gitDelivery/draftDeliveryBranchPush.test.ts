@@ -108,6 +108,38 @@ describe("issue-free branch push to a local bare origin", () => {
     GIT_FIXTURE_TIMEOUT_MS,
   );
 
+  // AC3 lab T17 (round I, #3907): Full access committed the staged candidate beside the untracked
+  // package-lock.json its own `npm install` had left, and then every push was refused as
+  // remote-drift because the push re-read demanded a tree with no untracked file at all. The push
+  // sends the verified commit only, so Full access admits the same untracked files the commit did;
+  // every other mode still refuses.
+  it(
+    "pushes a Full-access commit while an untracked file lies beside it, and refuses in other modes",
+    async () => {
+      const subject = await branchFixture();
+      const head = subject.git(["rev-parse", "HEAD"]);
+      writeFileSync(join(subject.root, "package-lock.json"), "{}\n");
+      await expect(subject.service.proposePush()).resolves.toMatchObject({
+        status: "unavailable",
+      });
+      expect(subject.remoteHead(subject.branch)).toBeUndefined();
+
+      const fullAccess = new DraftDeliveryController({
+        ...subject.options,
+        policyAllowsWithoutApproval: (): boolean => true,
+      });
+      const proposal = await fullAccess.proposePush();
+      const id = recordedId(subject, proposal);
+      const result = await fullAccess.executeApproved(id, undefined, { check: () => true });
+      expect(result, JSON.stringify(subject.events)).toMatchObject({
+        status: "recorded",
+        record: { phase: "pushed", reason: "completed" },
+      });
+      expect(subject.remoteHead(subject.branch)).toBe(head);
+    },
+    GIT_FIXTURE_TIMEOUT_MS,
+  );
+
   it(
     "never substitutes a later local commit for the approved one",
     async () => {
