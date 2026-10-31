@@ -1,4 +1,3 @@
-import { buildManagedGitWorktree } from "./managedGitWorktree.test-support.js";
 // Route tests for the governed fetch/pull sync preview + execute routes (Issue #1573, Epic #1572).
 //
 // Drives the handlers at the BFF seam with an injected fake GitProcessRunner (no real git). Proves:
@@ -7,6 +6,7 @@ import { buildManagedGitWorktree } from "./managedGitWorktree.test-support.js";
 //   * request hardening (404 unknown project, 400 bad/forbidden/extra-key/unsafe-ref, 413 oversize).
 //   * a content-free sync evidence record lands after execute (no URLs / secrets).
 
+import { buildManagedGitWorktree } from "./_support.js";
 import { captureActivityLog } from "../activityLogCapture.test-support.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

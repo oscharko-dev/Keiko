@@ -1144,7 +1144,15 @@ describe.each([
   ["public", publicRunControlSnapshot],
 ] as const)("%s identity-header observations", (_surface, validate): void => {
   it("reads the healthy header and local suffix once in order with original receivers", (): void => {
-    expectHealthyHeaderReads(validate, snapshot(), SNAPSHOT_IDENTITY_HEADER_FIELDS);
+    expectHealthyHeaderReads(validate, snapshot(), SNAPSHOT_IDENTITY_HEADER_FIELDS, [
+      "kind",
+      "schemaVersion",
+      "taskId",
+      "runId",
+      "idempotencyKey",
+      "runEpoch",
+      "stateRevision",
+    ]);
   });
 
   it("retains earlier own-key errors and eagerly checks every refused prefix and local suffix", (): void => {

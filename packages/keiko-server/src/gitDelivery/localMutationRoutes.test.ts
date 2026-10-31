@@ -1,4 +1,3 @@
-import { buildManagedGitWorktree } from "./managedGitWorktree.test-support.js";
 // Route tests for the governed local branch + staging execution routes (Issue #475, Epic #470).
 //
 // Two harnesses:
@@ -9,6 +8,7 @@ import { buildManagedGitWorktree } from "./managedGitWorktree.test-support.js";
 //     exercise the governed outcomes (success, preflight-block, policy-block, approval-required) and
 //     prove evidence is recorded and the mutation never bypasses the kernel.
 
+import { buildManagedGitWorktree } from "./_support.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

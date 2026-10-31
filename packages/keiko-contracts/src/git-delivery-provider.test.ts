@@ -1,7 +1,7 @@
-import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 // Behavioral tests for git-delivery-provider.ts (Issue #471, Epic #470). Covers every exported
 // guard (positive AND negative cases) for the provider-neutral interfaces.
 
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 import { describe, expect, it } from "vitest";
 
 import {

@@ -1541,7 +1541,13 @@ describe.each([
   ["public", publicCodeTaskExecution],
 ] as const)("%s identity-header observations", (_surface, validate): void => {
   it("reads the healthy header and local suffix once in order with original receivers", (): void => {
-    expectHealthyHeaderReads(validate, execution(), EXECUTION_IDENTITY_HEADER_FIELDS);
+    expectHealthyHeaderReads(validate, execution(), EXECUTION_IDENTITY_HEADER_FIELDS, [
+      "kind",
+      "schemaVersion",
+      "taskId",
+      "runId",
+      "workspaceId",
+    ]);
   });
 
   it("retains earlier own-key errors and eagerly checks every refused prefix and local suffix", (): void => {

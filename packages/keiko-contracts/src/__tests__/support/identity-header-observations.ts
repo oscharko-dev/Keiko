@@ -37,18 +37,22 @@ export function observeHeaderFields<T extends object>(
   return { trace, receivers };
 }
 
-/** A healthy header is read once per field, in order, on the original receiver. */
+/**
+ * A healthy header is read once per field, in the `expected` order, on the original receiver.
+ * `expected` is stated separately from `fields`, so shrinking the observed list fails the proof.
+ */
 export function expectHealthyHeaderReads<T extends object>(
   validate: (input: T) => CheckedRecord,
   input: T,
   fields: readonly (keyof T & string)[],
+  expected: readonly string[],
 ): void {
   const { trace, receivers } = observeHeaderFields(input, fields);
   const result = validate(input);
   expect(result.ok).toBe(true);
   if (result.ok) expect(result.value).toBe(input);
-  expect(trace).toEqual(fields);
-  expect(receivers).toHaveLength(fields.length);
+  expect(trace).toEqual(expected);
+  expect(receivers).toHaveLength(expected.length);
   for (const receiver of receivers) expect(receiver).toBe(input);
 }
 

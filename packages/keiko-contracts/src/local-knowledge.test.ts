@@ -1,9 +1,9 @@
-import type { OptionalFieldPair } from "./__tests__/support/library-parser-type-facts.js";
 // Unit tests for the Local Knowledge Connector contracts (Epic #189, Issue #191). Each
 // negative test mutates exactly one field of a known-good fixture so failures point
 // precisely at the broken invariant — the same mutation-robust pattern used by
 // connected-context.test.ts and workflow-handoff.test.ts.
 
+import type { OptionalFieldPair } from "./__tests__/support/library-parser-type-facts.js";
 import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
   LibraryParserAcceptedExpected,

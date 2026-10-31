@@ -1,10 +1,10 @@
-import { expectDiagnosticRefusals } from "./__tests__/support/context-diagnostic-refusals.js";
 // Unit tests for context-observations.ts + context-observations-validation.ts (ADR-0054, PR3-W1).
 // Each validator test mutates exactly one field of a known-good fixture so a single-line
 // implementation mutation is caught. Discriminated-union dispatch routes by kind. The forward-
 // defined browser type validates. Backward compat pins the absent-optional shapes: a
 // CommandResult without omittedByteCount and a ToolCallResult without shapedObservation still type.
 
+import { expectDiagnosticRefusals } from "./__tests__/support/context-diagnostic-refusals.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   ContextDiagnosticTripleExpected,

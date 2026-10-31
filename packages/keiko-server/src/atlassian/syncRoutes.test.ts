@@ -1,4 +1,4 @@
-import { withSyncActivityLog } from "./syncActivityLog.test-support.js";
+import { withSyncActivityLog } from "./_support.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import {

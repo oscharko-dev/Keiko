@@ -1,4 +1,4 @@
-import { withSyncActivityLog } from "./syncActivityLog.test-support.js";
+import { withSyncActivityLog } from "./_support.js";
 import {
   expectActivityLogProof,
   singleActivityLogEventLine,

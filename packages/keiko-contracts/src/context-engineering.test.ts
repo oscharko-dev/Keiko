@@ -1,9 +1,9 @@
-import { expectDiagnosticRefusals } from "./__tests__/support/context-diagnostic-refusals.js";
 // Unit tests for context-engineering.ts + context-engineering-validation.ts. Each validator
 // test mutates exactly one field of a known-good fixture so a single-line implementation
 // mutation is caught and the failure points at the broken invariant. Estimator tests assert
 // totality, determinism, monotonicity, and the conservatism bounds from ADR-0052 gate 2.
 
+import { expectDiagnosticRefusals } from "./__tests__/support/context-diagnostic-refusals.js";
 import { describe, it, expect, expectTypeOf, vi } from "vitest";
 import type {
   ContextDiagnosticTripleExpected,

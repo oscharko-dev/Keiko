@@ -1,9 +1,9 @@
-import { receiverCheckedReads } from "./__tests__/support/checked-envelope.js";
 // Unit tests for the Governed Enterprise Memory Vault contracts (Epic #204, Issue #205).
 // Each negative test mutates exactly one field of a known-good fixture so failures point
 // precisely at the broken invariant — the same mutation-robust pattern used by
 // local-knowledge.test.ts and connected-context.test.ts.
 
+import { receiverCheckedReads } from "./__tests__/support/checked-envelope.js";
 import { describe, it, expect, expectTypeOf } from "vitest";
 import type { LibraryOutput } from "./__tests__/support/library-parser-type-facts.js";
 import { spawnSync } from "node:child_process";
@@ -2437,6 +2437,14 @@ describe("Memory public parsers (#3918)", () => {
   });
 });
 
+interface RemainingMemoryCase {
+  readonly parse: (input: unknown) => PublicMemoryValidation<unknown>;
+  readonly input: Record<string, unknown>;
+  readonly invalid: Record<string, unknown>;
+  readonly errors: readonly string[];
+  readonly optionalField: string;
+}
+
 export function parsePublicMemoryProposal(
   input: unknown,
 ): PublicMemoryValidation<PublicMemoryProposal> {
@@ -2489,6 +2497,13 @@ export function parsePublicMemoryArchive(
   return result;
 }
 
+export function parsePublicMemoryForget(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryForget> {
+  const result = validatePublicMemoryForget(input);
+  return result;
+}
+
 export function parsePublicMemoryAuditRecord(
   input: unknown,
 ): PublicMemoryValidation<PublicMemoryAuditRecord> {
@@ -2496,12 +2511,11 @@ export function parsePublicMemoryAuditRecord(
   return result;
 }
 
-interface RemainingMemoryCase {
-  readonly parse: (input: unknown) => PublicMemoryValidation<unknown>;
-  readonly input: Record<string, unknown>;
-  readonly invalid: Record<string, unknown>;
-  readonly errors: readonly string[];
-  readonly optionalField: string;
+export function parsePublicMemoryRetrievalRequest(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryRetrievalRequest> {
+  const result = validatePublicMemoryRetrievalRequest(input);
+  return result;
 }
 
 function lifecycleProofInput(fields: Record<string, unknown>): Record<string, unknown> {
@@ -2851,20 +2865,6 @@ function expectRemainingMemoryAccumulation(): void {
       "retrieval.includeSuperseded must be a boolean when set",
     ],
   });
-}
-
-export function parsePublicMemoryForget(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryForget> {
-  const result = validatePublicMemoryForget(input);
-  return result;
-}
-
-export function parsePublicMemoryRetrievalRequest(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryRetrievalRequest> {
-  const result = validatePublicMemoryRetrievalRequest(input);
-  return result;
 }
 
 describe("Memory remaining public parsers (#3918)", () => {

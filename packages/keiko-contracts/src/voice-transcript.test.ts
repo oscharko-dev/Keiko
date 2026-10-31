@@ -1,4 +1,3 @@
-import { expectCatalogGuardWithoutCoercion } from "./__tests__/support/catalog-guard.js";
 // Regression tests for the Voice Digital Twin transcript segment lifecycle contract (Issue #500,
 // ADR-0105). These pin the acceptance criteria as executable, mutation-resistant invariants:
 //   AC4 — provider corrections replace prior text deterministically (a corrected segment supersedes the
@@ -8,6 +7,7 @@ import { expectCatalogGuardWithoutCoercion } from "./__tests__/support/catalog-g
 //   AC1/AC2/AC3 admission gating is derived from the wire contract, not re-encoded.
 // The module is pure; these tests read no clock and perform no IO.
 
+import { expectCatalogGuardWithoutCoercion } from "./__tests__/support/catalog-guard.js";
 import { describe, expect, it } from "vitest";
 import type { VoiceProfile } from "./gateway.js";
 import type { VoiceControlMessageKind } from "./voice-protocol.js";
