@@ -28,12 +28,19 @@ function exchange(
   data: ToolResultEnvelope["data"],
   mutationOutcome?: ChatToolExchange["mutationOutcome"],
   status: ToolResultEnvelope["status"] = "completed",
+  canonicalId = "keiko.jira.create",
 ): ChatToolExchange {
   return {
     call: { id: `${name}-${String(Math.random())}`, name, arguments: {} },
-    result: { status, data } as ToolResultEnvelope,
+    result: { status, data, toolRef: { canonicalId, contractVersion: 3 } } as ToolResultEnvelope,
     ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
   };
+}
+function draftExchange(
+  data: ToolResultEnvelope["data"],
+  mutationOutcome: ChatToolExchange["mutationOutcome"],
+): ChatToolExchange {
+  return exchange("jira_draft", data, mutationOutcome, "completed", "keiko.jira.draft");
 }
 const TRANSCRIPT: readonly ChatToolExchange[] = [
   exchange("jira_search", { issues: [] }),
@@ -97,8 +104,7 @@ describe("chatToolTurnPartialAnswer", () => {
   });
 
   it("lists each backlog draft item's key and keeps uncertain items apart", () => {
-    const draft = exchange(
-      "jira_draft",
+    const draft = draftExchange(
       {
         outcome: "unknown",
         items: [
@@ -115,13 +121,12 @@ describe("chatToolTurnPartialAnswer", () => {
       "Completed in this turn:\n- jira_draft REQ-21 (created)\n- jira_draft REQ-22 (existing)",
     );
     expect(answer).toContain(
-      "check these in Jira before retrying:\n- jira_draft (no key) (uncertain)",
+      "check these in Jira before retrying:\n- jira_draft (item 3, no key) (uncertain)",
     );
   });
 
-  it("counts a draft's failed items as refused, not its skipped or excluded ones", () => {
-    const draft = exchange(
-      "jira_draft",
+  it("names a draft's failed and blocked items as not done, and leaves deselected ones out", () => {
+    const draft = draftExchange(
       {
         outcome: "rejected",
         items: [
@@ -136,7 +141,39 @@ describe("chatToolTurnPartialAnswer", () => {
     );
     const answer = chatToolTurnPartialAnswer([draft], "deadline");
     expect(answer).toContain("- jira_draft REQ-31 (created)");
+    expect(answer).toContain(
+      "Not done — refused by Jira, or blocked by an earlier item:\n" +
+        "- jira_draft (item 2, no key) (failed)\n" +
+        "- jira_draft (item 3, no key) (failed)\n" +
+        "- jira_draft (item 4, no key) (skipped)\n",
+    );
+    expect(answer).not.toContain("excluded");
     expect(answer).toContain("Reads completed: 0. Refused or failed tool calls: 2.");
+  });
+
+  // #4178 review: a read or an MCP tool may return data shaped like a draft result; only the
+  // managed draft's own journal-classified write may become a receipt.
+  it.each([
+    ["a read without a mutation outcome", undefined, "keiko.mcp.tabc"],
+    ["a classified result of another tool", "succeeded" as const, "keiko.jira.create"],
+    ["an unclassified result naming the draft tool", undefined, "keiko.jira.draft"],
+  ])("never turns %s into draft receipts", (_name, outcome, canonicalId) => {
+    const shaped = exchange(
+      "mcp_inventory_list",
+      {
+        items: [
+          { state: "created", issueKey: "REQ-123" },
+          { state: "uncertain", issueKey: "REQ-124" },
+        ],
+      },
+      outcome,
+      "completed",
+      canonicalId,
+    );
+    const answer = chatToolTurnPartialAnswer([shaped], "deadline");
+    expect(answer).not.toContain("REQ-123");
+    expect(answer).not.toContain("REQ-124");
+    expect(answer).not.toContain("Not done");
   });
 
   it("counts a read whose result lists items as a read, not as a draft", () => {

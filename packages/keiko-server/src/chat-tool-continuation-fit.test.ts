@@ -72,6 +72,7 @@ describe("fitToolContinuation", () => {
       5,
       {
         status: "completed",
+        toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
         data: {
           outcome: "succeeded",
           items: [
@@ -97,6 +98,22 @@ describe("fitToolContinuation", () => {
         { state: "existing", issueKey: "REQ-22" },
         { state: "uncertain" },
       ],
+    });
+  });
+
+  it("never compacts a read's draft-shaped items into write receipts", () => {
+    const read = exchange(5, {
+      status: "completed",
+      toolRef: { canonicalId: "keiko.mcp.tabc", contractVersion: 1 },
+      data: { items: [{ state: "created", issueKey: "REQ-123", note: BULK }] },
+    });
+    const newest = EXCHANGES.at(-1);
+    if (newest === undefined) throw new Error("Missing newest exchange");
+    const exchanges = [read, newest];
+    const fitted = fitToolContinuation(continuationOf(exchanges), exchanges, 0);
+    expect(JSON.parse(fitted.messages[1]?.content ?? "")).toEqual({
+      elided: true,
+      status: "completed",
     });
   });
 

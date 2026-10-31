@@ -15,9 +15,9 @@ import { chatToolDraftReceipts, chatToolIssueKey } from "./chat-tool-receipts.js
 function closedString(value: unknown): string | undefined {
   return typeof value === "string" && /^[a-z][a-z0-9-]{0,63}$/u.test(value) ? value : undefined;
 }
-function receiptsOf(data: unknown): object {
-  const issueKey = chatToolIssueKey(data);
-  const items = chatToolDraftReceipts(data);
+function receiptsOf(exchange: ChatToolExchange): object {
+  const issueKey = chatToolIssueKey(exchange.result?.data);
+  const items = chatToolDraftReceipts(exchange);
   return {
     ...(issueKey === undefined ? {} : { issueKey }),
     ...(items === undefined ? {} : { items }),
@@ -31,7 +31,7 @@ function compactExchange(exchange: ChatToolExchange): string {
     status: closedString(result?.status),
     reason: closedString(result?.reason),
     mutationOutcome: closedString(exchange.mutationOutcome),
-    ...receiptsOf(result?.data),
+    ...receiptsOf(exchange),
   });
 }
 export function estimateGatewayMessageTokens(messages: readonly GatewayMessage[]): number {

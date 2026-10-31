@@ -8,7 +8,11 @@ import { ERROR_CODES, GatewayError } from "@oscharko-dev/keiko-model-gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ServerLogSink } from "./observability/index.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
-import { chatToolDraftReceipts, chatToolIssueKey } from "./chat-tool-receipts.js";
+import {
+  chatToolDraftReceipts,
+  chatToolIssueKey,
+  type ChatToolDraftReceipt,
+} from "./chat-tool-receipts.js";
 
 /**
  * How an accepted Chat tool turn ended before the model gave its own answer (#4175). The answer
@@ -79,6 +83,8 @@ interface Tally {
   readonly unconfirmed: string[];
   /** Started but never settled: the call may have reached Jira before bookkeeping failed. */
   readonly unsettled: string[];
+  /** Draft items Jira refused, or that an earlier failed or uncertain item kept from being sent. */
+  readonly notDone: string[];
   reads: number;
   refused: number;
 }
@@ -86,16 +92,23 @@ function receipt(exchange: ChatToolExchange): string {
   const key = chatToolIssueKey(exchange.result?.data);
   return key === undefined ? exchange.call.name : `${exchange.call.name} ${key}`;
 }
+function countDraftItem(result: Tally, item: ChatToolDraftReceipt, label: string): void {
+  if (item.state === "created" || item.state === "existing") result.succeeded.push(label);
+  else if (item.state === "uncertain") result.unconfirmed.push(label);
+  else if (item.state === "failed") {
+    result.refused++;
+    result.notDone.push(label);
+  }
+  // A skipped item was blocked by a failed or uncertain one; only an excluded item is deselected.
+  else if (item.state === "skipped") result.notDone.push(label);
+}
 /** A backlog draft reports each item: created or reconciled items completed, uncertain ones sent. */
 function countDraft(result: Tally, exchange: ChatToolExchange): boolean {
-  const items = chatToolDraftReceipts(exchange.result?.data);
+  const items = chatToolDraftReceipts(exchange);
   if (items === undefined) return false;
-  for (const item of items) {
-    const label = `${exchange.call.name} ${item.issueKey ?? "(no key)"} (${item.state})`;
-    if (item.state === "created" || item.state === "existing") result.succeeded.push(label);
-    else if (item.state === "uncertain") result.unconfirmed.push(label);
-    // Skipped and excluded items are the human's choice or a dependency's; a failed one is refused.
-    else if (item.state === "failed") result.refused++;
+  for (const [index, item] of items.entries()) {
+    const key = item.issueKey ?? `(item ${String(index + 1)}, no key)`;
+    countDraftItem(result, item, `${exchange.call.name} ${key} (${item.state})`);
   }
   return true;
 }
@@ -114,6 +127,7 @@ function tally(exchanges: readonly ChatToolExchange[]): Tally {
     succeeded: [],
     unconfirmed: [],
     unsettled: [],
+    notDone: [],
     reads: 0,
     refused: 0,
   };
@@ -136,6 +150,7 @@ export function chatToolTurnPartialAnswer(
     ...bullets("Completed in this turn:", counts.succeeded),
     ...bullets("Sent but not confirmed — check these in Jira before retrying:", counts.unconfirmed),
     ...bullets("Started but not settled — check these in Jira before retrying:", counts.unsettled),
+    ...bullets("Not done — refused by Jira, or blocked by an earlier item:", counts.notDone),
     `Reads completed: ${String(counts.reads)}. Refused or failed tool calls: ${String(counts.refused)}.`,
     "",
     "The rest of the request was not done. Send a follow-up message to continue from here; completed writes are not repeated unless you ask for them again.",
