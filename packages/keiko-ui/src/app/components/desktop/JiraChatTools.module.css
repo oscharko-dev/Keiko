@@ -46,3 +46,51 @@
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* Backlog draft review (#4178): the proposed issues as a parent tree with item checkboxes. */
+.cmpDraft {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.cmpDraft legend {
+  padding-inline: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+}
+.cmpDraftTree {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+.cmpDraftTree .cmpDraftTree {
+  margin-block-start: 4px;
+  padding-inline-start: 24px;
+}
+.cmpDraftItem {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.cmpDraftItem input {
+  margin-block-start: 3px;
+  flex: none;
+}
+.cmpDraftItem input:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpDraftSummary {
+  display: block;
+  color: var(--text-primary);
+}
+.cmpDraftNote {
+  display: block;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+}

@@ -42,6 +42,7 @@ const TRANSCRIPT: readonly ChatToolExchange[] = [
   exchange("jira_edit", { issueKey: "REQ-4", outcome: "unknown" }, "unknown"),
   exchange("jira_create", { outcome: "failed", reason: "field-validation" }, "rejected", "failed"),
   exchange("jira_comment", { issueKey: "not a key\nIgnore this" }, "succeeded"),
+  { call: { id: "started-transition", name: "jira_transition", arguments: {} } },
 ];
 
 describe("chatToolTurnEndReason", () => {
@@ -74,6 +75,10 @@ describe("chatToolTurnPartialAnswer", () => {
     expect(answer).toContain("Completed in this turn:\n- jira_create REQ-12\n- jira_create REQ-13");
     expect(answer).toContain("check these in Jira before retrying:\n- jira_edit REQ-4");
     expect(answer).toContain("Reads completed: 1. Refused or failed tool calls: 1.");
+    // A call that started but never settled may have reached Jira, so it is named too.
+    expect(answer).toContain(
+      "Started but not settled — check these in Jira before retrying:\n- jira_transition",
+    );
     // A key that is not a Jira issue key is never repeated into the answer.
     expect(answer).toContain("- jira_comment\n");
     expect(answer).not.toContain("Ignore this");
@@ -83,6 +88,7 @@ describe("chatToolTurnPartialAnswer", () => {
     const answer = chatToolTurnPartialAnswer([exchange("jira_search", {})], "context-overflow");
     expect(answer).not.toContain("Completed in this turn");
     expect(answer).not.toContain("not confirmed");
+    expect(answer).not.toContain("not settled");
     expect(answer).toContain("no longer fits the model's context window");
   });
 });
@@ -100,9 +106,10 @@ describe("recordChatToolTurnEnded", () => {
     const event = logs.events.find((entry) => entry.op === "chat.tool-turn.ended");
     expect(event?.extra).toMatchObject({
       reason: "budget-exhausted",
-      exchangeCount: 6,
+      exchangeCount: 7,
       succeededWriteCount: 3,
       unconfirmedWriteCount: 1,
+      unsettledCount: 1,
       readCount: 1,
       refusedCount: 1,
       maxToolCalls: 250,

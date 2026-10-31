@@ -68,6 +68,8 @@ export function chatToolTurnEndReason(error: unknown): ChatToolTurnEndReason | u
 interface Tally {
   readonly succeeded: string[];
   readonly unconfirmed: string[];
+  /** Started but never settled: the call may have reached Jira before bookkeeping failed. */
+  readonly unsettled: string[];
   reads: number;
   refused: number;
 }
@@ -84,14 +86,21 @@ function receipt(exchange: ChatToolExchange): string {
 }
 function count(result: Tally, exchange: ChatToolExchange): void {
   const outcome = exchange.mutationOutcome;
-  if (outcome === "succeeded") result.succeeded.push(receipt(exchange));
+  if (exchange.result === undefined) result.unsettled.push(exchange.call.name);
+  else if (outcome === "succeeded") result.succeeded.push(receipt(exchange));
   else if (outcome === "succeeded-unconfirmed" || outcome === "unknown")
     result.unconfirmed.push(receipt(exchange));
-  else if (outcome === undefined && exchange.result?.status === "completed") result.reads++;
+  else if (outcome === undefined && exchange.result.status === "completed") result.reads++;
   else result.refused++;
 }
 function tally(exchanges: readonly ChatToolExchange[]): Tally {
-  const result: Tally = { succeeded: [], unconfirmed: [], reads: 0, refused: 0 };
+  const result: Tally = {
+    succeeded: [],
+    unconfirmed: [],
+    unsettled: [],
+    reads: 0,
+    refused: 0,
+  };
   for (const exchange of exchanges) count(result, exchange);
   return result;
 }
@@ -110,6 +119,7 @@ export function chatToolTurnPartialAnswer(
     "",
     ...bullets("Completed in this turn:", counts.succeeded),
     ...bullets("Sent but not confirmed — check these in Jira before retrying:", counts.unconfirmed),
+    ...bullets("Started but not settled — check these in Jira before retrying:", counts.unsettled),
     `Reads completed: ${String(counts.reads)}. Refused or failed tool calls: ${String(counts.refused)}.`,
     "",
     "The rest of the request was not done. Send a follow-up message to continue from here; completed writes are not repeated unless you ask for them again.",
@@ -129,6 +139,7 @@ const TURN_ENDED = defineActivityLogOperation({
     exchangeCount: { type: "integer", dataClass: "count", required: true },
     succeededWriteCount: { type: "integer", dataClass: "count", required: true },
     unconfirmedWriteCount: { type: "integer", dataClass: "count", required: true },
+    unsettledCount: { type: "integer", dataClass: "count", required: true },
     readCount: { type: "integer", dataClass: "count", required: true },
     refusedCount: { type: "integer", dataClass: "count", required: true },
     maxToolCalls: { type: "integer", dataClass: "count", required: true },
@@ -167,6 +178,7 @@ export function recordChatToolTurnEnded(
           exchangeCount: input.exchanges.length,
           succeededWriteCount: counts.succeeded.length,
           unconfirmedWriteCount: counts.unconfirmed.length,
+          unsettledCount: counts.unsettled.length,
           readCount: counts.reads,
           refusedCount: counts.refused,
           maxToolCalls: input.budget.maxToolCalls,

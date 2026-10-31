@@ -257,13 +257,18 @@ same turn deadline bounds `expiresAt` and runtime. The envelope budget is the tu
 ceilings from it rather than from the coding-harness defaults, and the stored tool transcript holds
 one exchange per admitted tool call. The default (`CHAT_TOOL_TURN_BUDGET`) is sized for backlog
 work — 60 minutes, 250 tool calls and 5,000,000 cumulative prompt tokens — and a composition may
-narrow it; a request cannot. Jira and MCP sources of one turn share it. A round past the tool-call
-budget is refused before any model call. When a turn that already settled tool calls ends early
+narrow it; a request cannot. A composed value above the default is clamped to it field by field,
+because the default is also the stored transcript's exchange bound. Jira and MCP sources of one turn
+share it. A round past the tool-call budget is refused before any model call. Before a call starts,
+the turn reserves its worst-case transcript bytes (arguments, the descriptor's result bound, the
+result binding and a fixed envelope share); a call that would exceed the transcript's 16 MiB bound
+ends the turn as `budget-exhausted` instead of starting work whose result could not be persisted. When a turn that already settled tool calls ends early
 (budget, deadline, authority change, unsettled tool call, output exhaustion, context overflow or
 another model failure), its answer is built from the stored transcript, not from the model: it lists
-the acknowledged writes with their issue keys, unconfirmed writes separately, and the counts of
-reads and refused calls; a human stop is not replaced. `chat.tool-turn.ended` records the closed
-reason, those counts and the envelope bounds. Older tool results in the copy sent to the model are
+the acknowledged writes with their issue keys, unconfirmed writes separately, calls that started
+but never settled (one may have reached Jira before bookkeeping failed), and the counts of reads and
+refused calls; a human stop is not replaced. `chat.tool-turn.ended` records the closed reason, those
+counts (including `unsettledCount`) and the envelope bounds. Older tool results in the copy sent to the model are
 compacted, oldest first and never the newest, to a closed record (status, reason, mutation outcome,
 issue key) when the continuation would exceed its share of the model window;
 `chat.tool-turn.context-fitted` records the count. The stored transcript is unchanged. A dispatch

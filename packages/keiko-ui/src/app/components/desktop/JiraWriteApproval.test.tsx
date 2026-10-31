@@ -337,3 +337,87 @@ it("reviews a configured MCP action and its arguments through the existing appro
   expect(await screen.findByText("Approved for this action")).toBeVisible();
   expect(await axe(container)).toHaveNoViolations();
 });
+
+describe("Jira backlog draft approval (#4178)", () => {
+  const draftCall = {
+    id: "draft-call",
+    name: "jira_draft",
+    arguments: {
+      items: [
+        { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic A" } },
+        {
+          ref: "story",
+          projectId: "10000",
+          issueTypeId: "10002",
+          fields: { summary: "Story B", description: "Synthetic" },
+          parent: { fieldId: "customfield_10100", ref: "epic" },
+        },
+        {
+          ref: "bug",
+          projectId: "10000",
+          issueTypeId: "10003",
+          fields: { summary: "Bug C" },
+          links: [{ type: "Blocks", direction: "outward", ref: "story" }],
+        },
+        { ref: "loose", projectId: "10000", issueTypeId: "10002", fields: { summary: "Task D" } },
+      ],
+    },
+  };
+  function draftApproval(): ChatToolWriteApprovalView {
+    return { ...approval("draft-approval"), operation: "jira.draft" };
+  }
+
+  it("shows the draft as a tree, carries a deselection with its dependents, and sends only the choice", async () => {
+    const view = draftApproval();
+    const decide = vi.fn().mockResolvedValue({
+      ...view,
+      state: "approved",
+      excludedItemRefs: ["story"],
+    });
+    const { container } = render(
+      <JiraWriteApproval
+        approval={view}
+        call={draftCall}
+        turnState="pending"
+        observe={vi.fn().mockResolvedValue(view)}
+        decide={decide}
+      />,
+    );
+    await ready();
+    expect(screen.getByRole("group", { name: "Issues to create (4 of 4 selected)" })).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: /Story B/u })).toBeChecked();
+    expect(screen.getByText("Blocks → story")).toBeVisible();
+    expect(screen.getByText("1 more field")).toBeVisible();
+    await userEvent.click(screen.getByRole("checkbox", { name: /Story B/u }));
+    expect(screen.getByRole("group", { name: "Issues to create (2 of 4 selected)" })).toBeVisible();
+    const bug = screen.getByRole("checkbox", { name: /Bug C/u });
+    expect(bug).not.toBeChecked();
+    expect(bug).toBeDisabled();
+    expect(screen.getByText("Left out because an issue it depends on is left out")).toBeVisible();
+    expect(await axe(container)).toHaveNoViolations();
+    await userEvent.click(screen.getByRole("button", { name: "Approve this action" }));
+    expect(decide).toHaveBeenCalledExactlyOnceWith(view, "approve", ["story"]);
+    expect(await screen.findByText("Approved for this action")).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: /Epic A/u })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /Bug C/u })).not.toBeChecked();
+  });
+
+  it("cannot approve a draft with every item left out, but can still decline it", async () => {
+    const view = draftApproval();
+    render(
+      <JiraWriteApproval
+        approval={view}
+        call={draftCall}
+        turnState="pending"
+        observe={vi.fn().mockResolvedValue(view)}
+        decide={vi.fn()}
+      />,
+    );
+    await ready();
+    await userEvent.click(screen.getByRole("checkbox", { name: /Epic A/u }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Task D/u }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Bug C/u }));
+    expect(screen.getByRole("button", { name: "Approve this action" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Decline this action" })).toBeEnabled();
+  });
+});

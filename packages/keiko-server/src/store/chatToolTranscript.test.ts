@@ -5,6 +5,11 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { buildUiStoreOverDatabase, type UiStore } from "./index.js";
+import {
+  CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
+  CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
+  chatToolExchangeReservation,
+} from "./chatToolTranscript.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { runMigrations } from "./schema.js";
@@ -14,7 +19,10 @@ import {
   expectActivityLogProof,
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  ToolDescriptor,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 const disposals: (() => void)[] = [];
 afterEach(() => {
@@ -556,4 +564,37 @@ it("retains both source disclosures and upgrades a legacy single disclosure with
   const transcript = store.findMessageById(id)?.toolTranscript;
   expect(transcript?.readGrants).toEqual([jira, granted]);
   expect(transcript?.readGrant).toEqual(granted);
+});
+
+describe("transcript byte reservation (#4175)", () => {
+  it("reserves at least a worst-case stored exchange", () => {
+    const maxResultBytes = 262_144;
+    const descriptor = {
+      toolRef: { canonicalId: "keiko.jira.search", contractVersion: 1 },
+      bounds: { maxArgumentBytes: 262_144, maxResultBytes, maxResultCount: 1, maxDurationMs: 1 },
+      inputSchema: { description: "s".repeat(8_192) },
+    } as unknown as ToolDescriptor;
+    const largeCall = { ...call, arguments: { jql: '"'.repeat(100_000) } };
+    const stored = {
+      call: largeCall,
+      result: { ...result(), data: { text: "x".repeat(maxResultBytes - 16) } },
+      resultBinding: { descriptor, projectionDigest: "c".repeat(64) },
+      approval: {
+        ...approval({ id: "m", chatId: "c" } as ReturnType<typeof fixture>),
+        excludedItemRefs: Array.from({ length: 32 }, (_, index) => `ref-${String(index)}`),
+      },
+      mutationOutcome: "unknown",
+    };
+    expect(Buffer.byteLength(JSON.stringify(stored))).toBeLessThanOrEqual(
+      chatToolExchangeReservation(largeCall, descriptor),
+    );
+    // Reads at the full result bound fit far fewer than the 250 admitted calls, so the turn ends
+    // as budget-exhausted before persistence could refuse a started call.
+    const fitting = Math.floor(
+      (CHAT_TOOL_TRANSCRIPT_MAX_BYTES - CHAT_TOOL_TRANSCRIPT_BASE_BYTES) /
+        chatToolExchangeReservation(call, descriptor),
+    );
+    expect(fitting).toBeGreaterThan(0);
+    expect(fitting).toBeLessThan(CHAT_TOOL_TURN_BUDGET.maxToolCalls);
+  });
 });

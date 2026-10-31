@@ -12,8 +12,8 @@ import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 
 const TURN_LIMIT_MS = 1_800_000;
 
-const api = (ctx, name, path, body, method = "POST") =>
-  jsonRequest(ctx.origin, ctx.cookie, name, path, body, method);
+const api = (ctx, name, path, body, method = "POST", signal = undefined) =>
+  jsonRequest(ctx.origin, ctx.cookie, name, path, body, method, signal);
 
 function rulesMarkdown() {
   const lines = ["# Jira-Strukturvorgabe (Projektleitung, synthetisch)", ""];
@@ -147,19 +147,32 @@ async function chatTurn(ctx, chat, content) {
   const started = Date.now();
   let settled = false;
   let failure;
-  const pending = api(ctx, "send", "/api/desktop/chat", {
-    chatId: chat.id,
-    projectPath: ctx.projectPath,
-    modelId: ctx.modelId,
-    clientTurnId: randomUUID(),
-    expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
-    content,
-    memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
-  })
+  const send = new globalThis.AbortController();
+  const pending = api(
+    ctx,
+    "send",
+    "/api/desktop/chat",
+    {
+      chatId: chat.id,
+      projectPath: ctx.projectPath,
+      modelId: ctx.modelId,
+      clientTurnId: randomUUID(),
+      expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
+      content,
+      memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
+    },
+    "POST",
+    send.signal,
+  )
     .catch((error) => (failure = String(error?.message ?? error).slice(0, 300)))
     .finally(() => (settled = true));
-  await superviseTurn(ctx, chat, prior, () => settled);
-  await pending;
+  try {
+    await superviseTurn(ctx, chat, prior, () => settled);
+  } finally {
+    // A turn that outlives supervision is cancelled, so it cannot write into the next journey.
+    if (!settled) send.abort();
+    await pending;
+  }
   return { durationMs: Date.now() - started, failure, ...(await settledTurn(ctx, chat, prior)) };
 }
 
@@ -317,6 +330,7 @@ const JOURNEYS = {
     const muss = buildCorpus(1)
       .truth.filter((item) => item.priority === "Muss")
       .map((item) => item.id);
+    const refusalsBefore = logMatchCount(ctx.root, "generation-changed");
     const turn = await chatTurn(
       ctx,
       chat,
@@ -326,7 +340,8 @@ const JOURNEYS = {
       ctx.session,
       `project = REQ AND issuetype = Epic AND created >= "${since}"`,
     );
-    const refused = logContains(ctx.root, "generation-changed");
+    // Only this turn's refusals count; earlier journeys share the same live log.
+    const refused = logMatchCount(ctx.root, "generation-changed") > refusalsBefore;
     const ok = !turn.failure && turn.answer.length > 0 && epics.length === muss.length && !refused;
     return result(
       ok ? "green" : "red",
@@ -336,7 +351,8 @@ const JOURNEYS = {
   },
 };
 
-function logContains(root, needle) {
+function logMatchCount(root, needle) {
+  let count = 0;
   const stack = [root];
   while (stack.length > 0) {
     const path = stack.pop();
@@ -344,11 +360,11 @@ function logContains(root, needle) {
       const child = join(path, name);
       const stat = statSync(child);
       if (stat.isDirectory()) stack.push(child);
-      else if (/\.(jsonl|log|ndjson)$/.test(name) && readFileSync(child, "utf8").includes(needle))
-        return true;
+      else if (/\.(jsonl|log|ndjson)$/.test(name))
+        count += readFileSync(child, "utf8").split(needle).length - 1;
     }
   }
-  return false;
+  return count;
 }
 
 export const JOURNEY_IDS = Object.freeze(Object.keys(JOURNEYS));

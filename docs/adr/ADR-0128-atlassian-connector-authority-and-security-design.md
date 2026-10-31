@@ -359,8 +359,9 @@ target; read-back confirms every requested link in its requested direction, exis
 kept, and a link read returns `{ type, direction, issueKey }` JSON text. Field
 metadata projects Jira's declared `schemaType` so a caller can shape an opaque value. A refused
 write returns, to the model only, the refused field with Keiko's closed validation reason, or
-Jira's own bounded field errors and messages (at most 8 and 3, 200 characters each, control
-characters removed); none of it is logged. A choice list above 500 entries makes only that field
+Jira's own bounded field errors and messages (at most 8 and 3, each cut on code-point boundaries
+to 200 UTF-8 bytes of its JSON encoding, control characters removed, so quotes and non-ASCII text
+cannot push the detail past the 4 KiB result bound); none of it is logged. A choice list above 500 entries makes only that field
 unsupported; other fields remain usable, and a required field without a server default still
 blocks creation. Plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;

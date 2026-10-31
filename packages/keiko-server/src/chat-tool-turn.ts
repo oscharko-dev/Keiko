@@ -48,6 +48,11 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ChatMessage } from "./store/index.js";
+import {
+  CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
+  CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
+  chatToolExchangeReservation,
+} from "./store/chatToolTranscript.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
@@ -117,6 +122,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private completionTokens = 0;
   private readonly limits: HarnessLimits;
   private elidedResults = 0;
+  private reservedTranscriptBytes = CHAT_TOOL_TRANSCRIPT_BASE_BYTES;
   protected constructor(private readonly options: ChatToolTurnOptions<Context>) {
     this.context = {
       ...options.context,
@@ -310,6 +316,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
     this.callIds.add(call.id);
     const publicCall = { id: call.id, name: call.name, arguments: call.arguments };
+    this.reserveTranscript(publicCall, call.invocation.toolRef.canonicalId);
     deps.store.updateChatToolTranscript(
       message.id,
       { kind: "started", call: publicCall },
@@ -342,6 +349,16 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
     this.appendObservedExchange(call.id);
     await this.publish();
+  }
+  /** A call whose worst-case exchange no longer fits the stored transcript ends the turn. */
+  private reserveTranscript(call: ChatToolExchange["call"], canonicalId: string): void {
+    const descriptor = this.options.managed.catalog.descriptors.find(
+      (entry) => entry.toolRef.canonicalId === canonicalId,
+    );
+    requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
+    const reserved = this.reservedTranscriptBytes + chatToolExchangeReservation(call, descriptor);
+    requireDispatch(reserved <= CHAT_TOOL_TRANSCRIPT_MAX_BYTES, "denied", "budget-exhausted");
+    this.reservedTranscriptBytes = reserved;
   }
   private appendObservedExchange(id: string): void {
     const stored = this.options.deps.store
@@ -440,11 +457,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
     const reason = expired ? "deadline" : chatToolTurnEndReason(error);
-    const exchanges =
-      deps.store
-        .findMessageById(message.id)
-        ?.toolTranscript?.exchanges.filter((exchange) => exchange.result !== undefined) ?? [];
-    if (reason === undefined || exchanges.length === 0) return undefined;
+    // Unsettled calls stay in the answer: one may have reached Jira before bookkeeping failed.
+    const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
+    const settled = exchanges.some((exchange) => exchange.result !== undefined);
+    if (reason === undefined || !settled) return undefined;
     recordChatToolTurnEnded(processServerLogSink(), {
       correlationId,
       messageId: message.id,

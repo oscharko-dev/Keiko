@@ -73,6 +73,8 @@ export const JIRA_MUTATION_DETAIL_LIMITS = Object.freeze({
   fieldErrors: 8,
   messages: 3,
   messageChars: 200,
+  /** UTF-8 bytes of one message's JSON encoding, so escapes and non-ASCII text stay bounded. */
+  messageBytes: 200,
 });
 export interface JiraMutationFieldError {
   readonly fieldId: string;
@@ -103,8 +105,26 @@ function detailText(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const text = value.replace(DETAIL_CONTROL, " ").trim();
   if (text.length === 0) return undefined;
-  const limit = JIRA_MUTATION_DETAIL_LIMITS.messageChars;
-  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+  return boundedDetailText(text);
+}
+const DETAIL_ENCODER = new TextEncoder();
+const DETAIL_ELLIPSIS = "…";
+function encodedBytes(text: string): number {
+  return DETAIL_ENCODER.encode(JSON.stringify(text)).length - 2;
+}
+/** Cuts on code-point boundaries until the JSON-encoded text fits its byte bound. */
+function boundedDetailText(text: string): string {
+  const limit = JIRA_MUTATION_DETAIL_LIMITS.messageBytes;
+  if (encodedBytes(text) <= limit) return text;
+  const budget = limit - encodedBytes(DETAIL_ELLIPSIS);
+  let used = 0;
+  let kept = "";
+  for (const point of text) {
+    used += encodedBytes(point);
+    if (used > budget) break;
+    kept += point;
+  }
+  return `${kept}${DETAIL_ELLIPSIS}`;
 }
 function detailFieldId(value: unknown): value is string {
   return typeof value === "string" && DETAIL_FIELD_ID.test(value);

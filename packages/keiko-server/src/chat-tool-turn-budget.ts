@@ -14,11 +14,27 @@ export const CHAT_TOOL_TURN_BUDGET: ChatToolAuthorityEnvelope["budget"] = Object
   maxPatchBytes: 0,
 });
 
-/** The composed budget, or the default when a composition does not narrow it. */
+/**
+ * The composed budget, narrowed field by field to the default: the default is also what the stored
+ * transcript admits, so a composition can tighten a turn but never widen it.
+ */
 export function chatToolTurnBudget(deps: {
   readonly chatToolTurnBudget?: ChatToolAuthorityEnvelope["budget"] | undefined;
 }): ChatToolAuthorityEnvelope["budget"] {
-  return deps.chatToolTurnBudget ?? CHAT_TOOL_TURN_BUDGET;
+  const composed = deps.chatToolTurnBudget;
+  if (composed === undefined) return CHAT_TOOL_TURN_BUDGET;
+  const ceiling = CHAT_TOOL_TURN_BUDGET;
+  const narrows =
+    composed.maxRuntimeMs <= ceiling.maxRuntimeMs &&
+    composed.maxToolCalls <= ceiling.maxToolCalls &&
+    composed.maxPromptTokens <= ceiling.maxPromptTokens;
+  if (narrows) return composed;
+  return Object.freeze({
+    maxRuntimeMs: Math.min(composed.maxRuntimeMs, ceiling.maxRuntimeMs),
+    maxToolCalls: Math.min(composed.maxToolCalls, ceiling.maxToolCalls),
+    maxPromptTokens: Math.min(composed.maxPromptTokens, ceiling.maxPromptTokens),
+    maxPatchBytes: 0,
+  });
 }
 
 /** Every round dispatches at least one tool call or ends; each round may need one repair. */

@@ -135,14 +135,16 @@ export async function jsonRequest(origin, cookie, name, path, body, method = "PO
   if (!origin.startsWith("http:"))
     return (await request(origin, cookie, name, path, body, method, signal)).json();
   const { status, text } = await loopbackJson(origin, cookie, path, body, method, signal);
-  const parsed = (() => {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return {};
-    }
-  })();
-  if (status < 200 || status >= 300) throw failedStage(name, status, parsed);
+  const ok = status >= 200 && status < 300;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    // An error status still names its stage; a successful body must be JSON like request().json().
+    if (ok) throw new TypeError(`${name} returned an unparsable body`, { cause: error });
+    parsed = {};
+  }
+  if (!ok) throw failedStage(name, status, parsed);
   return parsed;
 }
 function assertLiveModelOptions(modelId, modelRetries, embeddingModelId) {
@@ -181,6 +183,11 @@ function selectedGatewayProvider(modelId) {
   const capability = config.capabilities?.find((entry) => entry.id === modelId);
   return { provider, capability, env: { [`KEIKO_MODEL_${token}_API_KEY`]: apiKey } };
 }
+// The gateway takes whole output limits only, and 0 means the model declared none.
+function simulatedOutputLimit(base, simulated) {
+  if (base.maxOutputTokens === 0) return 0;
+  return Math.min(base.maxOutputTokens, Math.max(1, Math.floor(simulated / 8)));
+}
 // KEIKO_JIRA_LAB_CONTEXT_WINDOW deliberately simulates a smaller model on the same endpoint.
 function chatCapability(modelId, configured) {
   const simulated = Number(process.env.KEIKO_JIRA_LAB_CONTEXT_WINDOW ?? "");
@@ -192,7 +199,7 @@ function chatCapability(modelId, configured) {
   return {
     ...base,
     ...(Number.isSafeInteger(simulated) && simulated > 0
-      ? { contextWindow: simulated, maxOutputTokens: Math.min(base.maxOutputTokens, simulated / 8) }
+      ? { contextWindow: simulated, maxOutputTokens: simulatedOutputLimit(base, simulated) }
       : {}),
     streaming: true,
     toolCalling: true,

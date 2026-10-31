@@ -183,8 +183,25 @@ function bugPlan(fields, epics) {
     });
 }
 
+/** The truth file describes exactly what was seeded, so a partly seeded project must stop here. */
+async function assertEmptyProject(key) {
+  const jql = encodeURIComponent(`project = ${key}`);
+  const found = await checked(
+    session,
+    `project-${key}-empty`,
+    "GET",
+    `/rest/api/2/search?jql=${jql}&maxResults=0`,
+    auth,
+  );
+  if (found.total !== 0)
+    throw new TypeError(
+      `Project ${key} already holds ${String(found.total)} issues but no truth file; reset the lab first`,
+    );
+}
+
 await ensureProject("REQ", "Anforderungen Schadenmeldung");
 await ensureProject("RPT", "Auswertung Schadenmeldung");
+await assertEmptyProject("RPT");
 const fields = await fieldIds("RPT");
 const epics = epicPlan(fields);
 (await bulkCreate("RPT", epics)).forEach((key, index) => (epics[index].key = key));

@@ -249,7 +249,9 @@ every other connection field) keeps the runtime generation, the coarse verificat
 remaining observations, then consumes the applied fields; a conversation turn admitted against those
 connections stays admitted (#4175: a readiness proof landing mid-turn refused the turn as
 `generation-changed`). A write that changes any connection field, the model list or its order
-replaces the runtime generation and clears every remaining observation.
+replaces the runtime generation and resets the coarse verification state. It clears the remaining
+observations only of providers that were changed or removed; an unchanged provider keeps its
+observations under the new generation, including when the list was only reordered.
 
 ### D4 — Whole-gateway verification remains independent
 

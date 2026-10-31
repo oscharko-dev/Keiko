@@ -69,7 +69,7 @@ it.each(["project", "issuetype"])("rejects a caller routing override in fields.%
       issueTypeId: "10001",
       fields: { summary: "Synthetic", customfield_10000: "Required", [id]: { id: "10002" } },
     }),
-  ).toMatchObject({ ok: false, reason: "field-validation" });
+  ).toEqual({ ok: false, reason: "field-validation" });
   expect(f.http).not.toHaveBeenCalled();
 });
 
@@ -94,7 +94,11 @@ it.each(["summary", "customfield_10000"])(
         issueTypeId: "10001",
         fields: { summary: "Synthetic", customfield_10000: "Required" },
       }),
-    ).toMatchObject({ ok: false, reason: "field-validation" });
+    ).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: id, validation: "invalid-operation" },
+    });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
@@ -120,7 +124,11 @@ it("keeps selected routing references inside current metadata allowed values", a
       issueTypeId: "10001",
       fields: { summary: "Synthetic", customfield_10000: "Required" },
     }),
-  ).toMatchObject({ ok: false, reason: "field-validation" });
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "issuetype", validation: "invalid-field" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
 it.each(["legacy", "current", "immutable-current"])(
@@ -310,7 +318,11 @@ it.each(["jira.create", "jira.transition"] as const)(
       operation === "jira.create"
         ? { projectId: "10000", issueTypeId: "10001", fields: { summary: "Synthetic" } }
         : { issueKey: "SYN-1", transitionId: "31", fields: {} };
-    expect(await f.run(operation, args)).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: "customfield_10000", validation: "required-field" },
+    });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
@@ -335,7 +347,7 @@ it.each([
   "rejects malformed/routing/compound %s arguments before HTTP (%#)",
   async (operation, args) => {
     const f = fixture();
-    expect(await f.run(operation, args)).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "field-validation" });
     expect(f.http).not.toHaveBeenCalled();
   },
 );
@@ -354,7 +366,11 @@ it("collects all create pages before validating a required field on a later page
       issueTypeId: "10001",
       fields: { summary: "Synthetic" },
     }),
-  ).toMatchObject({ ok: false, reason: "field-validation" });
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "customfield_10000", validation: "required-field" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET"]);
   expect(f.http.mock.calls[1]?.[0].url).toContain("startAt=2");
 });
@@ -426,7 +442,11 @@ it("revalidates metadata when edit operations change between actions", async () 
   f.http.mockResolvedValueOnce(
     response({ fields: { summary: { ...field("summary", "string"), operations: [] } } }),
   );
-  expect(await f.run("jira.edit", args)).toMatchObject({ ok: false, reason: "field-validation" });
+  expect(await f.run("jira.edit", args)).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "summary", validation: "invalid-operation" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
     "GET",
     "GET",
@@ -472,7 +492,7 @@ it.each(["inactive", "unassign-forbidden"] as const)(
         issueKey: "SYN-1",
         ...(kind === "inactive" ? { assigneeName: "synthetic-user" } : { clearAssignee: true }),
       }),
-    ).toMatchObject({ ok: false, reason: "field-validation" });
+    ).toEqual({ ok: false, reason: "field-validation" });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );

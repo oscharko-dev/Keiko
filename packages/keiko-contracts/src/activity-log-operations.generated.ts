@@ -2829,6 +2829,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      unsettledCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       readCount: {
         type: "integer",
         dataClass: "count",

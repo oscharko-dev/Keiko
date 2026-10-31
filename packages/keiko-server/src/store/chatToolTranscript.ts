@@ -14,7 +14,10 @@ import {
   JIRA_MUTATION_OPERATIONS,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  ToolDescriptor,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, deepRedactStrings, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   captureCatalogJson,
@@ -55,6 +58,27 @@ interface StoredTranscript extends ChatToolTranscript {
 // One exchange per tool call the turn's Authority Envelope admits (#4175).
 const MAX_EXCHANGES = CHAT_TOOL_TURN_BUDGET.maxToolCalls;
 const MAX_TRANSCRIPT_BYTES = 16_777_216;
+// The envelope, approval view, mutation outcome and grant share one exchange adds beside its
+// call, bounded result and descriptor binding; generous so the reservation is an upper bound.
+const EXCHANGE_OVERHEAD_BYTES = 16_384;
+/**
+ * The stored transcript's byte bound, and the share its schema and read grants hold (#4175). A
+ * turn reserves each exchange's worst case before it starts, so it ends as budget-exhausted
+ * instead of starting a call whose result could not be persisted.
+ */
+export const CHAT_TOOL_TRANSCRIPT_MAX_BYTES = MAX_TRANSCRIPT_BYTES;
+export const CHAT_TOOL_TRANSCRIPT_BASE_BYTES = 65_536;
+export function chatToolExchangeReservation(
+  call: ChatToolExchange["call"],
+  descriptor: ToolDescriptor,
+): number {
+  return (
+    Buffer.byteLength(JSON.stringify(call)) +
+    descriptor.bounds.maxResultBytes +
+    Buffer.byteLength(JSON.stringify(descriptor)) +
+    EXCHANGE_OVERHEAD_BYTES
+  );
+}
 const UPDATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,

@@ -119,7 +119,7 @@ describe("executeAtlassianWriteRequest — classification", () => {
     });
     if (outcome.ok || outcome.remote?.fieldErrors === undefined) throw new Error("Expected detail");
     expect(outcome.remote.fieldErrors[1]?.message).toMatch(/^bad value x+…$/u);
-    expect(outcome.remote.fieldErrors[1]?.message).toHaveLength(200);
+    expect(outcome.remote.fieldErrors[1]?.message).toHaveLength(198);
   });
 
   it.each([

@@ -39,4 +39,19 @@ describe("chat tool turn budget (#4175)", () => {
     expect(chatToolTurnBudget({ chatToolTurnBudget: narrow })).toBe(narrow);
     expect(chatToolTurnBudget({})).toBe(CHAT_TOOL_TURN_BUDGET);
   });
+
+  it("never widens the default the stored transcript admits", () => {
+    const wide = {
+      maxRuntimeMs: 1,
+      maxToolCalls: CHAT_TOOL_TURN_BUDGET.maxToolCalls + 1,
+      maxPromptTokens: CHAT_TOOL_TURN_BUDGET.maxPromptTokens + 1,
+      maxPatchBytes: 0,
+    } as const;
+    expect(chatToolTurnBudget({ chatToolTurnBudget: wide })).toEqual({
+      maxRuntimeMs: 1,
+      maxToolCalls: CHAT_TOOL_TURN_BUDGET.maxToolCalls,
+      maxPromptTokens: CHAT_TOOL_TURN_BUDGET.maxPromptTokens,
+      maxPatchBytes: 0,
+    });
+  });
 });

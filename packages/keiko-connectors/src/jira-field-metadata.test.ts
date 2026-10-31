@@ -112,6 +112,13 @@ describe("bounded Jira metadata field/operation matrix", () => {
     { customfield_9: Array.from({ length: 101 }, (_, index) => index) },
     { customfield_9: "control\u0000character" },
     { customfield_9: Number.POSITIVE_INFINITY },
+    {
+      customfield_9: Object.fromEntries(
+        Array.from({ length: 51 }, (_, index) => [`k${String(index)}`, index]),
+      ),
+    },
+    // Each string is within the scalar bound; together they pass the 16 KiB serialized bound.
+    { customfield_9: Array.from({ length: 5 }, () => "x".repeat(4000)) },
   ])("bounds an opaque plugin value: %j", (changes) => {
     const result = parseJiraFieldMetadata([
       field("customfield_9", "any", { schema: { type: "any", custom: "vendor:link" } }),
@@ -121,6 +128,28 @@ describe("bounded Jira metadata field/operation matrix", () => {
       ok: false,
       reason: "invalid-field",
       fieldId: "customfield_9",
+    });
+  });
+
+  it.each([
+    { customfield_9: "x".repeat(4096) },
+    { customfield_9: Array.from({ length: 100 }, (_, index) => index) },
+    {
+      customfield_9: Object.fromEntries(
+        Array.from({ length: 50 }, (_, index) => [`k${String(index)}`, index]),
+      ),
+    },
+    { customfield_9: [[["at depth"]]] },
+    { customfield_9: Array.from({ length: 3 }, () => "x".repeat(4000)) },
+  ])("accepts an opaque plugin value exactly at its bounds: %j", (changes) => {
+    const result = parseJiraFieldMetadata([
+      field("customfield_9", "any", { schema: { type: "any", custom: "vendor:link" } }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(validateJiraFieldChanges(result.fields, changes, "edit", "data-center")).toEqual({
+      ok: true,
+      fields: changes,
+      update: {},
     });
   });
 
