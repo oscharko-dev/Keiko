@@ -57,9 +57,10 @@ function context(jira, act, truth = { fieldIds: { epicLink: EPIC_LINK }, issues:
     search: (query) => jira.search(query),
     refusals: () => 0,
     turn: async () => {
-      const { answer = "", writes = 1 } = act();
+      const { answer = "", writes = 1, toolExchanges = [] } = act();
       return {
         answer,
+        toolExchanges,
         failure: undefined,
         durationMs: 1000,
         toolCalls: 2,
@@ -269,24 +270,45 @@ describe("S07 tasks under the requirement epic", () => {
 });
 
 describe("S11 compliance report", () => {
+  const OBLIGATIONS = ["deviating-issues", "deviation-detail"];
+  const FIELDS = { epicLink: "customfield_10001", storyPoints: "customfield_10002" };
   const issues = [
     { key: "RPT-1", deviations: ["summary", "section:Abgrenzung"] },
     { key: "RPT-2", deviations: [] },
     { key: "RPT-3", deviations: ["parent"] },
   ];
-  const truth = { fieldIds: {}, issues };
-  const grade = async (answer) =>
+  const truth = { fieldIds: FIELDS, issues };
+  /** The deviation list of a completed `jira.report` call, as the tool returns it. */
+  const reportOf = (items) => ({
+    call: { id: "call-1", name: "jira.report", arguments: { projectKey: "RPT" } },
+    result: {
+      status: "completed",
+      data: {
+        outcome: "succeeded",
+        status: "complete",
+        report: { compliance: { deviations: { total: items.length, items } } },
+      },
+    },
+  });
+  const ENTRIES = [
+    { key: "RPT-1", ruleIds: ["template.summary", "template.section.abgrenzung"], fieldIds: [] },
+    { key: "RPT-3", ruleIds: ["required-field-empty"], fieldIds: [FIELDS.epicLink] },
+  ];
+  const grade = async (answer, toolExchanges = [reportOf(ENTRIES)], world = truth) =>
     run(
       "S11",
-      context(fakeJira(), () => ({ answer }), truth),
+      context(fakeJira(), () => ({ answer, toolExchanges }), world),
     );
+  const verdict = (check) => scenarioVerdict(scenario("S11"), [{ layer: "journey", ...check }]);
 
-  it("is green when every deviating issue and each of its deviations is described", async () => {
+  it("is green when every deviating issue is reported by the tool and each deviation described", async () => {
     const answer = [
       "RPT-1: Zusammenfassung ohne [LH-xxx]-Präfix; Abschnitt Abgrenzung fehlt",
       "RPT-3: kein Epic zugeordnet",
     ].join("\n");
-    expect((await grade(answer)).status).toBe("green");
+    const check = await grade(answer);
+    expect(check.status).toBe("green");
+    expect(verdict(check).status).toBe("green");
   });
 
   it("is not green for the right keys without their deviations", async () => {
@@ -304,6 +326,149 @@ describe("S11 compliance report", () => {
     expect((await grade("RPT-1: Zusammenfassung, Abgrenzung\nRPT-2: Zusammenfassung")).status).toBe(
       "red",
     );
+  });
+
+  it("does not take a compliant issue for a false finding", async () => {
+    const answer = [
+      "RPT-1: Zusammenfassung ohne Präfix; Abschnitt Abgrenzung fehlt",
+      "RPT-2: keine Abweichung",
+      "RPT-3: Epic fehlt",
+    ].join("\n");
+    expect((await grade(answer)).status).toBe("green");
+  });
+
+  describe("an answer that denies the seeded deviations", () => {
+    const FIVE = ["summary", "parent", "estimate", "label:req", "section:Abnahmekriterien"];
+    const fiveTruth = { fieldIds: FIELDS, issues: [{ key: "RPT-1", deviations: FIVE }] };
+    const fiveEntry = {
+      key: "RPT-1",
+      ruleIds: [
+        "template.summary-prefix",
+        "template.parent-epic",
+        "template.estimate-missing",
+        "template.label-req",
+        "template.section-abnahmekriterien",
+      ],
+      fieldIds: [],
+    };
+    const gradeFive = (answer, toolExchanges = [reportOf([fiveEntry])]) =>
+      grade(answer, toolExchanges, fiveTruth);
+    const DESCRIBED = [
+      "Summary ohne Präfix [LH-",
+      "Parent: kein Epic zugeordnet",
+      "Estimate fehlt",
+      "Label req fehlt",
+    ];
+
+    it("is not green and credits no obligation for the reviewer's negated answer", async () => {
+      const check = await gradeFive(
+        "RPT-1: Keine Abweichung. Summary, Parent, Estimate, Label und Abnahmekriterien sind vollständig und korrekt.",
+      );
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("5 of 5 seeded deviations not described");
+      const result = verdict(check);
+      expect(result.status).toBe("red");
+      expect(result.uncovered).toEqual(OBLIGATIONS);
+      expect(result.covered).toEqual([]);
+    });
+
+    it.each([
+      "RPT-1: Keine Abweichung. Summary, Parent, Estimate, Label und Abnahmekriterien.",
+      "Summary, Parent, Estimate, Label und Abnahmekriterien von RPT-1 sind vollständig und korrekt.",
+      "RPT-1: No deviation. Summary, parent, estimate, label and Abnahmekriterien are compliant.",
+      "RPT-1: Abweichungen: keine. Summary, Parent, Estimate, Label und Abnahmekriterien.",
+      "RPT-1: nothing to report. Summary, parent, estimate, label and Abnahmekriterien.",
+      "RPT-1: kein Fehler gefunden; Summary, Parent, Estimate, Label, Abnahmekriterien in Ordnung.",
+      "RPT-1 is correct: summary, parent, estimate, label and Abnahmekriterien all match the template.",
+    ])("is not green for the denial %#", async (answer) => {
+      const check = await gradeFive(answer);
+      expect(check.status).toBe("red");
+      expect(check.detail).toMatch(/[1-5] of 5 seeded deviations not described/);
+    });
+
+    it("is green when a structured result and an answer naming each deviation agree", async () => {
+      const check = await gradeFive(
+        [...DESCRIBED, "Abschnitt Abnahmekriterien fehlt"]
+          .map((line) => `RPT-1: ${line}`)
+          .join("\n"),
+      );
+      expect(check.status).toBe("green");
+      expect(verdict(check).covered).toEqual(OBLIGATIONS);
+    });
+
+    it("keeps a deviation that merely contains a denial word described", async () => {
+      const answer = [
+        "RPT-1: Summary entspricht nicht der Vorgabe; Parent ist nicht korrekt gesetzt",
+        "Estimate fehlt, Label req fehlt, Abschnitt Abnahmekriterien fehlt vollständig",
+      ].join("\n");
+      expect((await gradeFive(answer)).status).toBe("green");
+    });
+
+    it("is red with one undescribed deviation when four are described and one is denied", async () => {
+      const answer = [
+        `RPT-1: ${DESCRIBED.join("; ")}.`,
+        "Abnahmekriterien sind vollständig und korrekt.",
+      ].join("\n");
+      const check = await gradeFive(answer);
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("1 of 5 seeded deviations not described");
+      expect(verdict(check).covered).toEqual([]);
+    });
+  });
+
+  describe("without a matching structured result", () => {
+    const answer = [
+      "RPT-1: Zusammenfassung ohne Präfix; Abschnitt Abgrenzung fehlt",
+      "RPT-3: kein Epic zugeordnet",
+    ].join("\n");
+
+    it("credits nothing when the turn holds no jira.report result", async () => {
+      for (const exchanges of [
+        [],
+        null,
+        [
+          {
+            call: { id: "c", name: "jira.search", arguments: {} },
+            result: { status: "completed", data: {} },
+          },
+        ],
+        [{ ...reportOf(ENTRIES), result: { status: "failed", reason: "x", data: null } }],
+        [{ ...reportOf(ENTRIES), result: { status: "completed", data: { outcome: "failed" } } }],
+      ]) {
+        const check = await grade(answer, exchanges);
+        expect(check.status).toBe("unverified");
+        expect(check.covers).toEqual([]);
+        const result = verdict(check);
+        expect(result.status).toBe("partial");
+        expect(result.uncovered).toEqual(OBLIGATIONS);
+      }
+    });
+
+    it("is red when the tool did not report a seeded deviation for the right issue", async () => {
+      const wrongIssue = [{ ...ENTRIES[0], key: "RPT-2" }, ENTRIES[1]];
+      const check = await grade(answer, [reportOf(wrongIssue)]);
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("2 not reported by the tool");
+      const missingRule = [
+        { key: "RPT-1", ruleIds: ["template.summary"], fieldIds: [] },
+        ENTRIES[1],
+      ];
+      expect((await grade(answer, [reportOf(missingRule)])).status).toBe("red");
+    });
+
+    it("reads deviations that arrive in a later section page", async () => {
+      const page = {
+        call: { id: "call-2", name: "jira.report", arguments: { section: "deviations" } },
+        result: {
+          status: "completed",
+          data: {
+            outcome: "succeeded",
+            section: { name: "deviations", total: 1, items: [ENTRIES[1]] },
+          },
+        },
+      };
+      expect((await grade(answer, [reportOf([ENTRIES[0]]), page])).status).toBe("green");
+    });
   });
 });
 

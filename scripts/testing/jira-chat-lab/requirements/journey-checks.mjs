@@ -1,7 +1,8 @@
 // Journey definitions and oracles of epic #4173 (#4174): the request sent through Chat and the
 // independent judgement of its effects. The live plumbing is injected through the context so the
 // grading is testable without Keiko or Jira:
-//   ctx.turn(chat, content)  -> { answer, failure, durationMs, toolCalls, approvals: { reads, writes } }
+//   ctx.turn(chat, content)  -> { answer, failure, durationMs, toolCalls, toolExchanges,
+//                                 approvals: { reads, writes } }
 //   ctx.search(query, fields) -> every matching Jira issue (admin read, all pages)
 //   ctx.refusals()           -> count of generation-changed refusals in the live log
 //   ctx.truth                -> generated ground truth of the report project
@@ -15,6 +16,7 @@ import {
   gradeRequirementListing,
   newIssues,
   sectionsPresent,
+  structuredDeviations,
 } from "./oracles.mjs";
 
 const result = (status, turn, detail, covers) => ({
@@ -124,11 +126,26 @@ export const JOURNEYS = {
       chat,
       "Prüfe als Projektleiter jeden Vorgang des Jira-Projekts RPT gegen die Strukturvorgabe und liste die Schlüssel ALLER abweichenden Vorgänge mit ihren Abweichungen auf.",
     );
-    const grade = gradeDeviationReport(turn.answer, ctx.truth.issues);
+    // The tool result is the evidence of what Jira holds; the answer only has to say it, not deny it.
+    const structured = structuredDeviations(turn.toolExchanges);
+    if (structured === undefined) {
+      return result(
+        "unverified",
+        turn,
+        "no completed jira.report result with deviations in the turn; nothing is credited",
+        [],
+      );
+    }
+    const grade = gradeDeviationReport(
+      turn.answer,
+      ctx.truth.issues,
+      structured,
+      ctx.truth.fieldIds,
+    );
     return result(
       grade.keysOk && grade.detailOk ? "green" : "red",
       turn,
-      `${grade.found}/${grade.expected} deviating issues found, ${grade.falseFindings.length} false findings, ${grade.undescribed.length} of ${grade.deviationCount} seeded deviations not described`,
+      `${grade.found}/${grade.expected} deviating issues found, ${grade.falseFindings.length} false findings, ${grade.undescribed.length} of ${grade.deviationCount} seeded deviations not described in the answer, ${grade.unreported.length} not reported by the tool`,
       ["deviating-issues", "deviation-detail"],
     );
   },

@@ -7,7 +7,8 @@
  *  - unchecked:  no check exists
  *  - red:        any check failed
  *  - green:      every obligation is covered by a passing check, one of them an end-to-end journey
- *  - partial:    a journey ran but obligations remain uncovered
+ *  - partial:    a journey ran but obligations remain uncovered (a check that could not verify
+ *                its evidence reports `unverified` and covers nothing)
  *  - probe-only: only model-free probes ran
  * A check lists the obligations it verifies in `covers`; unknown names fail closed.
  */

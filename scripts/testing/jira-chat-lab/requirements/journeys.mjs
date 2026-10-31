@@ -142,9 +142,11 @@ async function settledTurn(ctx, chat, prior) {
   const fresh = observed.messages.filter((message) => !prior.has(message.id));
   const user = fresh.find((message) => message.role === "user");
   const assistant = fresh.find((message) => message.role === "assistant");
+  const toolExchanges = user?.toolTranscript?.exchanges ?? [];
   return {
     answer: assistant?.content ?? assistant?.groundedAnswer?.content ?? "",
-    toolCalls: user?.toolTranscript?.exchanges?.length ?? 0,
+    toolCalls: toolExchanges.length,
+    toolExchanges,
   };
 }
 

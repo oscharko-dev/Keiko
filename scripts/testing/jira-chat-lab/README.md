@@ -592,7 +592,10 @@ and an obligation nobody covers keeps it from ever turning green. Creation journ
 S17) read the matching Jira issue keys before the turn and grade only the keys that appeared
 during it, so earlier journeys, reruns and the Jira actor's timezone cannot leak into the verdict.
 S05 additionally requires exactly one write approval for its batch, S04 requires title, priority
-and chapter per requirement, S11 each seeded deviation, and S17 a one-to-one mapping of the new
+and chapter per requirement, S11 each seeded deviation twice over (the structured `jira.report` result of the turn names it for
+that issue, and the answer attributes it to that issue without denying it; an answer such as
+"Keine Abweichung" or "vollständig und korrekt" leaves it undescribed, and a turn without a
+completed `jira.report` deviation list credits nothing and leaves S11 partial), and S17 a one-to-one mapping of the new
 epics onto the Muss requirements plus every created key in the answer. The oracles are unit-tested
 with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mjs`.
 

@@ -3,7 +3,6 @@
 import { STRUCTURE_RULES } from "./corpus.mjs";
 
 const REQUIREMENT_ID = /LH-\d{3}/g;
-const ISSUE_KEY = /RPT-\d+/g;
 
 const escapeRegExp = (value) => value.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 
@@ -58,62 +57,8 @@ export function gradeRequirementListing(answer, truth) {
   };
 }
 
-// ---------- S11: compliance report ----------
-
-const DEVIATION_WORDS = {
-  summary: /zusammenfassung|summary|titel|präfix|\[LH-/i,
-  parent: /parent|epic|übergeordnet|zuordn|verknüpf/i,
-  estimate: /sch[aä]tzung|estimate|story ?points?|aufwand/i,
-  label: /label/i,
-};
-
-function deviationPattern(code) {
-  if (code.startsWith("section:")) return new RegExp(escapeRegExp(code.slice(8)), "i");
-  if (code.startsWith("label:")) return DEVIATION_WORDS.label;
-  const pattern = DEVIATION_WORDS[code];
-  if (pattern === undefined) throw new TypeError(`Unknown seeded deviation ${code}`);
-  return pattern;
-}
-
-/** Text of the answer that belongs to each issue key: its lines and the lines that continue them. */
-function segmentsByKey(answer) {
-  const segments = new Map();
-  let current = [];
-  for (const line of answer.split("\n")) {
-    const keys = line.match(ISSUE_KEY);
-    if (keys) current = [...new Set(keys)];
-    for (const key of current) segments.set(key, `${segments.get(key) ?? ""}\n${line}`);
-  }
-  return segments;
-}
-
-/**
- * Grades a compliance report: exactly the deviating issues are named, and each seeded deviation of
- * each of them is described in that issue's part of the answer.
- */
-export function gradeDeviationReport(answer, issues) {
-  const expected = issues.filter((issue) => issue.deviations.length > 0);
-  const expectedKeys = new Set(expected.map((issue) => issue.key));
-  const segments = segmentsByKey(answer);
-  const reported = new Set(segments.keys());
-  const found = expected.filter((issue) => reported.has(issue.key));
-  const falseFindings = [...reported].filter((key) => !expectedKeys.has(key));
-  const undescribed = found.flatMap((issue) =>
-    issue.deviations
-      .filter((code) => !deviationPattern(code).test(segments.get(issue.key)))
-      .map((code) => `${issue.key} ${code}`),
-  );
-  const deviationCount = expected.reduce((sum, issue) => sum + issue.deviations.length, 0);
-  return {
-    keysOk: found.length === expected.length && falseFindings.length === 0,
-    detailOk: undescribed.length === 0 && found.length === expected.length,
-    found: found.length,
-    expected: expected.length,
-    falseFindings,
-    undescribed,
-    deviationCount,
-  };
-}
+// S11 (compliance report) lives in deviation-report.mjs: it also reads the tool result.
+export { gradeDeviationReport, structuredDeviations } from "./deviation-report.mjs";
 
 // ---------- creation oracles ----------
 
