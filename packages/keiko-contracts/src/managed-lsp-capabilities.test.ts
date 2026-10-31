@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   installIgnoredProtocolMetadata,
-  observeCapturedExtent,
+  itPreservesCapturedExtent,
   protocolEnumerationInput,
 } from "./__tests__/support/protocol-observation-mechanics.js";
 
@@ -342,54 +342,11 @@ describe.each([
   ["source", parseManagedLspCandidateCapabilities],
   ["public", publicCandidate],
 ] as const)("3918 managed-lsp-capabilities captured extent %s", (_surface, parse) => {
-  function inspectExtent(
-    laterExtent: number,
-    firstObservation: { readonly first: unknown } = { first: 1 },
-  ): {
-    readonly result: boolean;
-    readonly indexReads: number;
-    readonly lengths: readonly unknown[];
-  } {
-    const values: unknown[] = ["hover"];
-    const observation = observeCapturedExtent(
-      values,
-      laterExtent,
-      firstObservation,
-      () => LANGUAGE_SERVICE_OPERATIONS.length + 1,
-    );
-    const { observed } = observation;
-    return {
-      result: parse({ ...candidate(), operations: observed }).ok,
-      indexReads: observation.indexReads,
-      lengths: observation.lengths,
-    };
-  }
-  it("preserves a healthy actual captured extent", () => {
-    const observation = inspectExtent(1);
-    expect(observation.result).toBe(true);
-    expect(observation.lengths.slice(0, 2)).toEqual([1, 1]);
-    expect(observation.indexReads).toBeGreaterThan(0);
+  itPreservesCapturedExtent({
+    member: "hover",
+    bound: LANGUAGE_SERVICE_OPERATIONS.length,
+    admit: (observed) => parse({ ...candidate(), operations: observed }).ok,
   });
-  it.each([NaN, undefined])("preserves original first-limit refusal for %s", (first) => {
-    const observation = inspectExtent(1, { first });
-    expect(observation).toEqual({ result: false, indexReads: 0, lengths: [first] });
-  });
-
-  it.each([LANGUAGE_SERVICE_OPERATIONS.length + 1, Infinity, 0.5, -1])(
-    "refuses captured extent %s before indexing",
-    (extent) => {
-      const observation = inspectExtent(extent);
-      expect({
-        accepted: observation.result,
-        indexReads: observation.indexReads,
-        firstTwoLengths: observation.lengths.slice(0, 2),
-      }).toEqual({
-        accepted: false,
-        indexReads: 0,
-        firstTwoLengths: [1, extent],
-      });
-    },
-  );
 });
 
 import {

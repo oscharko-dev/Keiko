@@ -1,7 +1,10 @@
+import { acceptedValue } from "./__tests__/support/accepted-value.js";
 import type {
-  ParserTypeFacts,
-  UnknownInputParserFacts,
-} from "./__tests__/support/parser-type-contract.js";
+  CheckedResultExpected,
+  CheckedResultFacts,
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 // Tests for the pure Prompt Enhancer validators and branded-id constructors (Issue #1309).
 // Covers happy-path acceptance, per-invariant rejection, and the Ok|Fail discriminated result so
 // downstream packages can rely on the wire-shape guarantees without re-validating.
@@ -909,37 +912,34 @@ export function parsePublicPromptRequest(
 
 describe("Prompt request public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf<ParserTypeFacts<typeof validatePromptEnhancementRequest>>().toEqualTypeOf<
-      UnknownInputParserFacts<PromptEnhancerValidation<PromptEnhancementRequest>>
-    >();
-    expectTypeOf(validatePromptEnhancementRequest).returns.not.toBeAny();
-    expectTypeOf<ParserTypeFacts<typeof publicPromptRequest>>().toEqualTypeOf<
-      UnknownInputParserFacts<PublicPromptValidation<PublicPromptRequest>>
-    >();
-    expectTypeOf(publicPromptRequest).returns.not.toBeAny();
-    expectTypeOf(publicPromptRequest).returns.not.toBeUnknown();
-    expectTypeOf<ParserTypeFacts<typeof parsePublicPromptRequest>>().toEqualTypeOf<
-      UnknownInputParserFacts<PublicPromptValidation<PublicPromptRequest>>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validatePromptEnhancementRequest,
+        typeof publicPromptRequest,
+        typeof parsePublicPromptRequest
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PromptEnhancerValidation<PromptEnhancementRequest>,
+        PublicPromptValidation<PublicPromptRequest>,
+        PublicPromptValidation<PublicPromptRequest>
+      >
     >();
   });
   it("pins independent public nested output fields", () => {
-    const result = publicPromptRequest(validRequest());
-    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
-    if (!result.ok) {
-      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
-      return;
-    }
-    expectTypeOf(result.value).not.toBeAny();
-    expectTypeOf(result.value).not.toBeUnknown();
-    expectTypeOf(result.value.requestId).not.toBeAny();
-    expectTypeOf(result.value.requestId).toEqualTypeOf<PublicRequestId>();
+    expectTypeOf<
+      CheckedResultFacts<typeof publicPromptRequest>
+    >().toEqualTypeOf<CheckedResultExpected>();
+    const value = acceptedValue(publicPromptRequest(validRequest()));
+    expectTypeOf(value.requestId).not.toBeAny();
+    expectTypeOf(value.requestId).toEqualTypeOf<PublicRequestId>();
     expectTypeOf<string>().not.toExtend<PublicRequestId>();
     expectTypeOf<PublicRequestId>().not.toExtend<PublicEnhancedId>();
-    expectTypeOf(result.value.input).not.toBeAny();
-    expectTypeOf(result.value.input.text).toEqualTypeOf<string>();
-    expectTypeOf(result.value.input.attachmentCount).toEqualTypeOf<number | undefined>();
-    expectTypeOf(result.value.locale).toEqualTypeOf<string | undefined>();
-    expectTypeOf(result.value.missingInformationStrategy).toEqualTypeOf<"clarify" | "assume">();
+    expectTypeOf(value.input).not.toBeAny();
+    expectTypeOf(value.input.text).toEqualTypeOf<string>();
+    expectTypeOf(value.input.attachmentCount).toEqualTypeOf<number | undefined>();
+    expectTypeOf(value.locale).toEqualTypeOf<string | undefined>();
+    expectTypeOf(value.missingInformationStrategy).toEqualTypeOf<"clarify" | "assume">();
   });
   it("preserves healthy public identity and owned nested fields", () => {
     const input = { ...validRequest(), locale: undefined };
@@ -977,38 +977,35 @@ export function parsePublicPromptAnalysis(
 
 describe("Prompt analysis public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf<ParserTypeFacts<typeof validatePromptTaskAnalysis>>().toEqualTypeOf<
-      UnknownInputParserFacts<PromptEnhancerValidation<PromptTaskAnalysis>>
-    >();
-    expectTypeOf(validatePromptTaskAnalysis).returns.not.toBeAny();
-    expectTypeOf<ParserTypeFacts<typeof publicSignalAnalysis>>().toEqualTypeOf<
-      UnknownInputParserFacts<PublicPromptValidation<PublicPromptAnalysis>>
-    >();
-    expectTypeOf(publicSignalAnalysis).returns.not.toBeAny();
-    expectTypeOf(publicSignalAnalysis).returns.not.toBeUnknown();
-    expectTypeOf<ParserTypeFacts<typeof parsePublicPromptAnalysis>>().toEqualTypeOf<
-      UnknownInputParserFacts<PublicPromptValidation<PublicPromptAnalysis>>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validatePromptTaskAnalysis,
+        typeof publicSignalAnalysis,
+        typeof parsePublicPromptAnalysis
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PromptEnhancerValidation<PromptTaskAnalysis>,
+        PublicPromptValidation<PublicPromptAnalysis>,
+        PublicPromptValidation<PublicPromptAnalysis>
+      >
     >();
   });
   it("pins independent public nested output fields", () => {
-    const result = publicSignalAnalysis(analyzePrompt(validRequest()));
-    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
-    if (!result.ok) {
-      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
-      return;
-    }
-    expectTypeOf(result.value).not.toBeAny();
-    expectTypeOf(result.value).not.toBeUnknown();
-    expectTypeOf(result.value.requestId).not.toBeAny();
-    expectTypeOf(result.value.requestId).toEqualTypeOf<PublicRequestId>();
+    expectTypeOf<
+      CheckedResultFacts<typeof publicSignalAnalysis>
+    >().toEqualTypeOf<CheckedResultExpected>();
+    const value = acceptedValue(publicSignalAnalysis(analyzePrompt(validRequest())));
+    expectTypeOf(value.requestId).not.toBeAny();
+    expectTypeOf(value.requestId).toEqualTypeOf<PublicRequestId>();
     expectTypeOf<string>().not.toExtend<PublicRequestId>();
-    expectTypeOf(result.value.groundingNeed).not.toBeAny();
-    expectTypeOf(result.value.groundingNeed.volatile).toEqualTypeOf<boolean>();
-    expectTypeOf(result.value.outputSchema).not.toBeAny();
-    expectTypeOf(result.value.outputSchema.structured).toEqualTypeOf<boolean>();
-    expectTypeOf(result.value.normalizedInputLength).toEqualTypeOf<number>();
-    expectTypeOf(result.value.signals).not.toBeAny();
-    for (const signal of result.value.signals) {
+    expectTypeOf(value.groundingNeed).not.toBeAny();
+    expectTypeOf(value.groundingNeed.volatile).toEqualTypeOf<boolean>();
+    expectTypeOf(value.outputSchema).not.toBeAny();
+    expectTypeOf(value.outputSchema.structured).toEqualTypeOf<boolean>();
+    expectTypeOf(value.normalizedInputLength).toEqualTypeOf<number>();
+    expectTypeOf(value.signals).not.toBeAny();
+    for (const signal of value.signals) {
       expectTypeOf(signal).not.toBeAny();
       expectTypeOf(signal.dimension).not.toBeAny();
       expectTypeOf(signal.dimension).toEqualTypeOf<PromptSignalDimension>();
@@ -1058,38 +1055,35 @@ export function parsePublicPromptGrounding(
 
 describe("Prompt grounding public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf<ParserTypeFacts<typeof validateGroundingPlan>>().toEqualTypeOf<
-      UnknownInputParserFacts<PromptEnhancerValidation<GroundingPlan>>
-    >();
-    expectTypeOf(validateGroundingPlan).returns.not.toBeAny();
-    expectTypeOf<ParserTypeFacts<typeof publicGroundingPlan>>().toEqualTypeOf<
-      UnknownInputParserFacts<PublicPromptValidation<PublicGroundingPlan>>
-    >();
-    expectTypeOf(publicGroundingPlan).returns.not.toBeAny();
-    expectTypeOf(publicGroundingPlan).returns.not.toBeUnknown();
-    expectTypeOf<ParserTypeFacts<typeof parsePublicPromptGrounding>>().toEqualTypeOf<
-      UnknownInputParserFacts<PublicPromptValidation<PublicGroundingPlan>>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateGroundingPlan,
+        typeof publicGroundingPlan,
+        typeof parsePublicPromptGrounding
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PromptEnhancerValidation<GroundingPlan>,
+        PublicPromptValidation<PublicGroundingPlan>,
+        PublicPromptValidation<PublicGroundingPlan>
+      >
     >();
   });
   it("pins independent public nested output fields", () => {
-    const result = publicGroundingPlan(planFor("Explain the latest security guidance."));
-    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
-    if (!result.ok) {
-      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
-      return;
-    }
-    expectTypeOf(result.value).not.toBeAny();
-    expectTypeOf(result.value).not.toBeUnknown();
-    expectTypeOf(result.value.untrustedContent).toEqualTypeOf<true>();
-    expectTypeOf(result.value.required).toEqualTypeOf<boolean>();
-    expectTypeOf(result.value.citation).not.toBeAny();
-    expectTypeOf(result.value.citation.granularity).toEqualTypeOf<
-      "per-claim" | "per-section" | "none"
-    >();
-    expectTypeOf(result.value.recency).not.toBeAny();
-    expectTypeOf(result.value.recency.volatile).toEqualTypeOf<boolean>();
-    expectTypeOf(result.value.sourcePriority).not.toBeAny();
-    for (const source of result.value.sourcePriority) {
+    expectTypeOf<
+      CheckedResultFacts<typeof publicGroundingPlan>
+    >().toEqualTypeOf<CheckedResultExpected>();
+    const value = acceptedValue(
+      publicGroundingPlan(planFor("Explain the latest security guidance.")),
+    );
+    expectTypeOf(value.untrustedContent).toEqualTypeOf<true>();
+    expectTypeOf(value.required).toEqualTypeOf<boolean>();
+    expectTypeOf(value.citation).not.toBeAny();
+    expectTypeOf(value.citation.granularity).toEqualTypeOf<"per-claim" | "per-section" | "none">();
+    expectTypeOf(value.recency).not.toBeAny();
+    expectTypeOf(value.recency.volatile).toEqualTypeOf<boolean>();
+    expectTypeOf(value.sourcePriority).not.toBeAny();
+    for (const source of value.sourcePriority) {
       expectTypeOf(source).not.toBeAny();
       expectTypeOf(source.priority).toEqualTypeOf<number>();
       expectTypeOf(source.required).toEqualTypeOf<boolean>();
@@ -1133,37 +1127,34 @@ export function parsePublicEnhancedPrompt(
 
 describe("Enhanced prompt public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf<ParserTypeFacts<typeof validateEnhancedPrompt>>().toEqualTypeOf<
-      UnknownInputParserFacts<PromptEnhancerValidation<EnhancedPrompt>>
-    >();
-    expectTypeOf(validateEnhancedPrompt).returns.not.toBeAny();
-    expectTypeOf<ParserTypeFacts<typeof publicEnhancedPrompt>>().toEqualTypeOf<
-      UnknownInputParserFacts<PublicPromptValidation<PublicEnhancedPrompt>>
-    >();
-    expectTypeOf(publicEnhancedPrompt).returns.not.toBeAny();
-    expectTypeOf(publicEnhancedPrompt).returns.not.toBeUnknown();
-    expectTypeOf<ParserTypeFacts<typeof parsePublicEnhancedPrompt>>().toEqualTypeOf<
-      UnknownInputParserFacts<PublicPromptValidation<PublicEnhancedPrompt>>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateEnhancedPrompt,
+        typeof publicEnhancedPrompt,
+        typeof parsePublicEnhancedPrompt
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PromptEnhancerValidation<EnhancedPrompt>,
+        PublicPromptValidation<PublicEnhancedPrompt>,
+        PublicPromptValidation<PublicEnhancedPrompt>
+      >
     >();
   });
   it("pins independent public nested output fields", () => {
-    const result = publicEnhancedPrompt(validEnhancedPrompt());
-    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
-    if (!result.ok) {
-      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
-      return;
-    }
-    expectTypeOf(result.value).not.toBeAny();
-    expectTypeOf(result.value).not.toBeUnknown();
-    expectTypeOf(result.value.promptId).not.toBeAny();
-    expectTypeOf(result.value.promptId).toEqualTypeOf<PublicEnhancedId>();
+    expectTypeOf<
+      CheckedResultFacts<typeof publicEnhancedPrompt>
+    >().toEqualTypeOf<CheckedResultExpected>();
+    const value = acceptedValue(publicEnhancedPrompt(validEnhancedPrompt()));
+    expectTypeOf(value.promptId).not.toBeAny();
+    expectTypeOf(value.promptId).toEqualTypeOf<PublicEnhancedId>();
     expectTypeOf<string>().not.toExtend<PublicEnhancedId>();
     expectTypeOf<PublicEnhancedId>().not.toExtend<PublicRequestId>();
-    expectTypeOf(result.value.context).toEqualTypeOf<readonly string[]>();
-    expectTypeOf(result.value.groundingPlan).not.toBeAny();
-    expectTypeOf(result.value.groundingPlan.untrustedContent).toEqualTypeOf<true>();
-    expectTypeOf(result.value.outputSchema).not.toBeAny();
-    expectTypeOf(result.value.outputSchema.structured).toEqualTypeOf<boolean>();
+    expectTypeOf(value.context).toEqualTypeOf<readonly string[]>();
+    expectTypeOf(value.groundingPlan).not.toBeAny();
+    expectTypeOf(value.groundingPlan.untrustedContent).toEqualTypeOf<true>();
+    expectTypeOf(value.outputSchema).not.toBeAny();
+    expectTypeOf(value.outputSchema.structured).toEqualTypeOf<boolean>();
   });
   it("preserves healthy public identity and owned nested fields", () => {
     const input = validEnhancedPrompt();

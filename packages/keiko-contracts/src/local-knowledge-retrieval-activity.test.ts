@@ -4,8 +4,8 @@ import {
   knowledgeFinalExtentFailureMembers,
 } from "./__tests__/support/protocol-observation-mechanics.js";
 import type {
-  LibraryParserTripleExpected,
-  LibraryParserTripleFacts,
+  LibraryParserAcceptedExpected,
+  LibraryParserAcceptedFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "./local-knowledge.js";
@@ -432,31 +432,24 @@ export function parsePublicKnowledgeActivity(
 describe("Knowledge retrieval activity public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserAcceptedFacts<
         typeof validateKnowledgePodRetrievalActivity,
         typeof publicValidateActivity,
-        typeof parsePublicKnowledgeActivity
+        typeof parsePublicKnowledgeActivity,
+        [
+          PublicRetrievalActivity["pods"],
+          PublicRetrievalActivity["summary"]["citationCount"],
+          PublicRetrievalActivity["privacy"]["rawQueryExposed"],
+        ]
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserAcceptedExpected<
         LocalKnowledgeValidation<KnowledgePodRetrievalActivity>,
         PublicKnowledgeValidation<PublicRetrievalActivity>,
-        PublicKnowledgeValidation<PublicRetrievalActivity>
+        PublicRetrievalActivity
       >
     >();
-    const result = parsePublicKnowledgeActivity(happyActivity());
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expectTypeOf(result.value).toEqualTypeOf<PublicRetrievalActivity>();
-      expectTypeOf(result.value).not.toBeAny();
-      expectTypeOf(result.value).not.toBeUnknown();
-      expectTypeOf(result.value.pods).not.toBeAny();
-      expectTypeOf(result.value.pods).not.toBeUnknown();
-      expectTypeOf(result.value.summary.citationCount).not.toBeAny();
-      expectTypeOf(result.value.summary.citationCount).not.toBeUnknown();
-      expectTypeOf(result.value.privacy.rawQueryExposed).not.toBeAny();
-      expectTypeOf(result.value.privacy.rawQueryExposed).not.toBeUnknown();
-    }
+    expect(parsePublicKnowledgeActivity(happyActivity()).ok).toBe(true);
   });
 });
 

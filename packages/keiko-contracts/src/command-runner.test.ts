@@ -1,3 +1,12 @@
+import type {
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
+import {
+  itAdmitsNativeTaskArrayMembers,
+  observedCatalogIdentityReads,
+  observedIdentityReads,
+} from "./__tests__/support/execution-task-admission.js";
 import {
   registerPhysicalTaskCatalogContract,
   type PhysicalTaskCatalogValidator,
@@ -488,67 +497,23 @@ describe("validateRunResultCore (shared with container-runtime.ts, KEIKO-0601)",
   });
 });
 
-function observedExecutionFields(
-  input: Record<string, unknown>,
-  reads: string[],
-): Record<string, unknown> {
-  return Object.defineProperties(
-    {},
-    Object.fromEntries(
-      Object.entries(input).map(([key, value]) => [
-        key,
-        {
-          enumerable: true,
-          get: (): unknown => {
-            reads.push(key);
-            return value;
-          },
-        },
-      ]),
-    ),
-  );
-}
-
 describe("#3918 command checked-phase preservation", () => {
   it("preserves request identity and optional field observation order", () => {
-    const reads: string[] = [];
-    const input = observedExecutionFields(
-      { ...baseRequest(), timeoutMs: 12, requestId: "request-1" },
-      reads,
-    );
-    const result = parseCommandTaskRunRequest(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(input);
-    expect(reads).toEqual([
-      "projectId",
-      "taskId",
-      "timeoutMs",
-      "timeoutMs",
-      "requestId",
-      "requestId",
-    ]);
+    expect(
+      observedIdentityReads(parseCommandTaskRunRequest, {
+        ...baseRequest(),
+        timeoutMs: 12,
+        requestId: "request-1",
+      }),
+    ).toEqual(["projectId", "taskId", "timeoutMs", "timeoutMs", "requestId", "requestId"]);
   });
   it("preserves original catalog and nested task/argument identity", () => {
-    const reads: string[] = [];
-    const task = baseTask();
-    const input = observedExecutionFields({ ...baseCatalog(), tasks: [task] }, reads);
-    const result = validateCommandTaskCatalog(input);
-    const admissionReads = [...reads];
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value).toBe(input);
-      expect(result.value.tasks[0]).toBe(task);
-      expect(result.value.tasks[0]?.args).toBe(task.args);
-    }
-    expect(admissionReads).toEqual(["schemaVersion", "projectId", "tasks", "tasks"]);
+    expect(
+      observedCatalogIdentityReads(validateCommandTaskCatalog, baseCatalog(), baseTask()),
+    ).toEqual(["schemaVersion", "projectId", "tasks", "tasks"]);
   });
   it("preserves result identity and eager common-field order", () => {
-    const reads: string[] = [];
-    const input = observedExecutionFields({ ...baseResult() }, reads);
-    const result = validateCommandTaskRunResult(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(input);
-    expect(reads).toEqual([
+    expect(observedIdentityReads(validateCommandTaskRunResult, { ...baseResult() })).toEqual([
       "schemaVersion",
       "runId",
       "taskId",
@@ -565,45 +530,11 @@ describe("#3918 command checked-phase preservation", () => {
 });
 
 describe("#3918 native array member admission", () => {
-  it("rejects malformed tasks despite an own forEach that skips members", () => {
-    const tasks = Object.defineProperty([{ ...baseTask(), id: 0 }], "forEach", {
-      value: (): void => undefined,
-    });
-    expect(validateCommandTaskCatalog({ ...baseCatalog(), tasks })).toEqual({
-      ok: false,
-      errors: ["tasks[0].id must be a non-empty string"],
-    });
-  });
-  it("rejects nonstring arguments despite an own every that claims success", () => {
-    const args = Object.defineProperty([1], "every", { value: (): boolean => true });
-    expect(
-      validateCommandTaskCatalog({ ...baseCatalog(), tasks: [{ ...baseTask(), args }] }),
-    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
-  });
-  it("rejects a task hole that cannot satisfy the member contract", () => {
-    expect(validateCommandTaskCatalog({ ...baseCatalog(), tasks: new Array<unknown>(1) })).toEqual({
-      ok: false,
-      errors: ["tasks[0] must be an object"],
-    });
-  });
-  it("rejects an argument hole that cannot satisfy the string contract", () => {
-    expect(
-      validateCommandTaskCatalog({
-        ...baseCatalog(),
-        tasks: [{ ...baseTask(), args: new Array<unknown>(1) }],
-      }),
-    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
-  });
-  it("rejects a nonarray second task observation with the original two reads", () => {
-    let reads = 0;
-    const input = Object.defineProperty({ ...baseCatalog() }, "tasks", {
-      get: (): unknown => (++reads === 1 ? [baseTask()] : { forEach: (): void => undefined }),
-    });
-    expect(validateCommandTaskCatalog(input)).toEqual({
-      ok: false,
-      errors: ["tasks must be an array"],
-    });
-    expect(reads).toBe(2);
+  itAdmitsNativeTaskArrayMembers({
+    validate: validateCommandTaskCatalog,
+    catalog: baseCatalog,
+    task: baseTask,
+    malformed: { field: "id", error: "tasks[0].id must be a non-empty string" },
   });
 });
 
@@ -708,35 +639,29 @@ function commandInspectionInputs(field: string): readonly unknown[] {
 
 describe("Command request public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(parseCommandTaskRunRequest).parameter(0).toBeUnknown();
-    expectTypeOf(publicCommandRequest).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicCommandRequest).parameter(0).toBeUnknown();
-    expectTypeOf(parseCommandTaskRunRequest).parameter(0).not.toBeAny();
-    expectTypeOf(publicCommandRequest).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicCommandRequest).parameter(0).not.toBeAny();
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseCommandTaskRunRequest,
+        typeof publicCommandRequest,
+        typeof parsePublicCommandRequest
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PublicCommandRequestParse,
+        PublicCommandRequestParse,
+        PublicCommandRequestParse
+      >
+    >();
     expectTypeOf(publicCommandRequest).toEqualTypeOf<typeof parseCommandTaskRunRequest>();
-    expectTypeOf(publicCommandRequest).returns.toEqualTypeOf<PublicCommandRequestParse>();
-    expectTypeOf(parsePublicCommandRequest).returns.toEqualTypeOf<PublicCommandRequestParse>();
-    expectTypeOf(publicCommandRequest).returns.not.toBeAny();
-    expectTypeOf(parsePublicCommandRequest).returns.not.toBeAny();
   });
   it("preserves request identity optionals and owning field observation order", () => {
-    const reads: string[] = [];
-    const input = observedExecutionFields(
-      { ...baseRequest(), timeoutMs: 12, requestId: "request-1" },
-      reads,
-    );
-    const parsed = parsePublicCommandRequest(input);
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) expect(parsed.value).toBe(input);
-    expect(reads).toEqual([
-      "projectId",
-      "taskId",
-      "timeoutMs",
-      "timeoutMs",
-      "requestId",
-      "requestId",
-    ]);
+    expect(
+      observedIdentityReads(parsePublicCommandRequest, {
+        ...baseRequest(),
+        timeoutMs: 12,
+        requestId: "request-1",
+      }),
+    ).toEqual(["projectId", "taskId", "timeoutMs", "timeoutMs", "requestId", "requestId"]);
     const absent = baseRequest();
     const explicit = { ...baseRequest(), timeoutMs: undefined, requestId: undefined };
     for (const input of [absent, explicit])
@@ -809,31 +734,25 @@ describe("Command request public parser (#3918)", () => {
 
 describe("Command catalog public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(validateCommandTaskCatalog).parameter(0).toBeUnknown();
-    expectTypeOf(publicCommandCatalog).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicCommandCatalog).parameter(0).toBeUnknown();
-    expectTypeOf(validateCommandTaskCatalog).parameter(0).not.toBeAny();
-    expectTypeOf(publicCommandCatalog).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicCommandCatalog).parameter(0).not.toBeAny();
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateCommandTaskCatalog,
+        typeof publicCommandCatalog,
+        typeof parsePublicCommandCatalog
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PublicCommandCatalogParse,
+        PublicCommandCatalogParse,
+        PublicCommandCatalogParse
+      >
+    >();
     expectTypeOf(publicCommandCatalog).toEqualTypeOf<typeof validateCommandTaskCatalog>();
-    expectTypeOf(publicCommandCatalog).returns.toEqualTypeOf<PublicCommandCatalogParse>();
-    expectTypeOf(parsePublicCommandCatalog).returns.toEqualTypeOf<PublicCommandCatalogParse>();
-    expectTypeOf(publicCommandCatalog).returns.not.toBeAny();
-    expectTypeOf(parsePublicCommandCatalog).returns.not.toBeAny();
   });
   it("preserves original catalog task argument identity and admission reads", () => {
-    const reads: string[] = [];
-    const task = baseTask();
-    const input = observedExecutionFields({ ...baseCatalog(), tasks: [task] }, reads);
-    const parsed = parsePublicCommandCatalog(input);
-    const admissionReads = [...reads];
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) {
-      expect(parsed.value).toBe(input);
-      expect(parsed.value.tasks[0]).toBe(task);
-      expect(parsed.value.tasks[0]?.args).toBe(task.args);
-    }
-    expect(admissionReads).toEqual(["schemaVersion", "projectId", "tasks", "tasks"]);
+    expect(
+      observedCatalogIdentityReads(parsePublicCommandCatalog, baseCatalog(), baseTask()),
+    ).toEqual(["schemaVersion", "projectId", "tasks", "tasks"]);
   });
   it("refuses unknown and malformed catalog task fields", () => {
     const healthy = baseCatalog();
@@ -904,25 +823,23 @@ describe("Command catalog public parser (#3918)", () => {
 
 describe("Command result public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(validateCommandTaskRunResult).parameter(0).toBeUnknown();
-    expectTypeOf(publicCommandResult).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicCommandResult).parameter(0).toBeUnknown();
-    expectTypeOf(validateCommandTaskRunResult).parameter(0).not.toBeAny();
-    expectTypeOf(publicCommandResult).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicCommandResult).parameter(0).not.toBeAny();
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateCommandTaskRunResult,
+        typeof publicCommandResult,
+        typeof parsePublicCommandResult
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PublicCommandResultParse,
+        PublicCommandResultParse,
+        PublicCommandResultParse
+      >
+    >();
     expectTypeOf(publicCommandResult).toEqualTypeOf<typeof validateCommandTaskRunResult>();
-    expectTypeOf(publicCommandResult).returns.toEqualTypeOf<PublicCommandResultParse>();
-    expectTypeOf(parsePublicCommandResult).returns.toEqualTypeOf<PublicCommandResultParse>();
-    expectTypeOf(publicCommandResult).returns.not.toBeAny();
-    expectTypeOf(parsePublicCommandResult).returns.not.toBeAny();
   });
   it("preserves result identity nullable exits and eager common field order", () => {
-    const reads: string[] = [];
-    const input = observedExecutionFields({ ...baseResult() }, reads);
-    const parsed = parsePublicCommandResult(input);
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) expect(parsed.value).toBe(input);
-    expect(reads).toEqual([
+    expect(observedIdentityReads(parsePublicCommandResult, { ...baseResult() })).toEqual([
       "schemaVersion",
       "runId",
       "taskId",

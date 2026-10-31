@@ -1,3 +1,4 @@
+import { observeConsumedExtent } from "./__tests__/support/protocol-observation-mechanics.js";
 import { describe, expect, it } from "vitest";
 import {
   isWorkspaceContentDigest,
@@ -347,25 +348,6 @@ describe.each([
     expect(input.entries).toBe(healthy);
   });
 });
-
-function observeConsumedExtent(
-  values: readonly unknown[],
-  laterExtent: number,
-): {
-  readonly array: readonly unknown[];
-  readonly snapshot: () => { readonly lengthReads: number; readonly indexReads: number };
-} {
-  let lengthReads = 0;
-  let indexReads = 0;
-  const array = new Proxy([...values], {
-    get(target, property, receiver): unknown {
-      if (property === "length") return ++lengthReads === 2 ? laterExtent : target.length;
-      if (typeof property === "string" && /^\d+$/u.test(property)) indexReads += 1;
-      return Reflect.get(target, property, receiver);
-    },
-  });
-  return { array, snapshot: () => ({ lengthReads, indexReads }) };
-}
 
 describe.each([
   ["source", validateEditorLocalHistoryIndex],

@@ -2919,6 +2919,19 @@ describe("incoming request consumed revision admission", () => {
   }
 });
 
+function runtimeReadinessBoundaryFixture(): CodingWorkbenchRuntimeReadiness {
+  return {
+    schemaVersion: "1",
+    requestedMode: "autonomous-delivery",
+    deploymentCeiling: "autonomous-delivery",
+    effectiveMode: "supervised-coding",
+    runtimeAvailable: true,
+    runtimeEvidenceClass: "functional-not-platform-qualified",
+    selectableAgents: ["build", "plan"],
+    promptInputs: { delivery: true, references: true, commands: true, mentions: true },
+  };
+}
+
 export function parsePublicRuntimeCommandRequest(
   input: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchCommandRequest> {
@@ -2945,19 +2958,6 @@ export function parsePublicRuntimeReadiness(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeReadiness> {
   const result = validateRuntimeReadinessPublic(input);
   return result;
-}
-
-function runtimeReadinessBoundaryFixture(): CodingWorkbenchRuntimeReadiness {
-  return {
-    schemaVersion: "1",
-    requestedMode: "autonomous-delivery",
-    deploymentCeiling: "autonomous-delivery",
-    effectiveMode: "supervised-coding",
-    runtimeAvailable: true,
-    runtimeEvidenceClass: "functional-not-platform-qualified",
-    selectableAgents: ["build", "plan"],
-    promptInputs: { delivery: true, references: true, commands: true, mentions: true },
-  };
 }
 
 describe("Runtime API commands/readiness public parser responsibility (#3918)", () => {

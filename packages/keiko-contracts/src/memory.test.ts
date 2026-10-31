@@ -2523,24 +2523,10 @@ export function parsePublicMemoryArchive(
   return result;
 }
 
-export function parsePublicMemoryForget(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryForget> {
-  const result = validatePublicMemoryForget(input);
-  return result;
-}
-
 export function parsePublicMemoryAuditRecord(
   input: unknown,
 ): PublicMemoryValidation<PublicMemoryAuditRecord> {
   const result = validatePublicMemoryAuditRecord(input);
-  return result;
-}
-
-export function parsePublicMemoryRetrievalRequest(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryRetrievalRequest> {
-  const result = validatePublicMemoryRetrievalRequest(input);
   return result;
 }
 
@@ -2893,6 +2879,20 @@ function expectRemainingMemoryAccumulation(): void {
       "retrieval.includeSuperseded must be a boolean when set",
     ],
   });
+}
+
+export function parsePublicMemoryForget(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryForget> {
+  const result = validatePublicMemoryForget(input);
+  return result;
+}
+
+export function parsePublicMemoryRetrievalRequest(
+  input: unknown,
+): PublicMemoryValidation<PublicMemoryRetrievalRequest> {
+  const result = validatePublicMemoryRetrievalRequest(input);
+  return result;
 }
 
 describe("Memory remaining public parsers (#3918)", () => {

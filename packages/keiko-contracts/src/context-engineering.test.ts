@@ -1,10 +1,14 @@
+import { expectDiagnosticRefusals } from "./__tests__/support/context-diagnostic-refusals.js";
 // Unit tests for context-engineering.ts + context-engineering-validation.ts. Each validator
 // test mutates exactly one field of a known-good fixture so a single-line implementation
 // mutation is caught and the failure points at the broken invariant. Estimator tests assert
 // totality, determinism, monotonicity, and the conservatism bounds from ADR-0052 gate 2.
 
 import { describe, it, expect, expectTypeOf, vi } from "vitest";
-import type { LibraryContextDiagnosticFacts } from "./__tests__/support/library-parser-type-facts.js";
+import type {
+  ContextDiagnosticTripleExpected,
+  ContextDiagnosticTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_EVICTION_POLICIES,
@@ -1139,29 +1143,14 @@ export function countPublicContextProfileDiagnostics(input: unknown): number {
 
 it("shipped context profile diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateContextProfile,
-      Extract<ReturnType<typeof validateContextProfile>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof validateContextProfile>, { ok: false }>["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicContextProfile,
-      Extract<ReturnType<typeof publicContextProfile>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof publicContextProfile>, { ok: false }>["reasons"][number]
+      typeof countPublicContextProfileDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<Parameters<typeof countPublicContextProfileDiagnostics>>().toEqualTypeOf<
-    [unknown]
-  >();
-  expectTypeOf<ReturnType<typeof countPublicContextProfileDiagnostics>>().toEqualTypeOf<number>();
 });
 
 it("shipped context profile diagnostic preserves healthy input and counts no reasons", () => {
@@ -1205,11 +1194,11 @@ it("shipped context profile diagnostic counts actual ordered public refusals", (
       reasons: ["profile.tokenAccounting.source invalid"],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicContextProfile(input)).toEqual({ ok: false, reasons });
-    expect(validateContextProfile(input)).toEqual({ ok: false, reasons });
-    expect(countPublicContextProfileDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicContextProfile, validateContextProfile],
+    countPublicContextProfileDiagnostics,
+  );
 });
 
 export function countPublicContextBudgetDiagnostics(input: unknown): number {
@@ -1219,27 +1208,14 @@ export function countPublicContextBudgetDiagnostics(input: unknown): number {
 
 it("shipped context budget diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateContextBudget,
-      Extract<ReturnType<typeof validateContextBudget>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof validateContextBudget>, { ok: false }>["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicContextBudget,
-      Extract<ReturnType<typeof publicContextBudget>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof publicContextBudget>, { ok: false }>["reasons"][number]
+      typeof countPublicContextBudgetDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<Parameters<typeof countPublicContextBudgetDiagnostics>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof countPublicContextBudgetDiagnostics>>().toEqualTypeOf<number>();
 });
 
 it("shipped context budget diagnostic preserves healthy input and counts no reasons", () => {
@@ -1277,11 +1253,11 @@ it("shipped context budget diagnostic counts actual ordered public refusals", ()
       reasons: ["budget.profile.schemaVersion mismatch", "budget.lanes invalid"],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicContextBudget(input)).toEqual({ ok: false, reasons });
-    expect(validateContextBudget(input)).toEqual({ ok: false, reasons });
-    expect(countPublicContextBudgetDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicContextBudget, validateContextBudget],
+    countPublicContextBudgetDiagnostics,
+  );
 });
 
 export function countPublicContextAssemblyDiagnosticsDiagnostics(input: unknown): number {
@@ -1291,34 +1267,14 @@ export function countPublicContextAssemblyDiagnosticsDiagnostics(input: unknown)
 
 it("shipped context assembly diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateContextAssemblyDiagnostics,
-      Extract<ReturnType<typeof validateContextAssemblyDiagnostics>, { ok: false }>["reasons"],
-      Extract<
-        ReturnType<typeof validateContextAssemblyDiagnostics>,
-        { ok: false }
-      >["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicContextAssemblyDiagnostics,
-      Extract<ReturnType<typeof publicContextAssemblyDiagnostics>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof publicContextAssemblyDiagnostics>, { ok: false }>["reasons"][number]
+      typeof countPublicContextAssemblyDiagnosticsDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<Parameters<typeof countPublicContextAssemblyDiagnosticsDiagnostics>>().toEqualTypeOf<
-    [unknown]
-  >();
-  expectTypeOf<
-    ReturnType<typeof countPublicContextAssemblyDiagnosticsDiagnostics>
-  >().toEqualTypeOf<number>();
 });
 
 it("shipped context assembly diagnostic preserves healthy input and counts no reasons", () => {
@@ -1367,9 +1323,9 @@ it("shipped context assembly diagnostic counts actual ordered public refusals", 
       ],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicContextAssemblyDiagnostics(input)).toEqual({ ok: false, reasons });
-    expect(validateContextAssemblyDiagnostics(input)).toEqual({ ok: false, reasons });
-    expect(countPublicContextAssemblyDiagnosticsDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicContextAssemblyDiagnostics, validateContextAssemblyDiagnostics],
+    countPublicContextAssemblyDiagnosticsDiagnostics,
+  );
 });

@@ -1,4 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { acceptedValue } from "./__tests__/support/accepted-value.js";
+import type {
+  CheckedResultExpected,
+  CheckedResultFacts,
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchCodexAuthSetupPlan,
@@ -2458,42 +2465,32 @@ export function parsePublicWorkbenchEvent(
 // These witnesses qualify the existing public contract; they do not normalize admitted objects.
 describe("Workbench authority public parser (#3918)", () => {
   it("pins unknown inputs and independent checked authority fields", () => {
-    expectTypeOf(validateCodingWorkbenchAuthorityEnvelope).parameter(0).toBeUnknown();
-    expectTypeOf(validateCodingWorkbenchAuthorityEnvelope).parameter(0).not.toBeAny();
-    expectTypeOf(validateCodingWorkbenchAuthorityEnvelope).returns.not.toBeAny();
-    expectTypeOf(validateCodingWorkbenchAuthorityEnvelope).returns.not.toBeUnknown();
-    expectTypeOf(validateCodingWorkbenchAuthorityEnvelope).returns.toEqualTypeOf<
-      CodingWorkbenchValidationResult<CodingWorkbenchAuthorityEnvelope>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateCodingWorkbenchAuthorityEnvelope,
+        typeof publicWorkbenchAuthority,
+        typeof parsePublicWorkbenchAuthority
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        CodingWorkbenchValidationResult<CodingWorkbenchAuthorityEnvelope>,
+        PublicWorkbenchValidationResult<PublicWorkbenchAuthorityEnvelope>,
+        PublicWorkbenchValidationResult<PublicWorkbenchAuthorityEnvelope>
+      >
     >();
-    expectTypeOf(publicWorkbenchAuthority).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicWorkbenchAuthority).parameter(0).toBeUnknown();
-    expectTypeOf(publicWorkbenchAuthority).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicWorkbenchAuthority).parameter(0).not.toBeAny();
-    expectTypeOf(publicWorkbenchAuthority).returns.not.toBeAny();
-    expectTypeOf(publicWorkbenchAuthority).returns.not.toBeUnknown();
-    expectTypeOf(publicWorkbenchAuthority).returns.toEqualTypeOf<
-      PublicWorkbenchValidationResult<PublicWorkbenchAuthorityEnvelope>
-    >();
-    expectTypeOf(parsePublicWorkbenchAuthority).returns.toEqualTypeOf<
-      PublicWorkbenchValidationResult<PublicWorkbenchAuthorityEnvelope>
-    >();
-    const result = publicWorkbenchAuthority(baseAuthorityEnvelope());
-    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
-    if (!result.ok) {
-      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
-      return;
-    }
-    expectTypeOf(result.value).not.toBeAny();
-    expectTypeOf(result.value).not.toBeUnknown();
-    expectTypeOf(result.value.workspace).not.toBeAny();
-    expectTypeOf(result.value.workspace.rootDigest).toEqualTypeOf<string>();
-    expectTypeOf(result.value.taskRefs).toEqualTypeOf<readonly string[]>();
-    expectTypeOf(result.value.effectiveMode).toEqualTypeOf<
+    expectTypeOf<
+      CheckedResultFacts<typeof publicWorkbenchAuthority>
+    >().toEqualTypeOf<CheckedResultExpected>();
+    const value = acceptedValue(publicWorkbenchAuthority(baseAuthorityEnvelope()));
+    expectTypeOf(value.workspace).not.toBeAny();
+    expectTypeOf(value.workspace.rootDigest).toEqualTypeOf<string>();
+    expectTypeOf(value.taskRefs).toEqualTypeOf<readonly string[]>();
+    expectTypeOf(value.effectiveMode).toEqualTypeOf<
       "governed-assist" | "supervised-coding" | "autonomous-delivery"
     >();
-    expectTypeOf(result.value.budget).not.toBeAny();
-    expectTypeOf(result.value.budget.maxToolCalls).toEqualTypeOf<number>();
-    expectTypeOf(result.value.commandPolicy.allow).toEqualTypeOf<readonly string[]>();
+    expectTypeOf(value.budget).not.toBeAny();
+    expectTypeOf(value.budget.maxToolCalls).toEqualTypeOf<number>();
+    expectTypeOf(value.commandPolicy.allow).toEqualTypeOf<readonly string[]>();
   });
   it("preserves admitted authority and nested reference identity", () => {
     const input = baseAuthorityEnvelope();
@@ -2546,44 +2543,34 @@ describe("Workbench authority public parser (#3918)", () => {
 
 describe("Workbench permission public parser (#3918)", () => {
   it("pins unknown inputs and independent checked permission fields", () => {
-    expectTypeOf(validateCodingWorkbenchPermissionRequest).parameter(0).toBeUnknown();
-    expectTypeOf(validateCodingWorkbenchPermissionRequest).parameter(0).not.toBeAny();
-    expectTypeOf(validateCodingWorkbenchPermissionRequest).returns.not.toBeAny();
-    expectTypeOf(validateCodingWorkbenchPermissionRequest).returns.not.toBeUnknown();
-    expectTypeOf(validateCodingWorkbenchPermissionRequest).returns.toEqualTypeOf<
-      CodingWorkbenchValidationResult<CodingWorkbenchPermissionRequest>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateCodingWorkbenchPermissionRequest,
+        typeof publicWorkbenchPermission,
+        typeof parsePublicWorkbenchPermission
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        CodingWorkbenchValidationResult<CodingWorkbenchPermissionRequest>,
+        PublicWorkbenchValidationResult<PublicWorkbenchPermissionRequest>,
+        PublicWorkbenchValidationResult<PublicWorkbenchPermissionRequest>
+      >
     >();
-    expectTypeOf(publicWorkbenchPermission).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicWorkbenchPermission).parameter(0).toBeUnknown();
-    expectTypeOf(publicWorkbenchPermission).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicWorkbenchPermission).parameter(0).not.toBeAny();
-    expectTypeOf(publicWorkbenchPermission).returns.not.toBeAny();
-    expectTypeOf(publicWorkbenchPermission).returns.not.toBeUnknown();
-    expectTypeOf(publicWorkbenchPermission).returns.toEqualTypeOf<
-      PublicWorkbenchValidationResult<PublicWorkbenchPermissionRequest>
-    >();
-    expectTypeOf(parsePublicWorkbenchPermission).returns.toEqualTypeOf<
-      PublicWorkbenchValidationResult<PublicWorkbenchPermissionRequest>
-    >();
-    const result = publicWorkbenchPermission(validPermissionRequest());
-    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
-    if (!result.ok) {
-      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
-      return;
-    }
-    expectTypeOf(result.value).not.toBeAny();
-    expectTypeOf(result.value).not.toBeUnknown();
-    expectTypeOf(result.value.requestId).toEqualTypeOf<string>();
-    expectTypeOf(result.value.kind).toEqualTypeOf<
+    expectTypeOf<
+      CheckedResultFacts<typeof publicWorkbenchPermission>
+    >().toEqualTypeOf<CheckedResultExpected>();
+    const value = acceptedValue(publicWorkbenchPermission(validPermissionRequest()));
+    expectTypeOf(value.requestId).toEqualTypeOf<string>();
+    expectTypeOf(value.kind).toEqualTypeOf<
       | "workspace-write"
       | "command-execution"
       | "network-egress"
       | "connector-access"
       | "delivery-substrate"
     >();
-    expectTypeOf(result.value.scopeLabel).toEqualTypeOf<string | undefined>();
-    expectTypeOf(result.value.connectorScopes).not.toBeAny();
-    expectTypeOf(result.value.connectorScopes).toEqualTypeOf<
+    expectTypeOf(value.scopeLabel).toEqualTypeOf<string | undefined>();
+    expectTypeOf(value.connectorScopes).not.toBeAny();
+    expectTypeOf(value.connectorScopes).toEqualTypeOf<
       | readonly (
           | "source-control.read"
           | "source-control.write"
@@ -2623,45 +2610,35 @@ describe("Workbench permission public parser (#3918)", () => {
 
 describe("Workbench runtime event public parser (#3918)", () => {
   it("pins unknown inputs and independent checked runtime event fields", () => {
-    expectTypeOf(validateCodingWorkbenchRuntimeEvent).parameter(0).toBeUnknown();
-    expectTypeOf(validateCodingWorkbenchRuntimeEvent).parameter(0).not.toBeAny();
-    expectTypeOf(validateCodingWorkbenchRuntimeEvent).returns.not.toBeAny();
-    expectTypeOf(validateCodingWorkbenchRuntimeEvent).returns.not.toBeUnknown();
-    expectTypeOf(validateCodingWorkbenchRuntimeEvent).returns.toEqualTypeOf<
-      CodingWorkbenchValidationResult<CodingWorkbenchRuntimeEvent>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateCodingWorkbenchRuntimeEvent,
+        typeof publicWorkbenchEvent,
+        typeof parsePublicWorkbenchEvent
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        CodingWorkbenchValidationResult<CodingWorkbenchRuntimeEvent>,
+        PublicWorkbenchValidationResult<PublicWorkbenchRuntimeEvent>,
+        PublicWorkbenchValidationResult<PublicWorkbenchRuntimeEvent>
+      >
     >();
-    expectTypeOf(publicWorkbenchEvent).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicWorkbenchEvent).parameter(0).toBeUnknown();
-    expectTypeOf(publicWorkbenchEvent).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicWorkbenchEvent).parameter(0).not.toBeAny();
-    expectTypeOf(publicWorkbenchEvent).returns.not.toBeAny();
-    expectTypeOf(publicWorkbenchEvent).returns.not.toBeUnknown();
-    expectTypeOf(publicWorkbenchEvent).returns.toEqualTypeOf<
-      PublicWorkbenchValidationResult<PublicWorkbenchRuntimeEvent>
-    >();
-    expectTypeOf(parsePublicWorkbenchEvent).returns.toEqualTypeOf<
-      PublicWorkbenchValidationResult<PublicWorkbenchRuntimeEvent>
-    >();
-    const result = publicWorkbenchEvent(baseRuntimeEvent());
-    expectTypeOf(result.ok).toEqualTypeOf<boolean>();
-    if (!result.ok) {
-      expectTypeOf(result.errors).toEqualTypeOf<readonly string[]>();
-      return;
-    }
-    expectTypeOf(result.value).not.toBeAny();
-    expectTypeOf(result.value).not.toBeUnknown();
-    expectTypeOf(result.value.eventId).toEqualTypeOf<string>();
-    expectTypeOf(result.value.effectiveMode).toEqualTypeOf<
+    expectTypeOf<
+      CheckedResultFacts<typeof publicWorkbenchEvent>
+    >().toEqualTypeOf<CheckedResultExpected>();
+    const value = acceptedValue(publicWorkbenchEvent(baseRuntimeEvent()));
+    expectTypeOf(value.eventId).toEqualTypeOf<string>();
+    expectTypeOf(value.effectiveMode).toEqualTypeOf<
       "governed-assist" | "supervised-coding" | "autonomous-delivery" | undefined
     >();
-    expectTypeOf(result.value.nativeRetry).not.toBeAny();
-    if (result.value.nativeRetry != null) {
-      expectTypeOf(result.value.nativeRetry.attempt).toEqualTypeOf<number>();
-      expectTypeOf(result.value.nativeRetry.scheduledAt).toEqualTypeOf<string>();
+    expectTypeOf(value.nativeRetry).not.toBeAny();
+    if (value.nativeRetry != null) {
+      expectTypeOf(value.nativeRetry.attempt).toEqualTypeOf<number>();
+      expectTypeOf(value.nativeRetry.scheduledAt).toEqualTypeOf<string>();
     }
-    expectTypeOf(result.value.permissionRequest).not.toBeAny();
-    if (result.value.permissionRequest !== undefined) {
-      expectTypeOf(result.value.permissionRequest.requestId).toEqualTypeOf<string>();
+    expectTypeOf(value.permissionRequest).not.toBeAny();
+    if (value.permissionRequest !== undefined) {
+      expectTypeOf(value.permissionRequest.requestId).toEqualTypeOf<string>();
     }
   });
   it("preserves admitted runtime event and nested retry identity", () => {

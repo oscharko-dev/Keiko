@@ -1,3 +1,7 @@
+import {
+  expectAcceptedReference,
+  expectIndependentFailures,
+} from "./__tests__/support/checked-envelope.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -1226,21 +1230,14 @@ function envelopeIdleState(): Record<string, unknown> {
 
 for (const surface of ["source", "public"] as const) {
   it(`${surface}: preserves the idle-state envelope's accepted reference`, async () => {
-    const validate = await envelopeStateValidator(surface);
-    const value = envelopeIdleState();
-    const result = validate(value);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(value);
+    expectAcceptedReference(await envelopeStateValidator(surface), envelopeIdleState());
   });
 
   it(`${surface}: returns independent state failure envelopes and readonly arrays`, async () => {
-    const validate = await envelopeStateValidator(surface);
-    const first = validate(null);
-    const second = validate(null);
-    expect(first).toEqual({ ok: false, errors: ["runtime state must be an object"] });
-    expect(second).toEqual(first);
-    expect(second).not.toBe(first);
-    if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
+    expectIndependentFailures(
+      await envelopeStateValidator(surface),
+      "runtime state must be an object",
+    );
   });
 
   it(`${surface}: keeps the state's complete ordered admission errors`, async () => {
@@ -1311,13 +1308,10 @@ for (const surface of ["source", "public"] as const) {
   });
 
   it(`${surface}: returns independent authority failure envelopes and readonly arrays`, async () => {
-    const validate = await envelopeAuthorityValidator(surface);
-    const first = validate(null);
-    const second = validate(null);
-    expect(first).toEqual({ ok: false, errors: ["authority envelope must be an object"] });
-    expect(second).toEqual(first);
-    expect(second).not.toBe(first);
-    if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
+    expectIndependentFailures(
+      await envelopeAuthorityValidator(surface),
+      "authority envelope must be an object",
+    );
   });
 
   it(`${surface}: eagerly retains every authority consistency-tail refusal in order`, async () => {

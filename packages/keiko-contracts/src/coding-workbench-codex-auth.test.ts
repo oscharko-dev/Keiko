@@ -1,3 +1,8 @@
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
+import {
+  expectAcceptedReference,
+  expectIndependentFailures,
+} from "./__tests__/support/checked-envelope.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -422,16 +427,7 @@ for (const surface of ["source", "public"] as const) {
       }),
     );
     const reads: string[] = [];
-    const observed = new Proxy(members, {
-      get(target, key, receiver): unknown {
-        reads.push(`get:${String(key)}`);
-        return Reflect.get(target, key, receiver);
-      },
-      has(target, key): boolean {
-        reads.push(`has:${String(key)}`);
-        return Reflect.has(target, key);
-      },
-    });
+    const observed = observeIndexedMembers(members, reads);
     const value = { ...c1bCoverageProfile(), runtimeBinarySources: observed };
     const result = validate(value);
     expect(result.ok).toBe(true);
@@ -457,21 +453,14 @@ for (const surface of ["source", "public"] as const) {
 
 for (const surface of ["source", "public"] as const) {
   it(`${surface}: preserves the profile envelope's accepted reference`, async () => {
-    const validate = await physicalAuthListValidator(surface);
-    const value = c1bCoverageProfile();
-    const result = validate(value);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(value);
+    expectAcceptedReference(await physicalAuthListValidator(surface), c1bCoverageProfile());
   });
 
   it(`${surface}: returns independent profile failure envelopes and readonly arrays`, async () => {
-    const validate = await physicalAuthListValidator(surface);
-    const first = validate(null);
-    const second = validate(null);
-    expect(first).toEqual({ ok: false, errors: ["profile must be an object"] });
-    expect(second).toEqual(first);
-    expect(second).not.toBe(first);
-    if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
+    expectIndependentFailures(
+      await physicalAuthListValidator(surface),
+      "profile must be an object",
+    );
   });
 
   it(`${surface}: keeps the profile admission's complete ordered errors`, async () => {

@@ -1,4 +1,9 @@
 import {
+  itAdmitsNativeTaskArrayMembers,
+  observedCatalogIdentityReads,
+  observedIdentityReads,
+} from "./__tests__/support/execution-task-admission.js";
+import {
   registerPhysicalTaskCatalogContract,
   type PhysicalTaskCatalogValidator,
 } from "./__tests__/support/physical-task-catalog-contract.js";
@@ -504,73 +509,23 @@ describe("#3918 canonical container capability admission", () => {
   });
 });
 
-function observedExecutionFields(
-  input: Record<string, unknown>,
-  reads: string[],
-): Record<string, unknown> {
-  return Object.defineProperties(
-    {},
-    Object.fromEntries(
-      Object.entries(input).map(([key, value]) => [
-        key,
-        {
-          enumerable: true,
-          get: (): unknown => {
-            reads.push(key);
-            return value;
-          },
-        },
-      ]),
-    ),
-  );
-}
-
 describe("#3918 container checked-phase preservation", () => {
   it("preserves request identity and optional field observation order", () => {
-    const reads: string[] = [];
-    const input = observedExecutionFields(
-      { ...baseRequest(), timeoutMs: 12, requestId: "request-1" },
-      reads,
-    );
-    const result = parseContainerRunRequest(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(input);
-    expect(reads).toEqual([
-      "projectId",
-      "taskId",
-      "timeoutMs",
-      "timeoutMs",
-      "requestId",
-      "requestId",
-    ]);
+    expect(
+      observedIdentityReads(parseContainerRunRequest, {
+        ...baseRequest(),
+        timeoutMs: 12,
+        requestId: "request-1",
+      }),
+    ).toEqual(["projectId", "taskId", "timeoutMs", "timeoutMs", "requestId", "requestId"]);
   });
   it("preserves original catalog and nested task/argument identity", () => {
-    const reads: string[] = [];
-    const task = baseTask();
-    const input = observedExecutionFields({ ...baseCatalog(), tasks: [task] }, reads);
-    const result = validateContainerTaskCatalog(input);
-    const admissionReads = [...reads];
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value).toBe(input);
-      expect(result.value.tasks[0]).toBe(task);
-      expect(result.value.tasks[0]?.args).toBe(task.args);
-    }
-    expect(admissionReads).toEqual([
-      "schemaVersion",
-      "projectId",
-      "engineAvailable",
-      "tasks",
-      "tasks",
-    ]);
+    expect(
+      observedCatalogIdentityReads(validateContainerTaskCatalog, baseCatalog(), baseTask()),
+    ).toEqual(["schemaVersion", "projectId", "engineAvailable", "tasks", "tasks"]);
   });
   it("preserves result identity and eager common-field order", () => {
-    const reads: string[] = [];
-    const input = observedExecutionFields({ ...baseResult() }, reads);
-    const result = validateContainerRunResult(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(input);
-    expect(reads).toEqual([
+    expect(observedIdentityReads(validateContainerRunResult, { ...baseResult() })).toEqual([
       "schemaVersion",
       "runId",
       "taskId",
@@ -588,44 +543,11 @@ describe("#3918 container checked-phase preservation", () => {
 });
 
 describe("#3918 native array member admission", () => {
-  it("rejects malformed tasks despite an own forEach that skips members", () => {
-    const tasks = Object.defineProperty([{ ...baseTask(), image: 0 }], "forEach", {
-      value: (): void => undefined,
-    });
-    expect(validateContainerTaskCatalog({ ...baseCatalog(), tasks })).toEqual({
-      ok: false,
-      errors: ["tasks[0].image must be a non-empty string"],
-    });
-  });
-  it("rejects nonstring arguments despite an own every that claims success", () => {
-    const args = Object.defineProperty([1], "every", { value: (): boolean => true });
-    expect(
-      validateContainerTaskCatalog({ ...baseCatalog(), tasks: [{ ...baseTask(), args }] }),
-    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
-  });
-  it("rejects a task hole that cannot satisfy the member contract", () => {
-    expect(
-      validateContainerTaskCatalog({ ...baseCatalog(), tasks: new Array<unknown>(1) }),
-    ).toEqual({ ok: false, errors: ["tasks[0] must be an object"] });
-  });
-  it("rejects an argument hole that cannot satisfy the string contract", () => {
-    expect(
-      validateContainerTaskCatalog({
-        ...baseCatalog(),
-        tasks: [{ ...baseTask(), args: new Array<unknown>(1) }],
-      }),
-    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
-  });
-  it("rejects a nonarray second task observation with the original two reads", () => {
-    let reads = 0;
-    const input = Object.defineProperty({ ...baseCatalog() }, "tasks", {
-      get: (): unknown => (++reads === 1 ? [baseTask()] : { forEach: (): void => undefined }),
-    });
-    expect(validateContainerTaskCatalog(input)).toEqual({
-      ok: false,
-      errors: ["tasks must be an array"],
-    });
-    expect(reads).toBe(2);
+  itAdmitsNativeTaskArrayMembers({
+    validate: validateContainerTaskCatalog,
+    catalog: baseCatalog,
+    task: baseTask,
+    malformed: { field: "image", error: "tasks[0].image must be a non-empty string" },
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
-  LibraryParserTripleFacts,
-  LibraryParserTripleExpected,
+  LibraryParserTripleIdentityExpected,
+  LibraryParserTripleIdentityFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 import {
   GIT_EDITOR_BLAME_MAX_BYTES,
@@ -502,34 +502,6 @@ describe("G1 final Editor collection observation", () => {
   }
 });
 
-export function parsePublicGitEditorDiffRequest(
-  input: unknown,
-): PublicGitEditorParseResult<PublicGitEditorDiffRequest> {
-  const result = publicDiffRequest(input);
-  return result;
-}
-
-export function parsePublicGitEditorDiffResponse(
-  input: unknown,
-): PublicGitEditorParseResult<PublicGitEditorDiffResponse> {
-  const result = publicDiffResponse(input);
-  return result;
-}
-
-export function parsePublicGitEditorBlameRequest(
-  input: unknown,
-): PublicGitEditorParseResult<PublicGitEditorBlameRequest> {
-  const result = publicBlameRequest(input);
-  return result;
-}
-
-export function parsePublicGitEditorBlameResponse(
-  input: unknown,
-): PublicGitEditorParseResult<PublicGitEditorBlameResponse> {
-  const result = publicBlameResponse(input);
-  return result;
-}
-
 function hostileInspectionFailures(): readonly { thrown: unknown; errorClass: string }[] {
   const privateName = Object.defineProperty(new Error(), "name", { value: "fixture-private-name" });
   const hostileFields = Object.defineProperties(new Error(), {
@@ -572,41 +544,47 @@ function hostileInspectionFailures(): readonly { thrown: unknown; errorClass: st
   ];
 }
 
+/** Each parser closes every hostile getter failure with the same body-free refusal. */
+function expectHostileInspectionClosed(
+  ...parsers: readonly ((input: object) => GitEditorParseResult<object>)[]
+): void {
+  for (const failure of hostileInspectionFailures()) {
+    const input = Object.defineProperty({}, "schemaVersion", {
+      get: (): never => {
+        throw failure.thrown;
+      },
+    });
+    const expected = {
+      ok: false,
+      errors: [`payload could not be inspected: ${failure.errorClass}`],
+    };
+    for (const parse of parsers) expect(parse(input)).toEqual(expected);
+  }
+}
+
+export function parsePublicGitEditorDiffRequest(
+  input: unknown,
+): PublicGitEditorParseResult<PublicGitEditorDiffRequest> {
+  const result = publicDiffRequest(input);
+  return result;
+}
+
 describe("Git DiffRequest public parser (#3918)", () => {
   it("closes hostile thrown values without reading private error fields", () => {
-    for (const failure of hostileInspectionFailures()) {
-      const input = Object.defineProperty({}, "schemaVersion", {
-        get: (): never => {
-          throw failure.thrown;
-        },
-      });
-      const expected = {
-        ok: false,
-        errors: [`payload could not be inspected: ${failure.errorClass}`],
-      };
-      expect(parseGitEditorDiffRequest(input)).toEqual(expected);
-      expect(parsePublicGitEditorDiffRequest(input)).toEqual(expected);
-    }
+    expectHostileInspectionClosed(parseGitEditorDiffRequest, parsePublicGitEditorDiffRequest);
   });
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserTripleIdentityFacts<
         typeof parseGitEditorDiffRequest,
         typeof publicDiffRequest,
         typeof parsePublicGitEditorDiffRequest
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserTripleIdentityExpected<
         GitEditorParseResult<GitEditorDiffRequest>,
-        PublicGitEditorParseResult<PublicGitEditorDiffRequest>,
         PublicGitEditorParseResult<PublicGitEditorDiffRequest>
       >
-    >();
-    expectTypeOf(publicDiffRequest).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorDiffRequest>
-    >();
-    expectTypeOf(parsePublicGitEditorDiffRequest).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorDiffRequest>
     >();
   });
 
@@ -685,41 +663,29 @@ describe("Git DiffRequest public parser (#3918)", () => {
   });
 });
 
+export function parsePublicGitEditorDiffResponse(
+  input: unknown,
+): PublicGitEditorParseResult<PublicGitEditorDiffResponse> {
+  const result = publicDiffResponse(input);
+  return result;
+}
+
 describe("Git DiffResponse public parser (#3918)", () => {
   it("closes hostile thrown values without reading private error fields", () => {
-    for (const failure of hostileInspectionFailures()) {
-      const input = Object.defineProperty({}, "schemaVersion", {
-        get: (): never => {
-          throw failure.thrown;
-        },
-      });
-      const expected = {
-        ok: false,
-        errors: [`payload could not be inspected: ${failure.errorClass}`],
-      };
-      expect(parseGitEditorDiffResponse(input)).toEqual(expected);
-      expect(parsePublicGitEditorDiffResponse(input)).toEqual(expected);
-    }
+    expectHostileInspectionClosed(parseGitEditorDiffResponse, parsePublicGitEditorDiffResponse);
   });
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserTripleIdentityFacts<
         typeof parseGitEditorDiffResponse,
         typeof publicDiffResponse,
         typeof parsePublicGitEditorDiffResponse
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserTripleIdentityExpected<
         GitEditorParseResult<GitEditorDiffResponse>,
-        PublicGitEditorParseResult<PublicGitEditorDiffResponse>,
         PublicGitEditorParseResult<PublicGitEditorDiffResponse>
       >
-    >();
-    expectTypeOf(publicDiffResponse).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorDiffResponse>
-    >();
-    expectTypeOf(parsePublicGitEditorDiffResponse).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorDiffResponse>
     >();
   });
 
@@ -836,41 +802,29 @@ describe("Git DiffResponse public parser (#3918)", () => {
   });
 });
 
+export function parsePublicGitEditorBlameRequest(
+  input: unknown,
+): PublicGitEditorParseResult<PublicGitEditorBlameRequest> {
+  const result = publicBlameRequest(input);
+  return result;
+}
+
 describe("Git BlameRequest public parser (#3918)", () => {
   it("closes hostile thrown values without reading private error fields", () => {
-    for (const failure of hostileInspectionFailures()) {
-      const input = Object.defineProperty({}, "schemaVersion", {
-        get: (): never => {
-          throw failure.thrown;
-        },
-      });
-      const expected = {
-        ok: false,
-        errors: [`payload could not be inspected: ${failure.errorClass}`],
-      };
-      expect(parseGitEditorBlameRequest(input)).toEqual(expected);
-      expect(parsePublicGitEditorBlameRequest(input)).toEqual(expected);
-    }
+    expectHostileInspectionClosed(parseGitEditorBlameRequest, parsePublicGitEditorBlameRequest);
   });
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserTripleIdentityFacts<
         typeof parseGitEditorBlameRequest,
         typeof publicBlameRequest,
         typeof parsePublicGitEditorBlameRequest
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserTripleIdentityExpected<
         GitEditorParseResult<GitEditorBlameRequest>,
-        PublicGitEditorParseResult<PublicGitEditorBlameRequest>,
         PublicGitEditorParseResult<PublicGitEditorBlameRequest>
       >
-    >();
-    expectTypeOf(publicBlameRequest).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorBlameRequest>
-    >();
-    expectTypeOf(parsePublicGitEditorBlameRequest).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorBlameRequest>
     >();
   });
 
@@ -956,41 +910,29 @@ describe("Git BlameRequest public parser (#3918)", () => {
   });
 });
 
+export function parsePublicGitEditorBlameResponse(
+  input: unknown,
+): PublicGitEditorParseResult<PublicGitEditorBlameResponse> {
+  const result = publicBlameResponse(input);
+  return result;
+}
+
 describe("Git BlameResponse public parser (#3918)", () => {
   it("closes hostile thrown values without reading private error fields", () => {
-    for (const failure of hostileInspectionFailures()) {
-      const input = Object.defineProperty({}, "schemaVersion", {
-        get: (): never => {
-          throw failure.thrown;
-        },
-      });
-      const expected = {
-        ok: false,
-        errors: [`payload could not be inspected: ${failure.errorClass}`],
-      };
-      expect(parseGitEditorBlameResponse(input)).toEqual(expected);
-      expect(parsePublicGitEditorBlameResponse(input)).toEqual(expected);
-    }
+    expectHostileInspectionClosed(parseGitEditorBlameResponse, parsePublicGitEditorBlameResponse);
   });
   it("pins source public and forwarding unknown inputs and checked results", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserTripleIdentityFacts<
         typeof parseGitEditorBlameResponse,
         typeof publicBlameResponse,
         typeof parsePublicGitEditorBlameResponse
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserTripleIdentityExpected<
         GitEditorParseResult<GitEditorBlameResponse>,
-        PublicGitEditorParseResult<PublicGitEditorBlameResponse>,
         PublicGitEditorParseResult<PublicGitEditorBlameResponse>
       >
-    >();
-    expectTypeOf(publicBlameResponse).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorBlameResponse>
-    >();
-    expectTypeOf(parsePublicGitEditorBlameResponse).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorBlameResponse>
     >();
   });
 

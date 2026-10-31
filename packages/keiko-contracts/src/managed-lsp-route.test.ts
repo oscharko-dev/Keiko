@@ -1,3 +1,7 @@
+import type {
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
@@ -651,19 +655,19 @@ export function parsePublicManagedLspControlMutation(
 
 describe("Managed LSP control request public parser (#3918)", () => {
   it("pins independent source public and forwarding checked request types", () => {
-    expectTypeOf(parseManagedLspControlRequest).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(publicRequest).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(parsePublicManagedLspControlRequest).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(parseManagedLspControlRequest).returns.toEqualTypeOf<
-      SourceRouteResult<SourceControlRequest>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseManagedLspControlRequest,
+        typeof publicRequest,
+        typeof parsePublicManagedLspControlRequest
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        SourceRouteResult<SourceControlRequest>,
+        ManagedLspRouteParseResult<ManagedLspControlRequest>,
+        ManagedLspRouteParseResult<ManagedLspControlRequest>
+      >
     >();
-    expectTypeOf(publicRequest).returns.toEqualTypeOf<
-      ManagedLspRouteParseResult<ManagedLspControlRequest>
-    >();
-    expectTypeOf(parsePublicManagedLspControlRequest).returns.toEqualTypeOf<
-      ManagedLspRouteParseResult<ManagedLspControlRequest>
-    >();
-    expectTypeOf(publicRequest).returns.not.toBeAny();
     type Success = Extract<ReturnType<typeof publicRequest>, { readonly ok: true }>;
     type Failure = Extract<ReturnType<typeof publicRequest>, { readonly ok: false }>;
     expectTypeOf<Success["value"]["action"]>().toEqualTypeOf<
@@ -713,19 +717,19 @@ describe("Managed LSP control request public parser (#3918)", () => {
 
 describe("Managed LSP control response public parser (#3918)", () => {
   it("pins independent source public and forwarding checked response types", () => {
-    expectTypeOf(parseManagedLspControlResponse).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(publicResponse).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(parsePublicManagedLspControlResponse).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(parseManagedLspControlResponse).returns.toEqualTypeOf<
-      SourceRouteResult<SourceControlResponse>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseManagedLspControlResponse,
+        typeof publicResponse,
+        typeof parsePublicManagedLspControlResponse
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        SourceRouteResult<SourceControlResponse>,
+        ManagedLspRouteParseResult<ManagedLspControlResponse>,
+        ManagedLspRouteParseResult<ManagedLspControlResponse>
+      >
     >();
-    expectTypeOf(publicResponse).returns.toEqualTypeOf<
-      ManagedLspRouteParseResult<ManagedLspControlResponse>
-    >();
-    expectTypeOf(parsePublicManagedLspControlResponse).returns.toEqualTypeOf<
-      ManagedLspRouteParseResult<ManagedLspControlResponse>
-    >();
-    expectTypeOf(publicResponse).returns.not.toBeAny();
     type Success = Extract<ReturnType<typeof publicResponse>, { readonly ok: true }>;
     type Failure = Extract<ReturnType<typeof publicResponse>, { readonly ok: false }>;
     expectTypeOf<Success["value"]["revision"]>().toEqualTypeOf<number>();
@@ -768,19 +772,19 @@ describe("Managed LSP control response public parser (#3918)", () => {
 
 describe("Managed LSP control mutation public parser (#3918)", () => {
   it("pins independent source public and forwarding checked mutation types", () => {
-    expectTypeOf(parseManagedLspControlMutationResponse).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(publicMutation).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(parsePublicManagedLspControlMutation).parameter(0).toEqualTypeOf<unknown>();
-    expectTypeOf(parseManagedLspControlMutationResponse).returns.toEqualTypeOf<
-      SourceRouteResult<SourceControlSuccess>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseManagedLspControlMutationResponse,
+        typeof publicMutation,
+        typeof parsePublicManagedLspControlMutation
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        SourceRouteResult<SourceControlSuccess>,
+        ManagedLspRouteParseResult<ManagedLspControlSuccessResult>,
+        ManagedLspRouteParseResult<ManagedLspControlSuccessResult>
+      >
     >();
-    expectTypeOf(publicMutation).returns.toEqualTypeOf<
-      ManagedLspRouteParseResult<ManagedLspControlSuccessResult>
-    >();
-    expectTypeOf(parsePublicManagedLspControlMutation).returns.toEqualTypeOf<
-      ManagedLspRouteParseResult<ManagedLspControlSuccessResult>
-    >();
-    expectTypeOf(publicMutation).returns.not.toBeAny();
     type Success = Extract<ReturnType<typeof publicMutation>, { readonly ok: true }>;
     type Failure = Extract<ReturnType<typeof publicMutation>, { readonly ok: false }>;
     expectTypeOf<Success["value"]["changed"]>().toEqualTypeOf<boolean>();

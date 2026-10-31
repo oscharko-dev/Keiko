@@ -5,8 +5,8 @@
 
 import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
-  LibraryParserTripleExpected,
-  LibraryParserTripleFacts,
+  LibraryParserAcceptedExpected,
+  LibraryParserAcceptedFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
@@ -1228,33 +1228,25 @@ export function parsePublicKnowledgeSet(
 describe("Knowledge capsule set public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserAcceptedFacts<
         typeof validateCapsuleSet,
         typeof publicValidateSet,
-        typeof parsePublicKnowledgeSet
+        typeof parsePublicKnowledgeSet,
+        [
+          PublicCapsuleSet["id"],
+          PublicCapsuleSet["capsuleIds"],
+          PublicCapsuleSet["tags"],
+          PublicCapsuleSet["description"],
+        ]
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserAcceptedExpected<
         LocalKnowledgeValidation<CapsuleSet>,
         PublicKnowledgeValidation<PublicCapsuleSet>,
-        PublicKnowledgeValidation<PublicCapsuleSet>
+        PublicCapsuleSet
       >
     >();
-    const result = parsePublicKnowledgeSet(happyCapsuleSet());
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expectTypeOf(result.value).toEqualTypeOf<PublicCapsuleSet>();
-      expectTypeOf(result.value).not.toBeAny();
-      expectTypeOf(result.value).not.toBeUnknown();
-      expectTypeOf(result.value.id).not.toBeAny();
-      expectTypeOf(result.value.id).not.toBeUnknown();
-      expectTypeOf(result.value.capsuleIds).not.toBeAny();
-      expectTypeOf(result.value.capsuleIds).not.toBeUnknown();
-      expectTypeOf(result.value.tags).not.toBeAny();
-      expectTypeOf(result.value.tags).not.toBeUnknown();
-      expectTypeOf(result.value.description).not.toBeAny();
-      expectTypeOf(result.value.description).not.toBeUnknown();
-    }
+    expect(parsePublicKnowledgeSet(happyCapsuleSet()).ok).toBe(true);
   });
 });
 
@@ -1268,38 +1260,32 @@ export function parsePublicKnowledgeReindex(
 describe("Knowledge reindex public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserAcceptedFacts<
         typeof validateCapsuleReindexRequest,
         typeof publicValidateReindex,
-        typeof parsePublicKnowledgeReindex
+        typeof parsePublicKnowledgeReindex,
+        [
+          PublicReindexRequest["capsuleId"],
+          PublicReindexRequest["mode"],
+          PublicReindexRequest["force"],
+          PublicReindexRequest["resumeJobId"],
+        ]
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserAcceptedExpected<
         LocalKnowledgeValidation<CapsuleReindexRequest>,
         PublicKnowledgeValidation<PublicReindexRequest>,
-        PublicKnowledgeValidation<PublicReindexRequest>
+        PublicReindexRequest
       >
     >();
-    const result = parsePublicKnowledgeReindex({
-      capsuleId: "cap-1",
-      mode: "resume",
-      force: true,
-      resumeJobId: "job-1",
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expectTypeOf(result.value).toEqualTypeOf<PublicReindexRequest>();
-      expectTypeOf(result.value).not.toBeAny();
-      expectTypeOf(result.value).not.toBeUnknown();
-      expectTypeOf(result.value.capsuleId).not.toBeAny();
-      expectTypeOf(result.value.capsuleId).not.toBeUnknown();
-      expectTypeOf(result.value.mode).not.toBeAny();
-      expectTypeOf(result.value.mode).not.toBeUnknown();
-      expectTypeOf(result.value.force).not.toBeAny();
-      expectTypeOf(result.value.force).not.toBeUnknown();
-      expectTypeOf(result.value.resumeJobId).not.toBeAny();
-      expectTypeOf(result.value.resumeJobId).not.toBeUnknown();
-    }
+    expect(
+      parsePublicKnowledgeReindex({
+        capsuleId: "cap-1",
+        mode: "resume",
+        force: true,
+        resumeJobId: "job-1",
+      }).ok,
+    ).toBe(true);
   });
 });
 
@@ -1313,31 +1299,20 @@ export function parsePublicKnowledgeGraph(
 describe("Knowledge graph public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserAcceptedFacts<
         typeof validateConnectorGraphState,
         typeof publicValidateGraph,
-        typeof parsePublicKnowledgeGraph
+        typeof parsePublicKnowledgeGraph,
+        [PublicGraphState["nodes"], PublicGraphState["edges"], PublicGraphState["updatedAt"]]
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserAcceptedExpected<
         LocalKnowledgeValidation<ConnectorGraphState>,
         PublicKnowledgeValidation<PublicGraphState>,
-        PublicKnowledgeValidation<PublicGraphState>
+        PublicGraphState
       >
     >();
-    const result = parsePublicKnowledgeGraph(happyGraph());
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expectTypeOf(result.value).toEqualTypeOf<PublicGraphState>();
-      expectTypeOf(result.value).not.toBeAny();
-      expectTypeOf(result.value).not.toBeUnknown();
-      expectTypeOf(result.value.nodes).not.toBeAny();
-      expectTypeOf(result.value.nodes).not.toBeUnknown();
-      expectTypeOf(result.value.edges).not.toBeAny();
-      expectTypeOf(result.value.edges).not.toBeUnknown();
-      expectTypeOf(result.value.updatedAt).not.toBeAny();
-      expectTypeOf(result.value.updatedAt).not.toBeUnknown();
-    }
+    expect(parsePublicKnowledgeGraph(happyGraph()).ok).toBe(true);
   });
 });
 

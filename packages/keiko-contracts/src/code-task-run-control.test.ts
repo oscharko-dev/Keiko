@@ -1,3 +1,8 @@
+import {
+  expectHeaderGetterRefusals,
+  expectHealthyHeaderReads,
+  observeHeaderFields,
+} from "./__tests__/support/identity-header-observations.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
 import {
@@ -1139,33 +1144,7 @@ describe.each([
   ["public", publicRunControlSnapshot],
 ] as const)("%s identity-header observations", (_surface, validate): void => {
   it("reads the healthy header and local suffix once in order with original receivers", (): void => {
-    const input = snapshot();
-    const trace: string[] = [];
-    const receivers: unknown[] = [];
-    for (const field of SNAPSHOT_IDENTITY_HEADER_FIELDS) {
-      const original = input[field];
-      Object.defineProperty(input, field, {
-        get(this: unknown): unknown {
-          trace.push(field);
-          receivers.push(this);
-          return original;
-        },
-      });
-    }
-    const result = validate(input);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(input);
-    expect(trace).toEqual([
-      "kind",
-      "schemaVersion",
-      "taskId",
-      "runId",
-      "idempotencyKey",
-      "runEpoch",
-      "stateRevision",
-    ]);
-    expect(receivers).toHaveLength(7);
-    for (const receiver of receivers) expect(receiver).toBe(input);
+    expectHealthyHeaderReads(validate, snapshot(), SNAPSHOT_IDENTITY_HEADER_FIELDS);
   });
 
   it("retains earlier own-key errors and eagerly checks every refused prefix and local suffix", (): void => {
@@ -1180,16 +1159,7 @@ describe.each([
       stateRevision: -1,
       fixtureExtra: true,
     };
-    const trace: string[] = [];
-    for (const field of SNAPSHOT_IDENTITY_HEADER_FIELDS) {
-      const original = input[field];
-      Object.defineProperty(input, field, {
-        get(): unknown {
-          trace.push(field);
-          return original;
-        },
-      });
-    }
+    const { trace } = observeHeaderFields(input, SNAPSHOT_IDENTITY_HEADER_FIELDS);
     expect(validate(input)).toEqual({
       ok: false,
       errors: [
@@ -1215,33 +1185,6 @@ describe.each([
   });
 
   it("propagates each opaque header getter refusal without later observations", (): void => {
-    for (const [fault, expected] of [
-      ["kind", ["kind"]],
-      ["schemaVersion", ["kind", "schemaVersion"]],
-      ["taskId", ["kind", "schemaVersion", "taskId"]],
-      ["runId", ["kind", "schemaVersion", "taskId", "runId"]],
-    ] as const) {
-      const input = snapshot();
-      const trace: string[] = [];
-      const failure: Error = Object.freeze(new TypeError("synthetic identity-header refusal"));
-      for (const field of SNAPSHOT_IDENTITY_HEADER_FIELDS) {
-        const original = input[field];
-        Object.defineProperty(input, field, {
-          get(): unknown {
-            trace.push(field);
-            if (field === fault) throw failure;
-            return original;
-          },
-        });
-      }
-      let observed: unknown;
-      try {
-        validate(input);
-      } catch (error) {
-        observed = error;
-      }
-      expect(observed).toBe(failure);
-      expect(trace).toEqual(expected);
-    }
+    expectHeaderGetterRefusals(validate, snapshot, SNAPSHOT_IDENTITY_HEADER_FIELDS);
   });
 });

@@ -1,3 +1,4 @@
+import { expectKeyInspectionFailure } from "./__tests__/support/tagged-fact-observations.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
 import {
@@ -1124,35 +1125,14 @@ describe("auxiliary tagged-fact observation preservation", () => {
     }
 
     it(`${surface} propagates key inspection failure before known value access`, () => {
-      const failure = new TypeError("opaque tagged-fact key inspection");
-      const trace: string[] = [];
-      let inspections = 0;
-      const fact = new Proxy(
-        { outcome: "known", value: DIGEST },
-        {
-          ownKeys(target): (string | symbol)[] {
-            inspections += 1;
-            trace.push(`keys:${String(inspections)}`);
-            if (inspections === 2) throw failure;
-            return Reflect.ownKeys(target);
-          },
-          get(target, key, receiver): unknown {
-            trace.push(`get:${String(key)}`);
-            return Reflect.get(target, key, receiver);
-          },
-        },
+      expectKeyInspectionFailure(
+        (fact) =>
+          validate({
+            ...researchRequest(),
+            research: { ...researchRequest().research, queryTextDigest: fact },
+          }),
+        DIGEST,
       );
-      let observed: unknown;
-      try {
-        validate({
-          ...researchRequest(),
-          research: { ...researchRequest().research, queryTextDigest: fact },
-        });
-      } catch (error) {
-        observed = error;
-      }
-      expect(observed).toBe(failure);
-      expect(trace).toEqual(["keys:1", "get:outcome", "keys:2"]);
     });
 
     it(`${surface} preserves the exact known value getter failure`, () => {

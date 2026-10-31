@@ -1,3 +1,4 @@
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 // Behavioral tests for git-delivery-provider.ts (Issue #471, Epic #470). Covers every exported
 // guard (positive AND negative cases) for the provider-neutral interfaces.
 
@@ -409,16 +410,7 @@ describe("provider physical member observation preservation", () => {
           throw new TypeError("later capability must remain unread");
         },
       });
-      const capabilities = new Proxy(entries, {
-        has(target, key): boolean {
-          trace.push(`has:${String(key)}`);
-          return Reflect.has(target, key);
-        },
-        get(target, key, receiver): unknown {
-          trace.push(`get:${String(key)}`);
-          return Reflect.get(target, key, receiver);
-        },
-      });
+      const capabilities = observeIndexedMembers(entries, trace);
       expect(validate({ schemaVersion: "1", providerInstanceId: "fixture", capabilities })).toBe(
         false,
       );
@@ -461,16 +453,7 @@ describe("provider physical member observation preservation", () => {
         value: "dev",
       };
       const trace: string[] = [];
-      const allowedPushTargetPatterns = new Proxy(entries, {
-        has(target, key): boolean {
-          trace.push(`has:${String(key)}`);
-          return Reflect.has(target, key);
-        },
-        get(target, key, receiver): unknown {
-          trace.push(`get:${String(key)}`);
-          return Reflect.get(target, key, receiver);
-        },
-      });
+      const allowedPushTargetPatterns = observeIndexedMembers(entries, trace);
       expect(validate({ allowedPushTargetPatterns, forcePushGloballyDenied: false })).toBe(false);
       expect(trace).toEqual(["get:length", "has:0", "get:0", "has:1"]);
     });

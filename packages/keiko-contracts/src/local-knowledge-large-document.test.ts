@@ -4,8 +4,8 @@ import {
   knowledgeFinalExtentFailureMembers,
 } from "./__tests__/support/protocol-observation-mechanics.js";
 import type {
-  LibraryParserTripleExpected,
-  LibraryParserTripleFacts,
+  LibraryParserAcceptedExpected,
+  LibraryParserAcceptedFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 
 import type {
@@ -368,35 +368,26 @@ export function parsePublicKnowledgeCheckpoint(
 describe("Knowledge checkpoint public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserAcceptedFacts<
         typeof validateExtractionCheckpointRecord,
         typeof publicValidateCheckpoint,
-        typeof parsePublicKnowledgeCheckpoint
+        typeof parsePublicKnowledgeCheckpoint,
+        [
+          PublicCheckpoint["capsuleId"],
+          PublicCheckpoint["fingerprint"],
+          PublicCheckpoint["fingerprint"]["embeddingIdentity"],
+          PublicCheckpoint["terminalDiagnostics"],
+          PublicCheckpoint["pageCursor"],
+        ]
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserAcceptedExpected<
         LocalKnowledgeValidation<ExtractionCheckpointRecord>,
         PublicKnowledgeValidation<PublicCheckpoint>,
-        PublicKnowledgeValidation<PublicCheckpoint>
+        PublicCheckpoint
       >
     >();
-    const result = parsePublicKnowledgeCheckpoint(baseCheckpoint());
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expectTypeOf(result.value).toEqualTypeOf<PublicCheckpoint>();
-      expectTypeOf(result.value).not.toBeAny();
-      expectTypeOf(result.value).not.toBeUnknown();
-      expectTypeOf(result.value.capsuleId).not.toBeAny();
-      expectTypeOf(result.value.capsuleId).not.toBeUnknown();
-      expectTypeOf(result.value.fingerprint).not.toBeAny();
-      expectTypeOf(result.value.fingerprint).not.toBeUnknown();
-      expectTypeOf(result.value.fingerprint.embeddingIdentity).not.toBeAny();
-      expectTypeOf(result.value.fingerprint.embeddingIdentity).not.toBeUnknown();
-      expectTypeOf(result.value.terminalDiagnostics).not.toBeAny();
-      expectTypeOf(result.value.terminalDiagnostics).not.toBeUnknown();
-      expectTypeOf(result.value.pageCursor).not.toBeAny();
-      expectTypeOf(result.value.pageCursor).not.toBeUnknown();
-    }
+    expect(parsePublicKnowledgeCheckpoint(baseCheckpoint()).ok).toBe(true);
   });
 });
 

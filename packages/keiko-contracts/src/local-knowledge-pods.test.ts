@@ -1,8 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { happySummary } from "./__tests__/support/knowledge-array-fixtures.js";
 import type {
-  LibraryParserTripleExpected,
-  LibraryParserTripleFacts,
+  LibraryParserAcceptedExpected,
+  LibraryParserAcceptedFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 
 import {
@@ -973,33 +973,25 @@ export function parsePublicKnowledgeSummary(
 describe("Knowledge pod summary public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserAcceptedFacts<
         typeof validateKnowledgePodSummary,
         typeof publicValidateSummary,
-        typeof parsePublicKnowledgeSummary
+        typeof parsePublicKnowledgeSummary,
+        [
+          PublicPodSummary["id"],
+          PublicPodSummary["counts"],
+          PublicPodSummary["privacy"]["rawContentExposed"],
+          PublicPodSummary["modelUsePolicy"]["operations"]["rawContentRelease"],
+        ]
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserAcceptedExpected<
         LocalKnowledgeValidation<KnowledgePodSummary>,
         PublicKnowledgeValidation<PublicPodSummary>,
-        PublicKnowledgeValidation<PublicPodSummary>
+        PublicPodSummary
       >
     >();
-    const result = parsePublicKnowledgeSummary(happySummary());
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expectTypeOf(result.value).toEqualTypeOf<PublicPodSummary>();
-      expectTypeOf(result.value).not.toBeAny();
-      expectTypeOf(result.value).not.toBeUnknown();
-      expectTypeOf(result.value.id).not.toBeAny();
-      expectTypeOf(result.value.id).not.toBeUnknown();
-      expectTypeOf(result.value.counts).not.toBeAny();
-      expectTypeOf(result.value.counts).not.toBeUnknown();
-      expectTypeOf(result.value.privacy.rawContentExposed).not.toBeAny();
-      expectTypeOf(result.value.privacy.rawContentExposed).not.toBeUnknown();
-      expectTypeOf(result.value.modelUsePolicy.operations.rawContentRelease).not.toBeAny();
-      expectTypeOf(result.value.modelUsePolicy.operations.rawContentRelease).not.toBeUnknown();
-    }
+    expect(parsePublicKnowledgeSummary(happySummary()).ok).toBe(true);
   });
 });
 

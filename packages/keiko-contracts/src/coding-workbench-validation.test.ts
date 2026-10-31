@@ -1,3 +1,8 @@
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
+import {
+  expectAcceptedReference,
+  expectIndependentFailures,
+} from "./__tests__/support/checked-envelope.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -184,11 +189,10 @@ async function physicalEvidenceListErrors(
 
 for (const surface of ["source", "public"] as const) {
   it(`${surface}: accepts a healthy connector list with original permission identity`, async () => {
-    const validate = await physicalPermissionListValidator(surface);
-    const value = physicalConnectorPermission(["source-control.read"]);
-    const result = validate(value);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(value);
+    expectAcceptedReference(
+      await physicalPermissionListValidator(surface),
+      physicalConnectorPermission(["source-control.read"]),
+    );
   });
 
   it(`${surface}: retains required empty connector-list diagnostics`, async () => {
@@ -294,16 +298,7 @@ for (const surface of ["source", "public"] as const) {
       }),
     );
     const reads: string[] = [];
-    const observed = new Proxy(members, {
-      get(target, key, receiver): unknown {
-        reads.push(`get:${String(key)}`);
-        return Reflect.get(target, key, receiver);
-      },
-      has(target, key): boolean {
-        reads.push(`has:${String(key)}`);
-        return Reflect.has(target, key);
-      },
-    });
+    const observed = observeIndexedMembers(members, reads);
     expect(await physicalEvidenceListErrors(surface, observed)).toEqual([]);
     expect(reads).toEqual(["get:length", "get:length", "has:0", "get:0"]);
     expect(members).toHaveLength(2);
@@ -631,21 +626,14 @@ function envelopeObservedEvent(trace: string[], failure?: Error): Record<string,
 
 for (const surface of ["source", "public"] as const) {
   it(`${surface}: preserves the event envelope's accepted reference`, async () => {
-    const validate = await envelopeEventValidator(surface);
-    const value = requiredDigestEvent();
-    const result = validate(value);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value).toBe(value);
+    expectAcceptedReference(await envelopeEventValidator(surface), requiredDigestEvent());
   });
 
   it(`${surface}: returns independent event failure envelopes and readonly arrays`, async () => {
-    const validate = await envelopeEventValidator(surface);
-    const first = validate(null);
-    const second = validate(null);
-    expect(first).toEqual({ ok: false, errors: ["runtime event must be an object"] });
-    expect(second).toEqual(first);
-    expect(second).not.toBe(first);
-    if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
+    expectIndependentFailures(
+      await envelopeEventValidator(surface),
+      "runtime event must be an object",
+    );
   });
 
   it(`${surface}: eagerly retains all event phases and duplicate evidence diagnostics`, async () => {

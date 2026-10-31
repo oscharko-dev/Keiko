@@ -1,3 +1,6 @@
+import { expectKeyInspectionFailure } from "./__tests__/support/tagged-fact-observations.js";
+import { observeFieldReads } from "./__tests__/support/field-read-observations.js";
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
@@ -2449,16 +2452,7 @@ describe("acceptance physical member phase preservation", () => {
           throw new TypeError("later scenario must remain unread");
         },
       });
-      const scenarios = new Proxy(entries, {
-        has(target, key): boolean {
-          trace.push(`has:${String(key)}`);
-          return Reflect.has(target, key);
-        },
-        get(target, key, receiver): unknown {
-          trace.push(`get:${String(key)}`);
-          return Reflect.get(target, key, receiver);
-        },
-      });
+      const scenarios = observeIndexedMembers(entries, trace);
       expect(
         validate({
           ...validContribution(),
@@ -2525,16 +2519,7 @@ describe("acceptance physical member phase preservation", () => {
         },
       };
       const trace: string[] = [];
-      const scenarios = new Proxy(entries, {
-        has(target, key): boolean {
-          trace.push(`has:${String(key)}`);
-          return Reflect.has(target, key);
-        },
-        get(target, key, receiver): unknown {
-          trace.push(`get:${String(key)}`);
-          return Reflect.get(target, key, receiver);
-        },
-      });
+      const scenarios = observeIndexedMembers(entries, trace);
       expect(validate({ ...contribution, scenarios })).toEqual({
         ok: false,
         errors: ["scenarios[1] must be an object"],
@@ -2778,32 +2763,7 @@ describe("acceptance tagged-fact observation preservation", () => {
     }
 
     it(`${surface} propagates key inspection failure before known value access`, () => {
-      const failure = new TypeError("opaque tagged-fact key inspection");
-      const trace: string[] = [];
-      let inspections = 0;
-      const fact = new Proxy(
-        { outcome: "known", value: DIGEST },
-        {
-          ownKeys(target): (string | symbol)[] {
-            inspections += 1;
-            trace.push(`keys:${String(inspections)}`);
-            if (inspections === 2) throw failure;
-            return Reflect.ownKeys(target);
-          },
-          get(target, key, receiver): unknown {
-            trace.push(`get:${String(key)}`);
-            return Reflect.get(target, key, receiver);
-          },
-        },
-      );
-      let observed: unknown;
-      try {
-        validate(withReceiptDigest(fact));
-      } catch (error) {
-        observed = error;
-      }
-      expect(observed).toBe(failure);
-      expect(trace).toEqual(["keys:1", "get:outcome", "keys:2"]);
+      expectKeyInspectionFailure((fact) => validate(withReceiptDigest(fact)), DIGEST);
     });
 
     it(`${surface} preserves the exact known value getter failure`, () => {
@@ -3055,16 +3015,7 @@ describe("qualification numeric-field observation preservation", () => {
       const flow = validQualificationFlow();
       const trace: string[] = [];
       const authorityObservation = { ...flow.authorityObservation };
-      for (const field of NUMERIC_AUTHORITY_FIELDS) {
-        const count = authorityObservation[field];
-        Object.defineProperty(authorityObservation, field, {
-          enumerable: true,
-          get: (): number => {
-            trace.push(field);
-            return count;
-          },
-        });
-      }
+      observeFieldReads(authorityObservation, NUMERIC_AUTHORITY_FIELDS, trace);
       const input = { ...flow, authorityObservation };
       const result = validate(input);
       expect(result.ok).toBe(true);
@@ -3078,16 +3029,7 @@ describe("qualification numeric-field observation preservation", () => {
       const flow = validQualificationFlow();
       const trace: string[] = [];
       const spend = { ...flow.spend };
-      for (const field of NUMERIC_SPEND_FIELDS) {
-        const amount = spend[field];
-        Object.defineProperty(spend, field, {
-          enumerable: true,
-          get: (): number => {
-            trace.push(field);
-            return amount;
-          },
-        });
-      }
+      observeFieldReads(spend, NUMERIC_SPEND_FIELDS, trace);
       const input = { ...flow, spend };
       const result = validate(input);
       expect(result.ok).toBe(true);

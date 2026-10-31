@@ -1,3 +1,4 @@
+import { expectDiagnosticRefusals } from "./__tests__/support/context-diagnostic-refusals.js";
 // Unit tests for context-observations.ts + context-observations-validation.ts (ADR-0054, PR3-W1).
 // Each validator test mutates exactly one field of a known-good fixture so a single-line
 // implementation mutation is caught. Discriminated-union dispatch routes by kind. The forward-
@@ -5,7 +6,10 @@
 // CommandResult without omittedByteCount and a ToolCallResult without shapedObservation still type.
 
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { LibraryContextDiagnosticFacts } from "./__tests__/support/library-parser-type-facts.js";
+import type {
+  ContextDiagnosticTripleExpected,
+  ContextDiagnosticTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "./context-engineering.js";
 import {
   MAX_FAILING_TEST_NAMES,
@@ -605,37 +609,14 @@ export function countPublicContextToolRehydrationHandleDiagnostics(input: unknow
 
 it("shipped context tool rehydration diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateContextToolRehydrationHandle,
-      Extract<ReturnType<typeof validateContextToolRehydrationHandle>, { ok: false }>["reasons"],
-      Extract<
-        ReturnType<typeof validateContextToolRehydrationHandle>,
-        { ok: false }
-      >["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicContextToolRehydrationHandle,
-      Extract<ReturnType<typeof publicContextToolRehydrationHandle>, { ok: false }>["reasons"],
-      Extract<
-        ReturnType<typeof publicContextToolRehydrationHandle>,
-        { ok: false }
-      >["reasons"][number]
+      typeof countPublicContextToolRehydrationHandleDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Parameters<typeof countPublicContextToolRehydrationHandleDiagnostics>
-  >().toEqualTypeOf<[unknown]>();
-  expectTypeOf<
-    ReturnType<typeof countPublicContextToolRehydrationHandleDiagnostics>
-  >().toEqualTypeOf<number>();
 });
 
 it("shipped context tool rehydration diagnostic preserves healthy input and counts no reasons", () => {
@@ -680,11 +661,11 @@ it("shipped context tool rehydration diagnostic counts actual ordered public ref
       ],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicContextToolRehydrationHandle(input)).toEqual({ ok: false, reasons });
-    expect(validateContextToolRehydrationHandle(input)).toEqual({ ok: false, reasons });
-    expect(countPublicContextToolRehydrationHandleDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicContextToolRehydrationHandle, validateContextToolRehydrationHandle],
+    countPublicContextToolRehydrationHandleDiagnostics,
+  );
 });
 
 export function countPublicShapedCommandObservationDiagnostics(input: unknown): number {
@@ -694,31 +675,14 @@ export function countPublicShapedCommandObservationDiagnostics(input: unknown): 
 
 it("shipped shaped command diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateShapedCommandObservation,
-      Extract<ReturnType<typeof validateShapedCommandObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof validateShapedCommandObservation>, { ok: false }>["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicShapedCommandObservation,
-      Extract<ReturnType<typeof publicShapedCommandObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof publicShapedCommandObservation>, { ok: false }>["reasons"][number]
+      typeof countPublicShapedCommandObservationDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<Parameters<typeof countPublicShapedCommandObservationDiagnostics>>().toEqualTypeOf<
-    [unknown]
-  >();
-  expectTypeOf<
-    ReturnType<typeof countPublicShapedCommandObservationDiagnostics>
-  >().toEqualTypeOf<number>();
 });
 
 it("shipped shaped command diagnostic preserves healthy input and counts no reasons", () => {
@@ -765,11 +729,11 @@ it("shipped shaped command diagnostic counts actual ordered public refusals", ()
       ],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicShapedCommandObservation(input)).toEqual({ ok: false, reasons });
-    expect(validateShapedCommandObservation(input)).toEqual({ ok: false, reasons });
-    expect(countPublicShapedCommandObservationDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicShapedCommandObservation, validateShapedCommandObservation],
+    countPublicShapedCommandObservationDiagnostics,
+  );
 });
 
 export function countPublicShapedTestObservationDiagnostics(input: unknown): number {
@@ -779,31 +743,14 @@ export function countPublicShapedTestObservationDiagnostics(input: unknown): num
 
 it("shipped shaped test diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateShapedTestObservation,
-      Extract<ReturnType<typeof validateShapedTestObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof validateShapedTestObservation>, { ok: false }>["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicShapedTestObservation,
-      Extract<ReturnType<typeof publicShapedTestObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof publicShapedTestObservation>, { ok: false }>["reasons"][number]
+      typeof countPublicShapedTestObservationDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<Parameters<typeof countPublicShapedTestObservationDiagnostics>>().toEqualTypeOf<
-    [unknown]
-  >();
-  expectTypeOf<
-    ReturnType<typeof countPublicShapedTestObservationDiagnostics>
-  >().toEqualTypeOf<number>();
 });
 
 it("shipped shaped test diagnostic preserves healthy input and counts no reasons", () => {
@@ -838,11 +785,11 @@ it("shipped shaped test diagnostic counts actual ordered public refusals", () =>
       reasons: ["test.stackFrameExcerpts[0] invalid", "test.injectionSignalCount invalid"],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicShapedTestObservation(input)).toEqual({ ok: false, reasons });
-    expect(validateShapedTestObservation(input)).toEqual({ ok: false, reasons });
-    expect(countPublicShapedTestObservationDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicShapedTestObservation, validateShapedTestObservation],
+    countPublicShapedTestObservationDiagnostics,
+  );
 });
 
 export function countPublicShapedSearchObservationDiagnostics(input: unknown): number {
@@ -852,31 +799,14 @@ export function countPublicShapedSearchObservationDiagnostics(input: unknown): n
 
 it("shipped shaped search diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateShapedSearchObservation,
-      Extract<ReturnType<typeof validateShapedSearchObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof validateShapedSearchObservation>, { ok: false }>["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicShapedSearchObservation,
-      Extract<ReturnType<typeof publicShapedSearchObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof publicShapedSearchObservation>, { ok: false }>["reasons"][number]
+      typeof countPublicShapedSearchObservationDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<Parameters<typeof countPublicShapedSearchObservationDiagnostics>>().toEqualTypeOf<
-    [unknown]
-  >();
-  expectTypeOf<
-    ReturnType<typeof countPublicShapedSearchObservationDiagnostics>
-  >().toEqualTypeOf<number>();
 });
 
 it("shipped shaped search diagnostic preserves healthy input and counts no reasons", () => {
@@ -914,11 +844,11 @@ it("shipped shaped search diagnostic counts actual ordered public refusals", () 
       ],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicShapedSearchObservation(input)).toEqual({ ok: false, reasons });
-    expect(validateShapedSearchObservation(input)).toEqual({ ok: false, reasons });
-    expect(countPublicShapedSearchObservationDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicShapedSearchObservation, validateShapedSearchObservation],
+    countPublicShapedSearchObservationDiagnostics,
+  );
 });
 
 export function countPublicShapedBrowserObservationDiagnostics(input: unknown): number {
@@ -928,31 +858,14 @@ export function countPublicShapedBrowserObservationDiagnostics(input: unknown): 
 
 it("shipped shaped browser diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateShapedBrowserObservation,
-      Extract<ReturnType<typeof validateShapedBrowserObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof validateShapedBrowserObservation>, { ok: false }>["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicShapedBrowserObservation,
-      Extract<ReturnType<typeof publicShapedBrowserObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof publicShapedBrowserObservation>, { ok: false }>["reasons"][number]
+      typeof countPublicShapedBrowserObservationDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<Parameters<typeof countPublicShapedBrowserObservationDiagnostics>>().toEqualTypeOf<
-    [unknown]
-  >();
-  expectTypeOf<
-    ReturnType<typeof countPublicShapedBrowserObservationDiagnostics>
-  >().toEqualTypeOf<number>();
 });
 
 it("shipped shaped browser diagnostic preserves healthy input and counts no reasons", () => {
@@ -1001,11 +914,11 @@ it("shipped shaped browser diagnostic counts actual ordered public refusals", ()
       ],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicShapedBrowserObservation(input)).toEqual({ ok: false, reasons });
-    expect(validateShapedBrowserObservation(input)).toEqual({ ok: false, reasons });
-    expect(countPublicShapedBrowserObservationDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicShapedBrowserObservation, validateShapedBrowserObservation],
+    countPublicShapedBrowserObservationDiagnostics,
+  );
 });
 
 export function countPublicContextToolObservationDiagnostics(input: unknown): number {
@@ -1015,31 +928,14 @@ export function countPublicContextToolObservationDiagnostics(input: unknown): nu
 
 it("shipped context tool observation diagnostic retains independent source and public closed result types", () => {
   expectTypeOf<
-    LibraryContextDiagnosticFacts<
+    ContextDiagnosticTripleFacts<
       typeof validateContextToolObservation,
-      Extract<ReturnType<typeof validateContextToolObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof validateContextToolObservation>, { ok: false }>["reasons"][number]
-    >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
-  expectTypeOf<
-    LibraryContextDiagnosticFacts<
       typeof publicContextToolObservation,
-      Extract<ReturnType<typeof publicContextToolObservation>, { ok: false }>["reasons"],
-      Extract<ReturnType<typeof publicContextToolObservation>, { ok: false }>["reasons"][number]
+      typeof countPublicContextToolObservationDiagnostics
     >
-  >().toEqualTypeOf<
-    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
-  >();
+  >().toEqualTypeOf<ContextDiagnosticTripleExpected<ExpectedContextDiagnostic>>();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<Parameters<typeof countPublicContextToolObservationDiagnostics>>().toEqualTypeOf<
-    [unknown]
-  >();
-  expectTypeOf<
-    ReturnType<typeof countPublicContextToolObservationDiagnostics>
-  >().toEqualTypeOf<number>();
 });
 
 it("shipped context tool observation diagnostic preserves healthy input and counts no reasons", () => {
@@ -1083,9 +979,9 @@ it("shipped context tool observation diagnostic counts actual ordered public ref
       ],
     },
   ];
-  for (const { input, reasons } of cases) {
-    expect(publicContextToolObservation(input)).toEqual({ ok: false, reasons });
-    expect(validateContextToolObservation(input)).toEqual({ ok: false, reasons });
-    expect(countPublicContextToolObservationDiagnostics(input)).toBe(reasons.length);
-  }
+  expectDiagnosticRefusals(
+    cases,
+    [publicContextToolObservation, validateContextToolObservation],
+    countPublicContextToolObservationDiagnostics,
+  );
 });

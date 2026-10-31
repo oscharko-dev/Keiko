@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   installIgnoredProtocolMetadata,
-  observeCapturedExtent,
+  itPreservesCapturedExtent,
   protocolEnumerationInput,
 } from "./__tests__/support/protocol-observation-mechanics.js";
 
@@ -876,54 +876,12 @@ describe.each([
   ["source", parseSetWatchesRequest],
   ["public", publicWatches],
 ] as const)("3918 dap-debug captured extent %s", (_surface, parse) => {
-  function inspectExtent(
-    laterExtent: number,
-    firstObservation: { readonly first: unknown } = { first: 1 },
-  ): {
-    readonly result: boolean;
-    readonly indexReads: number;
-    readonly lengths: readonly unknown[];
-  } {
-    const values: unknown[] = [watch];
-    const observation = observeCapturedExtent(
-      values,
-      laterExtent,
-      firstObservation,
-      () => DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatches + 1,
-    );
-    const { observed } = observation;
-    return {
-      result: parse({ schemaVersion, workspaceId, expectedRevision: 0, watches: observed }).ok,
-      indexReads: observation.indexReads,
-      lengths: observation.lengths,
-    };
-  }
-  it("preserves a healthy actual captured extent", () => {
-    const observation = inspectExtent(1);
-    expect(observation.result).toBe(true);
-    expect(observation.lengths.slice(0, 2)).toEqual([1, 1]);
-    expect(observation.indexReads).toBeGreaterThan(0);
+  itPreservesCapturedExtent({
+    member: watch,
+    bound: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatches,
+    admit: (observed) =>
+      parse({ schemaVersion, workspaceId, expectedRevision: 0, watches: observed }).ok,
   });
-  it.each([NaN, undefined])("preserves original first-limit refusal for %s", (first) => {
-    const observation = inspectExtent(1, { first });
-    expect(observation).toEqual({ result: false, indexReads: 0, lengths: [first] });
-  });
-
-  it.each([DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatches + 1, Infinity, 0.5, -1])(
-    "refuses captured extent %s before indexing",
-    (extent) => {
-      const observation = inspectExtent(extent);
-      expect({
-        accepted: observation.result,
-        indexReads: observation.indexReads,
-        firstTwoLengths: observation.lengths.slice(0, 2),
-      }).toEqual({
-        accepted: false,
-        indexReads: 0,
-        firstTwoLengths: [1, extent],
-      });
-    },
-  );
 });
 
 import * as debugPublic from "@oscharko-dev/keiko-contracts/runtime/dap-debug";

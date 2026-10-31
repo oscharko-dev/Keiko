@@ -23,8 +23,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { capsuleInput } from "./__tests__/support/knowledge-array-fixtures.js";
 import type {
-  LibraryParserTripleExpected,
-  LibraryParserTripleFacts,
+  LibraryParserAcceptedExpected,
+  LibraryParserAcceptedFacts,
 } from "./__tests__/support/library-parser-type-facts.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -363,35 +363,26 @@ export function parsePublicKnowledgeCapsule(
 describe("Knowledge capsule public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
     expectTypeOf<
-      LibraryParserTripleFacts<
+      LibraryParserAcceptedFacts<
         typeof validateKnowledgeCapsule,
         typeof publicValidateKnowledgeCapsule,
-        typeof parsePublicKnowledgeCapsule
+        typeof parsePublicKnowledgeCapsule,
+        [
+          PublicKnowledgeCapsule["id"],
+          PublicKnowledgeCapsule["sourceIds"],
+          PublicKnowledgeCapsule["embeddingModelIdentity"],
+          PublicKnowledgeCapsule["embeddingModelIdentity"]["vectorDimensions"],
+          PublicKnowledgeCapsule["alwaysQuery"],
+        ]
       >
     >().toEqualTypeOf<
-      LibraryParserTripleExpected<
+      LibraryParserAcceptedExpected<
         LocalKnowledgeValidation<SourceKnowledgeCapsule>,
         PublicKnowledgeValidation<PublicKnowledgeCapsule>,
-        PublicKnowledgeValidation<PublicKnowledgeCapsule>
+        PublicKnowledgeCapsule
       >
     >();
-    const result = parsePublicKnowledgeCapsule(capsuleInput());
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expectTypeOf(result.value).toEqualTypeOf<PublicKnowledgeCapsule>();
-      expectTypeOf(result.value).not.toBeAny();
-      expectTypeOf(result.value).not.toBeUnknown();
-      expectTypeOf(result.value.id).not.toBeAny();
-      expectTypeOf(result.value.id).not.toBeUnknown();
-      expectTypeOf(result.value.sourceIds).not.toBeAny();
-      expectTypeOf(result.value.sourceIds).not.toBeUnknown();
-      expectTypeOf(result.value.embeddingModelIdentity).not.toBeAny();
-      expectTypeOf(result.value.embeddingModelIdentity).not.toBeUnknown();
-      expectTypeOf(result.value.embeddingModelIdentity.vectorDimensions).not.toBeAny();
-      expectTypeOf(result.value.embeddingModelIdentity.vectorDimensions).not.toBeUnknown();
-      expectTypeOf(result.value.alwaysQuery).not.toBeAny();
-      expectTypeOf(result.value.alwaysQuery).not.toBeUnknown();
-    }
+    expect(parsePublicKnowledgeCapsule(capsuleInput()).ok).toBe(true);
   });
 });
 
