@@ -119,6 +119,26 @@ describe("chatToolTurnPartialAnswer", () => {
     );
   });
 
+  it("counts a draft's failed items as refused, not its skipped or excluded ones", () => {
+    const draft = exchange(
+      "jira_draft",
+      {
+        outcome: "rejected",
+        items: [
+          { ref: "epic", state: "created", issueKey: "REQ-31" },
+          { ref: "story", state: "failed" },
+          { ref: "task", state: "failed" },
+          { ref: "bug", state: "skipped" },
+          { ref: "spike", state: "excluded" },
+        ],
+      },
+      "rejected",
+    );
+    const answer = chatToolTurnPartialAnswer([draft], "deadline");
+    expect(answer).toContain("- jira_draft REQ-31 (created)");
+    expect(answer).toContain("Reads completed: 0. Refused or failed tool calls: 2.");
+  });
+
   it("counts a read whose result lists items as a read, not as a draft", () => {
     const answer = chatToolTurnPartialAnswer(
       [exchange("jira_projects", { items: [{ key: "REQ", name: "Requirements" }] })],

@@ -144,7 +144,11 @@ const DEFINITIONS: Readonly<
       readonly description: string;
       readonly input: CatalogJsonObject;
       readonly result?: CatalogJsonObject;
-      readonly bounds?: { readonly maxResultBytes: number; readonly maxDurationMs: number };
+      readonly bounds?: {
+        readonly maxResultBytes: number;
+        readonly maxDurationMs: number;
+        readonly maxResultCount: number;
+      };
     }
   >
 > = {
@@ -205,7 +209,8 @@ const DEFINITIONS: Readonly<
       ["items"],
     ),
     result: DRAFT_RESULT_SCHEMA,
-    bounds: { maxResultBytes: 131072, maxDurationMs: 900000 },
+    // One result per item: the draft's own item bound, not a single issue (#4178).
+    bounds: { maxResultBytes: 131072, maxDurationMs: 900000, maxResultCount: JIRA_DRAFT_ITEMS_MAX },
   },
 };
 const RESULT_SCHEMA = object(
@@ -242,7 +247,7 @@ function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
       bounds: {
         maxArgumentBytes: 262144,
         maxResultBytes: definition.bounds?.maxResultBytes ?? 4096,
-        maxResultCount: 1,
+        maxResultCount: definition.bounds?.maxResultCount ?? 1,
         maxDurationMs: definition.bounds?.maxDurationMs ?? 90000,
       },
       idempotency: "server-key-required",

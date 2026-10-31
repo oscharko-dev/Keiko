@@ -558,7 +558,9 @@ scope — its parent field and target, and its links, each resolved to the exist
 the target draft item's own identity, never to the draft-local `ref`; items identical in all of that
 are told apart by their order of occurrence — so two same-summary tasks under different parents are
 two issues). When the create screen offers no labels, the exact summary plus the resolved parent key
-is the identity. The search reads every candidate page (50 per page, at most 10 pages): one match is
+is the identity; links and order of occurrence are invisible to that search, so items of one draft
+that share project, issue type, summary and parent are refused as a `conflict` before any request
+instead of being merged into one issue. The search reads every candidate page (50 per page, at most 10 pages): one match is
 reconciled without a write, several are refused as a conflict, and a candidate set that cannot be
 read completely is refused as `bounds-exceeded` instead of creating a possible duplicate. A replayed
 item keeps its journal outcome: a created item and a reconciled (`existing`) item both recover their

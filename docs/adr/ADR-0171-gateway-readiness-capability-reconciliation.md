@@ -43,10 +43,12 @@ mutated merely because readiness ran.
 ### D2 — Observations bind to one live configuration generation
 
 Every readiness run captures the runtime configuration generation before asynchronous work begins.
-Late results for a superseded generation are dropped. Replacing configuration clears all field
-observations and the coarse verification state. Observations intentionally survive separate HTTP
-requests in the current process, but not a configuration replacement or process restart; after
-either event basic-chat verification starts during configuration initialization. Successful
+Late results for a superseded generation are dropped. Replacing configuration resets the coarse
+verification state and clears the field observations of every provider that was changed or removed;
+an unchanged provider keeps its observations under the new generation, including when the list was
+only reordered (D3). Observations intentionally survive separate HTTP requests in the current
+process, but not a process restart; because a replacement resets the coarse verification state,
+basic-chat verification starts during configuration initialization after a restart or a replacement. Successful
 credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
 create, send, streaming send, regeneration, or grounded question may join an already running
 initialization. A fresh successful observation adds no per-question readiness request. A success

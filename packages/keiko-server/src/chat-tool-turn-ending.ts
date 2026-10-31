@@ -94,6 +94,8 @@ function countDraft(result: Tally, exchange: ChatToolExchange): boolean {
     const label = `${exchange.call.name} ${item.issueKey ?? "(no key)"} (${item.state})`;
     if (item.state === "created" || item.state === "existing") result.succeeded.push(label);
     else if (item.state === "uncertain") result.unconfirmed.push(label);
+    // Skipped and excluded items are the human's choice or a dependency's; a failed one is refused.
+    else if (item.state === "failed") result.refused++;
   }
   return true;
 }

@@ -439,6 +439,39 @@ describe("a draft item's identity binds its relation scope", () => {
     });
     expect(writes(jira)).toBe(2);
   });
+
+  // An unlabelled search sees only project, type, summary and parent, so these items would all
+  // reconcile to the first one's issue: one issue where the draft asked for two.
+  it.each([
+    ["identical siblings", [sibling("one", "SYN-90"), sibling("two", "SYN-90")]],
+    [
+      "items that differ only by a link",
+      [
+        { ...item("plain"), fields: { summary: "Implement logging" } },
+        {
+          ...item("related"),
+          fields: { summary: "Implement logging" },
+          links: [{ type: "Relates", direction: "outward", issueKey: "SYN-90" }],
+        },
+      ],
+    ],
+  ])("refuses %s without a labels field before any write", async (_name, items) => {
+    const jira = syntheticJira({ labels: false });
+    const parsed = draft(items);
+    for (const index of [0, 1])
+      await expect(runItem(jira, parsed, index)).resolves.toMatchObject({
+        ok: false,
+        reason: "conflict",
+      });
+    expect(writes(jira)).toBe(0);
+  });
+
+  it("still creates an unlabelled item whose summary and parent are unique in the draft", async () => {
+    const jira = syntheticJira({ labels: false });
+    const parsed = draft([sibling("one", "SYN-90"), sibling("two", "SYN-91")]);
+    expect(parsed.items.map((entry) => entry.unlabelledTwin)).toEqual([false, false]);
+    await expect(runItem(jira, parsed, 0)).resolves.toMatchObject({ ok: true });
+  });
 });
 
 describe("a draft item's identity search is complete or refused", () => {

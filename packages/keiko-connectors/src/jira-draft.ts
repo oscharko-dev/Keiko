@@ -43,6 +43,11 @@ interface ParsedJiraDraftItem {
 export interface JiraDraftItem extends ParsedJiraDraftItem {
   /** The deterministic label this item leaves on its issue; see `withIdentities`. */
   readonly identity: string;
+  /**
+   * Another item of the same draft has the same project, issue type, summary and parent. Without a
+   * labels field those are all Jira can be searched for, so the two cannot be told apart.
+   */
+  readonly unlabelledTwin: boolean;
 }
 /** Items in dependency order: every referenced item precedes the items that reference it. */
 export interface JiraDraft {
@@ -242,7 +247,7 @@ function identitySignature(
 function withIdentities(ordered: readonly ParsedJiraDraftItem[]): readonly JiraDraftItem[] {
   const identities = new Map<string, string>();
   const occurrences = new Map<string, number>();
-  return ordered.map((item) => {
+  const identified = ordered.map((item) => {
     const signature = identitySignature(item, identities);
     const occurrence = occurrences.get(signature) ?? 0;
     occurrences.set(signature, occurrence + 1);
@@ -252,6 +257,25 @@ function withIdentities(ordered: readonly ParsedJiraDraftItem[]): readonly JiraD
     const identity = `${JIRA_DRAFT_IDENTITY_PREFIX}${digest.slice(0, 20)}`;
     identities.set(item.ref, identity);
     return { ...item, identity };
+  });
+  const searchable = identified.map((item) => unlabelledSignature(item, identities));
+  const counts = new Map<string, number>();
+  for (const signature of searchable) counts.set(signature, (counts.get(signature) ?? 0) + 1);
+  return identified.map((item, index) => ({
+    ...item,
+    unlabelledTwin: (counts.get(searchable[index] ?? "") ?? 0) > 1,
+  }));
+}
+/** What an unlabelled identity search can tell apart: links and order are invisible to it. */
+function unlabelledSignature(
+  item: ParsedJiraDraftItem,
+  identities: ReadonlyMap<string, string>,
+): string {
+  return canonicalise({
+    projectId: item.projectId,
+    issueTypeId: item.issueTypeId,
+    summary: normalizedSummary(item.fields),
+    parent: item.parent === undefined ? null : relationScope(item.parent, identities),
   });
 }
 export function jiraDraftIdentity(item: JiraDraftItem): string {
@@ -419,6 +443,17 @@ async function collectCandidates(
   return collectCandidates(request, base, next, all);
 }
 
+// Merging twins would create one issue where the draft asked for two, and a rerun could not tell
+// which existing issue is which; refusing before anything is sent keeps both outcomes honest.
+const UNLABELLED_TWIN: JiraMutationAttempt = {
+  ok: false,
+  reason: "conflict",
+  detail: {
+    messages: [
+      "This create screen offers no labels field, so items with the same summary and parent cannot be told apart. Give each item a distinct summary.",
+    ],
+  },
+};
 export type JiraDraftReconciliation =
   | { readonly kind: "absent" }
   | { readonly kind: "existing"; readonly attempt: JiraMutationAttempt }
@@ -435,6 +470,7 @@ export async function reconcileJiraDraftItem(
   parentKey: string | undefined,
 ): Promise<JiraDraftReconciliation> {
   const labelled = labelsWritable(metadata);
+  if (!labelled && item.unlabelledTwin) return { kind: "refused", attempt: UNLABELLED_TWIN };
   if (!labelled && item.parent !== undefined && parentKey === undefined) return { kind: "absent" };
   const base = new URLSearchParams({
     jql: identityQuery(item, labelled),
