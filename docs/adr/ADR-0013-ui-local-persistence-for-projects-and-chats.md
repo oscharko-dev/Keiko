@@ -263,6 +263,14 @@ the revision when later turns are already eligible. Ordinary append completion r
 existing append-only behavior. Audit retention does not own these rows. See ADR-0172 D1 for
 failure behavior, compatibility reads, content projection and asynchronous enrichment.
 
+**Chat history discovery, schema v56 (#4155).** Complementary SQLite FTS5 word and trigram
+indexes are external-content indexes of the existing private `chat_messages` table. They support
+short identifiers and internal German compound fragments without creating another canonical
+message or memory store. Transactional insert/delete/content-update triggers maintain both;
+the migration backfills existing messages and enables FTS index secure deletion. Completed-turn
+admission is applied before the bounded candidate limit and rechecked by the canonical resolver.
+Current content projection still applies before any excerpt reaches the model. See ADR-0172 D2.
+
 We will use `PRAGMA user_version` as the schema version counter. An ordered migration runner
 in `src/ui/store/schema.ts` applies migrations idempotently, checking the current
 `user_version` and running only the migrations whose index is >= the current version, then

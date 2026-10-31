@@ -5,9 +5,9 @@ import { MIGRATIONS, SCHEMA_VERSION, runMigrations } from "./schema.js";
 import { buildUiStoreOverDatabase } from "./db.js";
 import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 
-function v54Conversation(): DatabaseSync {
+function legacyConversation(version = 54): DatabaseSync {
   const db = openWithForeignKeys();
-  applyMigrationsUpTo(db, 54);
+  applyMigrationsUpTo(db, version);
   db.prepare(
     "INSERT INTO projects (path, name, created_at, last_opened_at) VALUES (?, ?, ?, ?)",
   ).run("/fixture", "Fixture", 1, 1);
@@ -23,9 +23,37 @@ function v54Conversation(): DatabaseSync {
   return db;
 }
 
+it("backfills both v56 indexes from v55 originals and preserves index integrity", () => {
+  const db = legacyConversation(55);
+  try {
+    runMigrations(db);
+    runMigrations(db);
+    const store = buildUiStoreOverDatabase(db);
+    const ids: string[] = [];
+    store.searchGatewayMessageUnits(
+      "existing-chat",
+      [{ kind: "word-prefix", value: "original" }],
+      (unit) => {
+        ids.push(...unit.map((message) => message.id));
+      },
+    );
+    expect(ids).toEqual(["existing-user", "existing-assistant"]);
+    expect(store.countMessages("existing-chat")).toBe(2);
+    db.exec(
+      "INSERT INTO chat_history_words(chat_history_words, rank) VALUES ('integrity-check', 1)",
+    );
+    db.exec(
+      "INSERT INTO chat_history_fragments(chat_history_fragments, rank) VALUES ('integrity-check', 1)",
+    );
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
 describe("v55 migration — private chat continuity", () => {
   it("preserves a v54 conversation and admits its private checkpoint after an idempotent upgrade", () => {
-    const db = v54Conversation();
+    const db = legacyConversation();
     try {
       runMigrations(db);
       runMigrations(db);
@@ -66,7 +94,7 @@ describe("v55 migration — private chat continuity", () => {
   });
 
   it("keeps the shared historical-schema fixture able to rewind and reapply the current schema", () => {
-    const db = v54Conversation();
+    const db = legacyConversation();
     try {
       runMigrations(db);
       rewindSchemaFixture(db, 54);

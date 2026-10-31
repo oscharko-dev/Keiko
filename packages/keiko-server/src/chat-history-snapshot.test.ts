@@ -780,3 +780,41 @@ it.each([1, 3, 8])(
     );
   },
 );
+
+it.each([0, 20])(
+  "finds an original fact at position %i beyond the recent scan window",
+  (position) => {
+    const { store, chatId, add } = fixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    for (let index = 0; index < 50; index++) {
+      if (index === position) {
+        add("user", "Die Lagerfachfarbe ist ockergelb. Die Freigabekennung lautet Q7-42.");
+        add("assistant", "Acknowledged.");
+      }
+      add("user", "Unverbindlicher Zwischenstand ohne neue Sachangaben. ".repeat(1000));
+      add("assistant", "Acknowledged.");
+    }
+    const result = rehydrateChatHistory(
+      store,
+      chatId,
+      "Welche Farbe hat das Lagerfach?",
+      new Set(),
+      [],
+    );
+    expect(result).toContain("ockergelb");
+    expect(store.countMessages(chatId)).toBe(102);
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.rehydration");
+    const extra = event?.extra ?? {};
+    expect(extra.discoveryPolicy).toBe("indexed-candidates-and-bounded-tail-v1");
+    expect(Number(extra.indexedCandidateRows)).toBeGreaterThan(0);
+    expect(Number(extra.indexedCandidateRows)).toBeLessThanOrEqual(128);
+    expect(Number(extra.indexedUnitsVisited)).toBeGreaterThan(0);
+    expect(Number(extra.scannedChars)).toBeLessThanOrEqual(1_048_576);
+    expect(JSON.stringify(sink.events)).not.toContain("ockergelb");
+    expectActivityLogProof(
+      "chat.continuity.rehydration.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  },
+);

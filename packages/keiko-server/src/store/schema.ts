@@ -5,12 +5,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ServerLogSink } from "../observability/index.js";
 import { migrateJourneyOutcomeProjection } from "./journeyOutcomeMigration.js";
+import { CHAT_HISTORY_SEARCH_SCHEMA } from "./chatHistorySearchSchema.js";
 import {
   migrateLegacyProjectManifests,
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 55;
+export const SCHEMA_VERSION = 56;
 
 interface Migration {
   readonly version: number;
@@ -1875,6 +1876,7 @@ export const MIGRATIONS: readonly Migration[] = [
               OR (later.timestamp = NEW.timestamp AND later.rowid > NEW.rowid)))
       BEGIN UPDATE chats SET history_revision = history_revision + 1 WHERE id = NEW.chat_id; END;`,
   },
+  { version: 56, sql: CHAT_HISTORY_SEARCH_SCHEMA },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

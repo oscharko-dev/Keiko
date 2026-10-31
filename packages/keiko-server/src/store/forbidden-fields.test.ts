@@ -198,6 +198,16 @@ const EXPECTED_TABLES = new Set([
   "browser_approval_installation",
   "chat_creation_intents",
   "chat_continuity_checkpoints",
+  "chat_history_words",
+  "chat_history_words_data",
+  "chat_history_words_idx",
+  "chat_history_words_docsize",
+  "chat_history_words_config",
+  "chat_history_fragments",
+  "chat_history_fragments_data",
+  "chat_history_fragments_idx",
+  "chat_history_fragments_docsize",
+  "chat_history_fragments_config",
   "chat_tool_mutations",
   "chat_tool_read_grants",
   "chat_drafts",
@@ -784,6 +794,20 @@ describe("forbidden-fields — durable chat mutation metadata", () => {
     }
   });
 });
+
+it.each(["chat_history_words", "chat_history_fragments"])(
+  "keeps %s an external index of canonical content",
+  (table) => {
+    const inspector = openMigratedSchema(join(tmpDir, "chat-index-inventory.db"));
+    try {
+      expect(columnNames(inspector, table)).toEqual(["content"]);
+      const schema = inspector.prepare("SELECT sql FROM sqlite_master WHERE name = ?").get(table);
+      expect(schema?.sql).toContain("content='chat_messages'");
+    } finally {
+      inspector.close();
+    }
+  },
+);
 
 describe("forbidden-fields — every table in the migrated store (AC#5 / ADR-0013 D8)", () => {
   it("creates exactly the expected tables, so a new table is reviewed before it ships", () => {

@@ -1829,6 +1829,27 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      discoveryPolicy: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["indexed-candidates-and-bounded-tail-v1"],
+      },
+      indexedCandidateRows: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      indexedUnitsVisited: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      indexLimitReached: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       scanDisposition: {
         type: "string",
         dataClass: "closed-enum",

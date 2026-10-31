@@ -109,6 +109,27 @@ Unicode-safe matching, and unsafe-path/role checks apply before excerpts reach p
 role checks precede whitespace folding. Existing body-free continuity evidence reports the
 resulting candidate/excerpt counts and budget disposition.
 
+Discovery first preselects same-chat candidates from the private store's complementary FTS5
+word/trigram indexes, then retains the bounded recent-history fallback. Word matching supports
+short identifiers; trigram matching preserves internal word-fragment discovery such as `kennu`
+inside `Vorgangskennung`. Each index selects at most 64 rows plus one discarded limit sentinel;
+at most 128 deduplicated candidates reach canonical resolution. Completed canonical and paired
+legacy turns are admitted before this limit and resolved again afterward. Pending, failed,
+orphan and cross-chat rows cannot consume the eligible candidate allocation. SQL expressions
+come from validated bounded terms and parameterized chat/input values.
+
+Indexed rank is discovery order, not conversation chronology. Excerpts use the canonical user
+anchor's timestamp and rowid, the message's position within the unit, and its source order;
+skewed assistant timestamps do not rewrite the sequence. Duplicate excerpt text retains its
+latest canonical occurrence. Indexed and fallback reads share the existing scan/render limits,
+skip already visited messages and apply the current content policy, credential floor, exclusions
+and unsafe-role/path checks. Historical tool calls are never executed by this read path.
+
+Compatible optional recall evidence identifies the discovery policy, deduplicated index candidate
+rows, eligible indexed units visited and index-limit state. Limit exhaustion reports partial
+observation; finding an old excerpt is not a claim of full source coverage or semantic fidelity.
+The indexes cover canonical message text, not the complete attachment/MCP/Skill evidence chain.
+
 The 800-token excerpt budget uses the shared local estimator on the complete rendered block,
 including the header, source labels and separators. Adding separately estimated line costs does
 not enforce this bound: the estimator applies a different density floor to multiline text.

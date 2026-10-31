@@ -120,6 +120,29 @@ failures are retained separately. Grounded probes currently ask about conversati
 do not establish source-answer accuracy. No model average or global 0–10 claim is derived from
 these observations.
 
+### Iteration 6: indexed canonical archive discovery
+
+Two failure-first production-producer cases on `32b117e1c` place a German fact at the beginning
+or middle of 50 completed turns, beyond the recent 1 MiB scan. Both return no excerpt despite
+all 102 original messages remaining stored. With bounded indexed discovery both find the fact;
+the recent scan ceiling and complete-block 800-token estimate budget remain unchanged.
+
+The existing private SQLite store owns complementary external-content word/trigram indexes.
+Migration, current assistant-response edits and cascading deletion maintain them transactionally.
+Short literal identifiers and internal German compounds are tested. A canonical user anchor
+preserves ordering when assistant timestamps are skewed, including a later duplicate claim.
+
+Two additional failure-first cases show why admission must precede the candidate budget: 80
+matching pending or orphan assistant rows initially crowd out the completed original. Both pass
+after adding the canonical/legacy admission prefilter; actual turn resolution still rechecks it.
+Store tests also cover cross-chat isolation, invalid query syntax, reopen, old-data backfill and
+FTS integrity. The schema inventory explicitly includes the two virtual indexes and their eight
+shadow tables; the all-table credential-column sweep remains intact.
+
+This fixes measured archive-discovery cases. Native before/after model quality remains to be
+measured. Giant single-message interior retrieval, complete model-summary source processing and
+the full source/security matrix remain separate acceptance work; full coverage is not claimed.
+
 ## Measurement design
 
 ### Reusable two-model laboratory and offline comparison

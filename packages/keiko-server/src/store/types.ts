@@ -131,6 +131,28 @@ export interface ChatContinuityCheckpoint {
   readonly record: ContextCompactionRecord | undefined;
 }
 
+export interface GatewayHistoryOrder {
+  readonly timestamp: number;
+  readonly rowid: number;
+}
+
+export interface GatewayHistorySearchTerm {
+  readonly value: string;
+  readonly kind: "word-prefix" | "identifier";
+}
+
+export interface GatewayHistorySearchResult {
+  readonly candidateRows: number;
+  readonly eligibleUnits: number;
+  readonly indexLimitReached: boolean;
+  readonly visitStopped: boolean;
+}
+
+export type GatewayHistoryVisitor = (
+  messages: readonly ChatMessage[],
+  order?: GatewayHistoryOrder,
+) => boolean | undefined;
+
 export interface UiStore {
   readonly chatToolReadGrants?: ChatReadGrantStore;
   readonly chatToolMutations?: ChatToolMutationStore;
@@ -182,8 +204,14 @@ export interface UiStore {
   readonly visitGatewayMessageUnits: (
     chatId: string,
     currentUserMessageId: string,
-    visit: (messages: readonly ChatMessage[]) => boolean | undefined,
+    visit: GatewayHistoryVisitor,
   ) => void;
+  /** Indexed preselection never admits a turn that the canonical history visitor would exclude. */
+  readonly searchGatewayMessageUnits: (
+    chatId: string,
+    terms: readonly GatewayHistorySearchTerm[],
+    visit: GatewayHistoryVisitor,
+  ) => GatewayHistorySearchResult;
   readonly chatHistoryRevision: (chatId: string) => number;
   readonly readChatContinuityCheckpoint: (chatId: string) => ChatContinuityCheckpoint | undefined;
   /** Compare and swap inside the private database; undefined expects no existing checkpoint. */

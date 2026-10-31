@@ -145,6 +145,10 @@ export interface ChatRehydrationEvidence {
   readonly tokenBudget?: number;
   readonly tokenCounterSource?: "local-estimate";
   readonly budgetDroppedExcerpts?: number;
+  readonly discoveryPolicy?: "indexed-candidates-and-bounded-tail-v1";
+  readonly indexedCandidateRows?: number;
+  readonly indexedUnitsVisited?: number;
+  readonly indexLimitReached?: boolean;
   readonly scanDisposition:
     "complete" | "unit-limit" | "character-limit" | "best-matches" | "no-query-terms";
 }
@@ -178,6 +182,15 @@ const CHAT_CONTINUITY_REHYDRATION = defineActivityLogOperation({
       values: ["local-estimate"],
     },
     budgetDroppedExcerpts: { type: "integer", dataClass: "count", required: false },
+    discoveryPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["indexed-candidates-and-bounded-tail-v1"],
+    },
+    indexedCandidateRows: { type: "integer", dataClass: "count", required: false },
+    indexedUnitsVisited: { type: "integer", dataClass: "count", required: false },
+    indexLimitReached: { type: "boolean", dataClass: "closed-enum", required: false },
     scanDisposition: {
       type: "string",
       dataClass: "closed-enum",
@@ -302,7 +315,8 @@ export function logChatRehydration(
         ...evidence,
         completeness:
           evidence.scanDisposition === "unit-limit" ||
-          evidence.scanDisposition === "character-limit"
+          evidence.scanDisposition === "character-limit" ||
+          evidence.indexLimitReached === true
             ? "partial"
             : "complete",
         loss: "none",

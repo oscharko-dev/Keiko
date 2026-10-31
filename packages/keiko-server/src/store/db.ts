@@ -89,6 +89,7 @@ import {
   updateChat as sqlUpdateChat,
   invalidateJiraPod as sqlInvalidateJiraPod,
 } from "./chats.js";
+import { searchGatewayMessageUnits } from "./chatHistorySearch.js";
 import {
   type ClientTurnRecord,
   countMessages as sqlCountMessages,
@@ -788,6 +789,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     visitGatewayMessageUnits: (chatId, currentUserMessageId, visit): void => {
       sqlVisitGatewayMessageUnits(db, chatId, currentUserMessageId, visit);
     },
+    searchGatewayMessageUnits: (chatId, terms, visit) =>
+      searchGatewayMessageUnits(db, chatId, terms, visit),
     chatHistoryRevision: (chatId): number => sqlChatHistoryRevision(db, chatId),
     readChatContinuityCheckpoint: (chatId) =>
       readContinuityCheckpoint(db, chatId, options.redactContentString),

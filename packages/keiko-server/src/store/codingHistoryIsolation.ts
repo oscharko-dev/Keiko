@@ -70,9 +70,16 @@ function ordinaryContinuityAccess(
   requireOrdinary: (id: string) => void,
 ): Pick<
   UiStore,
-  "readChatContinuityCheckpoint" | "writeChatContinuityCheckpoint" | "chatHistoryRevision"
+  | "readChatContinuityCheckpoint"
+  | "writeChatContinuityCheckpoint"
+  | "chatHistoryRevision"
+  | "searchGatewayMessageUnits"
 > {
   return {
+    searchGatewayMessageUnits: (id, terms, visit) =>
+      ordinary(id)
+        ? store.searchGatewayMessageUnits(id, terms, visit)
+        : { candidateRows: 0, eligibleUnits: 0, indexLimitReached: false, visitStopped: false },
     chatHistoryRevision: (id): number => {
       requireOrdinary(id);
       return store.chatHistoryRevision(id);

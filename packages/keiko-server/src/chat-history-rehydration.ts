@@ -8,6 +8,7 @@ import {
 import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import { redactContent } from "@oscharko-dev/keiko-security";
 import type { ChatMessage, UiStore } from "./store/index.js";
+import type { GatewayHistoryOrder, GatewayHistorySearchResult } from "./store/types.js";
 import { logChatRehydration, type ChatRehydrationEvidence } from "./chat-continuity-log.js";
 
 const MAX_REHYDRATED_MESSAGES = 8;
@@ -106,6 +107,8 @@ interface RehydrationCandidate {
   readonly excerpt: string;
   readonly score: number;
   readonly order: number;
+  readonly chronology: GatewayHistoryOrder;
+  readonly part: number;
 }
 
 interface SourceExcerpt {
@@ -217,22 +220,17 @@ export function rehydrateChatHistory(
   const terms = queryTerms(query);
   const state = createRecallScan(terms.length);
   const normalizedQuery = normalizeRecallQuery(query);
-  if (terms.length > 0)
-    store.visitGatewayMessageUnits(chatId, "", (unit) => {
-      state.unitsVisited += 1;
-      for (const message of [...unit].reverse()) {
-        if (state.scannedChars >= MAX_SCAN_CHARS) break;
-        scanMessage(state, message, {
-          terms,
-          excludedIds,
-          secrets,
-          query,
-          normalizedQuery,
-          contentRedaction,
-        });
-      }
-      return continueRecallScan(state, terms.length);
-    });
+  const input = { terms, excludedIds, secrets, query, normalizedQuery, contentRedaction };
+  const indexed =
+    terms.length === 0
+      ? undefined
+      : store.searchGatewayMessageUnits(chatId, terms, (unit, order) =>
+          scanUnit(state, unit, input, order, false),
+        );
+  if (terms.length > 0 && state.scanDisposition === "complete")
+    store.visitGatewayMessageUnits(chatId, "", (unit, order) =>
+      scanUnit(state, unit, input, order, true),
+    );
   const rendered = renderCandidates(state.candidates);
   logChatRehydration(
     {
@@ -248,10 +246,25 @@ export function rehydrateChatHistory(
       queryTermCount: terms.length,
       identifierTermCount: terms.filter((term) => term.kind === "identifier").length,
       matchingPolicy: "word-prefix-and-identifiers-v2",
+      ...indexedEvidence(indexed),
     },
     correlationId,
   );
   return rendered.content;
+}
+
+function indexedEvidence(
+  indexed: GatewayHistorySearchResult | undefined,
+): Pick<
+  ChatRehydrationEvidence,
+  "discoveryPolicy" | "indexedCandidateRows" | "indexedUnitsVisited" | "indexLimitReached"
+> {
+  return {
+    discoveryPolicy: "indexed-candidates-and-bounded-tail-v1",
+    indexedCandidateRows: indexed?.candidateRows ?? 0,
+    indexedUnitsVisited: indexed?.eligibleUnits ?? 0,
+    indexLimitReached: indexed?.indexLimitReached ?? false,
+  };
 }
 
 interface RecallScan {
@@ -260,6 +273,34 @@ interface RecallScan {
   scannedChars: number;
   order: number;
   scanDisposition: ChatRehydrationEvidence["scanDisposition"];
+  readonly seenMessages: Set<string>;
+}
+
+interface RecallScanInput {
+  readonly terms: readonly RecallTerm[];
+  readonly excludedIds: ReadonlySet<string>;
+  readonly secrets: readonly string[];
+  readonly query: string;
+  readonly normalizedQuery: string | undefined;
+  readonly contentRedaction: ContentRedactionPolicy;
+}
+
+function scanUnit(
+  state: RecallScan,
+  unit: readonly ChatMessage[],
+  input: RecallScanInput,
+  order: GatewayHistoryOrder | undefined,
+  allowEarlyStop: boolean,
+): boolean {
+  state.unitsVisited++;
+  for (let part = unit.length - 1; part >= 0; part--) {
+    const message = unit[part];
+    if (state.scannedChars >= MAX_SCAN_CHARS) break;
+    if (message === undefined || state.seenMessages.has(message.id)) continue;
+    state.seenMessages.add(message.id);
+    scanMessage(state, message, input, order ?? { timestamp: message.timestamp, rowid: 0 }, part);
+  }
+  return continueRecallScan(state, input.terms.length, allowEarlyStop);
 }
 
 function createRecallScan(termCount: number): RecallScan {
@@ -269,13 +310,19 @@ function createRecallScan(termCount: number): RecallScan {
     scannedChars: 0,
     order: 0,
     scanDisposition: termCount === 0 ? "no-query-terms" : "complete",
+    seenMessages: new Set(),
   };
 }
 
-function continueRecallScan(state: RecallScan, termCount: number): boolean {
+function continueRecallScan(
+  state: RecallScan,
+  termCount: number,
+  allowEarlyStop: boolean,
+): boolean {
   if (state.scannedChars >= MAX_SCAN_CHARS) state.scanDisposition = "character-limit";
   else if (state.unitsVisited >= MAX_SCAN_UNITS) state.scanDisposition = "unit-limit";
   else if (
+    allowEarlyStop &&
     state.candidates.length === MAX_REHYDRATED_MESSAGES &&
     state.candidates.every((candidate) => candidate.score === termCount)
   )
@@ -286,14 +333,9 @@ function continueRecallScan(state: RecallScan, termCount: number): boolean {
 function scanMessage(
   state: RecallScan,
   message: ChatMessage,
-  input: {
-    readonly terms: readonly RecallTerm[];
-    readonly excludedIds: ReadonlySet<string>;
-    readonly secrets: readonly string[];
-    readonly query: string;
-    readonly normalizedQuery: string | undefined;
-    readonly contentRedaction: ContentRedactionPolicy;
-  },
+  input: RecallScanInput,
+  chronology: GatewayHistoryOrder,
+  part: number,
 ): void {
   state.order += 1;
   if (input.excludedIds.has(message.id) || message.content === input.query) return;
@@ -322,6 +364,8 @@ function scanMessage(
         excerpt,
         input.terms,
         state.order + index / (MAX_REHYDRATED_MESSAGES + 1),
+        chronology,
+        part,
       );
   }
 }
@@ -332,20 +376,39 @@ function selectCandidate(
   excerpt: string,
   terms: readonly RecallTerm[],
   order: number,
+  chronology: GatewayHistoryOrder,
+  part: number,
 ): void {
-  if (candidates.some((candidate) => candidate.excerpt === excerpt)) return;
-  candidates.push({
+  const candidate = {
     line: `${message.role} [${message.id}]: ${excerpt}`,
     excerpt,
     score: terms.filter((term) => term.pattern.test(excerpt)).length,
     order,
-  });
-  candidates.sort((left, right) => right.score - left.score || left.order - right.order);
+    chronology,
+    part,
+  };
+  const duplicate = candidates.findIndex((existing) => existing.excerpt === excerpt);
+  const existing = candidates[duplicate];
+  if (existing !== undefined) {
+    if (chronological(candidate, existing) <= 0) return;
+    candidates.splice(duplicate, 1);
+  }
+  candidates.push(candidate);
+  candidates.sort((left, right) => right.score - left.score || chronological(right, left));
   if (candidates.length > MAX_REHYDRATED_MESSAGES) candidates.pop();
 }
 
+function chronological(left: RehydrationCandidate, right: RehydrationCandidate): number {
+  return (
+    left.chronology.timestamp - right.chronology.timestamp ||
+    left.chronology.rowid - right.chronology.rowid ||
+    left.part - right.part ||
+    right.order - left.order
+  );
+}
+
 function renderRecallBlock(candidates: readonly RehydrationCandidate[]): string {
-  const ordered = [...candidates].sort((left, right) => right.order - left.order);
+  const ordered = [...candidates].sort(chronological);
   return [REHYDRATION_HEADER, ...ordered.map((candidate) => candidate.line)].join("\n");
 }
 
