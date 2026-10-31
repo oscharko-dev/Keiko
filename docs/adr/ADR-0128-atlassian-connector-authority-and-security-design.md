@@ -608,6 +608,67 @@ reports the truthful `not-dispatched` outcome. An item whose parent or linked it
 skipped; an item whose outcome is uncertain stops the draft, because the journal admits no further
 write in that turn. Coding runs do not offer `jira.draft`.
 
+**Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
+type must look like and where in the workflow that applies; Keiko enforces it deterministically
+before every Jira write, so a Markdown skill's advice the model may ignore is no longer the only
+means. This adds no connector scope, action row or approval class: it is a precondition of the
+existing `create-issue`, `update-issue-fields` and `transition-issue` rows, and it holds in every
+autonomy mode, Full access included, because it sits in front of the Jira request rather than in
+the approval.
+
+- **Storage reuses the private Markdown skill library** (`markdown_skills` revisions, the
+  `/api/skills` routes, import and export). A template is a skill whose front matter declares
+  `keiko: jira-issue-template`; there is no second store, table or migration. Import and replace
+  parse the document strictly and refuse a malformed template with closed error codes, key names and
+  line numbers (never document text). A document that merely mentions the marker in its body is an
+  ordinary skill. A stored template that no longer parses fails closed (`template-unreadable`)
+  instead of silently dropping enforcement.
+- **Template format** (`keiko-contracts` `jira-issue-template.ts`, exported through
+  `runtime/atlassian-connectors`): flat front matter with `project`, `issueType` (name or numeric id),
+  `activateOn` (`create`, `edit`, `transition`, or `transition:<transition name, id or target
+  status>` for a definition of ready), `summaryMinLength`/`summaryMaxLength`/`summaryPattern`,
+  `requiredFields` (instance field ids or names), `requiredLabels`/`labelPattern`/`minLabels`,
+  `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`. The
+  Markdown `##` headings of the template body are the required description sections, each of which
+  must be present and carry content. Patterns use a closed regular-expression subset validated at
+  parse time without compiling it (no lookaround, back-reference, named group, or quantified group
+  holding a quantifier or alternation), so a pattern run on model text cannot backtrack
+  catastrophically and an accepted pattern always compiles.
+- **One pure checker** (`keiko-connectors` `jira-issue-template-check.ts`) judges the state after
+  the write: the proposed values merged over the issue's current values, resolved against the
+  instance's field names. Write admission, the backlog draft and the compliance report share it. It
+  is deterministic, performs no I/O and emits closed rule ids (`summary-too-short`,
+  `section-missing`, `field-missing`, `field-unavailable`, `label-missing`, `parent-missing`, ...)
+  with a short subject and the `PROJECT/Issue type` label.
+- **Enforcement points.** (1) The gate (`jira-managed-template-gate.ts`) runs inside the managed
+  mutation executor for `jira.create`, `jira.edit`, `jira.transition` and every `jira.draft` item
+  (each a journaled `jira.create`), after field validation and before the POST or PUT. It is shared
+  by Chat and by Coding runs with a Jira Pod, in every autonomy mode. A violating write is never
+  sent; the journal records it as `rejected` and the model receives `outcome: rejected`,
+  `reason: field-validation` and the bounded `violations` list, with tool guidance to correct
+  exactly those violations. A source that throws propagates to the executor's correlated
+  diagnostic, so the write is still not sent. When no template governs the write, no request is
+  added. (2) In Ask-for-approval and Supervised modes Chat additionally runs the same pipeline as a
+  dry run (`checkJiraManagedMutationTemplates`) after read consent and before the write approval
+  is created, so a human is never asked to approve a draft that would be refused. A failed dry run
+  is recorded and falls through to the gate. The backlog draft has no dry run; its items are
+  refused individually at the gate and report their violations per item.
+- **Settings surface.** `GET /api/skills/jira-templates` lists templates; `POST
+  /api/skills/jira-templates/validate` validates a template against the live instance through a
+  Pod the caller owns (unknown project, issue type, field, ambiguous field name, link type or
+  transition target); `POST /api/skills/jira-templates/propose` drafts one template per issue type
+  of an existing project from its create metadata and the description headings most sampled issues
+  share. Both read Jira with GET only and never write to Jira or the library; the lead edits and
+  saves what is proposed through the skill routes.
+- **Evidence.** `jira.template.admission` (warn, stage `pre-approval` or `dispatch`) records the
+  operation, the violation count and the closed rule ids under the write's correlation id. It
+  never records a field name, section title, label or value; `ruleIds` is a closed vocabulary and
+  the registration is pinned to the contract's `JIRA_TEMPLATE_RULE_IDS` by a test. The skill
+  library lines gain the actions `jira-template-list`, `-validate` and `-propose`.
+- **Scope.** Assignment and comments carry no field state and are not governed. Organization-wide
+  distribution is the skill library's import and export. No fixed hierarchy or issue model is
+  built in.
+
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
 Additive, non-destructive writes with no lasting external side effect beyond their own content
