@@ -1148,13 +1148,16 @@ class VerifiedCommitController implements VerifiedCommitService {
   // buffers, which staging cannot resolve (review on #3611); and a clean staged candidate nobody
   // verified yet. Naming the first as "verification-missing" sent the model back to a verification
   // that answered candidate-not-staged, round and round. The cause comes from the same read's
-  // blocking paths, never from the combined clean flag.
+  // blocking paths, never from the combined clean flag. Full access admits untracked files beside a
+  // staged candidate, so there they leave only the verification missing (#3907, lab T17).
   private recordMissingProof(
     context: VerifiedCommitRunContext,
     binding: VerifiedCommitBinding,
     facts: VerifiedCommitFacts,
   ): VerifiedCommitResult {
     const blocking = facts.blocking;
+    if (this.admitsUntracked(context, facts))
+      return this.record(context, binding, "verification-failed", "verification-missing");
     if (blocking !== undefined && blocking.unstagedCount + blocking.untrackedCount > 0)
       return this.record(context, binding, "verification-failed", "candidate-not-staged");
     if (!context.buffersClean()) return this.record(context, binding, "blocked", "buffers-dirty");

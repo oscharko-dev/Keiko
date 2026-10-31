@@ -2119,7 +2119,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   before execution still refuses. The same comparison covers untracked files that appear after a
   verification passed on a clean tree (lab lane T19: the model's next pytest run left its cache):
   in Full access the passing proof still describes the unchanged staged tree and the commit
-  proceeds; in any other mode the later untracked file remains drift.
+  proceeds; in any other mode the later untracked file remains drift. A Full-access commit proposed
+  before any verification of that staged candidate is refused as `verification-missing`, not
+  `candidate-not-staged`: the untracked files are admitted, so only the verification is missing (lab
+  lane T17, round H: the old answer sent the model to restage the same candidate until the deadline).
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the
