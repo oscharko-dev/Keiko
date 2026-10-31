@@ -252,3 +252,18 @@ export function persistedActivityLogLines(raw: string, op: string): readonly str
       }
     });
 }
+
+/**
+ * Formats the one captured event of `op` as a proof line; any other count fails the test. The
+ * caller still names its proof with a literal `expectActivityLogProof` call.
+ */
+export function singleActivityLogEventLine(
+  events: readonly { readonly op: string }[],
+  op: string,
+): string {
+  const matches = events.filter((event) => event.op === op);
+  expect(matches).toHaveLength(1);
+  const [event] = matches;
+  if (event === undefined) throw new Error(`Missing ${op} event`);
+  return formatActivityLogProofLine(event);
+}
