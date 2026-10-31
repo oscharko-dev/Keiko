@@ -2785,7 +2785,7 @@ async function assertUiLaunchProject(baseUrl, tmp) {
   }
 }
 
-async function assertPackagedUi(tmp) {
+export async function assertPackagedUi(tmp) {
   const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
   const staticRoot = join(packageRoot, "dist", "ui", "static");
   const hashesFile = join(packageRoot, "dist", "ui", "csp-hashes.json");
@@ -2827,7 +2827,7 @@ async function assertPackagedUi(tmp) {
   }
 }
 
-function lifecycleCommandRunner(tmp, bin, port, stateDir) {
+function lifecycleCommandRunner(tmp, bin, port, stateDir, packageStart) {
   const commonArgs = [
     "--host",
     "127.0.0.1",
@@ -2842,10 +2842,9 @@ function lifecycleCommandRunner(tmp, bin, port, stateDir) {
   ];
   return (command, extra = []) =>
     run(
-      "node",
+      packageStart && command === "start" ? "npm" : "node",
       [
-        bin,
-        command,
+        ...(packageStart && command === "start" ? ["start", "--"] : [bin, command]),
         ...commonArgs,
         ...(command === "start" || command === "restart" ? ["--no-open"] : []),
         ...extra,
@@ -2959,7 +2958,7 @@ function assertLifecycleStatusStopped(runLifecycle) {
   }
 }
 
-async function assertPackagedLifecycleCommands(tmp) {
+export async function assertPackagedLifecycleCommands(tmp, { packageStart = false } = {}) {
   const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
   const bin = join(packageRoot, "dist", "cli", "index.js");
   const port = await reserveUiPort();
@@ -2970,7 +2969,7 @@ async function assertPackagedLifecycleCommands(tmp) {
   // planting attack (KEIKO-0330). A home-contained temp dir satisfies both: outside the workspace,
   // inside home, cleaned up when the smoke completes.
   const stateDir = mkdtempSync(join(homedir(), ".keiko-smoke-state-"));
-  const lifecycleRun = lifecycleCommandRunner(tmp, bin, port, stateDir);
+  const lifecycleRun = lifecycleCommandRunner(tmp, bin, port, stateDir, packageStart);
 
   let started = false;
   try {
