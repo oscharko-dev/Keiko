@@ -545,3 +545,12 @@ Open broader requirements remain recorded: full bounded source processing instea
 MCP/source/attachment/skill freshness qualification; and actual final-request occupancy
 separate from cumulative tool-round consumption. They are not silently marked delivered
 by this partial PR. The reusable Lab and frozen evidence remain available for later work.
+
+Final delivery review also reproduced three Lab-boundary failures: replay could
+create output inside a different frozen subject checkout, and a completed run
+could accept configuration or subject-build drift after its restart. Replay now
+checks the subject's output guard before creating a directory; the campaign checks
+both identities again before accepting completion. Three hermetic subprocess/clone
+regressions fail before the repairs and pass afterward. The final Lab suite passes
+130 tests across eight files. These are evidence-integrity corrections; no new
+model campaign or optimization iteration was started.

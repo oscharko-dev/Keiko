@@ -275,11 +275,12 @@ export async function replayContinuityCases({
   const input = replayInputs(ledgerPath, indices);
   const report = replayReport(input, subject, config);
   const target = privateContinuityOutput(output);
-  mkdirSync(target, { mode: 0o700 });
   const subjectRuntime = await import(
     pathToFileURL(join(subject, "scripts/testing/coding-workbench-lab/chat-continuity-runtime.mjs"))
       .href
   );
+  subjectRuntime.privateContinuityOutput(target);
+  mkdirSync(target, { mode: 0o700 });
   const save = () => writeReplayCheckpoint(join(target, "replay.json"), report);
   save();
   return runReplayCases(

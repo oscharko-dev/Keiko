@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { recordContinuityBuild } from "../testing/coding-workbench-lab/chat-continuity-build.mjs";
+import { replayContinuityCases } from "../testing/coding-workbench-lab/chat-continuity-replay.mjs";
+import { continuityCorpusManifest } from "../testing/coding-workbench-lab/chat-continuity-corpus.mjs";
 
 const roots = [];
 afterEach(() => {
@@ -96,4 +98,37 @@ it("refuses input drift before any Chat or provider request", () => {
   expect(result.status).toBe(1);
   expect(existsSync(join(output, "dispatch.flag"))).toBe(false);
   expect(JSON.parse(readFileSync(join(output, "ledger.json"))).status).toBe("failed");
+});
+
+it.each(["configuration", "subject"])("rejects %s drift at the final campaign boundary", (kind) => {
+  const mutation =
+    kind === "configuration"
+      ? "writeFileSync(config,'changed')"
+      : "writeFileSync(join(dir,'..','..','package.json'),'changed')";
+  const root = subject(`${COMMON}\nexport async function startContinuityRuntime(dir,config) {
+    return {models:[],async restart(){${mutation};},async drain(){return undefined;},async close(){return undefined;}};
+  }`);
+  const { result, output } = run(root);
+  expect(result.status).toBe(1);
+  expect(JSON.parse(readFileSync(join(output, "ledger.json"))).status).toBe("failed");
+});
+
+it("rejects replay output in a separate subject checkout before creating it", async () => {
+  const runtime = COMMON.replace(
+    "value => value",
+    "() => {throw new TypeError('subject-output-rejected');}",
+  );
+  const root = subject(runtime),
+    output = join(root, "private-replay");
+  const ledger = join(root, "source-ledger.json"),
+    config = join(root, "input.json");
+  writeFileSync(
+    ledger,
+    JSON.stringify({ corpus: continuityCorpusManifest(), ledger: [{ kind: "plain", score: {} }] }),
+  );
+  writeFileSync(config, "{}");
+  await expect(
+    replayContinuityCases({ ledger, subject: root, config, output, indices: "0" }),
+  ).rejects.toThrow("subject-output-rejected");
+  expect(existsSync(output)).toBe(false);
 });

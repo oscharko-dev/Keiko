@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { arch, platform, totalmem, cpus } from "node:os";
-import { parseArgs } from "node:util";
+import { parseArgs, isDeepStrictEqual } from "node:util";
 import { URL, URLSearchParams, pathToFileURL } from "node:url";
 import { privateContinuityOutput } from "./chat-continuity-runtime.mjs";
 import { REPO_ROOT } from "./lab-common.mjs";
@@ -125,6 +125,12 @@ function record(row) {
       code: row.code,
     }),
   );
+}
+function assertQualificationInputs() {
+  if (continuityDigest(readFileSync(values.config)) !== metadata.configurationDigest)
+    throw new Error("continuity-input-configuration-changed");
+  if (!isDeepStrictEqual(readContinuityBuildIdentity(subjectRoot), subjectIdentity))
+    throw new Error("continuity-subject-changed");
 }
 async function checked(method, path, body) {
   cancellation.signal.throwIfAborted();
@@ -397,12 +403,12 @@ try {
   runtime = await startContinuityRuntime(join(output, "runtime"), values.config, physical, {
     signal: cancellation.signal,
   });
-  if (continuityDigest(readFileSync(values.config)) !== metadata.configurationDigest)
-    throw new Error("continuity-input-configuration-changed-during-startup");
+  assertQualificationInputs();
   metadata.models = runtime.models;
   metadata.requestTimeoutByModel = runtime.requestTimeoutByModel;
   record({ id: "runtime-ready", models: runtime.models });
   const qualification = await runCampaigns();
+  assertQualificationInputs();
   const passed = qualification.campaignsPassed && qualification.repetitionsPassed;
   finalStatus = passed ? "completed" : "incomplete";
   finalQualification = qualification;
