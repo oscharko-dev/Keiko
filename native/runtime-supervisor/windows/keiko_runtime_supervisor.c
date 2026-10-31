@@ -1,5 +1,9 @@
 /* KRP1/KRC1/KRS1 no-shell Windows Job Object runtime supervisor. */
 #include "gateway_service.h"
+#include <shlobj.h>
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "uuid.lib")
 #include <fcntl.h>
 #include <io.h>
 #include <stdint.h>
@@ -259,10 +263,14 @@ failure:
   return NULL;
 }
 
-static wchar_t *environment_block(const struct launch_request *request) {
+static wchar_t *environment_block(const struct launch_request *request, const wchar_t *appdata) {
   wchar_t *block, *cursor;
   size_t length = 1, index;
+  const wchar_t prefix[] = L"LOCALAPPDATA=";
+  size_t required = appdata ? wcslen(prefix) + wcslen(appdata) + 1 : 0;
+  length += required;
   for (index = 0; index < request->environment_count; ++index) {
+    if (appdata && _stricmp(request->environment_names[index], "LOCALAPPDATA") == 0) continue;
     int name = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
                                    request->environment_names[index], -1, NULL, 0);
     int value = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
@@ -273,7 +281,13 @@ static wchar_t *environment_block(const struct launch_request *request) {
   block = calloc(length + 1, sizeof(wchar_t));
   if (block == NULL) return NULL;
   cursor = block;
+  if (appdata) {
+    memcpy(cursor, prefix, wcslen(prefix) * sizeof(*cursor));
+    memcpy(cursor + wcslen(prefix), appdata, (wcslen(appdata) + 1) * sizeof(*cursor));
+    cursor += required;
+  }
   for (index = 0; index < request->environment_count; ++index) {
+    if (appdata && _stricmp(request->environment_names[index], "LOCALAPPDATA") == 0) continue;
     int name = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
                                    request->environment_names[index], -1, cursor,
                                    (int)(length - (size_t)(cursor - block)));
@@ -375,7 +389,14 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
                          PROCESS_INFORMATION *process, struct keiko_gateway_connection *gateway) {
   STARTUPINFOEXW startup;
   SECURITY_CAPABILITIES capabilities = {0};
-  if (gateway) capabilities.AppContainerSid = gateway->sid;
+  wchar_t *appdata = NULL;
+  if (gateway) {
+    capabilities.AppContainerSid = gateway->sid;
+    /* AppContainer process creation needs LOCALAPPDATA even when the caller submits a
+     * hermetic environment. Resolve it for this user; never trust a packet-supplied path. */
+    if (FAILED(SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, NULL, &appdata))) return 0;
+    if (!SetEnvironmentVariableW(L"LOCALAPPDATA", appdata)) { CoTaskMemFree(appdata); return 0; }
+  }
   /* UpdateProcThreadAttribute retains this pointer through CreateProcessW. A callee-local array
    * expires when startup initialization returns, causing ERROR_INVALID_PARAMETER without inlining. */
   HANDLE inherited[3] = {GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
@@ -383,7 +404,8 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
   wchar_t *executable = wide_string(request->executable);
   wchar_t *cwd = wide_string(request->cwd);
   wchar_t *line = executable == NULL ? NULL : command_line(request, executable);
-  wchar_t *environment = environment_block(request);
+  wchar_t *environment = environment_block(request, appdata);
+  CoTaskMemFree(appdata);
   DWORD flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP |
                 EXTENDED_STARTUPINFO_PRESENT;
   BOOL created = FALSE;
