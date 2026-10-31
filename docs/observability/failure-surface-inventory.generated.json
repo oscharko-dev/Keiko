@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c261abfef5941d72f0a4db15e3c82cb51e4f1780c88397031875c7d5ccb084eb"
+    "catalogDigest": "2ce548142d70d622d5e9a01da037545d7c19248c47798038172125be0eb6ffaf"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 634,
-    "proofCount": 657,
-    "resolvedProofCount": 657,
-    "failureClassCount": 394,
+    "operationCount": 641,
+    "proofCount": 664,
+    "resolvedProofCount": 664,
+    "failureClassCount": 396,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -682,6 +682,13 @@
         "review.counter-check.completed",
         "review.counter-check.failed",
         "review.finding.reported",
+        "review.model-policy.refused",
+        "review.model-policy.resolved",
+        "review.model-policy.updated",
+        "review.pair-qualification.case-scored",
+        "review.pair-qualification.completed",
+        "review.pair-qualification.failed",
+        "review.pair-qualification.started",
         "review.run.action-refused",
         "review.run.phase",
         "review.run.profile-refused",
@@ -1217,7 +1224,9 @@
     "review-rules-file": ["editor-delivery.dependency-failure"],
     "review-finding-intake": ["editor-delivery.dependency-failure"],
     "review-run": ["editor-delivery.rejection"],
-    "review-counter-check": ["editor-delivery.dependency-failure"]
+    "review-counter-check": ["editor-delivery.dependency-failure"],
+    "review-model-policy": ["editor-delivery.rejection"],
+    "review-pair-qualification": ["editor-delivery.dependency-failure"]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -2651,6 +2660,27 @@
     ],
     "review.finding.reported.line": [
       "packages/keiko-server/src/review/runtime/activity-log.test.ts"
+    ],
+    "review.model-policy.refused.line": [
+      "packages/keiko-server/src/review/policy/activity-log.test.ts"
+    ],
+    "review.model-policy.resolved.line": [
+      "packages/keiko-server/src/review/policy/activity-log.test.ts"
+    ],
+    "review.model-policy.updated.line": [
+      "packages/keiko-server/src/review/policy/activity-log.test.ts"
+    ],
+    "review.pair-qualification.case-scored.line": [
+      "packages/keiko-server/src/review/qualification/activity-log.test.ts"
+    ],
+    "review.pair-qualification.completed.line": [
+      "packages/keiko-server/src/review/qualification/activity-log.test.ts"
+    ],
+    "review.pair-qualification.failed.line": [
+      "packages/keiko-server/src/review/qualification/activity-log.test.ts"
+    ],
+    "review.pair-qualification.started.line": [
+      "packages/keiko-server/src/review/qualification/activity-log.test.ts"
     ],
     "review.run.action-refused.line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",

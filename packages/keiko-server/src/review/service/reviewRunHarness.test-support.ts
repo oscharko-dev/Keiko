@@ -219,6 +219,8 @@ export interface HarnessOptions {
   readonly wrapServices?: ((services: ReviewServices) => ReviewServices) | undefined;
   readonly store?: ((db: DatabaseSync) => ReviewRunStore) | undefined;
   readonly db?: DatabaseSync | undefined;
+  /** Issue #4137: the operator and user policy in front of eligibility (default: none). */
+  readonly admit?: ReviewRunServiceDeps["models"]["admit"];
 }
 
 export interface ReviewRunHarness {
@@ -298,6 +300,7 @@ function serviceDeps(
         return capability(modelId);
       },
       generation: () => 7,
+      ...(options.admit === undefined ? {} : { admit: options.admit }),
     },
     activityLog: harness.log.sink,
   };

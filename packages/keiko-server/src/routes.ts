@@ -22,6 +22,7 @@ import {
   handleReviewRunStart,
   handleReviewStates,
 } from "./review/routes.js";
+import { guardReviewRoute, REVIEW_POLICY_ROUTE_GROUP } from "./review/routeGroup.js";
 import {
   handleListMarkdownSkills,
   handleReadMarkdownSkill,
@@ -558,7 +559,7 @@ function dispatchGitChangeApplyDescription(
 // endpoint, the 10 additive UI-store routes (ADR-0013 D7), three Issue #66 run-summary routes,
 // two desktop chat routes, desktop terminal JSON routes, and read-only Files widget routes.
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
-export const API_ROUTES: readonly RouteDefinition[] = [
+const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   {
     method: "POST",
     pattern: "/api/mcp/servers/:serverName/authorization",
@@ -1781,7 +1782,13 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   ...CHAT_READ_CONSENT_ROUTE_GROUP,
   ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
+  // Issue #4137 (ADR-0182 D8) — the review model policy, review settings and pair qualification.
+  ...REVIEW_POLICY_ROUTE_GROUP,
 ];
+
+// Issue #4137: every `/api/git-review/*` route, wherever it is registered, sits behind the
+// operator's `enabled` switch (the model-policy read view excepted).
+export const API_ROUTES: readonly RouteDefinition[] = REGISTERED_API_ROUTES.map(guardReviewRoute);
 
 interface PreparedRoute {
   readonly definition: RouteDefinition;

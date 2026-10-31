@@ -6685,6 +6685,45 @@ describe("handleGatewaySetup", () => {
     },
   );
 
+  // #4137 (ADR-0182 D8): the operator's review section survives a rebuild verbatim, invalid values
+  // included; a rebuild that dropped it would turn a fail-closed review policy into a default.
+  it("keeps the operator review section verbatim through a preserve-mode rebuild", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-review-block-");
+    const evidenceDir = await tempDir("keiko-gw-ev-review-block-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    const review = { enabled: true, allowedReviewModelIds: ["example-chat"], reviewerModelId: 7 };
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "example-chat", baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" },
+        ],
+        review,
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.review?.section).toEqual(review);
+    expect(currentGatewayConfig(deps)?.review?.operator.issues).toEqual([
+      { key: "reviewerModelId", source: "file" },
+    ]);
+    deps.store.close();
+  });
+
   it("restores stored OCR providers verbatim through preserve-mode rebuilds", async () => {
     // Review finding on #3031 (P1): the rebuild only re-derives chat and embedding providers, so
     // a stored ocr-vision provider was chat-probed and silently dropped (or reclassified) by an

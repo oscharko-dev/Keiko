@@ -6,6 +6,7 @@
 // scoring live in `pull-request-review-rules.ts`. Every text field is untrusted data written by a
 // model or a person, never an instruction to Keiko.
 
+import type { CostClass, LatencyClass } from "./gateway.js";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "./workspace-contract-primitives.js";
 
 /** Version of the `keiko_review_report` argument shape and the records derived from it. */
@@ -959,4 +960,269 @@ export type ReviewRunEvent =
       readonly presentedCount: number;
       readonly elapsedMs: number;
       readonly counts: ReviewRunProgressCounts;
+    };
+
+// ─── Model policy, review settings and pair qualification (Issue #4137) ─────
+
+/** Every route of the Pull requests area starts with this prefix (the `enabled` guard). */
+export const REVIEW_ROUTE_PREFIX = "/api/git-review/";
+export const REVIEW_MODEL_POLICY_ROUTE = "/api/git-review/model-policy";
+export const REVIEW_SETTINGS_ROUTE = "/api/git-review/settings";
+export const REVIEW_PAIR_QUALIFICATIONS_ROUTE = "/api/git-review/pair-qualifications";
+export const REVIEW_PAIR_QUALIFICATION_ROUTE =
+  "/api/git-review/pair-qualifications/:qualificationId";
+export const REVIEW_PAIR_QUALIFICATION_EVENTS_ROUTE =
+  "/api/git-review/pair-qualifications/:qualificationId/events";
+export const REVIEW_PAIR_QUALIFICATION_CANCEL_ROUTE =
+  "/api/git-review/pair-qualifications/:qualificationId/cancel";
+
+/**
+ * The keys of the operator's `review` section in `keiko.config.json`. `review` names the section
+ * itself (not an object, or an unknown key in it). An invalid explicit value fails closed: the
+ * policy refuses every role with `invalid-operator-value` and no other model is substituted.
+ */
+export const REVIEW_OPERATOR_CONFIG_KEYS = [
+  "review",
+  "enabled",
+  "reviewerModelId",
+  "counterCheckerModelId",
+  "allowedReviewModelIds",
+  "lockModelPolicy",
+  "rulesFilePath",
+  "repositories",
+] as const;
+export type ReviewOperatorConfigKey = (typeof REVIEW_OPERATOR_CONFIG_KEYS)[number];
+
+/** Environment overrides for unattended deployments; a set variable wins over the file value. */
+export const REVIEW_OPERATOR_ENV_VARIABLES = {
+  enabled: "KEIKO_REVIEW_ENABLED",
+  reviewerModelId: "KEIKO_REVIEW_REVIEWER_MODEL_ID",
+  counterCheckerModelId: "KEIKO_REVIEW_COUNTER_CHECKER_MODEL_ID",
+  allowedReviewModelIds: "KEIKO_REVIEW_ALLOWED_MODEL_IDS",
+  lockModelPolicy: "KEIKO_REVIEW_LOCK_MODEL_POLICY",
+  rulesFilePath: "KEIKO_REVIEW_RULES_FILE_PATH",
+} as const satisfies Partial<Record<ReviewOperatorConfigKey, string>>;
+
+/** Entries an operator allowlist may name; more is an invalid value. */
+export const REVIEW_ALLOWED_MODEL_IDS_MAX = 64;
+/** Repository presets an operator may declare. */
+export const REVIEW_REPOSITORY_PRESETS_MAX = 256;
+
+export interface ReviewOperatorConfigIssue {
+  readonly key: ReviewOperatorConfigKey;
+  readonly source: "file" | "environment";
+}
+
+/** An operator preset for one repository, addressed by its content-free repository id. */
+export interface ReviewRepositoryPreset {
+  readonly rulesFilePath?: string | undefined;
+}
+
+/**
+ * The operator's review configuration after parsing (ADR-0182 D8). `enabled` defaults to `false`
+ * until Issue #4142 releases the area. Every invalid value is listed in `issues` and the affected
+ * value is absent; a non-empty `issues` list makes the whole policy refuse with
+ * `invalid-operator-value`, and an invalid `enabled` or `lockModelPolicy` reads as its strict value
+ * (`false`, `true`).
+ */
+export interface ReviewOperatorConfig {
+  readonly enabled: boolean;
+  readonly reviewerModelId?: string | undefined;
+  readonly counterCheckerModelId?: string | undefined;
+  readonly allowedReviewModelIds?: readonly string[] | undefined;
+  readonly lockModelPolicy: boolean;
+  readonly rulesFilePath?: string | undefined;
+  readonly repositories: Readonly<Record<string, ReviewRepositoryPreset>>;
+  readonly issues: readonly ReviewOperatorConfigIssue[];
+}
+
+/** Why a role selection, a settings write or a run start was refused (`review.model-policy.refused`). */
+export const REVIEW_MODEL_POLICY_REFUSAL_REASONS = [
+  "not-configured",
+  "not-tool-capable",
+  "tool-verification-stale",
+  "window-unknown",
+  "window-too-small",
+  "not-coding-safe",
+  "outside-allowlist",
+  "policy-locked",
+  "invalid-operator-value",
+  "rules-path-invalid",
+  "revision-conflict",
+  "request-invalid",
+] as const;
+export type ReviewModelPolicyRefusalReason = (typeof REVIEW_MODEL_POLICY_REFUSAL_REASONS)[number];
+
+/** Where a resolved value came from, strictest first. */
+export const REVIEW_MODEL_POLICY_SOURCES = ["operator", "user", "recommendation", "none"] as const;
+export type ReviewModelPolicySource = (typeof REVIEW_MODEL_POLICY_SOURCES)[number];
+
+/** The state of a resolved role: usable, temporarily unavailable, or refused with its reason. */
+export type ReviewResolvedRoleState =
+  | { readonly status: "eligible"; readonly hint?: "busy" }
+  | { readonly status: "temporarily-unavailable" }
+  | { readonly status: "refused"; readonly reason: ReviewModelPolicyRefusalReason };
+
+export interface ReviewResolvedRole {
+  readonly modelId: string | null;
+  readonly source: ReviewModelPolicySource;
+  readonly state: ReviewResolvedRoleState;
+}
+
+/** One configured chat model as a role option, with the capability facts eligibility reads. */
+export interface ReviewModelOption {
+  readonly modelId: string;
+  /** The verified window (`maxInputTokens`, else `contextWindow`); `null` when unknown. */
+  readonly contextWindowTokens: number | null;
+  readonly contextWindowAssumed: boolean;
+  readonly toolCalling: "verified" | "stale" | "unverified" | "unsupported";
+  readonly conversationReady: boolean | null;
+  readonly costClass: CostClass;
+  readonly latencyClass: LatencyClass;
+  /** Inside the operator allowlist (always `true` without one). */
+  readonly allowed: boolean;
+  readonly reviewer: ReviewRoleEligibility;
+  readonly counterChecker: ReviewRoleEligibility;
+}
+
+/** The status of exactly one pair at the current gateway configuration generation. */
+export interface ReviewPairStatusView {
+  readonly status: ReviewPairStatus;
+  /** The local qualification the status comes from, when it comes from one. */
+  readonly qualificationId?: string | undefined;
+  readonly recordedAt?: string | undefined;
+  readonly score?: ReviewSeedScore | undefined;
+}
+
+/** `GET /api/git-review/model-policy?repositoryId=…`. A read view; writes use the settings route. */
+export type ReviewModelPolicyResponse =
+  | { readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION; readonly enabled: false }
+  | {
+      readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+      readonly enabled: true;
+      readonly repositoryId: string | null;
+      readonly locked: boolean;
+      readonly allowlistActive: boolean;
+      readonly invalidOperatorKeys: readonly ReviewOperatorConfigKey[];
+      readonly reviewer: ReviewResolvedRole;
+      readonly counterChecker: ReviewResolvedRole;
+      /** Both roles resolve to the same model: no second eligible model exists. */
+      readonly singleModel: boolean;
+      readonly options: readonly ReviewModelOption[];
+      readonly pair: ReviewPairStatusView;
+      readonly configurationGeneration: number | null;
+    };
+
+export const REVIEW_SETTINGS_SCHEMA_VERSION = 1 as const;
+
+/**
+ * The per-repository review settings document, stored server-side and published atomically. The
+ * `revision` grows by one with every saved change; `0` means nothing was saved yet.
+ */
+export interface ReviewSettingsDocument {
+  readonly schemaVersion: typeof REVIEW_SETTINGS_SCHEMA_VERSION;
+  readonly repositoryId: string;
+  readonly revision: number;
+  readonly reviewerModelId?: string | undefined;
+  readonly counterCheckerModelId?: string | undefined;
+  readonly rulesFilePath?: string | undefined;
+  readonly updatedAt?: string | undefined;
+}
+
+/**
+ * `PUT /api/git-review/settings?repositoryId=…`. An omitted field keeps the stored value, `null`
+ * clears it (the operator default or the recommendation applies again). `expectedRevision` makes
+ * the write conditional on the stored revision.
+ */
+export interface ReviewSettingsUpdateRequest {
+  readonly expectedRevision?: number | undefined;
+  readonly reviewerModelId?: string | null | undefined;
+  readonly counterCheckerModelId?: string | null | undefined;
+  readonly rulesFilePath?: string | null | undefined;
+}
+
+export interface ReviewSettingsResponse {
+  readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+  readonly settings: ReviewSettingsDocument;
+  /** The rules path child 5 reads: the operator preset when locked, else the user value. */
+  readonly effectiveRulesFilePath: string;
+  readonly rulesFilePathSource: "operator" | "user" | "default";
+  readonly locked: boolean;
+}
+
+/** `POST /api/git-review/pair-qualifications`. */
+export interface ReviewPairQualificationStartRequest {
+  readonly reviewerModelId: string;
+  readonly counterCheckerModelId: string;
+}
+
+/** A pair qualification's end. Only `seed-qualified` and `seed-failed` become a pair status. */
+export const REVIEW_PAIR_QUALIFICATION_OUTCOMES = [
+  "seed-qualified",
+  "seed-failed",
+  "incomplete",
+  "cancelled",
+] as const;
+export type ReviewPairQualificationOutcome = (typeof REVIEW_PAIR_QUALIFICATION_OUTCOMES)[number];
+
+/** What one seed case's review run showed. `not-scored` runs did not settle complete or incomplete. */
+export const REVIEW_SEED_CASE_RESULTS = [
+  "found",
+  "missed",
+  "stale",
+  "clean",
+  "false-alarm",
+  "not-scored",
+] as const;
+export type ReviewSeedCaseResult = (typeof REVIEW_SEED_CASE_RESULTS)[number];
+
+/** The whole qualification's wall-clock bound; per-run budgets bound every run's spend. */
+export const REVIEW_PAIR_QUALIFICATION_DEFAULT_DEADLINE_MS = 3 * 60 * 60 * 1000;
+
+export interface ReviewPairQualificationCaseView {
+  readonly caseId: string;
+  readonly seedClass: ReviewFindingCategory;
+  readonly required: boolean;
+  readonly cleanControl: boolean;
+  readonly result: ReviewSeedCaseResult | "pending";
+  readonly presentedCount: number;
+  readonly runId: string | null;
+}
+
+export interface ReviewPairQualificationView {
+  readonly schemaVersion: typeof REVIEW_CONTRACT_VERSION;
+  readonly qualificationId: string;
+  readonly reviewerModelId: string;
+  readonly counterCheckerModelId: string;
+  readonly configurationGeneration: number | null;
+  readonly state: "running" | "settled";
+  readonly outcome: ReviewPairQualificationOutcome | null;
+  readonly startedAt: string;
+  readonly settledAt: string | null;
+  readonly durationMs: number;
+  readonly score: ReviewSeedScore | null;
+  /** Seed classes of the required cases that were not found, in corpus order. */
+  readonly missedSeedClasses: readonly ReviewFindingCategory[];
+  readonly cases: readonly ReviewPairQualificationCaseView[];
+  readonly totals: {
+    readonly reviewer: ReviewRoleTotals;
+    readonly counterChecker: ReviewRoleTotals;
+  };
+}
+
+/** One frame of `GET /api/git-review/pair-qualifications/{id}/events`; counts only. */
+export type ReviewPairQualificationEvent =
+  | {
+      readonly kind: "progress";
+      readonly qualificationId: string;
+      readonly completedCases: number;
+      readonly totalCases: number;
+      readonly elapsedMs: number;
+    }
+  | {
+      readonly kind: "settled";
+      readonly qualificationId: string;
+      readonly outcome: ReviewPairQualificationOutcome;
+      readonly score: ReviewSeedScore | null;
+      readonly elapsedMs: number;
     };

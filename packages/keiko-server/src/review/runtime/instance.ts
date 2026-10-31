@@ -131,6 +131,12 @@ export interface ReviewRuntimeService {
   ): ReviewRuntimeComposition | undefined;
   /** Live instances; review runs never appear in the Coding Workbench's lists. */
   instanceCount(): number;
+  /**
+   * Stops the idle instance of one repository now instead of after the idle period (Issue #4137:
+   * a pair qualification's seed repositories are removed right after their review). An instance
+   * with a review in flight or in preparation is left alone.
+   */
+  release(repositoryRoot: string, correlationId?: string): Promise<void>;
   dispose(correlationId?: string): Promise<void>;
 }
 
@@ -202,6 +208,10 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
 
   public instanceCount(): number {
     return this.instances.size;
+  }
+
+  public async release(repositoryRoot: string, correlationId?: string): Promise<void> {
+    await this.stop(repositoryRoot, "idle", correlationId);
   }
 
   public async dispose(correlationId?: string): Promise<void> {

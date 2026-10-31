@@ -551,9 +551,23 @@ import {
   createProductionReviewRuntimeService,
 } from "./review/runtime/production.js";
 import type { ReviewRuntimeService } from "./review/runtime/instance.js";
+import type { ReviewRulesSettingsPort } from "./review/runtime/rulesFile.js";
 import { counterCheckCandidate } from "./review/counter-check/counterCheck.js";
 import { createReviewRunService, type ReviewRunService } from "./review/service/service.js";
 import { ReviewRunStore } from "./review/service/store.js";
+import {
+  reportReviewOperatorConfig,
+  reviewRulesSettingsPort,
+  reviewRunAdmission,
+  type ReviewPolicyDeps,
+  type ReviewPolicyServices,
+} from "./review/policy/policy.js";
+import { createReviewSettingsStore } from "./review/policy/settingsStore.js";
+import { ReviewPairStatusRegistry } from "./review/qualification/pairStatus.js";
+import {
+  REVIEW_QUALIFICATION_DIR,
+  createPairQualificationService,
+} from "./review/qualification/service.js";
 import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -1318,6 +1332,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // browser and no SDP is persisted.
   readonly voiceRealtimeNegotiationRequest?:
     ((request: RealtimeNegotiationRequest) => Promise<RealtimeNegotiationOutcome>) | undefined;
+  // Issue #4137 (ADR-0182 D8): review settings, pair status and the local pair qualification.
+  readonly reviewPolicy?: ReviewPolicyServices | undefined;
 }
 
 export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependency {
@@ -5043,13 +5059,32 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 function composeReviewDeps(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
-): Pick<UiHandlerDeps, "reviewServices" | "reviewRuntime"> {
+): Pick<UiHandlerDeps, "reviewServices" | "reviewRuntime" | "reviewPolicy"> {
   const reviewServices = composeReviewServices(args);
-  const reviewRuntime = composeReviewRuntimeService(args, services, reviewServices);
+  // Issue #4137: the settings documents live beside the review worktrees, production persistence only.
+  const reviewSettings =
+    reviewServices === undefined || args.options.store !== undefined
+      ? undefined
+      : createReviewSettingsStore(dirname(args.resolvedUiDbPath));
+  const rulesSettings = reviewRulesSettingsPort(
+    () => reviewPolicyDeps(args),
+    () => reviewSettings,
+  );
+  const reviewRuntime = composeReviewRuntimeService(args, services, reviewServices, rulesSettings);
   return {
     ...(reviewServices === undefined ? {} : { reviewServices }),
     ...(reviewRuntime === undefined ? {} : { reviewRuntime }),
+    reviewPolicy: {
+      settings: reviewSettings,
+      pairStatus: new ReviewPairStatusRegistry(),
+      qualifications: undefined,
+    },
   };
+}
+
+/** What the review model policy reads: the live gateway configuration and the environment. */
+function reviewPolicyDeps(args: UiHandlerDepsAssemblyArgs): ReviewPolicyDeps {
+  return { config: args.config, gatewayConfig: args.runtimeConfig, env: args.options.env };
 }
 
 function composeReviewServices(args: UiHandlerDepsAssemblyArgs): ReviewServices | undefined {
@@ -5111,6 +5146,7 @@ function attachReviewServicesLifecycle(args: UiHandlerDepsAssemblyArgs, deps: Ui
   const disposeGraph = deps.dispose;
   Object.assign(deps, {
     dispose: async (): Promise<void> => {
+      await deps.reviewPolicy?.qualifications?.dispose();
       await deps.reviewRunService?.dispose();
       await deps.reviewRuntime?.dispose();
       await reviewServices.dispose();
@@ -5150,6 +5186,8 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
         return config === undefined ? undefined : findConfiguredCapability(config, modelId);
       },
       generation: () => deps.gatewayConfig?.generation(),
+      // Issue #4137: the operator and user policy in front of eligibility at every run start.
+      admit: reviewRunAdmission(() => reviewPolicyDeps(args), activityLog),
     },
     activityLog,
     reviewerPromptBudget: configuredReviewRunBudget(
@@ -5158,6 +5196,47 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
     ).promptTokenBudget,
   });
   Object.assign(deps, { reviewRunService });
+  attachPairQualificationService(args, deps, reviewServices, activityLog);
+}
+
+/**
+ * Issue #4137 (ADR-0182 D8): the local pair qualification drives the review run service above with
+ * the shipped seed corpus; its seed repositories live under `<state>/review-qualification`, which
+ * is swept at start. Invalid operator review values are reported once at start, by key and source.
+ */
+function attachPairQualificationService(
+  args: UiHandlerDepsAssemblyArgs,
+  deps: UiHandlerDeps,
+  reviewServices: ReviewServices,
+  activityLog: ServerLogSink,
+): void {
+  const reviewPolicy = deps.reviewPolicy;
+  if (reviewPolicy === undefined) return;
+  const qualifications = createPairQualificationService({
+    runs: () => deps.reviewRunService,
+    runner: (correlationId) => reviewServices.reviewRunner(correlationId),
+    releaseRuntime: async (repositoryRoot, correlationId) => {
+      await deps.reviewRuntime?.release(repositoryRoot, correlationId);
+    },
+    root: join(dirname(args.resolvedUiDbPath), REVIEW_QUALIFICATION_DIR),
+    pairStatus: reviewPolicy.pairStatus,
+    activityLog,
+  });
+  Object.assign(deps, { reviewPolicy: { ...reviewPolicy, qualifications } });
+  reportReviewOperatorConfig(reviewPolicyDeps(args), activityLog, args.bootstrapCorrelationId);
+  void qualifications.sweep().catch((error: unknown) => {
+    emitServerDiagnostic(
+      args.options.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: args.bootstrapCorrelationId,
+        operation: "review.pair-qualification.startup-sweep",
+        source: "review.bootstrap",
+        error,
+        summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+        redact: (message): string => message,
+      }),
+    );
+  });
 }
 
 /**
@@ -5170,6 +5249,7 @@ function composeReviewRuntimeService(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
   reviewServices: ReviewServices | undefined,
+  rulesSettings: ReviewRulesSettingsPort,
 ): ReviewRuntimeService | undefined {
   if (reviewServices === undefined || args.options.codingRuntimeProductionPorts !== undefined) {
     return undefined;
@@ -5195,6 +5275,7 @@ function composeReviewRuntimeService(
       gatewayEvidenceRecorder: (controlPlane, evidence) =>
         codingSidecarGatewayEvidenceRecorder(evidence, controlPlane.eventHub),
       runner: () => reviewServices.reviewRunner(),
+      rulesSettings,
       serverPrincipal: serverOperatorPrincipal(args.options),
       activityLog: args.options.activityLog ?? processServerLogSink(),
       diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,

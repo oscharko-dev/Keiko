@@ -31,6 +31,10 @@ import {
   REVIEW_REPOSITORY_ID_MAX_CHARS,
   REVIEW_RUN_ID_MAX_CHARS,
   REVIEW_SETTLEMENT_REASONS,
+  REVIEW_ALLOWED_MODEL_IDS_MAX,
+  REVIEW_OPERATOR_ENV_VARIABLES,
+  REVIEW_REPOSITORY_PRESETS_MAX,
+  REVIEW_SETTINGS_SCHEMA_VERSION,
   type CounterCheckVerdict,
   type FindingDecision,
   type ReviewEvidence,
@@ -38,7 +42,14 @@ import {
   type ReviewFindingRecord,
   type ReviewFindingReport,
   type ReviewModelPolicy,
+  type ReviewOperatorConfig,
+  type ReviewOperatorConfigIssue,
+  type ReviewOperatorConfigKey,
+  type ReviewPairQualificationStartRequest,
+  type ReviewRepositoryPreset,
   type ReviewRunSettlement,
+  type ReviewSettingsDocument,
+  type ReviewSettingsUpdateRequest,
   type ReviewRunStartRequest,
   type ReviewTarget,
 } from "./pull-request-review.js";
@@ -588,4 +599,263 @@ export function validateReviewRunStartRequest(
   checkClientRequestId(own(value, "clientRequestId"), issues);
   checkBoolean(own(value, "dryRun"), "dryRun", issues);
   return finish({ ...value } as unknown as ReviewRunStartRequest, issues);
+}
+
+// ─── Model policy and review settings (Issue #4137) ─────────────────────────
+
+/**
+ * A review-rules path a repository may configure: portable, repository-relative, no `.` or `..`
+ * segment, no control, bidirectional or zero-width character. Anything else could name a file
+ * outside the tree, so it is refused rather than normalized.
+ */
+export function isReviewRulesFilePath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    !hasControlCharacter(value) &&
+    stripUnsafeFormatChars(value) === value &&
+    isPortableWorkspaceRelativePath(value)
+  );
+}
+
+/** A content-free repository id as the review routes address repositories. */
+export function isReviewRepositoryId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= REVIEW_REPOSITORY_ID_MAX_CHARS &&
+    SAFE_IDENTIFIER.test(value)
+  );
+}
+
+type EnvLookup = Readonly<Record<string, string | undefined>>;
+
+const OPERATOR_FILE_KEYS: ReadonlySet<string> = new Set([
+  "enabled",
+  "reviewerModelId",
+  "counterCheckerModelId",
+  "allowedReviewModelIds",
+  "lockModelPolicy",
+  "rulesFilePath",
+  "repositories",
+]);
+
+interface OperatorValue {
+  readonly value: unknown;
+  readonly source: "file" | "environment";
+}
+
+/** The environment value of `key` when set (non-empty after trimming), else the file value. */
+function operatorValue(
+  block: Fields,
+  env: EnvLookup,
+  key: keyof typeof REVIEW_OPERATOR_ENV_VARIABLES,
+): OperatorValue | undefined {
+  const raw = env[REVIEW_OPERATOR_ENV_VARIABLES[key]]?.trim();
+  if (raw !== undefined && raw.length > 0) return { value: raw, source: "environment" };
+  return Object.hasOwn(block, key) ? { value: block[key], source: "file" } : undefined;
+}
+
+function operatorBoolean(entry: OperatorValue | undefined): boolean | undefined | "invalid" {
+  if (entry === undefined) return undefined;
+  if (typeof entry.value === "boolean") return entry.value;
+  if (entry.source === "environment" && (entry.value === "true" || entry.value === "false")) {
+    return entry.value === "true";
+  }
+  return "invalid";
+}
+
+function operatorModelIds(
+  entry: OperatorValue | undefined,
+): readonly string[] | undefined | "invalid" {
+  if (entry === undefined) return undefined;
+  const list =
+    entry.source === "environment" && typeof entry.value === "string"
+      ? entry.value.split(",").map((item) => item.trim())
+      : entry.value;
+  if (!Array.isArray(list) || list.length === 0 || list.length > REVIEW_ALLOWED_MODEL_IDS_MAX) {
+    return "invalid";
+  }
+  const ids = list as readonly unknown[];
+  const valid = ids.every(isReviewModelId) && new Set(ids).size === ids.length;
+  return valid ? ids : "invalid";
+}
+
+function operatorPresets(
+  value: unknown,
+): Readonly<Record<string, ReviewRepositoryPreset>> | "invalid" {
+  if (!isRecord(value)) return "invalid";
+  const entries = Object.entries(value);
+  if (entries.length > REVIEW_REPOSITORY_PRESETS_MAX) return "invalid";
+  const presets: Record<string, ReviewRepositoryPreset> = {};
+  for (const [repositoryId, preset] of entries) {
+    if (!isReviewRepositoryId(repositoryId) || !isRecord(preset)) return "invalid";
+    const keys = Object.keys(preset);
+    if (keys.some((key) => key !== "rulesFilePath")) return "invalid";
+    const rulesFilePath = own(preset, "rulesFilePath");
+    if (rulesFilePath !== undefined && !isReviewRulesFilePath(rulesFilePath)) return "invalid";
+    presets[repositoryId] = rulesFilePath === undefined ? {} : { rulesFilePath };
+  }
+  return presets;
+}
+
+interface OperatorDraft {
+  enabled: boolean;
+  lockModelPolicy: boolean;
+  reviewerModelId?: string;
+  counterCheckerModelId?: string;
+  allowedReviewModelIds?: readonly string[];
+  rulesFilePath?: string;
+  repositories: Readonly<Record<string, ReviewRepositoryPreset>>;
+  readonly issues: ReviewOperatorConfigIssue[];
+}
+
+function noteIssue(
+  draft: OperatorDraft,
+  key: ReviewOperatorConfigKey,
+  entry: OperatorValue | undefined,
+): void {
+  draft.issues.push({ key, source: entry?.source ?? "file" });
+}
+
+function applySwitches(draft: OperatorDraft, block: Fields, env: EnvLookup): void {
+  const enabledEntry = operatorValue(block, env, "enabled");
+  const enabled = operatorBoolean(enabledEntry);
+  if (enabled === "invalid") noteIssue(draft, "enabled", enabledEntry);
+  else draft.enabled = enabled ?? false;
+  const lockEntry = operatorValue(block, env, "lockModelPolicy");
+  const lock = operatorBoolean(lockEntry);
+  if (lock === "invalid") {
+    noteIssue(draft, "lockModelPolicy", lockEntry);
+    draft.lockModelPolicy = true;
+  } else draft.lockModelPolicy = lock ?? false;
+}
+
+function applyModels(draft: OperatorDraft, block: Fields, env: EnvLookup): void {
+  const allowedEntry = operatorValue(block, env, "allowedReviewModelIds");
+  const allowed = operatorModelIds(allowedEntry);
+  if (allowed === "invalid") noteIssue(draft, "allowedReviewModelIds", allowedEntry);
+  else if (allowed !== undefined) draft.allowedReviewModelIds = allowed;
+  const allowlist = allowed === "invalid" ? undefined : allowed;
+  for (const key of ["reviewerModelId", "counterCheckerModelId"] as const) {
+    const entry = operatorValue(block, env, key);
+    if (entry === undefined) continue;
+    const value = entry.value;
+    const valid = isReviewModelId(value) && (allowlist === undefined || allowlist.includes(value));
+    if (valid) draft[key] = value;
+    else noteIssue(draft, key, entry);
+  }
+}
+
+function applyRules(draft: OperatorDraft, block: Fields, env: EnvLookup): void {
+  const rulesEntry = operatorValue(block, env, "rulesFilePath");
+  if (rulesEntry !== undefined) {
+    if (isReviewRulesFilePath(rulesEntry.value)) draft.rulesFilePath = rulesEntry.value;
+    else noteIssue(draft, "rulesFilePath", rulesEntry);
+  }
+  if (!Object.hasOwn(block, "repositories")) return;
+  const presets = operatorPresets(block.repositories);
+  if (presets === "invalid") noteIssue(draft, "repositories", undefined);
+  else draft.repositories = presets;
+}
+
+/**
+ * Parses the operator's `review` section of `keiko.config.json` with its environment overrides
+ * (`REVIEW_OPERATOR_ENV_VARIABLES`). It never throws: every invalid explicit value (a wrong type, an
+ * unsafe id or path, a default outside the allowlist, an unknown key) becomes a closed issue and
+ * the value is left out, so the gateway configuration keeps loading while the review policy fails
+ * closed. An absent section with no override is the default: disabled, unlocked, unrestricted.
+ */
+export function parseReviewOperatorConfig(raw: unknown, env: EnvLookup = {}): ReviewOperatorConfig {
+  const draft: OperatorDraft = {
+    enabled: false,
+    lockModelPolicy: false,
+    repositories: {},
+    issues: [],
+  };
+  const block = raw === undefined ? {} : raw;
+  if (!isRecord(block)) {
+    draft.issues.push({ key: "review", source: "file" });
+    return { ...draft };
+  }
+  if (Object.keys(block).some((key) => !OPERATOR_FILE_KEYS.has(key))) {
+    draft.issues.push({ key: "review", source: "file" });
+  }
+  applySwitches(draft, block, env);
+  applyModels(draft, block, env);
+  applyRules(draft, block, env);
+  return { ...draft };
+}
+
+function checkNullableModelId(record: Fields, key: string, issues: Issues): void {
+  const value = own(record, key);
+  if (value !== null) checkModelId(value, key, issues);
+}
+
+function checkRevision(value: unknown, path: string, issues: Issues, min: number): void {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min) {
+    issues.push({ code: "invalid-number", path });
+  }
+}
+
+function checkRulesFilePath(value: unknown, path: string, issues: Issues): void {
+  if (value === undefined || value === null) return;
+  if (!isReviewRulesFilePath(value)) issues.push({ code: "invalid-path", path });
+}
+
+const SETTINGS_UPDATE_KEYS = [
+  "expectedRevision",
+  "reviewerModelId",
+  "counterCheckerModelId",
+  "rulesFilePath",
+];
+
+/** Validates a `PUT /api/git-review/settings` body; the key set is closed. */
+export function validateReviewSettingsUpdateRequest(
+  value: unknown,
+): ReviewContractValidation<ReviewSettingsUpdateRequest> {
+  if (!isRecord(value)) return notAnObject("");
+  const issues: Issues = [];
+  checkKeys(value, [], SETTINGS_UPDATE_KEYS, "", issues);
+  checkRevision(own(value, "expectedRevision"), "expectedRevision", issues, 0);
+  checkNullableModelId(value, "reviewerModelId", issues);
+  checkNullableModelId(value, "counterCheckerModelId", issues);
+  checkRulesFilePath(own(value, "rulesFilePath"), "rulesFilePath", issues);
+  return finish<ReviewSettingsUpdateRequest>({ ...value }, issues);
+}
+
+/** Validates a stored settings document read back from disk; anything else is not trusted. */
+export function validateReviewSettingsDocument(
+  value: unknown,
+): ReviewContractValidation<ReviewSettingsDocument> {
+  if (!isRecord(value)) return notAnObject("");
+  const issues: Issues = [];
+  const optional = ["reviewerModelId", "counterCheckerModelId", "rulesFilePath", "updatedAt"];
+  checkKeys(value, ["schemaVersion", "repositoryId", "revision"], optional, "", issues);
+  if (own(value, "schemaVersion") !== REVIEW_SETTINGS_SCHEMA_VERSION) {
+    issues.push({ code: "unknown-enum-value", path: "schemaVersion" });
+  }
+  if (!isReviewRepositoryId(own(value, "repositoryId"))) {
+    issues.push({ code: "invalid-identifier", path: "repositoryId" });
+  }
+  checkRevision(own(value, "revision"), "revision", issues, 1);
+  checkModelId(own(value, "reviewerModelId"), "reviewerModelId", issues);
+  checkModelId(own(value, "counterCheckerModelId"), "counterCheckerModelId", issues);
+  checkRulesFilePath(own(value, "rulesFilePath"), "rulesFilePath", issues);
+  const updatedAt = own(value, "updatedAt");
+  if (updatedAt !== undefined && (typeof updatedAt !== "string" || updatedAt.length > 64)) {
+    issues.push({ code: "wrong-type", path: "updatedAt" });
+  }
+  return finish({ ...value } as unknown as ReviewSettingsDocument, issues);
+}
+
+/** Validates a `POST /api/git-review/pair-qualifications` body; the key set is closed. */
+export function validateReviewPairQualificationStartRequest(
+  value: unknown,
+): ReviewContractValidation<ReviewPairQualificationStartRequest> {
+  if (!isRecord(value)) return notAnObject("");
+  const issues: Issues = [];
+  checkKeys(value, ["reviewerModelId", "counterCheckerModelId"], [], "", issues);
+  checkModelId(own(value, "reviewerModelId"), "reviewerModelId", issues);
+  checkModelId(own(value, "counterCheckerModelId"), "counterCheckerModelId", issues);
+  return finish({ ...value } as unknown as ReviewPairQualificationStartRequest, issues);
 }

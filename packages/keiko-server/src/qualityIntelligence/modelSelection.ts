@@ -26,6 +26,13 @@ import type {
 import { isQualityIntelligenceJudgeEligible } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/bffWire";
 import type { UiHandlerDeps } from "../deps.js";
 import { currentGatewayConfig } from "../deps.js";
+import {
+  compareContextWindowDesc,
+  indexedChatCapabilities,
+  pickRoleModel,
+  recommendRolePair,
+  type IndexedCapability,
+} from "../modelRolePolicy/recommendation.js";
 import { QiGenerationError } from "./generationPort.js";
 
 type QiProfileId = MgQI.QualityIntelligenceTaskProfileId;
@@ -109,15 +116,8 @@ export type QiTestDesignSelection =
       readonly capability: ModelCapability;
     };
 
-interface IndexedCapability {
-  readonly capability: ModelCapability;
-  readonly index: number;
-}
-
 function chatCapabilities(deps: UiHandlerDeps): readonly IndexedCapability[] {
-  return configuredCapabilities(deps)
-    .map((capability, index) => ({ capability, index }))
-    .filter((entry) => entry.capability.kind === "chat");
+  return indexedChatCapabilities(configuredCapabilities(deps));
 }
 
 function compareBooleanDesc(a: boolean | undefined, b: boolean | undefined): number {
@@ -126,19 +126,6 @@ function compareBooleanDesc(a: boolean | undefined, b: boolean | undefined): num
 
 function compareNumberDesc(a: number | undefined, b: number | undefined): number {
   return (b ?? 0) - (a ?? 0);
-}
-
-// contextWindow===0 is a runtime-discovered/unenriched placeholder (GEN-GATE-DISCOVERY-001).
-// Total order (transitive) that (a) prefers any known capacity over the placeholder and
-// (b) orders known capacities largest-first, while treating two placeholders as equal.
-// Returning 0 for "0 vs X" and X vs Y descending is NOT a total order — the comparator
-// would report cycles (4K < 128K, 0 == 128K, 0 == 4K) and Node's stable sort could leave
-// the placeholder ahead of the largest window (PR-review follow-up on KEIKO-0501).
-function compareContextWindowDesc(a: number | undefined = 0, b: number | undefined = 0): number {
-  const aKnown = a > 0;
-  const bKnown = b > 0;
-  if (aKnown !== bKnown) return aKnown ? -1 : 1;
-  return b - a;
 }
 
 function compareGenerationDefault(a: IndexedCapability, b: IndexedCapability): number {
@@ -164,23 +151,18 @@ function compareJudgeDefault(a: IndexedCapability, b: IndexedCapability): number
   );
 }
 
+const GENERATION_ROLE = { eligible: (): boolean => true, order: compareGenerationDefault };
+const JUDGE_ROLE = { eligible: isQualityIntelligenceJudgeEligible, order: compareJudgeDefault };
+
 function defaultGenerationCapability(deps: UiHandlerDeps): ModelCapability | undefined {
-  return chatCapabilities(deps).slice().sort(compareGenerationDefault)[0]?.capability;
+  return pickRoleModel(chatCapabilities(deps), GENERATION_ROLE.eligible, GENERATION_ROLE.order);
 }
 
 function defaultJudgeCapability(
   deps: UiHandlerDeps,
   avoidModelId?: string,
 ): ModelCapability | undefined {
-  const candidates = chatCapabilities(deps).filter((entry): boolean =>
-    isQualityIntelligenceJudgeEligible(entry.capability),
-  );
-  const differentModelCandidates =
-    avoidModelId === undefined
-      ? candidates
-      : candidates.filter((entry) => entry.capability.id !== avoidModelId);
-  const pool = differentModelCandidates.length > 0 ? differentModelCandidates : candidates;
-  return pool.slice().sort(compareJudgeDefault)[0]?.capability;
+  return pickRoleModel(chatCapabilities(deps), JUDGE_ROLE.eligible, JUDGE_ROLE.order, avoidModelId);
 }
 
 /**
@@ -231,8 +213,9 @@ export function normaliseQiModelPolicy(
 }
 
 export function recommendQiModelPolicy(deps: UiHandlerDeps): QualityIntelligenceModelPolicy {
-  const generation = defaultGenerationCapability(deps);
-  const judge = defaultJudgeCapability(deps, generation?.id);
+  const recommendation = recommendRolePair(chatCapabilities(deps), GENERATION_ROLE, JUDGE_ROLE);
+  const generation = recommendation.first;
+  const judge = recommendation.second;
   return {
     policyVersion: QI_MODEL_POLICY_VERSION,
     ...(generation !== undefined ? { testDesignModelId: generation.id } : {}),

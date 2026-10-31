@@ -225,7 +225,12 @@ class ReviewRunServiceImpl implements ReviewRunService {
   }
 
   private async dryRun(input: ReviewRunStartInput): Promise<ReviewRunStartOutcome> {
-    const models = validateReviewRoleModels(this.deps.models, input.request, this.now());
+    const models = validateReviewRoleModels(
+      this.deps.models,
+      input.request,
+      this.now(),
+      input.correlationId,
+    );
     if (!models.ok) return this.refuse(models.reason, input);
     const estimate = await estimateDryRun(
       this.deps.reviewServices,

@@ -1433,7 +1433,15 @@ function operatorPolicyBlocks(config: GatewayConfig | undefined): Record<string,
     ...(config?.codingOutageWindowMs === undefined
       ? {}
       : { codingOutageWindowMs: config.codingOutageWindowMs }),
+    ...reviewOperatorBlock(config),
   };
+}
+
+// #4137: the operator's review section survives verbatim, invalid values included, so a rewrite can
+// never turn a fail-closed review policy into a silently accepted default.
+function reviewOperatorBlock(config: GatewayConfig | undefined): Record<string, unknown> {
+  const section = config?.review?.section;
+  return section === undefined ? {} : { review: section };
 }
 
 function rawCapabilityIsVoice(value: unknown): boolean {

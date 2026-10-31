@@ -249,7 +249,7 @@ export async function prepareReviewRun(
   ctx: ReviewRunContext,
   state: ReviewRunState,
 ): Promise<ReviewDiffPackage | undefined> {
-  const models = validateReviewRoleModels(deps.models, ctx, deps.now());
+  const models = validateReviewRoleModels(deps.models, ctx, deps.now(), ctx.correlationId);
   if (!models.ok) {
     stopWith(state, { kind: "skipped", reason: models.reason });
     return undefined;
