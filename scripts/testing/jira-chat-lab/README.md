@@ -584,7 +584,17 @@ unit tests do not establish native live acceptance.
 `requirements/` holds the lab of epic #4173: the scenario catalog S01–S19, a model-free probe
 layer, end-to-end Chat journeys and the scorecard that combines them. Every check is graded by an
 independent oracle (Jira REST/JQL reads or the generated ground truth), never by the model's own
-answer. A scenario is green only when every check passed and an end-to-end journey exists.
+answer. `catalog.mjs` lists each scenario's obligations; a check names the obligations it covers
+(`covers`) and `coverage.mjs` awards green only when every obligation is covered by a passing
+check, one of them an end-to-end journey. A journey that verifies only part of the contract leaves
+the scenario `partial` (for example S10 until per-epic progress and estimate totals are graded),
+and an obligation nobody covers keeps it from ever turning green. Creation journeys (S05, S07,
+S17) read the matching Jira issue keys before the turn and grade only the keys that appeared
+during it, so earlier journeys, reruns and the Jira actor's timezone cannot leak into the verdict.
+S05 additionally requires exactly one write approval for its batch, S04 requires title, priority
+and chapter per requirement, S11 each seeded deviation, and S17 a one-to-one mapping of the new
+epics onto the Muss requirements plus every created key in the answer. The oracles are unit-tested
+with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mjs`.
 
 ```sh
 # Once per session: the empty work project REQ and the report project RPT with known ground truth
@@ -606,6 +616,9 @@ session's containers (volumes retained) when the window runs low. It never chang
 licensing code or license data.
 
 The synthetic corpus (`requirements/corpus.mjs`) is a fictional requirements specification in two
-versions with seeded quality defects; `STRUCTURE_RULES` is the lab's stand-in for the issue
+versions with seeded quality defects. Its truth records each requirement completely (id, title,
+priority, chapter, text, acceptance criteria), and every rendering (Markdown, Word, Excel,
+PowerPoint, PDF) carries all of it; `jira-lab-corpus-documents.test.mjs` extracts the records back
+out of each format and compares them, including the v1 to v2 changes, with the truth; `STRUCTURE_RULES` is the lab's stand-in for the issue
 templates a project lead defines. Lab code may know Jira Software's field schemas to seed ground
 truth; the product under test may not.

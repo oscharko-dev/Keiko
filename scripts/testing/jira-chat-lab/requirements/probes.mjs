@@ -62,9 +62,14 @@ async function typeCoverage(session, projectKey, typeName) {
   const refused = results.flatMap((result) => result.refused);
   const offered = results.reduce((sum, result) => sum + result.offered, 0);
   return refused.length === 0
-    ? { status: "green", detail: `${typeName}: all ${offered} offered fields writable` }
+    ? {
+        status: "green",
+        covers: ["fields-writable"],
+        detail: `${typeName}: all ${offered} offered fields writable`,
+      }
     : {
         status: "red",
+        covers: ["fields-writable"],
         detail: `${typeName}: ${refused.length} of ${offered} offered fields refused by Keiko: ${refused.join(", ")}`,
       };
 }

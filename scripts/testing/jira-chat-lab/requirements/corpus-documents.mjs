@@ -70,12 +70,16 @@ function markdownBlocks(markdown) {
 
 function applyBlock(current, { kind, text }) {
   if (kind === "bullet") current.criteria.push(text);
-  else if (kind === "para" && !/^(Abnahmekriterien:|Priorität: )/u.test(text)) current.text = text;
+  else if (kind === "para" && !/^(Abnahmekriterien:|Priorität: )/u.test(text)) {
+    current.parsedText = text;
+  }
 }
 
 /** Reads description and acceptance criteria per requirement and cross-checks them with truth. */
 function parseRequirements(corpus) {
-  const byId = new Map(corpus.truth.map((item) => [item.id, { ...item, text: "", criteria: [] }]));
+  const byId = new Map(
+    corpus.truth.map((item) => [item.id, { ...item, parsedText: "", criteria: [] }]),
+  );
   let current = null;
   for (const block of markdownBlocks(corpus.markdown)) {
     if (block.kind === "h1" || block.kind === "title") current = null;
@@ -83,7 +87,8 @@ function parseRequirements(corpus) {
     else if (current) applyBlock(current, block);
   }
   for (const item of byId.values()) {
-    if (item.criteria.length !== item.acceptanceCount || item.text === "") {
+    // The Markdown is only a rendering: it must still say exactly what the truth records.
+    if (item.text !== item.parsedText || item.criteria.join("\n") !== item.acceptance.join("\n")) {
       throw new Error(`corpus parse mismatch for ${item.id}`);
     }
   }
@@ -140,8 +145,17 @@ function buildDocx(corpus) {
 
 // ---------------------------------------------------------------- Excel
 
-const XLSX_HEADER = ["ID", "Titel", "Bereich", "Priorität", "Abnahmekriterien"];
-const XLSX_COLUMN_WIDTHS = [10, 38, 20, 12, 70];
+const XLSX_HEADER = [
+  "ID",
+  "Titel",
+  "Bereich",
+  "Priorität",
+  "Abnahmekriterien",
+  "Anforderung",
+  "Kapitel",
+];
+const XLSX_COLUMN_WIDTHS = [10, 38, 20, 12, 70, 70, 10];
+const XLSX_LAST_COLUMN = String.fromCharCode(64 + XLSX_HEADER.length);
 const XLSX_STYLES = `${XML_HEAD}<styleSheet xmlns="${NS_S}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 
 function sheetRows(requirements) {
@@ -153,6 +167,8 @@ function sheetRows(requirements) {
       item.area,
       item.priority,
       item.criteria.join("\n"),
+      item.text,
+      String(item.chapter),
     ]),
   ];
   return rows.map((cells, rowIndex) => ({ cells, header: rowIndex === 0 }));
@@ -173,7 +189,7 @@ function buildSheetXml(rows, indexOf) {
       return `<row r="${rowIndex + 1}">${cellXml.join("")}</row>`;
     })
     .join("");
-  const last = `E${rows.length}`;
+  const last = `${XLSX_LAST_COLUMN}${rows.length}`;
   return (
     `${XML_HEAD}<worksheet xmlns="${NS_S}"><dimension ref="A1:${last}"/><sheetViews><sheetView workbookViewId="0">` +
     '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
@@ -195,7 +211,7 @@ function buildXlsx(requirements) {
     `${XML_HEAD}<workbook xmlns="${NS_S}" xmlns:r="${NS_REL}"><bookViews><workbookView/></bookViews>` +
     '<sheets><sheet name="Anforderungen" sheetId="1" r:id="rId1"/></sheets>' +
     '<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">' +
-    `Anforderungen!$A$1:$E$${rows.length}</definedName></definedNames></workbook>`;
+    `Anforderungen!$A$1:$${XLSX_LAST_COLUMN}$${rows.length}</definedName></definedNames></workbook>`;
   return createZip([
     {
       name: "[Content_Types].xml",
@@ -307,6 +323,19 @@ function notesXml(lines) {
   return `${XML_HEAD}<p:notes ${NS_DECL_P}><p:cSld><p:spTree>${GROUP_PROPS}${image}${notes}</p:spTree></p:cSld>${CLR_OVERRIDE}</p:notes>`;
 }
 
+const SLIDE_LIST =
+  '<a:lstStyle><a:lvl1pPr marL="0" indent="0"><a:buNone/><a:defRPr sz="900"/></a:lvl1pPr></a:lstStyle>';
+
+/** One slide paragraph per fact, so a slide carries the complete requirement records of its area. */
+function requirementLines(item) {
+  return [
+    `${item.id} ${item.title}`,
+    `Priorität: ${item.priority} · Kapitel ${item.chapter}`,
+    `Anforderung: ${item.text}`,
+    ...item.acceptance.map((line) => `Abnahmekriterium: ${line}`),
+  ];
+}
+
 function areaStatistics(items) {
   const criteria = items.reduce((sum, item) => sum + item.acceptanceCount, 0);
   const without = items.filter((item) => item.acceptanceCount === 0).length;
@@ -346,7 +375,8 @@ function slidePlan(corpus, version) {
           id: 3,
           name: "Content",
           ph: 'idx="1"',
-          text: paragraphs(items.map((item) => `${item.id} ${item.title}`)),
+          list: SLIDE_LIST,
+          text: paragraphs(items.flatMap(requirementLines)),
         }),
       notes: areaStatistics(items).map((line) => `${area}: ${line}`),
       layout: 2,

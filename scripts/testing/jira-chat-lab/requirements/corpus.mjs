@@ -37,7 +37,9 @@ function requirement(index, area, topic, revised) {
           `${topic} ist für angemeldete Versicherungsnehmer verfügbar.`,
           `Fehlerhafte Eingaben zu ${topic} werden vor dem Absenden gemeldet.`,
         ];
-  return { id, title: `${area}: ${topic}`, area, priority, text, acceptance, vague };
+  // The specification numbers its chapters from 2 (1 is the starting position), one per area.
+  const chapter = AREAS.findIndex(([name]) => name === area) + 2;
+  return { id, title: `${area}: ${topic}`, area, chapter, priority, text, acceptance, vague };
 }
 
 function requirementsFor(version) {
@@ -91,11 +93,15 @@ export function buildCorpus(version = 1) {
   return {
     fileName: `Lastenheft-Schadenmeldung-v${version}.md`,
     markdown: markdown(version, requirements),
-    truth: requirements.map(({ id, title, priority, acceptance, vague, area }) => ({
+    // The full requirement record, so every rendering and every oracle compares the same data.
+    truth: requirements.map(({ id, title, priority, acceptance, vague, area, chapter, text }) => ({
       id,
       title,
       area,
+      chapter,
       priority,
+      text,
+      acceptance,
       acceptanceCount: acceptance.length,
       vague,
     })),
