@@ -85,8 +85,10 @@ mkdir -p "$KEIKO_LAB_REPO" && cp -R tests/fixtures/coding-workbench-lab/ledger-l
 the model and the Run authority, starts the task, then, as `--approve` says, approves permissions,
 applies the change reviews of Ask for approval (`--approve none` rejects them) and allows the
 package-script trust pause until the run settles (`all` below: the driver approves; use
-`--approve ask --headed` to decide yourself). The last line names the run
-(`----- run run-<digits> -----`).
+`--approve ask --headed` to decide yourself). `--jira-pod <name>` selects a ready Jira Pod for the
+run; without it the run starts with `Jira: none`. A question the model asks is recorded and declined,
+as standalone `opencode run` offers none. When the Workbench refuses the start, the driver prints the
+Workbench text that says why. The last line names the run (`----- run run-<digits> -----`).
 
 ```bash
 node scripts/testing/coding-workbench-lab/wb-ui.mjs --list-tasks
@@ -156,7 +158,7 @@ node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits> --ledger-
 
 | Script                      | What it does                                                                                                                         |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `tasks.json`                | The task catalog: ids T1 to T13 and C1, their exact texts, modes and baselines                                                       |
+| `tasks.json`                | The task catalog: ids T1 to T32 and C1, their exact texts, modes and baselines                                                       |
 | `wb-ui.mjs`                 | Runs one task through the real Workbench UI in headless Chromium (`--headed` to watch); the driver for every editing task            |
 | `wb-run.mjs`                | Runs one task over the HTTP API; read-only tasks only, because edits need the live editor bridge (finding F4)                        |
 | `wb-stop.mjs`               | Stops a run                                                                                                                          |

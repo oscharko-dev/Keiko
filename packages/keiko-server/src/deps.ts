@@ -17,6 +17,7 @@ import {
   type JiraChatCatalogRuntime,
 } from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
 import {
   createStateCodingSessionContinuity,
   KEIKO_CODING_SESSION_RETENTION_ENV,
@@ -4538,6 +4539,8 @@ interface UiHandlerDepsAssemblyArgs {
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
   readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
+  /** The Jira Pods a Coding run may be started with; absent without the managed MCP relay. */
+  readonly codingJiraPods?: CodingJiraPods | undefined;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4856,6 +4859,19 @@ function safeActivityContentSource(
       };
 }
 
+// A selection (Local checkout, folder) ends the previous workspace's safe activity like any switch.
+function purgingSelection<Request, Result>(
+  select: ((request: Request) => Result) | undefined,
+  purge: () => void,
+): ((request: Request) => Result) | undefined {
+  return select === undefined
+    ? undefined
+    : (request): Result => {
+        purge();
+        return select(request);
+      };
+}
+
 function activityAwareWorkspaceLifecycle(
   lifecycle: WorkspaceLifecycleService | undefined,
   projection: CodingSafeActivityProjection | undefined,
@@ -4864,21 +4880,12 @@ function activityAwareWorkspaceLifecycle(
   const purge = (): void => {
     projection.purgeAll("workspace-switch");
   };
-  const selectLocal = lifecycle.selectLocal;
   return {
     list: lifecycle.list,
     listAll: lifecycle.listAll,
     getActive: lifecycle.getActive,
-    ...(selectLocal === undefined
-      ? {}
-      : {
-          selectLocal: (
-            request: Parameters<typeof selectLocal>[0],
-          ): ReturnType<typeof selectLocal> => {
-            purge();
-            return selectLocal(request);
-          },
-        }),
+    selectLocal: purgingSelection(lifecycle.selectLocal, purge),
+    selectFolder: purgingSelection(lifecycle.selectFolder, purge),
     setActive: (request): ReturnType<WorkspaceLifecycleService["setActive"]> => {
       purge();
       return lifecycle.setActive(request);
@@ -4943,6 +4950,7 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
   mcpSettings: McpSettingsStore;
   mcpConnections: ConfiguredMcpConnections;
   mcpAuthorization: McpAuthorization;
+  codingJiraPods: CodingJiraPods | undefined;
 } {
   const mcpSettings = buildMcpSettings(args);
   const mcpAuthorization = createMcpAuthorization({
@@ -4964,13 +4972,16 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
     log: args.options.activityLog ?? processServerLogSink(),
     egress: () => resolveOutboundHttpEgressConfig(undefined, args.options.env),
   });
-  return { mcpSettings, mcpConnections, mcpAuthorization };
+  return { mcpSettings, mcpConnections, mcpAuthorization, codingJiraPods: codingJiraPodsFor(args) };
 }
 
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
-  const { mcpSettings, mcpConnections, mcpAuthorization } = buildMcpServices(args);
+  const { mcpSettings, mcpConnections, mcpAuthorization, codingJiraPods } = buildMcpServices(args);
   const dapRuntime = createDapRuntimeReference(args.options);
-  const services = assembleUiHandlerRuntimeServices({ ...args, mcpConnections }, dapRuntime);
+  const services = assembleUiHandlerRuntimeServices(
+    { ...args, mcpConnections, codingJiraPods },
+    dapRuntime,
+  );
   // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
   // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
   // than each call building an independent, uncoordinated bridge over the same durable store.
@@ -5030,6 +5041,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
   attachReviewServicesLifecycle(args, deps);
+  installCodingJiraPods(deps, codingJiraPods);
   return installConversationReadinessInitialization(installChatToolCatalogs(deps, args.options));
 }
 
@@ -5115,6 +5127,34 @@ function attachReviewServicesLifecycle(args: UiHandlerDepsAssemblyArgs, deps: Ui
       await deps.reviewRuntime?.dispose();
       await reviewServices.dispose();
       await disposeGraph?.();
+    },
+  });
+}
+
+// Owner decision 2026-10-30: a Coding run started with a Jira Pod reaches the Pod's tools through
+// the managed MCP relay, so the service exists only where that relay does. Its custody graph is
+// attached once the deps graph exists.
+function codingJiraPodsFor(args: UiHandlerDepsAssemblyArgs): CodingJiraPods | undefined {
+  return args.mcpCredentialRelay === undefined
+    ? undefined
+    : createCodingJiraPods(args.options.activityLog ?? processServerLogSink());
+}
+
+/** Attach the Pod custody to the Coding Jira service and close its hosts with the deps graph. */
+function installCodingJiraPods(
+  deps: UiHandlerDeps,
+  pods: CodingJiraPods | undefined,
+): UiHandlerDeps {
+  if (pods === undefined) return deps;
+  pods.attach(deps);
+  const previousDispose = deps.dispose;
+  return Object.assign(deps, {
+    dispose: async (): Promise<void> => {
+      try {
+        await pods.close();
+      } finally {
+        await previousDispose?.();
+      }
     },
   });
 }
@@ -6500,6 +6540,7 @@ function resolveProductionRuntimePorts(
     sessionContinuity: args.codingSessionContinuity,
     ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
     ...(args.mcpConnections === undefined ? {} : { mcpConnections: args.mcpConnections }),
+    ...(args.codingJiraPods === undefined ? {} : { codingJiraPods: args.codingJiraPods }),
     mcpMutations: nativeMcpMutationJournalFor(args),
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
@@ -6727,6 +6768,7 @@ function qualifiedRuntimeResolver(
     workspaceScriptTrust: args.bundle.workspaceScriptTrust,
     ...(verifiedCommit === undefined ? {} : { verifiedCommit }),
     ...(draftDelivery === undefined ? {} : { draftDelivery }),
+    ...(args.codingJiraPods === undefined ? {} : { jiraPods: args.codingJiraPods }),
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
     materializedPatches: input.materializedPatches,
     resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),

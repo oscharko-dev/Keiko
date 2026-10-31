@@ -16,6 +16,7 @@ import {
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import styles from "./CodingWorkbenchWindow.module.css";
+import { useHeldNotice } from "./codingWorkbenchPairingHold";
 
 const MCP_LABEL_ID = "coding-workbench-mcp-label";
 
@@ -57,6 +58,9 @@ export function CodingWorkbenchMcpServers({
 
 export function McpServersView({ mcp }: { readonly mcp: UseCodingWorkbenchMcpResult }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  // #3880: an unpaired window cannot read the channel; the run status sentence says why.
+  const held = useHeldNotice("mcp", mcp.status === "unavailable");
+  if (held) return null;
   if (mcp.status === "unavailable") {
     return (
       <p className={styles["cmp-skills-unavailable"]} role="note">

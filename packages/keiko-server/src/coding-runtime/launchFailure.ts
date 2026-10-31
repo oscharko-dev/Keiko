@@ -17,6 +17,7 @@ import type {
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeFailureCode,
 } from "@oscharko-dev/keiko-contracts";
+import type { CodingJiraPodRefusal } from "./codingJiraPodBinding.js";
 import type { CodingRuntimeFailureCode } from "./codingRuntimeManager.js";
 
 /** A launch refused by a runtime backend, carrying the manager's structured failure code. */
@@ -96,6 +97,22 @@ export class CodingRuntimeInputsUnsupportedError extends Error {
 }
 
 /**
+ * A start that names a Jira Pod the run cannot use (owner decision 2026-10-30): the Pod is not the
+ * caller's own, is not ready, changed since the human chose it, or this runtime cannot offer Jira
+ * tools. Refused before the confirmation is consumed, so the human's confirmation stays valid for
+ * the corrected request. Carries the closed reason and nothing else: no Pod id, name or URL.
+ */
+export class CodingRuntimeJiraPodRefusedError extends Error {
+  public readonly reason: CodingJiraPodRefusal;
+
+  public constructor(reason: CodingJiraPodRefusal) {
+    super(`jira-pod:${reason}`);
+    this.name = "CodingRuntimeJiraPodRefusedError";
+    this.reason = reason;
+  }
+}
+
+/**
  * The closed diagnostic reason of a launch rejection: the structured code, suffixed with its closed
  * sub-reason when the rejection carries one, or the model-selection reason. Never free text.
  */
@@ -106,6 +123,7 @@ export function launchRejectionDiagnosticReason(error: unknown): string | undefi
   if (error instanceof CodingRuntimeLaunchResolutionError) return error.reason;
   if (error instanceof CodingRuntimeAgentUnsupportedError) return "agent-unsupported";
   if (error instanceof CodingRuntimeInputsUnsupportedError) return "inputs-unsupported";
+  if (error instanceof CodingRuntimeJiraPodRefusedError) return `jira-pod:${error.reason}`;
   return undefined;
 }
 
@@ -154,6 +172,7 @@ export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeF
   // A request the runtime cannot honour is an invalid intent, not a missing authority.
   if (error instanceof CodingRuntimeAgentUnsupportedError) return "invalid-intent";
   if (error instanceof CodingRuntimeInputsUnsupportedError) return "invalid-intent";
+  if (error instanceof CodingRuntimeJiraPodRefusedError) return "invalid-intent";
   if (!(error instanceof CodingRuntimeLaunchRejectedError)) return "authority-resolution-failed";
   return LAUNCH_FAILURE_CODES.get(error.failureCode) ?? "authority-resolution-failed";
 }

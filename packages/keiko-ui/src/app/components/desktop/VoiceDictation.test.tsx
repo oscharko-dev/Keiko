@@ -12,7 +12,12 @@ import {
   VoiceDictationPreviewFromController,
   VoiceDictationComposerStatus,
 } from "./VoiceDictation";
-import { VoiceDictationWaveform } from "./VoiceDictationWaveform";
+import {
+  VoiceDictationWaveform,
+  nextVoiceEnvelope,
+  shapedVoiceLevel,
+  voiceBarSpan,
+} from "./VoiceDictationWaveform";
 import type { DictationController } from "./hooks/useDictation";
 
 describe("VoiceDictationButton", () => {
@@ -436,23 +441,48 @@ describe("VoiceDictationPreviewFromController", () => {
     });
     const view = render(<VoiceDictationWaveform controller={recording} />);
     const lines = (): SVGLineElement[] => Array.from(view.container.querySelectorAll("line"));
-    expect(lines().every((line) => line.getAttribute("y1") === "15")).toBe(true);
+    const silent = String(voiceBarSpan(0).y1);
+    const offset = (line: SVGLineElement | undefined): string | undefined => line?.style.transform;
+    expect(lines().every((line) => line.getAttribute("y1") === silent)).toBe(true);
     act(() => vi.advanceTimersByTime(80));
-    expect(lines().at(-1)).toHaveAttribute("y1", "2");
+    const loud = nextVoiceEnvelope(0, 1);
+    const newest = lines().at(-1);
+    expect(newest).toHaveAttribute("y1", String(voiceBarSpan(loud).y1));
+    expect(newest).toHaveAttribute("data-speech", "true");
+    const newestOffset = offset(newest);
     view.rerender(<VoiceDictationWaveform controller={{ ...recording, audioLevel: Number.NaN }} />);
     act(() => vi.advanceTimersByTime(80));
-    expect(lines().at(-1)).toHaveAttribute("y1", "15");
-    expect(lines().at(-2)).toHaveAttribute("y1", "2");
+    // A non-finite level is silence: the envelope releases toward zero instead of jumping.
+    const released = nextVoiceEnvelope(loud, 0);
+    expect(released).toBeLessThan(loud);
+    expect(lines().at(-1)).toHaveAttribute("y1", String(voiceBarSpan(released).y1));
+    // The loud sample is the same element one step further left, so it can glide, not jump.
+    expect(lines().at(-2)).toBe(newest);
+    expect(offset(lines().at(-2))).not.toBe(newestOffset);
     view.rerender(<VoiceDictationWaveform controller={makeController()} />);
     expect(view.container).toBeEmptyDOMElement();
     expect(vi.getTimerCount()).toBe(0);
     view.rerender(<VoiceDictationWaveform controller={recording} />);
-    expect(lines().every((line) => line.getAttribute("y1") === "15")).toBe(true);
+    expect(lines().every((line) => line.getAttribute("y1") === silent)).toBe(true);
     view.rerender(<VoiceDictationWaveform controller={recording} visible={false} />);
     expect(view.container).toBeEmptyDOMElement();
     expect(vi.getTimerCount()).toBe(0);
     view.unmount();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps room noise a dot, eases speech and never fills the bar", () => {
+    expect(shapedVoiceLevel(0.03)).toBe(0);
+    expect(shapedVoiceLevel(Number.NaN)).toBe(0);
+    expect(shapedVoiceLevel(0.2)).toBeGreaterThan(0.2);
+    expect(shapedVoiceLevel(1)).toBeLessThan(1);
+    expect(shapedVoiceLevel(5)).toBe(shapedVoiceLevel(1));
+    const { y1, y2 } = voiceBarSpan(shapedVoiceLevel(1));
+    expect(y1).toBeGreaterThan(0);
+    expect(y2).toBeLessThan(32);
+    // Rising follows quickly, falling lets go gently.
+    expect(nextVoiceEnvelope(0, 1)).toBeGreaterThan(shapedVoiceLevel(1) / 2);
+    expect(nextVoiceEnvelope(shapedVoiceLevel(1), 0)).toBeGreaterThan(shapedVoiceLevel(1) / 2);
   });
 
   it.each([

@@ -157,6 +157,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "figma",
   "files",
   "focus",
+  "folder",
   "follow-up",
   "forget",
   "gateway",

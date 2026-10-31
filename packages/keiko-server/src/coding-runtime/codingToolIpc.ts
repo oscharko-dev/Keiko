@@ -128,6 +128,11 @@ export interface CodingToolVerificationResult {
 
 export type CodingToolCommitProofResult =
   | { readonly commitProof: "recorded" }
+  /**
+   * Full access only (#3907): the staged candidate may be committed while the untracked paths under
+   * `blocking` stay outside it; the verification ran beside them and is recorded as not proving it.
+   */
+  | { readonly commitProof: "admitted"; readonly blocking: VerifiedCommitBlockingPaths }
   | {
       readonly commitProof: "unavailable";
       /** `buffers-dirty`: nothing is unstaged, but unsaved editor buffers keep the candidate from
@@ -334,6 +339,8 @@ export type CodingToolResult =
       readonly verifiedCommit: VerifiedCommitResult;
       /** Fresh bound approval-store disposition; the recorded commit receipt remains immutable. */
       readonly approvalDisposition?: "ready" | undefined;
+      /** The fixed recovery instruction for a commit blocked on a protected branch; absent otherwise. */
+      readonly guidance?: string | undefined;
     }
   | {
       readonly status: "completed";

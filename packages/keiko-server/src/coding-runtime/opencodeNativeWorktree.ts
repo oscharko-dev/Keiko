@@ -1,6 +1,9 @@
 import { resolve } from "node:path";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
-import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import {
+  isFolderWorkspace,
+  taskWorkspaceProvisioningSource,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { TaskWorkspaceError } from "../task-workspace/errors.js";
 import type {
   WorkspaceLifecycleService,
@@ -104,6 +107,8 @@ async function provisionNativeWorktree(
   const active = lifecycle.getActive(request.correlationId);
   if (active === undefined || resolve(active.binding.activeRoot) !== resolve(request.workspaceRoot))
     return { ok: false, reason: "workspace-changed" };
+  // A plain folder has no branch to cut a managed workspace from (owner decision 2026-10-30).
+  if (isFolderWorkspace(active.instance)) return { ok: false, reason: "unavailable" };
   try {
     const provisioned = await provisioning.provision({
       repositoryRequestPath: active.instance.repositoryRoot,

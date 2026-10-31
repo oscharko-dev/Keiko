@@ -1,5 +1,8 @@
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isDraftDeliveryIssueBinding,
+  type DraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import {
   journeyDescriptionApplied,
@@ -36,6 +39,8 @@ export function matchesJourneySnapshot(
 }
 function matchesDelivery(binding: JourneyOutcome["binding"], draft: DraftDeliveryRecord): boolean {
   const target = draft.binding;
+  // A branch push has no pull request, so no journey can describe it.
+  if (!isDraftDeliveryIssueBinding(target)) return false;
   return (
     binding.runId === target.runId &&
     binding.remoteDigest === target.remoteDigest &&

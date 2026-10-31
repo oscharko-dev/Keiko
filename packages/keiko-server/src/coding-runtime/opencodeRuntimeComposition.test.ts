@@ -100,7 +100,14 @@ import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
-import type { McpOAuthIssuerPort } from "./opencodeRuntimeComposition.js";
+import type {
+  McpOAuthIssuerPort,
+  OpenCodeRuntimeCompositionInput,
+} from "./opencodeRuntimeComposition.js";
+import { createMcpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
+import { createCodingJiraPods, type CodingJiraPodDeps } from "./codingJiraPodMcp.js";
+import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
+import { withCodingJiraServer } from "./codingJiraPodBinding.js";
 
 const ISSUER = "https://login.example.test";
 const METADATA_URL = `${ISSUER}/.well-known/oauth-authorization-server`;
@@ -160,7 +167,11 @@ import type {
   PromptInputsRequest,
 } from "./opencodePromptInputs.js";
 import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
-import { CODING_TOOL_MAX_BODY_BYTES, CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./codingToolIpc.js";
+import {
+  CODING_TOOL_MAX_BODY_BYTES,
+  CODING_TOOL_MAX_REQUEST_BODY_BYTES,
+  type CodingToolResult,
+} from "./codingToolIpc.js";
 import {
   OPENCODE_PROMPT_FILE_MAX_BYTES,
   openCodeV2PromptFileData,
@@ -712,6 +723,9 @@ interface StartBridgeControl {
   /** The operator's MCP registry and the issuer validation of its OAuth servers (#3903 AC3). */
   readonly mcpServers?: () => readonly McpServerDefinition[];
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
+  /** The managed MCP relay and the servers the human chose for the run (a Jira Pod). */
+  readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
+  readonly mcpGrantedServers?: ReadonlySet<string>;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
   /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
@@ -1045,10 +1059,16 @@ function optionalRepositoryItems(control: StartBridgeControl | undefined): {
 function optionalMcp(control: StartBridgeControl | undefined): {
   readonly mcpServers?: () => readonly McpServerDefinition[];
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
+  readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
+  readonly mcpGrantedServers?: ReadonlySet<string>;
 } {
   return {
     ...(control?.mcpServers === undefined ? {} : { mcpServers: control.mcpServers }),
     ...(control?.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: control.mcpOAuthIssuer }),
+    ...(control?.mcpRelay === undefined ? {} : { mcpRelay: control.mcpRelay }),
+    ...(control?.mcpGrantedServers === undefined
+      ? {}
+      : { mcpGrantedServers: control.mcpGrantedServers }),
   };
 }
 
@@ -4160,6 +4180,133 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     },
   );
 
+  // Owner decision 2026-10-30: the Jira Pod the human chose for the run is a managed MCP server of
+  // that run only, reached through the relay, and the choice grants its read tools in every mode.
+  it("binds the run's Jira Pod as a relayed server and allows its reads without asking", async () => {
+    const binding = {
+      podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+      authenticationGeneration: 3,
+      verificationRevision: 1,
+    };
+    const pods = createCodingJiraPods(undefined);
+    pods.attach({
+      serverPrincipal: () => "operator-principal",
+      atlassianConnectorCredentials: {
+        custody: {
+          list: () => [
+            {
+              schemaVersion: "1",
+              authRef: "synthetic-credential",
+              displayName: "Synthetic Jira",
+              baseUrl: "https://jira.example.invalid",
+              createdAt: 1,
+              generation: binding.authenticationGeneration,
+              provider: "jira",
+              deployment: "data-center",
+              authScheme: "bearer-pat",
+              livePod: {
+                podId: binding.podId,
+                ownerDigest: createHash("sha256").update("operator-principal").digest("hex"),
+                creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019",
+                verificationRevision: binding.verificationRevision,
+                verificationInProgress: false,
+                verificationStatus: "ok",
+              },
+            },
+          ],
+        } as unknown as NonNullable<CodingJiraPodDeps["atlassianConnectorCredentials"]>["custody"],
+        httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+          Promise.resolve({ kind: "network-error" }),
+      },
+    });
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "governed-assist",
+      readToolProfile: () => "native",
+      mcpServers: () => withCodingJiraServer([], binding),
+      mcpRelay: {
+        relay: createMcpCredentialRelay(),
+        origin: "http://127.0.0.1:1983",
+        secrets: {},
+        managed: pods.connections(undefined, binding),
+      },
+      mcpGrantedServers: new Set(["jira"]),
+    });
+    try {
+      const config = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly mcp?: { readonly servers?: Readonly<Record<string, Record<string, unknown>>> };
+      };
+      const jira = config.mcp?.servers?.jira;
+      expect(jira).toMatchObject({ type: "remote", oauth: false });
+      expect(String(jira?.url)).toMatch(/^http:\/\/127\.0\.0\.1:1983\/api\/coding-sidecar\/mcp\//u);
+      expect(JSON.stringify(config)).not.toContain(binding.podId);
+      const ask = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission: "jira_jira_issue",
+          resources: ["*"],
+          mcpInput: { issueKey: "SYN-1" },
+          source: { type: "tool", messageID: "msg_1", id: "call_jira_1" },
+          configured: "ask",
+        }),
+      });
+      expect(ask).toMatchObject({ status: 200, body: '{"effect":"allow"}' });
+    } finally {
+      await fixture.stop();
+      await pods.close();
+    }
+  });
+
+  it("leaves the run's Jira tools out entirely when the Pod is no longer the one chosen at launch", async () => {
+    const binding = {
+      podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+      authenticationGeneration: 3,
+      verificationRevision: 1,
+    };
+    // No custody is attached: the Pod cannot be shown to be the chosen one, so no relay is bound.
+    const pods = createCodingJiraPods(undefined);
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      mcpServers: () => withCodingJiraServer([], binding),
+      mcpRelay: {
+        relay: createMcpCredentialRelay(),
+        origin: "http://127.0.0.1:1983",
+        secrets: {},
+        managed: pods.connections(undefined, binding),
+      },
+      mcpGrantedServers: new Set(["jira"]),
+    });
+    try {
+      const config = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly mcp?: { readonly servers?: Readonly<Record<string, unknown>> };
+      };
+      expect(config.mcp?.servers).toEqual({});
+      const ask = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission: "jira_jira_comment",
+          resources: ["*"],
+          mcpInput: { issueKey: "SYN-1", body: "x" },
+          source: { type: "tool", messageID: "msg_1", id: "call_jira_2" },
+          configured: "allow",
+        }),
+      });
+      expect(ask.status).toBe(200);
+      expect(ask.body).not.toBe('{"effect":"allow"}');
+    } finally {
+      await fixture.stop();
+      await pods.close();
+    }
+  });
+
   // #3897 (parity row C07): the producer runs a built-in formatter after its own edits without any
   // permission, so the launch mode decides whether it may, and the choice is recorded body-free.
   it.each([
@@ -6130,6 +6277,141 @@ describe("private OpenCode tool bridge", () => {
           textBlockCount: 0,
           resultStatus: "completed",
         });
+      } finally {
+        await fixture.stop();
+      }
+    });
+  });
+
+  // #3579: the Workbench card showed a verification the operator had not yet allowed to run, and a
+  // repository with nothing for the verifier to run, as a red "Failed". The bridge settles the call
+  // with the closed outcome the server derived from the result the model received, and the same word
+  // reaches the activity log on the existing rendering record, so the log reads back as the card did.
+  describe("a verification call's closed outcome", () => {
+    const RENDER_OP = "coding-runtime.tool-result-rendered";
+    const verificationBody = (callId: string): string =>
+      JSON.stringify({
+        action: "verification",
+        actionId: `tool:${callId}`,
+        idempotencyKey: `idempotency-${callId}`,
+        verifierId: "test",
+        targetPath: "",
+      });
+    const refused = (reasonCode: string): CodingToolResult => ({
+      status: "failed",
+      reasonCode,
+      evidence: [{ kind: "governed-delegate", code: reasonCode }],
+    });
+
+    it.each([
+      ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+      ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+      ["VERIFICATION_NOT_RUN", "not-run"],
+    ] as const)(
+      "settles the refusal %s as %s and records the word body-free",
+      async (reasonCode, verificationOutcome) => {
+        const activity = activityRecorder();
+        const log = createBufferedServerLogSink();
+        const facade: CodingToolFacade = {
+          execute: vi.fn(() => Promise.resolve(refused(reasonCode))),
+        };
+        const fixture = await startBridgeFixture(facade, undefined, {
+          safeActivity: activity.safeActivity,
+          activityLog: log,
+          toolResultCorrelationId: FIXTURE_RUN_ID,
+        });
+        try {
+          await expect(
+            fixture.runtime.toolBridge.handle({
+              method: "POST",
+              headers: new Headers(authorized),
+              body: verificationBody("call_verification_refused"),
+            }),
+          ).resolves.toMatchObject({ status: 200 });
+
+          expect(activity.settlements).toEqual([
+            expect.objectContaining({
+              actionId: "tool:call_verification_refused",
+              state: "failed",
+              presentation: { verificationOutcome, bridgeDurationMs: expect.any(Number) as number },
+            }),
+          ]);
+          const rendered = log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.resultStatus === "failed",
+          );
+          expect(rendered).toHaveLength(1);
+          const line = formatActivityLogProofLine(rendered[0] ?? {});
+          expect(
+            expectActivityLogProof("coding-runtime.tool-result-rendered.emitted-line", line),
+          ).toMatchObject({
+            correlationId: FIXTURE_RUN_ID,
+            resultStatus: "failed",
+            verificationOutcome,
+          });
+          expect(line).not.toContain(reasonCode);
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
+
+    it("settles a passed verification as succeeded with the passed outcome", async () => {
+      const activity = activityRecorder();
+      const log = createBufferedServerLogSink();
+      const passed: CodingToolResult = {
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        verification: { status: "passed", completed: ["test"] },
+      };
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(passed)) };
+      const fixture = await startBridgeFixture(facade, undefined, {
+        safeActivity: activity.safeActivity,
+        activityLog: log,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+      });
+      try {
+        await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: verificationBody("call_verification_passed"),
+        });
+        expect(activity.settlements).toEqual([
+          expect.objectContaining({
+            state: "succeeded",
+            presentation: expect.objectContaining({ verificationOutcome: "passed" }) as unknown,
+          }),
+        ]);
+        expect(
+          log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.verificationOutcome === "passed",
+          ),
+        ).toHaveLength(1);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("adds no outcome to a tool that is not a verification", async () => {
+      const activity = activityRecorder();
+      const log = createBufferedServerLogSink();
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+      const fixture = await startBridgeFixture(facade, undefined, {
+        safeActivity: activity.safeActivity,
+        activityLog: log,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+      });
+      try {
+        await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: toolBody("call_read_no_outcome"),
+        });
+        expect(JSON.stringify(activity.settlements)).not.toContain("verificationOutcome");
+        expect(
+          log.events.filter(
+            (event) => event.op === RENDER_OP && event.extra?.verificationOutcome !== undefined,
+          ),
+        ).toHaveLength(0);
       } finally {
         await fixture.stop();
       }
@@ -8259,6 +8541,32 @@ describe("turn revert on the run port (B3, S04)", () => {
         ok: false,
         reason: "run-unavailable",
       });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // Coding Workbench Jira lab, 2026-10-30: a revert-state read between the stop's revocation and
+  // the runtime's reaping hit the dying runtime and logged `revert.refused`. Once a stop began, the
+  // read is unavailable without reaching the runtime (#3907).
+  it("closes the revert-state read as soon as a stop begins", async () => {
+    const { control, revert, activityLog } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      revert.messages = TURN;
+      await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+      await expect(fixture.runtime.manager.hold?.(FIXTURE_RUN_ID)).resolves.toMatchObject({
+        status: "held",
+      });
+      await expect(port.revertState?.(FIXTURE_RUN_ID)).resolves.toMatchObject({ fileCount: 1 });
+      revert.requests.length = 0;
+
+      const stopping = fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+      await expect(port.revertState?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+      expect(revert.requests).toEqual([]);
+      await stopping;
+      expect(JSON.stringify(activityLog.events)).not.toContain("coding-runtime.revert.refused");
     } finally {
       await fixture.stop();
     }

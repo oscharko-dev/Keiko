@@ -9,6 +9,15 @@ export const CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS = [
   "operation-in-flight",
   "payload-invalid",
   "provider-unavailable",
+  // A run delivers by pushing its own task branch (ADR-0085 D1b) and, on a github.com origin,
+  // opening a draft pull request (ADR-0086 D13): these name why it cannot. No verified repository
+  // context, no `origin` remote to push to, a pull request asked for where `origin` is not a
+  // verified github.com repository, and the CI observation of a delivered pull request, which only
+  // an issue-bound run has.
+  "repository-required",
+  "remote-required",
+  "github-origin-required",
+  "issue-binding-required",
 ] as const;
 
 export type CodingRuntimeDeliveryResult =

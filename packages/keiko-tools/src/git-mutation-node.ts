@@ -465,16 +465,28 @@ async function prepareVerifiedCommit(
   return { baseRef, head };
 }
 
+// Git refuses a transaction that names one ref twice ("multiple updates for ref"). A branch that is
+// its own base (a human's local checkout of the task branch, #3907) is therefore guarded by the
+// update's own old value alone, which is only sound while the verified base and head agree.
+function verifiedCommitRefTransaction(
+  verified: VerifiedCommitExecRequest["verified"],
+  prepared: PreparedVerifiedCommit,
+): string | undefined {
+  const branchRef = `refs/heads/${verified.branchName}`;
+  const update = `update ${branchRef} ${prepared.head} ${verified.headSha}\n`;
+  if (prepared.baseRef !== branchRef)
+    return `start\nverify ${prepared.baseRef} ${verified.baseSha}\n${update}prepare\ncommit\n`;
+  return verified.baseSha === verified.headSha ? `start\n${update}prepare\ncommit\n` : undefined;
+}
+
 async function updateVerifiedCommitRef(
   ctx: RunContext,
   request: VerifiedCommitExecRequest,
   prepared: PreparedVerifiedCommit,
 ): Promise<GitDeliveryExecutionResult> {
-  const result = await runOne(
-    ctx,
-    ["update-ref", "--stdin"],
-    `start\nverify ${prepared.baseRef} ${request.verified.baseSha}\nupdate refs/heads/${request.verified.branchName} ${prepared.head} ${request.verified.headSha}\nprepare\ncommit\n`,
-  );
+  const transaction = verifiedCommitRefTransaction(request.verified, prepared);
+  if (transaction === undefined) return failureFromExit(0, 0);
+  const result = await runOne(ctx, ["update-ref", "--stdin"], transaction);
   if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
   return executionResult("succeeded", result.durationMs, { externalId: prepared.head });
 }

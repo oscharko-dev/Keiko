@@ -11,10 +11,7 @@ import {
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type { Chat } from "@/lib/types";
 import { fetchChats, type UpdateChatInput } from "@/lib/api";
-import {
-  listAtlassianConnectors,
-  type AtlassianConnectorMetadata,
-} from "@/lib/atlassian-connectors-api";
+import { listAtlassianConnectors } from "@/lib/atlassian-connectors-api";
 import {
   connectionRequest,
   JIRA_CHAT_CONNECTION_REQUEST_EVENT,
@@ -23,15 +20,11 @@ import {
 import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import { useConnectorRefresh } from "./useConnectorRefresh";
+import { usePodChoices, type PodChoice } from "./useJiraPodChoices";
 import { AutonomyModeSelect } from "./AutonomyModeSelect";
 import styles from "./JiraChatConnection.module.css";
 import { McpServerAvailability } from "./widgets/panels/McpServerAvailability";
 
-interface PodChoice {
-  readonly id: string;
-  readonly name: string;
-  readonly ready: boolean;
-}
 interface Draft {
   readonly revision: string;
   readonly podId: string;
@@ -53,68 +46,6 @@ function initialDraft(chat: Chat): Draft {
     podId: chat.jiraPodBinding?.podId ?? "",
     mode: chat.toolMode ?? "governed-assist",
     confirmed: false,
-  };
-}
-function choices(metadata: readonly AtlassianConnectorMetadata[]): readonly PodChoice[] {
-  return metadata.flatMap((item) =>
-    item.deployment !== "data-center" || item.livePod === undefined
-      ? []
-      : [
-          {
-            id: item.livePod.podId,
-            name: item.displayName,
-            ready:
-              item.livePod.verificationStatus === "ok" &&
-              !item.livePod.verificationInProgress &&
-              item.livePod.capabilities.includes("live-read"),
-          },
-        ],
-  );
-}
-function usePodChoices(
-  list: typeof listAtlassianConnectors,
-  initiallyBound: boolean,
-): {
-  pods: readonly PodChoice[];
-  loading: boolean;
-  failed: boolean;
-  reload: () => void;
-} {
-  const [pods, setPods] = useState<readonly PodChoice[]>([]);
-  const [loading, setLoading] = useState(initiallyBound);
-  const [failed, setFailed] = useState(false);
-  const [version, setVersion] = useState(initiallyBound ? 1 : 0);
-  useEffect(() => {
-    if (version === 0) return;
-    let active = true;
-    void list()
-      .then((items) => {
-        if (active) setPods(choices(items));
-      })
-      .catch(() => {
-        if (active) setFailed(true);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return (): void => {
-      active = false;
-    };
-  }, [list, version]);
-  useConnectorRefresh(() => {
-    setLoading(true);
-    setFailed(false);
-    setVersion((value) => value + 1);
-  });
-  return {
-    pods,
-    loading,
-    failed,
-    reload: (): void => {
-      setLoading(true);
-      setFailed(false);
-      setVersion((value) => value + 1);
-    },
   };
 }
 function useChatPatch(

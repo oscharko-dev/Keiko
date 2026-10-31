@@ -32,7 +32,10 @@ import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/r
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
-import { isDeliveredDraftDeliveryPhase } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isDeliveredDraftDeliveryPhase,
+  isIssueBoundDraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeResumeRequest,
@@ -1048,7 +1051,10 @@ function descriptionApplicationTarget(
 ): WorkbenchDescriptionScope["applicationTarget"] {
   const delivery = snapshot.draftDelivery;
   const pullRequest = delivery?.pullRequest;
-  const repository = delivery?.binding.repository;
+  const repository =
+    delivery !== undefined && isIssueBoundDraftDeliveryRecord(delivery)
+      ? delivery.binding.repository
+      : undefined;
   if (
     workspace === undefined ||
     pullRequest?.state !== "open" ||
@@ -1226,6 +1232,11 @@ function agentField(agent: CodingWorkbenchAgent | undefined): {
   readonly agent?: CodingWorkbenchAgent;
 } {
   return agent === undefined ? {} : { agent };
+}
+
+/** The human's Jira Pod choice as an optional key, so a start without one adds none. */
+function jiraPodField(jiraPodId: string | undefined): { readonly jiraPodId?: string } {
+  return jiraPodId === undefined ? {} : { jiraPodId };
 }
 
 /** The first prompt's references and slash command as optional keys, so an absent one adds no key. */
@@ -4386,6 +4397,7 @@ export class CodingRuntimeOrchestrator {
         projectMemoryEnabled: request.projectMemory?.enabled ?? true,
         ...agentField(request.agent),
         ...promptInputFields(request),
+        ...jiraPodField(request.jiraPodId),
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,
@@ -4566,7 +4578,6 @@ export class CodingRuntimeOrchestrator {
     if (!current) return this.stopSettledRun(kind, runId);
     if (current.state === "recovery-required") return this.fail("recovery-required");
     this.captureHistory(runId);
-    this.deps.safeActivityProjection?.purge(runId, kind === "stop" ? "stop" : "takeover");
     const stopping = this.createEndStoppingTransition(kind, current);
     if (!stopping.ok) return stopping;
     const settleInterruptedStart = this.interruptStartup(runId);
@@ -4756,7 +4767,7 @@ export class CodingRuntimeOrchestrator {
     } else if (!TERMINAL_STATES.has(state)) {
       return;
     } else {
-      this.purgeExplicitlyEndedActivity(next.runId, state);
+      this.interruptExplicitlyEndedActivity(next.runId, state);
     }
     recordRuntimeRunSettled(
       this.deps.activityLog,
@@ -5070,12 +5081,17 @@ export class CodingRuntimeOrchestrator {
     );
   }
 
-  private purgeExplicitlyEndedActivity(
+  // A stopped or taken-over run keeps its tool rows, as OpenCode keeps an aborted session's steps;
+  // only the calls still open are settled as cancelled (owner decision 2026-10-30, #3907).
+  private interruptExplicitlyEndedActivity(
     runId: string,
     state: CodingWorkbenchRuntimeStateName,
   ): void {
     if (state !== "cancelled" && state !== "taken-over") return;
-    this.deps.safeActivityProjection?.purge(runId, state === "taken-over" ? "takeover" : "stop");
+    this.deps.safeActivityProjection?.interrupt(
+      runId,
+      state === "taken-over" ? "takeover" : "stop",
+    );
   }
 
   private publishSettlement(

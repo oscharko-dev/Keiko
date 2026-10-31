@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   createSecretSpellingStreamRedactor,
   SecretSpellingOverflowError,
@@ -15,6 +15,11 @@ import {
   gatewayFetch,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  activityErrorFields,
+  activityStateLevel,
+  definedActivityFields,
+} from "../activity-line-fields.js";
 
 /**
  * Static credentials of a remote MCP server (#3903 AC3), kept out of the runtime. A registry entry
@@ -260,47 +265,34 @@ export interface McpRelayLine {
   readonly error?: unknown;
 }
 
-function optionalFields(line: McpRelayLine): Readonly<Record<string, number | string>> {
-  const fields: Record<string, number | string> = {};
-  for (const key of [
-    "reason",
-    "method",
-    "status",
-    "relayedServerCount",
-    "refusedServerCount",
-    "requestBytes",
-    "responseBytes",
-    "redactedCount",
-    "durationMs",
-  ] as const) {
-    const value = line[key];
-    if (value !== undefined) fields[key] = value;
-  }
-  return fields;
-}
-
 /** Counts and closed values only; never a credential, a URL or a server name. */
 export function recordMcpRelay(
   activityLog: ServerLogSink | undefined,
   correlationId: string,
   line: McpRelayLine,
 ): void {
-  const failed = line.outcome === "failed";
   activityLog?.write(
     activityLogEvent(
       MCP_RELAY_OPERATION,
       {
         correlationId,
-        ...(failed ? { level: "warn" as const, errorKind: "internal" as const } : {}),
-        ...(line.outcome === "refused" ? { level: "warn" as const } : {}),
+        ...activityStateLevel(line.outcome),
       },
       {
         action: line.action,
         outcome: line.outcome,
-        ...optionalFields(line),
-        ...(line.error === undefined
-          ? {}
-          : { frames: keikoStackFrames(line.error), causeChain: causeChain(line.error) }),
+        ...definedActivityFields(line, [
+          "reason",
+          "method",
+          "status",
+          "relayedServerCount",
+          "refusedServerCount",
+          "requestBytes",
+          "responseBytes",
+          "redactedCount",
+          "durationMs",
+        ] as const),
+        ...activityErrorFields(line),
       },
     ),
   );

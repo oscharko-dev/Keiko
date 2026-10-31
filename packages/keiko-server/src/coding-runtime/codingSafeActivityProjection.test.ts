@@ -71,6 +71,13 @@ function populateBoundedTurns(
   }
 }
 
+function firstTurnToolStates(
+  projection: ReturnType<typeof createCodingSafeActivityProjection>,
+): (readonly [string, string])[] {
+  const feed = projection.currentContent()?.feed;
+  if (feed?.availability !== "available") return [];
+  return (feed.turns[0]?.tools ?? []).map(({ callId, state }) => [callId, state] as const);
+}
 describe("bounded coding safe-activity projection", () => {
   it("owns canonical tool facts across native restatement and replay without logging paths", () => {
     const log = createBufferedServerLogSink();
@@ -1361,6 +1368,98 @@ describe("bounded coding safe-activity projection", () => {
           activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
         ),
       ).toMatchObject({ op: "coding-runtime.safe-activity" });
+    },
+  );
+
+  // Owner decision 2026-10-30 (#3907 F3): Stop and takeover used to purge the feed, so a stopped
+  // run lost every tool row while standalone OpenCode keeps an aborted session's steps. The feed now
+  // stays; only the calls still open settle as cancelled, as OpenCode marks them aborted.
+  it.each(["stop", "takeover"] as const)(
+    "keeps the tool rows on %s and settles only the open calls as cancelled",
+    (reason) => {
+      const activityLog = createBufferedServerLogSink();
+      const projection = createCodingSafeActivityProjection({
+        now: () => Date.parse("2026-07-18T17:00:01.000Z"),
+        activityLog,
+      });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      projection.ingest(RUN_ID, message("msg_user", "user"));
+      projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+      const tool = (
+        callId: string,
+        state: "pending" | "running" | "succeeded",
+      ): CodingSafeActivitySignal => ({
+        kind: "tool",
+        messageId: "msg_assistant",
+        callId,
+        tool: "read",
+        state,
+        occurredAt: "2026-07-18T17:00:00.002Z",
+      });
+      projection.ingest(RUN_ID, tool("call_done", "succeeded"));
+      projection.ingest(RUN_ID, tool("call_open", "running"));
+      projection.ingest(RUN_ID, tool("call_queued", "pending"));
+      const listener = vi.fn();
+      projection.subscribeContent(listener);
+
+      projection.interrupt(RUN_ID, reason);
+      projection.interrupt("another-run", reason);
+
+      const content = projection.currentContent();
+      expect(content?.feed.availability).toBe("available");
+      if (content?.feed.availability !== "available") return;
+      expect(content.feed.turns[0]?.tools.map(({ callId, state }) => [callId, state])).toEqual([
+        ["call_done", "succeeded"],
+        ["call_open", "cancelled"],
+        ["call_queued", "cancelled"],
+      ]);
+      expect(listener).toHaveBeenCalledOnce();
+      expect(activityLog.events).toEqual([
+        {
+          category: "process",
+          op: "coding-runtime.safe-activity",
+          correlationId: RUN_ID,
+          extra: {
+            completeness: "complete",
+            event: "interrupted",
+            loss: "none",
+            occurrenceCount: 2,
+            reason,
+          },
+        },
+      ]);
+      expect(
+        validateRegisteredActivityLogEvent(
+          activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+        ),
+      ).toMatchObject({ op: "coding-runtime.safe-activity" });
+      // A late OpenCode restatement of the aborted call keeps Keiko's cancelled verdict.
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: "msg_assistant",
+        callId: "call_open",
+        state: "failed",
+        occurredAt: "2026-07-18T17:00:02.000Z",
+      });
+      const after = projection.currentContent()?.feed;
+      expect(after?.availability === "available" ? after.turns[0]?.tools[1]?.state : "none").toBe(
+        "cancelled",
+      );
+      // A delayed signal of a call the feed never saw cannot reopen the interrupted run; a call
+      // that already settled is still recorded.
+      expect(projection.ingest(RUN_ID, tool("call_late", "running"))).toBe(false);
+      expect(projection.ingest(RUN_ID, tool("call_late_done", "succeeded"))).toBe(true);
+      expect(firstTurnToolStates(projection)).toEqual([
+        ["call_done", "succeeded"],
+        ["call_open", "cancelled"],
+        ["call_queued", "cancelled"],
+        ["call_late_done", "succeeded"],
+      ]);
     },
   );
 

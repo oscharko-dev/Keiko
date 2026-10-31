@@ -220,6 +220,14 @@ export interface WorkspaceLifecycleService {
         readonly correlationId?: string;
       }) => ActiveWorkspaceView)
     | undefined;
+  // Binds an ordinary folder that is not a Git repository, in place (owner decision 2026-10-30).
+  readonly selectFolder?:
+    | ((request: {
+        readonly root: string;
+        readonly requestedBy: string;
+        readonly correlationId?: string;
+      }) => ActiveWorkspaceView)
+    | undefined;
   // List the persisted instances for an already-resolved repository root.
   readonly list: (repositoryRoot: string) => readonly WorkspaceInstance[];
   // Every persisted instance across repositories — the switcher's inventory. The active pointer is

@@ -1,4 +1,5 @@
 import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import type { CodingJiraPodBinding } from "./codingJiraPodBinding.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import type {
@@ -68,6 +69,13 @@ export interface CodingRuntimeLaunchResolver {
     readonly command?: CodingWorkbenchRuntimeStartRequest["command"];
     /** The first prompt's subagent and skill mentions (S15, #3906), refused like references. */
     readonly mentions?: CodingWorkbenchRuntimeStartRequest["mentions"];
+    /**
+     * The Jira Pod the human picked for the run. A resolver without Jira Pod support throws
+     * `CodingRuntimeJiraPodRefusedError` before any run is minted or confirmation consumed.
+     */
+    readonly jiraPodId?: string | undefined;
+    /** The Pod identity the resolver bound the run to; the resolver sets it, the orchestrator never. */
+    readonly jiraPod?: CodingJiraPodBinding | undefined;
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;

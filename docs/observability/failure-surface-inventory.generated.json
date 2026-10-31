@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c261abfef5941d72f0a4db15e3c82cb51e4f1780c88397031875c7d5ccb084eb"
+    "catalogDigest": "e2f0eb7354d0915bcf11502eac580d6bf72afa9c0fa2da61be86e2958474099e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 634,
-    "proofCount": 657,
-    "resolvedProofCount": 657,
-    "failureClassCount": 394,
+    "operationCount": 637,
+    "proofCount": 660,
+    "resolvedProofCount": 660,
+    "failureClassCount": 396,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -170,6 +170,7 @@
         "client.citation.activated",
         "client.coding-run.restored",
         "client.coding-workbench.interaction",
+        "client.coding-workbench.request-timed-out",
         "client.composer.activity",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
@@ -258,6 +259,7 @@
         "gateway.readiness.compatibility-retry.failed",
         "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
+        "gateway.readiness.renewal.paused",
         "gateway.readiness.started",
         "gateway.reranker.setup.resolved",
         "gateway.retry.budget-exhausted",
@@ -363,6 +365,7 @@
         "coding-runtime.inbox.dispatch-failed",
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
+        "coding-runtime.jira-pod",
         "coding-runtime.linked-files.resolved",
         "coding-runtime.mcp-authorization",
         "coding-runtime.mcp-credentials",
@@ -869,6 +872,7 @@
     "client-citation-activation": ["client-diagnostics.dependency-failure"],
     "client-coding-run-restore": ["client-diagnostics.dependency-failure"],
     "client-coding-workbench-interaction": ["client-diagnostics.dependency-failure"],
+    "client-coding-workbench-request-timeout": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
@@ -908,6 +912,7 @@
     "coding-runtime-remote-skills": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-credentials": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-relay": ["tools-workflows.dependency-failure"],
+    "coding-runtime-jira-pod": ["tools-workflows.dependency-failure"],
     "coding-runtime-descendant-sweep": ["tools-workflows.dependency-failure"],
     "coding-runtime-websearch": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-authorization": ["tools-workflows.dependency-failure"],
@@ -1444,6 +1449,9 @@
     "client.coding-workbench.interaction.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
+    "client.coding-workbench.request-timed-out.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.composer.activity.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
@@ -1660,6 +1668,9 @@
     "coding-runtime.initial-turn.stop-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
     ],
+    "coding-runtime.jira-pod.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
+    ],
     "coding-runtime.linked-files.resolved.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeLinkedFiles.test.ts"
     ],
@@ -1832,7 +1843,8 @@
     ],
     "coding-runtime.tool-result.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts",
-      "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.test.ts",
+      "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
     ],
     "coding-runtime.tool-result-rendered.emitted-line": [
       "packages/keiko-server/src/coding-runtime/governedToolModelContent.test.ts",
@@ -2146,7 +2158,8 @@
       "packages/keiko-server/src/gateway-readiness.on-demand.test.ts"
     ],
     "gateway.readiness.automatic.started.line": [
-      "packages/keiko-server/src/gateway-readiness.test.ts"
+      "packages/keiko-server/src/gateway-readiness.test.ts",
+      "packages/keiko-server/src/gateway-readiness.workbench-never-proven.test.ts"
     ],
     "gateway.readiness.busy-retained.line": [
       "packages/keiko-server/src/gateway-readiness.busy.test.ts"
@@ -2163,6 +2176,9 @@
     "gateway.readiness.completed.line": [
       "packages/keiko-server/src/gateway-readiness.native-cancellation.test.ts",
       "packages/keiko-server/src/gateway-readiness.test.ts"
+    ],
+    "gateway.readiness.renewal.paused.line": [
+      "packages/keiko-server/src/gateway-readiness.initialization.test.ts"
     ],
     "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
     "gateway.reranker.setup.resolved.line": [
@@ -2330,6 +2346,8 @@
       "packages/keiko-server/src/gitDelivery/draftDeliveryChecks.test.ts"
     ],
     "git.draft-delivery.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/draftDeliveryBranchPush.test.ts",
+      "packages/keiko-server/src/gitDelivery/draftDeliveryGitHubOrigin.test.ts",
       "packages/keiko-server/src/gitDelivery/draftDeliveryService.test.ts"
     ],
     "git.draft-delivery.repository-drift.emitted-line": [
@@ -3005,6 +3023,7 @@
     ],
     "task-workspace.lifecycle.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts",
+      "packages/keiko-server/src/task-workspace/folder-workspace.test.ts",
       "packages/keiko-server/src/task-workspace/local-checkout.test.ts"
     ],
     "task-workspace.manifest.reconnected.trust-revoked": [

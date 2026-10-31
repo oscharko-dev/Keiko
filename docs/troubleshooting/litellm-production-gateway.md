@@ -390,6 +390,49 @@ the model's check in Settings → Models once.
 
 ---
 
+## Coding Workbench finds no coding model behind a gateway that is not LiteLLM
+
+| Field             | Value                                                                  |
+| ----------------- | ---------------------------------------------------------------------- |
+| Severity          | Medium                                                                 |
+| Surface           | Coding Workbench                                                       |
+| Stable identifier | `coding-sidecar.gateway.readiness-insufficient` with `no-tool-calling` |
+
+**Symptom**
+
+The gateway is a plain OpenAI-compatible or Azure endpoint, not a recognised LiteLLM connection. The
+Coding Workbench says the automatic tool-calling check did not confirm a compatible coding model,
+and Settings → Models shows its chat models with tools "no" although nobody ever ran a check on
+them. A check started from Settings makes the Workbench usable.
+
+**Root Cause**
+
+A chat model carries no tool-calling proof until Keiko's forced tool-call probe has run against it.
+Keiko verified such a model by itself at process start only for a recognised LiteLLM connection, and
+the Workbench's own verification only renewed a proof that had lapsed, so a never-proven model behind
+any other gateway waited for a manual check. After 1.3.2 the profile read asks for the first proof
+through the same bounded verification, whichever gateway serves the model.
+
+**Diagnostic Steps**
+
+On the Workbench profile read, `gateway.readiness.automatic.started` carries `probeBasis:
+never-proven` and `probeTrigger: profile-read`, followed by `.completed` and
+`gateway.tool-calling.verification` under the same correlation id. While the run is open the read
+logs `coding-sidecar.gateway.readiness-insufficient` with `reason: "model-verification-pending"` and
+`storedReason: "no-tool-calling"`. If the probe refuted tool calling, the verification line reads
+`unsupported`, the model stays unavailable with `reason: "no-tool-calling"`, and the Workbench does
+not probe it again. A probe the gateway never answered is retried after one minute; any other
+failure waits out the six-hour cooldown.
+
+**Resolution**
+
+Update to a release after 1.3.2 and open the Workbench; the check runs without any manual action. A model
+that answered but refused forced tool calls does not support tools through this gateway: choose a
+model that does, or fix the gateway's tool parser and run the model's check in Settings → Models
+once.
+
+---
+
 ## Authenticate x-litellm-key against a proxy that ignores it
 
 | Field             | Value                                                          |

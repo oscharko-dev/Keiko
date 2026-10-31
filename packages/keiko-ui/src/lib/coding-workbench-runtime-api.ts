@@ -52,10 +52,12 @@ import {
   parseCodingWorkbenchMcpAuthorizationStatus,
   parseCodingWorkbenchRuntimeMcpChannelPayload,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import type { ClientCodingRuntimeCall } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { ApiError } from "./api";
 import { bffFetchJson, bffRequestErrorKind, newClientCorrelationId } from "./http";
 import { repairLocalCodingAppSessionWithEvidence } from "./coding-app-session-client";
 import { reportClientDiagnostic } from "./client-diagnostics";
+import { reportCodingWorkbenchRequestTimeout } from "./coding-workbench-request-timeout";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { runtimeIssueFailure, runtimeModelRefusal } from "./coding-workbench-issue-errors";
 import { secureRandomId } from "./secure-random";
@@ -63,19 +65,93 @@ import { secureRandomId } from "./secure-random";
 const RUNTIME_ROOT = "/api/coding-workbench/runtime";
 
 // A request the BFF accepts but never answers would hold the serialized mutation queue and the run
-// refresh join forever, taking away Stop/Approve/Deny (stability audit item 1). The bounds are
-// generous: a Start can legitimately wait on workspace preparation, so it gets the longest one.
-const RUNTIME_STATUS_TIMEOUT_MS = 20_000;
+// refresh join forever, taking away Stop/Approve/Deny (stability audit item 1). Every call kind has
+// its own client-side deadline, set from what was measured (issue #4109: real Gemma through LiteLLM
+// under shared load, warm models, n = 3..6 per call). A timeout is reported with its call kind and
+// deadline (`client.coding-workbench.request-timed-out`), so each bound can be judged from the log.
+//
+// - status and snapshot reads: p50 3.5 ms / p95 6 ms mid-turn (idle p95 4 ms). 10 s is about 1,700x
+//   the measured p95: a read that has not answered by then is hung, not slow.
+// - Stop: p50 1,568 ms / p95 2,558 ms (it waits for the runtime to settle). 15 s is about 6x the
+//   measured p95, and short enough that a hung Stop gives control back before a minute passes.
+// - start: p50 4,029 ms / p95 4,591 ms for a WARM model. A cold model load and a cold OpenCode start
+//   are not measured and a Start can wait on workspace preparation, so it keeps the longest bound
+//   (180 s, about 39x the warm p95) rather than being cut off while it is making progress.
+// - every other mutation (approve, deny, takeover, retry, recovery acknowledgement, pause, resume,
+//   follow-up, undo, inbox, research revoke, question answers) is NOT measured, so it keeps the 60 s
+//   bound it always had until a measurement justifies a tighter one.
+const RUNTIME_STATUS_TIMEOUT_MS = 10_000;
+const RUNTIME_STOP_TIMEOUT_MS = 15_000;
 const RUNTIME_MUTATION_TIMEOUT_MS = 60_000;
 const RUNTIME_START_TIMEOUT_MS = 180_000;
 
-function withRuntimeDeadline(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-  const deadline = AbortSignal.timeout(timeoutMs);
-  return signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
-}
+// Exhaustive over the closed report vocabulary: a new call kind cannot ship without a decision on
+// its deadline.
+const RUNTIME_CALL_DEADLINE_MS: Readonly<Record<ClientCodingRuntimeCall, number>> = {
+  status: RUNTIME_STATUS_TIMEOUT_MS,
+  snapshot: RUNTIME_STATUS_TIMEOUT_MS,
+  start: RUNTIME_START_TIMEOUT_MS,
+  stop: RUNTIME_STOP_TIMEOUT_MS,
+  approval: RUNTIME_MUTATION_TIMEOUT_MS,
+  takeover: RUNTIME_MUTATION_TIMEOUT_MS,
+  retry: RUNTIME_MUTATION_TIMEOUT_MS,
+  "recovery-ack": RUNTIME_MUTATION_TIMEOUT_MS,
+  pause: RUNTIME_MUTATION_TIMEOUT_MS,
+  resume: RUNTIME_MUTATION_TIMEOUT_MS,
+  "follow-up": RUNTIME_MUTATION_TIMEOUT_MS,
+  revert: RUNTIME_MUTATION_TIMEOUT_MS,
+  inbox: RUNTIME_MUTATION_TIMEOUT_MS,
+  "research-revoke": RUNTIME_MUTATION_TIMEOUT_MS,
+  "question-answer": RUNTIME_MUTATION_TIMEOUT_MS,
+  "question-reject": RUNTIME_MUTATION_TIMEOUT_MS,
+};
+
+/** The closed code of a request that hit its own deadline (see `codingWorkbenchRuntimeApiError`). */
+export const RUNTIME_REQUEST_TIMEOUT_CODE = "CODING_RUNTIME_REQUEST_TIMEOUT";
 
 function isDeadlineError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "TimeoutError";
+}
+
+/**
+ * Why a mutation's client wait ended without an answer: Stop took its place. The request may still
+ * be applied by the server; the run state reconciles through the Stop answer or a re-read. It is
+ * not a failure of the mutation and never a timeout, so nothing reports it as either.
+ */
+export class CodingWorkbenchPreemptedError extends Error {
+  constructor() {
+    super("The request was preempted by Stop.");
+    this.name = "CodingWorkbenchPreemptedError";
+  }
+}
+
+export function isCodingWorkbenchPreempted(error: unknown): error is CodingWorkbenchPreemptedError {
+  return error instanceof CodingWorkbenchPreemptedError;
+}
+
+/**
+ * Sends one runtime request under its call kind's deadline and the caller's own signal. The request
+ * carries a correlation id minted here, so an expired deadline (which fails the request before any
+ * response could carry an id) is still reported under the id the BFF would have logged it by. Only
+ * the call's own deadline is a timeout: a caller's abort, a preemption and a server refusal are not.
+ */
+async function sendBounded<T>(
+  call: ClientCodingRuntimeCall,
+  callerSignal: AbortSignal | undefined,
+  send: (signal: AbortSignal, correlationId: string) => Promise<T>,
+  correlationId: string = newClientCorrelationId(),
+): Promise<T> {
+  const deadlineMs = RUNTIME_CALL_DEADLINE_MS[call];
+  const deadline = AbortSignal.timeout(deadlineMs);
+  const signal = callerSignal === undefined ? deadline : AbortSignal.any([callerSignal, deadline]);
+  try {
+    return await send(signal, correlationId);
+  } catch (error) {
+    if (deadline.aborted && isDeadlineError(error)) {
+      reportCodingWorkbenchRequestTimeout(call, deadlineMs, correlationId);
+    }
+    throw error;
+  }
 }
 
 export interface CodingWorkbenchRuntimeApiError {
@@ -108,7 +184,7 @@ export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchR
   }
   if (isDeadlineError(error)) {
     return {
-      code: "CODING_RUNTIME_REQUEST_TIMEOUT",
+      code: RUNTIME_REQUEST_TIMEOUT_CODE,
       message: "The runtime request did not answer in time.",
       retryable: true,
     };
@@ -267,27 +343,27 @@ function enrichRuntimeIssueFailure(error: ApiError, envelope: unknown): void {
 }
 
 function postSnapshot<T>(
+  call: ClientCodingRuntimeCall,
   path: string,
   body: T,
   signal?: AbortSignal,
   repairedCorrelationId?: string,
-  timeoutMs: number = RUNTIME_MUTATION_TIMEOUT_MS,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return bffFetchJson(
-    path,
-    {
-      method: "POST",
-      cache: "no-store",
-      body: JSON.stringify(body),
-      signal: withRuntimeDeadline(timeoutMs, signal),
-    },
-    {
-      validator: snapshotValidator,
-      enrichError: enrichRuntimeIssueFailure,
-      ...(repairedCorrelationId === undefined
-        ? {}
-        : { correlationId: repairedCorrelationId, repairSession: false }),
-    },
+  return sendBounded(
+    call,
+    signal,
+    (deadline, correlationId) =>
+      bffFetchJson(
+        path,
+        { method: "POST", cache: "no-store", body: JSON.stringify(body), signal: deadline },
+        {
+          validator: snapshotValidator,
+          enrichError: enrichRuntimeIssueFailure,
+          correlationId,
+          ...(repairedCorrelationId === undefined ? {} : { repairSession: false }),
+        },
+      ),
+    repairedCorrelationId,
   );
 }
 
@@ -307,8 +383,10 @@ function isPreBodyStartDenial(error: unknown): error is ApiError {
 async function retryStartAfterSessionRepair(
   input: CodingWorkbenchRuntimeStartRequest,
   denied: ApiError,
+  signal: AbortSignal | undefined,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
-  const repair = await repairLocalCodingAppSessionWithEvidence();
+  const repair = await repairLocalCodingAppSessionWithEvidence(signal);
+  signal?.throwIfAborted();
   const correlationId = denied.correlationId ?? newClientCorrelationId();
   const report = (outcome: "repair-failed" | "replayed" | "replay-failed"): void => {
     reportClientDiagnostic(`[keiko] coding start session repair: ${outcome}`, {
@@ -328,11 +406,11 @@ async function retryStartAfterSessionRepair(
   }
   try {
     const snapshot = await postSnapshot(
+      "start",
       `${RUNTIME_ROOT}/runs`,
       input,
-      undefined,
+      signal,
       correlationId,
-      RUNTIME_START_TIMEOUT_MS,
     );
     report("replayed");
     return snapshot;
@@ -381,108 +459,94 @@ export function getCodingWorkbenchRuntimeReadiness(
 }
 
 export function getCodingWorkbenchRuntimeStatus(): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return bffFetchJson(
-    `${RUNTIME_ROOT}/status`,
-    { cache: "no-store", signal: AbortSignal.timeout(RUNTIME_STATUS_TIMEOUT_MS) },
-    {
-      validator: snapshotValidator,
-    },
+  return sendBounded("status", undefined, (signal, correlationId) =>
+    bffFetchJson(
+      `${RUNTIME_ROOT}/status`,
+      { cache: "no-store", signal },
+      { validator: snapshotValidator, correlationId },
+    ),
   );
 }
 
 export function getCodingWorkbenchRuntimeSnapshot(
   runId: string,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return bffFetchJson(
-    runPath(runId),
-    { cache: "no-store", signal: AbortSignal.timeout(RUNTIME_STATUS_TIMEOUT_MS) },
-    { validator: snapshotValidator },
+  return sendBounded("snapshot", undefined, (signal, correlationId) =>
+    bffFetchJson(
+      runPath(runId),
+      { cache: "no-store", signal },
+      { validator: snapshotValidator, correlationId },
+    ),
   );
+}
+
+// `signal` is the queue's preemption signal: Stop aborts the wait of a mutation it takes the place
+// of (#4109). Every mutation below takes one and joins it to its own deadline.
+/** A run-scoped lifecycle POST: every one validates and returns the run's snapshot. */
+function runSnapshotPost<Body>(
+  call: ClientCodingRuntimeCall,
+  suffix: string,
+): (runId: string, input: Body, signal?: AbortSignal) => Promise<CodingWorkbenchRuntimeSnapshot> {
+  return (runId, input, signal) => postSnapshot(call, runPath(runId, suffix), input, signal);
 }
 
 export async function startCodingWorkbenchRuntime(
   input: CodingWorkbenchRuntimeStartRequest,
+  signal?: AbortSignal,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   try {
-    return await postSnapshot(
-      `${RUNTIME_ROOT}/runs`,
-      input,
-      undefined,
-      undefined,
-      RUNTIME_START_TIMEOUT_MS,
-    );
+    return await postSnapshot("start", `${RUNTIME_ROOT}/runs`, input, signal);
   } catch (error) {
     if (!isPreBodyStartDenial(error)) throw error;
-    return retryStartAfterSessionRepair(input, error);
+    return retryStartAfterSessionRepair(input, error, signal);
   }
 }
 
-export function decideCodingWorkbenchRuntimeApproval(
-  runId: string,
-  input: CodingWorkbenchRuntimeApprovalDecisionRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/approvals"), input);
-}
+export const decideCodingWorkbenchRuntimeApproval =
+  runSnapshotPost<CodingWorkbenchRuntimeApprovalDecisionRequest>("approval", "/approvals");
 
-export function stopCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeStopRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/stop"), input);
-}
+// The server refuses a stop whose `requestId` is not the run id (`isEndRequestConsistent`).
+export const stopCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeStopRequest>(
+  "stop",
+  "/stop",
+);
 
-export function takeOverCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeTakeoverRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/takeover"), input);
-}
+// Likewise for a takeover: `requestId` must equal `runId`.
+export const takeOverCodingWorkbenchRuntime =
+  runSnapshotPost<CodingWorkbenchRuntimeTakeoverRequest>("takeover", "/takeover");
 
-export function retryCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeRetryRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/retry"), input);
-}
+export const retryCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeRetryRequest>(
+  "retry",
+  "/retry",
+);
 
-export function acknowledgeCodingWorkbenchRuntimeRecovery(
-  runId: string,
-  input: CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/recovery-ack"), input);
-}
+export const acknowledgeCodingWorkbenchRuntimeRecovery =
+  runSnapshotPost<CodingWorkbenchRuntimeRecoveryAcknowledgementRequest>(
+    "recovery-ack",
+    "/recovery-ack",
+  );
 
-export function pauseCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeLifecycleBody,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/pause"), input);
-}
+export const pauseCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeLifecycleBody>(
+  "pause",
+  "/pause",
+);
 
-export function resumeCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeResumeRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/resume"), input);
-}
+export const resumeCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeResumeRequest>(
+  "resume",
+  "/resume",
+);
 
-export function submitCodingWorkbenchRuntimeFollowUp(
-  runId: string,
-  input: CodingWorkbenchRuntimeFollowUpBody,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/follow-up"), input);
-}
+export const submitCodingWorkbenchRuntimeFollowUp =
+  runSnapshotPost<CodingWorkbenchRuntimeFollowUpBody>("follow-up", "/follow-up");
 
 /**
  * Undo the run's newest turn or restore an undo (B3, S04). The server stops the turn in flight, if
  * any, and restores the workspace files that turn changed; the run stays live until it is stopped.
  */
-export function revertCodingWorkbenchRuntime(
-  runId: string,
-  input: CodingWorkbenchRuntimeRevertRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/revert"), input);
-}
+export const revertCodingWorkbenchRuntime = runSnapshotPost<CodingWorkbenchRuntimeRevertRequest>(
+  "revert",
+  "/revert",
+);
 
 /**
  * Reads what an undo would do or has done over the authenticated app-session channel: counts only,
@@ -576,12 +640,8 @@ export function readCodingWorkbenchMcpAuthorization(
  * D10). Bound to the observed revision like a follow-up; the server proves the message is one the
  * operator delivered into this turn and answers one the runtime already took as delivered.
  */
-export function submitCodingWorkbenchRuntimeInboxAction(
-  runId: string,
-  input: CodingWorkbenchRuntimeInboxRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/inbox"), input);
-}
+export const submitCodingWorkbenchRuntimeInboxAction =
+  runSnapshotPost<CodingWorkbenchRuntimeInboxRequest>("inbox", "/inbox");
 
 /**
  * Reads the messages still waiting for the running turn over the authenticated app-session channel:
@@ -604,12 +664,11 @@ export function fetchCodingWorkbenchRuntimeInbox(
  * Revoke the live internet research grant. The server drops the grant for the parent run and every
  * child in one revision bump; general runtime snapshots never carry grant content (#2644).
  */
-export function revokeCodingWorkbenchRuntimeResearchGrant(
-  runId: string,
-  input: CodingWorkbenchRuntimeResearchRevokeRequest,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/research/revoke"), input);
-}
+export const revokeCodingWorkbenchRuntimeResearchGrant =
+  runSnapshotPost<CodingWorkbenchRuntimeResearchRevokeRequest>(
+    "research-revoke",
+    "/research/revoke",
+  );
 
 /**
  * Read pending and approved research state over the authenticated app-session channel. Both the
@@ -705,21 +764,14 @@ export function listCodingWorkbenchRuntimeQuestions(
 // re-declaring the requestId/expectedRevision/questionId/answers shape locally: the server route
 // parses this exact wire body with parseCodingWorkbenchRuntimeQuestionAnswerRequest, so there is
 // exactly one definition of what an answer looks like, not two that can drift apart.
-export function answerCodingWorkbenchRuntimeQuestion(
-  runId: string,
-  input: CodingWorkbenchRuntimeQuestionAnswerRequest,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/questions/answer"), input, signal);
-}
+export const answerCodingWorkbenchRuntimeQuestion =
+  runSnapshotPost<CodingWorkbenchRuntimeQuestionAnswerRequest>(
+    "question-answer",
+    "/questions/answer",
+  );
 
-export function rejectCodingWorkbenchRuntimeQuestion(
-  runId: string,
-  input: CodingWorkbenchRuntimeQuestionRejectBody,
-  signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(runPath(runId, "/questions/reject"), input, signal);
-}
+export const rejectCodingWorkbenchRuntimeQuestion =
+  runSnapshotPost<CodingWorkbenchRuntimeQuestionRejectBody>("question-reject", "/questions/reject");
 
 export function createCodingWorkbenchRuntimeEventSource(
   runId: string,

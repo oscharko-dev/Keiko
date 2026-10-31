@@ -66,6 +66,9 @@ export function resolveVerifiedCommitContext(
     runtimeAuthorityDigest: snapshot.authorityDigest,
     workspaceDigest: snapshot.workspaceDigest,
     repositoryDigest,
+    ...(context.repositoryIdentity === undefined
+      ? {}
+      : { repositoryKind: context.repositoryIdentity.kind }),
     workspace,
     baseRef: context.branch.baseRef,
     headRef: context.branch.headRef,

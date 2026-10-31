@@ -62,7 +62,29 @@ export const CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES = [
 export type CodingSafeActivityEditRefusalReason =
   (typeof CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)[number];
 
-/** Canonical server facts only. Live authenticated presentation; never Activity Log evidence. */
+/**
+ * Why one governed verification (`keiko_verification`) ended as it did, in closed words (#3579). A
+ * verification that could not check anything is not a check that failed, and the timeline must not
+ * paint it as one: `waiting-for-trust` is the package-script decision only the operator can make,
+ * `no-runnable-steps` a repository that defines nothing the verifier can run, and `not-run` a run
+ * whose steps were skipped, denied or cancelled. `failed-check` is a check that ran and went red,
+ * `passed` every requested check green.
+ */
+export const CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES = [
+  "passed",
+  "failed-check",
+  "waiting-for-trust",
+  "no-runnable-steps",
+  "not-run",
+] as const;
+export type CodingSafeActivityVerificationOutcome =
+  (typeof CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES)[number];
+
+/**
+ * Canonical server facts only. Live authenticated presentation. Paths and byte counts never enter
+ * Activity Log evidence; the closed `verificationOutcome` alone is also recorded, body-free, on
+ * `coding-runtime.tool-result-rendered`.
+ */
 export interface CodingSafeActivityToolPresentation {
   /** The workspace-contained file a completed governed read actually returned. */
   readonly relativePath?: string;
@@ -75,6 +97,8 @@ export interface CodingSafeActivityToolPresentation {
   /** Actual discovery items returned after filtering and limits, not inventory or text lines. */
   readonly returnedPathCount?: number;
   readonly refusalReason?: CodingSafeActivityEditRefusalReason;
+  /** Why a governed verification ended as it did; present on `keiko_verification` calls only. */
+  readonly verificationOutcome?: CodingSafeActivityVerificationOutcome;
   /** Elapsed bridge service time; includes governed waits, excludes model generation time. */
   readonly bridgeDurationMs?: number;
   /** A finished native shell call's own exit status, as the runtime reported it. */
@@ -506,15 +530,22 @@ export function isCodingSafeActivityToolPresentation(
     "totalFileLines",
     "returnedPathCount",
     "refusalReason",
+    "verificationOutcome",
     "bridgeDurationMs",
     "exitCode",
   ];
   if (exactKeys(value, allowed, "presentation").length > 0) return false;
   if (!validPresentationPaths(value) || !validPresentationCounts(value)) return false;
   if (value.exitCode !== undefined && !Number.isSafeInteger(value.exitCode)) return false;
+  return validPresentationVocabulary(value);
+}
+
+function validPresentationVocabulary(value: Record<string, unknown>): boolean {
   return (
-    value.refusalReason === undefined ||
-    isOneOf(value.refusalReason, CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)
+    (value.refusalReason === undefined ||
+      isOneOf(value.refusalReason, CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)) &&
+    (value.verificationOutcome === undefined ||
+      isOneOf(value.verificationOutcome, CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES))
   );
 }
 

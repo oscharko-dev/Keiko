@@ -171,6 +171,8 @@ export interface ProductionOpenCodeActivationInput {
   readonly mcpRelay?: ProductionOpenCodeBackendInput["mcpRelay"];
   readonly mcpMutations?: ProductionOpenCodeBackendInput["mcpMutations"];
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
+  /** The Jira Pods a Coding run may be started with (owner decision 2026-10-30). */
+  readonly codingJiraPods?: ProductionOpenCodeBackendInput["codingJiraPods"];
   readonly env: NodeJS.ProcessEnv;
   /** Host identity injection for deterministic tests; production omits both. */
   readonly platform?: NodeJS.Platform | undefined;
@@ -317,6 +319,7 @@ function nativeMcpBackendInputs(
     ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
     ...(input.mcpMutations ? { mcpMutations: input.mcpMutations } : {}),
     ...(input.mcpConnections ? { mcpConnections: input.mcpConnections } : {}),
+    ...(input.codingJiraPods ? { codingJiraPods: input.codingJiraPods } : {}),
   };
 }
 

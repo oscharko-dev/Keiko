@@ -93,6 +93,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
+  codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
 } from "./codingToolFacade.js";
@@ -104,6 +105,7 @@ import {
 import {
   isCodingSafeActivityPresentationPath,
   type CodingSafeActivityToolPresentation,
+  type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
@@ -596,6 +598,11 @@ export interface OpenCodeRuntimeCompositionInput {
    * is not admitted.
    */
   readonly mcpRelay?: OpenCodeMcpRelayInput | undefined;
+  /**
+   * Managed MCP servers the human chose for this run (a Jira Pod picked in the composer): the choice
+   * is the grant of their read tools, in every mode. Absent, the run grants nothing.
+   */
+  readonly mcpGrantedServers?: ReadonlySet<string> | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -895,6 +902,8 @@ interface PreparedRun {
   ready: boolean;
   /** A qualified native client retained for operator undo after productive monitoring stops. */
   revertReady: boolean;
+  /** Advances when an interrupt of the run's session begins and ends (`OpenCodeRevertRun`). */
+  interruptSeq: number;
 }
 
 interface ReadyRun extends PreparedRun {
@@ -1694,6 +1703,8 @@ function createAbortTask(
   return async (runId): Promise<boolean> => {
     const run = readyRun(runId);
     if (run === undefined) return false;
+    // Odd while the interrupt runs: a state read it overtakes is not a failure (`revertState`).
+    run.interruptSeq += 1;
     try {
       // The whole native session tree: a background child keeps running when only the parent is
       // interrupted, and its end would start another turn of the parent (`interruptNativeTree`).
@@ -1719,6 +1730,8 @@ function createAbortTask(
     } catch {
       run.runtimeAdapter.cancelTurn();
       return false;
+    } finally {
+      run.interruptSeq += 1;
     }
   };
 }
@@ -1793,6 +1806,13 @@ function lifecycleAdapter(
             run.ready = false;
             dispose();
           };
+    },
+    // A stop revokes the runtime and reaps it seconds later; the operator revert client closes
+    // first, so a revert-state read in between is unavailable instead of failing on the dying
+    // runtime (#3907). Disposal closes it again.
+    beginStop: (runId): void => {
+      const run = runs.get(runId);
+      if (run !== undefined) run.revertReady = false;
     },
     dispose: (runId, signal, settlement): Promise<boolean> =>
       disposeRun(input, bridge, runs, runId, signal, settlement),
@@ -2049,6 +2069,7 @@ function nativeMcpAdmission(
     validations: checks.validations,
     relays: checks.relays,
     managed: input.mcpRelay?.managed !== undefined,
+    grantedServers: input.mcpGrantedServers,
   });
 }
 
@@ -2484,6 +2505,7 @@ function preparedRun(
     initialTurnBaselineStable: false,
     ready: false,
     revertReady: false,
+    interruptSeq: 0,
   };
 }
 
@@ -4998,6 +5020,7 @@ function responseForToolResult(
       actionId,
       result,
       presentation.bridgeDurationMs,
+      presentation.verificationOutcome,
     );
   }
   return { status: 200, body: responseBody };
@@ -5015,9 +5038,16 @@ function recordRenderedToolResult(
   actionId: string | undefined,
   result: CodingToolResult,
   bridgeDurationMs: number | undefined,
+  verificationOutcome: CodingSafeActivityVerificationOutcome | undefined,
 ): void {
   try {
-    recordGovernedToolModelContent(rendered.sink, rendered.correlationId, result, bridgeDurationMs);
+    recordGovernedToolModelContent(
+      rendered.sink,
+      rendered.correlationId,
+      result,
+      bridgeDurationMs,
+      verificationOutcome,
+    );
   } catch (error) {
     emitServerDiagnostic(diagnostics, {
       correlationId: actionCorrelationId(actionId),
@@ -5157,6 +5187,7 @@ function governedToolPresentation(
   result: CodingToolResult,
 ): CodingSafeActivityToolPresentation {
   if (request.action === "edit") return codingToolEditPresentation(result);
+  if (request.action === "verification") return codingToolVerificationPresentation(result);
   if (result.status !== "completed" || !("read" in result)) return {};
   if (request.action === "discover") {
     return "returnedPathCount" in result.read && typeof result.read.returnedPathCount === "number"

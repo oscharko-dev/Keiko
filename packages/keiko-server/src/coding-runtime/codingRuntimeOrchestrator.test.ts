@@ -71,6 +71,7 @@ import { createCodingRuntimeDescriptionJobStore } from "./codingRuntimeDescripti
 import {
   CodingRuntimeAgentUnsupportedError,
   CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeJiraPodRefusedError,
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
 } from "./launchFailure.js";
@@ -635,6 +636,7 @@ function fakeSafeActivityProjection(): CodingSafeActivityProjection {
     purge: vi.fn(),
     purgeAll: vi.fn(),
     markUnavailable: vi.fn(),
+    interrupt: vi.fn(),
     currentContent: vi.fn(() => null),
     subscribeContent: vi.fn(() => ({ admitted: true, detach: vi.fn() })),
   };
@@ -2767,6 +2769,38 @@ describe("CodingRuntimeOrchestrator", () => {
       );
     });
 
+    it("hands the human's Jira Pod choice to the launch resolver and omits the key when none was made", async () => {
+      const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+      const f = fixture();
+
+      await f.orchestrator.start({ ...start, jiraPodId });
+
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(expect.objectContaining({ jiraPodId }));
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("jiraPodId");
+    });
+
+    it("answers a start whose Jira Pod was refused with invalid-intent and a closed diagnostic", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.launchResolver.resolve.mockImplementationOnce(() => {
+        throw new CodingRuntimeJiraPodRefusedError("pod-not-ready");
+      });
+
+      expect(
+        await f.orchestrator.start({ ...start, jiraPodId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018" }),
+      ).toEqual({ ok: false, failureCode: "invalid-intent", runId: "run-1" });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: "stage=start:reason=launch-resolution:jira-pod:pod-not-ready",
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("d5f5681e");
+    });
+
     it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {
       const f = fixture();
       await f.orchestrator.start(start);
@@ -4610,12 +4644,15 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(
       successfulSnapshot(await g.orchestrator.takeover("run-1", { requestId: "run-1" })).state,
     ).toBe("taken-over");
-    expect(g.safeActivityProjection.purge).toHaveBeenCalledWith("run-1", "takeover");
+    // Owner decision 2026-10-30 (#3907): an ended run keeps its tool rows, as OpenCode does; only
+    // its open calls are settled as cancelled. Nothing purges the feed of a run that was stopped.
+    expect(g.safeActivityProjection.interrupt).toHaveBeenCalledWith("run-1", "takeover");
     await g.orchestrator.start(start);
     expect(
       successfulSnapshot(await g.orchestrator.stop("run-2", { requestId: "run-2" })).state,
     ).toBe("cancelled");
-    expect(g.safeActivityProjection.purge).toHaveBeenCalledWith("run-2", "stop");
+    expect(g.safeActivityProjection.interrupt).toHaveBeenCalledWith("run-2", "stop");
+    expect(g.safeActivityProjection.purge).not.toHaveBeenCalled();
     expect(g.evidence.settle).toHaveBeenCalled();
   });
 

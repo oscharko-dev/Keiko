@@ -266,11 +266,16 @@ function codingReportFields(
   meta: ClientDiagnosticMeta,
 ): Pick<
   ClientDiagnosticIngestRequest,
-  "codingRunRestore" | "codingWorkbenchInteraction" | "codingHistoryScope" | "codingIssueOutcome"
+  | "codingRunRestore"
+  | "codingWorkbenchInteraction"
+  | "codingRequestTimeout"
+  | "codingHistoryScope"
+  | "codingIssueOutcome"
 > {
   return {
     codingRunRestore: meta.codingRunRestore,
     codingWorkbenchInteraction: meta.codingWorkbenchInteraction,
+    codingRequestTimeout: meta.codingRequestTimeout,
     codingHistoryScope: meta.codingHistoryScope,
     codingIssueOutcome: meta.codingIssueOutcome,
   };

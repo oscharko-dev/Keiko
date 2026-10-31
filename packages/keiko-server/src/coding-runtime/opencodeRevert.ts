@@ -172,6 +172,12 @@ export interface OpenCodeRevertRun {
   >;
   revert?: OpenCodeStagedRevert | undefined;
   /**
+   * Counts the run's interrupts (`abortTask`): it advances when one begins and again when it ends,
+   * so an odd value means a stop is interrupting the session now. A state read that fails while it
+   * is odd, or that saw it advance, was overtaken by the stop (`revertState`).
+   */
+  interruptSeq?: number | undefined;
+  /**
    * The newest turn's files as the turn left them, recorded when it settled
    * (`recordOpenCodeTurnImage`); `undefined` inside the promise when recording them failed.
    */
@@ -311,15 +317,24 @@ async function revertState(
   const run = ports.readyRun(runId);
   if (run === undefined) return undefined;
   if (run.revert !== undefined) return { staged: true, ...countsOf(run.revert) };
+  const interrupts = run.interruptSeq ?? 0;
   try {
     return { staged: false, ...diffCounts(await turnDiff(run)) };
   } catch (error) {
     // A read the run's teardown overtook (a server stop disposes the runtime under it) ends like a
-    // read of a run that is gone: no counts and no failure, since nothing was reverted (#4119).
-    if (ports.readyRun(runId) !== run) return undefined;
+    // read of a run that is gone: no counts and no failure, since nothing was reverted (#4119). So
+    // does a read the stop's interrupt of the still streaming session overtook, before the disposal
+    // (#3907).
+    if (ports.readyRun(runId) !== run || interruptOvertook(run, interrupts)) return undefined;
     recordRevertRefusal(ports, runId, "state", "revert-failed", undefined, error);
     return undefined;
   }
+}
+
+/** Whether an interrupt was running, or began and ended, since the run's `interruptSeq` was `seen`. */
+function interruptOvertook(run: OpenCodeRevertRun, seen: number): boolean {
+  const now = run.interruptSeq ?? 0;
+  return now !== seen || now % 2 === 1;
 }
 
 /**

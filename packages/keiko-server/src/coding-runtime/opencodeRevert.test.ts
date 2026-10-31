@@ -96,6 +96,11 @@ function subject(
     readonly image?: boolean;
     /** The run is torn down (server stop) while the runtime is still answering the diff. */
     readonly disposedDuringDiff?: boolean;
+    /**
+     * A stop interrupts the session while the runtime answers the diff: `begun` leaves the
+     * interrupt running, `settled` has it finished before the read fails (`abortTask`).
+     */
+    readonly interruptedDuringDiff?: "begun" | "settled";
   } = {},
 ): Subject {
   const order: string[] = [];
@@ -112,6 +117,11 @@ function subject(
       if (input.disposedDuringDiff === true) {
         available = false;
         return Promise.reject(new Error(`runtime gone ${SECRET}`));
+      }
+      if (input.interruptedDuringDiff !== undefined) {
+        run.interruptSeq =
+          (run.interruptSeq ?? 0) + (input.interruptedDuringDiff === "begun" ? 1 : 2);
+        return Promise.reject(new Error(`session interrupted ${SECRET}`));
       }
       return input.diffFails === true
         ? Promise.reject(new Error(`diff failed ${SECRET}`))
@@ -148,7 +158,12 @@ function subject(
     activityLog: log,
   });
   // The turn settled before the test begins: the composition records its image at that moment.
-  if (input.image !== false && input.diffFails !== true && input.disposedDuringDiff !== true)
+  if (
+    input.image !== false &&
+    input.diffFails !== true &&
+    input.disposedDuringDiff !== true &&
+    input.interruptedDuringDiff === undefined
+  )
     recordOpenCodeTurnImage(run, log);
   client.sessionDiff.mockClear();
   order.length = 0;
@@ -783,6 +798,29 @@ describe("revert state", () => {
 
     expect(client.sessionDiff).toHaveBeenCalledTimes(1);
     expect(log.events).toEqual([]);
+  });
+
+  it.each(["begun", "settled"] as const)(
+    "is absent without a revert-failed warning when a stop interrupts the session during the read (%s, #3907)",
+    async (interruptedDuringDiff) => {
+      const { port, log, client } = subject({ interruptedDuringDiff });
+
+      await expect(port.revertState(RUN_ID)).resolves.toBeUndefined();
+
+      expect(client.sessionDiff).toHaveBeenCalledTimes(1);
+      expect(log.events).toEqual([]);
+    },
+  );
+
+  it("still warns when a read fails on a run that was interrupted before the read began", async () => {
+    const { port, log, run } = subject({ diffFails: true });
+    run.interruptSeq = 2;
+
+    await expect(port.revertState(RUN_ID)).resolves.toBeUndefined();
+
+    expect(log.events).toMatchObject([
+      { level: "warn", op: "coding-runtime.revert.refused", extra: { operation: "state" } },
+    ]);
   });
 
   it("records no turn image, and says why on the log, when the runtime cannot report the diff", async () => {

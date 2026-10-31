@@ -1,4 +1,5 @@
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { CLIENT_CODING_RUNTIME_CALLS } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import {
   resetServerLogger,
@@ -1601,6 +1602,13 @@ describe("POST /api/diagnostics/client", () => {
       totalLineCount: 16_777_216,
       totalByteCount: 1_073_741_824,
     },
+    // #3880: an unpaired window held one of its secondary notices behind the pairing state.
+    { interaction: "notice-held", notice: "task-session" },
+    { interaction: "notice-held", notice: "skills" },
+    { interaction: "notice-held", notice: "mcp" },
+    { interaction: "notice-held", notice: "activity" },
+    { interaction: "notice-held", notice: "questions" },
+    { interaction: "notice-held", notice: "editor-bridge" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1642,6 +1650,9 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "history-workspace-switched", workspaceId: "ws-other" },
     { interaction: "bridge-registration-refused" },
     { interaction: "bridge-registration-refused", refusal: "EDITOR_AGENT_ROOT_BINDING_INVALID" },
+    { interaction: "notice-held" },
+    { interaction: "notice-held", notice: "Activity not connected." },
+    { interaction: "notice-held", notice: "skills", fileCount: 1 },
     { interaction: "diff-windowed" },
     { interaction: "diff-windowed", surface: "changeset-review", fileCount: 1, totalLineCount: 5 },
     {
@@ -1746,6 +1757,128 @@ describe("POST /api/diagnostics/client", () => {
     ).toBe(true);
     const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
     expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+  });
+
+  // #4109: a runtime request the Workbench gave up on at its own deadline is one warn line that
+  // names the call kind and the deadline, joined to the failed request by its correlation id.
+  it.each(CLIENT_CODING_RUNTIME_CALLS)(
+    "persists a %s deadline expiry as client.coding-workbench.request-timed-out at warn",
+    async (call) => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        message: "[keiko] request timed out for /private/path/of/the/user",
+        clientTs: CLIENT_TS,
+        correlationId: "ui_request-timeout-0001",
+        codingRequestTimeout: { call, deadlineMs: 15_000 },
+      });
+
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      const event = sink.events.find(
+        (candidate) => candidate.op === "client.coding-workbench.request-timed-out",
+      );
+      expect(event?.level).toBe("warn");
+      const line = formatActivityLogProofLine(event ?? {});
+      const record = expectActivityLogProof("client.coding-workbench.request-timed-out.line", line);
+      expect(record).toMatchObject({
+        level: "warn",
+        correlationId: "ui_request-timeout-0001",
+        errorKind: "timeout",
+        call,
+        deadlineMs: 15_000,
+        completeness: "complete",
+        loss: "none",
+      });
+      // Closed values and one duration only: the free-text note is never kept.
+      expect(line).not.toContain("private");
+    },
+  );
+
+  it("joins a timeout report that carries no request id to the ingest request's correlation", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] request timed out",
+      clientTs: CLIENT_TS,
+      codingRequestTimeout: { call: "status", deadlineMs: 10_000 },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.coding-workbench.request-timed-out",
+    );
+    expect(event?.correlationId).toBe(CORRELATION_ID);
+    expect(event?.extra).toMatchObject({ call: "status", deadlineMs: 10_000 });
+  });
+
+  it.each([
+    ["an unknown call", { call: "launch", deadlineMs: 15_000 }],
+    ["a missing call", { deadlineMs: 15_000 }],
+    ["a negative deadline", { call: "stop", deadlineMs: -1 }],
+    ["a zero deadline", { call: "stop", deadlineMs: 0 }],
+    ["a fractional deadline", { call: "stop", deadlineMs: 1.5 }],
+    ["a deadline above the bound", { call: "stop", deadlineMs: 3_600_001 }],
+    ["a deadline that is a string", { call: "stop", deadlineMs: "15000" }],
+    ["a missing deadline", { call: "stop" }],
+    ["an extra field", { call: "stop", deadlineMs: 15_000, runId: "run-secret" }],
+    ["a report that is not an object", "stop"],
+  ])("refuses a request timeout report with %s", async (_name, codingRequestTimeout) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] request timed out",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_request-timeout-0002",
+      codingRequestTimeout,
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(
+      sink.events.some((event) => event.op === "client.coding-workbench.request-timed-out"),
+    ).toBe(false);
+  });
+
+  it("refuses a request timeout report that also carries failure context or another closed report", async () => {
+    const timeout = { call: "stop", deadlineMs: 15_000 };
+    for (const extra of [
+      { kind: "other" },
+      { errorKind: "timeout" },
+      { codingWorkbenchInteraction: { interaction: "pending-decision-focused" } },
+    ]) {
+      const body = JSON.stringify({
+        message: "[keiko] request timed out",
+        clientTs: CLIENT_TS,
+        codingRequestTimeout: timeout,
+        ...extra,
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    }
+  });
+
+  it("spends the failure budget for a request timeout, never the routine one", async () => {
+    const sink = captureServerLog();
+    const timedOut = JSON.stringify({
+      message: "[keiko] request timed out",
+      clientTs: CLIENT_TS,
+      codingRequestTimeout: { call: "status", deadlineMs: 10_000 },
+    });
+    // One more than a budget admits in a window.
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(timedOut));
+    }
+    const routine = JSON.stringify({
+      message: "[keiko] coding workbench interaction: pending-decision-focused",
+      clientTs: CLIENT_TS,
+      codingWorkbenchInteraction: { interaction: "pending-decision-focused" },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(routine))).status).toBe(204);
+    expect(sink.events.some((event) => event.op === "client.coding-workbench.interaction")).toBe(
+      true,
+    );
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["failure"]);
   });
 
   // PR #3678 review: the copy button's changed transformation must be reconstructable: one line per

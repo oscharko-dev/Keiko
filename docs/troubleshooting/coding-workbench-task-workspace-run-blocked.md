@@ -762,6 +762,40 @@ the machine.
 
 ---
 
+## A Git or delivery tool call fails with `repository-required`
+
+| Field             | Value                                                                |
+| ----------------- | -------------------------------------------------------------------- |
+| Severity          | Low                                                                  |
+| Surface           | Local server / Coding Workbench                                      |
+| Stable identifier | `repository-required`, `coding-runtime.tool-result`, `workspaceKind` |
+
+**Symptom**
+
+The run edits files and verifies, but every `keiko_git_*`, `keiko_pull_request` or `keiko_ci_status`
+call fails with `repository-required` and the activity log carries `op: "coding-runtime.tool-result"`
+with `state: "refused"` and `reason: "repository-required"` under the run's correlation id.
+
+**Root Cause**
+
+The run's workspace is an ordinary folder that is not a Git repository (a folder workspace,
+`workspaceKind: "folder"`; its `task-workspace.lifecycle` activation line carries
+`workspaceKind: "folder"`). The Workbench works there without a branch, but repository delivery needs a
+repository. This is expected, not a fault.
+
+**Diagnostic Steps**
+
+1. Find the run's refusal lines: `keiko support query --correlation-id <run-id> --json` and filter
+   `op: "coding-runtime.tool-result"`.
+2. Confirm the folder is not a repository: it has no `.git` entry.
+
+**Resolution**
+
+Initialize or clone a repository outside the Workbench and select it as a repository to use delivery;
+otherwise keep working in the folder with edits, commands and verification.
+
+---
+
 ## A stage proposal is blocked with `selection-unreviewed`, or a Git tool call fails with `git-execution-failed`
 
 | Field             | Value                                                                                        |

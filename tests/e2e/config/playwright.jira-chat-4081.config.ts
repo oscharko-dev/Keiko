@@ -4,7 +4,10 @@ import { defineConfig, devices } from "@playwright/test";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 const root = process.cwd();
-const port = Number(process.env.KEIKO_E2E_UI_PORT ?? "33581");
+// The UI listens on `port`, the Jira and model fixtures on the two ports above it. Like every other
+// E2E default, all three stay below 32768: Linux hands out outbound ports from 32768 upwards, so a
+// fixed port there can already be held by an unrelated connection (EADDRINUSE on 33582, PR #4150).
+const port = Number(process.env.KEIKO_E2E_UI_PORT ?? "32381");
 const directory = process.env.KEIKO_E2E_JIRA_STATE ?? e2eStateDir(`jira-chat-4081-${randomUUID()}`);
 process.env.KEIKO_E2E_JIRA_STATE = directory;
 process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_DIR = join(directory, "logs");
