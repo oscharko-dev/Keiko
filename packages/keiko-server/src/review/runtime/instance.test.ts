@@ -5,20 +5,25 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
-import type { CodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts";
 
 import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
 import type { GovernedCodingToolPort } from "../../coding-runtime/codingToolGovernedDelegate.js";
 import { DiffFixtureRepository } from "../diff-package/diffFixtures.test-support.js";
 import type { ReviewRuntimeComposition } from "./composition.js";
-import { createReviewRuntimeService, type ReviewRuntimeRunRequest } from "./instance.js";
-import { createReviewWorkspaceLifecycle } from "./reviewWorkspace.js";
+import {
+  createReviewRuntimeService,
+  type ReviewRuntimeRunRequest,
+  type ReviewRuntimeService,
+} from "./instance.js";
+import {
+  fakeReviewComposition,
+  newReviewRuntimeObservations,
+  reviewLayers,
+  type ReviewRuntimeObservations,
+  type ScriptedReviewRun,
+} from "./reviewRuntimeFakes.test-support.js";
 import type { ReviewRuntimeLayers } from "./selfCheck.js";
-import { reviewRuntimeAuthorityGrants } from "../../coding-runtime/runtimeAuthorityService.js";
-import { createGeneratedOpenCodeV2Plugins } from "../../coding-runtime/opencodeRuntimeAdapter.js";
-import { createFixedOpenCodeV2Config } from "../../coding-runtime/opencodeLaunchProfile.js";
 
-const GEOMETRY = { contextWindowTokens: 32_768, maxInputTokens: 28_672, maxOutputTokens: 4_096 };
 const RULES_PATH = ".keiko/review-rules.md";
 const SOURCE = "export function first(values: number[]): number {\n  return values[0];\n}\n";
 
@@ -26,90 +31,6 @@ const fixtures: DiffFixtureRepository[] = [];
 afterEach(() => {
   for (const created of fixtures.splice(0)) created.cleanup();
 });
-
-interface Scripted {
-  /** What the scripted model reports during the run (each through the run's report port). */
-  readonly reports: readonly unknown[];
-  readonly terminal?: "succeeded" | "failed" | undefined;
-}
-
-function reviewLayers(): ReviewRuntimeLayers {
-  return {
-    toolProfile: "review",
-    configValue: createFixedOpenCodeV2Config(GEOMETRY, undefined, "review"),
-    pluginSources: createGeneratedOpenCodeV2Plugins("review"),
-    authority: {
-      actionClasses: reviewRuntimeAuthorityGrants().actionClasses,
-      effectiveMode: "governed-assist",
-      runtimePurpose: "review",
-    },
-    facadePurpose: "review",
-  };
-}
-
-function fakeComposition(
-  instanceId: string,
-  reportPort: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
-  script: Scripted,
-  observed: { starts: unknown[]; shutdowns: number; closes: number; boundRoots: string[] },
-): ReviewRuntimeComposition {
-  const workspace = createReviewWorkspaceLifecycle();
-  let state: "running" | "succeeded" | "failed" = "running";
-  let runs = 0;
-  const orchestrator = {
-    start: async (body: unknown): Promise<unknown> => {
-      observed.starts.push(body);
-      observed.boundRoots.push(workspace.getActive()?.binding.activeRoot ?? "unbound");
-      runs += 1;
-      const runId = `runtime-run-${String(runs)}`;
-      const port = reportPort(runId);
-      for (const report of script.reports) {
-        await port?.execute(
-          { action: "review-report", actionId: "a", idempotencyKey: "k", report: report as never },
-          undefined,
-          { check: () => true },
-        );
-      }
-      state = script.terminal ?? "succeeded";
-      return { ok: true, snapshot: { runId, state: "running" } };
-    },
-    getSnapshot: (): { readonly state: string } => ({ state }),
-    stop: (): Promise<unknown> => Promise.resolve({ ok: true }),
-    shutdown: (): Promise<unknown> => {
-      observed.shutdowns += 1;
-      return Promise.resolve({ ok: true });
-    },
-  };
-  const eventHub = {
-    subscribe: (
-      _runId: string,
-      _last: string | undefined,
-      subscriber: { write: (event: CodingWorkbenchRuntimeSseEvent) => unknown; close: () => void },
-    ): unknown => {
-      subscriber.close();
-      return { ok: true, detach: () => undefined };
-    },
-  };
-  return {
-    instanceId,
-    controlPlane: {
-      orchestrator,
-      eventHub,
-      runtimeCapabilityAuthenticator: {
-        authenticate: (capability: string): unknown => ({ ok: capability === `cap-${instanceId}` }),
-      },
-    } as never,
-    readiness: { toolProfile: "review" } as never,
-    workspace,
-    expectStart: () => undefined,
-    authorityProbe: () => undefined,
-    facadePurpose: "review",
-    sidecarDeps: (base) => base,
-    close: (): void => {
-      observed.closes += 1;
-    },
-  };
-}
 
 function headRepository(rules?: string | Buffer): {
   readonly repo: DiffFixtureRepository;
@@ -162,24 +83,31 @@ const VALID_REPORT = {
 interface ServiceFixture {
   readonly subject: ReturnType<typeof createReviewRuntimeService>;
   readonly log: ReturnType<typeof createBufferedServerLogSink>;
-  readonly observed: { starts: unknown[]; shutdowns: number; closes: number; boundRoots: string[] };
+  readonly observed: ReviewRuntimeObservations;
   readonly timers: (() => void)[];
   readonly compose: ReturnType<typeof vi.fn>;
 }
 
+/** One script for every composed instance, or one per instance in composition order. */
 function service(
-  script: Scripted,
+  script: ScriptedReviewRun | readonly ScriptedReviewRun[],
   options: { readonly layers?: ReviewRuntimeLayers; readonly compose?: boolean } = {},
 ): ServiceFixture {
   const log = createBufferedServerLogSink();
-  const observed = { starts: [] as unknown[], shutdowns: 0, closes: 0, boundRoots: [] as string[] };
+  const observed = newReviewRuntimeObservations();
   const timers: (() => void)[] = [];
+  const scripts: readonly ScriptedReviewRun[] = Array.isArray(script) ? script : [script];
+  let composed = 0;
   const compose = vi.fn(
     (
       instanceId: string,
       port: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
-    ): ReviewRuntimeComposition | undefined =>
-      options.compose === false ? undefined : fakeComposition(instanceId, port, script, observed),
+    ): ReviewRuntimeComposition | undefined => {
+      if (options.compose === false) return undefined;
+      const scripted = scripts[Math.min(composed, scripts.length - 1)] ?? { reports: [] };
+      composed += 1;
+      return fakeReviewComposition(instanceId, port, scripted, observed);
+    },
   );
   const subject = createReviewRuntimeService({
     compose,
@@ -221,6 +149,107 @@ describe("createReviewRuntimeService", () => {
         "review.finding.reported",
       ]),
     );
+  });
+
+  // #4136, first live run on macOS: the Reviewer filed its finding and ended its turn, the gateway
+  // profile's descendant sweep stayed unproven (no sandbox member, ADR-0140 D3), the runtime run
+  // settled recovery-required, and the review counted the Reviewer as a failed model.
+  it("returns a completed Reviewer whose only failure is the unproven runtime reap", async () => {
+    const { repo, base, head } = headRepository();
+    const { subject } = service({
+      reports: [VALID_REPORT],
+      terminal: "recovery-required",
+      reapUnproven: true,
+    });
+
+    const result = await subject.run(request(repo, base, head));
+
+    expect(result).toMatchObject({ ok: true, outcome: "completed", runtimeCleanup: "unproven" });
+    if (!result.ok) throw new Error("expected a run");
+    expect(result.failureCode).toBeUndefined();
+    expect(result.candidates).toHaveLength(1);
+  });
+
+  it("keeps every other recovery a failed Reviewer and names a proven cleanup", async () => {
+    const { repo, base, head } = headRepository();
+    const run = (script: ScriptedReviewRun): ReturnType<ReviewRuntimeService["run"]> =>
+      service(script).subject.run(request(repo, base, head));
+
+    await expect(
+      run({ reports: [VALID_REPORT], terminal: "recovery-required", reapUnproven: false }),
+    ).resolves.toMatchObject({
+      ok: true,
+      outcome: "failed",
+      failureCode: "recovery-required",
+      runtimeCleanup: "unproven",
+    });
+    await expect(run({ reports: [], terminal: "failed" })).resolves.toMatchObject({
+      ok: true,
+      outcome: "failed",
+      runtimeCleanup: "proven",
+    });
+    await expect(run({ reports: [] })).resolves.toMatchObject({
+      ok: true,
+      outcome: "completed",
+      runtimeCleanup: "proven",
+    });
+  });
+
+  // #4136: after a Reviewer run left recovery-required, its instance's orchestrator refuses the
+  // next start (`active-run-conflict`), so every later review of the repository was skipped until
+  // the idle stop. The quarantined instance is set aside untouched and a fresh one serves the review.
+  it("composes a fresh instance beside a quarantined one and keeps the quarantine until idle", async () => {
+    const { repo, base, head } = headRepository();
+    const unproven: ScriptedReviewRun = {
+      reports: [],
+      terminal: "recovery-required",
+      reapUnproven: true,
+    };
+    const { subject, compose, observed, log, timers } = service([unproven, { reports: [] }]);
+
+    await subject.run(request(repo, base, head));
+    const second = await subject.run(request(repo, base, head, { reviewRunId: "review-run-2" }));
+
+    expect(second).toMatchObject({ ok: true, outcome: "completed", runtimeCleanup: "proven" });
+    expect(compose).toHaveBeenCalledTimes(2);
+    expect(observed.starts).toHaveLength(2);
+    expect(observed).toMatchObject({ shutdowns: 0, closes: 0 });
+    expect(subject.instanceCount()).toBe(2);
+    const started = log.events.filter((event) => event.op === "review.run.runtime-started");
+    expect(started.map((event) => event.extra?.placement)).toEqual([
+      undefined,
+      "beside-quarantined",
+    ]);
+
+    // The quarantined instance ends on its own idle stop, armed when its review ended.
+    expect(timers).toHaveLength(2);
+    timers[0]?.();
+    await vi.waitFor(() => {
+      expect(subject.instanceCount()).toBe(1);
+    });
+    expect(observed).toMatchObject({ shutdowns: 1, closes: 1 });
+    const stopped = log.events.find((event) => event.op === "review.run.runtime-stopped");
+    expect(stopped?.extra).toMatchObject({ trigger: "idle", runCount: 1 });
+  });
+
+  it("refuses a review that would need a second quarantined instance", async () => {
+    const { repo, base, head } = headRepository();
+    const unproven: ScriptedReviewRun = {
+      reports: [],
+      terminal: "recovery-required",
+      reapUnproven: true,
+    };
+    const { subject, compose, observed } = service([unproven, unproven, { reports: [] }]);
+
+    await subject.run(request(repo, base, head));
+    await subject.run(request(repo, base, head, { reviewRunId: "review-run-2" }));
+    const third = await subject.run(request(repo, base, head, { reviewRunId: "review-run-3" }));
+
+    expect(third).toEqual({ ok: false, reason: "runtime-unavailable", rules: "absent" });
+    expect(compose).toHaveBeenCalledTimes(2);
+    expect(observed.starts).toHaveLength(2);
+    expect(observed).toMatchObject({ shutdowns: 0, closes: 0 });
+    expect(subject.instanceCount()).toBe(2);
   });
 
   it("unbinds the review worktree after the run and reuses the instance for the next review", async () => {

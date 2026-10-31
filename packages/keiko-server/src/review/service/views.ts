@@ -49,5 +49,6 @@ export function reviewRunView(
     candidateCount: row.candidateCount,
     totals: { reviewer: row.reviewer, counterChecker: row.counterChecker },
     stale,
+    ...(row.runtimeCleanup === null ? {} : { runtimeCleanup: row.runtimeCleanup }),
   };
 }

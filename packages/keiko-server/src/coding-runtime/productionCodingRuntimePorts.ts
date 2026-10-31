@@ -431,6 +431,10 @@ function buildProductionRuntimeManager(
     result: (runId) =>
       (context.slot.matches(runId) ? context.slot.manager()?.result(runId) : undefined) ??
       (context.lastResult?.runId === runId ? context.lastResult.result : undefined),
+    // A stop whose reap is unproven keeps the slot, so the run's own manager still answers (#4136).
+    succeededStopReapUnproven: (runId) =>
+      context.slot.matches(runId) &&
+      context.slot.manager()?.succeededStopReapUnproven?.(runId) === true,
   };
 }
 

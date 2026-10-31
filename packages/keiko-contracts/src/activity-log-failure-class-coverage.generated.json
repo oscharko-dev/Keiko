@@ -40570,6 +40570,12 @@
               "required": true
             },
             {
+              "name": "runtimeCleanup",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "settlement",
               "type": "string",
               "dataClass": "closed-enum",
@@ -40727,6 +40733,12 @@
           "causal": "correlation",
           "analyzerProjection": "timeline",
           "safeContextFields": [
+            {
+              "name": "placement",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
             {
               "name": "runtimeInstanceId",
               "type": "string",

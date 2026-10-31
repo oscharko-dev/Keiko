@@ -12,6 +12,7 @@ import { captureActivityLog } from "../../activityLogCapture.test-support.js";
 import {
   REVIEW_RUN_PHASES,
   REVIEW_RUN_REFUSAL_REASONS,
+  REVIEW_RUNTIME_CLEANUP_STATES,
   REVIEW_SETTLEMENT_KINDS,
   REVIEW_SETTLEMENT_REASONS,
   REVIEW_TARGET_KINDS,
@@ -19,6 +20,7 @@ import {
 import {
   REVIEW_RUN_LOG_PHASES,
   REVIEW_RUN_LOG_REFUSAL_REASONS,
+  REVIEW_RUN_LOG_RUNTIME_CLEANUP,
   REVIEW_RUN_LOG_SETTLEMENT_REASONS,
   REVIEW_RUN_LOG_SETTLEMENTS,
   REVIEW_RUN_LOG_TARGET_KINDS,
@@ -50,6 +52,7 @@ describe("review run Activity Log proofs", () => {
     expect(REVIEW_RUN_LOG_PHASES).toEqual(REVIEW_RUN_PHASES);
     expect(REVIEW_RUN_LOG_SETTLEMENTS).toEqual(REVIEW_SETTLEMENT_KINDS);
     expect(REVIEW_RUN_LOG_REFUSAL_REASONS).toEqual(REVIEW_RUN_REFUSAL_REASONS);
+    expect(REVIEW_RUN_LOG_RUNTIME_CLEANUP).toEqual(REVIEW_RUNTIME_CLEANUP_STATES);
     expect(REVIEW_RUN_LOG_SETTLEMENT_REASONS).toEqual([
       "none",
       ...REVIEW_SETTLEMENT_REASONS.incomplete,
@@ -122,6 +125,33 @@ describe("review run Activity Log proofs", () => {
       reason: "budget-exhausted",
       presentedCount: 2,
       stale: true,
+    });
+  });
+
+  // #4136: a review that settled on its coverage while the Reviewer runtime's end stayed unproven
+  // (a macOS gateway-profile run) records the cleanup beside the settlement, at warn.
+  it("proves review.run.settled with an unproven runtime cleanup as a warning", () => {
+    const capture = captureActivityLog();
+    logReviewRunSettled(capture.sink, CORRELATION, {
+      runId: "review-run-1",
+      settlement: { kind: "complete" },
+      coverage: null,
+      verdicts: { candidates: 1, confirmed: 1, refuted: 0, undecided: 0, presented: 1 },
+      reviewer: TOTALS,
+      counterChecker: TOTALS,
+      durationMs: 65_000,
+      stale: false,
+      runtimeCleanup: "unproven",
+    });
+    const [event] = capture.events;
+    if (event === undefined) throw new TypeError("expected one event");
+    expect(event.level).toBe("warn");
+    const line = formatActivityLogProofLine(event);
+    expect(line).toContain(CORRELATION);
+    expect(expectActivityLogProof("review.run.settled.line", line)).toMatchObject({
+      settlement: "complete",
+      reason: "none",
+      runtimeCleanup: "unproven",
     });
   });
 

@@ -19,6 +19,7 @@ import type {
   ReviewRoleTotals,
   ReviewRunPhase,
   ReviewRunSettlement,
+  ReviewRuntimeCleanup,
   ReviewTargetRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -84,6 +85,8 @@ export interface ReviewRunState {
   coverage: ReviewDiffSettlementInput | undefined;
   coverageSummary: ReviewDiffCoverageSummary | null;
   reviewer: ReviewerSettlementFact | undefined;
+  /** Whether the Reviewer runtime's end was proven; a warning, never a settlement (#4136). */
+  runtimeCleanup: ReviewRuntimeCleanup | undefined;
   readonly counterCheckEffects: CounterCheckEffect[];
   uncheckedCandidates: number;
   target: { readonly baseSha: string; readonly headSha: string } | undefined;
@@ -102,6 +105,7 @@ export function newReviewRunState(): ReviewRunState {
     coverage: undefined,
     coverageSummary: null,
     reviewer: undefined,
+    runtimeCleanup: undefined,
     counterCheckEffects: [],
     uncheckedCandidates: 0,
     target: undefined,
@@ -304,6 +308,7 @@ export async function runReviewer(
   state.reviewerTotals = reviewerTotals(result, deps.now() - startedAt);
   if (!result.ok) return stopWith(state, runtimeRefusalSettlement(result.reason));
   if (result.rulesDigest !== undefined) deps.store.setRulesDigest(ctx.runId, result.rulesDigest);
+  state.runtimeCleanup = result.runtimeCleanup;
   const fact = reviewerOutcomeFact(result);
   if ("kind" in fact) return stopWith(state, fact);
   state.reviewer = fact;

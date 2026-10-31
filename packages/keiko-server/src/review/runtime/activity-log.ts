@@ -21,6 +21,8 @@ import { correlationIdOrUnknown } from "../../correlation.js";
 import { reviewEvidenceDigest } from "../activity-log.js";
 
 export type ReviewRuntimeStopTrigger = "idle" | "shutdown" | "start-failed";
+/** Why an instance was composed when the repository already had one (#4136). */
+export type ReviewRuntimePlacement = "beside-quarantined";
 export type ReviewRuntimeRefusalLayer = "tool-facade" | "catalog-bridge" | "tool-bridge";
 /**
  * The tool bridge's own native transports, which the bridge dispatches before the facade sees a
@@ -40,6 +42,14 @@ const REVIEW_RUN_RUNTIME_STARTED = defineActivityLogOperation({
   fields: {
     runtimeInstanceId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 64 },
     toolProfile: { type: "string", dataClass: "closed-enum", required: true, values: ["review"] },
+    // #4136: present only when the repository's instance was quarantined (its Reviewer run left
+    // recovery-required) and this fresh instance was composed beside it.
+    placement: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["beside-quarantined"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -237,12 +247,17 @@ export function logReviewRuntimeStarted(
   correlationId: string | undefined,
   instanceId: string,
   durationMs: number,
+  placement?: ReviewRuntimePlacement,
 ): void {
   log.write(
     activityLogEvent(
       REVIEW_RUN_RUNTIME_STARTED,
       { correlationId: correlationIdOrUnknown(correlationId), durationMs },
-      { runtimeInstanceId: instanceId, toolProfile: "review" },
+      {
+        runtimeInstanceId: instanceId,
+        toolProfile: "review",
+        ...(placement === undefined ? {} : { placement }),
+      },
     ),
   );
 }
