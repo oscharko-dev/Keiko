@@ -2835,6 +2835,7 @@ const ACTION_KIND_MESSAGE_KEYS: Record<
   "git-unstage": "codingWorkbench.approval.actionKind.git-unstage",
   "git-fetch": "codingWorkbench.approval.actionKind.git-fetch",
   "git-pull": "codingWorkbench.approval.actionKind.git-pull",
+  "git-branch": "codingWorkbench.approval.actionKind.git-branch",
   "verification-command": "codingWorkbench.approval.actionKind.verification-command",
   "ci-observe": "codingWorkbench.approval.actionKind.ci-observe",
   "connector-read": "codingWorkbench.approval.actionKind.connector-read",

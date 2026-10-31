@@ -158,6 +158,22 @@
     }
   },
   {
+    "name": "keiko_git_branch",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "The new task branch's name, such as feature/short-description. It must be a valid Git branch name, not a protected one (main, dev) and not an existing branch."
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "keiko_git_commit",
     "parameters": {
       "type": "object",

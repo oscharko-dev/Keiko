@@ -55,11 +55,15 @@ function providerContentParts(
   });
 }
 
+// A tool-calling assistant turn keeps the text the model wrote beside its calls, so the next turn
+// sees the conversation it produced (#3907 AC3, parity with a standalone OpenCode run); only a turn
+// without text is sent as the bare `content: null` of a tool-only call.
 function providerContent(
   message: ChatMessage,
   hasToolCalls: boolean,
 ): OpenAiCompatiblePromptMessage["content"] {
-  if (message.role === "assistant" && hasToolCalls) return null;
+  if (message.role === "assistant" && hasToolCalls && message.content.trim().length === 0)
+    return null;
   if (message.contentParts === undefined) return message.content;
   return providerContentParts(message.contentParts);
 }

@@ -22,7 +22,8 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
-import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
+import { readVerifiedCommitFacts, untrackedOutsideCandidate } from "./verifiedCommitFacts.js";
+import type { VerifiedCommitFacts } from "./verifiedCommitTypes.js";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
 import { mintProposalId } from "./proposalId.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -286,6 +287,20 @@ export async function assertDraftBranchTarget(
   return target.repository;
 }
 
+// Full access pushes the verified commit while untracked files lie beside it, exactly as it
+// committed it (#3907, lab T17 round I): the push sends that commit alone. Unstaged changes, unsaved
+// buffers and every other mode still refuse the push.
+function admitsUntrackedBesidePush(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+  facts: VerifiedCommitFacts,
+): boolean {
+  return (
+    options.policyAllowsWithoutApproval?.("push") === true &&
+    untrackedOutsideCandidate(context, facts)
+  );
+}
+
 export async function assertDraftLocalCandidate(
   options: DraftDeliveryDependencies,
   context: DraftDeliveryRunContext,
@@ -296,7 +311,7 @@ export async function assertDraftLocalCandidate(
   const tree = await readGitTreeDigest(runtimeGitReadDeps(context, execution), binding.headSha);
   assertDraftAuthority(context);
   if (
-    !facts.clean ||
+    !(facts.clean || admitsUntrackedBesidePush(options, context, facts)) ||
     facts.headSha !== binding.headSha ||
     facts.baseSha !== binding.baseSha ||
     facts.stagedTreeDigest !== tree

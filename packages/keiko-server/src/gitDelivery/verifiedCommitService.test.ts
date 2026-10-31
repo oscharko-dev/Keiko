@@ -924,6 +924,22 @@ describe("verified Code-task commit service", () => {
     });
     expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
   });
+  // #3907 AC3, lab lane T17 (round H): the model staged its last edit beside its own untracked
+  // package-lock.json and proposed the commit before verifying it again. Full access admits the
+  // untracked file, so only the verification was missing, yet the refusal said "part of the change is
+  // not staged yet" and the model staged the same candidate over and over until the deadline.
+  it("names a staged, unverified candidate beside an untracked file verification-missing in Full access", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      policyAllowsWithoutApproval: (): boolean => true,
+    });
+    writeFileSync(join(root, "package-lock.json"), "{}\n");
+    expect(await service.propose("feat: staged beside the lockfile")).toMatchObject({
+      status: "verification-failed",
+      reason: "verification-missing",
+    });
+    expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
+  });
   it("names the drift of an untracked ticket's candidate in Full access", async () => {
     service = createVerifiedCommitService({
       ...options,

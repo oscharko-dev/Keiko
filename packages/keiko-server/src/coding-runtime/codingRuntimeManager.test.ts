@@ -3111,6 +3111,100 @@ describe("coding runtime manager", () => {
     ).toBe(false);
   });
 
+  // #3907: a governed task branch asks as itself and is admitted exactly once, for the exact branch
+  // name its approval digest was bound to, and for no other.
+  it("raises a pendingPermission for a governed task branch and admits only that name, once, after approval (#3907)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const codingToolApprovals = createCodingToolApprovalBridge();
+    const request = {
+      action: "git" as const,
+      operation: "branch" as const,
+      branchName: "feature/x",
+      actionId: "session:branch-call",
+      idempotencyKey: "session:branch-call",
+    };
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest("run-1991", request),
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      codingToolApprovals,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const projected = projectOpenCodePermissionEvent(
+      {
+        id: "evt_branch",
+        type: "permission.asked",
+        properties: {
+          id: "per_branch",
+          sessionID: "ses_1",
+          permission: OPENCODE_GOVERNED_ACTION_PERMISSION,
+          patterns: ["branch"],
+          always: [],
+          metadata: {
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            expiresAt: "2026-07-07T13:05:00.000Z",
+            actionKind: "git-branch",
+            scopeLabel: "workspace-scope",
+            risk: "medium",
+            policyReason: "approval-required",
+            commandLabel: "branch",
+            actionId: request.actionId,
+            idempotencyKey: request.idempotencyKey,
+            approvalId: approvalProof.approvalId,
+            approvalDigest: approvalProof.approvalDigest,
+            targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+          },
+        },
+      },
+      "ses_1",
+    );
+    if (projected === undefined) throw new Error("expected governed branch projection");
+    harness.children[0]?.stdout.write(`${JSON.stringify(projected)}\n`);
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: {
+        requestId: projected.requestId,
+        actionKind: "git-branch",
+        kind: "command-execution",
+        risk: "medium",
+      },
+    });
+    const redeem = (branchName: string): boolean =>
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, branchName, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      });
+    expect(redeem("feature/x")).toBe(false);
+    expect(
+      manager.issueApproval({
+        runId: "run-1991",
+        requestId: projected.requestId,
+        actionKind: "git-branch",
+        approvedByUserId: "operator",
+      }).ok,
+    ).toBe(true);
+    expect(redeem("feature/y")).toBe(false);
+    expect(redeem("feature/x")).toBe(true);
+    expect(redeem("feature/x")).toBe(false);
+  });
+
   it("rolls back the issued approval when verification bridge activation fails", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
