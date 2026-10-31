@@ -10,6 +10,7 @@ import {
   type JiraIssueTemplate,
   type JiraTemplateActivation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { findOwnedJiraPod, isReadyJiraPod } from "./atlassian/jiraPodAccess.js";
 import { readMutation, withSkillAccess } from "./markdown-skill-routes.js";
@@ -86,15 +87,16 @@ function podRequest(
   const factory = deps.atlassianConnectorCredentials?.httpBodyPortFactory;
   if (factory === undefined) throw notFound("Jira Pod");
   const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   return createJiraReadRequest(
     {
       baseUrl: pod.baseUrl,
       deployment: pod.deployment,
-      http: factory(pod, ctx.correlationId, { beforeDispatch: () => !signal.aborted }),
+      http: factory(pod, correlationId, { beforeDispatch: () => !signal.aborted }),
     },
     {
-      invocationId: ctx.correlationId,
-      correlationId: ctx.correlationId,
+      invocationId: correlationId,
+      correlationId,
       signal,
       beforeEffect: () => !signal.aborted,
     },

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  compileJiraTemplatePattern,
   describeJiraTemplateParseErrors,
   isJiraIssueTemplateDocument,
   jiraIssueTemplateLabel,
+  jiraTemplatePatternIssue,
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
 } from "./jira-issue-template.js";
@@ -100,18 +102,17 @@ describe("parseJiraIssueTemplate", () => {
   });
 
   it("rejects malformed lines", () => {
-    const errors = failure(template([...VALID, "just words", "summaryMinLength: 5", "- orphan item"]));
+    const errors = failure(
+      template([...VALID, "just words", "summaryMinLength: 5", "- orphan item"]),
+    );
     expect(errors.map((error) => error.code)).toEqual(["malformed-line", "malformed-line"]);
   });
 
   it("requires the identifying keys", () => {
     const errors = failure(template(["keiko: jira-issue-template"], "## Goal\n"));
-    expect(errors.filter((error) => error.code === "missing-key").map((error) => error.key)).toEqual([
-      "version",
-      "project",
-      "issueType",
-      "activateOn",
-    ]);
+    expect(
+      errors.filter((error) => error.code === "missing-key").map((error) => error.key),
+    ).toEqual(["version", "project", "issueType", "activateOn"]);
   });
 
   it.each([
@@ -187,7 +188,9 @@ describe("template identification", () => {
 
   it("does not detect it in ordinary skills or in the body", () => {
     expect(isJiraIssueTemplateDocument("# Skill\nkeiko: jira-issue-template")).toBe(false);
-    expect(isJiraIssueTemplateDocument("---\nname: x\n---\nkeiko: jira-issue-template")).toBe(false);
+    expect(isJiraIssueTemplateDocument("---\nname: x\n---\nkeiko: jira-issue-template")).toBe(
+      false,
+    );
   });
 
   it("labels a template and normalises headings", () => {
@@ -195,5 +198,54 @@ describe("template identification", () => {
     expect(normalizeJiraSectionHeading("  **Acceptance   Criteria**: ")).toBe(
       "acceptance criteria",
     );
+  });
+});
+
+describe("the template pattern grammar", () => {
+  it.each([
+    "^[A-Z].*",
+    "^[a-z-]+$",
+    "(ab)+",
+    "a{1,3}b",
+    "a+?b",
+    "^(?:foo|bar)$",
+    String.raw`\d{3}-\w+`,
+    "[a-z0-9_]+",
+    String.raw`\[x\]`,
+    "a|b",
+    "{literal}",
+  ])("accepts %s and a pattern it accepts always compiles", (pattern) => {
+    expect(jiraTemplatePatternIssue(pattern)).toBeUndefined();
+    expect(() => compileJiraTemplatePattern(pattern)).not.toThrow();
+  });
+
+  it.each([
+    "",
+    "*a",
+    "a**",
+    "^*",
+    "|*",
+    "a+?+",
+    "(a+)+",
+    "(a|b)*",
+    "((a+)b)+",
+    "(?=a)",
+    "(?<name>a)",
+    String.raw`(a)\1`,
+    "[z-a]",
+    "a{3,1}",
+    "(",
+    ")",
+    "[abc",
+    "a\\",
+    "a".repeat(201),
+  ])("refuses %j", (pattern) => {
+    expect(jiraTemplatePatternIssue(pattern)).toBeDefined();
+    expect(() => compileJiraTemplatePattern(pattern)).toThrow(TypeError);
+  });
+
+  it("matches the way the lead wrote it", () => {
+    expect(compileJiraTemplatePattern("^[A-Z][a-z ]+$").test("Add login")).toBe(true);
+    expect(compileJiraTemplatePattern("^[A-Z][a-z ]+$").test("add login")).toBe(false);
   });
 });

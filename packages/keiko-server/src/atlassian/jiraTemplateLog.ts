@@ -1,7 +1,5 @@
 import type { JiraIssueTemplateSource } from "@oscharko-dev/keiko-connectors";
 import {
-  JIRA_TEMPLATE_RULE_IDS,
-  JIRA_TEMPLATE_VIOLATIONS_MAX,
   type JiraMutationAttempt,
   type JiraTemplateRuleId,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -56,8 +54,22 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "closed-enum",
       required: true,
-      values: JIRA_TEMPLATE_RULE_IDS,
-      maxItems: JIRA_TEMPLATE_VIOLATIONS_MAX,
+      // Literal on purpose (the registry reads a closed literal); a test pins it to the contract.
+      values: [
+        "summary-too-short",
+        "summary-too-long",
+        "summary-pattern",
+        "section-missing",
+        "section-empty",
+        "field-missing",
+        "field-unavailable",
+        "label-missing",
+        "label-pattern",
+        "label-count",
+        "parent-missing",
+        "template-unreadable",
+      ],
+      maxItems: 25,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },

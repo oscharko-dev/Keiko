@@ -41,7 +41,12 @@ const WIKI_HEADING = /^\s*h[1-6]\.[ \t]+(.+?)[ \t]*$/u;
 const VALUE_KEYS = ["name", "value", "key", "displayName", "id"] as const;
 
 function same(left: string | undefined, right: string): boolean {
-  return left !== undefined && left.trim().toLowerCase() === right.trim().toLowerCase();
+  return left?.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function scalarText(candidate: unknown): string {
+  if (typeof candidate === "string") return candidate.trim().length > 0 ? candidate : "";
+  return typeof candidate === "number" ? String(candidate) : "";
 }
 
 /** Text a Jira wire value carries; empty for anything that has no readable identity. */
@@ -51,12 +56,7 @@ export function jiraTemplateValueText(value: unknown): string {
   if (Array.isArray(value)) return value.map(jiraTemplateValueText).join(" ").trim();
   if (typeof value !== "object" || value === null) return "";
   const record = value as Record<string, unknown>;
-  for (const key of VALUE_KEYS) {
-    const candidate = record[key];
-    if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
-    if (typeof candidate === "number") return String(candidate);
-  }
-  return "";
+  return VALUE_KEYS.map((key) => scalarText(record[key])).find((text) => text !== "") ?? "";
 }
 
 export function jiraTemplateValuePresent(value: unknown): boolean {
@@ -152,12 +152,9 @@ function textOf(context: Context, id: string): string {
 }
 
 function matchesPattern(pattern: string, value: string): boolean {
-  try {
-    return compileJiraTemplatePattern(pattern).test(value.slice(0, MATCH_INPUT_MAX));
-  } catch {
-    // A pattern that cannot be compiled (a hand-built template) can never be proven satisfied.
-    return false;
-  }
+  // A parsed template's pattern always compiles; a hand-built unsafe one throws, and the
+  // executor's correlated diagnostic records it while the write stays unsent.
+  return compileJiraTemplatePattern(pattern).test(value.slice(0, MATCH_INPUT_MAX));
 }
 
 function checkSummary(context: Context): void {
@@ -277,7 +274,11 @@ export interface JiraTemplateFinding {
 export interface JiraTemplateInstanceMetadata {
   /** Absent when the instance's field list could not be read; field findings are then skipped. */
   readonly fields?: readonly JiraFieldCatalogEntry[];
-  readonly linkTypes?: readonly { readonly name: string; readonly inward?: string; readonly outward?: string }[];
+  readonly linkTypes?: readonly {
+    readonly name: string;
+    readonly inward?: string;
+    readonly outward?: string;
+  }[];
   /** The project as the instance reports it; absent when the project key is unknown. */
   readonly project?: {
     readonly key: string;

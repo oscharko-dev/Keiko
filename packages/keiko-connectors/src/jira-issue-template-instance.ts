@@ -5,8 +5,14 @@ import {
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
-import type { JiraFieldCatalogEntry, JiraTemplateInstanceMetadata } from "./jira-issue-template-check.js";
-import { jiraCreateMutationMetadata, type JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import type {
+  JiraFieldCatalogEntry,
+  JiraTemplateInstanceMetadata,
+} from "./jira-issue-template-check.js";
+import {
+  jiraCreateMutationMetadata,
+  type JiraMutationRequest,
+} from "./jira-managed-mutation-metadata.js";
 
 /**
  * Read-only instance facts for the Jira Pod template settings (#4177): what a template is
@@ -41,7 +47,12 @@ interface ProjectFacts {
 
 function projectFacts(body: Record<string, unknown> | undefined): ProjectFacts | undefined {
   const types = asArray(body?.issueTypes);
-  if (body === undefined || typeof body.id !== "string" || typeof body.key !== "string" || types === undefined)
+  if (
+    body === undefined ||
+    typeof body.id !== "string" ||
+    typeof body.key !== "string" ||
+    types === undefined
+  )
     return undefined;
   const issueTypes = types.flatMap((item): readonly { id: string; name: string }[] => {
     const record = asRecord(item);
@@ -112,12 +123,19 @@ async function readStatuses(
   const types = response.ok ? response.items : undefined;
   if (types === undefined || types.length > 200) return undefined;
   const wanted = project.issueTypes.find(
-    (type) => type.id === template.issueType || type.name.toLowerCase() === template.issueType.toLowerCase(),
+    (type) =>
+      type.id === template.issueType ||
+      type.name.toLowerCase() === template.issueType.toLowerCase(),
   );
+  return statusNames(types, wanted?.id);
+}
+
+/** Status names of the wanted issue type's workflow, or of every type when it is unknown. */
+function statusNames(types: readonly unknown[], wantedId: string | undefined): readonly string[] {
   const names = new Set<string>();
   for (const type of types) {
     const record = asRecord(type);
-    if (wanted !== undefined && record?.id !== wanted.id) continue;
+    if (wantedId !== undefined && record?.id !== wantedId) continue;
     for (const status of asArray(record?.statuses) ?? []) {
       const name = asRecord(status)?.name;
       if (typeof name === "string") names.add(name);
@@ -136,14 +154,17 @@ export async function readJiraTemplateInstanceMetadata(
   const { project } = read;
   const fields = await readFieldCatalog(request);
   const linkTypes = await readLinkTypes(request);
-  const statuses = project === undefined ? undefined : await readStatuses(request, template, project);
+  const statuses =
+    project === undefined ? undefined : await readStatuses(request, template, project);
   return {
     ok: true,
     instance: {
       ...(fields === undefined ? {} : { fields }),
       ...(linkTypes === undefined ? {} : { linkTypes }),
       ...(statuses === undefined ? {} : { statuses }),
-      ...(project === undefined ? {} : { project: { key: project.key, issueTypes: project.issueTypes } }),
+      ...(project === undefined
+        ? {}
+        : { project: { key: project.key, issueTypes: project.issueTypes } }),
     },
   };
 }
@@ -207,7 +228,10 @@ export function renderProposedJiraIssueTemplate(input: JiraTemplateProposalInput
       : [`requiredFields: [${input.requiredFields.map(listItem).join(", ")}]`]),
     "---",
   ];
-  const sections = input.sections.flatMap((section) => [`## ${section.replace(/[\r\n]+/gu, " ")}`, ""]);
+  const sections = input.sections.flatMap((section) => [
+    `## ${section.replace(/[\r\n]+/gu, " ")}`,
+    "",
+  ]);
   return [...front, `# ${input.issueType} template`, "", ...sections].join("\n").trimEnd() + "\n";
 }
 
@@ -287,6 +311,8 @@ export async function proposeJiraIssueTemplates(
   );
   return {
     ok: true,
-    proposals: proposals.filter((proposal): proposal is JiraTemplateProposal => proposal !== undefined),
+    proposals: proposals.filter(
+      (proposal): proposal is JiraTemplateProposal => proposal !== undefined,
+    ),
   };
 }

@@ -266,6 +266,19 @@ function reviewableAction(
   return READ_TOOLS.has(action.tool) || options.reviewableWrite?.(action) === true;
 }
 
+/** The template dry run first: a violating draft is refused before any human is asked. */
+async function requestWriteStage(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+): Promise<void> {
+  const refusal = await options.preflightWrite?.(action, context);
+  if (refusal !== undefined) {
+    throw new CatalogDispatchFault("failed", "provider-reported-error", undefined, refusal);
+  }
+  await requestCatalogWriteApproval({ ...options, context: () => context }, action);
+}
+
 async function requestConsent(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
@@ -290,13 +303,7 @@ async function requestConsent(
   if (request.kind === "review-required")
     await options.requestReadConsent(request.grant, context.signal);
   if (!readPermission(options, action).ok) return undefined;
-  if (!READ_TOOLS.has(action.tool)) {
-    const refusal = await options.preflightWrite?.(action, context);
-    if (refusal !== undefined) {
-      throw new CatalogDispatchFault("failed", "provider-reported-error", undefined, refusal);
-    }
-    await requestCatalogWriteApproval({ ...options, context: () => context }, action);
-  }
+  if (!READ_TOOLS.has(action.tool)) await requestWriteStage(options, action, context);
   return preview(options, context.authority, action).ok ? action : undefined;
 }
 

@@ -35535,12 +35535,20 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["skills.library.operation", "skills.workflow.attached"],
+        "state": [
+          "jira.template.admission",
+          "skills.library.operation",
+          "skills.workflow.attached"
+        ],
         "end": [],
         "failure": [],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "jira.template.admission",
+          "mode": "correlation"
+        },
         {
           "op": "skills.library.operation",
           "mode": "correlation"
@@ -35551,9 +35559,55 @@
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["skills.library.operation", "skills.workflow.attached"],
+      "resourceSignals": [
+        "jira.template.admission",
+        "skills.library.operation",
+        "skills.workflow.attached"
+      ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "jira.template.admission",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "operation",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "ruleIds",
+              "type": "string-array",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "violationCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["jira.template.admission.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "skills.library.operation",
           "owner": "keiko-server",

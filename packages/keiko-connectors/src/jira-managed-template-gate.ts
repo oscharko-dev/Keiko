@@ -145,7 +145,9 @@ function appliedLabels(
   prior: unknown,
   update: JiraTemplateGateInput["validated"]["update"],
 ): readonly string[] {
-  const labels = new Set((asArray(prior) ?? []).filter((item): item is string => typeof item === "string"));
+  const labels = new Set(
+    (asArray(prior) ?? []).filter((item): item is string => typeof item === "string"),
+  );
   for (const operation of update.labels ?? []) {
     if (operation.add !== undefined) labels.add(operation.add);
     if (operation.remove !== undefined) labels.delete(operation.remove);

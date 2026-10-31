@@ -86,12 +86,12 @@ describe("summary rules", () => {
     expect(ids(template, subject({}))).toContain("summary-too-short:at least 8 characters");
   });
 
-  it("fails closed on a pattern that cannot run", () => {
+  it("throws, rather than guessing, on a hand-built unsafe pattern", () => {
     const broken: JiraIssueTemplate = {
       ...template,
       summary: { pattern: "(a+)+$" },
     };
-    expect(ids(broken, subject({ summary: "aaaa" }))).toEqual(["summary-pattern:(a+)+$"]);
+    expect(() => ids(broken, subject({ summary: "aaaa" }))).toThrow("pattern structure");
   });
 });
 
@@ -113,9 +113,9 @@ describe("description sections", () => {
   });
 
   it("does not take a heading from inside another section's text", () => {
-    expect(ids(template, subject({ description: "Context and Acceptance criteria prose" }))).toEqual(
-      ["section-missing:Context", "section-missing:Acceptance criteria"],
-    );
+    expect(
+      ids(template, subject({ description: "Context and Acceptance criteria prose" })),
+    ).toEqual(["section-missing:Context", "section-missing:Acceptance criteria"]);
   });
 
   it("reads an absent description as no sections", () => {
@@ -169,9 +169,10 @@ describe("required fields and the parent relation", () => {
     expect(ids(template, blank)).toContain("parent-missing:Epic Link");
   });
 
-  it("checks a parent link only for edits and transitions", () => {
+  it("checks a parent link on every write, counting links the write adds", () => {
     const linked = parsed(["parentLink: is child of"], "# T");
-    expect(ids(linked, subject({}))).toEqual([]);
+    expect(ids(linked, subject({}))).toEqual(["parent-missing:is child of"]);
+    expect(ids(linked, subject({}, { linkTypes: ["Is Child Of"] }))).toEqual([]);
     expect(ids(linked, subject({}, { operation: "edit", linkTypes: [] }))).toEqual([
       "parent-missing:is child of",
     ]);
@@ -182,7 +183,10 @@ describe("required fields and the parent relation", () => {
 });
 
 describe("label rules", () => {
-  const template = parsed(["requiredLabels: [backend]", "labelPattern: ^[a-z-]+$", "minLabels: 2"], "# T");
+  const template = parsed(
+    ["requiredLabels: [backend]", "labelPattern: ^[a-z-]+$", "minLabels: 2"],
+    "# T",
+  );
 
   it("accepts conforming labels and matches required names case-insensitively", () => {
     expect(ids(template, subject({ labels: ["backend", "team-a"] }))).toEqual([]);
@@ -209,9 +213,9 @@ describe("activation and matching", () => {
 
   it("matches project, issue type name or id, and activation point", () => {
     expect(matchingJiraIssueTemplates([template], subject({}))).toHaveLength(1);
-    expect(
-      matchingJiraIssueTemplates([template], subject({}, { projectKey: "abc" })),
-    ).toHaveLength(1);
+    expect(matchingJiraIssueTemplates([template], subject({}, { projectKey: "abc" }))).toHaveLength(
+      1,
+    );
     expect(
       matchingJiraIssueTemplates([template], subject({}, { projectKey: "OTHER" })),
     ).toHaveLength(0);
@@ -229,7 +233,9 @@ describe("activation and matching", () => {
     expect(at({ ...base, transition })).toBe(1);
     expect(at({ ...base, transition: { id: "31", name: "Ready" } })).toBe(1);
     expect(at({ ...base, transition: { id: "Ready" } })).toBe(1);
-    expect(at({ ...base, transition: { id: "99", name: "Block", targetStatusName: "Blocked" } })).toBe(0);
+    expect(
+      at({ ...base, transition: { id: "99", name: "Block", targetStatusName: "Blocked" } }),
+    ).toBe(0);
     expect(at(base)).toBe(0);
   });
 

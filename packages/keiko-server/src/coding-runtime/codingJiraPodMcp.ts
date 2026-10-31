@@ -32,7 +32,10 @@ import {
   jiraLinkCountsOfResult,
   validJiraMutationAttempt,
 } from "../atlassian/jiraMutationResult.js";
-import { jiraIssueTemplateSource, recordJiraTemplateAttempt } from "../atlassian/jiraTemplateLog.js";
+import {
+  jiraIssueTemplateSource,
+  recordJiraTemplateAttempt,
+} from "../atlassian/jiraTemplateLog.js";
 import type { JiraPodAccessDeps, JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";

@@ -23,7 +23,10 @@ const CREATE_FIELDS = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
   named("summary", "string", "Summary", true),
-  { ...named("description", "string", "Description"), schema: { type: "string", system: "description" } },
+  {
+    ...named("description", "string", "Description"),
+    schema: { type: "string", system: "description" },
+  },
   {
     ...named("customfield_10016", "number", "Story Points"),
     schema: { type: "number", custom: "com.atlassian.jira.plugin.system.customfieldtypes:float" },
@@ -31,7 +34,10 @@ const CREATE_FIELDS = [
 ];
 const EDIT_FIELDS = {
   summary: named("summary", "string", "Summary"),
-  description: { ...named("description", "string", "Description"), schema: { type: "string", system: "description" } },
+  description: {
+    ...named("description", "string", "Description"),
+    schema: { type: "string", system: "description" },
+  },
 };
 
 function template(frontMatter: readonly string[], body = SECTIONS): JiraIssueTemplate {
@@ -52,6 +58,36 @@ function template(frontMatter: readonly string[], body = SECTIONS): JiraIssueTem
 }
 const ALL_POINTS = ["activateOn: [create, edit, transition:Ready]"];
 
+interface ReadRoute {
+  readonly suffix?: string;
+  readonly includes?: string;
+  readonly body: unknown;
+  readonly status?: number;
+}
+function readRoutes(remote: Remote): readonly ReadRoute[] {
+  return [
+    { suffix: "/project/10000", body: { key: "SYN" } },
+    { suffix: "/issuetype/10001", body: { id: "10001", name: "Story" } },
+    {
+      includes: "createmeta",
+      body: { values: CREATE_FIELDS, start: 0, size: 100, last: true, total: CREATE_FIELDS.length },
+    },
+    { suffix: "editmeta", body: { fields: EDIT_FIELDS } },
+    {
+      suffix: "/transitions",
+      body: {
+        transitions: [
+          { id: "31", name: "Start", to: { id: "3", name: "Ready" }, fields: {} },
+          { id: "41", name: "Park", to: { id: "4", name: "Parked" }, fields: {} },
+        ],
+      },
+    },
+    remote.fieldCatalog
+      ? { suffix: "/field", body: [{ id: "customfield_10016", name: "Story Points" }] }
+      : { suffix: "/field", body: {}, status: 404 },
+    { suffix: "/issue/SYN-1", body: { id: "10001", key: "SYN-1", fields: remote.issue } },
+  ];
+}
 interface Remote {
   issue: Record<string, unknown>;
   fieldCatalog: boolean;
@@ -74,41 +110,33 @@ function fixture(
   http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
   writes: () => string[];
   paths: () => string[];
-  run: (op: JiraMutationOperation, args: CatalogJsonObject) => ReturnType<typeof executeJiraManagedMutation>;
-  check: (op: JiraMutationOperation, args: CatalogJsonObject) => ReturnType<typeof checkJiraManagedMutationTemplates>;
+  run: (
+    op: JiraMutationOperation,
+    args: CatalogJsonObject,
+  ) => ReturnType<typeof executeJiraManagedMutation>;
+  check: (
+    op: JiraMutationOperation,
+    args: CatalogJsonObject,
+  ) => ReturnType<typeof checkJiraManagedMutationTemplates>;
 } {
+  const reads = readRoutes(remote);
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
     if (request.method !== "GET") {
       return Promise.resolve(
-        path.endsWith("/issue") ? response({ key: "SYN-1", id: "10001" }, 201) : response(undefined, 204),
+        path.endsWith("/issue")
+          ? response({ key: "SYN-1", id: "10001" }, 201)
+          : response(undefined, 204),
       );
     }
-    if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
-    if (path.endsWith("/issuetype/10001")) return Promise.resolve(response({ id: "10001", name: "Story" }));
-    if (path.includes("createmeta"))
-      return Promise.resolve(
-        response({ values: CREATE_FIELDS, start: 0, size: 100, last: true, total: CREATE_FIELDS.length }),
-      );
-    if (path.endsWith("editmeta")) return Promise.resolve(response({ fields: EDIT_FIELDS }));
-    if (path.endsWith("/transitions"))
-      return Promise.resolve(
-        response({
-          transitions: [
-            { id: "31", name: "Start", to: { id: "3", name: "Ready" }, fields: {} },
-            { id: "41", name: "Park", to: { id: "4", name: "Parked" }, fields: {} },
-          ],
-        }),
-      );
-    if (path.endsWith("/field"))
-      return Promise.resolve(
-        remote.fieldCatalog
-          ? response([{ id: "customfield_10016", name: "Story Points" }])
-          : response({}, 404),
-      );
-    if (path.endsWith("/issue/SYN-1"))
-      return Promise.resolve(response({ id: "10001", key: "SYN-1", fields: remote.issue }));
-    return Promise.resolve(response({}, 404));
+    const match = reads.find(
+      (route) =>
+        (route.suffix !== undefined && path.endsWith(route.suffix)) ||
+        (route.includes !== undefined && path.includes(route.includes)),
+    );
+    return Promise.resolve(
+      match === undefined ? response({}, 404) : response(match.body, match.status),
+    );
   });
   const context = {
     invocationId: "synthetic",
@@ -122,7 +150,10 @@ function fixture(
     http,
     ...(templates === undefined
       ? {}
-      : { issueTemplates: typeof templates === "function" ? templates : () => templates }),
+      : {
+          issueTemplates: (): JiraIssueTemplateSet =>
+            typeof templates === "function" ? templates() : templates,
+        }),
   };
   const lines = (): string[] =>
     http.mock.calls.map(([request]) => `${request.method} ${new URL(request.url).pathname}`);
@@ -140,7 +171,10 @@ const CREATE = {
   issueTypeId: "10001",
   fields: { summary: "Add login flow", description: FULL_DESCRIPTION },
 };
-const SET = (...templates: JiraIssueTemplate[]): JiraIssueTemplateSet => ({ templates, unreadable: 0 });
+const SET = (...templates: JiraIssueTemplate[]): JiraIssueTemplateSet => ({
+  templates,
+  unreadable: 0,
+});
 
 describe("create", () => {
   it("refuses a violating create with structured violations and never writes", async () => {
@@ -280,7 +314,10 @@ describe("edit", () => {
 });
 
 describe("transition", () => {
-  const gated = template(["activateOn: [transition:Ready]", "requiredFields: [Story Points]"], "# T");
+  const gated = template(
+    ["activateOn: [transition:Ready]", "requiredFields: [Story Points]"],
+    "# T",
+  );
 
   it("refuses a transition into the activating status until the issue conforms", async () => {
     const f = fixture(SET(gated));

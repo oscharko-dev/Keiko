@@ -321,30 +321,42 @@ interface FieldTarget {
     readonly targetStatusName?: string;
   };
 }
-async function fieldMutation(
+/** The template gate in front of an edit or transition; `undefined` means the write may proceed. */
+async function admitFieldMutation(
   request: JiraMutationRequest,
-  metadata: JiraMutationMetadata,
-  args: CatalogJsonObject,
-  { purpose, issueKey, targetStatusId, transition }: FieldTarget,
+  metadata: readonly JiraFieldMetadata[],
+  linked: Extract<LinkedFieldChanges, { ok: true }>,
+  { purpose, issueKey, transition }: FieldTarget,
   policy: MutationPolicy,
-): Promise<JiraMutationAttempt> {
-  if (!metadata.ok) return metadata;
-  const changes = linkedFieldChanges(metadata.fields, args, purpose);
-  if (!changes.ok) return changes;
-  const { validated } = changes;
-  const values = withLinks(validated, changes.links);
+): Promise<JiraMutationAttempt | undefined> {
   const gate = await gateJiraMutationByTemplates({
     request,
     source: policy.templates,
     operation: purpose,
-    metadata: metadata.fields,
-    validated,
-    links: changes.links,
+    metadata,
+    validated: linked.validated,
+    links: linked.links,
     target: { issueKey },
     ...(transition === undefined ? {} : { transition }),
   });
   if (!gate.ok) return gate;
-  if (policy.check) return CHECKED;
+  return policy.check ? CHECKED : undefined;
+}
+async function fieldMutation(
+  request: JiraMutationRequest,
+  metadata: JiraMutationMetadata,
+  args: CatalogJsonObject,
+  fieldTarget: FieldTarget,
+  policy: MutationPolicy,
+): Promise<JiraMutationAttempt> {
+  const { purpose, issueKey, targetStatusId } = fieldTarget;
+  if (!metadata.ok) return metadata;
+  const linked = linkedFieldChanges(metadata.fields, args, purpose);
+  if (!linked.ok) return linked;
+  const { validated } = linked;
+  const values = withLinks(validated, linked.links);
+  const admitted = await admitFieldMutation(request, metadata.fields, linked, fieldTarget, policy);
+  if (admitted !== undefined) return admitted;
   const transitionId = purpose === "transition" ? transitionArgument(args) : undefined;
   const target = fieldMutationTarget(issueKey, transitionId);
   const prior = await readJiraMutationIssue(
@@ -354,7 +366,7 @@ async function fieldMutation(
   );
   if (!prior.ok) return prior;
   // Jira does not de-duplicate links: one already on the issue is not written again.
-  const plan = planJiraIssueLinks(changes.links, prior.fields.issuelinks);
+  const plan = planJiraIssueLinks(linked.links, prior.fields.issuelinks);
   const acknowledged = await statusMutation(request, target.path, target.method, {
     fields: validated.fields,
     update: linkedUpdate(validated, plan),

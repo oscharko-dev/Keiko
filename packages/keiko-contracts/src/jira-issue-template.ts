@@ -107,12 +107,15 @@ export const JIRA_TEMPLATE_VIOLATIONS_MAX = 25;
 interface PatternGroup {
   inner: boolean;
 }
-
-function quantifierAt(source: string, index: number): boolean {
-  const character = source[index];
-  if (character === "*" || character === "+") return true;
-  return character === "{" && /^\{\d{1,3}(?:,\d{0,3})?\}/u.test(source.slice(index));
+interface PatternState {
+  readonly stack: PatternGroup[];
+  /** The previous token is an atom a quantifier may follow. */
+  repeatable: boolean;
+  /** The previous token was a quantifier, so `?` makes it lazy. */
+  lazyAllowed: boolean;
 }
+
+const BRACE_QUANTIFIER = /^\{(\d{1,3})(?:,(\d{0,3}))?\}/u;
 
 /** Index after a character class starting at `start`, or -1 when it never closes. */
 function classEnd(source: string, start: number): number {
@@ -123,58 +126,133 @@ function classEnd(source: string, start: number): number {
   return -1;
 }
 
-function unsafeGroupStructure(source: string): boolean {
-  const stack: PatternGroup[] = [];
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index] ?? "";
-    if (character === "\\") {
-      if (/[1-9kK]/u.test(source[index + 1] ?? "")) return true;
+/** Every `a-z` range between two plain characters must run upward. */
+function classRangesValid(body: string): boolean {
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === "\\") {
       index += 1;
-    } else if (character === "[") {
-      const end = classEnd(source, index);
-      if (end < 0) return true;
-      index = end;
-    } else if (character === "(") {
-      if (source[index + 1] === "?" && source[index + 2] !== ":") return true;
-      stack.push({ inner: false });
-    } else if (character === ")") {
-      const group = stack.pop();
-      if (group === undefined) return true;
-      const quantified = quantifierAt(source, index + 1);
-      if (quantified && group.inner) return true;
-      const parent = stack.at(-1);
-      if (parent !== undefined && (quantified || group.inner)) parent.inner = true;
-    } else if (character === "|" || quantifierAt(source, index)) {
-      const group = stack.at(-1);
-      if (group !== undefined) group.inner = true;
+    } else if (body[index + 1] === "-" && index + 2 < body.length && body[index + 2] !== "\\") {
+      if ((body[index] ?? "") > (body[index + 2] ?? "")) return false;
+      index += 2;
     }
   }
-  return stack.length > 0;
+  return true;
+}
+
+function atom(state: PatternState, next: number): number {
+  state.repeatable = true;
+  state.lazyAllowed = false;
+  return next;
+}
+
+function boundary(state: PatternState, next: number): number {
+  state.repeatable = false;
+  state.lazyAllowed = false;
+  return next;
+}
+
+function escapeStep(source: string, index: number, state: PatternState): number | undefined {
+  const escaped = source[index + 1];
+  if (escaped === undefined || /[1-9kK]/u.test(escaped)) return undefined;
+  return atom(state, index + 2);
+}
+
+function classStep(source: string, index: number, state: PatternState): number | undefined {
+  const end = classEnd(source, index);
+  if (end < 0 || !classRangesValid(source.slice(index + 1, end))) return undefined;
+  return atom(state, end + 1);
+}
+
+function openGroup(source: string, index: number, state: PatternState): number | undefined {
+  if (source[index + 1] === "?" && source[index + 2] !== ":") return undefined;
+  state.stack.push({ inner: false });
+  return boundary(state, source[index + 1] === "?" ? index + 3 : index + 1);
+}
+
+function closeGroup(source: string, index: number, state: PatternState): number | undefined {
+  const group = state.stack.pop();
+  if (group === undefined) return undefined;
+  const quantified = quantifierWidth(source, index + 1) > 0;
+  if (quantified && group.inner) return undefined;
+  const parent = state.stack.at(-1);
+  if (parent !== undefined && (quantified || group.inner)) parent.inner = true;
+  return atom(state, index + 1);
+}
+
+/** Width of the quantifier starting at `index`, or 0 when none starts there. */
+function quantifierWidth(source: string, index: number): number {
+  const character = source[index];
+  if (character === "*" || character === "+" || character === "?") return 1;
+  const brace = character === "{" ? BRACE_QUANTIFIER.exec(source.slice(index)) : null;
+  if (brace === null) return 0;
+  const [whole, low = "", high = ""] = brace;
+  return high !== "" && Number(low) > Number(high) ? -1 : whole.length;
+}
+
+function quantifierStep(source: string, index: number, state: PatternState): number | undefined {
+  const width = quantifierWidth(source, index);
+  if (width < 0) return undefined;
+  if (source[index] === "?" && state.lazyAllowed) return boundary(state, index + 1);
+  if (!state.repeatable) return undefined;
+  const group = state.stack.at(-1);
+  if (group !== undefined) group.inner = true;
+  state.repeatable = false;
+  state.lazyAllowed = true;
+  return index + width;
+}
+
+function plainStep(source: string, index: number, state: PatternState): number | undefined {
+  const character = source[index] ?? "";
+  if (character === "|") {
+    const group = state.stack.at(-1);
+    if (group !== undefined) group.inner = true;
+    return boundary(state, index + 1);
+  }
+  if (character === "^" || character === "$") return boundary(state, index + 1);
+  if (quantifierWidth(source, index) !== 0) return quantifierStep(source, index, state);
+  return atom(state, index + 1);
+}
+
+/** The next index to scan, or `undefined` when the construct is outside the safe grammar. */
+function patternStep(source: string, index: number, state: PatternState): number | undefined {
+  const character = source[index] ?? "";
+  if (character === "\\") return escapeStep(source, index, state);
+  if (character === "[") return classStep(source, index, state);
+  if (character === "(") return openGroup(source, index, state);
+  if (character === ")") return closeGroup(source, index, state);
+  return plainStep(source, index, state);
+}
+
+function unsafeGroupStructure(source: string): boolean {
+  const state: PatternState = { stack: [], repeatable: false, lazyAllowed: false };
+  let index = 0;
+  while (index < source.length) {
+    const next = patternStep(source, index, state);
+    if (next === undefined) return true;
+    index = next;
+  }
+  return state.stack.length > 0;
 }
 
 /**
- * Why a template pattern is refused, or `undefined` when it is safe to run. Patterns run on text a
- * model wrote, so a quantified group may not contain a quantifier or an alternation (catastrophic
- * backtracking), and lookarounds and back-references are not part of the grammar. Input is also
- * bounded by the checker (a Jira summary or label is at most 255 characters).
+ * Why a template pattern is refused, or `undefined` when it is safe to run. The grammar is a
+ * closed subset of JavaScript regular expressions (literals, classes, `. ^ $ | ( ) (?: )`,
+ * greedy and lazy quantifiers), validated without compiling it: a quantified group may not hold a
+ * quantifier or an alternation (catastrophic backtracking), and lookarounds, back-references,
+ * named groups and malformed quantifiers or ranges are refused. A pattern this accepts compiles.
+ * The checker also bounds its input (a Jira summary or label is at most 255 characters).
  */
 export function jiraTemplatePatternIssue(source: string): string | undefined {
   if (source.length === 0 || source.length > JIRA_ISSUE_TEMPLATE_LIMITS.patternChars)
     return "pattern length";
-  if (unsafeGroupStructure(source)) return "pattern structure";
-  try {
-    new RegExp(source, "u");
-  } catch {
-    return "pattern syntax";
-  }
-  return undefined;
+  return unsafeGroupStructure(source) ? "pattern structure" : undefined;
 }
 
 /** The compiled template pattern; callers must have accepted the pattern at parse time. */
 export function compileJiraTemplatePattern(source: string): RegExp {
   const issue = jiraTemplatePatternIssue(source);
   if (issue !== undefined) throw new TypeError(issue);
-  return new RegExp(source, "u");
+  return new RegExp(source);
 }
 
 const KEYS = [
@@ -232,41 +310,23 @@ export function isJiraIssueTemplateDocument(markdown: string): boolean {
   return lines.some((line) => /^keiko\s*:\s*"?jira-issue-template"?\s*$/u.test(line.trim()));
 }
 
+const QUOTED = /^"(?:[^"\\\p{Cc}]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"$/u;
+
 function unquote(raw: string): string | undefined {
   const value = raw.trim();
   if (!value.startsWith('"')) return value.includes('"') ? undefined : value;
-  if (value.length < 2 || !value.endsWith('"')) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return typeof parsed === "string" ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  // Only a well-formed JSON string literal reaches the decoder, so it cannot throw.
+  return QUOTED.test(value) ? (JSON.parse(value) as string) : undefined;
 }
+
+const INLINE_ITEM = /(?:"(?:[^"\\]|\\.)*"|[^,"])+/gu;
 
 function inlineItems(raw: string): readonly string[] | undefined {
   const inner = raw.trim().slice(1, -1);
   if (inner.trim().length === 0) return [];
-  const items: string[] = [];
-  let current = "";
-  let quoted = false;
-  for (let index = 0; index < inner.length; index += 1) {
-    const character = inner[index] ?? "";
-    if (character === "\\" && quoted) {
-      current += character + (inner[index + 1] ?? "");
-      index += 1;
-    } else if (character === '"') {
-      quoted = !quoted;
-      current += character;
-    } else if (character === "," && !quoted) {
-      items.push(current);
-      current = "";
-    } else {
-      current += character;
-    }
-  }
-  if (quoted) return undefined;
-  items.push(current);
+  const items = inner.match(INLINE_ITEM) ?? [];
+  // Rejoining must reproduce the text: an empty item or an unbalanced quote does not.
+  if (items.join(",") !== inner) return undefined;
   const values = items.map(unquote);
   return values.every((value): value is string => value !== undefined && value.length > 0)
     ? values
@@ -278,6 +338,18 @@ interface Scan {
   readonly errors: JiraTemplateParseError[];
 }
 
+function entryFor(key: string, raw: string, line: number): RawEntry | undefined {
+  if (raw.startsWith("[")) {
+    const items = raw.endsWith("]") ? inlineItems(raw) : undefined;
+    return items === undefined ? undefined : { key, values: items, list: true, inline: true, line };
+  }
+  if (raw.length === 0) return { key, values: [], list: true, line };
+  const value = unquote(raw);
+  return value === undefined || value.length === 0
+    ? undefined
+    : { key, values: [value], list: false, line };
+}
+
 function addKeyedLine(scan: Scan, text: string, line: number): void {
   const match = /^([A-Za-z][A-Za-z0-9]*)\s*:(?:\s+(.*))?$/u.exec(text);
   if (match === null) {
@@ -285,31 +357,27 @@ function addKeyedLine(scan: Scan, text: string, line: number): void {
     return;
   }
   const key = match[1] ?? "";
-  const raw = (match[2] ?? "").trim();
   if (!KEY_SET.has(key)) {
     scan.errors.push({ code: "unknown-key", key, line });
   } else if (scan.entries.some((entry) => entry.key === key)) {
     scan.errors.push({ code: "duplicate-key", key, line });
-  } else if (raw.startsWith("[")) {
-    const items = raw.endsWith("]") ? inlineItems(raw) : undefined;
-    if (items === undefined) scan.errors.push({ code: "invalid-value", key, line });
-    else scan.entries.push({ key, values: items, list: true, inline: true, line });
-  } else if (raw.length === 0) {
-    scan.entries.push({ key, values: [], list: true, line });
   } else {
-    const value = unquote(raw);
-    if (value === undefined || value.length === 0) {
-      scan.errors.push({ code: "invalid-value", key, line });
-    } else {
-      scan.entries.push({ key, values: [value], list: false, line });
-    }
+    const entry = entryFor(key, (match[2] ?? "").trim(), line);
+    if (entry === undefined) scan.errors.push({ code: "invalid-value", key, line });
+    else scan.entries.push(entry);
   }
 }
 
 function addBlockItem(scan: Scan, text: string, line: number): void {
   const last = scan.entries.at(-1);
   const value = unquote(text.slice(1));
-  if (last === undefined || !last.list || last.inline === true || value === undefined || value.length === 0) {
+  if (
+    last === undefined ||
+    !last.list ||
+    last.inline === true ||
+    value === undefined ||
+    value.length === 0
+  ) {
     scan.errors.push({ code: "malformed-line", line });
     return;
   }
@@ -391,7 +459,11 @@ class Reader {
     const value = this.scalar(key, JIRA_ISSUE_TEMPLATE_LIMITS.patternChars);
     if (value === undefined) return undefined;
     if (jiraTemplatePatternIssue(value) !== undefined) {
-      this.errors.push({ code: "unsafe-pattern", key, line: entryOf(this.entries, key)?.line ?? 0 });
+      this.errors.push({
+        code: "unsafe-pattern",
+        key,
+        line: entryOf(this.entries, key)?.line ?? 0,
+      });
       return undefined;
     }
     return value;
@@ -436,10 +508,17 @@ function bodySections(lines: readonly string[], optional: ReadonlySet<string>): 
   for (const line of lines) {
     if (FENCE.test(line)) fenced = !fenced;
     const heading = fenced ? null : HEADING.exec(line);
-    const title = heading?.[1]?.replace(/[*_`]/gu, "").replace(/[:\s]+$/u, "").trim();
+    const title = heading?.[1]
+      ?.replace(/[*_`]/gu, "")
+      .replace(/[:\s]+$/u, "")
+      .trim();
     if (title === undefined || title.length === 0) continue;
     if (optional.has(normalizeJiraSectionHeading(title))) continue;
-    if (!sections.some((seen) => normalizeJiraSectionHeading(seen) === normalizeJiraSectionHeading(title))) {
+    if (
+      !sections.some(
+        (seen) => normalizeJiraSectionHeading(seen) === normalizeJiraSectionHeading(title),
+      )
+    ) {
       sections.push(title);
     }
   }
@@ -585,6 +664,8 @@ export function describeJiraTemplateParseErrors(errors: readonly JiraTemplatePar
 }
 
 /** Stable label of a template in violations, summaries and logs. */
-export function jiraIssueTemplateLabel(template: Pick<JiraIssueTemplate, "project" | "issueType">): string {
+export function jiraIssueTemplateLabel(
+  template: Pick<JiraIssueTemplate, "project" | "issueType">,
+): string {
   return `${template.project}/${template.issueType}`;
 }
