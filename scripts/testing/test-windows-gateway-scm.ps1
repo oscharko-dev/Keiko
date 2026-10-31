@@ -33,7 +33,8 @@ try {
   Start-Service -Name $serviceName
   node scripts/testing/test-windows-gateway-service.mjs installed $helper
   if ($LASTEXITCODE) { throw "Installed-service proof failed" }
-  $transportArgs = if ($VerifyTransport) { @("--verify-transport") } else { @() }
+  $transportArgs = @()
+  if ($VerifyTransport) { $transportArgs += "--verify-transport" }
   node scripts/testing/test-windows-workbench-adapter.mjs $helper @transportArgs
   if ($LASTEXITCODE) { throw "Workbench native adapter proof failed" }
 } finally {

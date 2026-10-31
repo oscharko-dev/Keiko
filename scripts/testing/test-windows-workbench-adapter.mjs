@@ -17,7 +17,13 @@ import {
 } from "@oscharko-dev/keiko-sandbox";
 import { createNativeRuntimeProcessBackend } from "../../packages/keiko-server/dist/coding-runtime/nativeRuntimeProcessBackend.js";
 
-const installed = await realpath(process.argv[2]);
+const [helper, ...options] = process.argv.slice(2);
+assert.ok(
+  options.length === 0 || (options.length === 1 && options[0] === "--verify-transport"),
+  "unexpected Workbench adapter test arguments",
+);
+const verifyTransport = options.length === 1;
+const installed = await realpath(helper);
 const root = dirname(installed);
 const observer = join(root, "gateway-service-probe.exe");
 const bytes = await readFile(installed);
@@ -156,7 +162,7 @@ try {
   console.log(
     "Workbench Windows adapter: SCM digest mismatch refused; pinned image admitted, WFP read back and tree reaped",
   );
-  if (process.argv[3] === "--verify-transport") await qualifyTransport(source);
+  if (verifyTransport) await qualifyTransport(source);
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }
