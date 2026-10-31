@@ -568,7 +568,12 @@ is the identity; links and order of occurrence are invisible to that search, so 
 that share project, issue type, summary and parent are refused as a `conflict` before any request
 instead of being merged into one issue. The search reads every candidate page (50 per page, at most 10 pages): one match is
 reconciled without a write, several are refused as a conflict, and a candidate set that cannot be
-read completely is refused as `bounds-exceeded` instead of creating a possible duplicate. A replayed
+read completely is refused as `bounds-exceeded` instead of creating a possible duplicate. Absence
+requires consistent evidence: every page must state the `startAt` that was requested and a page size
+and total that are counts, may not hold more issues than its page size or the total, may not be
+empty while the total is not reached, and every candidate must carry a safe key and a numeric id.
+A page that fails any of this, or a candidate without those identities, is refused as
+`malformed-payload` before any write, never read as "no match". A replayed
 item keeps its journal outcome: a created item and a reconciled (`existing`) item both recover their
 key through the same read-only lookup, so dependents resolve without resending any mutation. The
 draft call is an error only when an item did not settle (`failed`, `uncertain`, `skipped`); when

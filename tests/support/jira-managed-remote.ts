@@ -59,6 +59,8 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
   // summary (the connector keeps only an exact summary match).
   if (path.endsWith("/search"))
     return response({
+      startAt: 0,
+      maxResults: 50,
       total: 1,
       issues: [{ key: "SYN-1", id: "10001", fields: { summary: state.fields.summary } }],
     });

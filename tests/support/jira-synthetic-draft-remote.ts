@@ -43,7 +43,8 @@ export function syntheticJira(existing: StoredIssue[] = []): SyntheticJira {
       const found = issues.filter((issue) =>
         (issue.fields.labels as readonly string[] | undefined)?.includes(label ?? "-"),
       );
-      return json({ issues: found });
+      // Jira states the page it served: where it starts, the size it honours and the total.
+      return json({ startAt: 0, maxResults: 50, total: found.length, issues: found });
     }
     const issue = issues.find((entry) => url.pathname.endsWith(`/issue/${entry.key}`));
     return issue === undefined ? json({}, 404) : json(issue);

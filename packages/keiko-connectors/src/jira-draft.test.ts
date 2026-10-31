@@ -536,6 +536,88 @@ describe("a draft item's identity search is complete or refused", () => {
     });
     expect(writes(jira)).toBe(0);
   });
+
+  const inconsistentPages: readonly (readonly [string, Record<string, unknown>])[] = [
+    [
+      "an empty page before the total is reached",
+      { startAt: 0, maxResults: 50, total: 1, issues: [] },
+    ],
+    [
+      "a page that starts elsewhere than requested",
+      { startAt: 50, maxResults: 50, total: 1, issues: [{ key: "SYN-1", id: "10001" }] },
+    ],
+    ["a page that states no start", { maxResults: 50, total: 0, issues: [] }],
+    [
+      "more issues than the page size it states",
+      {
+        startAt: 0,
+        maxResults: 1,
+        total: 2,
+        issues: [
+          { key: "SYN-1", id: "10001" },
+          { key: "SYN-2", id: "10002" },
+        ],
+      },
+    ],
+    [
+      "more issues than the total",
+      { startAt: 0, maxResults: 50, total: 0, issues: [{ key: "SYN-1", id: "10001" }] },
+    ],
+    ["a total that is not a count", { startAt: 0, maxResults: 50, total: "1", issues: [] }],
+    ["a page size that is not a count", { startAt: 0, maxResults: -1, total: 0, issues: [] }],
+    [
+      "an exact match without a numeric id",
+      {
+        startAt: 0,
+        maxResults: 50,
+        total: 1,
+        issues: [{ key: "SYN-1", fields: { summary: "Item a" } }],
+      },
+    ],
+    [
+      "an exact match without a key",
+      {
+        startAt: 0,
+        maxResults: 50,
+        total: 1,
+        issues: [{ id: "10001", fields: { summary: "Item a" } }],
+      },
+    ],
+    [
+      "a candidate with a non-numeric id beside a valid one",
+      {
+        startAt: 0,
+        maxResults: 50,
+        total: 2,
+        issues: [
+          { key: "SYN-1", id: "10001", fields: { summary: "Item a" } },
+          { key: "SYN-2", id: "x", fields: { summary: "Other" } },
+        ],
+      },
+    ],
+  ];
+  it.each(inconsistentPages)(
+    "refuses %s instead of treating the item as absent",
+    async (_, body) => {
+      const jira = syntheticJira({ labels: false });
+      const original = jira.http.getMockImplementation();
+      if (original === undefined) throw new Error("expected the synthetic transport");
+      jira.http.mockImplementation((request) =>
+        request.url.includes("/search") ? Promise.resolve(response(body)) : original(request),
+      );
+      await expect(runItem(jira, draft([item("a")]), 0)).resolves.toEqual({
+        ok: false,
+        reason: "malformed-payload",
+      });
+      expect(writes(jira)).toBe(0);
+    },
+  );
+
+  it("still treats a complete empty search as absence and creates", async () => {
+    const jira = syntheticJira({ labels: false });
+    await expect(runItem(jira, draft([item("a")]), 0)).resolves.toMatchObject({ ok: true });
+    expect(writes(jira)).toBe(1);
+  });
 });
 
 describe("findJiraDraftItem", () => {

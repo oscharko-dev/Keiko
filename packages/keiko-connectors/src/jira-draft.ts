@@ -374,70 +374,117 @@ interface FoundIssue {
   readonly key: string;
   readonly id: string;
 }
+/** A search candidate whose required identity (key and numeric id) was validated. */
+interface Candidate extends FoundIssue {
+  readonly fields: Readonly<Record<string, unknown>>;
+}
+function candidateOf(value: unknown): Candidate | undefined {
+  const issue = asRecord(value);
+  const key = issue?.key;
+  const id = issue?.id;
+  if (!isSafeAtlassianIdentifier(key) || !numericId(id)) return undefined;
+  return { key, id, fields: asRecord(issue?.fields) ?? {} };
+}
+/** Every candidate of a page with its identity, or undefined while any one of them lacks it. */
+function candidatesOf(issues: readonly unknown[]): readonly Candidate[] | undefined {
+  const candidates = issues.map(candidateOf);
+  return candidates.every((candidate) => candidate !== undefined) ? candidates : undefined;
+}
 function matchingIssues(
-  issues: readonly unknown[],
+  candidates: readonly Candidate[],
   item: JiraDraftItem,
   labelled: boolean,
   parentKey: string | undefined,
 ): readonly FoundIssue[] {
-  return issues.flatMap((value) => {
-    const issue = asRecord(value);
-    const key = issue?.key;
-    const id = issue?.id;
-    if (!isSafeAtlassianIdentifier(key) || !numericId(id)) return [];
-    const same = labelled || sameUnlabelledIssue(asRecord(issue?.fields) ?? {}, item, parentKey);
-    return same ? [{ key, id }] : [];
-  });
+  return candidates
+    .filter((candidate) => labelled || sameUnlabelledIssue(candidate.fields, item, parentKey))
+    .map(({ key, id }) => ({ key, id }));
 }
 
 /** Candidates are read in pages of this size, up to the page ceiling below (500 candidates). */
 export const JIRA_DRAFT_SEARCH_PAGE_SIZE = 50;
 export const JIRA_DRAFT_SEARCH_PAGES_MAX = 10;
 type Candidates =
-  | { readonly ok: true; readonly issues: readonly unknown[] }
+  | { readonly ok: true; readonly candidates: readonly Candidate[] }
   | { readonly ok: false; readonly attempt: JiraMutationAttempt };
 function refusedSearch(reason: AtlassianConnectorWriteFailureReason): Candidates {
   return { ok: false, attempt: { ok: false, reason } };
 }
-/** Where the next page starts, or undefined once the search is complete. */
-function nextPageStart(
+function count(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+interface SearchPage {
+  /** The candidate count the page states, or null when it states none. */
+  readonly total: number | null;
+  readonly size: number;
+}
+function pageSize(value: unknown): number | undefined {
+  const size = value === undefined ? JIRA_DRAFT_SEARCH_PAGE_SIZE : count(value);
+  return size === 0 ? undefined : size;
+}
+function pageTotal(value: unknown): number | null | undefined {
+  return value === undefined ? null : count(value);
+}
+function consistentPage(
+  startAt: number,
+  served: number,
+  size: number,
+  total: number | null,
+): boolean {
+  if (served > size) return false;
+  if (total === null) return true;
+  // A page that ends before the total is reached must have served something, or the search stalls.
+  return startAt + served <= total && (served > 0 || startAt >= total);
+}
+/**
+ * The page's own statement of where it starts, how large a page Jira honours and how many
+ * candidates exist, or undefined when that statement is missing, malformed or contradicts the
+ * request or the page it came with. Such a page proves nothing about absence.
+ */
+function readSearchPage(
   body: Readonly<Record<string, unknown>> | undefined,
   startAt: number,
-  count: number,
-): number | undefined {
-  if (count === 0) return undefined;
-  const reached = startAt + count;
-  const total = body?.total;
-  if (typeof total === "number" && Number.isSafeInteger(total))
-    return reached < total ? reached : undefined;
+  served: number,
+): SearchPage | undefined {
+  const size = pageSize(body?.maxResults);
+  const total = pageTotal(body?.total);
+  if (body?.startAt !== startAt || size === undefined || total === undefined) return undefined;
+  return consistentPage(startAt, served, size, total)
+    ? { total, size: Math.min(size, JIRA_DRAFT_SEARCH_PAGE_SIZE) }
+    : undefined;
+}
+/** Where the next page starts, or undefined once the search is complete. */
+function nextPageStart(page: SearchPage, startAt: number, served: number): number | undefined {
+  if (served === 0) return undefined;
+  const reached = startAt + served;
   // Without a total, a page shorter than the size Jira honours is the last one.
-  const served = body?.maxResults;
-  const size =
-    typeof served === "number" && served > 0
-      ? Math.min(served, JIRA_DRAFT_SEARCH_PAGE_SIZE)
-      : JIRA_DRAFT_SEARCH_PAGE_SIZE;
-  return count < size ? undefined : reached;
+  if (page.total === null) return served < page.size ? undefined : reached;
+  return reached < page.total ? reached : undefined;
 }
 /**
  * Every candidate of the search, page by page. A search that cannot be completed within the page
- * ceiling is refused: deciding an item is absent from part of the candidates would create a
- * duplicate of an issue on a page that was never read.
+ * ceiling, or whose pages contradict themselves, is refused: deciding an item is absent from part
+ * of the candidates would create a duplicate of an issue on a page that was never read.
  */
 async function collectCandidates(
   request: JiraMutationRequest,
   base: URLSearchParams,
   startAt: number,
-  collected: readonly unknown[],
+  collected: readonly Candidate[],
 ): Promise<Candidates> {
   const params = new URLSearchParams(base);
   params.set("startAt", String(startAt));
   const response = await request(`search?${params.toString()}`, "GET");
   if (!response.ok) return refusedSearch(response.reason);
   const issues = asArray(response.body?.issues);
-  if (issues === undefined) return refusedSearch("malformed-payload");
-  const all = [...collected, ...issues];
-  const next = nextPageStart(response.body, startAt, issues.length);
-  if (next === undefined) return { ok: true, issues: all };
+  const page =
+    issues === undefined ? undefined : readSearchPage(response.body, startAt, issues.length);
+  const candidates = issues === undefined ? undefined : candidatesOf(issues);
+  if (issues === undefined || page === undefined || candidates === undefined)
+    return refusedSearch("malformed-payload");
+  const all = [...collected, ...candidates];
+  const next = nextPageStart(page, startAt, issues.length);
+  if (next === undefined) return { ok: true, candidates: all };
   if (next >= JIRA_DRAFT_SEARCH_PAGES_MAX * JIRA_DRAFT_SEARCH_PAGE_SIZE)
     return refusedSearch("bounds-exceeded");
   return collectCandidates(request, base, next, all);
@@ -479,7 +526,7 @@ export async function reconcileJiraDraftItem(
   });
   const candidates = await collectCandidates(request, base, 0, []);
   if (!candidates.ok) return { kind: "refused", attempt: candidates.attempt };
-  const found = matchingIssues(candidates.issues, item, labelled, parentKey);
+  const found = matchingIssues(candidates.candidates, item, labelled, parentKey);
   if (found.length > 1) return { kind: "refused", attempt: { ok: false, reason: "conflict" } };
   const issue = found[0];
   return issue === undefined
