@@ -251,7 +251,7 @@ export function validateLegacyMinimatchTriage(suppressedIds, lockfileJson) {
   let legacyCount = 0;
   for (const [path, entry] of Object.entries(packages)) {
     if (!path.endsWith("node_modules/minimatch")) continue;
-    if (entry.version === "11.0.1") continue;
+    if (entry.version === "11.0.3") continue;
     if (isAuditedLegacyMatcher(path, entry)) {
       legacyCount += 1;
       continue;

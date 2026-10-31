@@ -3391,8 +3391,8 @@ describe("installable package smoke optional-dependency coverage", () => {
     // separately prove the published runtime. This test retains the installed-closure oracle.
     const plan = prepareRuntimeStagingPlan(ROOT);
     const tufModels = plan.packages.find((record) => record.manifest.name === "@tufjs/models");
-    expect(tufModels?.stagedManifest.peerDependencies.minimatch).toBe("11.0.1");
-    expect(plan.rootManifest.dependencies.minimatch).toBe("11.0.1");
+    expect(tufModels?.stagedManifest.peerDependencies.minimatch).toBe("11.0.3");
+    expect(plan.rootManifest.dependencies.minimatch).toBe("11.0.3");
     const { packages, stubs, missing } = resolveVendorClosure(
       join(ROOT, "node_modules"),
       plan.rootManifest,

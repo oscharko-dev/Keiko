@@ -22,7 +22,7 @@ describe("legacy minimatch advisory triage", () => {
         ids,
         graph({
           [legacyPath]: legacy,
-          "node_modules/minimatch": { version: "11.0.1" },
+          "node_modules/minimatch": { version: "11.0.3" },
         }),
       ),
     ).not.toThrow();
