@@ -15183,6 +15183,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      toolCallTextMessageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       imageCount: {
         type: "integer",
         dataClass: "count",

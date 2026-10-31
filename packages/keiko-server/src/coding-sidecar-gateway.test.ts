@@ -8626,6 +8626,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
     expect(validated?.extra).toMatchObject({
       inputMessageCount: 6,
       droppedReasoningMessageCount: 2,
+      toolCallTextMessageCount: 1,
       offeredToolCount: OPENCODE_MODEL_VISIBLE_TOOL_NAMES.length,
     });
     expect(

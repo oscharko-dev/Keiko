@@ -985,7 +985,10 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   messages never reach the gateway request, and an assistant message that carries nothing but
   reasoning (no answer text, no tool call) is dropped and counted
   (`droppedReasoningMessageCount` on `coding-sidecar.gateway.request-validated`), so a failed turn's
-  reasoning does not grow the prompt of the attempts that follow it (#3873 F23).
+  reasoning does not grow the prompt of the attempts that follow it (#3873 F23). The answer text a
+  model wrote beside its tool calls is not reasoning: the gateway resends it as written, as a
+  standalone OpenCode run does, and sends `content: null` only for a tool-calling turn without
+  text (#3907 AC3; `toolCallTextMessageCount` on the same line).
 - **Shown as what it is.** The sidecar hands reasoning to the managed runtime as
   `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
   projection carries it beside its assistant message, never inside the answer. The timeline shows
