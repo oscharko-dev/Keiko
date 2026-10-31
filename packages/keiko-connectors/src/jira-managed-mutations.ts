@@ -27,6 +27,7 @@ import {
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import {
   jiraDraftIdentity,
+  jiraDraftParentKey,
   reconcileJiraDraftItem,
   resolveJiraDraftItem,
   withJiraDraftIdentity,
@@ -461,7 +462,12 @@ export async function executeJiraDraftItem(
   const request = requestFor(connection, context);
   const metadata = await jiraCreateMutationMetadata(request, item.projectId, item.issueTypeId);
   if (!metadata.ok) return metadata;
-  const found = await reconcileJiraDraftItem(request, item, metadata.fields);
+  const found = await reconcileJiraDraftItem(
+    request,
+    item,
+    metadata.fields,
+    jiraDraftParentKey(item, keys),
+  );
   if (found.kind !== "absent") return found.attempt;
   const identified = withJiraDraftIdentity(fields, metadata.fields, jiraDraftIdentity(item));
   return createWithMetadata(
@@ -472,11 +478,13 @@ export async function executeJiraDraftItem(
 }
 
 /**
- * Read-only: the issue a draft item already created, found by its draft identity. A replayed item
- * keeps its journal outcome but not its receipt, so this recovers the key its dependents need.
+ * Read-only: the issue a draft item already created or reconciled to, found by its draft
+ * identity. A replayed item keeps its journal outcome but not its receipt, so this recovers the
+ * key its dependents need. `keys` are the keys its earlier items received.
  */
 export async function findJiraDraftItem(
   item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraMutationAttempt> {
@@ -484,7 +492,12 @@ export async function findJiraDraftItem(
   const request = requestFor(connection, context);
   const metadata = await jiraCreateMutationMetadata(request, item.projectId, item.issueTypeId);
   if (!metadata.ok) return metadata;
-  const found = await reconcileJiraDraftItem(request, item, metadata.fields);
+  const found = await reconcileJiraDraftItem(
+    request,
+    item,
+    metadata.fields,
+    jiraDraftParentKey(item, keys),
+  );
   return found.kind === "absent" ? { ok: false, reason: "not-found" } : found.attempt;
 }
 

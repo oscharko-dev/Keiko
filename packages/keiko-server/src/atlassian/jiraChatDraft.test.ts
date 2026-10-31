@@ -318,6 +318,76 @@ describe("executeJiraChatDraft (#4178)", () => {
     ).toBe("not-dispatched");
   });
 
+  it("creates two same-summary tasks under different parents and reconciles each on a rerun", async () => {
+    const task = (ref: string, parentKey: string): Record<string, unknown> =>
+      item(ref, {
+        fields: { summary: "Implement logging" },
+        parent: { fieldId: "parent", issueKey: parentKey },
+      });
+    const args = {
+      items: [task("a", "SYN-90"), task("b", "SYN-91")],
+    } as unknown as CatalogJsonObject;
+    const jira = syntheticJira();
+    const first = await executeJiraChatDraft(execution(jira, args));
+    expect(first.isError).toBeUndefined();
+    expect(first.data).toMatchObject({ outcome: "succeeded", createdCount: 2 });
+    expect(jira.posts()).toHaveLength(2);
+    expect(jira.issues.map((issue) => issue.fields.parent)).toEqual([
+      { key: "SYN-90" },
+      { key: "SYN-91" },
+    ]);
+    // A new journal: nothing replays, so only the draft identities can tell the items apart.
+    const rerun = await executeJiraChatDraft(execution(jira, args));
+    expect(jira.posts()).toHaveLength(2);
+    expect(itemsOf(rerun)).toEqual([
+      expect.objectContaining({ ref: "a", state: "existing", issueKey: "SYN-1" }),
+      expect.objectContaining({ ref: "b", state: "existing", issueKey: "SYN-2" }),
+    ]);
+  });
+
+  it("recovers an item reconciled on the first run when its journal replays", async () => {
+    const epic = parseJiraDraft(BACKLOG)?.items.find((entry) => entry.ref === "epic");
+    if (epic === undefined) throw new Error("epic");
+    const jira = syntheticJira([
+      {
+        key: "SYN-1",
+        id: "10001",
+        fields: { summary: "Item epic", labels: [jiraDraftIdentity(epic)] },
+      },
+    ]);
+    const args = {
+      items: [item("epic"), item("story", { parent: { fieldId: "parent", ref: "epic" } })],
+    } as unknown as CatalogJsonObject;
+    const input = execution(jira, args);
+    const first = await executeJiraChatDraft(input);
+    expect(itemsOf(first)).toEqual([
+      expect.objectContaining({ ref: "epic", state: "existing", issueKey: "SYN-1" }),
+      expect.objectContaining({ ref: "story", state: "created", issueKey: "SYN-2" }),
+    ]);
+    expect(jira.posts()).toHaveLength(1);
+    const replay = await executeJiraChatDraft(input);
+    expect(jira.posts()).toHaveLength(1);
+    expect(replay.isError).toBeUndefined();
+    expect(itemsOf(replay)).toEqual([
+      expect.objectContaining({ ref: "epic", state: "existing", issueKey: "SYN-1" }),
+      expect.objectContaining({ ref: "story", state: "created", issueKey: "SYN-2" }),
+    ]);
+    expect(replay.data).toMatchObject({ existingCount: 1, createdCount: 1, failedCount: 0 });
+  });
+
+  it("is no error when every item already exists or the human deselected the whole draft", async () => {
+    const jira = syntheticJira();
+    await executeJiraChatDraft(execution(jira));
+    expect(jira.posts()).toHaveLength(4);
+    const rerun = await executeJiraChatDraft(execution(jira));
+    expect(rerun.isError).toBeUndefined();
+    expect(rerun.data).toMatchObject({ outcome: "not-dispatched", existingCount: 4 });
+    const none = await executeJiraChatDraft(execution(syntheticJira(), BACKLOG, ["epic", "loose"]));
+    expect(none.isError).toBeUndefined();
+    expect(none.data).toMatchObject({ outcome: "not-dispatched", excludedCount: 4 });
+    expect(jira.posts()).toHaveLength(4);
+  });
+
   it("refuses a malformed draft before any request", async () => {
     const jira = syntheticJira();
     const result = await executeJiraChatDraft(

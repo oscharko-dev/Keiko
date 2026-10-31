@@ -504,6 +504,33 @@ it("runs a backlog draft through the real gateway/binder/SDK as journaled item c
   expect(f.logs.lines().join()).not.toMatch(/synthetic-test-pat|jira\.example|SYN-1/u);
 });
 
+it("treats a draft whose items all exist already as a completed no-op, not a tool error (#4178)", async () => {
+  const f = await fixture();
+  expect(await f.invoke("jira.draft")).toMatchObject({
+    kind: "settled",
+    result: { status: "completed", data: { outcome: "succeeded", createdCount: 1 } },
+  });
+  expect(f.writes()).toBe(1);
+  // The same backlog under another local reference is a new draft action with a fresh journal:
+  // its one item is reconciled to the issue that exists, so Jira receives nothing.
+  const [first] = DRAFT.items as readonly Record<string, unknown>[];
+  const rerun = { items: [{ ...first, ref: "uno" }] } as unknown as CatalogJsonObject;
+  expect(await f.invoke("jira.draft", rerun)).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "completed",
+      data: {
+        outcome: "not-dispatched",
+        existingCount: 1,
+        createdCount: 0,
+        failedCount: 0,
+        items: [{ ref: "uno", state: "existing", issueKey: "SYN-1" }],
+      },
+    },
+  });
+  expect(f.writes()).toBe(1);
+});
+
 it.each([51, 100])(
   "rejects %s updates at the catalog boundary before journal preparation",
   async (count) => {

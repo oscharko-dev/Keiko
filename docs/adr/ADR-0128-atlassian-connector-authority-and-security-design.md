@@ -553,11 +553,21 @@ item already sent is never sent again on replay. The draft's one approval is cla
 first item's dispatch and covers its remaining items. The approving human may deselect items; the
 deselection is bound into the approval proof and extends to every item that depends on a deselected
 one. Before creating an item the connector searches by a deterministic identity label
-(`keiko-draft-<20 hex>` from project, issue type and normalized summary; the exact summary when the
-create screen offers no labels): one match is reconciled without a write, several are refused as a
-conflict. An item whose parent or linked item has no key is skipped; an item whose outcome is
-uncertain stops the draft, because the journal admits no further write in that turn. Coding runs
-do not offer `jira.draft`.
+(`keiko-draft-<20 hex>` from project, issue type, normalized summary and the item's relation
+scope — its parent field and target, and its links, each resolved to the existing issue's key or to
+the target draft item's own identity, never to the draft-local `ref`; items identical in all of that
+are told apart by their order of occurrence — so two same-summary tasks under different parents are
+two issues). When the create screen offers no labels, the exact summary plus the resolved parent key
+is the identity. The search reads every candidate page (50 per page, at most 10 pages): one match is
+reconciled without a write, several are refused as a conflict, and a candidate set that cannot be
+read completely is refused as `bounds-exceeded` instead of creating a possible duplicate. A replayed
+item keeps its journal outcome: a created item and a reconciled (`existing`) item both recover their
+key through the same read-only lookup, so dependents resolve without resending any mutation. The
+draft call is an error only when an item did not settle (`failed`, `uncertain`, `skipped`); when
+every item is created, already existing or deselected it succeeds, and a draft that wrote nothing
+reports the truthful `not-dispatched` outcome. An item whose parent or linked item has no key is
+skipped; an item whose outcome is uncertain stops the draft, because the journal admits no further
+write in that turn. Coding runs do not offer `jira.draft`.
 
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.

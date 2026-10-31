@@ -127,26 +127,40 @@ async function runItem(
     },
   });
   const settled = settledItem(item.ref, result, attempt);
-  return result.data.replayed === true && settled.state === "created"
-    ? recoveredKey(input, item, settled)
+  const outcome = result.data.outcome;
+  if (result.data.replayed !== true) return settled;
+  // A replay never runs the executor: a created item and a reconciled one (settled without any
+  // write) both come back from their journal without the key their dependents need.
+  if (outcome === "succeeded") return recoveredKey(input, item, keys, settled, "created");
+  return outcome === "not-dispatched"
+    ? recoveredKey(input, item, keys, settled, "existing")
     : settled;
 }
 
-/** A replayed item keeps its journal outcome; its key comes back from a read-only lookup. */
+/**
+ * A replayed item keeps its journal outcome; its key comes back from a read-only lookup by its
+ * draft identity, so no mutation is ever resent.
+ */
 async function recoveredKey(
   input: JiraChatDraftExecution,
   item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
   settled: DraftItemResult,
+  state: "created" | "existing",
 ): Promise<DraftItemResult> {
   const http = input.httpPortFactory({
     beforeDispatch: (request) => request.method === "GET" && input.beforeEffect(),
   });
   try {
-    const found = await findJiraDraftItem(item, input.context, { ...input.connection, http });
+    const found = await findJiraDraftItem(item, keys, input.context, {
+      ...input.connection,
+      http,
+    });
     const issueKey = found.ok ? keyOf(found.receipt.issueKey) : undefined;
-    return issueKey === undefined ? settled : { ...settled, issueKey };
+    if (issueKey === undefined) return settled;
+    return { ref: item.ref, state, issueKey };
   } catch (error) {
-    // Without its key the item stays created; only its dependents are skipped.
+    // Without its key a created item stays created; only its dependents are skipped.
     emitServerDiagnostic(
       undefined,
       serverDiagnosticFromError({
@@ -241,11 +255,13 @@ function draftResult(baseUrl: string, items: readonly DraftItemResult[]): Manage
   const outcome: JiraMutationResultState = jiraDraftOutcome(
     items.map((item) => itemOutcome(item.state)),
   );
-  // The outcome says whether Jira changed; an item that did not land still makes the call an error.
+  // The outcome says whether Jira changed; the call succeeds when every item is settled — created,
+  // already existing or deselected — so a rerun that finds everything in place writes nothing and
+  // is still no error. An item that did not land (failed, uncertain, skipped) makes it one.
   const complete = items.every((item) => SETTLED_STATES.has(item.state));
   return {
     data: { outcome, items: items.map((item) => projectItem(baseUrl, item)), ...counts },
-    ...(outcome === "succeeded" && complete ? {} : { isError: true }),
+    ...(complete ? {} : { isError: true }),
   };
 }
 

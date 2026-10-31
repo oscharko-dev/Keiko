@@ -2,13 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import {
   JIRA_DRAFT_IDENTITY_PREFIX,
+  JIRA_DRAFT_SEARCH_PAGES_MAX,
+  JIRA_DRAFT_SEARCH_PAGE_SIZE,
   excludedJiraDraftRefs,
   jiraDraftIdentity,
   parseJiraDraft,
   resolveJiraDraftItem,
   type JiraDraft,
 } from "./jira-draft.js";
-import { executeJiraDraftItem } from "./jira-managed-mutations.js";
+import { executeJiraDraftItem, findJiraDraftItem } from "./jira-managed-mutations.js";
 import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
 
 const LABELS = {
@@ -183,13 +185,25 @@ function syntheticJira(options: { readonly labels: boolean; readonly existing?: 
       const jql = url.searchParams.get("jql") ?? "";
       queries.push(jql);
       const label = /labels = "([^"]+)"/u.exec(jql)?.[1];
+      // Jira's text match: the phrase occurs in the summary, so near matches are candidates too.
+      const phrase = /summary ~ "\\"(.*)\\""/u.exec(jql)?.[1] ?? "";
       const found = issues.filter((issue) =>
         label === undefined
-          ? jql.includes(String(issue.fields.summary))
+          ? String(issue.fields.summary).includes(phrase)
           : (issue.fields.labels as readonly string[] | undefined)?.includes(label) === true,
       );
+      // Jira pages its results and states the size of the whole candidate set.
+      const startAt = Number(url.searchParams.get("startAt") ?? "0");
+      const maxResults = Number(url.searchParams.get("maxResults") ?? "50");
       return Promise.resolve(
-        response({ issues: found.map(({ key, id, fields }) => ({ key, id, fields })) }),
+        response({
+          startAt,
+          maxResults,
+          total: found.length,
+          issues: found
+            .slice(startAt, startAt + maxResults)
+            .map(({ key, id, fields }) => ({ key, id, fields })),
+        }),
       );
     }
     const issue = issues.find((entry) => url.pathname.endsWith(`/issue/${entry.key}`));
@@ -331,5 +345,192 @@ describe("executeJiraDraftItem", () => {
         { deployment: "cloud", baseUrl: "https://jira.example.invalid", http: jira.http },
       ),
     ).resolves.toEqual({ ok: false, reason: "unavailable" });
+  });
+});
+
+function writes(jira: ReturnType<typeof syntheticJira>): number {
+  return jira.http.mock.calls.filter(([request]) => request.method !== "GET").length;
+}
+function stored(index: number, summary: string): StoredIssue {
+  return { key: `SYN-${String(index + 1)}`, id: String(10001 + index), fields: { summary } };
+}
+/** Issues whose summary contains the item's, as Jira's text match returns them before the exact one. */
+function nearMatches(count: number): StoredIssue[] {
+  return Array.from({ length: count }, (_, index) =>
+    stored(index, `Item a (copy ${String(index)})`),
+  );
+}
+
+describe("a draft item's identity binds its relation scope", () => {
+  const sibling = (ref: string, parentKey: string): Record<string, unknown> => ({
+    ...item(ref),
+    fields: { summary: "Implement logging" },
+    parent: { fieldId: "parent", issueKey: parentKey },
+  });
+
+  it("separates items that share a summary but hang from different parents or relations", () => {
+    const parsed = draft([
+      sibling("one", "SYN-90"),
+      sibling("two", "SYN-91"),
+      { ...item("plain"), fields: { summary: "Implement logging" } },
+      {
+        ...item("related"),
+        fields: { summary: "Implement logging" },
+        links: [{ type: "Relates", direction: "outward", issueKey: "SYN-90" }],
+      },
+    ]);
+    const identities = parsed.items.map(jiraDraftIdentity);
+    expect(new Set(identities).size).toBe(identities.length);
+  });
+
+  it("derives a child's identity from its parent item, not from the draft-local reference", () => {
+    const childIdentity = (epicSummary: string, epicRef: string, childRef: string): string => {
+      const parsed = draft([
+        { ...item(epicRef), fields: { summary: epicSummary } },
+        {
+          ...item(childRef),
+          fields: { summary: "Child" },
+          parent: { fieldId: "parent", ref: epicRef },
+        },
+      ]);
+      return jiraDraftIdentity(parsed.items[1] ?? (undefined as never));
+    };
+    expect(childIdentity("Epic", "e1", "c1")).toBe(childIdentity("Epic", "other", "second"));
+    expect(childIdentity("Another epic", "e1", "c1")).not.toBe(childIdentity("Epic", "e1", "c1"));
+  });
+
+  it.each([true, false])(
+    "creates each of two same-summary items under its own parent, then reconciles both (labels: %s)",
+    async (labels) => {
+      const jira = syntheticJira({ labels });
+      const parsed = draft([sibling("one", "SYN-90"), sibling("two", "SYN-91")]);
+      await expect(runItem(jira, parsed, 0)).resolves.toMatchObject({
+        ok: true,
+        receipt: { issueKey: "SYN-1" },
+      });
+      await expect(runItem(jira, parsed, 1)).resolves.toMatchObject({
+        ok: true,
+        receipt: { issueKey: "SYN-2" },
+      });
+      expect(writes(jira)).toBe(2);
+      expect(jira.issues.map((issue) => issue.fields.parent)).toEqual([
+        { key: "SYN-90" },
+        { key: "SYN-91" },
+      ]);
+      await expect(runItem(jira, parsed, 0)).resolves.toMatchObject({
+        ok: true,
+        receipt: { issueKey: "SYN-1" },
+      });
+      await expect(runItem(jira, parsed, 1)).resolves.toMatchObject({
+        ok: true,
+        receipt: { issueKey: "SYN-2" },
+      });
+      expect(writes(jira)).toBe(2);
+    },
+  );
+
+  it("keeps two identical siblings as two issues", async () => {
+    const jira = syntheticJira({ labels: true });
+    const parsed = draft([sibling("one", "SYN-90"), sibling("two", "SYN-90")]);
+    await runItem(jira, parsed, 0);
+    await expect(runItem(jira, parsed, 1)).resolves.toMatchObject({
+      ok: true,
+      receipt: { issueKey: "SYN-2" },
+    });
+    expect(writes(jira)).toBe(2);
+  });
+});
+
+describe("a draft item's identity search is complete or refused", () => {
+  const exact = (index: number): StoredIssue => stored(index, "Item a");
+
+  it("finds the exact match on a later page instead of creating a duplicate", async () => {
+    const near = nearMatches(JIRA_DRAFT_SEARCH_PAGE_SIZE + 5);
+    const jira = syntheticJira({ labels: false, existing: [...near, exact(near.length)] });
+    await expect(runItem(jira, draft([item("a")]), 0)).resolves.toEqual({
+      ok: true,
+      receipt: { issueKey: `SYN-${String(near.length + 1)}`, issueId: String(10001 + near.length) },
+    });
+    expect(writes(jira)).toBe(0);
+    expect(jira.queries).toHaveLength(2);
+  });
+
+  it("detects a second exact match beyond the first page as a conflict", async () => {
+    const near = nearMatches(JIRA_DRAFT_SEARCH_PAGE_SIZE + 5);
+    const jira = syntheticJira({
+      labels: false,
+      existing: [exact(0), ...near.slice(1), exact(near.length)],
+    });
+    await expect(runItem(jira, draft([item("a")]), 0)).resolves.toEqual({
+      ok: false,
+      reason: "conflict",
+    });
+    expect(writes(jira)).toBe(0);
+  });
+
+  it("reads exactly as many candidates as the page ceiling allows", async () => {
+    const ceiling = JIRA_DRAFT_SEARCH_PAGES_MAX * JIRA_DRAFT_SEARCH_PAGE_SIZE;
+    const near = nearMatches(ceiling - 1);
+    const jira = syntheticJira({ labels: false, existing: [...near, exact(near.length)] });
+    await expect(runItem(jira, draft([item("a")]), 0)).resolves.toMatchObject({
+      ok: true,
+      receipt: { issueKey: `SYN-${String(ceiling)}` },
+    });
+    expect(writes(jira)).toBe(0);
+    expect(jira.queries).toHaveLength(JIRA_DRAFT_SEARCH_PAGES_MAX);
+  });
+
+  it("refuses a search larger than the page ceiling instead of creating", async () => {
+    const ceiling = JIRA_DRAFT_SEARCH_PAGES_MAX * JIRA_DRAFT_SEARCH_PAGE_SIZE;
+    const jira = syntheticJira({ labels: false, existing: nearMatches(ceiling + 1) });
+    await expect(runItem(jira, draft([item("a")]), 0)).resolves.toEqual({
+      ok: false,
+      reason: "bounds-exceeded",
+    });
+    expect(writes(jira)).toBe(0);
+  });
+
+  it("refuses a malformed page instead of treating the item as absent", async () => {
+    const jira = syntheticJira({ labels: false });
+    const original = jira.http.getMockImplementation();
+    if (original === undefined) throw new Error("expected the synthetic transport");
+    jira.http.mockImplementation((request) =>
+      request.url.includes("/search") ? Promise.resolve(response({ total: 1 })) : original(request),
+    );
+    await expect(runItem(jira, draft([item("a")]), 0)).resolves.toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+    expect(writes(jira)).toBe(0);
+  });
+});
+
+describe("findJiraDraftItem", () => {
+  it("recovers an item's key read-only, and reports one that is gone as not found", async () => {
+    const jira = syntheticJira({ labels: true });
+    const parsed = draft([item("a")]);
+    const entry = parsed.items[0];
+    if (entry === undefined) throw new Error("item");
+    const connection = {
+      deployment: "data-center" as const,
+      baseUrl: "https://jira.example.invalid",
+      http: jira.http,
+    };
+    const context = {
+      invocationId: "d",
+      correlationId: "d",
+      signal: new AbortController().signal,
+      beforeEffect: (): boolean => true,
+    };
+    await expect(findJiraDraftItem(entry, new Map(), context, connection)).resolves.toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+    await runItem(jira, parsed, 0);
+    await expect(findJiraDraftItem(entry, new Map(), context, connection)).resolves.toEqual({
+      ok: true,
+      receipt: { issueKey: "SYN-1", issueId: "10001" },
+    });
+    expect(writes(jira)).toBe(1);
   });
 });
