@@ -12,7 +12,7 @@ permissions: {}
 jobs:
   filter-lifecycle:
     runs-on: windows-2025
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -34,7 +34,13 @@ jobs:
             throw "The native WFP proof requires an administrator token on the hosted runner."
           }
           if ((Get-Service BFE).Status -ne 'Running') { throw "BFE is not running." }
-      - name: Prove SCM admission before child execution with the installed supervisor
+      - name: Build Workbench server packages for the native adapter proof
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run build:packages
+        shell: pwsh
+      - name: Exercise the installed service and Workbench native adapter
         run: ./scripts/testing/test-windows-gateway-scm.ps1
         shell: pwsh
       - name: Compile, analyze, validate and prove dynamic filter cleanup

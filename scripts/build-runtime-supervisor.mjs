@@ -8,6 +8,7 @@ import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.m
 
 const WINDOWS_SOURCE = resolve("native/runtime-supervisor/windows/keiko_runtime_supervisor.c");
 export const windowsGatewaySources = [
+  "gateway_installed",
   "gateway_service",
   "gateway_peer",
   "gateway_request",

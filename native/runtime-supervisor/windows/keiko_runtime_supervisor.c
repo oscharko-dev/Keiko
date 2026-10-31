@@ -606,6 +606,8 @@ int wmain(int argc, wchar_t **argv) {
    */
   if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) || !SetDllDirectoryW(L"")) return 1;
   if (argc == 2 && wcscmp(argv[1], L"--gateway-service") == 0) return keiko_gateway_dispatch();
+  if (argc == 3 && wcscmp(argv[1], L"--gateway-installed") == 0)
+    return keiko_gateway_launch_installed(argv[2]);
   if (argc == 2 && wcscmp(argv[1], L"--probe-stdio-owner") == 0) {
     puts("{\"schemaVersion\":1,\"ownedStdio\":\"windows-job\"}");
     return 0;

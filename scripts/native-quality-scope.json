@@ -226,6 +226,16 @@
       ]
     },
     {
+      "path": "native/runtime-supervisor/windows/gateway_installed.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "gateway-filter-policy-behavior"
+      ]
+    },
+    {
       "path": "native/runtime-supervisor/windows/gateway_service.h",
       "language": "c",
       "platforms": ["windows"],

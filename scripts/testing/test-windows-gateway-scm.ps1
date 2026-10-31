@@ -31,6 +31,8 @@ try {
   Start-Service -Name $serviceName
   node scripts/testing/test-windows-gateway-service.mjs installed $helper
   if ($LASTEXITCODE) { throw "Installed-service proof failed" }
+  node scripts/testing/test-windows-workbench-adapter.mjs $helper
+  if ($LASTEXITCODE) { throw "Workbench native adapter proof failed" }
 } finally {
   if ($created) {
     Stop-Service -Name $serviceName -ErrorAction Stop

@@ -377,7 +377,7 @@ process.exit(41);
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
-  $gatewaySources = @("gateway_service", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  $gatewaySources = @("gateway_installed", "gateway_service", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
   & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
