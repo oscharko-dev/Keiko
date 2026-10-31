@@ -1,6 +1,6 @@
 # Qualify a temporary SCM installation on a disposable Windows runner.
 [CmdletBinding()]
-param()
+param([switch]$VerifyTransport)
 $ErrorActionPreference = "Stop"
 $serviceName = "KeikoRuntimeGateway"
 $install = Join-Path $env:ProgramFiles ("Keiko-Gateway-Proof-" + [guid]::NewGuid().ToString("N"))
@@ -11,6 +11,8 @@ try {
   New-Item -ItemType Directory -Path $install -ErrorAction Stop | Out-Null
   node scripts/build-runtime-supervisor.mjs windows-x64 $helper
   if ($LASTEXITCODE) { throw "Supervisor build failed" }
+  node native/runtime-supervisor/test-protocol.mjs --helper $helper
+  if ($LASTEXITCODE) { throw "Supervisor lifecycle proof failed" }
   node scripts/testing/test-windows-gateway-service.mjs build $helper
   if ($LASTEXITCODE) { throw "Observer build failed" }
   $os = Get-CimInstance Win32_OperatingSystem
@@ -31,7 +33,8 @@ try {
   Start-Service -Name $serviceName
   node scripts/testing/test-windows-gateway-service.mjs installed $helper
   if ($LASTEXITCODE) { throw "Installed-service proof failed" }
-  node scripts/testing/test-windows-workbench-adapter.mjs $helper
+  $transportArgs = if ($VerifyTransport) { @("--verify-transport") } else { @() }
+  node scripts/testing/test-windows-workbench-adapter.mjs $helper @transportArgs
   if ($LASTEXITCODE) { throw "Workbench native adapter proof failed" }
 } finally {
   if ($created) {

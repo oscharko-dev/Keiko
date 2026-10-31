@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <fwpmu.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <wchar.h>
 
 static DWORD observed_root(void) {
@@ -75,7 +76,50 @@ done:
   return ok;
 }
 
+/* Bound the connect attempt and report Winsock's verdict. A successful send is
+ * independently observed at the host listener, not inferred from the filter table. */
+static int send_probe(const wchar_t *port_text, char marker) {
+  wchar_t *end;
+  unsigned long port = wcstoul(port_text, &end, 10);
+  if (*end || !port || port > 65535) return WSAEINVAL;
+  SOCKET client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (client == INVALID_SOCKET) return WSAGetLastError();
+  WSAEVENT event = WSACreateEvent();
+  int result = 0;
+  SOCKADDR_IN address = {0};
+  address.sin_family = AF_INET;
+  address.sin_port = htons((u_short)port);
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (event == WSA_INVALID_EVENT || WSAEventSelect(client, event, FD_CONNECT)) {
+    result = WSAGetLastError();
+  } else if (connect(client, (SOCKADDR *)&address, sizeof(address))) {
+    result = WSAGetLastError();
+    if (result == WSAEWOULDBLOCK) {
+      WSANETWORKEVENTS events;
+      DWORD wait = WSAWaitForMultipleEvents(1, &event, FALSE, 2500, FALSE);
+      if (wait == WSA_WAIT_TIMEOUT) result = WSAETIMEDOUT;
+      else if (wait != WSA_WAIT_EVENT_0 || WSAEnumNetworkEvents(client, event, &events))
+        result = WSAGetLastError();
+      else result = (events.lNetworkEvents & FD_CONNECT) ? events.iErrorCode[FD_CONNECT_BIT] : WSAEINVAL;
+    }
+  }
+  if (!result && send(client, &marker, 1, 0) != 1) result = WSAGetLastError();
+  closesocket(client);
+  if (event != WSA_INVALID_EVENT) WSACloseEvent(event);
+  return result;
+}
+
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 5 && !wcscmp(argv[1], L"--probe-ports")) {
+    WSADATA data;
+    if (WSAStartup(MAKEWORD(2, 2), &data)) return 1;
+    char marker = !wcscmp(argv[4], L"control") ? 'C' : 'T';
+    int allowed = send_probe(argv[2], marker);
+    int hostile = send_probe(argv[3], marker);
+    printf("{\"allowed\":%d,\"hostile\":%d}\n", allowed, hostile);
+    WSACleanup();
+    return 0;
+  }
   if (argc == 1) {
     puts("child-entered");
     fflush(stdout);

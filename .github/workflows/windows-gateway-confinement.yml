@@ -6,6 +6,11 @@ on:
   push:
     branches: [fix/3666-windows-coding-runtime, feature/4068-windows-workbench]
   workflow_dispatch:
+    inputs:
+      verify_transport:
+        description: "Require a real gateway connection and hostile port denial through the installed Workbench adapter"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -41,7 +46,9 @@ jobs:
           npm run build:packages
         shell: pwsh
       - name: Exercise the installed service and Workbench native adapter
-        run: ./scripts/testing/test-windows-gateway-scm.ps1
+        env:
+          VERIFY_TRANSPORT: ${{ inputs.verify_transport }}
+        run: ./scripts/testing/test-windows-gateway-scm.ps1 -VerifyTransport:($env:VERIFY_TRANSPORT -eq 'true')
         shell: pwsh
       - name: Compile, analyze, validate and prove dynamic filter cleanup
         run: node scripts/testing/test-windows-gateway-filters.mjs --filter-lifecycle

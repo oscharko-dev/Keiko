@@ -35,6 +35,7 @@ if (operation === "build") {
       "/link",
       "/DEPENDENTLOADFLAG:0x800",
       "fwpuclnt.lib",
+      "ws2_32.lib",
       "advapi32.lib",
     ],
     { env, stdio: "inherit" },
