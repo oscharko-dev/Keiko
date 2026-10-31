@@ -75,8 +75,9 @@ const draftEpic = (jira, requirementId, n) =>
   jira.createEpic(requirementId, { labels: ["anforderung", identityOf(n)] });
 /** The completed `jira.draft` exchange of a turn; each item is `[state, issueKey?]`. */
 const draftExchange = (items) => ({
-  call: { id: "call-draft", name: "jira.draft", arguments: {} },
+  call: { id: "call-draft", name: "jira_draft", arguments: {} },
   result: {
+    toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
     status: "completed",
     data: {
       outcome: "succeeded",
@@ -392,8 +393,9 @@ describe("S11 compliance report", () => {
   const truth = { fieldIds: FIELDS, issues };
   /** The deviation list of a completed `jira.report` call, as the tool returns it. */
   const reportOf = (items) => ({
-    call: { id: "call-1", name: "jira.report", arguments: { projectKey: "RPT" } },
+    call: { id: "call-1", name: "jira_report", arguments: { projectKey: "RPT" } },
     result: {
+      toolRef: { canonicalId: "keiko.jira.report", contractVersion: 1 },
       status: "completed",
       data: {
         outcome: "succeeded",
@@ -570,8 +572,9 @@ describe("S11 compliance report", () => {
 
     it("reads deviations that arrive in a later section page", async () => {
       const page = {
-        call: { id: "call-2", name: "jira.report", arguments: { section: "deviations" } },
+        call: { id: "call-2", name: "jira_report", arguments: { section: "deviations" } },
         result: {
+          toolRef: { canonicalId: "keiko.jira.report", contractVersion: 1 },
           status: "completed",
           data: {
             outcome: "succeeded",

@@ -3,8 +3,8 @@
 // matching rule or field id, and the answer attributes the deviation to that issue without denying
 // it. Word occurrence alone proves nothing: "Summary, Parent and Label are correct" contains the
 // words of every seeded deviation.
+import { completedToolExchange } from "./tool-exchanges.mjs";
 const ISSUE_KEY = /RPT-\d+/g;
-const REPORT_TOOL = "jira.report";
 
 const escapeRegExp = (value) => value.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 
@@ -31,8 +31,7 @@ function merge(byKey, entry) {
   byKey.set(entry.key, known);
 }
 
-const completedReport = (exchange) =>
-  exchange?.call?.name === REPORT_TOOL && exchange.result?.status === "completed";
+const completedReport = (exchange) => completedToolExchange(exchange, "jira.report");
 
 /**
  * Per issue key, the rule ids and field ids every completed `jira.report` call of the turn reported
