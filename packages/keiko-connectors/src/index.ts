@@ -189,7 +189,11 @@ export {
   type JiraManagedMutationExecutor,
 } from "./jira-managed-tools.js";
 export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
-export { JIRA_ISSUE_LINKS_MAX } from "./jira-issue-links.js";
+export {
+  JIRA_ISSUE_LINKS_MAX,
+  JIRA_ISSUE_LINKS_PER_REQUEST_MAX,
+  isJiraIssueLinkWrite,
+} from "./jira-issue-links.js";
 export {
   JIRA_DRAFT_IDENTITY_PREFIX,
   excludedJiraDraftRefs,

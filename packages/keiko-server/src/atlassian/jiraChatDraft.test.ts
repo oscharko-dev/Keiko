@@ -13,6 +13,7 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import {
   SYNTHETIC_JIRA_BASE_URL,
   syntheticJira,
+  type StoredIssue,
   type SyntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
@@ -150,6 +151,70 @@ describe("executeJiraChatDraft (#4178)", () => {
         input.journal?.find(jiraDraftChildIntent(input.intent, ref).invocationId),
       ).toMatchObject({ operation: "jira.create", phase: "settled", outcome: "succeeded" });
     expect(observedJiraDraftOutcome(input.journal, input.intent, BACKLOG)).toBe("succeeded");
+  });
+
+  const HUB = {
+    items: [
+      item("one"),
+      item("two"),
+      item("three"),
+      item("hub", {
+        links: ["one", "two", "three"].map((ref) => ({
+          type: "Relates",
+          direction: "outward",
+          ref,
+        })),
+      }),
+    ],
+  } as unknown as CatalogJsonObject;
+  const linkKeys = (issue: StoredIssue | undefined): unknown[] =>
+    ((issue?.fields.issuelinks ?? []) as { outwardIssue?: { key: string } }[])
+      .map((link) => link.outwardIssue?.key)
+      .sort();
+
+  it("creates an item with several links as its create plus one call per further link (#4176)", async () => {
+    const jira = syntheticJira();
+    const input = execution(jira, HUB);
+    const result = await executeJiraChatDraft(input);
+    expect(result.data).toMatchObject({ outcome: "succeeded", createdCount: 4, failedCount: 0 });
+    expect(linkKeys(jira.issues[3])).toEqual(["SYN-1", "SYN-2", "SYN-3"]);
+    const operations = jira
+      .posts()
+      .map((body) => (body as { update?: { issuelinks?: unknown[] } }).update?.issuelinks?.length);
+    expect(Math.max(...operations.map((count) => count ?? 0))).toBe(1);
+    expect(jira.posts().filter((body) => "inwardIssue" in body)).toHaveLength(2);
+    expect(
+      input.journal?.find(jiraDraftChildIntent(input.intent, "hub").invocationId),
+    ).toMatchObject({ phase: "settled", outcome: "succeeded", httpStatus: 201 });
+  });
+
+  it("names the created issue and the missing links when a further link fails (#4176)", async () => {
+    const jira = syntheticJira();
+    jira.refuseLinks.add("SYN-3");
+    const input = execution(jira, HUB);
+    const result = await executeJiraChatDraft(input);
+    expect(itemsOf(result)[3]).toMatchObject({
+      ref: "hub",
+      state: "uncertain",
+      issueKey: "SYN-4",
+      reason: "not-found",
+      linksRequested: 3,
+      linksCreated: 2,
+      linksMissing: [{ type: "Relates", direction: "outward", issueKey: "SYN-3" }],
+    });
+    // An uncertain item makes the draft uncertain; the item itself carries the partial effect.
+    expect(result).toMatchObject({
+      isError: true,
+      data: { outcome: "unknown", uncertainCount: 1 },
+    });
+    expect(
+      input.journal?.find(jiraDraftChildIntent(input.intent, "hub").invocationId),
+    ).toMatchObject({ phase: "settled", outcome: "succeeded-unconfirmed" });
+    // A repeat of the whole draft sends nothing: the hub is neither created nor linked again.
+    const posts = jira.posts().length;
+    await executeJiraChatDraft(input);
+    expect(jira.posts()).toHaveLength(posts);
+    expect(jira.issues).toHaveLength(4);
   });
 
   it("never sends a replayed item again and still hands its key to later items", async () => {

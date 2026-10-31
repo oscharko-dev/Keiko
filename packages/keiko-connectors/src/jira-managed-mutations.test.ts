@@ -822,7 +822,16 @@ it("forwards an opaque plugin value and returns Jira's field error when it refus
   });
 });
 
-it("adds issue links on Jira's own update and confirms them in their direction (#4176)", async () => {
+function writes(f: ReturnType<typeof fixture>): { method: string; path: string; body: unknown }[] {
+  return f.http.mock.calls
+    .filter(([request]) => request.method !== "GET")
+    .map(([request]) => ({
+      method: request.method,
+      path: new URL(request.url).pathname.replace(/^.*\/rest\/api\/2\//u, ""),
+      body: JSON.parse(request.bodyJson ?? "null") as unknown,
+    }));
+}
+it("sends one issuelinks operation on the edit and each further link as its own call (#4176)", async () => {
   const f = fixture();
   expect(
     await f.run("jira.edit", {
@@ -831,19 +840,164 @@ it("adds issue links on Jira's own update and confirms them in their direction (
         { type: "Blocks", direction: "outward", issueKey: "SYN-2" },
         { type: "blocks", direction: "outward", issueKey: "syn-2" },
         { type: "Relates", direction: "inward", issueKey: "SYN-3" },
+        { type: "Relates", direction: "outward", issueKey: "SYN-4" },
       ],
     }),
-  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1" } });
-  const dispatched = f.http.mock.calls.find(([request]) => request.method === "PUT")?.[0];
-  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toEqual({
-    fields: {},
-    update: {
-      issuelinks: [
-        { add: { type: { name: "blocks" }, outwardIssue: { key: "syn-2" } } },
-        { add: { type: { name: "Relates" }, inwardIssue: { key: "SYN-3" } } },
+  ).toEqual({
+    ok: true,
+    receipt: { issueKey: "SYN-1" },
+    links: { requested: 3, created: 3, missing: [], unconfirmed: false },
+  });
+  expect(writes(f)).toEqual([
+    {
+      method: "PUT",
+      path: "issue/SYN-1",
+      body: {
+        fields: {},
+        update: {
+          issuelinks: [{ add: { type: { name: "blocks" }, outwardIssue: { key: "syn-2" } } }],
+        },
+      },
+    },
+    {
+      method: "POST",
+      path: "issueLink",
+      body: {
+        type: { name: "Relates" },
+        inwardIssue: { key: "SYN-3" },
+        outwardIssue: { key: "SYN-1" },
+      },
+    },
+    {
+      method: "POST",
+      path: "issueLink",
+      body: {
+        type: { name: "Relates" },
+        inwardIssue: { key: "SYN-1" },
+        outwardIssue: { key: "SYN-4" },
+      },
+    },
+  ]);
+});
+it("never sends two issuelinks operations in one request, as real Jira refuses them (#4176)", async () => {
+  const f = fixture();
+  await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    fields: { summary: "Changed" },
+    links: Array.from({ length: 6 }, (_, index) => ({
+      type: "Relates",
+      direction: "outward",
+      issueKey: `SYN-${String(index + 2)}`,
+    })),
+  });
+  const operations = writes(f).map(
+    ({ body }) => (body as { update?: { issuelinks?: unknown[] } }).update?.issuelinks?.length ?? 0,
+  );
+  expect(Math.max(...operations)).toBe(1);
+  expect(writes(f).filter(({ path }) => path === "issueLink")).toHaveLength(5);
+});
+it("reports an edit whose third link failed as a partial effect, never as success (#4176)", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  let linkCalls = 0;
+  f.http.mockImplementation((request) => {
+    if (request.url.endsWith("/issueLink") && ++linkCalls === 2)
+      return Promise.resolve(
+        response({ errorMessages: ["Issue Does Not Exist"], errors: {} }, 404),
+      );
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+  const result = await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    links: [1, 2, 3, 4, 5].map((n) => ({
+      type: "Relates",
+      direction: "outward" as const,
+      issueKey: `SYN-${String(n + 1)}`,
+    })),
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: "not-found",
+    receipt: { issueKey: "SYN-1" },
+    links: { requested: 5, created: 2, unconfirmed: false },
+  });
+  expect(result.ok ? [] : result.links?.missing.map(({ issueKey }) => issueKey)).toEqual([
+    "SYN-4",
+    "SYN-5",
+    "SYN-6",
+  ]);
+  // The failing call is not repeated and the links after it are not tried.
+  expect(writes(f).filter(({ path }) => path === "issueLink")).toHaveLength(2);
+});
+it("keeps a lost link answer unconfirmed when the issue cannot be read back (#4176)", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  let lost = false;
+  f.http.mockImplementation((request) => {
+    if (request.url.endsWith("/issueLink")) {
+      lost = true;
+      return Promise.resolve({ kind: "timeout" });
+    }
+    if (lost && request.method === "GET" && request.url.includes("fields=issuelinks"))
+      return Promise.resolve({ kind: "network-error" });
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [
+        { type: "Relates", direction: "outward", issueKey: "SYN-2" },
+        { type: "Relates", direction: "outward", issueKey: "SYN-3" },
       ],
+    }),
+  ).toMatchObject({
+    ok: false,
+    receipt: { issueKey: "SYN-1" },
+    links: {
+      requested: 2,
+      created: 1,
+      unconfirmed: true,
+      missing: [{ type: "Relates", direction: "outward", issueKey: "SYN-3" }],
     },
   });
+  expect(writes(f).filter(({ path }) => path === "issueLink")).toHaveLength(1);
+});
+it("does not write a link the issue already has (#4176)", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  f.http.mockImplementation((request) => {
+    if (request.method === "GET" && request.url.includes("/issue/SYN-1?"))
+      return Promise.resolve(
+        response({
+          id: "10001",
+          key: "SYN-1",
+          fields: {
+            summary: "Original",
+            issuelinks: [{ id: "1", type: { name: "Relates" }, outwardIssue: { key: "SYN-2" } }],
+          },
+        }),
+      );
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+  await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    links: [
+      { type: "Relates", direction: "outward", issueKey: "SYN-2" },
+      { type: "Relates", direction: "outward", issueKey: "SYN-3" },
+    ],
+  });
+  expect(writes(f)).toEqual([
+    {
+      method: "PUT",
+      path: "issue/SYN-1",
+      body: {
+        fields: {},
+        update: {
+          issuelinks: [{ add: { type: { name: "Relates" }, outwardIssue: { key: "SYN-3" } } }],
+        },
+      },
+    },
+  ]);
 });
 it("creates an issue with links when create metadata offers them (#4176)", async () => {
   const f = fixture();
@@ -870,6 +1024,79 @@ it("creates an issue with links when create metadata offers them (#4176)", async
       issuelinks: [{ add: { type: { name: "Relates" }, outwardIssue: { key: "SYN-9" } } }],
     },
   });
+});
+function createWithLinksMetadata(f: ReturnType<typeof fixture>): void {
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, LINKS_FIELD],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+}
+const THREE_LINKS = ["SYN-7", "SYN-8", "SYN-9"].map((issueKey) => ({
+  type: "Relates",
+  direction: "outward" as const,
+  issueKey,
+}));
+const CREATE_WITH_LINKS = {
+  projectId: "10000",
+  issueTypeId: "10001",
+  fields: { summary: "Synthetic", customfield_10000: "Required" },
+  links: THREE_LINKS,
+};
+it("creates an issue with its first link and adds every further link separately (#4176)", async () => {
+  const f = fixture();
+  createWithLinksMetadata(f);
+  expect(await f.run("jira.create", CREATE_WITH_LINKS)).toMatchObject({
+    ok: true,
+    receipt: { issueKey: "SYN-1", issueId: "10001" },
+    links: { requested: 3, created: 3, missing: [], unconfirmed: false },
+  });
+  expect(writes(f).map(({ method, path }) => `${method} ${path}`)).toEqual([
+    "POST issue",
+    "POST issueLink",
+    "POST issueLink",
+  ]);
+  expect(writes(f)[0]?.body).toMatchObject({
+    update: {
+      issuelinks: [{ add: { type: { name: "Relates" }, outwardIssue: { key: "SYN-7" } } }],
+    },
+  });
+  expect(writes(f)[2]?.body).toEqual({
+    type: { name: "Relates" },
+    inwardIssue: { key: "SYN-1" },
+    outwardIssue: { key: "SYN-9" },
+  });
+});
+it("says the issue exists and which links are missing when a create's link fails (#4176)", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  createWithLinksMetadata(f);
+  f.http.mockImplementation((request) =>
+    request.url.endsWith("/issueLink")
+      ? Promise.resolve(response({ errorMessages: ["No permission"], errors: {} }, 403))
+      : (dispatch?.(request) ?? Promise.resolve(response({}, 404))),
+  );
+  const result = await f.run("jira.create", CREATE_WITH_LINKS);
+  expect(result).toMatchObject({
+    ok: false,
+    reason: "permission-denied",
+    receipt: { issueKey: "SYN-1", issueId: "10001" },
+    links: {
+      requested: 3,
+      created: 1,
+      unconfirmed: false,
+      missing: [
+        { type: "Relates", direction: "outward", issueKey: "SYN-8" },
+        { type: "Relates", direction: "outward", issueKey: "SYN-9" },
+      ],
+    },
+  });
+  // The issue is created once: neither the failed link nor the create is ever sent again.
+  expect(writes(f).map(({ path }) => path)).toEqual(["issue", "issueLink"]);
 });
 it("refuses links before dispatch when current metadata does not offer them (#4176)", async () => {
   const f = fixture();
@@ -919,6 +1146,16 @@ it("does not confirm an edit whose requested link is missing on readback (#4176)
       issueKey: "SYN-1",
       links: [{ type: "Blocks", direction: "outward", issueKey: "SYN-2" }],
     }),
-  ).toEqual({ ok: false, reason: "conflict" });
+  ).toEqual({
+    ok: false,
+    reason: "conflict",
+    receipt: { issueKey: "SYN-1" },
+    links: {
+      requested: 1,
+      created: 0,
+      unconfirmed: false,
+      missing: [{ type: "Blocks", direction: "outward", issueKey: "SYN-2" }],
+    },
+  });
   expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
 });

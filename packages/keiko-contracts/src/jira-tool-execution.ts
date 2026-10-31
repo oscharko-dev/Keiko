@@ -90,12 +90,39 @@ export interface JiraMutationFailureDetail {
   readonly fieldErrors?: readonly JiraMutationFieldError[];
   readonly messages?: readonly string[];
 }
+/** Most issue links one create/edit request may ask for (#4176). */
+export const JIRA_MUTATION_LINKS_MAX = 20;
+/** One requested link, as the caller named it: the link type, the side and the other issue. */
+export interface JiraMutationLinkRef {
+  readonly type: string;
+  readonly direction: "inward" | "outward";
+  readonly issueKey: string;
+}
+/**
+ * What happened to the requested links (#4176). Jira takes one `issuelinks` operation per request, so
+ * every further link is its own call after the issue exists and can fail on its own. `created` counts
+ * the requested links present on the issue afterwards; `missing` names the rest; `unconfirmed` says
+ * the issue's links could not be read back, so a missing link may still exist.
+ */
+export interface JiraMutationLinkAccount {
+  readonly requested: number;
+  readonly created: number;
+  readonly missing: readonly JiraMutationLinkRef[];
+  readonly unconfirmed: boolean;
+}
 export type JiraMutationAttempt =
-  | { readonly ok: true; readonly receipt: JiraMutationReceipt }
+  | {
+      readonly ok: true;
+      readonly receipt: JiraMutationReceipt;
+      readonly links?: JiraMutationLinkAccount;
+    }
   | {
       readonly ok: false;
       readonly reason: AtlassianConnectorWriteFailureReason;
       readonly detail?: JiraMutationFailureDetail;
+      /** Set only when the issue itself exists although the attempt did not finish (partial effect). */
+      readonly receipt?: JiraMutationReceipt;
+      readonly links?: JiraMutationLinkAccount;
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.
@@ -166,4 +193,52 @@ export function sanitizeJiraMutationFailureDetail(
     ...(messages.length === 0 ? {} : { messages }),
   };
   return Object.keys(detail).length === 0 ? undefined : detail;
+}
+
+// eslint-disable-next-line no-control-regex -- a link type name is a single-line identifier.
+const LINK_TYPE_CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+const LINK_ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
+function linkTypeName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 255 &&
+    !LINK_TYPE_CONTROL.test(value)
+  );
+}
+function linkRef(value: unknown): JiraMutationLinkRef | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const type: unknown = Reflect.get(value, "type");
+  const direction: unknown = Reflect.get(value, "direction");
+  const issueKey: unknown = Reflect.get(value, "issueKey");
+  if (!linkTypeName(type) || (direction !== "inward" && direction !== "outward")) return undefined;
+  return typeof issueKey === "string" && LINK_ISSUE_KEY.test(issueKey)
+    ? { type, direction, issueKey }
+    : undefined;
+}
+function linkCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= JIRA_MUTATION_LINKS_MAX
+  );
+}
+/** One bounded projection of a link account, applied wherever an account crosses a boundary. */
+export function sanitizeJiraMutationLinkAccount(
+  value: unknown,
+): JiraMutationLinkAccount | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const requested: unknown = Reflect.get(value, "requested");
+  const created: unknown = Reflect.get(value, "created");
+  const unconfirmed: unknown = Reflect.get(value, "unconfirmed");
+  const listed: unknown = Reflect.get(value, "missing");
+  if (!linkCount(requested) || !linkCount(created) || created > requested) return undefined;
+  if (typeof unconfirmed !== "boolean" || !Array.isArray(listed)) return undefined;
+  const missing: (JiraMutationLinkRef | undefined)[] = (listed as unknown[]).map(linkRef);
+  if (missing.length > requested) return undefined;
+  const refs = missing.filter((link): link is JiraMutationLinkRef => link !== undefined);
+  return refs.length === missing.length
+    ? { requested, created, missing: refs, unconfirmed }
+    : undefined;
 }

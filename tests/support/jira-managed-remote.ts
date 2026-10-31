@@ -79,22 +79,60 @@ function fixtureLabelUpdates(mutation: Record<string, unknown>, state: Synthetic
   }
   state.fields.labels = [...labels];
 }
+type LinkOperations = { issuelinks?: { add: Record<string, unknown> }[] } | undefined;
+/** The synthetic issue every fixture request is about. */
+export const SYNTHETIC_ISSUE_KEY = "SYN-1";
+/**
+ * Jira Data Center and Cloud both take ONE `issuelinks` operation per create/edit request (the
+ * unresolved JRASERVER-66329); a lab Data Center 10.3 answers HTTP 400 with this message. The
+ * fixture refuses the same way, so a payload real Jira rejects can never pass here.
+ */
+export function jiraTooManyLinkOperationsBody(operations: number): Record<string, unknown> {
+  return {
+    errorMessages: [],
+    errors: {
+      issuelinks: `Too many operations (${String(operations)}) provided for field 'issuelinks'. We support at most 1 operation for this field.`,
+    },
+  };
+}
+export function fixtureLinkOperationCount(mutation: Record<string, unknown>): number {
+  return (mutation.update as LinkOperations)?.issuelinks?.length ?? 0;
+}
+function fixtureLinkOperationRefusal(
+  mutation: Record<string, unknown>,
+): AtlassianHttpBodyResult | undefined {
+  const operations = fixtureLinkOperationCount(mutation);
+  return operations > 1 ? response(jiraTooManyLinkOperationsBody(operations), 400) : undefined;
+}
+function fixtureStoreLink(state: SyntheticJira, link: Record<string, unknown>): void {
+  const links = (state.fields.issuelinks as readonly unknown[] | undefined) ?? [];
+  state.fields.issuelinks = [...links, { id: String(20000 + links.length), ...link }];
+}
 /** Jira stores an added link and reads it back with the other issue on its own side. */
 function fixtureLinkUpdates(mutation: Record<string, unknown>, state: SyntheticJira): void {
-  const update = mutation.update as { issuelinks?: { add: Record<string, unknown> }[] } | undefined;
-  if (update?.issuelinks === undefined) return;
-  const links = (state.fields.issuelinks as readonly unknown[] | undefined) ?? [];
-  state.fields.issuelinks = [
-    ...links,
-    ...update.issuelinks.map(({ add }, index) => ({ id: String(20000 + index), ...add })),
-  ];
+  for (const { add } of (mutation.update as LinkOperations)?.issuelinks ?? [])
+    fixtureStoreLink(state, add);
 }
-export function fixtureWrite(
-  path: string,
-  body: string | undefined,
+/**
+ * `POST /rest/api/2/issueLink`: `inwardIssue` is the source of the link, as a real Data Center
+ * reads back (a link whose source is this issue lists the other under `outwardIssue`).
+ */
+function fixtureIssueLink(
+  mutation: Record<string, unknown>,
   state: SyntheticJira,
 ): AtlassianHttpBodyResult {
-  const mutation = JSON.parse(body ?? "{}") as Record<string, unknown>;
+  const inward = (mutation.inwardIssue as { key?: string } | undefined)?.key;
+  const outward = (mutation.outwardIssue as { key?: string } | undefined)?.key;
+  if (mutation.type === undefined || inward === undefined || outward === undefined)
+    return response({ errorMessages: ["Bad link"], errors: {} }, 400);
+  if (inward === SYNTHETIC_ISSUE_KEY)
+    fixtureStoreLink(state, { type: mutation.type, outwardIssue: { key: outward } });
+  else if (outward === SYNTHETIC_ISSUE_KEY)
+    fixtureStoreLink(state, { type: mutation.type, inwardIssue: { key: inward } });
+  else return response({ errorMessages: ["Issue Does Not Exist"], errors: {} }, 404);
+  return response(undefined, 201);
+}
+function fixtureApply(path: string, mutation: Record<string, unknown>, state: SyntheticJira): void {
   if (typeof mutation.fields === "object" && mutation.fields !== null)
     state.fields = { ...state.fields, ...mutation.fields };
   fixtureLabelUpdates(mutation, state);
@@ -103,6 +141,17 @@ export function fixtureWrite(
     state.fields.assignee = mutation.name === null ? null : { name: mutation.name };
   if (path.endsWith("/transitions")) state.fields.status = { id: "3" };
   if (typeof mutation.body === "string") state.comment = mutation.body;
+}
+export function fixtureWrite(
+  path: string,
+  body: string | undefined,
+  state: SyntheticJira,
+): AtlassianHttpBodyResult {
+  const mutation = JSON.parse(body ?? "{}") as Record<string, unknown>;
+  const refusal = fixtureLinkOperationRefusal(mutation);
+  if (refusal !== undefined) return refusal;
+  if (path.endsWith("/issueLink")) return fixtureIssueLink(mutation, state);
+  fixtureApply(path, mutation, state);
   if (path.endsWith("/issue")) return response({ key: "SYN-1", id: "10001" }, 201);
   if (path.endsWith("/comment")) return response({ id: "10002" }, 201);
   return response(undefined, 204);

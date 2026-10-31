@@ -41,7 +41,7 @@ const LINKS = {
   type: "array",
   maxItems: JIRA_ISSUE_LINKS_MAX,
   description:
-    'Issue links to add, by Jira link type name (for example "Relates" or "Blocks"). outward means this issue → issueKey (this issue blocks issueKey); inward means issueKey → this issue. Requires the issuelinks field in current metadata; existing links are kept.',
+    'Issue links to add, by Jira link type name (for example "Relates" or "Blocks"). outward means this issue → issueKey (this issue blocks issueKey); inward means issueKey → this issue. Requires the issuelinks field in current metadata; existing links are kept. Each link after the first is a separate Jira call, so a result of succeeded-unconfirmed that lists linksMissing means the issue exists: add only the missing links with jira.edit, never create the issue again.',
   items: object(
     {
       type: { ...text(255), minLength: 1 },
@@ -106,6 +106,31 @@ const MESSAGES = {
   maxItems: JIRA_MUTATION_DETAIL_LIMITS.messages,
   items: text(JIRA_MUTATION_DETAIL_LIMITS.messageChars),
 };
+const LINK_COUNT = { type: "integer", minimum: 0, maximum: JIRA_ISSUE_LINKS_MAX };
+/**
+ * What happened to the requested links (#4176): Jira takes one `issuelinks` operation per request,
+ * so further links are separate calls and can fail alone. `linksMissing` names the requested links
+ * not on the issue; `linksUnconfirmed` says the issue could not be read back to be sure.
+ */
+const LINK_RESULT = {
+  linksRequested: LINK_COUNT,
+  linksCreated: LINK_COUNT,
+  linksMissing: {
+    type: "array",
+    maxItems: JIRA_ISSUE_LINKS_MAX,
+    items: object(
+      {
+        type: text(255),
+        direction: { type: "string", enum: ["inward", "outward"] },
+        issueKey: text(128),
+      },
+      ["type", "direction", "issueKey"],
+    ),
+  },
+  linksUnconfirmed: { type: "boolean" },
+};
+// Up to 20 missing links, each with a link type name of up to 255 characters, beside the usual result.
+const LINKED_RESULT_BOUNDS = { maxResultBytes: 16384, maxDurationMs: 90000, maxResultCount: 1 };
 const DRAFT_COUNT = { type: "integer", minimum: 0, maximum: JIRA_DRAFT_ITEMS_MAX };
 const DRAFT_RESULT_SCHEMA = object(
   {
@@ -125,6 +150,7 @@ const DRAFT_RESULT_SCHEMA = object(
           validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
           fieldErrors: FIELD_ERRORS,
           messages: MESSAGES,
+          ...LINK_RESULT,
         },
         ["ref", "state"],
       ),
@@ -160,6 +186,7 @@ const DEFINITIONS: Readonly<
       { projectId: NUMERIC_ID, issueTypeId: NUMERIC_ID, fields: FIELDS, links: LINKS },
       ["projectId", "issueTypeId", "fields"],
     ),
+    bounds: LINKED_RESULT_BOUNDS,
   },
   "jira.edit": {
     description:
@@ -167,6 +194,7 @@ const DEFINITIONS: Readonly<
     input: object({ issueKey: ISSUE_KEY, fields: FIELDS, updates: UPDATES, links: LINKS }, [
       "issueKey",
     ]),
+    bounds: LINKED_RESULT_BOUNDS,
   },
   "jira.assign": {
     description:
@@ -228,6 +256,7 @@ const RESULT_SCHEMA = object(
     validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
     fieldErrors: FIELD_ERRORS,
     messages: MESSAGES,
+    ...LINK_RESULT,
   },
   ["outcome"],
 );

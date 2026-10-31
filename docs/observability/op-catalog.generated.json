@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "945e9d278350a503971dcb21da02c48f97d64094b31cde436bbece2f64a59f72",
+    "catalogDigest": "5b90c45342bd1f8d1c624b677cff2aa927e3d367b9cf42161ac1029cb128fc8f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2753,16 +2753,37 @@
               "succeeded-unconfirmed",
               "unknown"
             ]
+          },
+          "linkRequestedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkCreatedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkFailedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
         "lifecycle": "state",
         "analyzerProjection": "timeline",
+        "diagnosticWhen": [
+          {
+            "field": "linkFailedCount",
+            "positive": true
+          }
+        ],
         "failureClasses": ["chat-tool-mutation"],
         "proofIds": ["chat.tool-mutation.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:9",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:62"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:12",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:71"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2889,8 +2910,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.context-fitted.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:210",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:244"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:212",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:246"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2977,8 +2998,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.ended.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:143",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:186"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:145",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:188"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9845,6 +9866,21 @@
             "dataClass": "count",
             "required": false
           },
+          "linkRequestedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkCreatedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkFailedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "durationMs": {
             "type": "integer",
             "dataClass": "duration",
@@ -9872,13 +9908,17 @@
           {
             "field": "outcome",
             "values": ["refused", "failed"]
+          },
+          {
+            "field": "linkFailedCount",
+            "positive": true
           }
         ],
         "failureClasses": ["coding-runtime-jira-pod"],
         "proofIds": ["coding-runtime.jira-pod.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:178",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:271"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:281"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43682,6 +43722,7 @@
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
+          "count",
           "digest",
           "loss-state",
           "opaque-id"
@@ -57575,6 +57616,24 @@
                   "required": true
                 },
                 {
+                  "name": "linkCreatedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "linkFailedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "linkRequestedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -57590,6 +57649,7 @@
               "evidenceClasses": [
                 "closed-enum",
                 "completeness-state",
+                "count",
                 "digest",
                 "loss-state",
                 "opaque-id"
@@ -64885,6 +64945,24 @@
                   "name": "frames",
                   "type": "string-array",
                   "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "linkCreatedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "linkFailedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "linkRequestedCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
@@ -104818,28 +104896,28 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:105",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:114",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:131",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:130",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:137",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:156",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:89",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:162",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105514,7 +105592,7 @@
     {
       "op": "chat.tool-mutation",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:12",
+      "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:15",
       "package": "keiko-server"
     },
     {
@@ -105532,13 +105610,13 @@
     {
       "op": "chat.tool-turn.context-fitted",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:213",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:215",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.ended",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:146",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:148",
       "package": "keiko-server"
     },
     {
@@ -107908,14 +107986,14 @@
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:168",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:186",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:45",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:49",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -29,6 +29,7 @@ import type { AtlassianConnectorCredentialDeps } from "../atlassian/credentialRo
 import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
 import {
   jiraAttemptToolResult,
+  jiraLinkCountsOfResult,
   validJiraMutationAttempt,
 } from "../atlassian/jiraMutationResult.js";
 import type { JiraPodAccessDeps, JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
@@ -124,6 +125,20 @@ function toolOf(name: string): CodingJiraTool | undefined {
 }
 
 type CallLine = Pick<CodingJiraPodLine, "action" | "tool" | "risk">;
+
+/** Link counts of a Jira write result, for its one body-free decision line (#4176). */
+function linkLineCounts(
+  data: CatalogJsonObject | undefined,
+): Pick<CodingJiraPodLine, "linkRequestedCount" | "linkCreatedCount" | "linkFailedCount"> {
+  const counts = jiraLinkCountsOfResult(data);
+  return counts === undefined
+    ? {}
+    : {
+        linkRequestedCount: counts.requested,
+        linkCreatedCount: counts.created,
+        linkFailedCount: counts.failed,
+      };
+}
 
 /** The result a provider reported with its failure; absent for any other kind of failure. */
 function providerResult(error: unknown): CatalogJsonObject | undefined {
@@ -423,6 +438,7 @@ class CodingJiraPodService implements CodingJiraPods {
       recordCodingJiraPod(this.log, context.correlationId, {
         ...line,
         outcome: "completed",
+        ...linkLineCounts(data),
         durationMs: Date.now() - started,
       });
       return callToolResult(data, false);
@@ -432,6 +448,7 @@ class CodingJiraPodService implements CodingJiraPods {
         ...line,
         outcome: "failed",
         reason: provider === undefined ? "internal" : "tool-failed",
+        ...linkLineCounts(provider),
         durationMs: Date.now() - started,
         ...(provider === undefined ? { error } : {}),
       });

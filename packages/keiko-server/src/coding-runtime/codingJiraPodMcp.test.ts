@@ -352,6 +352,65 @@ describe("serving the bound Pod through the relay", () => {
     ]);
   });
 
+  const THREE_LINKS = ["SYN-7", "SYN-8", "SYN-9"].map((issueKey) => ({
+    type: "Relates",
+    direction: "outward",
+    issueKey,
+  }));
+  it("links several issues through separate calls and counts them on its one line (#4176)", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", { issueKey: "SYN-1", links: THREE_LINKS });
+    expect(result).toMatchObject({
+      structuredContent: { outcome: "succeeded", issueKey: "SYN-1", linksRequested: 3 },
+    });
+    const writes = h.http.mock.calls
+      .filter(([request]) => request.method !== "GET")
+      .map(([request]) => new URL(request.url).pathname.replace(/^.*\/api\/2\//u, ""));
+    expect(writes).toEqual(["issue/SYN-1", "issueLink", "issueLink"]);
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({
+        tool: "jira.edit",
+        outcome: "completed",
+        linkRequestedCount: 3,
+        linkCreatedCount: 3,
+        linkFailedCount: 0,
+      }),
+    ]);
+  });
+
+  it("treats a partial link effect as an uncertain mutation and counts it, never retrying (#4176)", async () => {
+    const h = harness();
+    const dispatch = h.http.getMockImplementation();
+    h.http.mockImplementation((request) =>
+      request.url.endsWith("/issueLink")
+        ? Promise.resolve(response({ errorMessages: ["No permission"], errors: {} }, 403))
+        : (dispatch?.(request) ?? Promise.resolve(response({}, 404))),
+    );
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", { issueKey: "SYN-1", links: THREE_LINKS });
+    // A failed write is not delivered as data in a Coding run: the relay marks the permit failed
+    // and hands the run to the existing uncertain-mutation recovery.
+    expect(result).toMatchObject({ isError: true });
+    expect(h.recover).toHaveBeenCalledOnce();
+    const writes = h.http.mock.calls.filter(([request]) => request.method !== "GET");
+    expect(writes.map(([request]) => new URL(request.url).pathname.split("/").at(-1))).toEqual([
+      "SYN-1",
+      "issueLink",
+    ]);
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({
+        outcome: "failed",
+        reason: "tool-failed",
+        linkRequestedCount: 3,
+        linkCreatedCount: 1,
+        linkFailedCount: 2,
+        level: "warn",
+      }),
+    ]);
+    expect(JSON.stringify(proofLines(h))).not.toMatch(/SYN-/u);
+  });
+
   it("transitions the ticket", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h)));

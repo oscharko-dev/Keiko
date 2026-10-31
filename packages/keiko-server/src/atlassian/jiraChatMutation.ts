@@ -1,7 +1,10 @@
-import type {
-  AtlassianHttpBodyPort,
-  AtlassianHttpBodyRequest,
-  AtlassianHttpRequest,
+import {
+  isJiraIssueLinkWrite,
+  JIRA_ISSUE_LINKS_MAX,
+  JIRA_ISSUE_LINKS_PER_REQUEST_MAX,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpRequest,
 } from "@oscharko-dev/keiko-connectors";
 import type {
   JiraMutationAttempt,
@@ -17,6 +20,7 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import {
   jiraAttemptToolResult,
+  jiraLinkCounts,
   jiraMutationToolResult as result,
   validJiraMutationAttempt,
 } from "./jiraMutationResult.js";
@@ -54,14 +58,35 @@ function observedOutcome(record: ChatToolMutationRecord | undefined): JiraMutati
   if (record.phase === "prepared") return "not-dispatched";
   return record.phase === "acknowledged" ? "succeeded-unconfirmed" : "unknown";
 }
+/**
+ * Jira takes one `issuelinks` operation per create/edit, so a request with several links is that
+ * request plus one `POST /rest/api/2/issueLink` per further link (#4176). Those calls are the same
+ * approved mutation, not new ones: they dispatch only after this invocation's own write was
+ * acknowledged, under the same current-authority and approval guards, at most once each and at
+ * most the approved count. They leave the journal record as the primary write set it; a failure or
+ * a lost answer leaves it acknowledged, which settles as succeeded-unconfirmed, never as a retry.
+ */
 function mutationTransport(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
 ): AtlassianHttpBodyPort {
   const { intent } = input;
+  let furtherLinks = 0;
+  let continuing = false;
+  const admitsContinuation = (request: AtlassianHttpRequest | AtlassianHttpBodyRequest): boolean =>
+    isJiraIssueLinkWrite(request) &&
+    furtherLinks < JIRA_ISSUE_LINKS_MAX - JIRA_ISSUE_LINKS_PER_REQUEST_MAX &&
+    journal.find(intent.invocationId)?.phase === "acknowledged";
   return input.httpPortFactory({
     beforeDispatch: (request): boolean => {
+      continuing = false;
       if (request.method === "GET") return confirmed(input.beforeEffect());
+      if (admitsContinuation(request)) {
+        if (!confirmed(input.beforeEffect()) || !confirmed(input.beforeMutation())) return false;
+        furtherLinks += 1;
+        continuing = true;
+        return true;
+      }
       return journal.beginDispatch(
         intent.invocationId,
         () => confirmed(input.beforeEffect()) && confirmed(input.beforeMutation()),
@@ -71,7 +96,7 @@ function mutationTransport(
       request: AtlassianHttpRequest | AtlassianHttpBodyRequest,
       status: number,
     ): boolean => {
-      if (request.method !== "GET") journal.acknowledge(intent.invocationId, status);
+      if (request.method !== "GET" && !continuing) journal.acknowledge(intent.invocationId, status);
       return true;
     },
   });
@@ -100,7 +125,7 @@ function finish(
   if (current?.phase === "prepared" && !attempt.ok) outcome = "rejected";
   if (current?.phase === "acknowledged" && attempt.ok) outcome = "succeeded";
   try {
-    journal.settle(input.intent.invocationId, outcome);
+    journal.settle(input.intent.invocationId, outcome, jiraLinkCounts(attempt));
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
     return result(observedOutcome(current), "unavailable");

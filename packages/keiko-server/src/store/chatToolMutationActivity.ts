@@ -5,7 +5,10 @@ import {
   recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "../observability/index.js";
-import type { ChatToolMutationRecord } from "./chatToolMutationTypes.js";
+import type {
+  ChatToolMutationLinkCounts,
+  ChatToolMutationRecord,
+} from "./chatToolMutationTypes.js";
 const MUTATION_STATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -42,12 +45,17 @@ const MUTATION_STATE = defineActivityLogOperation({
         "unknown",
       ],
     },
+    // Issue links one write asked for, on its `settled` line only (#4176): counts, never keys.
+    linkRequestedCount: { type: "integer", dataClass: "count", required: false },
+    linkCreatedCount: { type: "integer", dataClass: "count", required: false },
+    linkFailedCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
+  diagnosticWhen: [{ field: "linkFailedCount", positive: true }],
   failureClasses: ["chat-tool-mutation"],
   proofIds: ["chat.tool-mutation.emitted-line"],
   releaseImpact: "patch",
@@ -56,6 +64,7 @@ export function recordChatToolMutation(
   log: ServerLogSink,
   record: ChatToolMutationRecord,
   event: "prepared" | "replayed" | "dispatched" | "response" | "settled",
+  links?: ChatToolMutationLinkCounts,
 ): void {
   try {
     log.write(
@@ -72,6 +81,13 @@ export function recordChatToolMutation(
           event,
           phase: record.phase,
           outcome: record.outcome ?? "none",
+          ...(links === undefined
+            ? {}
+            : {
+                linkRequestedCount: links.requested,
+                linkCreatedCount: links.created,
+                linkFailedCount: links.failed,
+              }),
           completeness: "complete",
           loss: "none",
         },

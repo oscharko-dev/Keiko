@@ -2646,6 +2646,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unknown",
         ],
       },
+      linkRequestedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      linkCreatedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      linkFailedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",
@@ -2653,6 +2668,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["chat-tool-mutation"],
     proofIds: ["chat.tool-mutation.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "linkFailedCount",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -9434,6 +9455,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      linkRequestedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      linkCreatedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      linkFailedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       durationMs: {
         type: "integer",
         dataClass: "duration",
@@ -9464,6 +9500,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       {
         field: "outcome",
         values: ["refused", "failed"],
+      },
+      {
+        field: "linkFailedCount",
+        positive: true,
       },
     ],
   },

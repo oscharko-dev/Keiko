@@ -74,7 +74,18 @@ export function jiraDraftChildIntent(
   };
 }
 
-const DETAIL_KEYS = ["reason", "fieldId", "validation", "fieldErrors", "messages"] as const;
+const DETAIL_KEYS = [
+  "reason",
+  "fieldId",
+  "validation",
+  "fieldErrors",
+  "messages",
+  // A created item whose further links did not all land (#4176): which are missing.
+  "linksRequested",
+  "linksCreated",
+  "linksMissing",
+  "linksUnconfirmed",
+] as const;
 function failureDetail(data: CatalogJsonObject): CatalogJsonObject {
   const detail: Record<string, CatalogJsonValue> = {};
   for (const key of DETAIL_KEYS) {
@@ -103,7 +114,14 @@ function settledItem(
   }
   if (outcome === "rejected" || outcome === "not-dispatched")
     return { ref, state: "failed", detail: failureDetail(result.data) };
-  return { ref, state: "uncertain", detail: failureDetail(result.data) };
+  // A partial effect names the issue it did create, so it is never created again.
+  const partialKey = keyOf(result.data.issueKey);
+  return {
+    ref,
+    state: "uncertain",
+    ...(partialKey === undefined ? {} : { issueKey: partialKey }),
+    detail: failureDetail(result.data),
+  };
 }
 
 async function runItem(

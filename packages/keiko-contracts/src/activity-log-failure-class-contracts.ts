@@ -119,6 +119,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
+      "count",
       "digest",
       "loss-state",
       "opaque-id",

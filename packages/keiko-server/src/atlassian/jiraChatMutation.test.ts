@@ -134,6 +134,195 @@ it("uses the injected custody transport factory with journal-owned lifecycle hoo
   expect(httpPortFactory.mock.calls[0]?.[0].onResponse).toBeTypeOf("function");
   expect(f.effects).toHaveBeenCalledOnce();
 });
+const LINK_ACCOUNT = { requested: 3, created: 3, missing: [], unconfirmed: false } as const;
+/** The same journal and approval, over a Jira that answers each call by its path (#4176). */
+function linkFixture(answer: (url: string, index: number) => Response): {
+  f: ReturnType<typeof fixture>;
+  input: JiraChatMutationExecution;
+  fetches: Mock<typeof fetch>;
+  post: (
+    http: Parameters<JiraChatMutationExecution["execute"]>[0],
+    path: string,
+  ) => Promise<number>;
+} {
+  const f = fixture();
+  let calls = 0;
+  const fetches = vi.fn<typeof fetch>((request) => {
+    const url = request instanceof Request ? request.url : String(request);
+    return Promise.resolve(answer(url, calls++));
+  });
+  const input: JiraChatMutationExecution = {
+    ...f.input,
+    httpPortFactory: (lifecycle) =>
+      createGatewayAtlassianHttpBodyPort({
+        ...lifecycle,
+        correlationId: f.input.intent.correlationId,
+        baseUrl: "https://jira.example.invalid",
+        authRef: "synthetic-ref",
+        credentials: {
+          resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-test-pat" }),
+        },
+        fetchImpl: fetches,
+      }),
+  };
+  const post = async (
+    http: Parameters<JiraChatMutationExecution["execute"]>[0],
+    path: string,
+  ): Promise<number> => {
+    try {
+      const response = await http({
+        method: "POST",
+        url: `https://jira.example.invalid/rest/api/2/${path}`,
+        bodyJson: "{}",
+        maxBodyBytes: 1000,
+        timeoutMs: 1000,
+      });
+      return response.kind === "response" ? response.status : 0;
+    } catch {
+      // The journal-owned lifecycle refuses a dispatch it did not admit by throwing; 0 = not sent.
+      return 0;
+    }
+  };
+  return { f, input, fetches, post };
+}
+const createdThenLinked = (url: string): Response =>
+  url.endsWith("/issueLink")
+    ? new Response(null, { status: 201 })
+    : new Response('{"key":"SYN-1","id":"10001"}', { status: 201 });
+
+it("sends further issue links under the same journal record and approval (#4176)", async () => {
+  const l = linkFixture(createdThenLinked);
+  const beforeMutation = vi.fn(() => true);
+  const result = await executeJiraChatMutation({
+    ...l.input,
+    beforeMutation,
+    execute: async (http) => {
+      await l.post(http, "issue");
+      await l.post(http, "issueLink");
+      await l.post(http, "issueLink");
+      return { ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" }, links: LINK_ACCOUNT };
+    },
+  });
+  expect(result).toMatchObject({
+    data: { outcome: "succeeded", issueKey: "SYN-1", linksRequested: 3, linksCreated: 3 },
+  });
+  expect(l.fetches).toHaveBeenCalledTimes(3);
+  // One approval claim for the primary write and one per further link, never a new record.
+  expect(beforeMutation).toHaveBeenCalledTimes(3);
+  expect(l.f.input.journal?.find(l.f.input.intent.invocationId)).toMatchObject({
+    phase: "settled",
+    outcome: "succeeded",
+    httpStatus: 201,
+  });
+  const settled = l.f.logs.events.find((event) => event.extra?.event === "settled");
+  expect(settled?.extra).toMatchObject({
+    linkRequestedCount: 3,
+    linkCreatedCount: 3,
+    linkFailedCount: 0,
+  });
+  expect(l.f.logs.lines().join()).not.toMatch(/SYN-|synthetic-test-pat|jira\.example/u);
+});
+it("settles a created issue whose link failed as unconfirmed and names the missing links (#4176)", async () => {
+  const l = linkFixture((url) =>
+    url.endsWith("/issueLink")
+      ? new Response('{"errorMessages":["Issue Does Not Exist"],"errors":{}}', { status: 404 })
+      : new Response('{"key":"SYN-1","id":"10001"}', { status: 201 }),
+  );
+  const missing = [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }] as const;
+  const input: JiraChatMutationExecution = {
+    ...l.input,
+    execute: async (http) => {
+      await l.post(http, "issue");
+      await l.post(http, "issueLink");
+      return {
+        ok: false,
+        reason: "not-found",
+        receipt: { issueKey: "SYN-1", issueId: "10001" },
+        links: { requested: 2, created: 1, missing, unconfirmed: false },
+      };
+    },
+  };
+  const result = await executeJiraChatMutation(input);
+  expect(result).toMatchObject({
+    isError: true,
+    data: {
+      outcome: "succeeded-unconfirmed",
+      reason: "not-found",
+      issueKey: "SYN-1",
+      issueId: "10001",
+      linksRequested: 2,
+      linksCreated: 1,
+      linksMissing: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
+    },
+  });
+  // The failed answer did not overwrite the primary write's acknowledgement in the journal.
+  expect(l.f.input.journal?.find(input.intent.invocationId)).toMatchObject({
+    phase: "settled",
+    outcome: "succeeded-unconfirmed",
+    httpStatus: 201,
+  });
+  const settled = l.f.logs.events.find((event) => event.extra?.event === "settled");
+  expect(settled?.extra).toMatchObject({
+    linkRequestedCount: 2,
+    linkCreatedCount: 1,
+    linkFailedCount: 1,
+  });
+  // A replay returns the recorded outcome; nothing is created or linked again.
+  const calls = l.fetches.mock.calls.length;
+  expect(
+    await executeJiraChatMutation({
+      ...input,
+      intent: { ...input.intent, invocationId: "duplicate-delivery" },
+    }),
+  ).toMatchObject({ data: { outcome: "succeeded-unconfirmed", replayed: true } });
+  expect(l.fetches).toHaveBeenCalledTimes(calls);
+});
+it("admits at most the approved number of further links and only after an acknowledged write (#4176)", async () => {
+  const l = linkFixture(createdThenLinked);
+  const statuses: number[] = [];
+  await executeJiraChatMutation({
+    ...l.input,
+    execute: async (http) => {
+      // A link call before any acknowledged write is the primary write itself, once.
+      statuses.push(await l.post(http, "issue"));
+      for (let index = 0; index < 21; index++) statuses.push(await l.post(http, "issueLink")); // NOSONAR typescript:S9382 -- sequential by design
+      return { ok: false, reason: "unavailable" };
+    },
+  });
+  expect(statuses.filter((status) => status === 201)).toHaveLength(1 + 19);
+  expect(statuses.slice(-2)).toEqual([0, 0]);
+  expect(l.fetches).toHaveBeenCalledTimes(1 + 19);
+});
+it("sends no link when the primary write was not acknowledged (#4176)", async () => {
+  const l = linkFixture(() => new Response("{}", { status: 500 }));
+  const statuses: number[] = [];
+  await executeJiraChatMutation({
+    ...l.input,
+    execute: async (http) => {
+      statuses.push(await l.post(http, "issue"), await l.post(http, "issueLink"));
+      return { ok: false, reason: "unavailable" };
+    },
+  });
+  expect(statuses).toEqual([500, 0]);
+  expect(l.fetches).toHaveBeenCalledOnce();
+});
+it("stops sending links when the current authority is gone mid-sequence (#4176)", async () => {
+  const l = linkFixture(createdThenLinked);
+  let live = true;
+  const statuses: number[] = [];
+  await executeJiraChatMutation({
+    ...l.input,
+    beforeEffect: () => live,
+    execute: async (http) => {
+      statuses.push(await l.post(http, "issue"));
+      live = false;
+      statuses.push(await l.post(http, "issueLink"));
+      return { ok: false, reason: "unavailable" };
+    },
+  });
+  expect(statuses).toEqual([201, 0]);
+  expect(l.fetches).toHaveBeenCalledOnce();
+});
 it("refuses a write when concrete approval cannot be claimed at final dispatch", async () => {
   const f = fixture();
   const beforeMutation = vi.fn(() => false);

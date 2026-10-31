@@ -225,6 +225,10 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
     },
     risk: { type: "string", dataClass: "closed-enum", required: false, values: ["read", "write"] },
     toolCount: { type: "integer", dataClass: "count", required: false },
+    // Issue links a Jira write asked for (#4176): counts of requested, present and missing links.
+    linkRequestedCount: { type: "integer", dataClass: "count", required: false },
+    linkCreatedCount: { type: "integer", dataClass: "count", required: false },
+    linkFailedCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "duration", required: false },
     frames: {
       type: "string-array",
@@ -244,7 +248,10 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
-  diagnosticWhen: [{ field: "outcome", values: ["refused", "failed"] }],
+  diagnosticWhen: [
+    { field: "outcome", values: ["refused", "failed"] },
+    { field: "linkFailedCount", positive: true },
+  ],
   failureClasses: ["coding-runtime-jira-pod"],
   proofIds: ["coding-runtime.jira-pod.emitted-line"],
   releaseImpact: "minor",
@@ -257,6 +264,9 @@ export interface CodingJiraPodLine {
   readonly tool?: CodingJiraTool | undefined;
   readonly risk?: McpToolRisk | undefined;
   readonly toolCount?: number | undefined;
+  readonly linkRequestedCount?: number | undefined;
+  readonly linkCreatedCount?: number | undefined;
+  readonly linkFailedCount?: number | undefined;
   readonly durationMs?: number | undefined;
   readonly error?: unknown;
 }
@@ -282,6 +292,9 @@ export function recordCodingJiraPod(
           "tool",
           "risk",
           "toolCount",
+          "linkRequestedCount",
+          "linkCreatedCount",
+          "linkFailedCount",
           "durationMs",
         ] as const),
         ...activityErrorFields(line),

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   JIRA_MUTATION_DETAIL_LIMITS,
+  JIRA_MUTATION_LINKS_MAX,
   sanitizeJiraMutationFailureDetail,
+  sanitizeJiraMutationLinkAccount,
 } from "./jira-tool-execution.js";
 
 const ENCODER = new TextEncoder();
@@ -50,5 +52,32 @@ describe("sanitizeJiraMutationFailureDetail byte bound (#4176)", () => {
     expect(detail?.messages).toHaveLength(JIRA_MUTATION_DETAIL_LIMITS.messages);
     const result = { outcome: "failed", reason: "field-validation", ...detail };
     expect(encodedBytes(result)).toBeLessThan(4096);
+  });
+});
+
+describe("sanitizeJiraMutationLinkAccount (#4176)", () => {
+  const missing = { type: "Relates", direction: "outward", issueKey: "SYN-2" };
+  const account = { requested: 2, created: 1, missing: [missing], unconfirmed: false };
+
+  it("keeps a well-formed account and only its own fields", () => {
+    expect(sanitizeJiraMutationLinkAccount({ ...account, extra: "dropped" })).toEqual(account);
+  });
+
+  it.each([
+    ["a non-object", "links"],
+    ["a count beyond the bound", { ...account, requested: JIRA_MUTATION_LINKS_MAX + 1 }],
+    ["more created than requested", { ...account, created: 3 }],
+    ["a fractional count", { ...account, requested: 1.5 }],
+    ["a missing flag that is not boolean", { ...account, unconfirmed: "no" }],
+    ["more missing links than requested", { ...account, missing: [missing, missing, missing] }],
+    ["a link with a bad side", { ...account, missing: [{ ...missing, direction: "both" }] }],
+    ["a link with a bad key", { ...account, missing: [{ ...missing, issueKey: "not a key" }] }],
+    [
+      "a link type with a control character",
+      { ...account, missing: [{ ...missing, type: "a\n" }] },
+    ],
+    ["a link that is not an object", { ...account, missing: ["SYN-2"] }],
+  ])("refuses %s", (_name, value) => {
+    expect(sanitizeJiraMutationLinkAccount(value)).toBeUndefined();
   });
 });

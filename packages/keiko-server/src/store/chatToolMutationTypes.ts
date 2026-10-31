@@ -60,6 +60,15 @@ export type ChatToolMutationRecord = MutationObservation &
 export type ChatToolMutationPreparation =
   | { readonly kind: "prepared" | "replayed"; readonly record: ChatToolMutationRecord }
   | { readonly kind: "blocked"; readonly reason: "unknown-effect" | "in-flight" | "capacity" };
+/**
+ * Body-free counts of the issue links one write asked for (#4176): requested, present afterwards,
+ * and not present. They describe the settled write on the Activity Log and are never persisted.
+ */
+export interface ChatToolMutationLinkCounts {
+  readonly requested: number;
+  readonly created: number;
+  readonly failed: number;
+}
 /** Persistence only. The composing consumer still owns authority, approvals and HTTP dispatch. */
 export interface ChatToolMutationStore {
   readonly find: (invocationId: string) => ChatToolMutationRecord | undefined;
@@ -67,7 +76,11 @@ export interface ChatToolMutationStore {
   readonly beginDispatch: (invocationId: string, guard: () => boolean) => boolean;
   readonly acknowledge: (invocationId: string, httpStatus: number) => ChatToolMutationRecord;
   readonly acknowledgeMcp: (invocationId: string, success: boolean) => ChatToolMutationRecord;
-  readonly settle: (invocationId: string, outcome: JiraMutationOutcome) => ChatToolMutationRecord;
+  readonly settle: (
+    invocationId: string,
+    outcome: JiraMutationOutcome,
+    links?: ChatToolMutationLinkCounts,
+  ) => ChatToolMutationRecord;
   /** Finds one admitted call; an ambiguous dispatch is refused, never guessed. */
   readonly preparedNative?: (input: {
     readonly runId: string;

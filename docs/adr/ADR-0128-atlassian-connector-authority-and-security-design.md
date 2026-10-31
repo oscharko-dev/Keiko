@@ -358,13 +358,27 @@ key, canonicalized to one identity). `attachment`, `issuelinks`, `comment`, rout
 system fields stay outside plain field writes and are written through their own tools or
 arguments. Issue links are the `links` kind: `jira.create` and `jira.edit` take a bounded `links`
 argument (at most 20 `{ type, direction, issueKey }` entries; duplicates collapse) only when current
-metadata offers `add` on the canonical `array:issuelinks` field. Keiko translates it into Jira's own
-`update.issuelinks` add operations in the same create or edit request, so no new operation or
-approval path exists; `outward` means this issue → `issueKey`. Jira validates the link type and the
-target; read-back confirms every requested link in its requested direction, existing links are
-kept, and a link read returns `{ type, direction, issueKey }` JSON text only for the complete set:
+metadata offers `add` on the canonical `array:issuelinks` field; `outward` means this issue →
+`issueKey`. Jira Data Center and Cloud both refuse a create or edit with more than one `issuelinks`
+operation (JRASERVER-66329, unresolved; a Data Center 10.3 answers 400 "We support at most 1
+operation for this field"), so the request itself carries at most one `update.issuelinks` add
+and every further link is its own `POST /rest/api/2/issueLink` (`inwardIssue` is the link's source:
+an `outward` link names this issue there) after the issue exists, in order, each dispatched at most
+once. Those calls are the same approved mutation, not new ones: no new operation or approval path
+exists, the server dispatches them only after the invocation's own write was acknowledged and under
+the same current-authority and approval guards (at most the approved count, the journal record
+unchanged), and the connector writes only the approved links, none that the read before an edit
+already shows (Jira does not de-duplicate links). A failure stops the sequence, nothing is resent,
+and the issue is read back: if it was created or edited, the result is `succeeded-unconfirmed`,
+names the issue and lists the requested links that are missing (`linksMissing`; `linksUnconfirmed`
+when the links could not be read back), so the model repairs the links instead of creating the
+issue again. A replayed invocation returns its journal outcome and sends nothing. Jira validates the
+link type and the target; read-back confirms every requested link in its requested direction (a
+symmetric link type, whose inward and outward names are equal, has none), existing links are kept,
+and a link read returns `{ type, direction, issueKey }` JSON text only for the complete set:
 more than 100 links, or one entry that cannot be read, leaves the field `unavailable` (never a
-truncated `value`), so a caller treats the links as unknown rather than absent. Field
+truncated `value`), so a caller treats the links as unknown rather than absent. The Activity Log records only
+link counts (requested, present afterwards, missing) on the existing mutation line. Field
 metadata projects Jira's declared `schemaType` so a caller can shape an opaque value. A refused
 write returns, to the model only, the refused field with Keiko's closed validation reason, or
 Jira's own bounded field errors and messages (at most 8 and 3, each cut on code-point boundaries

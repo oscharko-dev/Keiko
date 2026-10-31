@@ -14,6 +14,7 @@ import {
 import { recordChatToolMutation } from "./chatToolMutationActivity.js";
 import type {
   ChatToolMutationIntent,
+  ChatToolMutationLinkCounts,
   ChatToolMutationRecord,
   ChatToolMutationPreparation,
   ChatToolMutationStore,
@@ -382,7 +383,11 @@ class MutationStore implements ChatToolMutationStore {
     recordChatToolMutation(this.log, change.record, change.event);
     return change.record;
   }
-  settle(invocationId: string, outcome: JiraMutationOutcome): ChatToolMutationRecord {
+  settle(
+    invocationId: string,
+    outcome: JiraMutationOutcome,
+    links?: ChatToolMutationLinkCounts,
+  ): ChatToolMutationRecord {
     const change = durableWrite(this.db, (): MutationChange => {
       const current = this.requireRecord(invocationId);
       validateMutationSettlement(current, outcome);
@@ -394,7 +399,12 @@ class MutationStore implements ChatToolMutationStore {
         .run(outcome, timestamp(this.now, current.updatedAt), invocationId);
       return { record: this.requireRecord(invocationId), event: "settled" };
     });
-    recordChatToolMutation(this.log, change.record, change.event);
+    recordChatToolMutation(
+      this.log,
+      change.record,
+      change.event,
+      change.event === "settled" ? links : undefined,
+    );
     return change.record;
   }
 }
