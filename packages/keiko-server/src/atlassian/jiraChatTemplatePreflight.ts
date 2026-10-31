@@ -68,8 +68,15 @@ async function dryRun(
     stage: "pre-approval",
     violations: result.violations,
   });
-  return jiraMutationToolResult("rejected", result.reason, {}, false, undefined, result.violations)
-    .data;
+  return jiraMutationToolResult(
+    "rejected",
+    result.reason,
+    {},
+    false,
+    undefined,
+    undefined,
+    result.violations,
+  ).data;
 }
 
 /**

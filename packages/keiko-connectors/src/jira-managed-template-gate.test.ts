@@ -11,7 +11,7 @@ import {
   checkJiraManagedMutationTemplates,
   executeJiraManagedMutation,
 } from "./jira-managed-mutations.js";
-import { field, response } from "../../../tests/support/jira-managed-remote.js";
+import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
 
 const SECTIONS = "## Context\n## Acceptance criteria\n";
 const FULL_DESCRIPTION = "## Context\nWhy\n## Acceptance criteria\n* works";
@@ -31,6 +31,7 @@ const CREATE_FIELDS = [
     ...named("customfield_10016", "number", "Story Points"),
     schema: { type: "number", custom: "com.atlassian.jira.plugin.system.customfieldtypes:float" },
   },
+  LINKS_FIELD,
 ];
 const EDIT_FIELDS = {
   summary: named("summary", "string", "Summary"),
@@ -38,6 +39,7 @@ const EDIT_FIELDS = {
     ...named("description", "string", "Description"),
     schema: { type: "string", system: "description" },
   },
+  issuelinks: LINKS_FIELD,
 };
 
 function template(frontMatter: readonly string[], body = SECTIONS): JiraIssueTemplate {
@@ -199,6 +201,30 @@ describe("create", () => {
       ],
     });
     expect(f.writes()).toEqual([]);
+  });
+
+  it("checks a create that carries several links before the first write, so no link call follows (#4176)", async () => {
+    const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])));
+    const links = [1, 2, 3].map((n) => ({
+      type: "Relates",
+      direction: "outward",
+      issueKey: `SYN-${String(n + 1)}`,
+    }));
+    const result = await f.run("jira.create", {
+      ...CREATE,
+      fields: { summary: "x", description: "## Context\nWhy" },
+      links,
+    });
+    expect(result).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.writes()).toEqual([]);
+    const conforming = await f.run("jira.create", {
+      ...CREATE,
+      fields: { ...CREATE.fields, customfield_10016: 3 },
+      links,
+    });
+    expect(f.writes()[0]).toBe("POST /context/rest/api/2/issue");
+    expect(conforming).toMatchObject({ receipt: { issueKey: "SYN-1" } });
+    expect(f.writes()).toContain("POST /context/rest/api/2/issueLink");
   });
 
   it("creates when the write conforms", async () => {
