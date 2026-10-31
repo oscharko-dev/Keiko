@@ -1,6 +1,8 @@
 // Presentation model of a proposed Jira backlog draft (#4178). The server parses and orders the
 // draft authoritatively; this only shows the human what they approve and which items a
 // deselection also leaves out, using the same rule: an item depends on its parent and linked items.
+// Everything shown is read from the exact request the human approves: target project and issue
+// type, the relation field and every field value, so two drafts that differ anywhere differ here.
 
 export interface JiraDraftTreeLink {
   readonly type: string;
@@ -9,11 +11,22 @@ export interface JiraDraftTreeLink {
   readonly target: string;
   readonly existing: boolean;
 }
+/** A field value as the human reads it: text, or a list of values. */
+export type JiraDraftValue =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "list"; readonly items: readonly JiraDraftValue[] };
+export interface JiraDraftField {
+  readonly id: string;
+  readonly value: JiraDraftValue;
+}
 export interface JiraDraftTreeItem {
   readonly ref: string;
   readonly summary: string;
-  /** Field ids the item sets besides its summary, for an honest "more fields" hint. */
-  readonly otherFieldCount: number;
+  readonly projectId: string;
+  readonly issueTypeId: string;
+  /** Every field the item sets besides its summary, in request order. */
+  readonly fields: readonly JiraDraftField[];
+  readonly parentFieldId?: string;
   readonly parentRef?: string;
   readonly parentIssueKey?: string;
   readonly links: readonly JiraDraftTreeLink[];
@@ -52,30 +65,73 @@ function linksOf(value: unknown): readonly JiraDraftTreeLink[] | undefined {
   const links = value.map(linkOf);
   return links.every((link) => link !== undefined) ? links : undefined;
 }
-function parentOf(value: unknown): Pick<JiraDraftTreeItem, "parentRef" | "parentIssueKey"> {
+type Parent = Pick<JiraDraftTreeItem, "parentFieldId" | "parentRef" | "parentIssueKey">;
+/** No parent is fine; a parent that names no field or no single target is not readable. */
+function parentOf(value: unknown): Parent | undefined {
+  if (value === undefined) return {};
   const parent = record(value);
+  const parentFieldId = text(parent?.fieldId);
   const parentRef = text(parent?.ref);
   const parentIssueKey = text(parent?.issueKey);
+  if (parentFieldId === undefined || (parentRef === undefined) === (parentIssueKey === undefined))
+    return undefined;
   return {
+    parentFieldId,
     ...(parentRef === undefined ? {} : { parentRef }),
     ...(parentIssueKey === undefined ? {} : { parentIssueKey }),
   };
 }
+
+// An object with one identifying member reads as that member (a user or option); anything else
+// stays exact as compact JSON, so no member is hidden.
+const IDENTIFYING_MEMBERS = ["displayName", "name", "value", "key", "accountId", "id"];
+function identifying(value: unknown): string | undefined {
+  const entries = Object.entries(record(value) ?? {});
+  const [only] = entries;
+  return entries.length === 1 &&
+    only !== undefined &&
+    IDENTIFYING_MEMBERS.includes(only[0]) &&
+    typeof only[1] === "string"
+    ? only[1]
+    : undefined;
+}
+function valueOf(value: unknown): JiraDraftValue {
+  if (typeof value === "string") return { kind: "text", text: value };
+  if (Array.isArray(value) && value.length > 0) return { kind: "list", items: value.map(valueOf) };
+  return { kind: "text", text: identifying(value) ?? JSON.stringify(value) };
+}
+function fieldsOf(fields: Raw): readonly JiraDraftField[] {
+  return Object.entries(fields)
+    .filter(([id]) => id !== "summary")
+    .map(([id, value]) => ({ id, value: valueOf(value) }));
+}
+type Identity = Pick<JiraDraftTreeItem, "ref" | "summary" | "projectId" | "issueTypeId">;
+function identityOf(raw: Raw | undefined, fields: Raw | undefined): Identity | undefined {
+  const ref = text(raw?.ref);
+  const summary = text(fields?.summary);
+  const projectId = text(raw?.projectId);
+  const issueTypeId = text(raw?.issueTypeId);
+  return ref === undefined ||
+    summary === undefined ||
+    projectId === undefined ||
+    issueTypeId === undefined
+    ? undefined
+    : { ref, summary, projectId, issueTypeId };
+}
 function itemOf(value: unknown): FlatItem | undefined {
   const raw = record(value);
-  const ref = text(raw?.ref);
   const fields = record(raw?.fields);
-  const summary = text(fields?.summary);
+  const identity = identityOf(raw, fields);
   const links = linksOf(raw?.links);
-  if (ref === undefined || fields === undefined || summary === undefined || links === undefined)
+  const parent = parentOf(raw?.parent);
+  if (identity === undefined || fields === undefined || links === undefined || parent === undefined)
     return undefined;
   return {
-    ref,
-    summary,
-    otherFieldCount: Object.keys(fields).filter((id) => id !== "summary").length,
+    ...identity,
+    fields: fieldsOf(fields),
     links,
     linkRefs: links.filter((link) => !link.existing).map((link) => link.target),
-    ...parentOf(raw?.parent),
+    ...parent,
   };
 }
 

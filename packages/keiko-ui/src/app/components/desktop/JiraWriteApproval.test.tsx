@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -387,7 +387,8 @@ describe("Jira backlog draft approval (#4178)", () => {
     expect(screen.getByRole("group", { name: "Issues to create (4 of 4 selected)" })).toBeVisible();
     expect(screen.getByRole("checkbox", { name: /Story B/u })).toBeChecked();
     expect(screen.getByText("Blocks → story")).toBeVisible();
-    expect(screen.getByText("1 more field")).toBeVisible();
+    expect(screen.getByText("description")).toBeVisible();
+    expect(screen.getByText("Synthetic")).toBeVisible();
     await userEvent.click(screen.getByRole("checkbox", { name: /Story B/u }));
     expect(screen.getByRole("group", { name: "Issues to create (2 of 4 selected)" })).toBeVisible();
     const bug = screen.getByRole("checkbox", { name: /Bug C/u });
@@ -419,5 +420,118 @@ describe("Jira backlog draft approval (#4178)", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: /Bug C/u }));
     expect(screen.getByRole("button", { name: "Approve this action" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Decline this action" })).toBeEnabled();
+  });
+
+  describe("shows what the exact request would create", () => {
+    const base = {
+      ref: "task",
+      projectId: "10000",
+      issueTypeId: "10002",
+      fields: { summary: "Same summary", description: "Same description" },
+      parent: { fieldId: "parent", issueKey: "SYN-7" },
+    };
+    function review(item: Record<string, unknown>): string {
+      const view = draftApproval();
+      const { container, unmount } = render(
+        <JiraWriteApproval
+          approval={view}
+          call={{ ...draftCall, arguments: { items: [item] } }}
+          turnState="pending"
+          observe={vi.fn().mockResolvedValue(view)}
+          decide={vi.fn()}
+        />,
+      );
+      const shown = container.querySelector("fieldset")?.textContent ?? "";
+      unmount();
+      return shown;
+    }
+
+    it.each([
+      ["target project", { projectId: "10001" }, "Project 10001"],
+      ["issue type", { issueTypeId: "10003" }, "Issue type 10003"],
+      [
+        "relation field",
+        { parent: { fieldId: "customfield_10100", issueKey: "SYN-7" } },
+        "customfield_10100",
+      ],
+      ["relation target", { parent: { fieldId: "parent", issueKey: "SYN-8" } }, "SYN-8"],
+      [
+        "field value",
+        { fields: { summary: "Same summary", description: "Another description" } },
+        "Another description",
+      ],
+      [
+        "assignee",
+        {
+          fields: {
+            summary: "Same summary",
+            description: "Same description",
+            assignee: { name: "jdoe" },
+          },
+        },
+        "jdoe",
+      ],
+    ])("renders drafts that differ only in the %s differently", (_name, change, shown) => {
+      const original = review(base);
+      const changed = review({ ...base, ...change });
+      expect(original).toContain("Project 10000 · Issue type 10002");
+      expect(original).toContain("Parent (parent): SYN-7");
+      expect(original).toContain("Same description");
+      expect(changed).not.toBe(original);
+      expect(changed).toContain(shown);
+    });
+
+    it("lists arrays, reads users and options by name and expands long text in place", async () => {
+      const long = `${"Long description. ".repeat(20)}End of text`;
+      const view = draftApproval();
+      const { container } = render(
+        <JiraWriteApproval
+          approval={view}
+          call={{
+            ...draftCall,
+            arguments: {
+              items: [
+                {
+                  ...base,
+                  fields: {
+                    summary: "Same summary",
+                    description: long,
+                    labels: ["alpha", "beta"],
+                    assignee: { name: "jdoe" },
+                    priority: { value: "High" },
+                    custom: { a: 1, b: 2 },
+                  },
+                },
+              ],
+            },
+          }}
+          turnState="pending"
+          observe={vi.fn().mockResolvedValue(view)}
+          decide={vi.fn()}
+        />,
+      );
+      await ready();
+      expect(screen.getByText("alpha")).toBeVisible();
+      expect(screen.getByText("beta")).toBeVisible();
+      expect(screen.getByText("jdoe")).toBeVisible();
+      expect(screen.getByText("High")).toBeVisible();
+      expect(screen.getByText('{"a":1,"b":2}')).toBeVisible();
+      expect(
+        within(screen.getByRole("group", { name: /Issues to create/u })).queryByText(
+          /End of text/u,
+        ),
+      ).toBeNull();
+      const more = screen.getByRole("button", { name: "Show more" });
+      expect(more).toHaveAttribute("aria-expanded", "false");
+      await userEvent.click(more);
+      expect(
+        within(screen.getByRole("group", { name: /Issues to create/u })).getByText(/End of text/u),
+      ).toBeVisible();
+      expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(await axe(container)).toHaveNoViolations();
+    });
   });
 });

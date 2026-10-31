@@ -95,11 +95,11 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "95145a4d917fd7ea12198c5b8207b706333435a6bd1e38713d8115a27df1ec12"
+      "sha256": "3d866bb566654f5d136f466c31ab7f12fe114b0e0e20eefb7a3305f6e3df3300"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "ce8ae35878fa9ab57b134c19da6a6517f79352039126f2fa3fd8448ef233fde4"
+      "sha256": "b5ba55aa4f4ce3219ff9a82fb79ff861e5b51a4d6175474c68fd670acd03791b"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
@@ -115,7 +115,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-10-31T16:43:28.526Z",
+  "generatedAt": "2026-10-31T18:30:42.474Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

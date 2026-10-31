@@ -94,3 +94,50 @@
   color: var(--text-secondary);
   font-size: var(--text-body-sm);
 }
+.cmpDraftBody {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cmpDraftFields {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  font-size: var(--text-body-sm);
+}
+.cmpDraftFields > div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+.cmpDraftFields dt {
+  flex: none;
+  color: var(--text-secondary);
+}
+.cmpDraftFields dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-primary);
+}
+.cmpDraftValue {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cmpDraftList {
+  margin: 0;
+  padding-inline-start: 16px;
+}
+.cmpDraftMore {
+  margin-inline-start: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.cmpDraftMore:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
