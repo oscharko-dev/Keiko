@@ -363,7 +363,7 @@ function scalar(
       return INVALID;
   }
 }
-const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]{0,254}-[1-9]\d{0,17}$/u;
+const ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
 /** `{ key }`, `{ id }` or a bare issue key; the result is always one canonical reference. */
 function issueValue(value: unknown): ValueResult {
   if (typeof value === "string")

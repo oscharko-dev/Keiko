@@ -5,6 +5,7 @@
 
 import type { DocumentId } from "@oscharko-dev/keiko-contracts";
 import { Buffer } from "node:buffer";
+import { deflateRawSync } from "node:zlib";
 
 import type { ParserSelectionInput } from "./types.js";
 
@@ -186,3 +187,65 @@ export const GZIP_MAGIC: Uint8Array = new Uint8Array([0x1f, 0x8b, 0x08, 0x00]);
 export const PNG_MAGIC: Uint8Array = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+export interface ZipTextEntry {
+  readonly name: string;
+  readonly content: string;
+}
+
+// Builds a minimal deflate-compressed zip from text entries so OOXML parsers can be exercised
+// with a synthetic package whose every part the test controls.
+export function zipTextEntries(entries: readonly ZipTextEntry[]): Uint8Array {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let localOffset = 0;
+  for (const entry of entries) {
+    const filename = Buffer.from(entry.name, "utf8");
+    const raw = Buffer.from(entry.content, "utf8");
+    const compressed = deflateRawSync(raw);
+    const checksum = crc32(raw);
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(compressed.byteLength, 18);
+    localHeader.writeUInt32LE(raw.byteLength, 22);
+    localHeader.writeUInt16LE(filename.byteLength, 26);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(compressed.byteLength, 20);
+    centralHeader.writeUInt32LE(raw.byteLength, 24);
+    centralHeader.writeUInt16LE(filename.byteLength, 28);
+    centralHeader.writeUInt32LE(localOffset, 42);
+
+    localParts.push(localHeader, filename, compressed);
+    centralParts.push(centralHeader, filename);
+    localOffset += localHeader.byteLength + filename.byteLength + compressed.byteLength;
+  }
+  const centralSize = centralParts.reduce((sum, part) => sum + part.byteLength, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(localOffset, 16);
+  return Uint8Array.from(Buffer.concat([...localParts, ...centralParts, end]));
+}

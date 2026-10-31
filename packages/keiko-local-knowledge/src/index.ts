@@ -91,6 +91,7 @@ export {
   htmlParser,
   jsonParser,
   pdfParser,
+  pptxParser,
   registerParser,
   resolveParser,
   textParser,
