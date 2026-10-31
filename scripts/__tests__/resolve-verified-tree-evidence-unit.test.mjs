@@ -146,7 +146,8 @@ describe("candidateProvedEveryReusedJob", () => {
     "Semantic duplication",
     "Core quality",
     "Coverage suite (keiko-ui)",
-    "Coverage suite (scripts)",
+    "Coverage shard (scripts 1/2)",
+    "Coverage shard (scripts 2/2)",
     "Coverage and SonarCloud",
     "Build, scan, SBOM, smoke",
     "Node 26 compatibility (shard 1/2)",
@@ -159,7 +160,7 @@ describe("candidateProvedEveryReusedJob", () => {
     "Firefox smoke (shard 2/2)",
     "ui",
     "Cross-platform smoke (ubuntu-latest)",
-    "Coverage shard (packages 1/3)",
+    "Coverage shard (packages 1/5)",
   ].map((name) => ({ name, conclusion: "success" }));
 
   it("accepts a candidate that executed every reused job", async () => {
