@@ -565,7 +565,10 @@ one. The stored approval view carries it as `excludedItemRefs`, and the transcri
 exactly one change besides the state: the pending-to-approved transition of a `jira.draft` may add
 a non-empty, unique subset of the reviewed draft's own item refs. Every other difference still
 conflicts: another operation, a deselection added at any other transition or on a first save, and
-a deselection that is dropped or changed after it was recorded. The action digest and subject
+a deselection that is dropped or changed after it was recorded. The approval registry enforces the
+same subset rule before any state changes, against the draft's item refs recorded privately on the
+pending entry, so a decision naming unknown or repeated refs is refused (409, logged as an invalid
+write-approval) and the registry and transcript stay pending together. The action digest and subject
 identity checks are unchanged. Draft results report one row per item, so the tool's
 `maxResultCount` is the item ceiling (32), not 1. Before creating an item the connector searches by a deterministic identity label
 (`keiko-draft-<20 hex>` from project, issue type, normalized summary and the item's relation

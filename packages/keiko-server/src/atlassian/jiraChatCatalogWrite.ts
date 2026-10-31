@@ -134,6 +134,7 @@ export async function requestCatalogWriteApproval(
     identity,
     new Date(options.now()).toISOString(),
     context.correlationId,
+    identity.operation === "jira.draft" ? options.draftItemRefs?.(action) : undefined,
   );
   if (result.kind === "review-required")
     await options.requestWriteConsent?.(result.approval, context.signal);

@@ -22,6 +22,7 @@ import {
 } from "./chatReadGrantState.js";
 export type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import {
+  admitsWriteDeselection,
   invalidWriteApproval,
   recordWriteApproval,
   sameWriteAction,
@@ -340,10 +341,9 @@ export class AtlassianActionApprovalRegistry {
     if (entry === undefined || !/^[a-f0-9]{64}$/u.test(proofDigest))
       return invalidWriteApproval(correlationId);
     if (entry.approval.state === "approved") return { ok: true, approval: entry.approval };
-    const draft =
-      entry.approval.kind === "jira-chat-write" && entry.approval.operation === "jira.draft";
-    // Only a backlog draft has items a human can leave out (#4178).
-    if (entry.approval.state !== "pending" || (!draft && excludedItemRefs.length > 0))
+    // Only a backlog draft has items a human can leave out, and only items of that very draft:
+    // a deselection the transcript would refuse is refused here, before any state changes (#4178).
+    if (entry.approval.state !== "pending" || !admitsWriteDeselection(entry, excludedItemRefs))
       return invalidWriteApproval(correlationId);
     return {
       ok: true,

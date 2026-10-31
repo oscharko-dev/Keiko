@@ -162,6 +162,8 @@ export interface JiraChatAdmissionOptions {
     signal: AbortSignal,
   ) => Promise<void>;
   readonly reviewableWrite?: (action: JiraChatCatalogAction) => boolean;
+  /** Item refs of the persisted backlog draft preview; the registry validates a deselection. */
+  readonly draftItemRefs?: (action: JiraChatCatalogAction) => readonly string[] | undefined;
 }
 type AdmissionPorts = Pick<
   CatalogToolBinderInput<JiraChatCatalogConsumer>,

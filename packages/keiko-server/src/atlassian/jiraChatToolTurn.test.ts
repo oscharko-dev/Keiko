@@ -23,7 +23,10 @@ import type {
   DesktopChatSendResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
+import type {
+  ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
+} from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleRegenerateDesktopChat, handleSendDesktopChat } from "../chat-handlers.js";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
@@ -744,11 +747,9 @@ it.each([false, true])(
   },
 );
 
-async function decidePendingWrite(
+async function pendingWriteApproval(
   f: ReturnType<typeof fixture>,
-  decision: "approve" | "reject",
-  excludedItemRefs?: readonly string[],
-): Promise<void> {
+): Promise<ChatToolWriteApprovalView> {
   await vi.waitFor(() => {
     expect(
       f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
@@ -757,21 +758,36 @@ async function decidePendingWrite(
   expect(f.writes()).toBe(0);
   const approval = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval;
   if (approval === undefined) throw new Error("Missing exact write approval");
-  expect(
-    (
-      await handleDecideChatWriteApproval(
-        context(
-          {
-            decision,
-            actionDigest: approval.actionDigest,
-            ...(excludedItemRefs === undefined ? {} : { excludedItemRefs }),
-          },
-          { approvalId: approval.approvalId },
-        ),
-        f.deps,
-      )
-    ).status,
-  ).toBe(200);
+  return approval;
+}
+
+async function postWriteDecision(
+  f: ReturnType<typeof fixture>,
+  approval: ChatToolWriteApprovalView,
+  decision: "approve" | "reject",
+  excludedItemRefs?: readonly string[],
+): Promise<number> {
+  const result = await handleDecideChatWriteApproval(
+    context(
+      {
+        decision,
+        actionDigest: approval.actionDigest,
+        ...(excludedItemRefs === undefined ? {} : { excludedItemRefs }),
+      },
+      { approvalId: approval.approvalId },
+    ),
+    f.deps,
+  );
+  return result.status;
+}
+
+async function decidePendingWrite(
+  f: ReturnType<typeof fixture>,
+  decision: "approve" | "reject",
+  excludedItemRefs?: readonly string[],
+): Promise<void> {
+  const approval = await pendingWriteApproval(f);
+  expect(await postWriteDecision(f, approval, decision, excludedItemRefs)).toBe(200);
 }
 
 function assertObservedWrite(f: ReturnType<typeof fixture>): void {
@@ -856,6 +872,29 @@ it("executes only the selected backlog items and persists the deselection throug
   expect(exchange.result?.status).toBe("completed");
   expect(exchange.mutationOutcome).toBe("succeeded");
   expect(JSON.stringify(exchange.result?.data)).toContain('"excludedCount":2');
+});
+
+// #4178: a hostile client names refs the reviewed draft does not contain. The decision route
+// refuses before any state changes, so the registry and the transcript cannot diverge.
+it("refuses a deselection outside the reviewed draft and leaves registry and transcript pending", async () => {
+  const f = fixture(true, undefined, true, false, true);
+  const pending = handleSendDesktopChat(sendContext(f, "foreign-deselection"), f.deps);
+  void pending.catch(() => undefined);
+  await approveReadForWrite(f);
+  const approval = await pendingWriteApproval(f);
+  expect(await postWriteDecision(f, approval, "approve", ["not-in-the-draft"])).toBe(409);
+  expect(await postWriteDecision(f, approval, "approve", ["epic", "epic"])).toBe(400);
+  expect(f.jira.posts()).toHaveLength(0);
+  expect(f.writes()).toBe(0);
+  const retained = f.deps.atlassianActionApprovalRegistry?.getChatWriteApproval(
+    approval.approvalId,
+  );
+  expect(retained?.approval.state).toBe("pending");
+  expect(retained?.approval).not.toHaveProperty("excludedItemRefs");
+  expect(firstToolExchange(f).approval).toEqual(approval);
+  await decidePendingWrite(f, "reject");
+  await pending;
+  expect(f.writes()).toBe(0);
 });
 
 it("keeps a rejected normal Chat write free of remote effects", async () => {

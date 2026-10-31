@@ -180,6 +180,75 @@ describe("retained concrete Chat write approvals", () => {
     );
   });
 
+  describe("draft deselection (#4178)", () => {
+    function draftEntry(refs?: readonly string[]): JiraWriteFixture {
+      const entry = pending("draft-1");
+      return {
+        ...entry,
+        approval: { ...entry.approval, operation: "jira.draft" },
+        ...(refs === undefined ? {} : { draftItemRefs: refs }),
+      };
+    }
+    function acceptWith(
+      registry: AtlassianActionApprovalRegistry,
+      entry: ChatWriteApprovalEntry,
+      excluded: readonly string[],
+    ): ReturnType<AtlassianActionApprovalRegistry["acceptChatWriteApproval"]> {
+      return registry.acceptChatWriteApproval(
+        entry.approval.approvalId,
+        entry.subject,
+        entry.authority,
+        entry.approval,
+        "f".repeat(64),
+        "deselection",
+        excluded,
+      );
+    }
+
+    it.each([
+      ["an unknown ref", ["epic", "elsewhere"]],
+      ["a repeated ref", ["epic", "epic"]],
+    ])("refuses %s and keeps the entry pending", (_, excluded) => {
+      const registry = new AtlassianActionApprovalRegistry(() => NOW);
+      const entry = draftEntry(["epic", "story"]);
+      registry.createChatWriteApproval(entry);
+      expect(acceptWith(registry, entry, excluded).ok).toBe(false);
+      expect(retainedEntry(registry, "draft-1").approval.state).toBe("pending");
+      expect(retainedEntry(registry, "draft-1").approval).not.toHaveProperty("excludedItemRefs");
+    });
+
+    it("refuses a deselection on a non-draft approval and on a draft without recorded refs", () => {
+      const registry = new AtlassianActionApprovalRegistry(() => NOW);
+      const comment = pending("comment-1");
+      registry.createChatWriteApproval(comment);
+      expect(acceptWith(registry, comment, ["epic"]).ok).toBe(false);
+      expect(retainedEntry(registry, "comment-1").approval.state).toBe("pending");
+      const bare = draftEntry();
+      registry.createChatWriteApproval(bare);
+      expect(acceptWith(registry, bare, ["epic"]).ok).toBe(false);
+      expect(retainedEntry(registry, "draft-1").approval.state).toBe("pending");
+    });
+
+    it("accepts a subset of the draft's refs, keeps them private and still admits no deselection", () => {
+      const registry = new AtlassianActionApprovalRegistry(() => NOW);
+      const entry = draftEntry(["epic", "story", "task"]);
+      registry.createChatWriteApproval(entry);
+      const accepted = acceptWith(registry, entry, ["story", "task"]);
+      expect(accepted).toMatchObject({
+        ok: true,
+        approval: { state: "approved", excludedItemRefs: ["story", "task"] },
+      });
+      expect(retainedEntry(registry, "draft-1").draftItemRefs).toEqual(["epic", "story", "task"]);
+      expect(projectChatWriteApproval(retainedEntry(registry, "draft-1"))).not.toHaveProperty(
+        "draftItemRefs",
+      );
+      const whole = draftEntry(["epic"]);
+      const other = new AtlassianActionApprovalRegistry(() => NOW);
+      other.createChatWriteApproval(whole);
+      expect(acceptWith(other, whole, []).ok).toBe(true);
+    });
+  });
+
   it("does not turn rejection or expiry into another pending approval", () => {
     let now = NOW;
     const registry = new AtlassianActionApprovalRegistry(() => now);
@@ -287,6 +356,48 @@ it("reconstructs request, human acceptance, claim and revocation without content
       entry.authority.runId,
     ])
       expect(lines.join("\n")).not.toContain(raw);
+  } finally {
+    sink.close?.();
+    resetServerLogger();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("records a refused draft deselection as an invalid write approval without naming refs (#4178)", () => {
+  const root = mkdtempSync(join(tmpdir(), "keiko-write-deselection-"));
+  const sink = createFileServerLogSink(root, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  const registry = new AtlassianActionApprovalRegistry(() => NOW);
+  const base = pending("draft-log");
+  const entry = {
+    ...base,
+    approval: { ...base.approval, operation: "jira.draft" as const },
+    draftItemRefs: ["epic"],
+  };
+  const correlation = "chat-write-deselection-refused";
+  try {
+    registry.createChatWriteApproval(entry, correlation);
+    const refused = registry.acceptChatWriteApproval(
+      entry.approval.approvalId,
+      entry.subject,
+      entry.authority,
+      entry.approval,
+      "f".repeat(64),
+      correlation,
+      ["unknown-ref-marker"],
+    );
+    expect(refused.ok).toBe(false);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(root),
+      "chat.tool-authority.operation",
+    );
+    const records = lines.map((line) =>
+      expectActivityLogProof("chat.tool-authority.operation.write-approval", line),
+    );
+    expect(records.map((line) => line.outcome)).toEqual(["review-required", "invalid"]);
+    expect(records.every((line) => line.correlationId === correlation)).toBe(true);
+    expect(lines.join("\n")).not.toContain("unknown-ref-marker");
+    expect(lines.join("\n")).not.toContain("epic");
   } finally {
     sink.close?.();
     resetServerLogger();

@@ -23,6 +23,7 @@ import type {
   CatalogToolBinder,
 } from "./tool-catalog/catalogToolPorts.js";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
+import { parseJiraDraft } from "@oscharko-dev/keiko-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { createHarnessCatalogBudget, type ModelPort } from "@oscharko-dev/keiko-harness";
 import type { HarnessLimits } from "@oscharko-dev/keiko-contracts/runtime/harness";
@@ -184,12 +185,26 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       readonly actionId: string;
       readonly argumentsDigest: string;
     }) => boolean;
+    readonly draftItemRefs: (action: {
+      readonly actionId: string;
+      readonly argumentsDigest: string;
+    }) => readonly string[] | undefined;
   } {
     return {
       requestReadConsent: (grant, signal) => this.waitForReadConsent(grant, signal),
       requestWriteConsent: (approval, signal) => this.waitForWriteConsent(approval, signal),
       reviewableWrite: (action) => this.reviewableWrite(action),
+      draftItemRefs: (action) => this.draftItemRefs(action),
     };
+  }
+  /** Refs of the persisted draft the human reviews, only while it matches the approved digest. */
+  protected draftItemRefs(action: {
+    readonly actionId: string;
+    readonly argumentsDigest: string;
+  }): readonly string[] | undefined {
+    const exchange = this.writeExchange(action.actionId);
+    if (exchange === undefined || !this.reviewableWrite(action)) return undefined;
+    return parseJiraDraft(exchange.call.arguments)?.items.map((item) => item.ref);
   }
   /** Approval must match the actual persisted preview after the store's credential floor. */
   protected reviewableWrite(action: {
