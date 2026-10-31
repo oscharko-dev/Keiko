@@ -1,5 +1,4 @@
 import type { KnowledgeLogEvent } from "./knowledge-log.js";
-import {} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 // Connector-backed Knowledge Pod sink tests (Issue #2242, Epic #2238, ADR-0128 D5).
 //
 // Hermetic and network-free: items arrive as normalized content (the shape the sync lane hands
