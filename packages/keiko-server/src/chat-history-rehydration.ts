@@ -394,7 +394,7 @@ function selectCandidate(
     candidates.splice(duplicate, 1);
   }
   candidates.push(candidate);
-  candidates.sort((left, right) => right.score - left.score || chronological(right, left));
+  candidates.sort((left, right) => right.score - left.score || -chronological(left, right));
   if (candidates.length > MAX_REHYDRATED_MESSAGES) candidates.pop();
 }
 

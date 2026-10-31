@@ -437,3 +437,45 @@ Reported benchmark gains are the respective authors' results, not Keiko measurem
 motivate experiments and acceptance evidence; novelty or a published claim does not establish local
 production readiness. This retrieval iteration introduces no new persistent-memory architecture or
 automatic memory promotion.
+
+## Bounded optimization protocol (owner instruction, 2026-10-31)
+
+The current archived-source candidate `c472621f55d43916c71ea46b69d8a888959d0b9e`
+is attempt 1 of at most three consecutive attempts without a verified improvement.
+A comparable increase becomes the new reference and resets that counter. Failed or
+inconclusive measurements do not reset it. The current reference is Qwen Plain's
+46/90 correct post-compaction fields across ten probes (5.1111/10), not a global
+production-readiness score. The parent baseline campaign was terminated and does
+not qualify restart/repetition or the other models by implication.
+
+`evidence/4155/optimization-register.json` records the frozen protocol and counter.
+The new full campaign retains the original two-model/four-lane schedule, native
+context limits, ten-cycle/two-hour minimum, five repetitions, questions and oracle.
+No threshold or question is changed to raise the score. Review admission, required
+checks, error handling, privacy and source guarantees remain independent obligations.
+After three non-improving attempts the owner authorized delivery closure and dev
+integration subject to exact-head checks and resolved review conversations; native
+auto-merge remains off.
+
+### Retained-state replay: recovery evidence has a different scope
+
+The reusable `chat-continuity-replay.mjs` CLI takes an explicit source ledger,
+frozen subject checkout, native configuration, scored plain-chat ledger indices
+and a fresh external private output directory. It checks corpus digests, verifies
+the measured question and answer, removes that pair only from a private SQLite
+clone, and hashes all unchanged canonical rows. It uses the ordinary authenticated
+Chat route after the ordinary readiness probe, with the original question and no
+expected answers. Original databases and frozen product trees remain unchanged.
+
+The source snapshot was retained **after** the historical probe. Its inherited
+derived state stays in the clone; therefore this is a cold-restart recovery test,
+not an exact reconstruction of the earlier live state. In the selected historical
+2/9 case, both the frozen old product and candidate answered 9/9 on identical
+cloned originals. This does not establish an improvement or reset the counter.
+Parallel exploratory runs caused readiness interference, were terminated and
+remain in private evidence. Subsequent model comparisons run serially.
+
+The Lab persists readiness/request/drain progress before waiting for the next
+operation. An unknown persisted readiness field must never be interpreted as
+proof that the request is still waiting for readiness. Missing or failed readiness
+prevents Chat dispatch, and incomplete replay exits nonzero.

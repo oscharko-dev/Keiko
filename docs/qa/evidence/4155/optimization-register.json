@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "scope": "qwen-plain-ten-post-compaction-probes; not-global-system-readiness",
+  "baseline": {
+    "correct": 46,
+    "total": 90,
+    "score": 5.111111111111111,
+    "cycles": 10,
+    "wholeRunStatus": "terminated",
+    "restartAndRepetitionsQualified": false
+  },
+  "policy": {
+    "consecutiveNonImprovingAttemptLimit": 3,
+    "resetOnlyOnVerifiedComparableIncrease": true,
+    "failedOrInconclusiveAttemptDoesNotReset": true,
+    "stopAfterThreeWithoutIncrease": true,
+    "conditionalDevIntegration": "owner-authorized-after-three-without-improvement; exact-head-required-checks-and-resolved-reviews-required; auto-merge-off"
+  },
+  "current": {
+    "attemptSinceLastIncrease": 1,
+    "status": "running",
+    "subjectHead": "c472621f55d43916c71ea46b69d8a888959d0b9e",
+    "productTreeDigest": "3c243effe59e795102f6d592eb04b1d663a4c3b88390d66870945ec77fac49e0",
+    "corpus": {
+      "version": "chat-continuity-v4",
+      "initialDigest": "669113b61c0b98b2634a04cc40bb7d9f93f1d93f5959c4bb82201f3b0710df95",
+      "correctionDigest": "674ea757fbf2ba9e74ac9da33eee084acf8918552282ab27ac973b0d4e2a9844",
+      "questionDigest": "b32dd1c0f320b29696961765602e5e2b2622d57a4f61683558f2d5a71aa3f3be",
+      "oracleDigest": "cfb820915b45cd13d4ece85df6df04f47777930a517219e06bb45f464793cb84",
+      "criticalFields": [
+        "projekt",
+        "verantwortlich",
+        "kennung",
+        "budget",
+        "termin",
+        "ersteEntscheidung",
+        "verworfeneAlternative",
+        "offenerSchritt",
+        "einschraenkung"
+      ]
+    },
+    "protocol": {
+      "requiredDuration": 7200000,
+      "requiredCycles": 10,
+      "repetitions": 5
+    },
+    "configurationDigest": "2f7b312bdfcacea9215931a13b247e2a5e85a8e758c0d7d51c6f1bd85dc158cc"
+  },
+  "exploratoryReplay": {
+    "scope": "retained-post-probe-state-after-cold-restart",
+    "canonicalInputsMatched": true,
+    "beforeCorrect": 9,
+    "afterCorrect": 9,
+    "total": 9,
+    "verifiedGain": false,
+    "conclusion": "historical-2-of-9-loss-not-reproduced-by-this-replay; no-counter-reset"
+  }
+}
