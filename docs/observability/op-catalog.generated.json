@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e5f84ad84cabe981339d1c994cf2f428ce5f53177da5a41e076ff139bb7f7cf8",
+    "catalogDigest": "aaabc9369a38d9f533c252fefb25242cf2450ad9889558e9e8d4eeb1ed065de7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24470,9 +24470,9 @@
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:213",
           "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:460",
-          "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:49",
-          "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:78",
-          "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:230"
+          "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:50",
+          "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:79",
+          "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:234"
         ]
       },
       {
@@ -28765,7 +28765,7 @@
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:115",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1256"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1259"]
       },
       {
         "contractKind": "activity-log-operation",
