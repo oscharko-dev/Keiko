@@ -533,7 +533,9 @@ static int reconcile_job(const wchar_t *wide_handle) {
 /* MCP providers are operator-configured host programs, not Coding sandbox actions. */
 static int mcp_stdio_owner(int argc, wchar_t **argv) {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
-  STARTUPINFOW startup;
+  STARTUPINFOEXW startup;
+  HANDLE inherited[3] = {GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
+                         GetStdHandle(STD_ERROR_HANDLE)};
   PROCESS_INFORMATION child;
   HANDLE job = NULL;
   wchar_t *line = NULL, *cursor;
@@ -562,19 +564,12 @@ static int mcp_stdio_owner(int argc, wchar_t **argv) {
   job = CreateJobObjectW(NULL, NULL);
   if (job == NULL || !SetInformationJobObject(job, JobObjectExtendedLimitInformation,
                                              &limits, sizeof(limits))) goto cleanup;
-  startup.cb = sizeof(startup);
-  startup.dwFlags = STARTF_USESTDHANDLES;
-  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-  if (!CreateProcessW(argv[2], line, NULL, NULL, TRUE,
-                      CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL, &startup, &child)) goto cleanup;
-  /* Admission happens before the provider or its Node lifetime owner can execute. */
-  if (!AssignProcessToJobObject(job, child.hProcess) || ResumeThread(child.hThread) == (DWORD)-1) {
-    (void)TerminateProcess(child.hProcess, 127);
-    (void)WaitForSingleObject(child.hProcess, INFINITE);
-    goto cleanup;
-  }
+  if (!initialize_startup_info(&startup, inherited, &job, NULL)) goto cleanup;
+  BOOL created = CreateProcessW(argv[2], line, NULL, NULL, TRUE,
+      CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &startup.StartupInfo, &child);
+  DeleteProcThreadAttributeList(startup.lpAttributeList);
+  free(startup.lpAttributeList);
+  if (!created) goto cleanup;
   if (WaitForSingleObject(child.hProcess, INFINITE) != WAIT_OBJECT_0 ||
       !GetExitCodeProcess(child.hProcess, &exit_code)) goto cleanup;
   result = (int)exit_code;
