@@ -475,8 +475,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       : chatToolTurnEndReason(error, { envelopeRefusedAttempt: this.envelopeRefusedAttempt });
     // Unsettled calls stay in the answer: one may have reached Jira before bookkeeping failed.
     const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
-    const settled = exchanges.some((exchange) => exchange.result !== undefined);
-    if (reason === undefined || !settled) return undefined;
+    if (reason === undefined || !exchanges.some((exchange) => exchange.result !== undefined))
+      return undefined;
     recordChatToolTurnEnded(processServerLogSink(), {
       correlationId,
       messageId: message.id,
@@ -499,6 +499,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       },
     };
     return this.endedAnswer;
+  }
+
+  /**
+   * True while a deadline that expires now would end this turn with its transcript answer: at least
+   * one exchange has settled. A caller must deliver that answer, not cancel it (#4175); a deadline
+   * with no settled exchange stays a cancellation.
+   */
+  public get answersAtDeadline(): boolean {
+    const { deps, message } = this.options;
+    return (
+      deps.store
+        .findMessageById(message.id)
+        ?.toolTranscript?.exchanges.some((exchange) => exchange.result !== undefined) ?? false
+    );
   }
 
   /** True once the turn answered from its transcript; callers must deliver, not cancel, it. */
@@ -601,6 +615,7 @@ export type ChatToolTurnPort = Pick<
   | "call"
   | "signal"
   | "deadlineAtMs"
+  | "answersAtDeadline"
   | "endedEarly"
 >;
 

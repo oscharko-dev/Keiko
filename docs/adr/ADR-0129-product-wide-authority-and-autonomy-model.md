@@ -271,8 +271,11 @@ refused calls; a human stop is not replaced. `chat.tool-turn.ended` records the 
 counts (including `unsettledCount`) and the envelope bounds. A backlog draft contributes each
 item's key and state. An attempt refusal by the turn's own envelope (for example its cumulative
 prompt tokens) ends the turn as `budget-exhausted` with that answer; a cap the caller supplied keeps
-its nonretryable 403. A deadline answer is delivered on the streamed path too: it is already built
-from the stored transcript and admits no further tool or model work. Older tool results in the copy sent to the model are
+its nonretryable 403. A deadline answer is delivered on the streamed and the grounded path too: it is already built
+from the stored transcript and admits no further tool or model work. The grounded route cancels on a human stop or an
+authority revocation at once, and on the deadline only while no exchange has settled; once one has, the deadline stops
+provider dispatch through the turn's own signal and the synthesis grants but the grounded route returns the transcript
+answer (200, persisted, turn completed) instead of a 499. Older tool results in the copy sent to the model are
 compacted, oldest first and never the newest, to a closed record (status, reason, mutation outcome,
 issue key, and each draft item's key and state) when the continuation would exceed its share of the model window;
 `chat.tool-turn.context-fitted` records the count. The stored transcript is unchanged. A dispatch

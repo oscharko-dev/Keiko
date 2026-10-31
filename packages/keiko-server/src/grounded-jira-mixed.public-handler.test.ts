@@ -975,7 +975,12 @@ it("keeps physical retrieval and its exhausted excerpt allowance through mixed t
   );
 });
 
-it("cancels mixed synthesis at the accepted turn deadline after time spent awaiting read consent", async () => {
+async function startDeadlineMixedTurn(): Promise<{
+  readonly f: ReturnType<typeof runtime>;
+  readonly requests: string[];
+  readonly pending: Promise<RouteResult>;
+  readonly startedAt: number;
+}> {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
     const controller = new AbortController();
@@ -1026,28 +1031,57 @@ it("cancels mixed synthesis at the accepted turn deadline after time spent await
     f.deps,
   );
   void pending.catch(() => undefined);
+  await vi.waitFor(
+    () => {
+      expect(requests).toHaveLength(2);
+    },
+    { interval: 1 },
+  );
+  expect(Date.now() - startedAt).toBeLessThan(300000);
+  // The narrower per-tool timeout has already expired; Data synthesis may still run in
+  // the original turn's last milliseconds. That phase must not receive a fresh deadline.
+  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+    { result: { status: "timeout" } },
+  ]);
+  return { f, requests, pending, startedAt };
+}
+
+it("answers mixed synthesis from its transcript at the accepted turn deadline after time spent awaiting read consent", async () => {
+  const { f, requests, pending, startedAt } = await startDeadlineMixedTurn();
   try {
-    await vi.waitFor(
-      () => {
-        expect(requests).toHaveLength(2);
-      },
-      { interval: 1 },
-    );
-    expect(Date.now() - startedAt).toBeLessThan(300000);
-    // The narrower per-tool timeout has already expired; Data synthesis may still run in
-    // the original turn's last milliseconds. That phase must not receive a fresh deadline.
-    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
-      { result: { status: "timeout" } },
-    ]);
     await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    // #4175 relocates this pin's terminal expectation: the exchange above settled, so the
+    // deadline ends the turn with its deterministic transcript answer on the grounded path
+    // instead of a 499. Every no-further-work assertion below is unchanged.
+    expect(result.status).toBe(200);
+    expect(JSON.stringify(result.body)).toContain("this turn reached its time limit");
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests).toEqual([]);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300000);
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+it("keeps a human stop during mixed synthesis a cancellation although an exchange settled", async () => {
+  const { f, requests, pending } = await startDeadlineMixedTurn();
+  try {
+    interruptChatGenerations(f.deps, f.chatId);
     const result = await pending;
     expect(result).toMatchObject({ status: 499, body: { error: { code: "CANCELLED" } } });
     expect(requests).toHaveLength(2);
     expect(f.jiraRequests).toEqual([]);
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300000);
-    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+    // The serialized turn answers the stop at once; the in-flight turn settles its state after.
+    await vi.waitFor(
+      () => {
+        expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+      },
+      { interval: 1 },
+    );
   } finally {
-    interruptChatGenerations(f.deps, f.chatId);
     await pending;
   }
 });

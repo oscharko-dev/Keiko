@@ -11,7 +11,11 @@ import {
   type CanonicalTurnMemoryRequest,
   type ParsedConversationMemoryRequest,
 } from "./chat-handlers.js";
-import { createChatToolTurn, scopeChatToolTurn } from "./chat-tool-runtime.js";
+import {
+  chatToolTurnCancellationSignal,
+  createChatToolTurn,
+  scopeChatToolTurn,
+} from "./chat-tool-runtime.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
   callGroundedSynthesisModel,
@@ -3461,10 +3465,7 @@ async function executeGroundedAskInTurn(
         ? admitted
         : {
             ...admitted,
-            signal: AbortSignal.any([
-              toolTurn.signal,
-              AbortSignal.timeout(Math.max(0, toolTurn.deadlineAtMs - Date.now())),
-            ]),
+            signal: chatToolTurnCancellationSignal(admitted.signal, toolTurn),
           },
       scoped,
       runner,
