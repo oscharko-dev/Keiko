@@ -376,6 +376,70 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
     ).toEqual([["warn", "failed", "rebind-failed"]]);
   });
 
+  // #4170 review: a checkout the kernel could not put back on its base is not reported as restored.
+  it("reports an uncertain execution when the checkout cannot be put back on its base", async () => {
+    const gitService = service({
+      admit: () => "admitted",
+      adopt: (adoption): boolean => {
+        adoptions.push(adoption);
+        git(root, ["branch", "-D", "main"]);
+        return false;
+      },
+    });
+    await expect(branch(gitService, "feature/x")).resolves.toEqual({
+      kind: "branch",
+      status: "recovery-required",
+      reason: "execution-uncertain",
+      branch: "feature/x",
+    });
+    expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/x");
+    expect(verificationInvalidations).toBe(0);
+    expect(
+      branchLines().map((event) => [event.level, event.extra?.state, event.extra?.reason]),
+    ).toEqual([["warn", "recovery-required", "execution-uncertain"]]);
+  });
+
+  it("keeps a thrown adoption the primary failure when the switch back fails as well", async () => {
+    const gitService = service({
+      admit: () => "admitted",
+      adopt: (adoption): boolean => {
+        adoptions.push(adoption);
+        git(root, ["branch", "-D", "main"]);
+        throw new TypeError("workspace record refused");
+      },
+    });
+    await expect(branch(gitService, "feature/x")).resolves.toMatchObject({
+      status: "recovery-required",
+      reason: "execution-uncertain",
+    });
+    const lines = branchLines();
+    expect(lines[0]?.extra).toMatchObject({
+      state: "failed",
+      reason: "rebind-failed",
+      errorClass: "TypeError",
+    });
+    expect(lines[1]?.extra).toMatchObject({
+      state: "recovery-required",
+      reason: "execution-uncertain",
+    });
+    expect(JSON.stringify(lines)).not.toContain("workspace record refused");
+  });
+
+  // #4170 review: the facade admits concurrent tool calls; two task branches must not both pass
+  // the base-branch check and switch the checkout twice.
+  it("runs concurrent task-branch calls one after the other", async () => {
+    const gitService = service();
+    const [first, second] = await Promise.all([
+      branch(gitService, "feature/a"),
+      branch(gitService, "feature/b"),
+    ]);
+    expect(first).toMatchObject({ status: "succeeded", branch: "feature/a" });
+    expect(second).toMatchObject({ status: "blocked", reason: "not-on-base" });
+    expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/a");
+    expect(localBranches()).not.toContain("feature/b");
+    expect(adoptions.map((adoption) => adoption.branch)).toEqual(["feature/a"]);
+  });
+
   it("logs the cause of an adoption that threw, structured and body-free, and restores the checkout", async () => {
     adoptResult = new TypeError("workspace record refused");
     await expect(branch(service(), "feature/x")).resolves.toMatchObject({

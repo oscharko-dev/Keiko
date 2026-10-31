@@ -206,6 +206,13 @@ function sync(value: Record<string, unknown>): boolean {
     typeof value.truncated === "boolean"
   );
 }
+/**
+ * A task-branch name `keiko_git_branch` may create and echo back (#3907): a safe Git ref name that
+ * cannot be read as an option. The one check its producer and this result validator share.
+ */
+export function isSafeTaskBranchName(value: unknown): value is string {
+  return typeof value === "string" && isSafeGitRefName(value) && !value.startsWith("-");
+}
 function branch(value: Record<string, unknown>): boolean {
   return (
     keys(value, ["kind", "status", "reason", "branch"]) &&
@@ -216,10 +223,7 @@ function branch(value: Record<string, unknown>): boolean {
         value.status as keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS
       ] as readonly unknown[]
     ).includes(value.reason) &&
-    (value.branch === undefined ||
-      (typeof value.branch === "string" &&
-        isSafeGitRefName(value.branch) &&
-        !value.branch.startsWith("-")))
+    (value.branch === undefined || isSafeTaskBranchName(value.branch))
   );
 }
 function stageStatusReason(status: unknown, reason: unknown): boolean {

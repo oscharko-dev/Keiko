@@ -1872,7 +1872,8 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         expect(transcript).toContain("Create and switch to a task branch with keiko_git_branch");
         expect(transcript).toMatch(/kind\\*":\\*"branch\\*",\\*"status\\*":\\*"succeeded/u);
         // Keiko's status read after the switch names the new branch: the run's authority follows it.
-        expect(transcript).toMatch(/kind\\*":\\*"status[\s\S]*?branch\\*":\\*"feature\/x/u);
+        // Bounded to the status result's own object, so a later branch result cannot satisfy it.
+        expect(transcript).toMatch(/kind\\*":\\*"status\\*"[^{}]*?branch\\*":\\*"feature\/x\\*"/u);
         expect(git(fixture.repository, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
           FUNCTIONAL_BRANCH_NAME,
         );

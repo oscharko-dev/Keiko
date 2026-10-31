@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3bdbf981ffa3e099f1caf9b70ada89134e6e4875af956c88b03129189ad0b5e9",
+    "catalogDigest": "6199ef55e84d1d138298ac5b6a5b4ecb580e59dedb40a3920130e459d0adfab8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10944,7 +10944,7 @@
         "proofIds": ["coding-runtime.operator-decision.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:311",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1975"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1995"
         ]
       },
       {
@@ -15011,13 +15011,13 @@
         "proofIds": ["coding-runtime.verification.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:344",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2029",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2149",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2277",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2442",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2686",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2806",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2829"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2049",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2169",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2297",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2462",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2706",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2826",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2849"
         ]
       },
       {
@@ -28036,8 +28036,8 @@
         "failureClasses": ["git-runtime-action"],
         "proofIds": ["git.runtime-action.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:146",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitService.ts:994"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:147",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitService.ts:1016"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -105575,7 +105575,7 @@
     {
       "op": "coding-runtime.accepted-initialization",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3109",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3129",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106381,7 +106381,7 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2492",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2512",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107409,7 +107409,7 @@
     {
       "op": "git.runtime-action",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:149",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:150",
       "package": "keiko-server"
     },
     {

@@ -125,18 +125,26 @@ async function reopenWorkbench(page) {
 
 // A model under a background readiness re-probe is briefly not offered; a human waits for it to
 // return. Readiness re-probes a stale observation on a cadence of about two minutes (AC3 lab,
-// 2026-10-31: T2, T31 and the Jira run missed it by seconds), so the driver waits up to five.
-export async function chooseOption(page, comboName, optionLabel) {
-  const deadline = Date.now() + 300_000;
+// 2026-10-31: T2, T31 and the Jira run missed it by seconds), so the model select waits up to
+// five. Every other select (authority, Jira Pod) has nothing to wait for and refuses at once.
+export const MODEL_READINESS_WAIT_MS = 300_000;
+
+export async function chooseOption(
+  page,
+  comboName,
+  optionLabel,
+  { waitMs = 0, retryMs = 3000, now = Date.now } = {},
+) {
+  const deadline = now() + waitMs;
   for (;;) {
     try {
       await chooseOptionOnce(page, comboName, optionLabel);
       return;
     } catch (error) {
-      if (Date.now() > deadline || !String(error?.message).includes("no option is labelled"))
+      if (now() >= deadline || !String(error?.message).includes("no option is labelled"))
         throw error;
       await page.keyboard.press("Escape");
-      await sleep(3000);
+      await sleep(retryMs);
     }
   }
 }
@@ -163,7 +171,7 @@ async function startRun(page, workbench, { model, mode, text, jiraPod }) {
     await newTask.click();
     await sleep(1000);
   }
-  await chooseOption(page, "Coding model", model);
+  await chooseOption(page, "Coding model", model, { waitMs: MODEL_READINESS_WAIT_MS });
   await chooseOption(page, "Run authority", mode.label);
   if (jiraPod !== undefined) await chooseOption(page, "Jira Pod for this run", `Jira: ${jiraPod}`);
   const composer = workbench.locator("textarea").first();

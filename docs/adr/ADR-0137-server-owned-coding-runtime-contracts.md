@@ -376,10 +376,14 @@ is not on its base branch (`not-on-base`), a workspace that is not a Local check
 workspace port) and a checkout with executable Git filters (`executable-filters`), and it reports
 the kernel's own policy and preflight blocks (`policy-block`, `preflight-block`,
 `authority-denied`). The authority is the facade's alone: Full access creates the branch inside the
-validated envelope; Supervised workspace and Ask for approval ask the operator about the exact
-branch name first, on the governed ask lane of `git-fetch`/`git-pull` (action `git-branch`,
-`command-execution`, risk `medium`; the approval is bound to `branch:<sha256 of the name>`, so the
-name is never in the approval record or the log). The Authority Envelope stays immutable. What
+validated envelope; Supervised workspace and Ask for approval ask the operator before the branch
+is created, on the governed ask lane of `git-fetch`/`git-pull` (action `git-branch`,
+`command-execution`, risk `medium`). The ask names the action, not the name: the approval is bound
+to `branch:<sha256 of the exact name>`, so it authorizes that one name and no other, and the name is
+never in the approval record or the log. Approving a name the card does not show is bounded by what
+the step can do at all: a new local branch at the run's current commit, never a protected or
+existing name, never a remote, with the base branch unchanged; the name reaches the model in the
+tool result. The Authority Envelope stays immutable. What
 changes is recorded server-side, only after Keiko's own successful switch, in three places that move
 together and undo each other: the run's Git delivery authority projection follows the run to the new
 branch with the base unchanged (`rebindGitDeliveryBranch`), the per-run record
@@ -390,7 +394,10 @@ that base). `trustedBranchMatches` accepts the live instance only through that r
 that workspace and that base, and from then on never again through the envelope's own branch;
 `resolveVerifiedCommitContext` reads both refs from the record, the one seam commit, push, pull
 request and CI share. If the run cannot adopt the branch, the checkout is switched back to the base
-branch and the result is `rebind-failed`. Open stage and commit proposals, the verification and
+branch and the result is `rebind-failed`; when the kernel cannot switch it back, the result is
+`recovery-required` (`execution-uncertain`), never a restored checkout, and an adoption that threw
+stays the logged primary failure. One task-branch step of a run runs at a time: a concurrent call
+waits, then reads the live context and head and is refused as `not-on-base`. Open stage and commit proposals, the verification and
 draft-delivery proposals are invalidated after a switch. A commit blocked as `protected-branch`
 therefore now tells the model to create a task branch with `keiko_git_branch` and commit again; the
 operator report remains the fallback when that tool refuses too.
@@ -1973,7 +1980,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   sync owner, under the owner's own mode decision (ADR-0138 D3 item 5); the shell's own fetch and
   pull stay refused (#3902 AC2). `keiko_git_branch` is the one governed way a run gets a task
   branch (owner decision 2026-10-31, #3907; see "A run on its base branch makes its own task
-  branch" below); the shell's own `git checkout -b`, `switch` and `branch` stay refused. The
+  branch" above); the shell's own `git checkout -b`, `switch` and `branch` stay refused. The
   managed worktree's Git directory is
   read-only to the run, so its own Git reads status, diff, log, show and blame but cannot write the
   index; `keiko_git_stage` with `unstage: true` gives staged paths back to the worktree through
@@ -2088,6 +2095,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   A denied, cancelled, timed-out, limit-breached or entirely skipped run, a candidate that changed
   during its verification, an unstaged candidate and unsaved editor buffers still refuse. A mode
   lowered after the proposal turns the red checks back into the gate before the Git effect.
+  The governed verifications of one run execute one at a time (#3907 AC3, lab lane T6 on the
+  task-branch build): every candidate ticket voids the tickets issued before it, so Gemma's
+  parallel typecheck, lint and test calls refused one another as `candidate-not-staged` on a fully
+  staged tree, and the commit never received its proof while standalone ran the same checks in
+  parallel. A queued call opens its ticket and checks the run's liveness only once the call
+  before it has settled.
   Untracked files outside the staged candidate follow the same owner decision (#3907 AC3, lab lane
   T17): the model's own `npm install` left an untracked `package-lock.json`, the model rightly kept
   it out of the commit, and every verification answered `candidate-not-staged` until the run's

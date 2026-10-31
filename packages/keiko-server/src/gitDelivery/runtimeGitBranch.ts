@@ -1,6 +1,6 @@
 import type { CodingRuntimeGitBranch } from "@oscharko-dev/keiko-contracts";
+import { isSafeTaskBranchName } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { gitDeliveryTargetIsProtectedBranch } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
-import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type {
   GitMutationCommand,
   GitMutationLifecycleResult,
@@ -72,7 +72,7 @@ type Refusal = CodingRuntimeGitBranch["reason"];
 
 /** The name checks alone: a safe ref name that cannot be read as an option and is not protected. */
 export function taskBranchNameRefusal(name: string): Refusal | undefined {
-  if (!isSafeGitRefName(name) || name.startsWith("-")) return "invalid-name";
+  if (!isSafeTaskBranchName(name)) return "invalid-name";
   return gitDeliveryTargetIsProtectedBranch(name, KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS)
     ? "protected-name"
     : undefined;
@@ -84,8 +84,12 @@ function branchResult(
   name: string,
 ): CodingRuntimeGitBranch {
   // The model's own argument is echoed back only when it is a safe, option-free ref name.
-  const echoed = isSafeGitRefName(name) && !name.startsWith("-");
-  return { kind: "branch", status, reason, ...(echoed ? { branch: name } : {}) };
+  return {
+    kind: "branch",
+    status,
+    reason,
+    ...(isSafeTaskBranchName(name) ? { branch: name } : {}),
+  };
 }
 
 function scopeRefusal(input: RuntimeGitBranchInput): Refusal | undefined {
@@ -107,13 +111,17 @@ function governedDeps(input: RuntimeGitBranchInput): Parameters<typeof readGitWo
 // The live snapshot the kernel judges the branch step against, read in the same hardened lane as
 // the Git Client's own snapshots and refused outright once the run's authority has lapsed: this
 // read sits immediately before each Git effect.
+function readGuardedSnapshot(
+  input: RuntimeGitBranchInput,
+): ReturnType<typeof readGitWorktreeSnapshot> {
+  if (!input.context.stillAuthorized()) throw new Error("git-branch-authority-unavailable");
+  return readGitWorktreeSnapshot(governedDeps(input));
+}
+
 function guardedSnapshotReader(
   input: RuntimeGitBranchInput,
 ): NonNullable<GitDeliveryExecutionSeams["snapshotReader"]> {
-  return () => {
-    if (!input.context.stillAuthorized()) throw new Error("git-branch-authority-unavailable");
-    return readGitWorktreeSnapshot(governedDeps(input));
-  };
+  return () => readGuardedSnapshot(input);
 }
 
 function mutate(
@@ -176,7 +184,7 @@ type Existing = "absent" | "at-head" | "elsewhere";
 // an earlier, interrupted step and is only switched to; one anywhere else is somebody's work and
 // is refused. The current branch counts as existing, so the base branch can never be "created".
 async function existingBranch(input: RuntimeGitBranchInput): Promise<Existing> {
-  const snapshot = await guardedSnapshotReader(input)(input.context.workspace);
+  const snapshot = await readGuardedSnapshot(input);
   if (input.branchName === snapshot.currentBranchName) return "elsewhere";
   if (!snapshot.existingLocalBranchNames.includes(input.branchName)) return "absent";
   const tip = await readGitRevision(governedDeps(input), `refs/heads/${input.branchName}`);
@@ -204,17 +212,23 @@ async function createAndSwitch(
 }
 
 // Puts the checkout back on the base branch after the run could not adopt the branch it was just
-// switched to, so the workspace and the run's authority agree again. A failure to do so leaves the
-// run unauthorized (the checkout no longer matches its record), which fails closed.
-async function switchBack(input: RuntimeGitBranchInput): Promise<void> {
-  await mutate(input, { kind: "branch-switch", branchName: input.context.baseRef });
+// switched to, so the workspace and the run's authority agree again. False when the kernel did not
+// switch back: the checkout then stays off its base and no longer matches the run's record, which
+// leaves the run unauthorized (fail closed) and is reported as such, never as a restored checkout.
+async function switchBack(input: RuntimeGitBranchInput): Promise<boolean> {
+  const back = await mutate(input, { kind: "branch-switch", branchName: input.context.baseRef });
+  return back.outcome.status === "succeeded";
 }
 
 /**
- * A run that could not adopt the branch it was just switched to. The checkout is back on the base
- * branch when this reaches the caller; the caller records the cause on its own log port.
+ * A run that could not adopt the branch it was just switched to; the caller records the cause on
+ * its own log port. The adoption's cause stays the primary failure even when putting the checkout
+ * back failed too: `checkoutRestored` says whether the checkout is on its base again, and
+ * `switchBackCause` holds what the switch back threw, if it threw.
  */
 export class TaskBranchAdoptionFailure extends Error {
+  public checkoutRestored = false;
+  public switchBackCause: unknown = undefined;
   public constructor(cause: unknown) {
     super("task-branch-adoption-failed", { cause });
     this.name = "TaskBranchAdoptionFailure";
@@ -226,25 +240,47 @@ export function adoptionFailedResult(name: string): CodingRuntimeGitBranch {
   return branchResult("failed", "rebind-failed", name);
 }
 
-function adopt(input: RuntimeGitBranchInput): boolean {
+/** The closed result of a branch step whose checkout the kernel could not put back on its base. */
+export function checkoutUncertainResult(name: string): CodingRuntimeGitBranch {
+  return branchResult("recovery-required", "execution-uncertain", name);
+}
+
+// The failure of an adoption that threw, once the checkout has been put back as far as it can be.
+async function settledAdoptionFailure(
+  input: RuntimeGitBranchInput,
+  failure: TaskBranchAdoptionFailure,
+): Promise<TaskBranchAdoptionFailure> {
   try {
-    return (
+    failure.checkoutRestored = await switchBack(input);
+  } catch (error_) {
+    failure.switchBackCause = error_;
+    throw failure;
+  }
+  return failure;
+}
+
+async function adoptOrRestore(input: RuntimeGitBranchInput): Promise<CodingRuntimeGitBranch> {
+  const name = input.branchName;
+  let adopted: boolean;
+  try {
+    adopted =
       input.port?.adopt({
         runId: input.context.runId,
         workspaceDigest: input.context.workspaceDigest,
-        branch: input.branchName,
+        branch: name,
         baseBranch: input.context.baseRef,
         headSha: input.headSha,
-      }) === true
-    );
+      }) === true;
   } catch (cause) {
-    throw new TaskBranchAdoptionFailure(cause);
+    throw await settledAdoptionFailure(input, new TaskBranchAdoptionFailure(cause));
   }
+  if (adopted) return branchResult("succeeded", "none", name);
+  return (await switchBack(input)) ? adoptionFailedResult(name) : checkoutUncertainResult(name);
 }
 
 /**
  * Runs the whole governed task-branch step. A refusal is a result; a Git fault throws, and so does
- * an adoption that threw (TaskBranchAdoptionFailure), after the checkout is back on its base.
+ * an adoption that threw (TaskBranchAdoptionFailure), after the checkout was put back.
  */
 export async function runTaskBranch(input: RuntimeGitBranchInput): Promise<CodingRuntimeGitBranch> {
   const name = input.branchName;
@@ -254,11 +290,5 @@ export async function runTaskBranch(input: RuntimeGitBranchInput): Promise<Codin
   if (existing === "elsewhere") return branchResult("blocked", "branch-exists", name);
   const stepped = await createAndSwitch(input, existing);
   if (!stepped.done) return stepped.result;
-  let adopted = false;
-  try {
-    adopted = adopt(input);
-  } finally {
-    if (!adopted) await switchBack(input);
-  }
-  return adopted ? branchResult("succeeded", "none", name) : adoptionFailedResult(name);
+  return adoptOrRestore(input);
 }

@@ -59,6 +59,7 @@ import { buildSyncPreview, runSyncExecute, type GitDeliverySyncSeams } from "./s
 import { persistGitSyncResult } from "./syncEvidence.js";
 import {
   adoptionFailedResult,
+  checkoutUncertainResult,
   runTaskBranch,
   TaskBranchAdoptionFailure,
   type RuntimeGitTaskBranchPort,
@@ -472,6 +473,7 @@ function thrownGitCode(error: unknown): { readonly code?: string } {
 
 export class RuntimeGitService {
   private generation = 0;
+  private branchStep: Promise<void> = Promise.resolve();
   private readonly proposals = new Map<string, RuntimeGitProposal>();
   private leases = new WeakMap<
     object,
@@ -535,23 +537,41 @@ export class RuntimeGitService {
     signal?: AbortSignal,
   ): Promise<RuntimeGitOutcome> {
     const request = snapshotRuntimeGitRequest(input);
+    // #3907 review: one task-branch step at a time. A queued call reads the live run context and
+    // the verified head only once the step before it has settled, so it sees the branch that step
+    // made and is refused as not-on-base instead of switching the checkout a second time.
+    const release = request.operation === "branch" ? await this.enterBranchStep() : undefined;
     const phase: RuntimeGitPhase =
       request.operation === "stage" || request.operation === "unstage"
         ? `${request.operation}-${request.phase}`
         : request.operation;
-    const context = this.guardedContext(guard, signal, phase);
-    if (context === undefined) return REFUSED_AUTHORITY;
     try {
-      const result = await this.dispatch(context, request, guard);
-      if (result.kind !== "refused" && !isCodingRuntimeGitResult(result))
-        throw new Error("git-runtime-result-invalid");
-      this.log(context, phase, resultEvidence(result), resultOutcome(result));
-      if (context.stillAuthorized()) return result;
-      this.log(context, phase, { state: "withheld", reason: "authority-revoked" }, "refused");
-      return REFUSED_AUTHORITY;
-    } catch (error) {
-      return this.failed(context, phase, error);
+      const context = this.guardedContext(guard, signal, phase);
+      if (context === undefined) return REFUSED_AUTHORITY;
+      try {
+        const result = await this.dispatch(context, request, guard);
+        if (result.kind !== "refused" && !isCodingRuntimeGitResult(result))
+          throw new Error("git-runtime-result-invalid");
+        this.log(context, phase, resultEvidence(result), resultOutcome(result));
+        if (context.stillAuthorized()) return result;
+        this.log(context, phase, { state: "withheld", reason: "authority-revoked" }, "refused");
+        return REFUSED_AUTHORITY;
+      } catch (error) {
+        return this.failed(context, phase, error);
+      }
+    } finally {
+      release?.();
     }
+  }
+  // The turn of one task-branch step; the returned function hands the turn to the next call.
+  private async enterBranchStep(): Promise<() => void> {
+    const previous = this.branchStep;
+    let release: () => void = () => undefined;
+    this.branchStep = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    return release;
   }
   // A read that threw because authority closed under it (`git-runtime-authority-denied`,
   // `verified-commit-authority-unavailable`) is the authority refusal, not a failed Git effect
@@ -716,7 +736,9 @@ export class RuntimeGitService {
       // The cause of a failed adoption is not in the result the model reads; it goes to the log as
       // the structured failure it is, under the same correlation, before the result line.
       this.logBranchRebindFailure(context, error.cause);
-      return adoptionFailedResult(branchName);
+      return error.checkoutRestored
+        ? adoptionFailedResult(branchName)
+        : checkoutUncertainResult(branchName);
     }
     if (result.status === "succeeded") this.invalidateAfterBranchChange();
     return result;
