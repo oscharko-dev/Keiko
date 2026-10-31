@@ -12,6 +12,7 @@ import {
   createConfiguredMcpConnections,
   type ConfiguredMcpConnections,
 } from "./mcp/mcpConfiguredConnections.js";
+import type { JiraReportComplianceChecker, JiraReportStore } from "@oscharko-dev/keiko-connectors";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
@@ -997,6 +998,10 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
+  /** In-memory Jira reports (#4181): the tool resumes them and the export route reads them. */
+  readonly jiraReportStore?: JiraReportStore;
+  /** The shared template checker (#4177); absent until a template set is active. */
+  readonly jiraReportChecker?: JiraReportComplianceChecker;
   /** Accepted Chat turn scope reused by grounded preparation, tools and answer repair. */
   readonly chatToolTurn?: ChatToolTurnPort;
   readonly mcpChatCatalog?: McpChatCatalogRuntime;

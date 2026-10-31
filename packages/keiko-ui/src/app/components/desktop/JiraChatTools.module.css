@@ -141,3 +141,24 @@
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* Jira report (#4181): the computed figures as a compact definition list. */
+.cmpFigures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 0;
+}
+.cmpFigures div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.cmpFigures dt {
+  color: var(--text-secondary);
+}
+.cmpFigures dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

@@ -1578,3 +1578,22 @@ export {
   type JiraTemplateRuleId,
   type JiraTemplateViolation,
 } from "./jira-issue-template.js";
+export {
+  JIRA_REPORT_EXPORT_FORMATS,
+  JIRA_REPORT_EXPORT_MEDIA_TYPES,
+  JIRA_REPORT_STATUSES,
+  JIRA_REPORT_INCOMPLETE_REASONS,
+  JIRA_REPORT_SECTIONS,
+  JIRA_REPORT_STATUS_CATEGORIES,
+  JIRA_REPORT_REQUIRED_FIELD_RULE,
+  JIRA_REPORT_ID_PATTERN,
+  JIRA_REPORT_REQUIREMENT_ID_MAX,
+  JIRA_REPORT_REQUIREMENT_ID_CHARS_MAX,
+  JIRA_REPORT_READ_SLICE_MS,
+  type JiraReportExportFormat,
+  type JiraReportExportResponse,
+  type JiraReportStatus,
+  type JiraReportIncompleteReason,
+  type JiraReportSection,
+  type JiraReportStatusCategory,
+} from "./jira-report.js";

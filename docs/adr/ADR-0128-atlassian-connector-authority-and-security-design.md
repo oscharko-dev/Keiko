@@ -559,12 +559,13 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 | 12–14 | `jira.issue-types`, `jira.create-fields`, `jira.edit-fields` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 15–17 | `jira.search`, `jira.issue`, `jira.comments` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 18–19 | `jira.transitions`, `jira.assignable-users` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
-| 20 | `assign-issue` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | review-required | allowed |
+| 20 | `jira.report` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 21 | `assign-issue` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | review-required | allowed |
 
-The shared action vocabulary and registered outcome event include all twenty rows. The managed
+The shared action vocabulary and registered outcome event include all twenty-one rows. The managed
 tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → `update-issue-fields`,
 `jira.assign` → `assign-issue`, `jira.comment` → `add-issue-comment`, and `jira.transition` →
-`transition-issue`. The nine read tools retain their names. Assignment has the same medium risk
+`transition-issue`. The ten read tools retain their names. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
 
 **Backlog drafts (#4178, 2026-10-31).** `jira.draft` maps to `create-issue` (high): it proposes
@@ -668,6 +669,42 @@ the approval.
 - **Scope.** Assignment and comments carry no field state and are not governed. Organization-wide
   distribution is the skill library's import and export. No fixed hierarchy or issue model is
   built in.
+
+**Deterministic project report (#4181, 2026-10-31).** `jira.report` is a tenth read tool (low risk,
+`issue-tracker.read`) and the one place where Keiko, not the model, produces project numbers. For a
+project (`projectKey`), a JQL scope (`jql`) or both, the connector pages Jira's search to
+completion itself and computes, as plain arithmetic over what it read: issues per status category
+and per issue type and status name, own estimates (`timeoriginalestimate` seconds, or a numeric
+field the caller names) done/total/remaining, unassigned and overdue open issues, progress per
+container (an epic, or any root issue holding non-sub-task work; hierarchy comes from `parent`
+and from the parent-bearing custom fields the instance reports by field type — Epic Link and
+Parent Link — or from caller-named `parentFieldIds`), epics without members, issues without an
+epic or parent (orphans; an issue link rescues an issue only when it reaches a container), the
+fields the instance requires on create per issue type from current create metadata (rule
+`required-field-empty`; project scope only), the deviations of the shared template checker when
+one is active (`UiHandlerDeps.jiraReportChecker`, #4177; the report asks for the checker's fields
+in the same reads and never interprets a template), and coverage of declared `requirementIds`
+(a requirement is covered by an issue naming its identifier in summary, labels or description;
+items traced through the covering issue's descendants and, for a container, its linked issues).
+The model supplies scope and options only and narrates the result; the digest of the report
+excludes read timing so the same Jira data always yields the same digest.
+
+A read is never silently partial. The page size adapts to the 256 KiB transport cap (a truncated
+body halves it; a single issue that still does not fit ends the read as `issue-too-large`); the
+result of a call is `reading` (with `issuesRead`/`issuesTotal` progress and `reportId`, to be
+called again), `complete`, or `incomplete` with a closed reason (`read-failed`, `scope-changed` —
+the total moved or an issue repeated while paging —, `memory-budget`, `issue-too-large`). Each call
+reads for at most 15 s because the managed host caps a call at 30 s; there is no issue-count limit.
+Reports live in memory only, bound to the Chat that started them, expire after four idle hours and
+are evicted least recently used beyond 1 GiB retained. The bounded result carries the summary
+(15 entries per list) and `reportId`; the full lists are paged through `section` (`statuses`,
+`epics`, `deviations`, `orphans`, `uncovered`, `requirements`) and `section: "comment"` returns the
+exact numbers-and-keys text for `jira.comment`, so posting the report stays a normal approved write.
+`GET /api/atlassian-connectors/jira-reports/:reportId/export?chatId=…&format=markdown|csv`
+renders the stored report (the model's prose is never the source) for the browser's own download;
+CSV neutralizes spreadsheet formulas. Evidence is `atlassian.jira-report` (phase, status, closed
+reason, scope kind, counts and rule ids; never scope text, keys, summaries or report content) beside
+the existing `atlassian.action.outcome` line for the call.
 
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.

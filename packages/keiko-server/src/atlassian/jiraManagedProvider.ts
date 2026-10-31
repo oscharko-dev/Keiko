@@ -2,6 +2,7 @@ import {
   createJiraManagedProvider,
   type JiraManagedConnection,
   type JiraManagedMutationExecutor,
+  type JiraReportToolDeps,
 } from "@oscharko-dev/keiko-connectors";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
@@ -22,6 +23,7 @@ import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-ca
 
 import { text, object } from "./jiraManagedSchemas.js";
 import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
 
 const PAGE_NUMBER = { type: "integer", minimum: 0, maximum: 1000000 };
 const REFERENCE = object({
@@ -91,7 +93,9 @@ interface ReadDefinition {
   readonly item: CatalogJsonObject;
   readonly paged?: boolean;
 }
-const DEFINITIONS: Readonly<Record<JiraManagedReadToolName, ReadDefinition>> = {
+const DEFINITIONS: Readonly<
+  Record<Exclude<JiraManagedReadToolName, "jira.report">, ReadDefinition>
+> = {
   "jira.projects": {
     description: "Read projects visible to the connected identity.",
     arguments: {},
@@ -193,6 +197,7 @@ const DEFINITIONS: Readonly<Record<JiraManagedReadToolName, ReadDefinition>> = {
   },
 };
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
+  if (name === "jira.report") return JIRA_REPORT_DECLARATION;
   const definition = DEFINITIONS[name];
   const descriptor = createToolDescriptor({
     toolRef: createToolRef(`keiko.${name.replaceAll("-", ".")}`, name === "jira.issue" ? 3 : 2),
@@ -240,6 +245,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
   connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>,
   tools: readonly (JiraManagedReadToolName | JiraMutationOperation)[] = JIRA_MANAGED_READ_TOOLS,
   executeMutation?: JiraManagedMutationExecutor<Context>,
+  report?: JiraReportToolDeps<Context>,
 ): ManagedMcpProvider<Context> {
   const selected = tools.map((name) => {
     const declaration = DECLARATIONS.find((item) => item.name === name);
@@ -250,5 +256,6 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
     connection,
     declarations: selected,
     ...(executeMutation === undefined ? {} : { executeMutation }),
+    ...(report === undefined ? {} : { report }),
   });
 }

@@ -42,6 +42,8 @@ import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian
 import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import { createJiraReportStore } from "./jira-report-store.js";
+import { executeJiraReportTool, type JiraReportToolDeps } from "./jira-report-tool.js";
 
 const ARRAY_READ_NAMES: ReadonlySet<string> = new Set(["jira.projects", "jira.assignable-users"]);
 const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
@@ -54,6 +56,8 @@ export interface JiraManagedProviderDeps<Context extends ManagedMcpInvocationCon
   readonly connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>;
   readonly declarations: readonly ManagedMcpToolDeclaration[];
   readonly executeMutation?: JiraManagedMutationExecutor<Context>;
+  /** Owner binding, store, checker and log for `jira.report`; defaults to a private in-memory store. */
+  readonly report?: JiraReportToolDeps<Context>;
 }
 /** The server owns durable intent, current authority and the final credential-bearing transport. */
 export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationContext> = (
@@ -275,7 +279,14 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
   declaration: ManagedMcpToolDeclaration,
   connection: JiraManagedProviderDeps<Context>["connection"],
   executeMutation: JiraManagedMutationExecutor<Context> | undefined,
+  report: JiraReportToolDeps<Context>,
 ): ManagedMcpTool<Context> {
+  if (declaration.name === "jira.report" && declaration.risk === "read")
+    return Object.freeze({
+      ...declaration,
+      execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
+        executeJiraReportTool(args, context, await connection(context), report),
+    });
   const readName = JIRA_MANAGED_READ_TOOLS.find((name) => name === declaration.name);
   if (readName !== undefined && declaration.risk === "read")
     return Object.freeze({
@@ -308,8 +319,14 @@ export function createJiraManagedProvider<Context extends ManagedMcpInvocationCo
 ): ManagedMcpProvider<Context> {
   const connection = deps.connection;
   const executeMutation = deps.executeMutation;
+  const report: JiraReportToolDeps<Context> = deps.report ?? {
+    store: createJiraReportStore(),
+    owner: () => "provider",
+  };
   const tools: readonly ManagedMcpTool<Context>[] = Object.freeze(
-    deps.declarations.map((declaration) => managedTool(declaration, connection, executeMutation)),
+    deps.declarations.map((declaration) =>
+      managedTool(declaration, connection, executeMutation, report),
+    ),
   );
   return Object.freeze({ id: "jira", tools: (): readonly ManagedMcpTool<Context>[] => tools });
 }

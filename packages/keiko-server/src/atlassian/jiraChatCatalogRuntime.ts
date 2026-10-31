@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type {
-  AtlassianHttpBodyPort,
-  JiraManagedConnection,
-  JiraManagedMutationExecutor,
+import {
+  createJiraReportStore,
+  type AtlassianHttpBodyPort,
+  type JiraManagedConnection,
+  type JiraManagedMutationExecutor,
+  type JiraReportStore,
+  type JiraReportToolDeps,
 } from "@oscharko-dev/keiko-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
@@ -25,6 +28,7 @@ import { executeJiraChatDraft } from "./jiraChatDraft.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
+import { recordJiraReportActivity } from "./jiraReportActivity.js";
 
 type ChatCatalog = ManagedProviderCatalog<JiraChatCatalogConsumer>;
 type CatalogInitialization =
@@ -143,9 +147,25 @@ function connection(
   };
 }
 
+/** A report belongs to the Chat that started it; the export route checks the same binding. */
+function reportTool(
+  deps: UiHandlerDeps,
+  store: JiraReportStore,
+): JiraReportToolDeps<CatalogHandlerContext<JiraChatCatalogConsumer>> {
+  return {
+    store,
+    owner: (context) => context.chatId,
+    checker: deps.jiraReportChecker,
+    activity: (activity, context): void => {
+      recordJiraReportActivity(deps.activityLog, context.correlationId, activity);
+    },
+  };
+}
+
 function initializeCatalog(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
+  store: JiraReportStore,
 ): Promise<ChatCatalog> {
   return createManagedProviderCatalog<JiraChatCatalogConsumer>({
     providers: [
@@ -153,6 +173,7 @@ function initializeCatalog(
         (context) => connection(deps, context),
         JIRA_CHAT_TOOLS,
         mutationExecutor(deps),
+        reportTool(deps, store),
       ),
     ],
     routes: jiraChatCatalogRoutes(),
@@ -167,6 +188,7 @@ function initializeCatalog(
 export function createJiraChatCatalogRuntime(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
+  store: JiraReportStore = createJiraReportStore(),
 ): JiraChatCatalogRuntime {
   let catalog: Promise<CatalogInitialization> | undefined;
   let closing: Promise<void> | undefined;
@@ -175,7 +197,7 @@ export function createJiraChatCatalogRuntime(
     if (closed) throw new CatalogDispatchFault("failed", "handler-unavailable");
   };
   const initialize = (): Promise<CatalogInitialization> => {
-    const pending: Promise<CatalogInitialization> = initializeCatalog(deps, log).then(
+    const pending: Promise<CatalogInitialization> = initializeCatalog(deps, log, store).then(
       (value) => ({ ok: true, value }),
       (error: unknown) => {
         // The managed initializer logs and disposes this failed host. Preserve the error for
@@ -210,10 +232,12 @@ export function installJiraChatCatalogRuntime(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
 ): UiHandlerDeps {
-  const runtime = createJiraChatCatalogRuntime(deps, log);
+  const store = createJiraReportStore();
+  const runtime = createJiraChatCatalogRuntime(deps, log, store);
   const previousDispose = deps.dispose;
   return Object.assign(deps, {
     jiraChatCatalog: runtime,
+    jiraReportStore: store,
     dispose: async (): Promise<void> => {
       try {
         await runtime.close();

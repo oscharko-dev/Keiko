@@ -906,7 +906,7 @@ describe("ordinary Chat catalog read admission", () => {
       store.updateChat(chat.id, { toolMode: mode });
       registerCurrentAuthority();
       const f = await catalogFixture();
-      expect(f.binder.offer().toolRefs).toHaveLength(9);
+      expect(f.binder.offer().toolRefs).toHaveLength(10);
       expect(notifications).toBe(0);
       expect(await dispatch(f, "first")).toMatchObject({
         kind: "settled",

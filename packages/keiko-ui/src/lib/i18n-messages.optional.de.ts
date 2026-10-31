@@ -2917,6 +2917,33 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.action.jira.comments": "Jira-Kommentare lesen",
   "atlassianConnectors.action.jira.transitions": "Jira-Statusübergänge lesen",
   "atlassianConnectors.action.jira.assignable-users": "Zuweisbare Jira-Benutzer suchen",
+  "atlassianConnectors.action.jira.report":
+    "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
+  "chat.jira.report.title": "Jira-Bericht",
+  "chat.jira.report.figures":
+    "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",
+  "chat.jira.report.reading": "Jira wird gelesen: {read} von {total} Vorgängen",
+  "chat.jira.report.readingUnknown": "Jira wird gelesen: {read} Vorgänge",
+  "chat.jira.report.complete": "Vollständig: {read} Vorgänge gelesen",
+  "chat.jira.report.incomplete":
+    "Unvollständig ({reason}): {read} von {total} Vorgängen gelesen. Die Zahlen beschreiben nur die gelesenen Vorgänge.",
+  "chat.jira.report.reason.read-failed": "Jira konnte nicht weiter gelesen werden",
+  "chat.jira.report.reason.scope-changed": "die Vorgänge haben sich während des Lesens geändert",
+  "chat.jira.report.reason.memory-budget": "Speichergrenze erreicht",
+  "chat.jira.report.reason.issue-too-large": "ein Vorgang ist zu groß zum Lesen",
+  "chat.jira.report.issues": "Vorgänge",
+  "chat.jira.report.todo": "Offen",
+  "chat.jira.report.inProgress": "In Arbeit",
+  "chat.jira.report.done": "Erledigt",
+  "chat.jira.report.donePercent": "{percent} % erledigt",
+  "chat.jira.report.compliance":
+    "{issues} von {checked} Vorgängen weichen ab ({count} Abweichungen)",
+  "chat.jira.report.coverage":
+    "{epics} Epics ohne Inhalt, {orphans} Vorgänge ohne Epic oder übergeordneten Vorgang",
+  "chat.jira.report.exportMarkdown": "Markdown exportieren",
+  "chat.jira.report.exportCsv": "CSV exportieren",
+  "chat.jira.report.exportFailed":
+    "Der Bericht konnte nicht exportiert werden. Führe ihn erneut aus, um ihn zu exportieren.",
   "atlassianConnectors.action.assign-issue": "Jira-Vorgang zuweisen",
   "atlassianConnectors.action.sync-project": "Jira-Projekt synchronisieren",
   "atlassianConnectors.action.search-issues-live": "Jira-Livesuche",

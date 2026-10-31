@@ -313,6 +313,18 @@ const D4_TABLE: readonly D4Row[] = [
     },
   },
   {
+    action: "jira.report",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
     action: "assign-issue",
     provider: "jira",
     actionClass: "connector-write",
@@ -1331,6 +1343,7 @@ it.each([
   "jira.comments",
   "jira.transitions",
   "jira.assignable-users",
+  "jira.report",
   "assign-issue",
 ])("recognizes governed Jira capability %s in the shared policy vocabulary", (action) => {
   expect(isAtlassianConnectorActionType(action)).toBe(true);
@@ -1338,7 +1351,7 @@ it.each([
 
 it("maps every managed Jira tool to one existing connector-policy action", () => {
   for (const name of JIRA_MANAGED_READ_TOOLS) expect(JIRA_MANAGED_ACTION_TYPES[name]).toBe(name);
-  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(15);
+  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(16);
   expect(JIRA_MANAGED_ACTION_TYPES).toMatchObject({
     "jira.create": "create-issue",
     // A backlog draft only creates issues and is governed like one create (#4178).

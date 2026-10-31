@@ -17,6 +17,8 @@ import { decideJiraChatReadConsent } from "@/lib/atlassian-connectors-api";
 import { jiraToolLabel, jiraToolState, jiraToolOutcomeHelp } from "./jira-tool-presentation";
 import styles from "./JiraChatTools.module.css";
 import { chatToolReadGrants } from "@/lib/chat-tool-events";
+import { JiraReportCard } from "./JiraReportCard";
+import { jiraReportView } from "./jira-report-view";
 const STATE_KEYS: Readonly<Record<ChatToolReadGrantView["state"], WidgetMessageKey>> = {
   pending: "chat.jira.pending",
   granted: "chat.jira.granted",
@@ -64,23 +66,32 @@ function hasPartialJiraResult(exchange: ChatToolExchange): boolean {
     exchange.result.page.truncated
   );
 }
+function jiraReportOf(exchange: ChatToolExchange): ReturnType<typeof jiraReportView> {
+  return exchange.call.name === "jira_report" ? jiraReportView(exchange.result?.data) : undefined;
+}
 function JiraToolExchange({
   exchange,
   turnState,
+  chatId,
 }: {
   readonly exchange: ChatToolExchange;
   readonly turnState: ChatTurnState | undefined;
+  readonly chatId: string | undefined;
 }): ReactNode {
   const t = useTranslate();
   const mcp = exchange.call.name.startsWith("mcp_");
   const state = jiraToolState(exchange, turnState);
   const help = jiraToolOutcomeHelp(state);
+  const report = jiraReportOf(exchange);
   return (
     <section className={styles.cmpCard} aria-label={t(mcp ? "chat.mcp.tool" : "chat.jira.tool")}>
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
-      {hasPartialJiraResult(exchange) ? <p>{t("chat.jira.partial")}</p> : null}
+      {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
+      {report === undefined && hasPartialJiraResult(exchange) ? (
+        <p>{t("chat.jira.partial")}</p>
+      ) : null}
       {exchange.result?.data == null ? null : (
         <details>
           <summary>{t(mcp ? "chat.mcp.details" : "chat.jira.details")}</summary>
@@ -93,9 +104,11 @@ function JiraToolExchange({
 export function JiraChatTools({
   transcript,
   turnState,
+  chatId,
 }: {
   readonly transcript: ChatToolTranscript | undefined;
   readonly turnState?: ChatTurnState | undefined;
+  readonly chatId?: string | undefined;
 }): ReactNode {
   if (transcript === undefined) return null;
   return (
@@ -113,7 +126,7 @@ export function JiraChatTools({
               turnState={turnState}
             />
           )}
-          <JiraToolExchange exchange={exchange} turnState={turnState} />
+          <JiraToolExchange exchange={exchange} turnState={turnState} chatId={chatId} />
         </div>
       ))}
     </div>
