@@ -680,3 +680,42 @@ it("retains human choice labels without admitting labels as write identities", (
     ).ok,
   ).toBe(true);
 });
+
+describe("escaped line breaks in rich text (#4178)", () => {
+  const fields = (): readonly JiraFieldMetadata[] => {
+    const result = parsed();
+    if (!result.ok) throw new Error("Invalid fixture");
+    return result.fields;
+  };
+  const check = (
+    description: string,
+    deployment: "data-center" | "cloud" = "data-center",
+  ): ReturnType<typeof validateJiraFieldChanges> =>
+    validateJiraFieldChanges(fields(), { description }, "edit", deployment);
+  const ESCAPED = String.raw`### Steps\n1. Build.\n\n### Definition of Done\n- Tested.`;
+
+  it.each(["data-center", "cloud"] as const)(
+    "refuses a description whose line breaks all arrive escaped (%s)",
+    (deployment) => {
+      expect(check(ESCAPED, deployment)).toEqual({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "description",
+        message:
+          "The text contains escaped line breaks (\\n) and no real line break; send real line breaks instead.",
+      });
+    },
+  );
+
+  it("accepts real line breaks, one literal escape and an escape beside real breaks", () => {
+    expect(check(ESCAPED.replaceAll(String.raw`\n`, "\n"))).toMatchObject({ ok: true });
+    expect(check(String.raw`Split the CSV on \n before parsing.`)).toMatchObject({ ok: true });
+    expect(check(`Regex:\n${String.raw`split on \n and \n again`}`)).toMatchObject({ ok: true });
+  });
+
+  it("leaves single-line text fields alone", () => {
+    expect(
+      validateJiraFieldChanges(fields(), { summary: String.raw`a\nb\nc` }, "edit", "data-center"),
+    ).toMatchObject({ ok: true });
+  });
+});

@@ -400,12 +400,24 @@ function optionValue(
     ? cascadingValue(field, value)
     : reference(field, value, false, deployment);
 }
+const ESCAPED_LINE_BREAKS = String.raw`The text contains escaped line breaks (\n) and no real line break; send real line breaks instead.`;
+/**
+ * Multi-line text whose every line break arrived as the two characters `\n` (#4178). Some models
+ * escape line breaks twice inside tool arguments; Jira would then store the escape sequences as
+ * visible text and collapse the document into one line. Keiko refuses rather than rewrites it, so
+ * the model resends the value it means. One literal escape, or escapes beside real line breaks,
+ * is ordinary prose about `\n` and stays accepted.
+ */
+function escapedLineBreaksOnly(value: string): boolean {
+  return !/[\r\n]/u.test(value) && (value.match(/\\n/gu)?.length ?? 0) >= 2;
+}
 function textValue(
   field: JiraFieldMetadata,
   value: unknown,
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
   if (typeof value !== "string" || !validFieldText(field, value)) return INVALID;
+  if (field.richText && escapedLineBreaksOnly(value)) return invalidWith(ESCAPED_LINE_BREAKS);
   if (deployment !== "cloud" || !field.richText) return { ok: true, value };
   const result = composePlainTextToAdf(value);
   return result.ok ? { ok: true, value: result.doc } : INVALID;

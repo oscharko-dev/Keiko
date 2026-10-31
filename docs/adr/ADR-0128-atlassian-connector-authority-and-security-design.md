@@ -403,7 +403,12 @@ default (lab S17, #4176). A supplied reporter is validated like any user; every 
 field still blocks the create, and edit and transition are unaffected. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
 Cloud rich text uses the existing ADF composer; Data Center uses plain text, and user references
-respect each deployment's identity scheme. Fresh metadata, authority and dispatch remain separate
+respect each deployment's identity scheme. A rich-text value without any real line break but with
+at least two escaped ones (the two characters `\n`) is refused with one fixed sentence for the
+model, on both deployments (lab S07, #4178): some models escape line breaks twice inside tool
+arguments, and Jira would store the escapes as visible text and collapse the document's sections
+into one line. Keiko never rewrites the value; one literal escape, or escapes beside real line
+breaks, remain ordinary prose and are accepted, and single-line text fields are unaffected. Fresh metadata, authority and dispatch remain separate
 provider obligations; the pure validator grants no execution authority.
 
 Issue reads may select at most 20 additional field IDs. Their `names`/`schema` expansion is
