@@ -21,6 +21,32 @@
 # shrink-only baseline, `scripts/check-semantic-duplication.mjs`) and fallow moved to 3.35.0.
 
 [[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2026-11-07
+reason = """
+2026-10-31, #4090: legacy-API applicability triage, not acceptance of the affected modern matcher.
+The advisory describes firstPhasePreProcess amplification at optimizationLevel >= 2 in minimatch
+10.2.6, but its <11.0.1 range also matches 3.1.5. The audited 3.1.5 make() only splits the
+brace-expanded patterns, parses them and filters invalid results; it has neither optimizationLevel
+nor firstPhasePreProcess/secondPhasePreProcess. This specific amplification path is absent.
+Source: https://github.com/advisories/GHSA-g3hv-75wg-m249 and the integrity-pinned 3.1.5 npm source.
+
+The only remaining affected instance is dev-only at
+node_modules/eslint-config-next/node_modules/minimatch, used by eslint-plugin-import 2.32.0,
+eslint-plugin-react 7.37.5 and eslint-plugin-jsx-a11y 6.10.2. These latest published plugins still
+call require('minimatch') as a function; 11.0.1 exports an object and cannot replace that API.
+No user-supplied patterns or shipped runtime traverse this legacy lint dependency.
+All modern consumers, including the shipped @tufjs/models path, now resolve patched 11.0.1;
+glob resolves 14.0.2. No shipped vulnerability is waived.
+
+check:osv-waiver-scope additionally enforces exactly that dev-only legacy path/version and
+11.0.1 for every other minimatch instance, alongside its independent npm/OSV shipped-graph checks.
+A changed graph, including a vulnerable dev-only modern matcher, fails closed. Revisit by
+2026-11-07, or immediately when upstream corrects the advisory range, publishes a legacy fix,
+or those plugins adopt the modern API. Remove this entry when the legacy copy disappears.
+"""
+
+[[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
 ignoreUntil = 2026-11-30
 reason = """
