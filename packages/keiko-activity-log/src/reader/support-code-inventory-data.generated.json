@@ -1082,6 +1082,7 @@
     "keiko-server/chat-context-breakdown",
     "keiko-server/chat-context-log",
     "keiko-server/chat-context-status",
+    "keiko-server/chat-continuity-checkpoint",
     "keiko-server/chat-continuity-log",
     "keiko-server/chat-draft-log",
     "keiko-server/chat-draft-routes",
@@ -1852,6 +1853,7 @@
     "keiko-server/store-handlers",
     "keiko-server/store/browserApprovals",
     "keiko-server/store/chat-grounding-scope-identity",
+    "keiko-server/store/chatContinuity",
     "keiko-server/store/chatCreationIntents",
     "keiko-server/store/chatDrafts",
     "keiko-server/store/chatJiraBinding",
@@ -2941,6 +2943,7 @@
     "ChatMutationFailure",
     "ChatMutationTimeoutFailure",
     "ChatPromptPreparationRejection",
+    "CheckpointWriteError",
     "ChunkingError",
     "CircuitAdmissionRefusal",
     "CircuitOpenError",
@@ -3508,6 +3511,8 @@
     "capsule",
     "chat-compaction-evidence",
     "chat-compaction-resurfacing",
+    "chat-continuity-checkpoint",
+    "chat.compaction.checkpoint",
     "chat.compaction.evidence",
     "chat.compaction.model-summary",
     "chat.compaction.read",
@@ -3894,6 +3899,7 @@
     "qi.capsule-adapter",
     "quality-intelligence.capsule-source",
     "rate-limited",
+    "read",
     "read-failed",
     "realtime",
     "recommended",
@@ -4020,6 +4026,7 @@
     "workspace.index.save",
     "workspace.root.restore.reason",
     "worktree-status",
+    "write",
     "write-failed"
   ]
 }

@@ -162,26 +162,29 @@ function redactModelSummary(
     ...(summary.validationState === undefined ? {} : { validationState: summary.validationState }),
     ...(summary.failureReason === undefined ? {} : { failureReason: summary.failureReason }),
     content: redactedPathSafe(summary.content, redact),
-    ...(summary.decisions === undefined
-      ? {}
-      : { decisions: redactStrings(summary.decisions, redact) }),
-    ...(summary.constraints === undefined
-      ? {}
-      : { constraints: redactStrings(summary.constraints, redact) }),
-    ...(summary.filesAndSymbols === undefined
-      ? {}
-      : { filesAndSymbols: redactStrings(summary.filesAndSymbols, redact) }),
-    ...(summary.debuggingContext === undefined
-      ? {}
-      : { debuggingContext: redactStrings(summary.debuggingContext, redact) }),
-    ...(summary.openThreads === undefined
-      ? {}
-      : { openThreads: redactStrings(summary.openThreads, redact) }),
+    ...projectOptionalFields(
+      ["decisions", "constraints", "filesAndSymbols", "debuggingContext", "openThreads"],
+      summary,
+      (values: readonly string[]): readonly string[] => redactStrings(values, redact),
+    ),
   };
 }
 
 function redactStrings(values: readonly string[], redact: Redactor): readonly string[] {
   return values.map((value) => redactedPathSafe(value, redact));
+}
+
+function projectOptionalFields<K extends string, V>(
+  keys: readonly K[],
+  source: Readonly<Partial<Record<NoInfer<K>, V | undefined>>>,
+  project: (value: V) => V,
+): Partial<Record<K, V>> {
+  const result: Partial<Record<K, V>> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined) result[key] = project(value);
+  }
+  return result;
 }
 
 function redactRehydration(
@@ -195,28 +198,22 @@ function redactRehydration(
     itemCount: handle.itemCount,
     approxTokens: handle.approxTokens,
     ...(handle.kind === undefined ? {} : { kind: handle.kind }),
-    ...(handle.scopePath === undefined
-      ? {}
-      : { scopePath: redactedPathSafe(handle.scopePath, redact) }),
     ...(handle.lineRange === undefined ? {} : { lineRange: handle.lineRange }),
-    ...(handle.contentHash === undefined
-      ? {}
-      : { contentHash: redactedPathSafe(handle.contentHash, redact) }),
-    ...(handle.evidenceAtomId === undefined
-      ? {}
-      : { evidenceAtomId: redactedPathSafe(handle.evidenceAtomId, redact) }),
     // KEIKO-0328: preserve the persisted tool-result artifact id. Body-free (opaque hash-like
     // identifier), so it's safe to keep; load-bearing for the `kind: "tool-result"` rehydration
     // path — without it the audit trail terminates at a dangling pointer.
-    ...(handle.artifactId === undefined
-      ? {}
-      : { artifactId: redactedPathSafe(handle.artifactId, redact) }),
-    ...(handle.notPersistedReason === undefined
-      ? {}
-      : { notPersistedReason: redactedPathSafe(handle.notPersistedReason, redact) }),
-    ...(handle.approvedSummary === undefined
-      ? {}
-      : { approvedSummary: redactedPathSafe(handle.approvedSummary, redact) }),
+    ...projectOptionalFields(
+      [
+        "scopePath",
+        "contentHash",
+        "evidenceAtomId",
+        "artifactId",
+        "notPersistedReason",
+        "approvedSummary",
+      ],
+      handle,
+      (value: string): string => redactedPathSafe(value, redact),
+    ),
   };
 }
 
@@ -318,24 +315,18 @@ function redactStringArrays(
   redact: Redactor,
 ): Partial<ContextCompactionRecord> {
   return {
-    ...(record.decisions === undefined
-      ? {}
-      : { decisions: redactStrings(record.decisions, redact) }),
-    ...(record.openQuestions === undefined
-      ? {}
-      : { openQuestions: redactStrings(record.openQuestions, redact) }),
-    ...(record.filesInspected === undefined
-      ? {}
-      : { filesInspected: redactStrings(record.filesInspected, redact) }),
-    ...(record.filesChanged === undefined
-      ? {}
-      : { filesChanged: redactStrings(record.filesChanged, redact) }),
-    ...(record.failingTests === undefined
-      ? {}
-      : { failingTests: redactStrings(record.failingTests, redact) }),
-    ...(record.droppedCategories === undefined
-      ? {}
-      : { droppedCategories: redactStrings(record.droppedCategories, redact) }),
+    ...projectOptionalFields(
+      [
+        "decisions",
+        "openQuestions",
+        "filesInspected",
+        "filesChanged",
+        "failingTests",
+        "droppedCategories",
+      ],
+      record,
+      (values: readonly string[]): readonly string[] => redactStrings(values, redact),
+    ),
   };
 }
 
