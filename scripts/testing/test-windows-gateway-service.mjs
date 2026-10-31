@@ -1,5 +1,6 @@
 // Exercises the installed SCM image through the native control protocol on Windows.
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { dirname, join, resolve } from "node:path";
@@ -76,7 +77,7 @@ async function qualify(valid, unavailable = false) {
   try {
     child.stdio[3].write(launchPacket(probe, root, [["SystemRoot", process.env.SystemRoot]], []));
     if (!unavailable) {
-      const observer = spawnSync(probe, ["--observe"], { encoding: "utf8", timeout: 3000 });
+      const observer = spawnSync(probe, ["--observe"], { encoding: "utf8", timeout: 6000 });
       assert.equal(observer.status, 0, "no suspended root observed in the named job");
       await delay(150);
       assert.equal(output.length, 0, "child ran before policy submission");

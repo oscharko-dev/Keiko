@@ -4,6 +4,7 @@
 #include "gateway_wfp.h"
 #include <userenv.h>
 #include <string.h>
+#include <stdio.h>
 
 #define SERVICE_NAME L"KeikoRuntimeGateway"
 #define PIPE_NAME L"\\\\.\\pipe\\KeikoRuntimeGateway-v1"
@@ -72,12 +73,18 @@ static HANDLE scm_peer(HANDLE pipe) {
 int keiko_gateway_connect(struct keiko_gateway_connection *c) {
   BYTE hello[4] = {'K','G','H','1'};
   c->pipe = CreateFileW(PIPE_NAME, GENERIC_READ | FILE_WRITE_DATA, 0, NULL, OPEN_EXISTING,
-      FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
-  if (c->pipe == INVALID_HANDLE_VALUE) return 0;
+      FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION, NULL);
+  if (c->pipe == INVALID_HANDLE_VALUE) {
+    fprintf(stderr, "gateway pipe unavailable: %lu\n", GetLastError());
+    return 0;
+  }
   c->server = scm_peer(c->pipe);
-  return c->server && transfer(c->pipe, hello, sizeof(hello), TRUE, NULL) &&
-      transfer(c->pipe, c->nonce, CHALLENGE_SIZE, FALSE, NULL) &&
-      tree_sid(c->nonce, &c->sid);
+  if (!c->server) { fputs("gateway SCM identity unavailable\n", stderr); return 0; }
+  if (!transfer(c->pipe, hello, sizeof(hello), TRUE, NULL) ||
+      !transfer(c->pipe, c->nonce, CHALLENGE_SIZE, FALSE, NULL)) {
+    fputs("gateway peer challenge unavailable\n", stderr); return 0;
+  }
+  return tree_sid(c->nonce, &c->sid);
 }
 
 int keiko_gateway_confirm(struct keiko_gateway_connection *c, HANDLE job, BYTE *frame) {

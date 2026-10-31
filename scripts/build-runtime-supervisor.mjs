@@ -59,28 +59,31 @@ function compilerInvocation(argv) {
     };
   }
   if (target === "linux-x64") return linuxCompilerInvocation(target, output);
-  if (target === "macos-arm64" || target === "macos-x64") {
-    return {
-      args: [
-        "clang",
-        "-std=c11",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-        "-O2",
-        "-D_DARWIN_C_SOURCE",
-        "-arch",
-        target === "macos-arm64" ? "arm64" : "x86_64",
-        "-o",
-        output,
-        MACOS_SOURCE,
-      ],
-      compiler: "xcrun",
-      output,
-      target,
-    };
-  }
+  if (target === "macos-arm64" || target === "macos-x64")
+    return macosCompilerInvocation(target, output);
   return undefined;
+}
+
+function macosCompilerInvocation(target, output) {
+  return {
+    args: [
+      "clang",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-O2",
+      "-D_DARWIN_C_SOURCE",
+      "-arch",
+      target === "macos-arm64" ? "arm64" : "x86_64",
+      "-o",
+      output,
+      MACOS_SOURCE,
+    ],
+    compiler: "xcrun",
+    output,
+    target,
+  };
 }
 
 function linuxCompilerInvocation(target, output) {

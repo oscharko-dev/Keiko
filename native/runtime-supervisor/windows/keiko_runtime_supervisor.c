@@ -391,6 +391,7 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
       initialize_startup_info(&startup, inherited, &job, gateway ? &capabilities : NULL)) {
     created = CreateProcessW(executable, line, NULL, NULL, TRUE, flags, environment, cwd,
                              &startup.StartupInfo, process);
+    if (!created && gateway) fprintf(stderr, "gateway suspended spawn failed: %lu\n", GetLastError());
     if (created && ((gateway && !admit_gateway(gateway, job, request)) ||
                     ResumeThread(process->hThread) == (DWORD)-1)) {
       TerminateJobObject(job, 127);
