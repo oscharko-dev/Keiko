@@ -45,3 +45,29 @@ Revisit condition: drop this entry as soon as braces publishes a patched release
 reviewed the advisory on 2026-10-02 at 22:36 UTC, after the last green scan on dev, and OSV began
 matching it minutes later.
 """
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2026-11-30
+reason = """
+minimatch denial of service through globparts amplification (medium; CVSS 6.9). Build-time only for
+the one remaining affected release: the advisory covers every minimatch before 11.0.1, and the
+shipped path is already moved off it (root overrides `minimatch@^10` -> 11.0.3 and `glob@^13` ->
+14.0.3 for the @sigstore/tuf, sigstore/cacache, eslint and typescript-eslint consumers, which use
+only the `minimatch`/`Minimatch` exports 11 keeps).
+
+Reach: the lockfile then holds minimatch@3.1.5 only, flagged dev, on the keiko-ui devDependency
+eslint-config-next -> eslint-plugin-import / eslint-plugin-jsx-a11y / eslint-plugin-react path.
+`npm ls --omit=dev --all minimatch@3.1.5` is empty. Those plugins match file names against globs
+from the ESLint configuration this repository authors, only while the keiko-ui lint runs; no user
+and no untrusted input reaches them, and the worst case is a slow lint over a pattern a committer
+wrote.
+
+No upgrade path exists on that line: the advisory names no patched 3.x release, and the plugins
+call the CommonJS default-export function that minimatch 10 and 11 no longer provide, so an override
+would break the lint rather than fix it.
+
+Revisit condition: drop this entry once the eslint plugins move to minimatch >= 11.0.1 or minimatch
+publishes a patched 3.x release. Recorded during #3907 (PR #4167): GitHub reviewed the advisory on
+2026-10-30 at 23:09 UTC and the OSV scan of every branch failed from then on.
+"""

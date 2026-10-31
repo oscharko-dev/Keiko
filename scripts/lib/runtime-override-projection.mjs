@@ -1,13 +1,29 @@
-import { valid } from "semver";
+import { subset, valid, validRange } from "semver";
 import {
+  aliasRange,
   descriptorIsSatisfied,
   lockfileRecordIdentity,
   manifestRuntimeEdges,
   resolveLockfileEdge,
 } from "./runtime-requirements.mjs";
 
+/** A `name@spec` key applies only where every version the original descriptor admits lies in
+ * `spec`, so the projection never guesses which version npm would have selected. */
+function versionKeyedPin(overrides, requirement) {
+  const original = aliasRange(requirement.range ?? "");
+  if (validRange(original) === null) return undefined;
+  const prefix = `${requirement.name}@`;
+  for (const [key, pin] of Object.entries(overrides ?? {})) {
+    if (!key.startsWith(prefix) || typeof pin !== "string") continue;
+    const spec = key.slice(prefix.length);
+    if (validRange(spec) !== null && subset(original, spec)) return pin;
+  }
+  return undefined;
+}
+
 function exactOverride(overrides, requirement, identity) {
-  const pin = overrides?.[requirement.name];
+  const flat = overrides?.[requirement.name];
+  const pin = flat === undefined ? versionKeyedPin(overrides, requirement) : flat;
   return typeof pin === "string" &&
     valid(pin) === pin &&
     pin === identity.version &&
@@ -69,7 +85,8 @@ function affectedAncestors(state) {
   return [...state.affected].filter((path) => state.visited.has(path));
 }
 
-/** Project only reviewed exact flat overrides actually selected by the runtime lockfile graph.
+/** Project only reviewed exact flat or version-keyed overrides actually selected by the runtime
+ * lockfile graph.
  * Other npm override forms retain their existing owner; this is not another npm resolver. */
 export function planRuntimeOverrides(packages, requirements, overrides) {
   const state = {

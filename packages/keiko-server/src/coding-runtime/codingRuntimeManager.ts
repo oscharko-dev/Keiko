@@ -371,6 +371,8 @@ export interface OpenCodeLifecycleAdapter {
     request: OpenCodeLifecycleHandshakeRequest,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>;
   monitor?: ((request: OpenCodeLifecycleMonitorRequest) => (() => void) | undefined) | undefined;
+  /** A stop began: called before anything is revoked, so reads the stop would break close first. */
+  beginStop?: ((runId: string) => void) | undefined;
   dispose?:
     | ((
         runId: string,
@@ -917,6 +919,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   private async stopActive(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
     active.stopRequested = true;
     active.status = "stopping";
+    active.openCodeLifecycleAdapter?.beginStop?.(active.context.runId);
     const receipt = await this.revokeAndTerminate(active);
     if (receipt === undefined) {
       await this.enterRecoveryRequired(active);

@@ -808,6 +808,55 @@ describe("CodingToolFacade", () => {
     expect(JSON.stringify(result)).not.toMatch(/inaccessible|not accessible/iu);
   });
 
+  // Coding Workbench Jira lab, 2026-10-30: a Local checkout on `main` had its verified commit blocked
+  // as `protected-branch`, the model saw only the code, tried the pull request and looped until the
+  // run timed out. The blocked commit now names the cause and the one step that is the model's.
+  it("tells the model a commit on a protected branch is the operator's blocker (#3907)", async () => {
+    const digest = "a".repeat(64);
+    const verifiedCommit = {
+      schemaVersion: "1",
+      proposalId: "commit-protected",
+      runId: "run-1",
+      envelopeDigest: digest,
+      runtimeAuthorityDigest: digest,
+      workspaceDigest: digest,
+      repositoryDigest: digest,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: digest,
+      verificationEvidenceId: "verification-1",
+      messageDigest: digest,
+      status: "blocked",
+      reason: "policy-block",
+      blockReason: "protected-branch",
+      recordedAt: "2026-10-30T23:20:00.000Z",
+    };
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], verifiedCommit }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "delivery", intent: "commit", phase: "propose", message: "m" }),
+      capability,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      verifiedCommit: { status: "blocked", blockReason: "protected-branch" },
+      guidance: expect.stringContaining("protected branch") as string,
+    });
+    expect(JSON.stringify(result)).not.toMatch(/git (checkout|switch|branch)/u);
+
+    verifiedCommit.blockReason = "risk-class-ceiling";
+    const other = await subject.execute({
+      body: requestBody({ action: "delivery", intent: "commit", phase: "propose", message: "m" }),
+      capability,
+    });
+    expect(other).not.toHaveProperty("guidance");
+  });
+
   it("keeps the delivery vocabulary out of every other action", async () => {
     const ports = facade();
     ports.delegate.execute = vi.fn(() =>

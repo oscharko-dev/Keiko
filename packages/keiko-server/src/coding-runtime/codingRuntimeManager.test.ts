@@ -3984,6 +3984,53 @@ describe("coding runtime manager", () => {
     expect(events.filter((event) => event.kind === "runtime-started")).toHaveLength(1);
   });
 
+  // Coding Workbench Jira lab, 2026-10-30: a stop revoked the runtime first and reaped it seconds
+  // later; a revert-state read in between hit the dying runtime and logged `revert.refused`. The
+  // lifecycle learns of the stop before anything is revoked, so it can close that read first.
+  it("tells the OpenCode lifecycle a stop began before anything is revoked (#3907)", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const order: string[] = [];
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(
+        () => ({
+          ...child.handle,
+          kill: (signal): void => {
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        }),
+        { setTimer: (callback): unknown => (callback(), undefined) },
+      ),
+      revokeRuntime: (runId): true => {
+        order.push(`revoke:${runId}`);
+        return true;
+      },
+      openCodeLifecycleAdapter: {
+        handshake: () => Promise.resolve({ ok: true }),
+        beginStop: (runId): void => {
+          order.push(`begin-stop:${runId}`);
+        },
+        dispose: (runId): true => {
+          order.push(`dispose:${runId}`);
+          return true;
+        },
+      },
+    });
+    const started = await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    if (!started.ok) throw new Error("the fixture run did not start");
+
+    await expect(manager.stop(started.runId)).resolves.toEqual({ ok: true, status: "stopped" });
+    expect(order).toEqual([
+      `begin-stop:${started.runId}`,
+      `revoke:${started.runId}`,
+      `dispose:${started.runId}`,
+    ]);
+  });
+
   it("prepares the fixed OpenCode invocation before spawn and never forwards caller arguments", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();
