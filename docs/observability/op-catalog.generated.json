@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaabc9369a38d9f533c252fefb25242cf2450ad9889558e9e8d4eeb1ed065de7",
+    "catalogDigest": "aa101fc19423003e852a7e323006c342142ae81ecec15fa846ba9775fc44a96e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -26550,8 +26550,8 @@
         "failureClasses": ["git-draft-repository-drift"],
         "proofIds": ["git.draft-delivery.repository-drift.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:38",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:187"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:39",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:188"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26799,8 +26799,8 @@
         "failureClasses": ["git-draft-remote-observation"],
         "proofIds": ["git.draft-remote.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:67",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:345"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:68",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:360"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28764,8 +28764,8 @@
         "failureClasses": ["git-verified-commit"],
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:115",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1259"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:116",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1243"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -107330,7 +107330,7 @@
     {
       "op": "git.draft-delivery.repository-drift",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:41",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:42",
       "package": "keiko-server"
     },
     {
@@ -107348,7 +107348,7 @@
     {
       "op": "git.draft-remote.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:70",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryFacts.ts:71",
       "package": "keiko-server"
     },
     {
@@ -107492,7 +107492,7 @@
     {
       "op": "git.verified-commit",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:118",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:119",
       "package": "keiko-server"
     },
     {
