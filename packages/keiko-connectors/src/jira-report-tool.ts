@@ -1,5 +1,6 @@
 import {
   JIRA_REPORT_READ_SLICE_MS,
+  type JiraReportFailureReason,
   type JiraReportIncompleteReason,
   type JiraReportStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -16,25 +17,28 @@ import {
   jiraReportState,
   jiraReportSummary,
 } from "./jira-report-result.js";
-import {
-  advanceJiraReportSession,
-  type JiraReportReadDeps,
-  type JiraReportSession,
-} from "./jira-report-session.js";
+import { advanceJiraReportSession } from "./jira-report-read.js";
+import type { JiraReportReadDeps, JiraReportSession } from "./jira-report-session.js";
 import { JIRA_REPORT_STORE_MAX_BYTES, type JiraReportStore } from "./jira-report-store.js";
 import { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
 import type { JiraReportCheckerPort } from "./jira-report-types.js";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 
 export type JiraReportRefusal =
-  "invalid-input" | "unsupported-deployment" | "report-not-found" | "report-busy";
+  | "invalid-input"
+  | "unsupported-deployment"
+  | "report-not-found"
+  | "report-busy"
+  | "connection-changed";
 
 /** Body-free facts about one call of the tool; the composing server maps them to its log. */
 export interface JiraReportActivity {
   readonly phase: "read" | "section" | "refused";
   readonly status?: JiraReportStatus;
   readonly reason?: JiraReportIncompleteReason;
+  readonly failure?: JiraReportFailureReason;
   readonly refusal?: JiraReportRefusal;
   readonly scopeKind: "project" | "jql" | "project-jql" | "report";
   readonly continued: boolean;
@@ -61,6 +65,12 @@ export interface JiraReportToolDeps<Context extends ManagedMcpInvocationContext>
   readonly sleep?: ((ms: number) => Promise<void>) | undefined;
 }
 
+/** The Jira instance and credential a report was started with; never the credential itself. */
+function connectionFingerprint(connection: JiraManagedConnection): string {
+  return sha256Hex(
+    canonicalise({ baseUrl: connection.baseUrl, identity: connection.identity ?? "" }),
+  );
+}
 function scopeKind(session: JiraReportSession): JiraReportActivity["scopeKind"] {
   const { projectKey, jql } = session.request;
   if (projectKey !== undefined && jql !== undefined) return "project-jql";
@@ -73,6 +83,9 @@ function optionalActivity(session: JiraReportSession): Partial<JiraReportActivit
   const total = totalOf(session);
   return {
     ...(session.incomplete === undefined ? {} : { reason: session.incomplete }),
+    ...(session.incomplete === undefined || session.failure === undefined
+      ? {}
+      : { failure: session.failure }),
     ...(total === undefined ? {} : { issuesTotal: total }),
   };
 }
@@ -131,7 +144,7 @@ function readView(session: JiraReportSession, elapsedMs: number): ManagedMcpTool
   if (session.report !== undefined) data.report = jiraReportSummary(session.report);
   if (status === "reading") {
     data.nextStartAt = session.startAt;
-    if (session.failureReason !== undefined) data.lastFailure = session.failureReason;
+    if (session.failure !== undefined) data.lastFailure = session.failure;
   }
   return { data };
 }
@@ -223,11 +236,14 @@ export async function executeJiraReportTool<Context extends ManagedMcpInvocation
   if (connection.deployment !== "data-center")
     return refuse(deps, context, "unsupported-deployment", startedAt);
   const owner = deps.owner(context);
+  const fingerprint = connectionFingerprint(connection);
   const session =
     args.kind === "new"
-      ? deps.store.start(owner, args.request)
+      ? deps.store.start(owner, args.request, fingerprint)
       : deps.store.get(args.reportId, owner);
   if (session === undefined) return refuse(deps, context, "report-not-found", startedAt);
+  if (session.fingerprint !== fingerprint)
+    return refuse(deps, context, "connection-changed", startedAt);
   if (session.busy) return refuse(deps, context, "report-busy", startedAt);
   return runSession(session, args, context, connection, deps);
 }

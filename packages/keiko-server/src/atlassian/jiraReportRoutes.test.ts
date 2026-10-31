@@ -22,13 +22,20 @@ function seeded(): JiraReportStore {
     projectKey: "REP",
     jql: undefined,
     estimateFieldId: undefined,
+    asOf: undefined,
     parentFieldIds: [],
     requirementIds: [],
   });
   session.report = {
     digest: DIGEST,
     generatedAt: "2026-10-31T12:00:00.000Z",
-    scope: { projectKey: "REP", jql: "" },
+    scope: {
+      projectKey: "REP",
+      jql: "",
+      estimateUnit: "seconds",
+      asOf: "2026-10-31",
+      timeZone: "UTC",
+    },
     completeness: { complete: true, issuesRead: 1, issuesTotal: 1, pageCount: 1 },
     hierarchy: { discovery: "complete", fieldCount: 1 },
     progress: {
@@ -172,7 +179,8 @@ describe("Jira report activity", () => {
     recordJiraReportActivity(logs, "correlation-2", {
       phase: "read",
       status: "incomplete",
-      reason: "scope-changed",
+      reason: "read-failed",
+      failure: "permission",
       scopeKind: "project-jql",
       continued: true,
       issuesRead: 250,
@@ -188,9 +196,10 @@ describe("Jira report activity", () => {
     expect(expectActivityLogProof("atlassian.jira-report.line", line)).toMatchObject({
       phase: "read",
       status: "incomplete",
-      reason: "scope-changed",
+      reason: "read-failed",
+      failure: "permission",
       level: "warn",
-      errorKind: "conflict",
+      errorKind: "read-failed",
       issuesRead: 250,
       ruleIds: ["required-field-empty", "template.bug.reproduction"],
     });

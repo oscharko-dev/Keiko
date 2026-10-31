@@ -149,6 +149,7 @@ function connection(
   return {
     baseUrl: current.credential.baseUrl,
     deployment: current.credential.deployment,
+    identity: `${current.credential.authRef}:${String(current.credential.generation)}`,
     http: credentials.httpBodyPortFactory(current.credential, context.correlationId, {
       beforeDispatch: () => context.beforeEffect(),
     }),

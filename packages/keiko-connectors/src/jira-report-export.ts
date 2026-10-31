@@ -99,6 +99,17 @@ function requirementRows(report: JiraReport): readonly string[] {
     ),
   ];
 }
+// Spreadsheet programs read a UTF-8 CSV as text in their own code page without this mark.
+const BYTE_ORDER_MARK = "\uFEFF";
+/** The unit of every estimate and the date overdue was judged against, stated beside the figures. */
+function unitsText(report: JiraReport): string {
+  const { estimateUnit, estimateFieldId, asOf, timeZone } = report.scope;
+  const unit =
+    estimateUnit === "seconds"
+      ? "estimateUnit=seconds"
+      : `estimateUnit=custom-field:${estimateFieldId ?? ""}`;
+  return `${unit};asOf=${asOf} ${timeZone}`;
+}
 function csvOf(report: JiraReport): string {
   const scope = report.scope.projectKey ?? report.scope.jql;
   const summaryRow = csvRow([
@@ -120,9 +131,9 @@ function csvOf(report: JiraReport): string {
     undefined,
     report.completeness.issuesRead,
     report.completeness.issuesTotal,
-    undefined,
+    unitsText(report),
   ]);
-  return `${[
+  return `${BYTE_ORDER_MARK}${[
     csvRow(JIRA_REPORT_CSV_COLUMNS),
     summaryRow,
     ...report.rows.map(issueRow),
@@ -130,10 +141,14 @@ function csvOf(report: JiraReport): string {
   ].join("\r\n")}\r\n`;
 }
 
+// Jira text is untrusted: every character Markdown or inline HTML would act on is escaped, and
+// line breaks are collapsed so a value cannot start a new block (heading, list, table row).
+const MARKDOWN_SPECIAL = /[\\`*_{}[\]()#+!<>|&~]/gu;
+function markdownText(value: string | number): string {
+  return String(value).replaceAll(/\s+/gu, " ").trim().replaceAll(MARKDOWN_SPECIAL, "\\$&");
+}
 function cell(value: string | number): string {
-  return String(value)
-    .replaceAll("|", String.raw`\|`)
-    .replaceAll(/[\r\n]+/gu, " ");
+  return markdownText(value);
 }
 function table(header: readonly string[], rows: readonly (readonly (string | number)[])[]): string {
   if (rows.length === 0) return "_None._\n";
@@ -159,11 +174,15 @@ const PROGRESS_HEADER = ["", "Issues", "To do", "In progress", "Done", "No categ
 function progressSection(report: JiraReport): string {
   const { project, byType, unassigned, overdue } = report.progress;
   const { estimate } = project;
+  const unit =
+    report.scope.estimateUnit === "seconds"
+      ? "seconds of original time estimate"
+      : `the unit of field ${report.scope.estimateFieldId ?? ""}`;
   return [
     "## Progress\n",
     table(PROGRESS_HEADER, [progressRow("Project", project)]),
-    `Estimate: ${String(estimate.total)} total, ${String(estimate.done)} done, ${String(estimate.remaining)} remaining; ${String(estimate.unestimated)} issues without an estimate.\n`,
-    `Open issues without an assignee: ${String(unassigned)}. Open issues past their due date: ${String(overdue)}.\n`,
+    `Estimate (${unit}): ${String(estimate.total)} total, ${String(estimate.done)} done, ${String(estimate.remaining)} remaining; ${String(estimate.unestimated)} issues without an estimate.\n`,
+    `Open issues without an assignee: ${String(unassigned)}. Open issues past their due date on ${report.scope.asOf} (${report.scope.timeZone}): ${String(overdue)}.\n`,
     "### By issue type and status\n",
     table(
       ["Type", "Status", "Category", "Issues"],
@@ -254,9 +273,8 @@ function coverageSection(report: JiraReport): string {
 }
 function scopeText(report: JiraReport): string {
   const project = report.scope.projectKey === undefined ? "" : `project ${report.scope.projectKey}`;
-  const jql =
-    report.scope.jql.length > 0 ? ` JQL \`${report.scope.jql.replaceAll("`", "'")}\`` : "";
-  return `${project}${jql}`;
+  const jql = report.scope.jql.length > 0 ? ` JQL: ${markdownText(report.scope.jql)}` : "";
+  return `${markdownText(project)}${jql}`;
 }
 function markdownOf(report: JiraReport): string {
   const { completeness } = report;
@@ -312,7 +330,7 @@ export function jiraReportCommentText(report: JiraReport): string {
     `Keiko Jira report ${report.scope.projectKey ?? ""} (${state}), digest ${report.digest}`,
     `Issues read: ${String(completeness.issuesRead)}${total}`,
     `Progress: ${String(project.total)} issues, ${String(project.new)} to do, ${String(project.indeterminate)} in progress, ${String(project.done)} done (${String(project.donePercent)}%), ${String(project.noCategory)} without category`,
-    `Estimate: ${String(project.estimate.total)} total, ${String(project.estimate.done)} done, ${String(project.estimate.remaining)} remaining`,
+    `Estimate (${report.scope.estimateUnit === "seconds" ? "seconds" : `unit of ${report.scope.estimateFieldId ?? "field"}`}): ${String(project.estimate.total)} total, ${String(project.estimate.done)} done, ${String(project.estimate.remaining)} remaining`,
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,
     `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesChecked)} issues deviate (${String(compliance.deviationCount)} deviations)`,
     ...compliance.byRule.map((item) => `Rule ${item.ruleId}: ${String(item.count)} issues`),

@@ -2,6 +2,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { JiraReportActivity } from "@oscharko-dev/keiko-connectors";
 import {
   type JiraReportExportFormat,
+  type JiraReportFailureReason,
   type JiraReportIncompleteReason,
   type JiraReportStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -17,6 +18,7 @@ type JiraReportRefusalKind =
   | "unsupported-deployment"
   | "report-not-found"
   | "report-busy"
+  | "connection-changed"
   | "invalid-format"
   | "export-unavailable";
 
@@ -52,6 +54,22 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
         "template-unreadable",
       ],
     },
+    failure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "invalid-jql",
+        "auth",
+        "permission",
+        "not-found",
+        "rate-limited",
+        "timeout",
+        "unavailable",
+        "malformed-payload",
+        "bounds-exceeded",
+      ],
+    },
     refusal: {
       type: "string",
       dataClass: "closed-enum",
@@ -61,6 +79,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
         "unsupported-deployment",
         "report-not-found",
         "report-busy",
+        "connection-changed",
         "invalid-format",
         "export-unavailable",
       ],
@@ -119,6 +138,7 @@ const REFUSAL_KIND: Readonly<Record<JiraReportRefusalKind, ActivityLogErrorKind>
   "unsupported-deployment": "unavailable",
   "report-not-found": "invalid-request",
   "report-busy": "conflict",
+  "connection-changed": "conflict",
   "invalid-format": "invalid-request",
   "export-unavailable": "unavailable",
 };
@@ -142,6 +162,7 @@ interface JiraReportLine {
   readonly durationMs: number;
   readonly status?: JiraReportStatus;
   readonly reason?: JiraReportIncompleteReason;
+  readonly failure?: JiraReportFailureReason;
   readonly refusal?: JiraReportRefusalKind;
   readonly format?: JiraReportExportFormat;
   readonly issuesRead?: number;
@@ -172,6 +193,7 @@ function lineOf(input: JiraReportLogInput): JiraReportLine {
     durationMs: input.durationMs,
     ...(input.status === undefined ? {} : { status: input.status }),
     ...(input.reason === undefined ? {} : { reason: input.reason }),
+    ...(input.failure === undefined ? {} : { failure: input.failure }),
     ...(input.refusal === undefined ? {} : { refusal: input.refusal }),
     issuesRead: input.issuesRead,
     ...(input.issuesTotal === undefined ? {} : { issuesTotal: input.issuesTotal }),

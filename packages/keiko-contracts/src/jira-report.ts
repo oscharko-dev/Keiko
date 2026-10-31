@@ -25,6 +25,20 @@ export const JIRA_REPORT_INCOMPLETE_REASONS = [
 ] as const;
 export type JiraReportIncompleteReason = (typeof JIRA_REPORT_INCOMPLETE_REASONS)[number];
 
+/** Why Jira could not be read further; closed words only, never a Jira message. */
+export const JIRA_REPORT_FAILURE_REASONS = [
+  "invalid-jql",
+  "auth",
+  "permission",
+  "not-found",
+  "rate-limited",
+  "timeout",
+  "unavailable",
+  "malformed-payload",
+  "bounds-exceeded",
+] as const;
+export type JiraReportFailureReason = (typeof JIRA_REPORT_FAILURE_REASONS)[number];
+
 /** Pageable lists of a completed report. `summary` is the bounded default projection. */
 export const JIRA_REPORT_SECTIONS = [
   "summary",
@@ -51,6 +65,11 @@ export const JIRA_REPORT_REQUIREMENT_ID_MAX = 1000;
 export const JIRA_REPORT_REQUIREMENT_ID_CHARS_MAX = 64;
 /** Time spent reading Jira in one tool call; the report continues in the next call. */
 export const JIRA_REPORT_READ_SLICE_MS = 15_000;
+/** The unit of every estimate figure: seconds of original time estimate, or a named field's own. */
+export const JIRA_REPORT_ESTIMATE_UNITS = ["seconds", "custom-field"] as const;
+export type JiraReportEstimateUnit = (typeof JIRA_REPORT_ESTIMATE_UNITS)[number];
+/** Entries of a covering-issue or type list in a bounded result; the export carries all. */
+export const JIRA_REPORT_RESULT_LIST_MAX = 25;
 
 /** Body of the browser download; the server returns the exact file text it produced. */
 export interface JiraReportExportResponse {

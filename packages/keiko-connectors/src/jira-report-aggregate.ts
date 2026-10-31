@@ -1,5 +1,8 @@
-import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { createHash } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { compareCodePoints } from "./jira-report-order.js";
+
+export { compareCodePoints };
 import type {
   JiraReport,
   JiraReportCompleteness,
@@ -39,7 +42,7 @@ export function compareJiraKeys(left: string, right: string): number {
   const [rightProject, rightNumber] = split(right);
   return leftProject === rightProject
     ? leftNumber - rightNumber
-    : leftProject.localeCompare(rightProject, "en");
+    : compareCodePoints(leftProject, rightProject);
 }
 
 interface Graph {
@@ -187,7 +190,7 @@ function byTypeOf(issues: readonly JiraReportIssue[]): readonly JiraReportTypePr
     types.set(issue.typeName, entry);
   }
   return [...types.entries()]
-    .sort(([left], [right]) => left.localeCompare(right, "en"))
+    .sort(([left], [right]) => compareCodePoints(left, right))
     .map(([typeName, entry]) => ({ typeName, ...entry }));
 }
 
@@ -210,9 +213,9 @@ function byStatusOf(issues: readonly JiraReportIssue[]): readonly JiraReportStat
   }
   return [...counts.values()].sort(
     (left, right) =>
-      left.typeName.localeCompare(right.typeName, "en") ||
-      left.statusName.localeCompare(right.statusName, "en") ||
-      left.category.localeCompare(right.category, "en"),
+      compareCodePoints(left.typeName, right.typeName) ||
+      compareCodePoints(left.statusName, right.statusName) ||
+      compareCodePoints(left.category, right.category),
   );
 }
 function membersOf(graph: Graph, root: string): readonly JiraReportIssue[] {
@@ -257,7 +260,7 @@ function complianceOf(
         ...new Set(
           issue.deviations.flatMap((item) => (item.fieldId === undefined ? [] : [item.fieldId])),
         ),
-      ].sort(compareStrings),
+      ].sort(compareCodePoints),
     });
   }
   return {
@@ -267,7 +270,7 @@ function complianceOf(
     issuesWithDeviations: deviations.length,
     deviationCount,
     byRule: [...byRule.entries()]
-      .sort(([left], [right]) => left.localeCompare(right, "en"))
+      .sort(([left], [right]) => compareCodePoints(left, right))
       .map(([ruleId, count]) => ({ ruleId, count })),
     deviations,
   };
@@ -303,11 +306,14 @@ function requirementsOf(
   declared: readonly string[],
 ): JiraReport["coverage"]["requirements"] {
   if (declared.length === 0) return undefined;
-  const ids = [...new Set(declared)].sort((left, right) => left.localeCompare(right, "en"));
+  const ids = [...new Set(declared)].sort((left, right) => compareCodePoints(left, right));
   const coverers = new Map<string, string[]>();
   for (const issue of issues)
-    for (const id of issue.requirementIds)
-      coverers.set(id, [...(coverers.get(id) ?? []), issue.key]);
+    for (const id of issue.requirementIds) {
+      const keys = coverers.get(id) ?? [];
+      keys.push(issue.key);
+      coverers.set(id, keys);
+    }
   const items: JiraReportRequirementCoverage[] = [];
   const uncovered: string[] = [];
   for (const id of ids) {
@@ -317,9 +323,12 @@ function requirementsOf(
       continue;
     }
     const traced = requirementItems(graph, coveredBy);
+    const covering = coveredBy.flatMap((key) => graph.index.get(key) ?? []);
     items.push({
       id,
       coveredBy,
+      coveringTotal: covering.length,
+      coveringDone: covering.filter((issue) => issue.category === "done").length,
       itemCount: traced.length,
       done: traced.filter((issue) => issue.category === "done").length,
       byType: byTypeOf(traced),
@@ -347,11 +356,17 @@ function rowOf(graph: Graph, issue: JiraReportIssue, today: string): JiraReportR
   };
 }
 
+/** Every row is hashed in turn, so two exports with different rows never share a digest. */
+function rowsDigest(rows: readonly JiraReportRow[]): string {
+  const hash = createHash("sha256");
+  for (const row of rows) hash.update(canonicalise(row)).update("\n");
+  return hash.digest("hex");
+}
 function withDigest(report: Omit<JiraReport, "digest">): JiraReport {
   // The digest covers what Jira holds; when it was read and in how many pages is not part of it.
-  const { rows: _rows, generatedAt: _generatedAt, completeness, ...rest } = report;
+  const { rows, generatedAt: _generatedAt, completeness, ...rest } = report;
   const { pageCount: _pageCount, ...stableCompleteness } = completeness;
-  const stable = { ...rest, completeness: stableCompleteness };
+  const stable = { ...rest, completeness: stableCompleteness, rows: rowsDigest(rows) };
   return { digest: sha256Hex(canonicalise(stable)), ...report };
 }
 
@@ -359,7 +374,7 @@ function withDigest(report: Omit<JiraReport, "digest">): JiraReport {
 export function buildJiraReport(input: JiraReportInput): JiraReport {
   const issues = [...input.issues].sort((left, right) => compareJiraKeys(left.key, right.key));
   const graph = buildGraph(issues);
-  const today = input.now.toISOString().slice(0, 10);
+  const today = input.scope.asOf;
   const rows = issues.map((issue) => rowOf(graph, issue, today));
   const open = issues.filter((issue) => issue.category !== "done");
   const epics = [...graph.containers].sort(compareJiraKeys).map((key) => containerOf(graph, key));

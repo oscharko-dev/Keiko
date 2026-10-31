@@ -369,6 +369,26 @@ describe("serving the bound Pod through the relay", () => {
     expect(JSON.stringify(lines)).not.toMatch(/SYN-1|jira\.example|Fix it/u);
   });
 
+  it("binds a report to the Pod and logs it on the run's correlation (jira.report)", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const first = await client.call("jira.report", { jql: "project = SYN" });
+    const id = first.structuredContent?.reportId;
+    expect(typeof id).toBe("string");
+    const second = await client.call("jira.report", { reportId: id });
+    expect(second.structuredContent).toMatchObject({ outcome: "succeeded", reportId: id });
+    const lines = h.records.filter((record) => record.op === "atlassian.jira-report");
+    expect(lines).toHaveLength(2);
+    for (const record of lines) {
+      const line = expectActivityLogProof(
+        "atlassian.jira-report.line",
+        formatActivityLogProofLine(record),
+      );
+      expect(line).toMatchObject({ correlationId: "run-jira-1", phase: "read", scopeKind: "jql" });
+      expect(JSON.stringify(line)).not.toMatch(/SYN|jira\.example/u);
+    }
+  });
+
   it("comments on the ticket after the relay's durable mutation permit, and reports the receipt", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h)));

@@ -18,6 +18,7 @@ const REPORT_INPUT = object({
   projectKey: text(128),
   jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
   estimateFieldId: FIELD_ID,
+  asOf: { type: "string", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", maxLength: 10 },
   parentFieldIds: { type: "array", maxItems: 4, items: FIELD_ID },
   requirementIds: {
     type: "array",
@@ -39,9 +40,10 @@ const DESCRIPTION =
   "Keiko reads every matching issue server-side and computes all numbers itself: status-category counts and estimates per project and per epic, " +
   "compliance deviations per issue (fields the instance requires on create, plus the active template checker), epics without members, issues without an epic or parent, " +
   "and optional coverage of declared requirementIds (a requirement is covered by an issue that names its identifier in summary, labels or description). " +
+  "Estimates are seconds of original time estimate unless estimateFieldId names a numeric custom field, whose own unit then applies; the report states the unit. Overdue is judged on asOf (a UTC date, default today) and the report states it. " +
   "Report the returned figures exactly; never recompute or estimate them. While status is reading, call again with only the reportId until status is complete or incomplete; the progress object shows the issues read so far. " +
   "A complete report returns a bounded summary; page the full lists with reportId plus a section (epics, deviations, orphans, uncovered, requirements) and nextStartAt; section comment returns the exact text to post with jira.comment. " +
-  "The person can export the finished report as Markdown or CSV from the tool card. An incomplete report says why and describes only the issues read.";
+  "The person can export the finished report as Markdown or CSV from the tool card. An incomplete report says why (reason and failure) and describes only the issues read; a changed scope, a credential or instance change and unreadable required metadata never produce a complete report.";
 
 export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
   name: "jira.report",

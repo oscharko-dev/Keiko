@@ -1,4 +1,6 @@
 import type {
+  JiraReportEstimateUnit,
+  JiraReportFailureReason,
   JiraReportIncompleteReason,
   JiraReportStatusCategory,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -128,6 +130,10 @@ export interface JiraReportDeviationRecord {
 export interface JiraReportRequirementCoverage {
   readonly id: string;
   readonly coveredBy: readonly string[];
+  /** The covering issues themselves: a story that covers a requirement alone is one. */
+  readonly coveringTotal: number;
+  readonly coveringDone: number;
+  /** Their descendants and, for a container, its linked issues. */
   readonly itemCount: number;
   readonly done: number;
   readonly byType: readonly JiraReportTypeProgress[];
@@ -138,6 +144,8 @@ export type JiraReportIssueClass = "container" | "member" | "linked" | "orphan";
 export interface JiraReportCompleteness {
   readonly complete: boolean;
   readonly reason?: JiraReportIncompleteReason;
+  /** Why Jira could not be read further, when that is the reason. */
+  readonly failure?: JiraReportFailureReason;
   readonly issuesRead: number;
   readonly issuesTotal: number | undefined;
   readonly pageCount: number;
@@ -147,6 +155,11 @@ export interface JiraReportScope {
   readonly projectKey?: string;
   readonly jql: string;
   readonly estimateFieldId?: string;
+  /** Seconds of original time estimate, or the named field's own unit. */
+  readonly estimateUnit: JiraReportEstimateUnit;
+  /** The date overdue is judged against, in `timeZone`. */
+  readonly asOf: string;
+  readonly timeZone: "UTC";
 }
 
 export interface JiraReport {

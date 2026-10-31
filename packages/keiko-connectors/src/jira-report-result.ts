@@ -3,7 +3,10 @@ import type {
   JiraReportSection,
   JiraReportStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { JIRA_REPORT_EXPORT_FORMATS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_REPORT_EXPORT_FORMATS,
+  JIRA_REPORT_RESULT_LIST_MAX,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   CatalogJsonObject,
   CatalogJsonValue,
@@ -35,6 +38,18 @@ function listed(
 ): CatalogJsonObject {
   return { total: items.length, items: items.slice(0, max) };
 }
+/** A list bounded for a tool result, with the true size beside it; the export carries every entry. */
+function capped<Item extends CatalogJsonValue>(
+  items: readonly Item[],
+): { readonly items: readonly Item[]; readonly total: number } {
+  return { items: items.slice(0, JIRA_REPORT_RESULT_LIST_MAX), total: items.length };
+}
+function typeItems(
+  types: readonly { readonly typeName: string; readonly total: number; readonly done: number }[],
+): CatalogJsonObject {
+  const { items, total } = capped(types.map((type) => ({ ...type })));
+  return { items, total };
+}
 function epicItems(report: JiraReport): readonly CatalogJsonObject[] {
   return report.epics.map((epic) => ({
     key: epic.key,
@@ -45,7 +60,7 @@ function epicItems(report: JiraReport): readonly CatalogJsonObject[] {
     external: epic.external,
     members: progress(epic.members),
     linked: progress(epic.linked),
-    byType: epic.byType.map((type) => ({ ...type })),
+    byType: typeItems(epic.byType),
   }));
 }
 function statusItems(report: JiraReport): readonly CatalogJsonObject[] {
@@ -64,8 +79,8 @@ function orphanItems(report: JiraReport): readonly CatalogJsonObject[] {
 function deviationItems(report: JiraReport): readonly CatalogJsonObject[] {
   return report.compliance.deviations.map((item) => ({
     key: item.key,
-    ruleIds: [...item.ruleIds],
-    fieldIds: [...item.fieldIds],
+    ruleIds: capped(item.ruleIds).items,
+    fieldIds: capped(item.fieldIds).items,
   }));
 }
 function requirementItems(report: JiraReport): readonly CatalogJsonObject[] {
@@ -75,10 +90,13 @@ function requirementItems(report: JiraReport): readonly CatalogJsonObject[] {
     ...requirements.items.map((item) => ({
       id: item.id,
       covered: true,
-      coveredBy: [...item.coveredBy],
+      coveredBy: capped(item.coveredBy).items,
+      coveredByTotal: item.coveredBy.length,
+      coveringTotal: item.coveringTotal,
+      coveringDone: item.coveringDone,
       itemCount: item.itemCount,
       done: item.done,
-      byType: item.byType.map((type) => ({ ...type })),
+      byType: typeItems(item.byType),
     })),
     ...requirements.uncovered.map((id) => ({ id, covered: false })),
   ];
@@ -104,6 +122,7 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
     completeness: {
       complete: completeness.complete,
       ...(completeness.reason === undefined ? {} : { reason: completeness.reason }),
+      ...(completeness.failure === undefined ? {} : { failure: completeness.failure }),
       issuesRead: completeness.issuesRead,
       ...(completeness.issuesTotal === undefined ? {} : { issuesTotal: completeness.issuesTotal }),
       pageCount: completeness.pageCount,

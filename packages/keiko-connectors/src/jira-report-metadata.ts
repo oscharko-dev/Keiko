@@ -1,5 +1,9 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  isSafeAtlassianIdentifier,
+  JIRA_FIELD_ID_PATTERN,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-contracts";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import type { JiraReportHttp } from "./jira-report-http.js";
 import type { JiraReportFieldCatalogEntry } from "./jira-report-types.js";
@@ -8,17 +12,20 @@ import type { JiraReportFieldCatalogEntry } from "./jira-report-types.js";
 const EPIC_LINK_TYPE = "com.pyxis.greenhopper.jira:gh-epic-link";
 const EPIC_NAME_TYPE = "com.pyxis.greenhopper.jira:gh-epic-label";
 const PARENT_LINK_TYPE = "com.atlassian.jpo:jpo-custom-field-parent";
-const FIELD_ID = /^(?:[a-z][a-z0-9]*|customfield_\d{1,16})$/u;
+const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
 /** Always present and never an author's omission, so never a required-field deviation. */
 const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["project", "issuetype", "reporter"]);
 const METADATA_PAGE_SIZE = 50;
 
 const CATALOG_MAX = 5000;
 
+export type JiraReportFailure = AtlassianConnectorWriteFailureReason;
+
 export interface JiraReportHierarchyFields {
   readonly discovery: "complete" | "unavailable";
   /** Every field the instance lists, for template references by name; absent when unread. */
   readonly catalog: readonly JiraReportFieldCatalogEntry[] | undefined;
+  readonly reason?: JiraReportFailure;
   readonly parentFieldIds: readonly string[];
   readonly epicNameFieldId: string | undefined;
 }
@@ -47,6 +54,7 @@ export async function discoverHierarchyFields(
   if (!outcome.ok)
     return {
       discovery: "unavailable",
+      reason: outcome.reason,
       catalog: undefined,
       parentFieldIds: [],
       epicNameFieldId: undefined,
@@ -70,6 +78,7 @@ function requirementState(read: number, wanted: number): JiraReportRequiredField
 
 export interface JiraReportRequiredFields {
   readonly state: "applied" | "partial" | "unavailable";
+  readonly reason?: JiraReportFailure;
   readonly byType: ReadonlyMap<string, readonly string[]>;
 }
 
@@ -87,39 +96,42 @@ function requiredIds(values: readonly unknown[]): readonly string[] {
   }
   return ids;
 }
-/** Every page of one createmeta collection; false when a page cannot be read. */
+/** Every page of one createmeta collection; the failure reason when a page cannot be read. */
 async function collectPages(
   http: JiraReportHttp,
   path: string,
   startAt: number,
   into: unknown[],
-): Promise<boolean> {
+): Promise<JiraReportFailure | undefined> {
   const outcome = await http.getRecord(
     `${path}?startAt=${String(startAt)}&maxResults=${String(METADATA_PAGE_SIZE)}`,
   );
-  const values = outcome.ok ? asArray(outcome.body.values) : undefined;
-  if (!outcome.ok || values === undefined) return false;
+  if (!outcome.ok) return outcome.reason;
+  const values = asArray(outcome.body.values);
+  if (values === undefined) return "malformed-payload";
   into.push(...values);
   const total = outcome.body.total;
   const last =
     outcome.body.isLast === true ||
     values.length === 0 ||
     (typeof total === "number" && startAt + values.length >= total);
-  return last ? true : collectPages(http, path, startAt + values.length, into);
+  return last ? undefined : collectPages(http, path, startAt + values.length, into);
 }
+type TypeRequirements =
+  { readonly fields: readonly string[] } | { readonly reason: JiraReportFailure };
 async function typeRequirements(
   http: JiraReportHttp,
   projectKey: string,
   typeId: string,
-): Promise<readonly string[] | undefined> {
+): Promise<TypeRequirements> {
   const values: unknown[] = [];
-  const read = await collectPages(
+  const reason = await collectPages(
     http,
     `issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${typeId}`,
     0,
     values,
   );
-  return read ? requiredIds(values) : undefined;
+  return reason === undefined ? { fields: requiredIds(values) } : { reason };
 }
 
 /** Fields the instance requires on create, per issue type of a project (current metadata). */
@@ -128,28 +140,31 @@ export async function loadRequiredFields(
   projectKey: string,
 ): Promise<JiraReportRequiredFields> {
   const types: unknown[] = [];
-  if (
-    !isSafeAtlassianIdentifier(projectKey) ||
-    !(await collectPages(
-      http,
-      `issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`,
-      0,
-      types,
-    ))
-  )
-    return { state: "unavailable", byType: new Map() };
+  const typesReason = isSafeAtlassianIdentifier(projectKey)
+    ? await collectPages(
+        http,
+        `issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`,
+        0,
+        types,
+      )
+    : "field-validation";
+  if (typesReason !== undefined)
+    return { state: "unavailable", reason: typesReason, byType: new Map() };
   const ids = types.flatMap((type) => {
     const id = asRecord(type)?.id;
     return typeof id === "string" && /^\d{1,32}$/u.test(id) ? [id] : [];
   });
   const loaded = await Promise.all(ids.map((id) => typeRequirements(http, projectKey, id)));
   const byType = new Map<string, readonly string[]>();
-  loaded.forEach((fields, index) => {
+  let reason: JiraReportFailure | undefined;
+  loaded.forEach((item, index) => {
     const id = ids[index];
-    if (id !== undefined && fields !== undefined) byType.set(id, fields);
+    if ("fields" in item && id !== undefined) byType.set(id, item.fields);
+    else if ("reason" in item) reason = item.reason;
   });
   return {
     state: requirementState(byType.size, ids.length),
+    ...(reason === undefined ? {} : { reason }),
     byType,
   };
 }

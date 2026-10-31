@@ -6,6 +6,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
+import { compareCodePoints } from "./jira-report-order.js";
 import type {
   JiraReportComplianceChecker,
   JiraReportDeviation,
@@ -120,8 +121,8 @@ function dedupeDeviations(items: readonly JiraReportDeviation[]): readonly JiraR
   }
   return result.sort(
     (left, right) =>
-      left.ruleId.localeCompare(right.ruleId, "en") ||
-      (left.fieldId ?? "").localeCompare(right.fieldId ?? "", "en"),
+      compareCodePoints(left.ruleId, right.ruleId) ||
+      compareCodePoints(left.fieldId ?? "", right.fieldId ?? ""),
   );
 }
 /** Drops a trailing run of `.`, `_` and `-` without a backtracking expression. */

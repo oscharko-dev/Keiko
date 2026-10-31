@@ -137,7 +137,8 @@ function plainFields(issue: FixtureIssue): Record<string, unknown> {
   };
 }
 function typedFields(issue: FixtureIssue): Record<string, unknown> {
-  const [statusId, statusName, categoryName] = CATEGORY_STATUS[issue.category];
+  const [statusId, , categoryName] = CATEGORY_STATUS[issue.category];
+  const statusName = issue.status;
   return {
     status: {
       id: statusId,
@@ -149,6 +150,7 @@ function typedFields(issue: FixtureIssue): Record<string, unknown> {
     [EPIC_NAME]: issue.type === "Epic" ? issue.summary : null,
     [ACCEPTANCE]: issue.type === "Story" ? issue.acceptance : "n/a",
     [POINTS]: issue.points ?? null,
+    fixVersions: [],
   };
 }
 function rawIssue(issue: FixtureIssue, requested: ReadonlySet<string>): unknown {
@@ -178,7 +180,13 @@ export interface FixtureOptions {
   /** Rewrites the `total` of a search response, to emulate a scope that changes while paging. */
   readonly totalFor?: (call: number, total: number) => number;
   /** Selects the issues of a JQL string; the default selects the whole project. */
-  readonly select?: (jql: string) => readonly FixtureIssue[];
+  readonly select?: (jql: string, searchCall: number) => readonly FixtureIssue[];
+  /** HTTP statuses the `field` endpoint answers with, one per request; 200 once exhausted. */
+  readonly fieldStatuses?: readonly number[];
+  /** The HTTP status a failing search answers with (default 503). */
+  readonly failSearchStatus?: number;
+  /** Also require `fixVersions` (a mixed-case system field) on create for stories. */
+  readonly requireFixVersions?: boolean;
   readonly failSearchAt?: number;
   readonly omitFieldList?: boolean;
   readonly noRequiredMetadata?: boolean;
@@ -199,13 +207,16 @@ const ISSUE_TYPES = [
   { id: "12", name: "Bug", subtask: false },
   { id: "13", name: "Sub-task", subtask: true },
 ];
-function createMetaFields(typeId: string): readonly unknown[] {
+function createMetaFields(typeId: string, mixedCase: boolean): readonly unknown[] {
   return [
     { fieldId: "summary", required: true, hasDefaultValue: false },
     { fieldId: "issuetype", required: true, hasDefaultValue: false },
     { fieldId: "reporter", required: true, hasDefaultValue: true },
     { fieldId: "labels", required: false, hasDefaultValue: false },
     ...(typeId === "11" ? [{ fieldId: ACCEPTANCE, required: true, hasDefaultValue: false }] : []),
+    ...(typeId === "11" && mixedCase
+      ? [{ fieldId: "fixVersions", required: true, hasDefaultValue: false }]
+      : []),
   ];
 }
 
@@ -235,7 +246,11 @@ function createMeta(path: string, options: FixtureOptions): AtlassianHttpBodyRes
   if (options.noRequiredMetadata === true) return failure(404);
   if (path.startsWith("issue/createmeta/REP/issuetypes/")) {
     const typeId = path.slice(path.lastIndexOf("/") + 1);
-    return response({ values: createMetaFields(typeId), isLast: true, total: 5 });
+    return response({
+      values: createMetaFields(typeId, options.requireFixVersions === true),
+      isLast: true,
+      total: 5,
+    });
   }
   return response({ values: ISSUE_TYPES, isLast: true, total: 4 });
 }
@@ -244,6 +259,7 @@ export function fixtureJira(options: FixtureOptions): FixtureJira {
   const searches: FixtureJira["searches"] = [];
   const requests: string[] = [];
   let searchCall = 0;
+  const fieldStatuses = [...(options.fieldStatuses ?? [])];
   const select = options.select ?? ((): readonly FixtureIssue[] => options.issues);
   function search(url: URL): AtlassianHttpBodyResult {
     searchCall += 1;
@@ -253,9 +269,9 @@ export function fixtureJira(options: FixtureOptions): FixtureJira {
     const maxResults = Math.min(asked, options.pageClamp ?? 1000);
     searches.push({ startAt, maxResults: asked, jql });
     if (options.failSearchAt !== undefined && searchCall >= options.failSearchAt)
-      return failure(503);
+      return failure(options.failSearchStatus ?? 503);
     const requested = new Set((url.searchParams.get("fields") ?? "").split(","));
-    const all = select(jql);
+    const all = select(jql, searchCall);
     const page = all
       .slice(startAt, startAt + maxResults)
       .map((issue) => rawIssue(issue, requested));
@@ -268,8 +284,11 @@ export function fixtureJira(options: FixtureOptions): FixtureJira {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^.*\/rest\/api\/2\//u, "");
     requests.push(`${request.method} ${path}${url.search}`);
-    if (path === "field")
+    if (path === "field") {
+      const status = fieldStatuses.shift();
+      if (status !== undefined && status !== 200) return Promise.resolve(failure(status));
       return Promise.resolve(options.omitFieldList === true ? failure(500) : fieldList());
+    }
     if (path.startsWith("issue/createmeta/REP/issuetypes"))
       return Promise.resolve(createMeta(path, options));
     return Promise.resolve(path === "search" ? search(url) : NOT_FOUND);

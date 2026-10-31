@@ -1,82 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  CONNECTION,
+  CONTEXT,
+  NOW,
+  harness,
+  idOf,
+  record,
+  reportOf,
+} from "./jira-report.harness.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type {
-  ManagedMcpInvocationContext,
-  ManagedMcpToolResult,
-} from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
 import {
   ACCEPTANCE,
   fixtureJira,
   syntheticProject,
   type FixtureIssue,
-  type FixtureJira,
-  type FixtureOptions,
 } from "./jira-report.fixture.js";
 import { parseJiraReportArgs } from "./jira-report-args.js";
 import { reportJql, stripJqlOrdering } from "./jira-report-session.js";
-import { createJiraReportStore, type JiraReportStore } from "./jira-report-store.js";
-import {
-  executeJiraReportTool,
-  type JiraReportActivity,
-  type JiraReportToolDeps,
-} from "./jira-report-tool.js";
+import { createJiraReportStore } from "./jira-report-store.js";
+import { executeJiraReportTool } from "./jira-report-tool.js";
 import type { JiraReport, JiraReportComplianceChecker } from "./jira-report-types.js";
-
-const NOW = Date.parse("2026-10-31T12:00:00Z");
-const CONNECTION = (fixture: FixtureJira): Parameters<typeof executeJiraReportTool>[2] => ({
-  deployment: "data-center",
-  baseUrl: "https://jira.example.invalid/context",
-  http: fixture.http,
-});
-const CONTEXT: ManagedMcpInvocationContext = {
-  invocationId: "invocation",
-  correlationId: "correlation",
-  signal: new AbortController().signal,
-  beforeEffect: () => true,
-};
-
-interface Harness {
-  readonly fixture: FixtureJira;
-  readonly store: JiraReportStore;
-  readonly activity: JiraReportActivity[];
-  readonly run: (args: CatalogJsonObject) => Promise<ManagedMcpToolResult>;
-  readonly session: (id: string) => JiraReport | undefined;
-}
-function harness(
-  options: FixtureOptions,
-  extra: Partial<JiraReportToolDeps<ManagedMcpInvocationContext>> = {},
-): Harness {
-  const fixture = fixtureJira(options);
-  const store = createJiraReportStore({ now: () => (extra.now ?? ((): number => NOW))() });
-  const activity: JiraReportActivity[] = [];
-  const deps: JiraReportToolDeps<ManagedMcpInvocationContext> = {
-    store,
-    owner: () => "chat-1",
-    now: () => NOW,
-    sleep: () => Promise.resolve(),
-    activity: (item) => activity.push(item),
-    ...extra,
-  };
-  return {
-    fixture,
-    store,
-    activity,
-    run: (args) => executeJiraReportTool(args, CONTEXT, CONNECTION(fixture), deps),
-    session: (id) => store.get(id, "chat-1")?.report,
-  };
-}
-function record(value: unknown): Record<string, unknown> {
-  return value as Record<string, unknown>;
-}
-function idOf(result: ManagedMcpToolResult): string {
-  const id = result.data.reportId;
-  if (typeof id !== "string") throw new Error("Missing report id");
-  return id;
-}
-function reportOf(result: ManagedMcpToolResult): Record<string, unknown> {
-  return record(result.data.report);
-}
 
 // ─── The independent oracle: plain loops over the seeded specification ───────────────────────────
 function count(issues: readonly FixtureIssue[], category: string): number {
@@ -340,13 +284,14 @@ describe("incomplete reads are never reported as complete", () => {
     expect(record(reportOf(result).completeness)).toMatchObject({
       complete: false,
       reason: "scope-changed",
-      issuesRead: 250,
-      issuesTotal: 253,
+      issuesRead: 100,
+      issuesTotal: 250,
     });
   });
 
   it("marks a read that keeps failing and keeps the issues read so far", async () => {
     const h = harness({ issues: syntheticProject(500), pageClamp: 100, failSearchAt: 3 });
+    // Pages overlap by the last issue read, so the second page adds 99 to the first 100.
     let result = await h.run({ projectKey: "REP" });
     const id = idOf(result);
     for (let step = 0; step < 5 && result.data.status === "reading"; step += 1) {
@@ -357,7 +302,8 @@ describe("incomplete reads are never reported as complete", () => {
     expect(record(reportOf(result).completeness)).toMatchObject({
       complete: false,
       reason: "read-failed",
-      issuesRead: 200,
+      issuesRead: 199,
+      failure: "unavailable",
     });
   });
 
@@ -370,7 +316,10 @@ describe("incomplete reads are never reported as complete", () => {
 
   it("treats an unreadable hierarchy field list as unavailable, not as no hierarchy", async () => {
     const h = harness({ issues: syntheticProject(60), omitFieldList: true });
-    const result = await h.run({ projectKey: "REP" });
+    const first = await h.run({ projectKey: "REP" });
+    expect(first.data.status).toBe("reading");
+    const result = await h.run({ reportId: idOf(first) });
+    expect(result.data.status).toBe("incomplete");
     expect(record(reportOf(result).hierarchy).discovery).toBe("unavailable");
     const named = await harness({ issues: syntheticProject(60), omitFieldList: true }).run({
       projectKey: "REP",
@@ -399,7 +348,9 @@ describe("scope and compliance sources", () => {
 
   it("marks required-field rules unavailable when createmeta cannot be read", async () => {
     const h = harness({ issues: syntheticProject(50), noRequiredMetadata: true });
-    const result = await h.run({ projectKey: "REP" });
+    const first = await h.run({ projectKey: "REP" });
+    const result = await h.run({ reportId: idOf(first) });
+    expect(result.data.status).toBe("incomplete");
     expect(record(reportOf(result).compliance).requiredFieldRules).toBe("unavailable");
   });
 
@@ -574,7 +525,8 @@ describe("export", () => {
       reportDigest: report.digest,
     });
     expect(file.byteCount).toBe(Buffer.byteLength(file.content));
-    const [header, summary, ...rest] = parseCsv(file.content);
+    expect(file.content.startsWith("\uFEFF")).toBe(true);
+    const [header, summary, ...rest] = parseCsv(file.content.slice(1));
     const column = (name: string): number => header?.indexOf(name) ?? -1;
     expect(summary?.[column("recordKind")]).toBe("report");
     expect(summary?.[column("key")]).toBe(report.digest);

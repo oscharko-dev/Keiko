@@ -10,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { jqlClause } from "./jira-report-jql.js";
 import type { JiraReportRequest } from "./jira-report-session.js";
 
 export const JIRA_REPORT_SECTION_PAGE_DEFAULT = 25;
@@ -36,6 +37,7 @@ const SCOPE_KEYS: ReadonlySet<string> = new Set([
   "projectKey",
   "jql",
   "estimateFieldId",
+  "asOf",
   "parentFieldIds",
   "requirementIds",
 ]);
@@ -67,23 +69,35 @@ function optionalProject(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;
   return isSafeAtlassianIdentifier(value) ? value : null;
 }
+/** The caller's clause without ordering; null when unbalanced, undefined when none was given. */
 function optionalClause(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;
   const valid =
     typeof value === "string" && value.trim().length > 0 && value.length <= ATLASSIAN_JQL_MAX_CHARS;
-  return valid ? value : null;
+  if (!valid) return null;
+  const clause = jqlClause(value);
+  return clause ?? null;
 }
 function scopeOf(args: CatalogJsonObject): ReportScope | undefined {
   const project = optionalProject(args.projectKey);
   const clause = optionalClause(args.jql);
-  if (project === null || clause === null || (project === undefined && clause === undefined))
-    return undefined;
-  return { projectKey: project, jql: clause };
+  if (project === null || clause === null) return undefined;
+  // A clause that was only ordering adds no scope; without a project nothing would be left.
+  const effective = clause === undefined || clause.length === 0 ? undefined : clause;
+  if (project === undefined && effective === undefined) return undefined;
+  return { projectKey: project, jql: effective };
+}
+function optionalDate(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return null;
+  const time = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(time) && new Date(time).toISOString().startsWith(value) ? value : null;
 }
 function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
   if (!Object.keys(args).every((key) => SCOPE_KEYS.has(key))) return undefined;
   const scope = scopeOf(args);
   const estimate = optionalField(args.estimateFieldId);
+  const asOf = optionalDate(args.asOf);
   const parents = stringList(args.parentFieldIds, JIRA_REPORT_PARENT_FIELDS_MAX, FIELD_ID);
   const requirements = stringList(
     args.requirementIds,
@@ -93,6 +107,7 @@ function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
   if (
     scope === undefined ||
     estimate === null ||
+    asOf === null ||
     parents === undefined ||
     requirements === undefined
   )
@@ -102,6 +117,7 @@ function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
     request: {
       ...scope,
       estimateFieldId: estimate,
+      asOf,
       parentFieldIds: parents,
       requirementIds: requirements,
     },

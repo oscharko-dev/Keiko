@@ -1647,6 +1647,12 @@
               "required": false
             },
             {
+              "name": "failure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "format",
               "type": "string",
               "dataClass": "closed-enum",

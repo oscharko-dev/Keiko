@@ -710,15 +710,36 @@ items traced through the covering issue's descendants and, for a container, its 
 The model supplies scope and options only and narrates the result; the digest of the report
 excludes read timing so the same Jira data always yields the same digest.
 
+Estimates are seconds of original time estimate unless the caller names a numeric field
+(`estimateFieldId`), whose own unit applies; the report, its exports and the tool description state
+the unit. Overdue is judged on an explicit UTC date (`asOf`, default the day of the first call),
+recorded in the report and in the digest, which also covers a hash of every export row. Lists sort
+by Unicode code point, never by locale.
+
 A read is never silently partial. The page size adapts to the 256 KiB transport cap (a truncated
 body halves it; a single issue that still does not fit ends the read as `issue-too-large`); the
 result of a call is `reading` (with `issuesRead`/`issuesTotal` progress and `reportId`, to be
 called again), `complete`, or `incomplete` with a closed reason (`read-failed`, `scope-changed` —
-the total moved or an issue repeated while paging —, `memory-budget`, `issue-too-large`,
+the total moved, an issue repeated, or the page that starts at the last issue read did not begin with it (that start proves nothing was inserted or removed before the cursor) —, `memory-budget`, `issue-too-large`,
 `template-unreadable` — the compliance section was not evaluated). Each call
 reads for at most 15 s because the managed host caps a call at 30 s; there is no issue-count limit.
-Reports live in memory only, bound to the Chat that started them, expire after four idle hours and
-are evicted least recently used beyond 1 GiB retained. The bounded result carries the summary
+Hierarchy discovery and the create-metadata rules are fetched before the first page; when either
+cannot be read the next call asks again and a second failure ends the report as `incomplete`
+(`read-failed`), never as a complete one with silently missing rules. A failure carries a closed
+word (`invalid-jql`, `auth`, `permission`, `not-found`, `rate-limited`, `timeout`, `unavailable`,
+`malformed-payload`, `bounds-exceeded`) beside the reason. A caller clause must have balanced
+parentheses outside quoted strings and, without a `projectKey`, must contain more than ordering, so
+it can neither escape the project scope nor read the whole instance. Reports live in memory only,
+bound to the Chat (or, for a Coding run, the Pod binding) that started them and to the Jira
+instance and credential identity they were started with (a resume against another is refused as
+`connection-changed`). They expire after four idle hours (an export does not renew that), one owner
+keeps at most four and the owner holding the most is trimmed first beyond the shared byte budget, so
+one Chat cannot push out another's reports. One report may hold 192 MiB of derived records, charged
+at a realistic per-issue cost that includes the build peak; beyond it the read ends as
+`memory-budget`. Tool results cap every per-requirement and per-epic list at 25 entries with its
+true total beside it; the exports carry everything. The CSV starts with a byte order mark so a
+spreadsheet reads it as UTF-8; the Markdown escapes every Markdown and HTML metacharacter in Jira
+text and collapses line breaks. The bounded result carries the summary
 (15 entries per list) and `reportId`; the full lists are paged through `section` (`statuses`,
 `epics`, `deviations`, `orphans`, `uncovered`, `requirements`) and `section: "comment"` returns the
 exact numbers-and-keys text for `jira.comment`, so posting the report stays a normal approved write.

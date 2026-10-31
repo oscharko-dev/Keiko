@@ -54,7 +54,7 @@ export function exportJiraReportRoute(ctx: RouteContext, deps: UiHandlerDeps): R
   const chatId = ctx.url.searchParams.get("chatId") ?? "";
   if (format === undefined || !REPORT_ID.test(reportId) || !CHAT_ID.test(chatId))
     return refused(ctx, deps, "invalid-format", startedAt);
-  const report = deps.jiraReportStore?.get(reportId, chatId)?.report;
+  const report = deps.jiraReportStore?.peek(reportId, chatId)?.report;
   if (report === undefined) return refused(ctx, deps, "export-unavailable", startedAt);
   const file = exportJiraReport(report, format);
   recordJiraReportActivity(deps.activityLog, correlationIdOrUnknown(ctx.correlationId), {

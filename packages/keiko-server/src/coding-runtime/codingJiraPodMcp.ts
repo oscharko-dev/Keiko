@@ -1,10 +1,12 @@
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type {
-  AtlassianCredentialMetadata,
-  AtlassianHttpBodyPort,
-  AtlassianHttpBodyRequest,
-  AtlassianHttpRequest,
-  JiraManagedConnection,
+import {
+  createJiraReportStore,
+  type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpRequest,
+  type JiraManagedConnection,
+  type JiraReportStore,
 } from "@oscharko-dev/keiko-connectors";
 import type {
   JiraMutationAttempt,
@@ -27,6 +29,7 @@ import {
 
 import type { AtlassianConnectorCredentialDeps } from "../atlassian/credentialRoutes.js";
 import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
+import { recordJiraReportActivity } from "../atlassian/jiraReportActivity.js";
 import {
   jiraAttemptToolResult,
   jiraLinkCountsOfResult,
@@ -158,6 +161,8 @@ function providerResult(error: unknown): CatalogJsonObject | undefined {
 class CodingJiraPodService implements CodingJiraPods {
   readonly #entries = new Map<string, PodEntry>();
   readonly #disposed = new WeakSet<PodEntry>();
+  /** Reports of Coding runs; each belongs to the Pod binding that started it. */
+  readonly #reports: JiraReportStore = createJiraReportStore();
   #deps: CodingJiraPodDeps | undefined;
   #closed = false;
 
@@ -297,6 +302,13 @@ class CodingJiraPodService implements CodingJiraPods {
           (context) => this.connection(binding, context),
           Object.keys(CODING_JIRA_TOOL_RISKS) as CodingJiraTool[],
           (operation, _args, context, execute) => this.mutate(binding, operation, context, execute),
+          {
+            store: this.#reports,
+            owner: () => this.key(binding),
+            activity: (activity, context) => {
+              recordJiraReportActivity(this.log, context.correlationId, activity);
+            },
+          },
         ),
       ],
       log: this.log ?? { write: (): void => undefined },
@@ -352,6 +364,7 @@ class CodingJiraPodService implements CodingJiraPods {
     return {
       baseUrl: credential.baseUrl,
       deployment: credential.deployment,
+      identity: `${credential.authRef}:${String(credential.generation)}`,
       http: factory(credential, context.correlationId, {
         beforeDispatch: () => this.admit(binding, context),
       }),
