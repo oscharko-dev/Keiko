@@ -4,6 +4,7 @@ import { SEATBELT_DENY_EGRESS_PROFILE } from "./backends.js";
 import {
   longLivedRuntimeEgressPolicyDigest,
   planLongLivedRuntimeSandbox,
+  planWindowsGatewayRuntimeSandbox,
   verifyLongLivedRuntimeSandboxAttestation,
   type LongLivedRuntimeSandboxRequest,
 } from "./runtime-egress.js";
@@ -99,6 +100,26 @@ describe("long-lived runtime egress planning", () => {
       expect(decision).toEqual({ kind: "fail-closed", reason: "policy-unenforceable" });
     },
   );
+
+  it("binds only managed loopback runs to the dedicated Windows WFP planner", () => {
+    const request = loopbackRequest();
+    const plan = planWindowsGatewayRuntimeSandbox(request);
+    expect(plan.kind).toBe("wrapped");
+    if (plan.kind !== "wrapped") throw new Error("expected Windows plan");
+    expect(plan).toMatchObject({
+      command: request.command,
+      args: request.args,
+      attestation: { backend: "windows-wfp", platform: "win32" },
+    });
+    expect(verifyLongLivedRuntimeSandboxAttestation(plan.attestation, request)).toBe(true);
+    expect(
+      verifyLongLivedRuntimeSandboxAttestation(
+        { ...plan.attestation, platform: "darwin" },
+        request,
+      ),
+    ).toBe(false);
+    expect(planWindowsGatewayRuntimeSandbox(enterpriseProxyRequest({})).kind).toBe("fail-closed");
+  });
 
   it("fails closed for a mismatched runtime/model profile", () => {
     const decision = planLongLivedRuntimeSandbox(

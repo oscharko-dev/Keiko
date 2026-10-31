@@ -2,6 +2,7 @@
  * running SCM service. The installed helper subsequently authenticates the actual pipe. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shlobj.h>
 #include <process.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -24,6 +25,18 @@ static BOOL digest_matches(HANDLE image, const wchar_t *pin) {
   keiko_sha256_hex(digest, hex);
   for (size_t i = 0; i < 64; i++) if (pin[i] != (wchar_t)hex[i]) return FALSE;
   return TRUE;
+}
+
+static BOOL protected_image_path(const wchar_t *path) {
+  wchar_t *program_files = NULL;
+  if (FAILED(SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, NULL, &program_files))) return FALSE;
+  size_t prefix = wcslen(program_files);
+  size_t length = wcslen(path);
+  BOOL ok = length > prefix + 5 && path[prefix] == L'\\' &&
+      CompareStringOrdinal(path, (int)prefix, program_files, (int)prefix, TRUE) == CSTR_EQUAL &&
+      _wcsicmp(path + length - 4, L".exe") == 0 && !wcschr(path + 2, L':');
+  CoTaskMemFree(program_files);
+  return ok;
 }
 
 static BOOL running_image(wchar_t *path, DWORD length) {
@@ -54,7 +67,7 @@ int keiko_gateway_launch_installed(const wchar_t *pin) {
   intptr_t child = -1;
   DWORD code = 1;
   const wchar_t *args[] = {L"keiko-runtime-supervisor", L"--gateway-supervised", NULL};
-  if (!path || !running_image(path, 32768) || wcslen(path) < 4 ||
+  if (!path || !running_image(path, 32768) || !protected_image_path(path) ||
       path[1] != L':' || path[2] != L'\\' || GetDriveTypeW((wchar_t[]){path[0],L':',L'\\',0}) != DRIVE_FIXED)
     goto done;
   /* Lock each directory entry against replacement/reparse mutation until CreateProcess

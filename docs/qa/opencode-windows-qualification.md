@@ -10,12 +10,9 @@ native gaps explicitly retained, on 2026-10-26. Windows continues to select `dir
 `productionOpenCodeToolProfile`; this is not native OpenCode parity. No native filesystem policy,
 release approval, runtime package approval, or authority ceiling changes in this increment.
 
-**Overall result: blocked, not qualified.** Even the mapped Workbench cannot currently launch
-through its production Windows gateway boundary. `assertNativeGatewaySupported` in
-[`nativeRuntimeProcessBackend.ts`](../../packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts)
-refuses a gateway-confined non-macOS launch before spawning. The Windows WFP policy sources and
-their passing validation test are not wired into that launch path. Removing this refusal would
-weaken the required boundary and is not a remedy.
+**Overall result: customer Workbench launch remains unqualified.** The production adapter now
+selects SCM/WFP for a release-qualified Windows x64 package with a pinned supervisor. The
+installed adapter proof and the separate Windows Workbench UI observation appear below.
 
 The dependency on [#4064](https://github.com/oscharko-dev/Keiko/pull/4064) is satisfied: it merged
 into `dev` at `37b1ee9d0c6308b1a59eef3470aa47036fb8362b`, the fetched base of this qualification.
@@ -821,9 +818,28 @@ acknowledgement. The supervisor resumes the root only after validating that repl
 
 This run covers a single tree with a temporary service on an elevated Windows runner.
 Customer installation, standard-user launches, concurrent trees, crash reconciliation
-and release-owner approval remain open. The Workbench still refuses Windows launches
-at the application boundary; its verified temporary helper copy is distinct from the
-protected SCM-installed supervisor image.
+and release-owner approval remain open.
+
+### Workbench adapter and UI start on Windows
+
+Only the release-qualified Windows x64 package path selects the WFP planner and the
+approved helper digest. The verified execution copy looks up the running SCM service,
+locks the image path, checks the installed binary against that digest and launches it
+with the original control pipes. The mapped policy reaches the installed supervisor
+through KGB1. Dev and evaluation lanes keep their existing admission rules.
+
+The [Windows Server 2025 adapter run](https://github.com/oscharko-dev/Keiko/actions/runs/41222287996/job/124599195730)
+used a synthetic executable and the built server adapter. A mismatched installed image
+produced no child marker. Matching bytes produced a child marker, the independent BFE
+inspection for its actual SID passed, and the job reported zero live processes on exit.
+
+Separately, the built CLI served the real Workbench in Chromium on Windows 11 x64.
+The paired UI registered and selected a disposable Git repository on `dev` (HTTP 201
+and 200). It remained idle with no configured model gateway, no available coding
+runtime, and no start action. The host's portable installation record reported
+`setup-failed`; the npm runtime approval list contains only macOS targets.
+End-to-end OpenCode startup, including its authenticated host/control connection and
+a model-backed task, is still outstanding.
 
 ## Update impact
 
