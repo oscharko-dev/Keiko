@@ -254,6 +254,39 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.author.draft": "Skill-Entwurf (Markdown)",
   "chat.skills.author.save": "Geprüften Skill speichern",
 
+  "chat.skills.jira.title": "Jira-Vorlagen",
+  "chat.skills.jira.description":
+    "Eine Vorlage ist ein Skill mit Jira-Front-Matter. Keiko prüft jedes Anlegen, Bearbeiten und gewählte Workflow-Übergänge dagegen, bevor etwas an Jira gesendet wird, in jedem Modus.",
+  "chat.skills.jira.pod": "Jira-Pod",
+  "chat.skills.jira.podRequired":
+    "Verbinde einen bereiten Jira-Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
+  "chat.skills.jira.empty":
+    "Noch keine Jira-Vorlagen. Lade einen Markdown-Skill mit Jira-Vorlagen-Front-Matter hoch oder schlage unten eine aus einem Projekt vor.",
+  "chat.skills.jira.invalid": "Muss korrigiert werden",
+  "chat.skills.jira.validate": "Gegen Jira prüfen",
+  "chat.skills.jira.validating": "Wird geprüft…",
+  "chat.skills.jira.valid": "Die Vorlage passt zur Jira-Instanz.",
+  "chat.skills.jira.syntax":
+    "Die Vorlage ist fehlerhaft ({codes}). Korrigiere sie und lade sie erneut hoch.",
+  "chat.skills.jira.finding.unknown-project":
+    "Das Projekt {subject} existiert nicht oder ist nicht sichtbar.",
+  "chat.skills.jira.finding.unknown-issue-type":
+    "Der Vorgangstyp {subject} existiert im Projekt nicht.",
+  "chat.skills.jira.finding.unknown-field":
+    "Das Feld {subject} existiert nicht. Davon betroffene Schreibvorgänge werden abgelehnt.",
+  "chat.skills.jira.finding.ambiguous-field":
+    "Mehrere Felder heißen {subject}. Verwende die Feld-ID, um eindeutig zu sein.",
+  "chat.skills.jira.finding.unknown-link-type": "Der Verknüpfungstyp {subject} existiert nicht.",
+  "chat.skills.jira.finding.unknown-transition-target":
+    "{subject} ist kein Status des Projekts. Ein Übergangsname oder eine ID lässt sich hier nicht prüfen.",
+  "chat.skills.jira.projectKey": "Projektschlüssel",
+  "chat.skills.jira.propose": "Aus Projekt vorschlagen",
+  "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
+  "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
+  "chat.skills.jira.save": "Als Skill speichern",
+  "chat.skills.jira.error":
+    "Jira oder die Vorlagenbibliothek konnte nicht gelesen werden, die Einhaltung wurde nicht geprüft. Prüfe den Pod und versuche es erneut.",
   "chat.skills.title": "Skills",
   "chat.skills.sessionRequired":
     "Öffne Keiko über den Launcher, um private Skills zu verwalten. Chat bleibt ohne Skill verfügbar.",
@@ -2930,6 +2963,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.report.reason.read-failed": "Jira konnte nicht weiter gelesen werden",
   "chat.jira.report.reason.scope-changed": "die Vorgänge haben sich während des Lesens geändert",
   "chat.jira.report.reason.memory-budget": "Speichergrenze erreicht",
+  "chat.jira.report.reason.template-unreadable":
+    "die Vorlagenbibliothek konnte nicht gelesen werden",
   "chat.jira.report.reason.issue-too-large": "ein Vorgang ist zu groß zum Lesen",
   "chat.jira.report.issues": "Vorgänge",
   "chat.jira.report.todo": "Offen",

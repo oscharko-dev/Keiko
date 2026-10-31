@@ -621,23 +621,39 @@ the approval.
   `/api/skills` routes, import and export). A template is a skill whose front matter declares
   `keiko: jira-issue-template`; there is no second store, table or migration. Import and replace
   parse the document strictly and refuse a malformed template with closed error codes, key names and
-  line numbers (never document text). A document that merely mentions the marker in its body is an
-  ordinary skill. A stored template that no longer parses fails closed (`template-unreadable`)
-  instead of silently dropping enforcement.
+  line numbers (never document text). One predicate (`isJiraIssueTemplateDocument`: the marker line
+  inside a front matter at the very top, with any spacing or quotes around the value) decides what is
+  listed and enforced; the storage prefilter is only a superset of it. A document that carries the
+  marker line outside fenced code but has no such front matter (a leading blank line, a second
+  block) is refused on upload instead of being stored as an ordinary skill that enforces nothing.
+  A stored template that no longer parses fails closed (`template-unreadable`), and the model-facing
+  violation names the skill to repair (never the activity log).
 - **Template format** (`keiko-contracts` `jira-issue-template.ts`, exported through
   `runtime/atlassian-connectors`): flat front matter with `project`, `issueType` (name or numeric id),
   `activateOn` (`create`, `edit`, `transition`, or `transition:<transition name, id or target
   status>` for a definition of ready), `summaryMinLength`/`summaryMaxLength`/`summaryPattern`,
   `requiredFields` (instance field ids or names), `requiredLabels`/`labelPattern`/`minLabels`,
   `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`. The
-  Markdown `##` headings of the template body are the required description sections, each of which
-  must be present and carry content. Patterns use a closed regular-expression subset validated at
-  parse time without compiling it (no lookaround, back-reference, named group, or quantified group
-  holding a quantifier or alternation), so a pattern run on model text cannot backtrack
-  catastrophically and an accepted pattern always compiles.
+  level-2 headings of the template body (`## Title`, or a setext title underlined with `---`) are
+  the required description sections, each of which must be present and carry content. One reader
+  (`jira-description-sections.ts`) takes headings from the template body and from an issue's
+  description alike: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings, none
+  inside fenced code (``` and ~~~ fences, `{code}` and `{noformat}`), none on a line over 512
+  characters, none matched by a backtracking expression. A deeper heading belongs to the enclosing
+  section, so a section made only of subsections has content; a section ends at the next heading of
+  the same or a shallower level. Patterns use a closed regular-expression subset (literals,
+  classes, `. ^ $ \b \B`, `\d \w \s` and their negations, escapes, alternation, groups, greedy
+  and lazy quantifiers; no lookaround, back-reference, named group, quantified assertion, or
+  quantified group holding a quantifier or alternation). They are never handed to `RegExp`: the one
+  parser validates a pattern and compiles it to an automaton program (bounded to 4096
+  instructions) that is simulated in time proportional to input times program, so no pattern can
+  backtrack and an accepted pattern is always matchable. Matched text is at most 255 characters.
 - **One pure checker** (`keiko-connectors` `jira-issue-template-check.ts`) judges the state after
   the write: the proposed values merged over the issue's current values, resolved against the
-  instance's field names. Write admission, the backlog draft and the compliance report share it. It
+  instance's field names. For an edit and for a transition the whole merged state is checked, not
+  only the changed fields, so an issue that already violates a template is refused on its next
+  edit until the edit also repairs it. A transition whose template names a transition or target
+  status that Jira's metadata does not name fails closed instead of passing unchecked. Write admission, the backlog draft and the compliance report share it. It
   is deterministic, performs no I/O and emits closed rule ids (`summary-too-short`,
   `section-missing`, `field-missing`, `field-unavailable`, `label-missing`, `parent-missing`, ...)
   with a short subject and the `PROJECT/Issue type` label.
@@ -683,7 +699,12 @@ epic or parent (orphans; an issue link rescues an issue only when it reaches a c
 fields the instance requires on create per issue type from current create metadata (rule
 `required-field-empty`; project scope only), the deviations of the shared template checker when
 one is active (`UiHandlerDeps.jiraReportChecker`, #4177; the report asks for the checker's fields
-in the same reads and never interprets a template), and coverage of declared `requirementIds`
+in the same reads and never interprets a template; the Jira connection's template source — the
+one the write gate reads — builds the checker, so the report and the gate cannot disagree. The
+report judges each issue as the state its next edit would leave, so the templates that govern
+edits apply; an unreadable library, or a name that cannot be resolved because the instance's
+field list was not read, makes the report incomplete with reason `template-unreadable` and
+compliance `checker: unavailable` instead of zero deviations), and coverage of declared `requirementIds`
 (a requirement is covered by an issue naming its identifier in summary, labels or description;
 items traced through the covering issue's descendants and, for a container, its linked issues).
 The model supplies scope and options only and narrates the result; the digest of the report
@@ -693,7 +714,8 @@ A read is never silently partial. The page size adapts to the 256 KiB transport 
 body halves it; a single issue that still does not fit ends the read as `issue-too-large`); the
 result of a call is `reading` (with `issuesRead`/`issuesTotal` progress and `reportId`, to be
 called again), `complete`, or `incomplete` with a closed reason (`read-failed`, `scope-changed` —
-the total moved or an issue repeated while paging —, `memory-budget`, `issue-too-large`). Each call
+the total moved or an issue repeated while paging —, `memory-budget`, `issue-too-large`,
+`template-unreadable` — the compliance section was not evaluated). Each call
 reads for at most 15 s because the managed host caps a call at 30 s; there is no issue-count limit.
 Reports live in memory only, bound to the Chat that started them, expire after four idle hours and
 are evicted least recently used beyond 1 GiB retained. The bounded result carries the summary

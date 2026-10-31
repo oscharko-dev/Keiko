@@ -19,6 +19,9 @@ export const JIRA_REPORT_INCOMPLETE_REASONS = [
   "scope-changed",
   "memory-budget",
   "issue-too-large",
+  /** The issue template library cannot be read or holds a malformed template: the compliance
+   * section was not evaluated, so a zero there would be a silent pass (#4177). */
+  "template-unreadable",
 ] as const;
 export type JiraReportIncompleteReason = (typeof JIRA_REPORT_INCOMPLETE_REASONS)[number];
 
@@ -42,7 +45,8 @@ export type JiraReportStatusCategory = (typeof JIRA_REPORT_STATUS_CATEGORIES)[nu
 /** The one rule id the report itself raises; a template checker contributes its own stable ids. */
 export const JIRA_REPORT_REQUIRED_FIELD_RULE = "required-field-empty";
 
-export const JIRA_REPORT_ID_PATTERN = String.raw`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`;
+export const JIRA_REPORT_ID_PATTERN =
+  "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 export const JIRA_REPORT_REQUIREMENT_ID_MAX = 1000;
 export const JIRA_REPORT_REQUIREMENT_ID_CHARS_MAX = 64;
 /** Time spent reading Jira in one tool call; the report continues in the next call. */

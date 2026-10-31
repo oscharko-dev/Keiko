@@ -51,6 +51,26 @@ export interface JiraReportComplianceChecker {
   readonly check: (facts: JiraReportIssueFacts) => readonly JiraReportDeviation[];
 }
 
+/** The instance's fields by id and name, for resolving the names a template refers to. */
+export interface JiraReportFieldCatalogEntry {
+  readonly id: string;
+  readonly name: string;
+}
+
+/**
+ * A checker whose fields depend on the instance (#4177): the report binds it once, with the
+ * instance's field list (`undefined` when that list could not be read). `none`: nothing governs
+ * the report, so there is nothing to check; `unavailable`: the checker cannot be applied (an
+ * unreadable or malformed template, or a name that cannot be resolved), and the report says so
+ * instead of reporting zero deviations.
+ */
+export interface JiraReportCheckerBinder {
+  readonly bind: (
+    catalog: readonly JiraReportFieldCatalogEntry[] | undefined,
+  ) => JiraReportComplianceChecker | "none" | "unavailable";
+}
+export type JiraReportCheckerPort = JiraReportComplianceChecker | JiraReportCheckerBinder;
+
 export interface JiraReportStatusCounts {
   readonly total: number;
   readonly new: number;
@@ -149,7 +169,7 @@ export interface JiraReport {
   readonly epics: readonly JiraReportContainer[];
   readonly compliance: {
     readonly requiredFieldRules: "applied" | "partial" | "unavailable" | "not-requested";
-    readonly checker: "applied" | "none";
+    readonly checker: "applied" | "none" | "unavailable";
     readonly issuesChecked: number;
     readonly issuesWithDeviations: number;
     readonly deviationCount: number;

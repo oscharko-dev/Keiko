@@ -245,6 +245,36 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Review the full draft, especially proposals, contradictions and open decisions. Saving or downloading does not activate the skill.",
   "chat.skills.author.draft": "Skill draft (Markdown)",
   "chat.skills.author.save": "Save reviewed skill",
+  "chat.skills.jira.title": "Jira issue templates",
+  "chat.skills.jira.description":
+    "A template is a skill with a Jira front matter. Keiko checks every issue create, edit and chosen workflow transition against it before anything is sent to Jira, in every mode.",
+  "chat.skills.jira.pod": "Jira Pod",
+  "chat.skills.jira.podRequired": "Connect a ready Jira Pod to validate a template or propose one.",
+  "chat.skills.jira.empty":
+    "No Jira issue templates yet. Upload a Markdown skill with a Jira template front matter, or propose one from a project below.",
+  "chat.skills.jira.invalid": "Needs repair",
+  "chat.skills.jira.validate": "Validate against Jira",
+  "chat.skills.jira.validating": "Validating…",
+  "chat.skills.jira.valid": "The template matches the Jira instance.",
+  "chat.skills.jira.syntax": "The template is malformed ({codes}). Fix it and upload it again.",
+  "chat.skills.jira.finding.unknown-project": "Project {subject} does not exist or is not visible.",
+  "chat.skills.jira.finding.unknown-issue-type":
+    "Issue type {subject} does not exist in the project.",
+  "chat.skills.jira.finding.unknown-field":
+    "Field {subject} does not exist. Writes it governs will be refused.",
+  "chat.skills.jira.finding.ambiguous-field":
+    "Several fields are named {subject}. Use the field id to be exact.",
+  "chat.skills.jira.finding.unknown-link-type": "Link type {subject} does not exist.",
+  "chat.skills.jira.finding.unknown-transition-target":
+    "{subject} is not a status of the project. A transition name or id cannot be checked here.",
+  "chat.skills.jira.projectKey": "Project key",
+  "chat.skills.jira.propose": "Propose from project",
+  "chat.skills.jira.proposing": "Reading project…",
+  "chat.skills.jira.proposalNone": "No template could be derived from this project.",
+  "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
+  "chat.skills.jira.save": "Save as skill",
+  "chat.skills.jira.error":
+    "Jira or the template library could not be read. Check the Pod and try again.",
   "chat.skills.title": "Skills",
   "chat.skills.sessionRequired":
     "Open Keiko from its launcher to manage private skills. Chat remains available without a skill.",
@@ -2831,6 +2861,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.report.reason.read-failed": "Jira could not be read further",
   "chat.jira.report.reason.scope-changed": "the issues changed while reading",
   "chat.jira.report.reason.memory-budget": "memory budget reached",
+  "chat.jira.report.reason.template-unreadable":
+    "the issue template library could not be read, so compliance was not checked",
   "chat.jira.report.reason.issue-too-large": "an issue is too large to read",
   "chat.jira.report.issues": "Issues",
   "chat.jira.report.todo": "To do",

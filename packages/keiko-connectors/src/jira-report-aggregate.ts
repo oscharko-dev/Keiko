@@ -1,3 +1,4 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
   JiraReport,
@@ -70,7 +71,7 @@ function rootKey(issue: JiraReportIssue, index: ReadonlyMap<string, JiraReportIs
     const parent = index.get(current.parentKey);
     if (parent === undefined) return current.parentKey;
     if (path.includes(parent.key))
-      return [...path.slice(path.indexOf(parent.key))].sort(compareJiraKeys)[0] ?? parent.key;
+      return path.slice(path.indexOf(parent.key)).sort(compareJiraKeys)[0] ?? parent.key;
     path.push(parent.key);
     current = parent;
   }
@@ -256,7 +257,7 @@ function complianceOf(
         ...new Set(
           issue.deviations.flatMap((item) => (item.fieldId === undefined ? [] : [item.fieldId])),
         ),
-      ].sort(),
+      ].sort(compareStrings),
     });
   }
   return {

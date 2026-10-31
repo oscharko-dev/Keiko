@@ -112,6 +112,28 @@ describe("Jira report card", () => {
     ).toBeInTheDocument();
   });
 
+  it("never shows an unchecked compliance section as a clean one", () => {
+    const unchecked = data({
+      status: "incomplete",
+      report: {
+        ...report,
+        completeness: {
+          complete: false,
+          reason: "template-unreadable",
+          issuesRead: 253,
+          issuesTotal: 253,
+        },
+      },
+      progress: { issuesRead: 253, issuesTotal: 253, pageCount: 1, elapsedMs: 1 },
+    });
+    render(<JiraChatTools transcript={transcript(unchecked)} chatId="chat-1" />);
+    expect(
+      screen.getByText(
+        "Incomplete (the issue template library could not be read, so compliance was not checked): 253 of 253 issues read. The figures describe only the issues read.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("saves the server-rendered file through the browser download path", async () => {
     const file = {
       fileName: "keiko-jira-report-aaaaaaaaaaaa.csv",

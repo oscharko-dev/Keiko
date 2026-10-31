@@ -44,21 +44,22 @@ function category(index: number): FixtureCategory {
  * sub-tasks have a parent. Requirement ids REQ-001..REQ-005 are named by the first four epics and
  * two stories; REQ-006 is named by nothing.
  */
+function epicIssue(epic: number): FixtureIssue {
+  return {
+    key: `REP-${String(epic)}`,
+    type: "Epic",
+    category: epic === 3 ? "done" : "indeterminate",
+    status: epic === 3 ? "Closed" : "Working",
+    summary: epic <= 3 ? `Epic ${String(epic)} for REQ-00${String(epic)}.` : "Epic without members",
+    links: [],
+    assignee: epic !== 2,
+    acceptance: "n/a",
+    labels: epic === 1 ? ["REQ-004"] : [],
+  };
+}
 export function syntheticProject(size: number): readonly FixtureIssue[] {
   const issues: FixtureIssue[] = [];
-  for (let epic = 1; epic <= 4; epic += 1)
-    issues.push({
-      key: `REP-${String(epic)}`,
-      type: "Epic",
-      category: epic === 3 ? "done" : "indeterminate",
-      status: epic === 3 ? "Closed" : "Working",
-      summary:
-        epic <= 3 ? `Epic ${String(epic)} for REQ-00${String(epic)}.` : "Epic without members",
-      links: [],
-      assignee: epic !== 2,
-      acceptance: "n/a",
-      labels: epic === 1 ? ["REQ-004"] : [],
-    });
+  for (let epic = 1; epic <= 4; epic += 1) issues.push(epicIssue(epic));
   let lastStory = 4;
   for (let index = 5; index <= size; index += 1) {
     const key = `REP-${String(index)}`;

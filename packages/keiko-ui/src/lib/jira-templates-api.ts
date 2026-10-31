@@ -1,9 +1,6 @@
 "use client";
 
-import type {
-  JiraTemplateParseError,
-  JiraTemplateParseErrorCode,
-} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { JiraTemplateParseError } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { bffFetchJson } from "./http";
 
@@ -52,7 +49,7 @@ export interface JiraTemplateProposal {
   readonly sampledIssueCount: number;
 }
 
-export type { JiraTemplateParseErrorCode };
+export type { JiraTemplateParseErrorCode } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 function request<T>(path: string, body?: unknown): Promise<T> {
   return codingAppSessionPairingSettled().then(() =>

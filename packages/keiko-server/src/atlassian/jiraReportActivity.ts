@@ -44,7 +44,13 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["read-failed", "scope-changed", "memory-budget", "issue-too-large"],
+      values: [
+        "read-failed",
+        "scope-changed",
+        "memory-budget",
+        "issue-too-large",
+        "template-unreadable",
+      ],
     },
     refusal: {
       type: "string",
@@ -121,6 +127,7 @@ const INCOMPLETE_KIND: Readonly<Record<string, ActivityLogErrorKind>> = {
   "issue-too-large": "read-failed",
   "scope-changed": "conflict",
   "memory-budget": "unavailable",
+  "template-unreadable": "unavailable",
 };
 
 function errorKindOf(input: JiraReportLogInput): ActivityLogErrorKind | undefined {

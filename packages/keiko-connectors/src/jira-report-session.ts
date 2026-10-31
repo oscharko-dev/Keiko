@@ -15,7 +15,9 @@ import {
 } from "./jira-report-metadata.js";
 import type {
   JiraReport,
+  JiraReportCheckerPort,
   JiraReportComplianceChecker,
+  JiraReportFieldCatalogEntry,
   JiraReportIssue,
   JiraReportScope,
 } from "./jira-report-types.js";
@@ -41,6 +43,8 @@ export interface JiraReportSession {
   busy: boolean;
   lastUsedAt: number;
   plan: JiraReportFieldPlan | undefined;
+  /** How the compliance checker was bound at the start; `unavailable` ends the report incomplete. */
+  checker: JiraReport["compliance"]["checker"];
   fieldList: string;
   hierarchy: JiraReportHierarchyFields | undefined;
   required: JiraReportRequiredFields | undefined;
@@ -63,7 +67,7 @@ export interface JiraReportReadDeps extends JiraReportHttpDeps {
   readonly now: () => number;
   readonly sliceMs: number;
   readonly memoryBudgetBytes: number;
-  readonly checker: JiraReportComplianceChecker | undefined;
+  readonly checker: JiraReportCheckerPort | undefined;
 }
 
 const INITIAL_PAGE_SIZE = 100;
@@ -135,6 +139,7 @@ export function createJiraReportSession(input: {
     busy: false,
     lastUsedAt: input.now,
     plan: undefined,
+    checker: "none",
     fieldList: "",
     hierarchy: undefined,
     required: undefined,
@@ -158,7 +163,7 @@ function fieldPlan(
   session: JiraReportSession,
   hierarchy: JiraReportHierarchyFields,
   required: JiraReportRequiredFields,
-  deps: JiraReportReadDeps,
+  checker: JiraReportComplianceChecker | undefined,
 ): JiraReportFieldPlan {
   return {
     parentFieldIds: [...new Set([...hierarchy.parentFieldIds, ...session.request.parentFieldIds])],
@@ -166,7 +171,7 @@ function fieldPlan(
     estimateFieldId: session.request.estimateFieldId ?? "timeoriginalestimate",
     requirementIds: new Set(session.request.requirementIds),
     requiredByType: required.byType,
-    checker: deps.checker,
+    checker,
     includeDescription: session.request.requirementIds.length > 0,
   };
 }
@@ -205,7 +210,7 @@ function reportInput(
       request.projectKey === undefined
         ? "not-requested"
         : (session.required?.state ?? "unavailable"),
-    checker: deps.checker === undefined ? "none" : "applied",
+    checker: session.checker,
     declaredRequirements: request.requirementIds,
     now: new Date(deps.now()),
   };
@@ -216,11 +221,28 @@ function finish(
   reason?: JiraReportIncompleteReason,
 ): void {
   const unchanged = session.total === undefined || session.issues.size === session.total;
-  const incomplete = reason ?? (session.shifted || !unchanged ? "scope-changed" : undefined);
+  const incomplete =
+    reason ??
+    (session.shifted || !unchanged ? "scope-changed" : undefined) ??
+    (session.checker === "unavailable" ? "template-unreadable" : undefined);
   session.incomplete = incomplete;
   session.report = buildJiraReport(reportInput(session, deps, incomplete));
   session.issues = new Map();
   session.phase = "finished";
+}
+
+type BoundChecker = JiraReportComplianceChecker | "none" | "unavailable";
+
+/** A binder resolves against the instance's field list; a plain checker applies as it is. */
+function bindChecker(
+  port: JiraReportCheckerPort | undefined,
+  catalog: readonly JiraReportFieldCatalogEntry[] | undefined,
+): BoundChecker {
+  if (port === undefined) return "none";
+  return "bind" in port ? port.bind(catalog) : port;
+}
+function checkerState(checker: BoundChecker): JiraReport["compliance"]["checker"] {
+  return typeof checker === "string" ? checker : "applied";
 }
 
 async function initialize(
@@ -235,7 +257,14 @@ async function initialize(
       : await loadRequiredFields(http, session.request.projectKey);
   session.hierarchy = hierarchy;
   session.required = required;
-  session.plan = fieldPlan(session, hierarchy, required, deps);
+  const checker = bindChecker(deps.checker, hierarchy.catalog);
+  session.checker = checkerState(checker);
+  session.plan = fieldPlan(
+    session,
+    hierarchy,
+    required,
+    typeof checker === "string" ? undefined : checker,
+  );
   session.fieldList = fieldListOf(session.plan);
   if (session.fieldList.length > FIELD_LIST_MAX_CHARS) {
     session.failureReason = "bounds-exceeded";

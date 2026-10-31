@@ -8,6 +8,7 @@ import {
   JIRA_REPORT_SECTIONS,
   type JiraReportSection,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraReportRequest } from "./jira-report-session.js";
 
@@ -31,8 +32,19 @@ const REQUIREMENT_ID = new RegExp(
   `^[A-Za-z0-9][A-Za-z0-9._-]{0,${String(JIRA_REPORT_REQUIREMENT_ID_CHARS_MAX - 1)}}$`,
   "u",
 );
-const SCOPE_KEYS = ["projectKey", "jql", "estimateFieldId", "parentFieldIds", "requirementIds"];
-const CONTINUE_KEYS = ["reportId", "section", "startAt", "maxResults"];
+const SCOPE_KEYS: ReadonlySet<string> = new Set([
+  "projectKey",
+  "jql",
+  "estimateFieldId",
+  "parentFieldIds",
+  "requirementIds",
+]);
+const CONTINUE_KEYS: ReadonlySet<string> = new Set([
+  "reportId",
+  "section",
+  "startAt",
+  "maxResults",
+]);
 
 function stringList(value: unknown, max: number, pattern: RegExp): readonly string[] | undefined {
   if (value === undefined) return [];
@@ -41,7 +53,7 @@ function stringList(value: unknown, max: number, pattern: RegExp): readonly stri
   const valid = items.filter(
     (item): item is string => typeof item === "string" && pattern.test(item),
   );
-  return valid.length === items.length ? [...new Set(valid)].sort() : undefined;
+  return valid.length === items.length ? [...new Set(valid)].sort(compareStrings) : undefined;
 }
 function optionalField(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;
@@ -69,7 +81,7 @@ function scopeOf(args: CatalogJsonObject): ReportScope | undefined {
   return { projectKey: project, jql: clause };
 }
 function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
-  if (!Object.keys(args).every((key) => SCOPE_KEYS.includes(key))) return undefined;
+  if (!Object.keys(args).every((key) => SCOPE_KEYS.has(key))) return undefined;
   const scope = scopeOf(args);
   const estimate = optionalField(args.estimateFieldId);
   const parents = stringList(args.parentFieldIds, JIRA_REPORT_PARENT_FIELDS_MAX, FIELD_ID);
@@ -112,7 +124,7 @@ function continuation(args: CatalogJsonObject): JiraReportArgs | undefined {
   );
   const named = JIRA_REPORT_SECTIONS.find((item) => item === (section ?? "summary"));
   if (
-    !Object.keys(args).every((key) => CONTINUE_KEYS.includes(key)) ||
+    !Object.keys(args).every((key) => CONTINUE_KEYS.has(key)) ||
     typeof reportId !== "string" ||
     !REPORT_ID.test(reportId) ||
     named === undefined ||

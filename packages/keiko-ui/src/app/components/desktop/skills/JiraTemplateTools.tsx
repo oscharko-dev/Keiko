@@ -13,7 +13,7 @@ import {
 } from "@/lib/jira-templates-api";
 import { readMarkdownSkill } from "@/lib/markdown-skills-api";
 import { usePodChoices } from "../useJiraPodChoices";
-import { useJiraTemplateCopy as useTranslate } from "./jira-template-copy";
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import { skillTextFits } from "./useMarkdownSkillAuthor";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 import styles from "./MarkdownSkillControl.module.css";
@@ -240,7 +240,7 @@ function Proposal({
       <div className={styles.cmpActions}>
         <button
           type="button"
-          disabled={!canPropose || !/^[A-Za-z][A-Za-z0-9_]*$/u.test(key)}
+          disabled={!canPropose || !/^[A-Za-z]\w*$/u.test(key)}
           onClick={() => {
             void tools.propose(key);
           }}

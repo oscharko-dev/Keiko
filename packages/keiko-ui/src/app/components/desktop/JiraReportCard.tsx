@@ -20,6 +20,7 @@ const REASON_KEYS: Readonly<Record<JiraReportIncompleteReason, WidgetMessageKey>
   "scope-changed": "chat.jira.report.reason.scope-changed",
   "memory-budget": "chat.jira.report.reason.memory-budget",
   "issue-too-large": "chat.jira.report.reason.issue-too-large",
+  "template-unreadable": "chat.jira.report.reason.template-unreadable",
 };
 const EXPORTS: readonly {
   readonly format: JiraReportExportFormat;

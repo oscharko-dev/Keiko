@@ -132,7 +132,7 @@ function csvOf(report: JiraReport): string {
 
 function cell(value: string | number): string {
   return String(value)
-    .replaceAll("|", "\\|")
+    .replaceAll("|", String.raw`\|`)
     .replaceAll(/[\r\n]+/gu, " ");
 }
 function table(header: readonly string[], rows: readonly (readonly (string | number)[])[]): string {
@@ -303,9 +303,14 @@ function keyList(label: string, keys: readonly string[]): string {
 export function jiraReportCommentText(report: JiraReport): string {
   const { project, unassigned, overdue } = report.progress;
   const { completeness, compliance, coverage } = report;
+  const state = completeness.complete
+    ? "complete"
+    : "incomplete: " + (completeness.reason ?? "unknown");
+  const total =
+    completeness.issuesTotal === undefined ? "" : " of " + String(completeness.issuesTotal);
   const lines = [
-    `Keiko Jira report ${report.scope.projectKey ?? ""} (${completeness.complete ? "complete" : `incomplete: ${completeness.reason ?? "unknown"}`}), digest ${report.digest}`,
-    `Issues read: ${String(completeness.issuesRead)}${completeness.issuesTotal === undefined ? "" : ` of ${String(completeness.issuesTotal)}`}`,
+    `Keiko Jira report ${report.scope.projectKey ?? ""} (${state}), digest ${report.digest}`,
+    `Issues read: ${String(completeness.issuesRead)}${total}`,
     `Progress: ${String(project.total)} issues, ${String(project.new)} to do, ${String(project.indeterminate)} in progress, ${String(project.done)} done (${String(project.donePercent)}%), ${String(project.noCategory)} without category`,
     `Estimate: ${String(project.estimate.total)} total, ${String(project.estimate.done)} done, ${String(project.estimate.remaining)} remaining`,
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,

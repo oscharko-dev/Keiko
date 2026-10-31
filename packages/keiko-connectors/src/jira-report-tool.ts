@@ -22,7 +22,8 @@ import {
   type JiraReportSession,
 } from "./jira-report-session.js";
 import { JIRA_REPORT_STORE_MAX_BYTES, type JiraReportStore } from "./jira-report-store.js";
-import type { JiraReportComplianceChecker } from "./jira-report-types.js";
+import { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
+import type { JiraReportCheckerPort } from "./jira-report-types.js";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 
@@ -51,7 +52,8 @@ export interface JiraReportToolDeps<Context extends ManagedMcpInvocationContext>
   readonly store: JiraReportStore;
   /** Binds a report to the Chat and authority that started it. */
   readonly owner: (context: Context) => string;
-  readonly checker?: JiraReportComplianceChecker | undefined;
+  /** An explicit checker wins; otherwise the connection's template source feeds the check. */
+  readonly checker?: JiraReportCheckerPort | undefined;
   readonly activity?: ((activity: JiraReportActivity, context: Context) => void) | undefined;
   readonly now?: (() => number) | undefined;
   readonly sliceMs?: number | undefined;
@@ -166,7 +168,11 @@ async function advance<Context extends ManagedMcpInvocationContext>(
     now,
     sliceMs: deps.sliceMs ?? JIRA_REPORT_READ_SLICE_MS,
     memoryBudgetBytes: deps.memoryBudgetBytes ?? JIRA_REPORT_STORE_MAX_BYTES,
-    checker: deps.checker,
+    checker:
+      deps.checker ??
+      (connection.issueTemplates === undefined
+        ? undefined
+        : createJiraReportTemplateChecker(connection.issueTemplates)),
     sleep: deps.sleep,
   };
   session.busy = true;

@@ -1,6 +1,8 @@
 import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import type { JiraReportHttp } from "./jira-report-http.js";
+import type { JiraReportFieldCatalogEntry } from "./jira-report-types.js";
 
 /** Custom field types that Jira Software and Portfolio define; ids are read from the instance. */
 const EPIC_LINK_TYPE = "com.pyxis.greenhopper.jira:gh-epic-link";
@@ -11,8 +13,12 @@ const FIELD_ID = /^(?:[a-z][a-z0-9]*|customfield_\d{1,16})$/u;
 const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["project", "issuetype", "reporter"]);
 const METADATA_PAGE_SIZE = 50;
 
+const CATALOG_MAX = 5000;
+
 export interface JiraReportHierarchyFields {
   readonly discovery: "complete" | "unavailable";
+  /** Every field the instance lists, for template references by name; absent when unread. */
+  readonly catalog: readonly JiraReportFieldCatalogEntry[] | undefined;
   readonly parentFieldIds: readonly string[];
   readonly epicNameFieldId: string | undefined;
 }
@@ -23,22 +29,43 @@ function fieldType(item: unknown): { readonly id: string; readonly custom: unkno
   return { id: record.id, custom: asRecord(record.schema)?.custom };
 }
 
+function catalogOf(items: readonly unknown[]): readonly JiraReportFieldCatalogEntry[] | undefined {
+  if (items.length > CATALOG_MAX) return undefined;
+  return items.flatMap((item): readonly JiraReportFieldCatalogEntry[] => {
+    const record = asRecord(item);
+    return typeof record?.id === "string" && typeof record.name === "string"
+      ? [{ id: record.id, name: record.name }]
+      : [];
+  });
+}
+
 /** Hierarchy fields by their Jira field type, so no instance-specific id is ever assumed. */
 export async function discoverHierarchyFields(
   http: JiraReportHttp,
 ): Promise<JiraReportHierarchyFields> {
   const outcome = await http.getArray("field");
   if (!outcome.ok)
-    return { discovery: "unavailable", parentFieldIds: [], epicNameFieldId: undefined };
+    return {
+      discovery: "unavailable",
+      catalog: undefined,
+      parentFieldIds: [],
+      epicNameFieldId: undefined,
+    };
   const fields = outcome.items.flatMap((item) => fieldType(item) ?? []);
   return {
     discovery: "complete",
+    catalog: catalogOf(outcome.items),
     parentFieldIds: fields
       .filter((field) => field.custom === EPIC_LINK_TYPE || field.custom === PARENT_LINK_TYPE)
       .map((field) => field.id)
-      .sort(),
+      .sort(compareStrings),
     epicNameFieldId: fields.find((field) => field.custom === EPIC_NAME_TYPE)?.id,
   };
+}
+
+function requirementState(read: number, wanted: number): JiraReportRequiredFields["state"] {
+  if (read === wanted) return "applied";
+  return read === 0 ? "unavailable" : "partial";
 }
 
 export interface JiraReportRequiredFields {
@@ -122,7 +149,7 @@ export async function loadRequiredFields(
     if (id !== undefined && fields !== undefined) byType.set(id, fields);
   });
   return {
-    state: byType.size === ids.length ? "applied" : byType.size === 0 ? "unavailable" : "partial",
+    state: requirementState(byType.size, ids.length),
     byType,
   };
 }

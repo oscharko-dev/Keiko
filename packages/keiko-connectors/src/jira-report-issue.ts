@@ -4,6 +4,7 @@ import {
   JIRA_REPORT_STATUS_CATEGORIES,
   type JiraReportStatusCategory,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import type {
   JiraReportComplianceChecker,
@@ -65,7 +66,7 @@ function linkedKeysOf(fields: Record<string, unknown>): readonly string[] {
       if (key !== undefined) keys.add(key);
     }
   }
-  return [...keys].sort();
+  return [...keys].sort(compareStrings);
 }
 function estimateOf(
   fields: Record<string, unknown>,
@@ -103,9 +104,7 @@ function checkerDeviations(
   for (const item of plan.checker.check(facts)) {
     if (!RULE_ID_PATTERN.test(item.ruleId)) continue;
     const fieldId =
-      item.fieldId !== undefined && /^[A-Za-z0-9_]{1,64}$/u.test(item.fieldId)
-        ? item.fieldId
-        : undefined;
+      item.fieldId !== undefined && /^\w{1,64}$/u.test(item.fieldId) ? item.fieldId : undefined;
     result.push(fieldId === undefined ? { ruleId: item.ruleId } : { ruleId: item.ruleId, fieldId });
   }
   return result;
@@ -125,6 +124,12 @@ function dedupeDeviations(items: readonly JiraReportDeviation[]): readonly JiraR
       (left.fieldId ?? "").localeCompare(right.fieldId ?? "", "en"),
   );
 }
+/** Drops a trailing run of `.`, `_` and `-` without a backtracking expression. */
+function withoutTrailingPunctuation(token: string): string {
+  let end = token.length;
+  while (end > 0 && ".-_".includes(token.charAt(end - 1))) end -= 1;
+  return token.slice(0, end);
+}
 function referencedRequirements(
   summary: string,
   fields: Record<string, unknown>,
@@ -136,11 +141,11 @@ function referencedRequirements(
   const found = new Set<string>();
   for (const text of [summary, ...labels, description]) {
     for (const match of text.matchAll(TOKEN_PATTERN)) {
-      const token = match[0].replace(/[._-]+$/u, "");
+      const token = withoutTrailingPunctuation(match[0]);
       if (plan.requirementIds.has(token)) found.add(token);
     }
   }
-  return [...found].sort();
+  return [...found].sort(compareStrings);
 }
 function checkerFacts(
   key: string,

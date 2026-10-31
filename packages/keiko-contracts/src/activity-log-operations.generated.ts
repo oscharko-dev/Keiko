@@ -1154,7 +1154,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["read-failed", "scope-changed", "memory-budget", "issue-too-large"],
+        values: [
+          "read-failed",
+          "scope-changed",
+          "memory-budget",
+          "issue-too-large",
+          "template-unreadable",
+        ],
       },
       refusal: {
         type: "string",
