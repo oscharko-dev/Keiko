@@ -28,7 +28,13 @@ import {
   verifyLinuxQualificationBundle,
   verifyLinuxQualificationRehearsalBundle,
 } from "../../packages/keiko-server/src/coding-runtime/linuxPortableSigstore.ts";
-import { runSignLinuxRuntimeQualificationCli } from "../sign-linux-runtime-qualification.mjs";
+import {
+  SIGNING_ATTEMPTS,
+  SIGNING_BACKOFF_MS,
+  SIGNING_OPTIONS,
+  classifySigningFailure,
+  runSignLinuxRuntimeQualificationCli,
+} from "../sign-linux-runtime-qualification.mjs";
 import { MAX_PORTABLE_MANIFEST_BYTES } from "../../packages/keiko-server/src/update-portable-staging-shared.ts";
 import { parseStableVersion } from "../lib/stable-version.mjs";
 
@@ -441,6 +447,166 @@ describe("Linux portable qualification sealing", () => {
     const output = stderr.write.mock.calls.flat().join("");
     expect(output).not.toContain("/sensitive/");
     expect(output).not.toContain("provider dependency details");
+  });
+
+  describe("qualification signing transient failures (#4122)", () => {
+    const argv = ["node", "signer", "/sensitive/receipt.json", "/sensitive/bundle.json"];
+
+    function sigstoreFailure(code, status, message = "provider dependency details") {
+      const cause = Object.assign(new Error(`(${String(status)}) ${message}`), {
+        statusCode: status,
+      });
+      return Object.assign(new Error(`${message} - ${cause.message}`), {
+        name: "InternalError",
+        code,
+        cause,
+      });
+    }
+
+    function networkFailure(code) {
+      const cause = Object.assign(new Error("connect failed to https://rekor.example"), { code });
+      return Object.assign(new TypeError("fetch failed"), { cause });
+    }
+
+    // The shape of minipass-fetch's FetchError, which make-fetch-happen raises on its deadline: a
+    // read-only name `FetchError`, `code: "FETCH_ERROR"` and the deadline in `type`. It is wrapped
+    // the way sigstore wraps it.
+    function fetchError(message, type) {
+      const error = Object.assign(new Error(message), {
+        code: "FETCH_ERROR",
+        errno: "FETCH_ERROR",
+        type,
+      });
+      return Object.defineProperty(error, "name", { get: () => "FetchError" });
+    }
+
+    function timeoutFailure(type) {
+      const cause = fetchError("network timeout at: https://rekor.example/api", type);
+      return Object.assign(new Error("error creating tlog entry"), {
+        name: "InternalError",
+        code: "TLOG_CREATE_ENTRY_ERROR",
+        cause,
+      });
+    }
+
+    function run(signReceipt) {
+      const stderr = { write: vi.fn() };
+      const deps = {
+        readFile: vi.fn(() => Buffer.from("receipt")),
+        signReceipt,
+        writeFile: vi.fn(),
+        sleep: vi.fn(() => Promise.resolve()),
+      };
+      return {
+        deps,
+        stderr,
+        status: runSignLinuxRuntimeQualificationCli(argv, deps, stderr),
+        output: () => stderr.write.mock.calls.flat().join(""),
+      };
+    }
+
+    it.each([
+      [
+        "a Rekor conflict after a client timeout",
+        sigstoreFailure("TLOG_CREATE_ENTRY_ERROR", 409),
+        "http-409",
+      ],
+      ["a Rekor server error", sigstoreFailure("TLOG_CREATE_ENTRY_ERROR", 503), "http-503"],
+      [
+        "a Fulcio rate limit",
+        sigstoreFailure("CA_CREATE_SIGNING_CERTIFICATE_ERROR", 429),
+        "http-429",
+      ],
+      ["a reset connection", networkFailure("ECONNRESET"), "network"],
+      [
+        "an aborted request",
+        Object.assign(new Error("aborted"), { name: "AbortError" }),
+        "timeout",
+      ],
+      ["a sigstore request deadline", timeoutFailure("request-timeout"), "timeout"],
+      ["a sigstore response-body deadline", timeoutFailure("body-timeout"), "timeout"],
+    ])("starts a fresh signing attempt after %s", async (_label, error, failureClass) => {
+      const signReceipt = vi
+        .fn()
+        .mockRejectedValueOnce(error)
+        .mockResolvedValueOnce({ mediaType: "bundle" });
+      const { deps, stderr, status, output } = run(signReceipt);
+
+      expect(await status).toBe(0);
+      expect(signReceipt).toHaveBeenCalledTimes(2);
+      for (const call of [1, 2]) {
+        expect(signReceipt).toHaveBeenNthCalledWith(call, Buffer.from("receipt"), {
+          tlogUpload: true,
+          timeout: expect.any(Number),
+        });
+      }
+      expect(SIGNING_OPTIONS.timeout).toBeGreaterThanOrEqual(30_000);
+      expect(deps.sleep).toHaveBeenCalledWith(SIGNING_BACKOFF_MS[0]);
+      expect(output()).toContain(`attempt=1/${String(SIGNING_ATTEMPTS)} class=${failureClass}`);
+      expect(deps.writeFile).toHaveBeenCalledTimes(1);
+      expect(deps.writeFile).toHaveBeenCalledWith(
+        "/sensitive/bundle.json",
+        `${JSON.stringify({ mediaType: "bundle" }, null, 2)}\n`,
+        { mode: 0o600 },
+      );
+      expect(stderr.write).not.toHaveBeenCalledWith(
+        "linux-runtime-qualification-signing: redacted failure\n",
+      );
+    });
+
+    it("stops after the bounded number of attempts and names every failure body-free", async () => {
+      const signReceipt = vi.fn(() =>
+        Promise.reject(sigstoreFailure("TLOG_CREATE_ENTRY_ERROR", 409, "entry already exists")),
+      );
+      const { deps, status, output } = run(signReceipt);
+
+      expect(await status).toBe(1);
+      expect(signReceipt).toHaveBeenCalledTimes(SIGNING_ATTEMPTS);
+      expect(deps.sleep.mock.calls.map(([ms]) => ms)).toEqual([...SIGNING_BACKOFF_MS]);
+      expect(deps.writeFile).not.toHaveBeenCalled();
+      for (let attempt = 1; attempt <= SIGNING_ATTEMPTS; attempt += 1) {
+        expect(output()).toContain(
+          `attempt=${String(attempt)}/${String(SIGNING_ATTEMPTS)} class=http-409 name=InternalError code=TLOG_CREATE_ENTRY_ERROR status=409`,
+        );
+      }
+      expect(output()).toContain("linux-runtime-qualification-signing: redacted failure\n");
+      expect(output()).not.toContain("entry already exists");
+      expect(output()).not.toContain("/sensitive/");
+    });
+
+    it("never retries a deterministic failure and keeps the network details out", async () => {
+      const signReceipt = vi.fn(() =>
+        Promise.reject(sigstoreFailure("IDENTITY_TOKEN_READ_ERROR", 401, "token abc.def.ghi")),
+      );
+      const { deps, status, output } = run(signReceipt);
+
+      expect(await status).toBe(1);
+      expect(signReceipt).toHaveBeenCalledTimes(1);
+      expect(deps.sleep).not.toHaveBeenCalled();
+      expect(output()).toContain(
+        "class=deterministic name=InternalError code=IDENTITY_TOKEN_READ_ERROR status=401",
+      );
+      expect(output()).not.toContain("abc.def.ghi");
+    });
+
+    it("drops a code or name outside the closed shape", () => {
+      const failure = classifySigningFailure(
+        Object.assign(new Error("x"), { name: "Bad name: https://x", code: "lower/case" }),
+      );
+      expect(failure).toEqual({
+        failureClass: "deterministic",
+        transient: false,
+        code: "",
+        name: "Error",
+        status: undefined,
+      });
+      const network = classifySigningFailure(networkFailure("ECONNRESET"));
+      expect(network).toMatchObject({
+        failureClass: "network",
+        transient: true,
+        name: "TypeError",
+      });
+    });
   });
 
   it("uses the dedicated error type for fail-closed signing failures", () => {

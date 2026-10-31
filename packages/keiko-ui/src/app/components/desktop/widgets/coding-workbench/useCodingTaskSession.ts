@@ -411,20 +411,29 @@ interface HistoryScopeState {
   accepted?: HistoryLoad;
 }
 
+const ROUTINE_SCOPE_SWITCHES: Partial<
+  Record<
+    ClientDiagnosticCodingHistoryScope["reason"],
+    "history-repository-switched" | "history-workspace-switched"
+  >
+> = {
+  "repository-mismatch": "history-repository-switched",
+  "workspace-mismatch": "history-workspace-switched",
+};
+
 function reportScopeChange(
   operation: HistoryLoad,
   current: HistoryScope,
   reason: ClientDiagnosticCodingHistoryScope["reason"],
   targetWorkspaceId?: string,
 ): void {
-  // A task of another repository returned while the scope never changed is the operator switching
-  // repositories: routine evidence on the info line, not a warn/unknown browser diagnostic. Any
-  // scope that moved meanwhile, and every other reason, keeps the diagnostic with its ids.
-  if (reason === "repository-mismatch" && operation.scope.id === current.id) {
-    reportCodingWorkbenchInteraction(
-      { interaction: "history-repository-switched" },
-      operation.correlationId,
-    );
+  // A task of another repository or workspace returned while the scope never changed is the
+  // operator working elsewhere: routine evidence on the info line, not a warn/unknown browser
+  // diagnostic (#4118). Any scope that moved meanwhile, and every other reason, keeps the
+  // diagnostic with its ids.
+  const switched = ROUTINE_SCOPE_SWITCHES[reason];
+  if (switched !== undefined && operation.scope.id === current.id) {
+    reportCodingWorkbenchInteraction({ interaction: switched }, operation.correlationId);
     return;
   }
   reportClientDiagnostic("[keiko] coding task history scope outcome", {

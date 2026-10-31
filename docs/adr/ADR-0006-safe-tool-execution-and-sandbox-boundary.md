@@ -339,7 +339,7 @@ and surfaced as a `malformed` entry in `reasons` (it is NOT re-thrown). The only
 `validatePatch` propagates is a genuine security violation from the symlink path gate
 (`PathEscapeError`), where failing closed is correct. Checks in order:
 
-1. **Size limit** — `Buffer.byteLength(diff, "utf8") <= maxPatchBytes` (default 65 536 bytes, matching the harness `maxPatchBytes` limit from ADR-0004 D3).
+1. **Size limit** — `Buffer.byteLength(diff, "utf8") <= maxPatchBytes` (default `GOVERNED_PATCH_MAX_BYTES`, 8 MiB since the owner decision of 2026-10-29 (#4110, ADR-0125 D3), matching the harness `maxPatchBytes` limit from ADR-0004 D3).
 2. **Binary rejection** — any diff containing `GIT binary patch`, `Binary files … differ`, or NUL bytes is rejected.
 3. **Path safety** — every target path is checked via `resolveWithinWorkspace` (rejects `..`, abs, NUL), `isDenied` (always-on deny list from ADR-0005 D3: `.env*`, `*.pem`, `*.key`, `.git/**`, `node_modules/**`, etc.), AND `containedRealPathInfo` — the same symlink/realpath gate the read path applies (ADR-0005 D2). The realpath gate resolves the target (or, for a create, the nearest existing parent) and rejects a path whose real location escapes the root or resolves to an always-denied in-workspace target, closing both symlink-write/outside and symlink-alias-to-denied-file escalations. The write path re-asserts it at `planWrites` as defence in depth.
 4. **Line-count limits** — `maxChangedLines` (default 2 000) and `maxFilesChanged` (default 50).

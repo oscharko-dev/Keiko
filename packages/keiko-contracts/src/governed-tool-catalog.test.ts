@@ -5,10 +5,13 @@ import {
   EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
   EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
 } from "./editor-agent.js";
+import { GOVERNED_PATCH_MAX_BYTES } from "./patch-limits.js";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
   GENERIC_TOOL_ARGUMENT_LIMITS,
   GOVERNED_CHANGESET_EDIT_TOOL_ID,
+  GOVERNED_PATCH_APPLY_TOOL_ID,
+  GOVERNED_PATCH_PROPOSE_TOOL_ID,
   TOOL_CATALOG_LIMITS,
   TOOL_PAGE_REASONS,
   TOOL_RESULT_REASONS,
@@ -70,5 +73,14 @@ describe("governed catalog per-tool argument ceilings (owner decision 2026-10-28
     );
     for (const id of ["keiko.workspace.read", "keiko.git.commit", "", "keiko.changeset.edit2"])
       expect(toolArgumentLimits(id)).toBe(GENERIC_TOOL_ARGUMENT_LIMITS);
+  });
+
+  // #4110: a legacy patch tool's one argument is a unified diff, so it follows the shared patch cap.
+  it("holds the legacy patch tools to the shared patch ceiling, derived from one constant", () => {
+    for (const id of [GOVERNED_PATCH_PROPOSE_TOOL_ID, GOVERNED_PATCH_APPLY_TOOL_ID]) {
+      expect(toolArgumentLimits(id)).toBe(CHANGESET_EDIT_ARGUMENT_LIMITS);
+      expect(toolArgumentLimits(id).maxStringBytes).toBe(GOVERNED_PATCH_MAX_BYTES);
+    }
+    expect(toolArgumentLimits("keiko.patch.apply2")).toBe(GENERIC_TOOL_ARGUMENT_LIMITS);
   });
 });

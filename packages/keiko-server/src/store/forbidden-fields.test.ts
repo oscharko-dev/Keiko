@@ -67,6 +67,8 @@ const ALLOWED_CHATS_COLUMNS = new Set([
   "git_change_scope_json",
   // V39: a body-free counter invalidating stale conversation compaction after history edits.
   "history_revision",
+  // V49 retains the exact live-Pod binding generations and selected mode; never credentials.
+  "jira_state_json",
   "created_at",
   "updated_at",
 ]);
@@ -90,6 +92,8 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
   "client_turn_id",
   "client_turn_state",
   "client_turn_content_digest",
+  // V50 retains redacted tool messages and closed approval/result projections.
+  "tool_transcript_json",
 ]);
 
 // V44 retains private per-chat composer text and its CAS revision, without provider metadata.
@@ -193,6 +197,8 @@ const EXPECTED_TABLES = new Set([
   "browser_approvals",
   "browser_approval_installation",
   "chat_creation_intents",
+  "chat_tool_mutations",
+  "chat_tool_read_grants",
   "chat_drafts",
   "chat_messages",
   "chats",
@@ -652,7 +658,10 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
 describe("forbidden-fields — coding history identity tables", () => {
   it.each([
     ["coding_history_tasks", ["chat_id", "workspace_id", "task_id", "operator_digest", "status"]],
-    ["coding_history_runs", ["run_id", "chat_id", "sequence"]],
+    [
+      "coding_history_runs",
+      ["run_id", "chat_id", "sequence", "active_native_turn_ref", "active_user_message_id"],
+    ],
     ["coding_history_message_bindings", ["run_id", "source_id", "message_id"]],
   ] as const)("keeps %s free of conversation bodies and credentials", (table, expected) => {
     const inspector = openMigratedSchema(join(tmpDir, "coding-history-inventory.db"));
@@ -690,6 +699,65 @@ describe("forbidden-fields — private instruction library (ADR-0013)", () => {
     const inspector = openMigratedSchema(join(tmpDir, "skill-inventory.db"));
     try {
       expect(new Set(columnNames(inspector, table))).toEqual(new Set(expected));
+    } finally {
+      inspector.close();
+    }
+  });
+});
+
+describe("forbidden-fields — durable chat mutation metadata", () => {
+  it("limits retained read consent to its identity and validated private record", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "consent-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, "chat_tool_read_grants"))).toEqual(
+        new Set(["grant_id", "chat_id", "entry_json"]),
+      );
+    } finally {
+      inspector.close();
+    }
+  });
+  it("stores bounded identities, digests and numeric generations without requests or credentials", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "mutation-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, "chat_tool_mutations"))).toEqual(
+        new Set([
+          "invocation_id",
+          "chat_id",
+          "user_message_id",
+          "turn_ref",
+          "actor_id",
+          "pod_id",
+          "binding_generation",
+          "authentication_generation",
+          "authority_digest",
+          "action_digest",
+          "operation",
+          "correlation_id",
+          "phase",
+          "outcome",
+          "http_status",
+          "created_at",
+          "updated_at",
+          "source_kind",
+          "configuration_digest",
+          "server_name",
+          "tool_name",
+          "protocol_outcome",
+          "consumer_kind",
+          "coding_run_id",
+          "native_session_id",
+          "native_message_id",
+          "native_call_id",
+          "native_arguments_digest",
+          "native_mcp_action_digest",
+        ]),
+      );
+      // Authentication generation is an integer invalidation counter, never a credential value.
+      const generation = inspector
+        .prepare("PRAGMA table_info(chat_tool_mutations)")
+        .all()
+        .find((column) => column.name === "authentication_generation");
+      expect(generation?.type).toBe("INTEGER");
     } finally {
       inspector.close();
     }

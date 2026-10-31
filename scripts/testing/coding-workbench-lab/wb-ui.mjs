@@ -18,6 +18,7 @@ import {
   browserBaseUrl,
   describeSnapshot,
   exitCodeForState,
+  errorMessage,
   formatTaskList,
   gateActions,
   labBaseUrl,
@@ -30,13 +31,14 @@ import {
   resolveTaskInput,
   runMain,
   selectLabCheckout,
+  stopUnfinishedRun,
 } from "./lab-common.mjs";
 
 const USAGE = [
   "usage: node wb-ui.mjs (--task-id <id> | --task <text>) --approve all|none|ask",
   "                      (--repo <path> | KEIKO_LAB_REPO) [--mode <label|id>] [--model <id>]",
   "                      [--timeout-min 40] [--branch main] [--base-url <origin>] [--shots <dir>]",
-  "                      [--text-out <file>] [--headed] [--list-tasks]",
+  "                      [--text-out <file>] [--jira-pod <name>] [--headed] [--list-tasks]",
   "",
   "  --approve    required, no default: all approves every permission ask once, applies the change",
   "               reviews of Ask for approval and allows package scripts; none denies the asks and",
@@ -47,6 +49,7 @@ const USAGE = [
   "  --mode       Ask for approval | Supervised workspace | Full access; default: the task's mode",
   "  --shots      directory for one screenshot per run state change",
   "  --text-out   file for the final Workbench text (the answer, so it stays outside the repo)",
+  "  --jira-pod   the name of a ready Jira Pod the run may use; default: Jira: none",
   "",
   "Environment: KEIKO_LAB_REPO (the repository, unless --repo), KEIKO_LAB_BASE_URL (default",
   "http://127.0.0.1:1983), KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET (required). A Chromium build",
@@ -66,6 +69,7 @@ const OPTIONS = {
   "base-url": { type: "string" },
   shots: { type: "string" },
   "text-out": { type: "string" },
+  "jira-pod": { type: "string" },
   headed: { type: "boolean" },
   "list-tasks": { type: "boolean" },
 };
@@ -119,20 +123,23 @@ async function reopenWorkbench(page) {
   return waitForWorkbench(page);
 }
 
-// An option's accessible name is its label, optionally followed by its description (the autonomy
-// options describe each mode), so the label must start the name rather than equal it.
-async function chooseOption(page, comboName, optionName) {
+export async function chooseOption(page, comboName, optionLabel) {
   await page.getByRole("combobox", { name: comboName }).click();
-  const label = optionName.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  // An option's accessible name is its label followed directly by its description, so the
-  // label is matched as a prefix; the offered labels are distinct.
-  await page
-    .getByRole("option", { name: new RegExp(`^${label}`, "u") })
-    .first()
-    .click();
+  // An option's accessible name is its label followed directly by its description, so the label
+  // element is compared on its own and only an exact label is chosen: an offered near-match (a
+  // longer Jira Pod name) never stands in for the requested one, and the run is not started.
+  const options = page.getByRole("option");
+  const labels = await Promise.all(
+    Array.from({ length: await options.count() }, (_, index) =>
+      options.nth(index).locator(".ksel-option-label").allTextContents(),
+    ),
+  );
+  const index = labels.findIndex((texts) => texts.length === 1 && texts[0].trim() === optionLabel);
+  if (index < 0) throw new Error(`${comboName}: no option is labelled "${optionLabel}"`);
+  await options.nth(index).click();
 }
 
-async function startRun(page, workbench, { model, mode, text }) {
+async function startRun(page, workbench, { model, mode, text, jiraPod }) {
   const newTask = page.getByRole("button", { name: "New task", exact: true });
   if (await newTask.isVisible().catch(() => false)) {
     await newTask.click();
@@ -140,6 +147,7 @@ async function startRun(page, workbench, { model, mode, text }) {
   }
   await chooseOption(page, "Coding model", model);
   await chooseOption(page, "Run authority", mode.label);
+  if (jiraPod !== undefined) await chooseOption(page, "Jira Pod for this run", `Jira: ${jiraPod}`);
   const composer = workbench.locator("textarea").first();
   await composer.fill(text);
   if ((await composer.inputValue()) !== text) {
@@ -149,7 +157,18 @@ async function startRun(page, workbench, { model, mode, text }) {
     response.url().endsWith("/api/coding-workbench/runtime/runs") &&
     response.request().method() === "POST";
   const started = page.waitForResponse(isStart, { timeout: UI_TIMEOUT_MS });
-  await page.getByRole("button", { name: "Start coding run" }).click();
+  // A failed click must surface as itself, not as this wait rejecting once the browser closes.
+  started.catch(() => undefined);
+  try {
+    await page.getByRole("button", { name: "Start coding run" }).click();
+  } catch (error) {
+    // Keep what the human would have seen: why the Workbench did not offer the start.
+    log("start refused by the Workbench; its text follows");
+    console.log(
+      (await workbench.innerText({ timeout: TEXT_TIMEOUT_MS }).catch(() => "")).slice(0, 4000),
+    );
+    throw error;
+  }
   const response = await started;
   const body = await response.json().catch(() => ({}));
   const runId = body.runId ?? body.snapshot?.runId;
@@ -157,6 +176,9 @@ async function startRun(page, workbench, { model, mode, text }) {
   if (!runId) throw new Error(`the run did not start: ${JSON.stringify(body).slice(0, 500)}`);
   return runId;
 }
+
+// A diagnostic read never waits on a Workbench that is gone: Playwright's own default is no limit.
+const TEXT_TIMEOUT_MS = 5_000;
 
 async function clickIfVisible(locator, label) {
   if (!(await locator.isVisible().catch(() => false))) return false;
@@ -215,6 +237,22 @@ export async function answerGates(page, runId, snapshot, { approve, decided }) {
   if (snapshot.state === "running" && approve !== "ask") await decideChangeReview(page, approve);
 }
 
+/**
+ * A question the model asked through OpenCode's question tool: recorded with its text, then
+ * declined so the run ends on the model's own answer. Standalone `opencode run` offers no question
+ * tool, so a declined question is the closest equivalent of a human who does not reply.
+ */
+async function declineQuestion(page) {
+  const section = page.getByRole("region", { name: "Runtime questions" });
+  const reject = section.getByRole("button", { name: "Reject question", exact: true }).first();
+  if (!(await reject.isEnabled().catch(() => false))) return;
+  log("question asked via UI; its text follows, then the driver declines it");
+  console.log(
+    (await section.innerText({ timeout: TEXT_TIMEOUT_MS }).catch(() => "")).slice(0, 2000),
+  );
+  await reject.click();
+}
+
 async function watchRun(page, runId, { approve, deadline, shots }) {
   let last = "";
   let shotCount = 0;
@@ -236,6 +274,7 @@ async function watchRun(page, runId, { approve, deadline, shots }) {
     }
     if (TERMINAL_STATES.includes(snapshot.state)) break;
     await answerGates(page, runId, snapshot, { approve, decided });
+    if (approve !== "ask") await declineQuestion(page);
     await sleep(POLL_MS);
   }
   return snapshot;
@@ -275,6 +314,13 @@ export async function operateRun(page, options) {
     deadline: Date.now() + timeoutMs,
     shots,
   });
+  await stopUnfinishedRun(
+    async (path, data) => ({
+      status: (await page.request.post(path, { headers: CSRF_HEADERS, data })).status(),
+    }),
+    runId,
+    snapshot,
+  );
   await reportRun(page, workbench, runId, snapshot, { shots, textOut, approve });
   return exitCodeForState(snapshot.state);
 }
@@ -282,7 +328,7 @@ export async function operateRun(page, options) {
 async function driveRun(browser, options) {
   const context = await browser.newContext({ viewport: VIEWPORT, baseURL: options.base });
   const page = await context.newPage();
-  page.on("pageerror", (error) => log("pageerror", String(error).slice(0, 200)));
+  page.on("pageerror", (error) => log("pageerror", errorMessage(error).slice(0, 200)));
   await seedWorkbenchWindow(page, options.repo);
   const { fragment } = await mintPairing();
   await page.goto(`/${fragment}`);
@@ -307,7 +353,7 @@ async function main() {
     textOut: cli.values["text-out"],
     approve,
     timeoutMs: minutesToMs(cli.values["timeout-min"]),
-    task: { text, mode, model: cli.values.model },
+    task: { text, mode, model: cli.values.model, jiraPod: cli.values["jira-pod"] },
   };
   if (options.shots) mkdirSync(options.shots, { recursive: true });
   const browser = await chromium.launch({ headless: cli.values.headed !== true });

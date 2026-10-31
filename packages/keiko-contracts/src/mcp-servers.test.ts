@@ -4,7 +4,9 @@ import {
   MCP_SERVER_MAX,
   mcpToolAction,
   mcpToolActions,
+  isMcpToolActionName,
   parseMcpServerRegistry,
+  parseMcpSettingsUpdate,
   type McpServerDefinition,
 } from "./mcp-servers.js";
 
@@ -41,6 +43,42 @@ function registry(...servers: unknown[]): unknown {
 }
 
 describe("the MCP server registry (#3903)", () => {
+  it.each([
+    String.raw`C:relative.exe`,
+    String.raw`\\host\share\tool.exe`,
+    "//host/share/tool",
+    String.raw`\\?\C:\tool.exe`,
+  ])("refuses ambiguous or remote executable paths: %s", (executable) => {
+    expect(
+      parseMcpServerRegistry(
+        registry({ ...LOCAL, transport: { ...LOCAL.transport, command: [executable] } }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it.each([String.raw`C:\Program Files\nodejs\node.exe`, "D:/tools/docs-mcp.exe"])(
+    "admits a fully qualified local Windows executable: %s",
+    (executable) => {
+      expect(
+        parseMcpServerRegistry(
+          registry({
+            ...LOCAL,
+            transport: { ...LOCAL.transport, command: [executable, "--stdio"] },
+          }),
+        ).ok,
+      ).toBe(true);
+    },
+  );
+
+  it("admits 128-character MCP tool names through the native action boundary", () => {
+    const name = "t".repeat(128);
+    const parsed = parseMcpServerRegistry(registry({ ...REMOTE, tools: { [name]: "read" } }));
+    expect(parsed.ok).toBe(true);
+    expect(isMcpToolActionName(mcpToolAction("s".repeat(64), name))).toBe(true);
+    expect(
+      parseMcpServerRegistry(registry({ ...REMOTE, tools: { [`${name}x`]: "read" } })).ok,
+    ).toBe(false);
+  });
   it("admits a remote server's expected issuer, public client and scope exactly as written", () => {
     const oauth = {
       issuer: ISSUER,
@@ -189,7 +227,6 @@ describe("the MCP server registry (#3903)", () => {
   });
 
   it.each([
-    ["a name with an underscore", { ...LOCAL, name: "my_docs" }],
     ["an uppercase name", { ...LOCAL, name: "Docs" }],
     ["an unknown key", { ...LOCAL, secret: "x" }],
     ["no tools", { ...LOCAL, tools: {} }],
@@ -244,5 +281,32 @@ describe("the MCP server registry (#3903)", () => {
       ok: false,
       reason: "server-invalid",
     });
+  });
+});
+
+describe("private MCP registry generation", () => {
+  const generation = "751aee5d-e2b8-4e60-a609-2995005266a5";
+  it("reads legacy documents and preserves a committed opaque generation", () => {
+    expect(parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL] })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL], generation }),
+    ).toMatchObject({ ok: true, generation });
+  });
+  it.each([null, 1, "", "stale", "a".repeat(1024)])("refuses malformed generation %s", (value) => {
+    expect(
+      parseMcpServerRegistry({ schemaVersion: 1, servers: [LOCAL], generation: value }),
+    ).toEqual({ ok: false, reason: "malformed" });
+  });
+  it("never accepts a client-selected Settings generation", () => {
+    expect(
+      parseMcpSettingsUpdate({
+        expectedRevision: "a".repeat(64),
+        servers: [LOCAL],
+        secrets: {},
+        generation,
+      }),
+    ).toBeUndefined();
   });
 });

@@ -39,6 +39,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { codingToolVerificationPresentation } from "./codingToolFacade.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import {
@@ -112,6 +113,7 @@ import type {
 } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
+import { commitVerificationReportPassed } from "../gitDelivery/verifiedCommitVerification.js";
 import { readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -1710,6 +1712,84 @@ describe("production managed worktree tools", () => {
     expect(verificationBlocked).not.toHaveBeenCalled();
   });
 
+  // #3579: the Workbench card used to show every one of these as a red "Failed" with only the
+  // generic "The tool reported an error to the model". The presentation is derived from the result
+  // the REAL port produced for the model, so a trust wait, a repository with nothing runnable and a
+  // run whose steps never executed each name what happened, and a check that went red stays a failure.
+  describe("the outcome a verification presents to the Workbench card (#3579)", () => {
+    it.each([
+      ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+      ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+    ] as const)("presents the runner refusal %s as %s", async (code, verificationOutcome) => {
+      const facade = verificationFacade({
+        records: [],
+        runToReport: () => Promise.reject(new VerificationRunnerError(code, "PRIVATE_BLOCKER")),
+      });
+      const result = await executeVerification(facade, "verification-presented");
+      expect(codingToolVerificationPresentation(result)).toEqual({ verificationOutcome });
+      expect(JSON.stringify(codingToolVerificationPresentation(result))).not.toContain(
+        "PRIVATE_BLOCKER",
+      );
+    });
+
+    it.each(["skipped", "denied", "cancelled"] as const)(
+      "presents a %s report, which executed nothing, as not-run",
+      async (status) => {
+        const facade = verificationFacade({
+          records: [],
+          runToReport: () => Promise.resolve(verificationReport(status)),
+        });
+        const result = await executeVerification(facade, "verification-presented");
+        expect(codingToolVerificationPresentation(result)).toEqual({
+          verificationOutcome: "not-run",
+        });
+      },
+    );
+
+    it("presents a red run as a failed check and a green one as passed", async () => {
+      const red = verificationFacade({
+        records: [],
+        runToReport: () => Promise.resolve(failedVerificationReport()),
+      });
+      expect(
+        codingToolVerificationPresentation(await executeVerification(red, "verification-red")),
+      ).toEqual({ verificationOutcome: "failed-check" });
+      const green = verificationFacade({
+        records: [],
+        runToReport: () => Promise.resolve(verificationReport("passed")),
+      });
+      expect(
+        codingToolVerificationPresentation(await executeVerification(green, "verification-green")),
+      ).toEqual({ verificationOutcome: "passed" });
+    });
+
+    it.each(["timed-out", "resource-exceeded"] as const)(
+      "claims nothing beyond the generic failure for a %s run",
+      async (status) => {
+        const facade = verificationFacade({
+          records: [],
+          runToReport: () => Promise.resolve(verificationReport(status)),
+        });
+        const result = await executeVerification(facade, "verification-limit");
+        expect(result).toMatchObject({ status: "failed" });
+        expect(codingToolVerificationPresentation(result)).toEqual({});
+      },
+    );
+
+    it.each(["PROJECT_NOT_FOUND", "VERIFICATION_RUNNER_UNAVAILABLE", "INTERNAL"] as const)(
+      "claims nothing beyond the generic failure for the runner fault %s",
+      async (code) => {
+        const facade = verificationFacade({
+          records: [],
+          runToReport: () => Promise.reject(new VerificationRunnerError(code, "PRIVATE_FAULT")),
+        });
+        const result = await executeVerification(facade, "verification-fault");
+        expect(result).toMatchObject({ status: "failed" });
+        expect(codingToolVerificationPresentation(result)).toEqual({});
+      },
+    );
+  });
+
   // A refusal by the verification runner (no project row, missing script trust, nothing runnable)
   // reaches the model under the runner's own closed code and leaves a body-free diagnostic; a bare
   // "failed" made the agent re-run the verifier instead of reporting the blocker (workbench
@@ -1913,6 +1993,57 @@ describe("production managed worktree tools", () => {
       ).resolves.toMatchObject({ status: "failed", reasonCode });
     },
   );
+
+  // #3907 AC3 (parity run T6f): on macOS every governed step is native-shell-required. A run that
+  // executed no step proves nothing about the staged candidate, yet it completed the ticket as a
+  // failed proof and replaced the passing proof the native shell check had just recorded, so every
+  // later commit was refused. Such a run is kept for the check list and leaves the proof alone.
+  it("leaves the commit proof alone when a governed run executed no step", async () => {
+    const [template] = failedVerificationReport().results;
+    if (template === undefined) throw new TypeError("fixture result missing");
+    const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
+      Promise.resolve(false),
+    );
+    const observeVerification = vi.fn<VerifiedCommitService["observeVerification"]>();
+    const notRun: VerificationReport = {
+      ...verificationReport("skipped"),
+      results: [
+        {
+          ...template,
+          kind: "typecheck",
+          status: "skipped",
+          exitCode: null,
+          durationMs: 0,
+          outputSummary: "",
+          locations: undefined,
+        },
+      ],
+      counts: { ...verificationReport("skipped").counts, skipped: 1 },
+    };
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(notRun),
+      records: [],
+      verifiedCommitService: {
+        ...verificationService(),
+        completeVerification,
+        observeVerification,
+      },
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-no-step",
+          idempotencyKey: "verification-no-step-key",
+          verifierId: "typecheck",
+        }),
+      }),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "VERIFICATION_NOT_RUN" });
+    expect(completeVerification).not.toHaveBeenCalled();
+    expect(observeVerification).toHaveBeenCalledExactlyOnceWith(notRun);
+  });
 
   // F74 (Coding Workbench run 24): a skipped run names the step it did not run and why, to the model
   // and in the activity log, instead of a bare VERIFICATION_NOT_RUN.
@@ -2577,6 +2708,50 @@ describe("production managed worktree tools", () => {
       expect(observeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 0 : 1);
     },
   );
+
+  // #3907 AC3 (lab lane T17): in Full access a staged candidate beside untracked files is admitted,
+  // never proven; the model reads the paths that stay outside the commit instead of "verify again".
+  it("reports a Full-access commit admitted beside untracked files", async () => {
+    const blocking = {
+      unstagedCount: 0,
+      untrackedCount: 1,
+      unstaged: [],
+      untracked: ["package-lock.json"],
+    };
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      log,
+      runToReport: () => Promise.resolve(verificationReport("passed")),
+      records: [],
+      verifiedCommitService: {
+        ...verificationService(),
+        beginVerification: () => Promise.resolve({ kind: "ticket", ticket: {} }),
+        completeVerification: () => Promise.resolve(false),
+        unprovenAdmission: () => blocking,
+      },
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-admitted",
+          idempotencyKey: "verification-admitted-key",
+          verifierId: "test",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      verification: { status: "passed", commit: { commitProof: "admitted", blocking } },
+    });
+    const line = expectActivityLogProof(
+      "coding-runtime.verification.emitted-line",
+      formatActivityLogProofLine(log.find((event) => event.extra?.state === "passed") ?? {}),
+    );
+    expect(line).toMatchObject({ commitProof: "admitted" });
+    expect(line).not.toHaveProperty("commitProofReason");
+  });
 
   it.each(["begin", "complete", "observe"] as const)(
     "preserves executed checks when optional commit proof %s throws",
@@ -4246,6 +4421,166 @@ describe("native verification publication through the production facade", () => 
   });
 });
 
+// #3907 AC3 parity: on macOS the governed verifier refuses to install for this host
+// (`native-shell-required`) and tells the model to run the check in its own shell. That shell check
+// reached the run's ledger but never the commit proof, so no native run could commit: every
+// keiko_git_commit of the Keiko T6 parity run ended `verification-failed`.
+describe("a native check line proves the staged commit candidate (#3907 AC3)", () => {
+  function proofService(
+    begin?: VerifiedCommitService["beginVerification"],
+    recorded = true,
+  ): {
+    readonly service: VerifiedCommitService;
+    readonly begin: ReturnType<typeof vi.fn<VerifiedCommitService["beginVerification"]>>;
+    readonly complete: ReturnType<typeof vi.fn<VerifiedCommitService["completeVerification"]>>;
+    readonly observe: ReturnType<typeof vi.fn<VerifiedCommitService["observeVerification"]>>;
+  } {
+    const begin_ = vi.fn<VerifiedCommitService["beginVerification"]>(
+      begin ??
+        ((): ReturnType<VerifiedCommitService["beginVerification"]> =>
+          Promise.resolve({ kind: "ticket" as const, ticket: {} })),
+    );
+    const complete = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
+      Promise.resolve(recorded),
+    );
+    const observe = vi.fn<VerifiedCommitService["observeVerification"]>();
+    const service = {
+      ...verificationService(),
+      beginVerification: begin_,
+      completeVerification: complete,
+      observeVerification: observe,
+    };
+    return { service, begin: begin_, complete, observe };
+  }
+  function nativeProofFacade(
+    service: VerifiedCommitService,
+    log: ServerLogEvent[] = [],
+  ): {
+    readonly settlement: NonNullable<
+      ReturnType<typeof createProductionManagedWorktreeToolFacade>["nativeSettlement"]
+    >;
+  } {
+    const facade = verificationFacade({
+      toolProfile: "native",
+      verificationRevision: () => 3,
+      verificationAdmitted: () => vi.fn(),
+      records: [],
+      log,
+      verifiedCommitService: service,
+      runToReport: () => Promise.resolve(verificationReport("passed")),
+    });
+    const settlement = facade.nativeSettlement;
+    if (settlement?.verificationAdmitted === undefined)
+      throw new TypeError("native verification admission unavailable");
+    return { settlement };
+  }
+  const call = { messageId: "message-proof-1", callId: "tool-proof-1" };
+
+  it("opens the ticket at admission and completes it with the line's passing report", async () => {
+    const { service, begin, complete } = proofService();
+    const log: ServerLogEvent[] = [];
+    const { settlement } = nativeProofFacade(service, log);
+    settlement.verificationAdmitted?.(call, "test");
+    expect(begin).toHaveBeenCalledOnce();
+    settlement.settled({
+      ...call,
+      tool: "shell",
+      state: "succeeded",
+      exitCode: 0,
+      exitStatusCheck: "test",
+    });
+    await vi.waitFor(() => {
+      expect(complete).toHaveBeenCalledOnce();
+    });
+    const [, report] = complete.mock.calls[0] ?? [];
+    expect(report).toMatchObject({
+      workspaceRoot: "/managed/worktree",
+      overallStatus: "passed",
+      counts: { passed: 1, failed: 0 },
+      results: [{ kind: "test", status: "passed", exitCode: 0, signal: null }],
+    });
+    if (report === undefined) throw new TypeError("native proof report missing");
+    expect(commitVerificationReportPassed(report, 0, Date.now())).toBe(true);
+    await vi.waitFor(() => {
+      expect(log.some((event) => event.extra?.state === "native-proof")).toBe(true);
+    });
+    const line = log.find((event) => event.extra?.state === "native-proof");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      ),
+    ).toMatchObject({
+      op: "coding-runtime.verification",
+      correlationId: "run-verification-3",
+      state: "native-proof",
+      verifierId: "test",
+      stepCount: 1,
+      commitProof: "recorded",
+    });
+  });
+
+  it("completes the ticket with a failed report when the line failed", async () => {
+    const { service, complete } = proofService(undefined, false);
+    const log: ServerLogEvent[] = [];
+    const { settlement } = nativeProofFacade(service, log);
+    settlement.verificationAdmitted?.(call, "lint");
+    settlement.settled({
+      ...call,
+      tool: "shell",
+      state: "failed",
+      exitCode: 2,
+      exitStatusCheck: "lint",
+    });
+    await vi.waitFor(() => {
+      expect(complete).toHaveBeenCalledOnce();
+    });
+    const [, report] = complete.mock.calls[0] ?? [];
+    expect(report).toMatchObject({
+      overallStatus: "failed",
+      results: [{ kind: "lint", status: "failed", exitCode: 2 }],
+    });
+    await vi.waitFor(() => {
+      expect(log.some((event) => event.extra?.state === "native-proof")).toBe(true);
+    });
+    const line = log.find((event) => event.extra?.state === "native-proof");
+    expect(line?.extra).toMatchObject({ verifierId: "lint", commitProof: "unavailable" });
+    expect(line?.extra).not.toHaveProperty("commitProofReason");
+  });
+
+  it("completes nothing for a line whose status another command decided", async () => {
+    const { service, complete } = proofService();
+    const { settlement } = nativeProofFacade(service);
+    settlement.verificationAdmitted?.(call, "test");
+    settlement.settled({ ...call, tool: "shell", state: "succeeded", exitCode: 0 });
+    await Promise.resolve();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("keeps a ticket the candidate refused off the proof path, on the check list", async () => {
+    const { service, complete, observe } = proofService(() =>
+      Promise.resolve({
+        kind: "refused" as const,
+        reason: "candidate-not-staged" as const,
+        blocking: { unstagedCount: 1, untrackedCount: 0, unstaged: ["src/a.ts"], untracked: [] },
+      }),
+    );
+    const { settlement } = nativeProofFacade(service);
+    settlement.verificationAdmitted?.(call, "test");
+    settlement.settled({
+      ...call,
+      tool: "shell",
+      state: "succeeded",
+      exitCode: 0,
+      exitStatusCheck: "test",
+    });
+    await vi.waitFor(() => {
+      expect(observe).toHaveBeenCalledOnce();
+    });
+    expect(complete).not.toHaveBeenCalled();
+  });
+});
+
 describe("verification waiting on the operator's package-script trust decision", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -4615,6 +4950,21 @@ function verificationRunnerOptions(options: {
   };
 }
 
+function folderKindOption(kind: "folder" | undefined): { readonly workspaceKind?: "folder" } {
+  return kind === undefined ? {} : { workspaceKind: kind };
+}
+
+// The facts the verification fixture grants; `delivery` adds the delivery action classes and scopes.
+function deliveryFacts(delivery: boolean): Pick<typeof FACTS, "actionClasses" | "connectorScopes"> {
+  const base = ["workspace-read", "workspace-write", "verification", "command-execution"] as const;
+  return delivery
+    ? {
+        actionClasses: [...base, "delivery-substrate", "connector-access"],
+        connectorScopes: ["source-control.read", "source-control.write"],
+      }
+    : { actionClasses: [...base], connectorScopes: FACTS.connectorScopes };
+}
+
 function verificationFacade(options: {
   readonly verificationBlocked?: ProductionManagedWorktreeToolInput["verificationBlocked"];
   readonly verificationAdmitted?: ProductionManagedWorktreeToolInput["verificationAdmitted"];
@@ -4623,6 +4973,8 @@ function verificationFacade(options: {
   readonly approvalProofVerifier?: ReturnType<typeof createCodingToolApprovalBridge>;
   readonly verifiedCommitService?: VerifiedCommitService;
   readonly runtimeGitService?: RuntimeGitService;
+  readonly workspaceKind?: "folder";
+  readonly deliveryGranted?: boolean;
   readonly requestStageApproval?: (proposalId: string) => void;
   readonly log?: ServerLogEvent[];
   readonly events?: CodingWorkbenchRuntimeEvent[];
@@ -4640,6 +4992,7 @@ function verificationFacade(options: {
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
     toolProfile: options.toolProfile,
+    ...folderKindOption(options.workspaceKind),
     verificationRevision: options.verificationRevision,
     verificationBlocked: options.verificationBlocked,
     verificationAdmitted: options.verificationAdmitted,
@@ -4685,7 +5038,7 @@ function verificationFacade(options: {
     deploymentCeiling: "autonomous-delivery",
     liveFacts: () => ({
       ...FACTS,
-      actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+      ...deliveryFacts(options.deliveryGranted === true),
     }),
     secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
     editorAgentClient: {
@@ -5940,5 +6293,109 @@ describe("accepted initial instruction acquisition", () => {
         .filter((e) => e.op === "coding-runtime.workspace-read" && e.extra?.state === "completed")
         .at(-1)?.extra?.purpose,
     ).toBe("native-instructions");
+  });
+});
+
+describe("a plain folder workspace without a repository (owner decision 2026-10-30)", () => {
+  const folderGit = (operation: string, extra: Record<string, unknown> = {}): string =>
+    JSON.stringify({
+      action: "git",
+      operation,
+      actionId: `folder-${operation}`,
+      idempotencyKey: `folder-${operation}`,
+      ...extra,
+    });
+
+  it("answers every Git operation with the closed repository-required reason and never calls a service", async () => {
+    const log: ServerLogEvent[] = [];
+    const execute = vi.fn();
+    const observe = vi.fn();
+    const facade = verificationFacade({
+      records: [],
+      log,
+      workspaceKind: "folder",
+      runToReport: vi.fn(),
+      runtimeGitService: { execute } as unknown as RuntimeGitService,
+      ciObservationService: { observe },
+    });
+    for (const body of [
+      folderGit("stage", { phase: "propose", paths: ["notes.txt"] }),
+      folderGit("ci"),
+    ]) {
+      const result = await facade.execute({ capability: "runtime-capability", body });
+      expect(result).toMatchObject({
+        status: "failed",
+        reasonCode: "repository-required",
+        evidence: [{ kind: "governed-delegate", code: "repository-required" }],
+      });
+      expect(JSON.stringify(result)).toContain("plain folder");
+    }
+    expect(execute).not.toHaveBeenCalled();
+    expect(observe).not.toHaveBeenCalled();
+    const line = log.find(
+      (event) =>
+        event.op === "coding-runtime.tool-result" && event.extra?.reason === "repository-required",
+    );
+    expect(line).toMatchObject({
+      correlationId: "run-verification-3",
+      extra: { actionKind: "git", state: "refused", reason: "repository-required" },
+    });
+    expect(line?.errorKind).toBeUndefined();
+    expectActivityLogProof(
+      "coding-runtime.tool-result.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+  });
+
+  it("refuses commit and push delivery the same way, as a delivery action", async () => {
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      records: [],
+      log,
+      workspaceKind: "folder",
+      deliveryGranted: true,
+      runToReport: vi.fn(),
+    });
+    const result = await facade.execute({
+      capability: "runtime-capability",
+      body: JSON.stringify({
+        action: "delivery",
+        actionId: "folder-commit",
+        idempotencyKey: "folder-commit",
+        intent: "commit",
+        phase: "propose",
+        message: "feat: note",
+      }),
+    });
+    expect(result).toMatchObject({ status: "failed", reasonCode: "repository-required" });
+    const line = log.find(
+      (event) =>
+        event.op === "coding-runtime.tool-result" && event.extra?.reason === "repository-required",
+    );
+    expect(line?.extra).toMatchObject({ actionKind: "delivery", state: "refused" });
+  });
+
+  it("keeps the repository answer unchanged where a repository exists", async () => {
+    const facade = verificationFacade({ records: [], runToReport: vi.fn() });
+    expect(
+      await facade.execute({ capability: "runtime-capability", body: folderGit("ci") }),
+    ).toMatchObject({ status: "failed", reasonCode: "capability-backend-unavailable" });
+  });
+
+  it("still verifies the folder: verification is independent of any repository", async () => {
+    const runToReport = vi.fn(() => Promise.resolve(verificationReport("passed")));
+    const facade = verificationFacade({ records: [], workspaceKind: "folder", runToReport });
+    const result = await facade.execute({
+      capability: "runtime-capability",
+      body: JSON.stringify({
+        action: "verification",
+        verifierId: "test",
+        actionId: "folder-verify",
+        idempotencyKey: "folder-verify",
+      }),
+    });
+    expect(runToReport).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "completed" });
+    expect(JSON.stringify(result)).not.toContain("repository-required");
   });
 });

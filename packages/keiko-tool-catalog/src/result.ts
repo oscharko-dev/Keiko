@@ -102,6 +102,19 @@ function validateIdentity(
   }
 }
 
+function validateResultData(
+  object: CatalogJsonObject,
+  metrics: CatalogJsonObject,
+  binding: ToolResultValidationBinding | undefined,
+): void {
+  requireCatalog(binding !== undefined && object.data !== undefined, "result-contract-failed");
+  requireCatalog(
+    matchesCatalogSchema(binding.descriptor.resultSchema, object.data),
+    "result-contract-failed",
+  );
+  requireCatalog(metrics.outputBytes === catalogBytes(object.data), "result-contract-failed");
+}
+
 function validateOutcome(
   object: CatalogJsonObject,
   binding: ToolResultValidationBinding | undefined,
@@ -111,17 +124,19 @@ function validateOutcome(
   const reasons: readonly string[] = TOOL_RESULT_REASONS[status as ToolResultStatus];
   requireCatalog(reasons.includes(catalogString(object.reason)), "result-contract-failed");
   const metrics = validateMetrics(object.metrics, binding);
-  if (status !== "completed") {
-    requireCatalog(object.data === null && object.page === null, "result-contract-failed");
+  if (status === "completed") {
+    validatePage(object.page);
+    validateResultData(object, metrics, binding);
     return;
   }
-  requireCatalog(binding !== undefined && object.data !== undefined, "result-contract-failed");
-  validatePage(object.page);
-  requireCatalog(
-    matchesCatalogSchema(binding.descriptor.resultSchema, object.data),
-    "result-contract-failed",
-  );
-  requireCatalog(metrics.outputBytes === catalogBytes(object.data), "result-contract-failed");
+  requireCatalog(object.page === null, "result-contract-failed");
+  if (status === "failed" && object.reason === "provider-reported-error") {
+    catalogObject(object.data);
+    requireCatalog(metrics.resultCount === 0, "result-contract-failed");
+    validateResultData(object, metrics, binding);
+    return;
+  }
+  requireCatalog(object.data === null, "result-contract-failed");
 }
 
 /** Pure envelope qualification. Cursor storage, authority, invocation settlement and clocks stay out. */

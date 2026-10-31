@@ -4,6 +4,7 @@ import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -16,6 +17,7 @@ import {
 import {
   createCodingToolFacade,
   codingToolEditPresentation,
+  codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
 } from "./codingToolFacade.js";
@@ -754,6 +756,73 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "provider-unavailable" }],
       reasonCode: "provider-unavailable",
+      guidance: expect.stringContaining("Retry once") as string,
+    });
+  });
+
+  // Coding Workbench live lab, 2026-10-30: an issue-free run pushed six times and each refusal reached
+  // the model as a bare "failed", so it invented a "remote that is not accessible". Every reason in the
+  // contract's closed vocabulary is forwarded for the delivery action, with the true cause as guidance.
+  it.each(CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS)(
+    "forwards the delivery refusal %s to the model with its cause",
+    async (reasonCode) => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+      const subject = createCodingToolFacade(ports);
+
+      const result = await subject.execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "propose" }),
+        capability,
+      });
+
+      expect(result).toMatchObject({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: reasonCode }],
+        reasonCode,
+        guidance: expect.stringMatching(/^.{41,}$/su) as string,
+      });
+    },
+  );
+
+  it.each([
+    ["repository-required", "not a remote or network problem"],
+    ["remote-required", "no 'origin' remote"],
+    ["github-origin-required", "github.com repository"],
+    ["issue-binding-required", "bound to an issue"],
+  ])("tells the model why a delivery is refused: %s", async (reasonCode, cause) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({
+        action: "delivery",
+        intent: "pull-request",
+        phase: "propose",
+        title: "t",
+      }),
+      capability,
+    });
+
+    expect(result).toMatchObject({ guidance: expect.stringContaining(cause) as string });
+    expect(JSON.stringify(result)).not.toMatch(/inaccessible|not accessible/iu);
+  });
+
+  it("keeps the delivery vocabulary out of every other action", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "remote-required" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "command", commandId: "test" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
     });
   });
 
@@ -1570,6 +1639,8 @@ describe("CodingToolFacade", () => {
     },
     { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "save-then-verify" },
     { commitProof: "unavailable", reasonCode: "unknown-reason", nextAction: "verify-again" },
+    { commitProof: "admitted" },
+    { commitProof: "admitted", blocking: { unstagedCount: 0, untrackedCount: 1 } },
   ])("strips a malformed verification proof payload", async (commit) => {
     const verification = { status: "passed", completed: ["test"], commit };
     const ports = facade();
@@ -1624,6 +1695,14 @@ describe("CodingToolFacade", () => {
       },
     },
     { status: "passed", completed: ["test"], commit: { commitProof: "recorded" } },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "admitted",
+        blocking: { unstagedCount: 0, untrackedCount: 1, unstaged: [], untracked: ["a.json"] },
+      },
+    },
     {
       status: "passed",
       completed: ["test"],
@@ -1969,6 +2048,78 @@ describe("CodingToolFacade", () => {
         extra: { status: "failed", reason: "handler-failed" },
       });
     });
+  });
+});
+
+// #3579: a refused or skipped verification used to read as a failed one in the Workbench timeline,
+// because the card knew only that the tool reported an error. The presentation names, in the
+// contract's closed words, why the call the model received ended as it did.
+describe("CodingToolFacade verification presentation (#3579)", () => {
+  async function presented(delegateOutcome: unknown): Promise<unknown> {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve(delegateOutcome));
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "verification", verifierId: "test" }),
+      capability,
+    });
+    return codingToolVerificationPresentation(result);
+  }
+
+  it.each([
+    ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+    ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+    ["VERIFICATION_NOT_RUN", "not-run"],
+    ["VERIFICATION_FAILED", "failed-check"],
+  ] as const)("presents the refusal %s as %s", async (reasonCode, verificationOutcome) => {
+    await expect(presented({ outcome: "failed", reasonCode })).resolves.toEqual({
+      verificationOutcome,
+    });
+  });
+
+  it("presents a completed verification as passed, with or without commit proof", async () => {
+    const passed = { status: "passed", completed: ["test", "lint"] };
+    await expect(presented({ outcome: "completed", verification: passed })).resolves.toEqual({
+      verificationOutcome: "passed",
+    });
+    await expect(
+      presented({
+        outcome: "completed",
+        verification: {
+          ...passed,
+          commit: {
+            commitProof: "unavailable",
+            reasonCode: "candidate-drift",
+            nextAction: "verify-again",
+          },
+        },
+      }),
+    ).resolves.toEqual({ verificationOutcome: "passed" });
+  });
+
+  // A timeout, a resource ceiling, a refusal before the runner and a bare failure claim no more
+  // than the card's generic failure; an unknown code and every non-failed status present nothing.
+  it.each([
+    { outcome: "failed", reasonCode: "VERIFICATION_TIMED_OUT" },
+    { outcome: "failed", reasonCode: "VERIFICATION_RESOURCE_EXCEEDED" },
+    { outcome: "failed", reasonCode: "VERIFICATION_RUNNER_UNAVAILABLE" },
+    { outcome: "failed", reasonCode: "PROJECT_NOT_FOUND" },
+    { outcome: "failed", reasonCode: "verification-authority-revoked" },
+    { outcome: "failed", reasonCode: "RAW_PROVIDER_SENTINEL" },
+    { outcome: "failed" },
+  ])("presents no outcome for %j", async (delegateOutcome) => {
+    await expect(presented(delegateOutcome)).resolves.toEqual({});
+  });
+
+  it("presents no outcome for a completed result that carries no verification", () => {
+    expect(
+      codingToolVerificationPresentation({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+      }),
+    ).toEqual({});
+    for (const status of ["denied", "cancelled", "timeout", "busy"] as const) {
+      expect(codingToolVerificationPresentation({ status, evidence: [] })).toEqual({});
+    }
   });
 });
 

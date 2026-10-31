@@ -74,6 +74,7 @@ export const PACKAGE_DIR_NAMES: ReadonlySet<string> = new Set([
   "keiko-memory-retrieval",
   "keiko-memory-vault",
   "keiko-model-gateway",
+  "keiko-mcp",
   "keiko-quality-intelligence",
   "keiko-sandbox",
   "keiko-sdk",

@@ -611,7 +611,10 @@ describe("OpenCode V2 live streamed text", () => {
       );
   }
 
-  it("copies known history once per acknowledged live delta instead of copying the owned snapshot", () => {
+  // The pin (#3895) forbade copying the owned snapshot on top of the one staging copy. #4104 removed
+  // the staging copy as well: a pass records only what it changed and adopts that at the checkpoint,
+  // so no known history is copied per acknowledged live delta, however long the session.
+  it("copies no known history for an acknowledged live delta, neither the owned snapshot nor a staging copy", () => {
     const projection = createOpenCodeV2HistoryProjection();
     const completed = Array.from({ length: 24 }, (_, index) => [
       { id: `msg_user_${String(index)}`, type: "user", time: { created: 1 }, text: "Task" },
@@ -646,7 +649,7 @@ describe("OpenCode V2 live streamed text", () => {
           ),
         ).toEqual(["word "]);
       }
-      expect(copies.read()).toEqual({ count: 12, entries: first.length * 12 });
+      expect(copies.read()).toEqual({ count: 0, entries: 0 });
     } finally {
       copies.restore();
     }

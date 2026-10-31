@@ -46,6 +46,7 @@ export const ACTIVITY_LOG_FAILURE_MODES = ["rejection", "dependency-failure", "c
 // keiko-server and keiko-cli have no owner-wide rule on purpose: a new BFF or CLI emitter module
 // must be mapped deliberately, and until it is, generation fails with `surface-unmapped`.
 export const ACTIVITY_LOG_SURFACE_RULES = [
+  { owner: "keiko-mcp", emitterPrefix: "", surface: "tools-workflows" },
   { owner: "keiko-cli", emitterPrefix: "audit", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "install-layout", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-browser-activity", surface: "ui" },
@@ -161,6 +162,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "process-log-sink", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "reference-id", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "run-handlers", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "run-patch-refusal-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "server", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "sse-write", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "store", surface: "bff" },
@@ -199,6 +201,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
 // the CLI write through the process-wide server logger; every domain package receives its own
 // port from the server (AGENTS.md §8).
 export const ACTIVITY_LOG_OWNER_PORTS = {
+  "keiko-mcp": { port: "ManagedMcpLogPort", declaredIn: "keiko-contracts" },
   "keiko-activity-log": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
   "keiko-cli": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
   "keiko-local-knowledge": { port: "KnowledgeLogSink", declaredIn: "keiko-local-knowledge" },

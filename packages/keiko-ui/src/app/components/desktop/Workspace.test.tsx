@@ -324,6 +324,31 @@ describe("Workspace card connections", () => {
     expect(style.transform).not.toContain("scale(");
   });
 
+  it.each([
+    LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+    FIGMA_VIEW_DRAG_TYPE,
+    FIGMA_JSON_DRAG_TYPE,
+    FIGMA_IMAGE_DRAG_TYPE,
+  ])("accepts protected native dragover for %s without reading its payload", (mime) => {
+    const add = vi.fn(() => "unused");
+    render(
+      <Workspace
+        ws={workspace({ wins: [], api: api({ add }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const dataTransfer = { types: [mime], getData: vi.fn(() => ""), dropEffect: "none" };
+    const event = createEvent.dragOver(surface, { dataTransfer });
+    fireEvent(surface, event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(dataTransfer.dropEffect).toBe("copy");
+    expect(dataTransfer.getData).not.toHaveBeenCalled();
+    fireEvent.drop(surface, { dataTransfer });
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it("creates a preselected connector card when a Local Knowledge capsule is dropped", () => {
     const add = vi.fn(() => "conn-1");
     const update = vi.fn();

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPatch, validatePatch } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_PATCH_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
   EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
@@ -1233,10 +1234,15 @@ describe("materializeReplacementChangeset at the 8 MiB changeset cap", () => {
 
     expect(Buffer.byteLength(patchOf(result), "utf8")).toBeGreaterThan(MIB - 4_096);
     expect(engineVerdict({}, patchOf(result), true)).toMatchObject({ ok: true });
-    // The tools default (64 KiB) is what the editor route used to apply: it would refuse this.
+    // The tools default used to be 64 KiB and would have refused this; since the owner decision of
+    // 2026-10-29 (#4110, ADR-0125 D3) it shares the editor path's per-patch byte bound, so the same
+    // changeset passes under it too.
+    expect(DEFAULT_PATCH_LIMITS.maxPatchBytes).toBe(
+      EDITOR_AGENT_CHANGESET_PATCH_LIMITS.maxPatchBytes,
+    );
     expect(
       validatePatch(workspace(tmpdir()), patchOf(result), { lineBreakMarkers: "verbatim" }),
-    ).toMatchObject({ ok: false });
+    ).toMatchObject({ ok: true });
   });
 
   // Seven files of exactly 1 MiB (the read ceiling a created file may reach) and one sized by

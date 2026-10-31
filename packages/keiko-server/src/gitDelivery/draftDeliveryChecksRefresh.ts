@@ -6,7 +6,7 @@
 // immediately before the write, and logged body-free whatever the outcome. A refresh that cannot run
 // leaves the section as it was: it names its own commit and says later commits are not covered.
 import { canonicalise } from "@oscharko-dev/keiko-security";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import type { IssueBoundDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import {
   validGitPrBodyText,
@@ -39,7 +39,7 @@ export interface DraftChecksRefreshInput {
   readonly options: DraftDeliveryServiceOptions;
   readonly context: DraftDeliveryRunContext;
   /** The record the push just advanced: its binding names the commit the section must describe. */
-  readonly record: DraftDeliveryRecord;
+  readonly record: IssueBoundDraftDeliveryRecord;
   /** The delivery's pull request, as read right after the push. */
   readonly pullRequest: GitPullRequestIdentity;
 }
@@ -98,7 +98,7 @@ export async function refreshDraftChecksSection(input: DraftChecksRefreshInput):
 function deliveredPullRequest(
   live: GitPullRequestIdentity,
   expected: GitPullRequestIdentity,
-  record: DraftDeliveryRecord,
+  record: IssueBoundDraftDeliveryRecord,
 ): boolean {
   return (
     live.state === "open" &&

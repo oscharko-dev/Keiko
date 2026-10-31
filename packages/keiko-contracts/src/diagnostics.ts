@@ -586,6 +586,28 @@ function coherentUpdateNotice(notice: Record<string, unknown>): boolean {
   );
 }
 
+// #4123: the Editor's Monaco model adopted the line ending of text the host wrote into it (a
+// buffer sync such as a reload from disk, or a host edit). The adopted sequence and its source only.
+export const CLIENT_EDITOR_LINE_ENDINGS = ["lf", "crlf"] as const;
+export const CLIENT_EDITOR_LINE_ENDING_SOURCES = ["buffer-sync", "host-edit"] as const;
+export interface ClientEditorLineEnding {
+  readonly lineEnding: (typeof CLIENT_EDITOR_LINE_ENDINGS)[number];
+  readonly source: (typeof CLIENT_EDITOR_LINE_ENDING_SOURCES)[number];
+}
+const EDITOR_LINE_ENDINGS: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDINGS);
+const EDITOR_LINE_ENDING_SOURCES: ReadonlySet<unknown> = new Set(CLIENT_EDITOR_LINE_ENDING_SOURCES);
+
+function hasValidEditorLineEndingContext(value: Record<string, unknown>): boolean {
+  const report = value.editorLineEnding;
+  if (report === undefined) return true;
+  if (!isRecord(report) || !isActivityLogCorrelationId(value.correlationId)) return false;
+  return (
+    Object.keys(report).length === 2 &&
+    EDITOR_LINE_ENDINGS.has(report.lineEnding) &&
+    EDITOR_LINE_ENDING_SOURCES.has(report.source)
+  );
+}
+
 function hasValidUpdateNoticeContext(value: Record<string, unknown>): boolean {
   const notice = value.updateNotice;
   if (notice === undefined) return true;
@@ -620,10 +642,21 @@ export interface ClientDiagnosticIngestRequest {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  // A Git-client operation (add-repository dialog discard, or manual retry) settling after the
+  // surface that asked for it is already gone (PR #3625 review): which operation, and how it
+  // settled — never the repository, path or URL involved.
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
+  // An open `KeikoSelect` menu dismissed by Escape (PR #3625 review): the closed reason and which
+  // focus location — trigger, search or option — Escape acted from, never a label or option text.
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  // The chat's Knowledge Pod picker offered no usable pod (PR #3678 review): counts only, sent as
+  // structured evidence rather than folded into the message the server reduces to a digest.
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
+  // A chat answer copy (PR #3678 review): its outcome and the marker groups removed and kept,
+  // never the copied text.
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
+  // An answer prepared for the voice dialogue (PR #3678 review): the marker groups removed and kept,
+  // under the correlation its synthesis request carries, never the spoken text.
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
   readonly scopeNotice?: ClientDiagnosticScopeNotice | undefined;
@@ -632,8 +665,19 @@ export interface ClientDiagnosticIngestRequest {
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly updateNotice?: ClientUpdateNotice | undefined;
+  // The Editor's model adopted the line ending of text Keiko wrote into it (#4123).
+  readonly editorLineEnding?: ClientEditorLineEnding | undefined;
+  // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
+  // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
+  // and how many were cut, never a message, path or run name.
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
+  // What the human did on the Coding Workbench page (#3897): closed values, a trust binding's two
+  // body-free ids and a changeset's file count — routine evidence, never a failure.
   readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
+  // A runtime request the Workbench gave up on at its own deadline (#4109): the call kind and the
+  // deadline in milliseconds, under the failed request's correlation id — a failure report, never
+  // a preemption.
+  readonly codingRequestTimeout?: ClientDiagnosticCodingRequestTimeout | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
@@ -836,8 +880,10 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "supportReportPreparation",
   "filesScopeDecision",
   "updateNotice",
+  "editorLineEnding",
   "codingRunRestore",
   "codingWorkbenchInteraction",
+  "codingRequestTimeout",
 ] as const;
 const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "message",
@@ -872,11 +918,13 @@ function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolea
   );
 }
 
-// The Coding Workbench's closed reports: a restored run's counts and the human's interactions.
+// The Coding Workbench's closed reports: a restored run's counts, the human's interactions and a
+// runtime request that hit its own deadline.
 function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
-    isOptional(value.codingWorkbenchInteraction, isClientDiagnosticCodingWorkbenchInteraction)
+    isOptional(value.codingWorkbenchInteraction, isClientDiagnosticCodingWorkbenchInteraction) &&
+    isOptional(value.codingRequestTimeout, isClientDiagnosticCodingRequestTimeout)
   );
 }
 
@@ -919,7 +967,8 @@ function hasValidOperationalContext(value: Record<string, unknown>): boolean {
     hasValidVoiceCaptureContext(value) &&
     hasValidGitContext(value) &&
     hasValidHealthDiagnostic(value) &&
-    hasValidUpdateNoticeContext(value)
+    hasValidUpdateNoticeContext(value) &&
+    hasValidEditorLineEndingContext(value)
   );
 }
 
@@ -1353,13 +1402,16 @@ export type ClientBindingSurface = (typeof CLIENT_BINDING_SURFACES)[number];
 // `candidates-offered`: a window whose chat id persistence redacted without a fingerprint listed the
 // chats it may have shown, for the person to choose from (#3557 review). `choice-kept` and
 // `choice-withdrawn`: the person kept the chat they chose for such a window, or withdrew it and
-// returned the window to the chats it may have shown.
+// returned the window to the chats it may have shown. `project-open-exhausted`: every bounded
+// attempt to open the chat's project was overtaken by another update, so the window stopped waiting
+// for it (#4123, #4126 review).
 export const CLIENT_BINDING_OUTCOMES = [
   "resolved",
   "target-missing",
   "candidates-offered",
   "choice-kept",
   "choice-withdrawn",
+  "project-open-exhausted",
 ] as const;
 export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 // The binding outcomes that report a failure; every other one is routine evidence. The browser and
@@ -1367,6 +1419,7 @@ export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 // the capacity a failure report needs (#3557 review).
 export const CLIENT_BINDING_FAILURE_OUTCOMES: ReadonlySet<ClientBindingOutcome> = new Set([
   "target-missing",
+  "project-open-exhausted",
 ]);
 
 // `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
@@ -1389,6 +1442,8 @@ export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPE
 // loss on a partial line, never silently cut (#3557 review).
 export const CLIENT_BINDING_RELATED_CORRELATIONS_MAX = 63;
 export const CLIENT_BINDING_DECIDING_LOADS_MAX = 10_000;
+// The most project-open attempts one binding report may name.
+export const CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX = 16;
 // The window's own persisted id, which workspace persistence bounds to this safe shape (a
 // restored window with any other id is dropped). The server logs only its digest, and no
 // truncation ever happens, so two windows can never share one (#3557 review). `~` stays out: it
@@ -1414,6 +1469,10 @@ export interface ClientBindingIngestRequest {
   readonly relatedCorrelationIds?: readonly string[] | undefined;
   // How many list loads decided the outcome in total; any the report does not name is loss.
   readonly decidingLoadCount?: number | undefined;
+  // How many times the window opened the chat's project before it held, when more than once: an
+  // attempt another update overtook is repeated, a bounded number of times (#4123). Always there on
+  // `project-open-exhausted`, which names the attempts it gave up after.
+  readonly projectOpenAttemptCount?: number | undefined;
   // `candidates-offered` only, and always there: how many chats the window offered, zero included.
   readonly candidateCount?: number | undefined;
   // `candidates-offered` only, and always there: how many of those offers read alike and show a
@@ -1434,6 +1493,7 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "correlationId",
   "relatedCorrelationIds",
   "decidingLoadCount",
+  "projectOpenAttemptCount",
   "candidateCount",
   "disambiguatedCount",
   "targetFingerprint",
@@ -1518,9 +1578,22 @@ function isDecidingLoadCount(value: unknown): boolean {
   return isBoundedPositiveInteger(value, CLIENT_BINDING_DECIDING_LOADS_MAX);
 }
 
+function isProjectOpenAttemptCount(value: unknown): boolean {
+  return isBoundedPositiveInteger(value, CLIENT_BINDING_PROJECT_OPEN_ATTEMPTS_MAX);
+}
+
+// An exhausted project open always names the attempts it gave up after.
+function hasConsistentProjectOpenAttempts(value: Record<string, unknown>): boolean {
+  if (value.outcome === "project-open-exhausted") {
+    return isProjectOpenAttemptCount(value.projectOpenAttemptCount);
+  }
+  return isOptional(value.projectOpenAttemptCount, isProjectOpenAttemptCount);
+}
+
 function hasBindingCorrelations(value: Record<string, unknown>): boolean {
   if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.decidingLoadCount, isDecidingLoadCount)) return false;
+  if (!hasConsistentProjectOpenAttempts(value)) return false;
   const related = value.relatedCorrelationIds;
   if (related === undefined) return true;
   return (
@@ -2095,6 +2168,19 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // The first interruption of a shared event stream whose browser source was closed; the stream is
   // reopened by its own reconnect and any session repair is reported on the same streak.
   "event-stream-reconnecting",
+  // A history task of another workspace than the active one was returned and not activated: the
+  // operator works in another workspace, an ordinary transition and not a failure (#4118).
+  "history-workspace-switched",
+  // The server refused to register the run's editor bridge: the root boundary refused the run's
+  // root, or another tab holds the run's lease. Closed reason only (#4117).
+  "bridge-registration-refused",
+  // A diff above the window threshold switched to the windowed view: one file and one page of its
+  // lines at a time. Counts and the closed surface only, never a path or diff text (#4108).
+  "diff-windowed",
+  // An unpaired window held one of its secondary notices: the run status sentence names the
+  // missing pairing once instead of every surface reporting its own failure. Closed notice only
+  // (#3880).
+  "notice-held",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2128,8 +2214,36 @@ export type ClientCodingWorkbenchProgressState =
 export const CLIENT_CODING_WORKBENCH_AGENT_KINDS = ["build", "plan", "custom"] as const;
 export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGENT_KINDS)[number];
 
+/** Why the editor bridge registration was refused: the root boundary, or a lease held elsewhere. */
+export const CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS = ["root-boundary", "lease"] as const;
+export type ClientCodingWorkbenchBridgeRefusal =
+  (typeof CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS)[number];
+
+/** The Coding Workbench surface that switched a diff to the windowed view. */
+export const CLIENT_CODING_WORKBENCH_DIFF_SURFACES = [
+  "changeset-review",
+  "run-changes",
+  "answer-diff",
+] as const;
+export type ClientCodingWorkbenchDiffSurface =
+  (typeof CLIENT_CODING_WORKBENCH_DIFF_SURFACES)[number];
+
+/** The secondary notice an unpaired window held behind its one pairing state (#3880). */
+export const CLIENT_CODING_WORKBENCH_HELD_NOTICES = [
+  "task-session",
+  "skills",
+  "mcp",
+  "activity",
+  "questions",
+  "editor-bridge",
+] as const;
+export type ClientCodingWorkbenchHeldNotice = (typeof CLIENT_CODING_WORKBENCH_HELD_NOTICES)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
+/** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
+export const CLIENT_CODING_WORKBENCH_DIFF_LINE_COUNT_MAX = 16_777_216;
+export const CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX = 1_073_741_824;
 
 export type ClientDiagnosticCodingWorkbenchInteraction =
   | {
@@ -2150,7 +2264,20 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
     }
   | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number }
   | { readonly interaction: "history-repository-switched" }
-  | { readonly interaction: "event-stream-reconnecting" };
+  | { readonly interaction: "event-stream-reconnecting" }
+  | { readonly interaction: "history-workspace-switched" }
+  | {
+      readonly interaction: "bridge-registration-refused";
+      readonly refusal: ClientCodingWorkbenchBridgeRefusal;
+    }
+  | {
+      readonly interaction: "diff-windowed";
+      readonly surface: ClientCodingWorkbenchDiffSurface;
+      readonly fileCount: number;
+      readonly totalLineCount: number;
+      readonly totalByteCount: number;
+    }
+  | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
@@ -2163,6 +2290,15 @@ const CODING_WORKBENCH_PROGRESS_STATE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+);
+const CODING_WORKBENCH_BRIDGE_REFUSAL_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
+);
+const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+);
+const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_HELD_NOTICES,
 );
 
 function isCodingWorkbenchInteractionName(
@@ -2189,6 +2325,10 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "pending-decision-focused": {},
   "history-repository-switched": {},
   "event-stream-reconnecting": {},
+  "history-workspace-switched": {},
+  "bridge-registration-refused": {
+    refusal: (value) => isSetMember(value, CODING_WORKBENCH_BRIDGE_REFUSAL_SET),
+  },
   "repository-trust-bound": {
     repositoryId: (value) => typeof value === "string" && BODY_FREE_ID_PATTERN.test(value),
     workspaceId: (value) =>
@@ -2198,6 +2338,16 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
     fileCount: (value) =>
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX),
   },
+  "diff-windowed": {
+    surface: (value) => isSetMember(value, CODING_WORKBENCH_DIFF_SURFACE_SET),
+    fileCount: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX),
+    totalLineCount: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_LINE_COUNT_MAX),
+    totalByteCount: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
+  },
+  "notice-held": { notice: (value) => isSetMember(value, CODING_WORKBENCH_HELD_NOTICE_SET) },
 };
 
 /** True for one closed interaction with exactly its own valid fields. */
@@ -2210,6 +2360,64 @@ function isClientDiagnosticCodingWorkbenchInteraction(
   return (
     keys.length === Object.keys(fields).length &&
     keys.every((key) => fields[key]?.(value[key]) === true)
+  );
+}
+
+// ─── Coding Workbench request timeout (#4109) ──────────────────────────────────
+//
+// A runtime request the Workbench gave up on at its own client-side deadline: the BFF accepted it and
+// never answered in time, so no server line can describe it. The report names which call it was and
+// the deadline it ran out of — closed values and one bound, never a run id, a path or a body. The
+// failed request's correlation id rides the report envelope when the transport carried one. A
+// preempted request (Stop took its place) is not a timeout and is never reported as one.
+
+/**
+ * The runtime calls the Workbench bounds with a deadline: the two reads and every mutation. The
+ * mutation names are the ones the Workbench's queue uses for its pending state; `question-answer`
+ * and `question-reject` answer a required question outside that queue.
+ */
+export const CLIENT_CODING_RUNTIME_CALLS = [
+  "status",
+  "snapshot",
+  "start",
+  "approval",
+  "stop",
+  "takeover",
+  "retry",
+  "recovery-ack",
+  "pause",
+  "resume",
+  "follow-up",
+  "revert",
+  "inbox",
+  "research-revoke",
+  "question-answer",
+  "question-reject",
+] as const;
+export type ClientCodingRuntimeCall = (typeof CLIENT_CODING_RUNTIME_CALLS)[number];
+
+/** Bounds a reported deadline: one hour, far above any deadline the Workbench sets. */
+export const CLIENT_CODING_REQUEST_DEADLINE_MS_MAX = 3_600_000;
+
+export interface ClientDiagnosticCodingRequestTimeout {
+  readonly call: ClientCodingRuntimeCall;
+  readonly deadlineMs: number;
+}
+
+const CODING_RUNTIME_CALL_SET: ReadonlySet<string> = new Set(CLIENT_CODING_RUNTIME_CALLS);
+const CODING_REQUEST_TIMEOUT_KEYS: ReadonlySet<string> = new Set(["call", "deadlineMs"]);
+
+/** True for exactly one closed call kind and a positive, bounded deadline in milliseconds. */
+function isClientDiagnosticCodingRequestTimeout(
+  value: unknown,
+): value is ClientDiagnosticCodingRequestTimeout {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === CODING_REQUEST_TIMEOUT_KEYS.size &&
+    keys.every((key) => CODING_REQUEST_TIMEOUT_KEYS.has(key)) &&
+    isSetMember(value.call, CODING_RUNTIME_CALL_SET) &&
+    isBoundedPositiveInteger(value.deadlineMs, CLIENT_CODING_REQUEST_DEADLINE_MS_MAX)
   );
 }
 

@@ -169,14 +169,23 @@ vi.mock("./useCodingTaskSession", () => ({
 
 // Binding and restoration are covered by the execution-location hook's focused suite. Keep this
 // presentation suite on an already verified checkout so a network-free fixture stays startable.
+const locationInputs = vi.hoisted(
+  () => [] as { readonly folderMode: boolean; readonly location: string }[],
+);
 vi.mock("./useWorkbenchExecutionLocation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./useWorkbenchExecutionLocation")>()),
-  useWorkbenchExecutionLocation: (): {
+  useWorkbenchExecutionLocation: (input: {
+    readonly folderMode: boolean;
+    readonly location: string;
+  }): {
     ready: boolean;
     pending: boolean;
     error: boolean;
     retry: () => void;
-  } => ({ ready: true, pending: false, error: false, retry: vi.fn() }),
+  } => {
+    locationInputs.push({ folderMode: input.folderMode, location: input.location });
+    return { ready: true, pending: false, error: false, retry: vi.fn() };
+  },
 }));
 
 function defaultTaskSession(): CodingTaskSession {
@@ -581,6 +590,7 @@ beforeEach(() => {
     denied: false,
     branches: [],
     currentBranch: root === null ? null : "dev",
+    ordinaryFolder: false,
     refresh: vi.fn(() => Promise.resolve()),
   }));
   editorBridgeHookMock.mockReturnValue({
@@ -601,6 +611,19 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
+  it("offers central MCP management before a fresh task starts", async () => {
+    runtimeHookMock.mockReturnValue({
+      state: liveState({ run: { status: "ready", value: null, error: null } }),
+      actions: actions(),
+    });
+    const openSettings = vi.fn();
+    render(<CodingWorkbenchWindow selectedRoot="/repo" onOpenMcpSettings={openSettings} />);
+    const manage = await screen.findByRole("button", { name: "Manage MCP servers" });
+    expect(manage).toBeVisible();
+    fireEvent.click(manage);
+    expect(openSettings).toHaveBeenCalledOnce();
+  });
+
   it("keeps a fresh task start available when previous history cannot load", async () => {
     taskSessionHookMock.mockReturnValue({
       ...defaultTaskSession(),
@@ -1904,9 +1927,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
-      /^Running\. Revision 4\.$/u,
-    );
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Running$/u);
     expect(screen.getByRole("timer")).toHaveTextContent(/^Elapsed /u);
     expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Running a verifier");
     const readiness = screen.getByTestId("coding-runtime-readiness");
@@ -2068,9 +2089,7 @@ describe("CodingWorkbenchWindow", () => {
 
       const announcement = screen.getByTestId("coding-runtime-announcement");
       expectPoliteAtomicStatus(announcement);
-      expect(announcement).toHaveTextContent(
-        /^Running\. Revision 4\. Model gateway unavailable, retrying\.$/u,
-      );
+      expect(announcement).toHaveTextContent(/^Running\. Model gateway unavailable, retrying\.$/u);
       expect(announcement).toBeVisible();
       expect(screen.queryByTestId("coding-runtime-phase")).toBeNull();
       expect(screen.getByTestId("coding-runtime-status")).not.toHaveTextContent(
@@ -2085,9 +2104,7 @@ describe("CodingWorkbenchWindow", () => {
       ]);
 
       expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
-        /^Running\. Revision 4\.$/u,
-      );
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Running$/u);
     });
 
     // A call the run cancelled while the gateway retried it ends with no answer; the status must
@@ -2501,7 +2518,10 @@ describe("CodingWorkbenchWindow", () => {
     });
     const liveActions = renderWorkbench(deliveryApprovalState("push"));
 
-    expect(screen.getByRole("heading", { name: "Review the bounded action" })).toBeInTheDocument();
+    // #3907 (owner: less is more): the card names the action itself and keeps the bounded policy
+    // facts in its collapsed details.
+    expect(screen.getByRole("heading", { name: "Push" })).toBeInTheDocument();
+    expect(screen.getByText("Details").closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText(/diff --git|Bearer|\/Users\//u)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Approve once" }));
     await user.click(screen.getByRole("button", { name: "Deny" }));
@@ -2562,8 +2582,8 @@ describe("CodingWorkbenchWindow", () => {
       retry: vi.fn(),
     });
     renderWorkbench(nativeEditApprovalState());
+    expect(screen.getByRole("heading", { name: "File change" })).toBeInTheDocument();
     const review = screen.getByRole("group", { name: "What the agent wants to do" });
-    expect(review).toHaveTextContent("File change");
     expect(review).toHaveTextContent("src/app.ts");
     expect(review).toHaveTextContent("src/app.test.ts");
     expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
@@ -2617,6 +2637,41 @@ describe("CodingWorkbenchWindow", () => {
     } as UseCodingWorkbenchApprovalReviewResult;
   }
 
+  it("enables a managed MCP approval using its bound native review without research evidence", () => {
+    approvalReviewHookMock.mockReturnValue(
+      nativeReview("fixture-server_write", ["fixture-server_write", "fixture"]),
+    );
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "awaiting-approval",
+            runId: "run-1",
+            pendingPermission: {
+              requestId: "permission-native-1",
+              kind: "network-egress",
+              actionClass: "network-egress",
+              reasonCode: "approval-required",
+              policyReason: "approval-required",
+              scopeLabel: "network-egress",
+              risk: "medium",
+              commandLabel: "native-mcp",
+              nativePermission: "mcp",
+              expiresAt: "2026-07-13T12:05:00.000Z",
+            },
+          }),
+        },
+      }),
+    );
+    expect(screen.getByRole("group", { name: "What the agent wants to do" })).toHaveTextContent(
+      "fixture-server_write",
+    );
+    expect(screen.queryByRole("group", { name: "Research destination" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+  });
+
   // #3897 review: the generic "Raw commands, prompts, diffs, and file contents remain hidden." sat
   // directly under the visible command. A native ask says what Approve does for ITS permission.
   it("#3897: a native shell ask states what Approve runs instead of claiming the command is hidden", () => {
@@ -2624,10 +2679,12 @@ describe("CodingWorkbenchWindow", () => {
     renderWorkbench(nativeAskState("shell"));
 
     const review = screen.getByRole("group", { name: "What the agent wants to do" });
-    expect(review).toHaveTextContent("Approve runs this command once in the task workspace");
+    expect(review).toHaveTextContent("Runs this command once in the task workspace.");
     expect(screen.queryByText(/remain hidden/u)).toBeNull();
     // One help line per ask, never the generic one beside the native one.
-    expect(screen.getAllByText(/Approve .* once/u)).toHaveLength(1);
+    expect(
+      screen.getAllByText(/Runs this command once|Allows exactly this action once/u),
+    ).toHaveLength(1);
     // The command keeps its line breaks (the block is pre-wrapped), not a whitespace-collapsed line.
     expect(
       screen.getByRole("list", { name: "Requested command, paths, or addresses" }).textContent,
@@ -2639,7 +2696,7 @@ describe("CodingWorkbenchWindow", () => {
     renderWorkbench(nativeAskState("webfetch"));
 
     const review = screen.getByRole("group", { name: "What the agent wants to do" });
-    expect(review).toHaveTextContent("Internet access is only available in Full access.");
+    expect(review).toHaveTextContent("Internet access exists only in Full access.");
     expect(review).not.toHaveTextContent("task workspace");
   });
 
@@ -2759,13 +2816,16 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.getByText("Network egress")).toBeInTheDocument();
-    expect(screen.getByText("Connector access")).toBeInTheDocument();
-    expect(screen.getByText("Critical")).toBeInTheDocument();
+    // #3907: the facts sit in the card's collapsed details; a critical risk also leads the card.
+    expect(screen.getByText("Approval required · Risk: Critical")).toBeInTheDocument();
+    const facts = within(screen.getByText("Details").closest("details") as HTMLElement);
+    expect(facts.getByText("Network egress")).toBeInTheDocument();
+    expect(facts.getByText("Connector access")).toBeInTheDocument();
+    expect(facts.getByText("Critical")).toBeInTheDocument();
     // The three remaining closed-union facts on the same screen (review of ec04288dc).
-    expect(screen.getByText("Push")).toBeInTheDocument();
-    expect(screen.getByText("File edit outside the task scope")).toBeInTheDocument();
-    expect(screen.getByText("Source control (write), Issue tracker (read)")).toBeInTheDocument();
+    expect(facts.getByText("Push")).toBeInTheDocument();
+    expect(facts.getByText("File edit outside the task scope")).toBeInTheDocument();
+    expect(facts.getByText("Source control (write), Issue tracker (read)")).toBeInTheDocument();
     expect(screen.queryByText("out-of-scope-file-edit")).not.toBeInTheDocument();
     expect(screen.queryByText("source-control.write")).not.toBeInTheDocument();
     expect(screen.queryByText("network-egress")).not.toBeInTheDocument();
@@ -2858,7 +2918,7 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: label })).toBeInTheDocument();
       // Neither maps to "network-egress", so no destination-review coupling applies and the
       // approve control is not blocked waiting on evidence it has no reader for (3941816393).
       expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
@@ -2966,7 +3026,7 @@ describe("CodingWorkbenchWindow", () => {
       retry: vi.fn(),
     });
     const actions = renderWorkbench(editApprovalState("git-stage"));
-    expect(screen.getByText("Stage changes")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Stage changes" })).toBeInTheDocument();
     expect(screen.getByText("src/stage-only.ts")).toBeInTheDocument();
     expect(warning).toHaveBeenCalledWith("[keiko] git stage review ready: files 1");
     expect(JSON.stringify(warning.mock.calls)).not.toContain("src/stage-only.ts");
@@ -3198,6 +3258,9 @@ describe("CodingWorkbenchWindow", () => {
         "1".repeat(40),
       ])
         expect(target).toHaveTextContent(value);
+      // #3907: the record's own proposal id and time stay on the status card, not on the decision.
+      expect(target.querySelector('[data-fact="proposalId"]')).toBeNull();
+      expect(target.querySelector('[data-fact="recordedAt"]')).toBeNull();
       expect(screen.queryByRole("group", { name: "Changed files" })).not.toBeInTheDocument();
       if (action === "pull-request") {
         expect(
@@ -6681,5 +6744,119 @@ describe("CodingWorkbenchWindow live-region and stream-status semantics", () => 
       "true",
     );
     expect(screen.getByRole("button", { name: "Deny" })).toHaveAttribute("aria-busy", "true");
+  });
+});
+
+// #3880: an unpaired window showed five overlapping notices at once, each surface reporting its own
+// failure to read a channel the missing pairing had closed. The run status sentence names the
+// pairing once; the secondary notices hold until the window is paired, and each hold is recorded.
+describe("CodingWorkbenchWindow unpaired notice hold (#3880)", () => {
+  const SECONDARY_NOTICES = [
+    /The coding task could not be loaded or updated/u,
+    /The approved skills could not be read/u,
+    /Activity not connected/u,
+    /Edits are paused: reconnecting the editor bridge/u,
+    /This window is not paired for question content/u,
+  ];
+  const reports: ClientDiagnosticMeta[] = [];
+
+  beforeEach(() => {
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta?.codingWorkbenchInteraction?.interaction === "notice-held") reports.push(meta);
+    });
+    taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), error: true });
+    skillsHookMock.mockReturnValue({ status: "unavailable", skills: null, retry: vi.fn() });
+    activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "unavailable" });
+    questionsHookMock.mockReturnValue({ ...EMPTY_QUESTIONS, status: "unpaired" });
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: null,
+      approve: vi.fn(),
+      deny: vi.fn(),
+      retry: vi.fn(),
+      bridgeUnavailable: true,
+    });
+  });
+  afterEach(() => {
+    reports.length = 0;
+    resetClientDiagnosticWriter();
+  });
+
+  function renderRun(pairing: CodingWorkbenchRuntimeState["pairing"]): void {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        pairing,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+        events: [event(1)],
+      }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko-checkout", "/repos/keiko-checkout"),
+    );
+  }
+
+  it("shows the one pairing state and holds every secondary notice", (): void => {
+    renderRun("unpaired");
+
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      "Workbench is not paired. Open Keiko from the launcher.",
+    );
+    for (const notice of SECONDARY_NOTICES) expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByTestId("coding-workbench-questions")).toBeNull();
+    expect(
+      reports.map((report) =>
+        report.codingWorkbenchInteraction?.interaction === "notice-held"
+          ? report.codingWorkbenchInteraction.notice
+          : null,
+      ),
+    ).toEqual(
+      expect.arrayContaining(["task-session", "skills", "activity", "questions", "editor-bridge"]),
+    );
+    expect(JSON.stringify(reports)).not.toMatch(/keiko-checkout|run-1/u);
+  });
+
+  it("shows each notice of a paired window that cannot read its channels", (): void => {
+    renderRun("paired");
+
+    for (const notice of SECONDARY_NOTICES) {
+      expect(screen.getAllByText(notice).length).toBeGreaterThan(0);
+    }
+    expect(reports).toEqual([]);
+  });
+});
+
+// Owner decision 2026-10-30: the Workbench works in any folder. An ordinary folder (the branch read
+// answers `available: false`) is handed to the binding hook as a folder, always Local, and its
+// repository is no failure.
+describe("CodingWorkbenchWindow in an ordinary folder", () => {
+  it("hands an ordinary folder to the binding hook as a folder, always Local", async () => {
+    repositoryBranchHookMock.mockImplementation((root) => ({
+      root,
+      response: { available: false } as never,
+      loading: false,
+      error: null,
+      denied: false,
+      branches: [],
+      currentBranch: null,
+      ordinaryFolder: root !== null,
+      refresh: vi.fn(() => Promise.resolve()),
+    }));
+    locationInputs.length = 0;
+    renderWorkbench();
+    await screen.findByRole("button", { name: "Start coding run" });
+    const last = locationInputs.at(-1);
+    expect(last).toEqual({ folderMode: true, location: "local" });
+    expect(screen.queryByRole("button", { name: "Open Git" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a repository out of folder mode", async () => {
+    locationInputs.length = 0;
+    renderWorkbench();
+    await screen.findByRole("button", { name: "Start coding run" });
+    expect(locationInputs.at(-1)?.folderMode).toBe(false);
   });
 });

@@ -6,10 +6,10 @@ been visually accepted. The narrative, surface matrix, tolerance, retention, des
 final variance register are in [`../../visual-regression.md`](../../visual-regression.md); the governance gates
 are in [ADR-0051](../../../adr/ADR-0051-design-system-visual-regression-and-acceptance-gate.md).
 
-The commands below are historical evidence tools, not standing CI or pull-request gates. They retain their
-non-zero assertions for forensic reproduction, but later intentional changes to the product or reference can
-make an old migration comparison fail. Current release protection is provided by the applicable UI and
-Playwright regression suites.
+The commands below retain historical fixture scope. They are not direct CI entry points, but current UI
+regression tests verify their committed proofs against the declared source inputs. When those inputs change,
+regenerate the original producers before claiming those tests pass. Their non-zero assertions remain active;
+these fixture proofs do not replace applicable product journeys or qualify capabilities they do not exercise.
 
 ## How to reproduce
 
@@ -44,7 +44,7 @@ ghost text, agent prompts) is proven by
 
 ## Environment
 
-- Headless Chromium via Playwright 1.61.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
+- Headless Chromium via Playwright 1.64.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
 - Fidelity gates use `page.setContent` / `file://` (no server — CodeQL-safe); the running-app capture serves
   `packages/keiko-ui/out` over a realpath-confined loopback server and stubs same-origin API responses with
   deterministic `keiko.workspace.v4` workspace-window state.
@@ -174,3 +174,69 @@ programs, source-input inventory, fixtures and assertions are unchanged. Capture
 Windows host's rendering and German UI locale; the emitted CSS bundle digest is measured from its
 fresh build. This refresh proves the seeded UI fixtures and source bindings, not an installed
 Windows Coding Workbench, a model task or a new human designer acceptance.
+
+## MCP and Jira Chat integration — 2026-10-28
+
+The original four producers were regenerated in the isolated Linux arm64 environment with Node 24.18.0
+and npm 11.16.0 from `01e3858cd`, plus the MCP CSS class-prefix repair and the exact empty connector-list
+fixture. The first complete browser run rejected 18 previously unstubbed `GET` requests from the new
+Jira-pod view. The fixture now answers only `/api/atlassian-connectors/credentials` with the existing
+`{ credentials: [] }` envelope; unexpected paths and methods still fail closed. All four producers were
+then rerun, so their 29 declared source fingerprints also bind the updated harness.
+
+Component fidelity passed 427 probes with zero gated differences. Editor fidelity passed 160 probes with
+zero gated differences and all 14 reference captures; the previously recorded, non-gated dark high-contrast
+bracket-color difference remains recorded. The seven-mode accessibility proof has zero violations and zero
+unresolved incomplete findings. All 108 running-app captures have zero page errors, missing selectors,
+error notices, crashed windows, unavailable trust states and unexpected API requests. All 287 unchanged
+CSS/proof tests and 25 producer/freshness tests passed. No threshold, exception or suppression changed.
+
+The regenerated browser and editor-reference captures were visually inspected. The historical canvas
+fixtures retain window positions extending beyond narrow viewports, as the prior baseline did; these images
+are not a complete mobile interaction qualification. Reference pages depicting an agent in the Editor
+remain historical design references, not evidence of an available Editor agent. MCP/Jira live effects and
+model behavior are qualified separately in the epic evidence.
+
+## Release 1.3.2 — 2026-10-28
+
+The 1.3.2 version bump changes `package.json`, `package-lock.json` and
+`packages/keiko-ui/package.json`, which these producers bind. The same four original producers were
+rerun on the release tree on Node 24.18.0 (macOS arm64), and all passed: component
+fidelity with 427 probes and zero gated or recorded differences, editor token fidelity with 160 gated
+probes, zero gated differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## PR #4093 exact Linux producer run — 2026-10-29
+
+The four original producers passed in the clean Linux checkout at exact source
+`4c129452229068c2cbde5d454b5add0d02187933` (Node 24.18.0, npm 11.16.0,
+Playwright 1.64.1). Component fidelity covered 427 probes with zero gated or
+recorded differences. Editor token fidelity covered 160 gated probes with zero
+gated differences and all 14 reference captures; ten accent differences remain
+recorded and three tokens remain reference-only. The seven-mode axe proof had zero
+violations and zero unresolved incomplete findings. All 108 running-app captures
+had zero page errors, missing selectors, visible error notices, crashed windows,
+unavailable workspace-trust states or unexpected API requests. The refreshed Linux
+release bundle record measures 388 static-export files; B1/B2/B3 and the editor
+bundle-size gate pass. No producer assertions, tolerances or budgets changed.
+
+These are synthetic visual fixtures; real MCP/Jira effects and model behavior are
+qualified separately.
+
+## Windows branch integration — 2026-10-31
+
+After integrating `dev` at `55e4b02b2` into #4088, the retained Windows npm launcher change
+still differs in a declared producer input. All four original producers were rerun on Windows
+x64 with Node 24.18.0, npm 11.16.0 and Playwright 1.64.1. Component fidelity passes all 427
+probes with zero gated or recorded differences; editor fidelity retains zero gated differences
+and all 14 reference captures. All seven accessibility modes have zero serious/critical
+violations and zero unresolved incomplete findings. All 108 browser captures pass the existing
+page-error, selector, notice, crash, trust-state and unexpected-request checks.
+
+The 281 stylesheet/evidence tests pass. The independent static dependency inventory test first
+failed on Windows path separators; normalizing the resolved relative path to manifest slash
+notation preserves the complete dependency check and both source-binding tests now pass.
+Representative desktop dark and editor light captures were visually inspected. Historical
+fixture layout limits and the separation from real Workbench acceptance remain unchanged.

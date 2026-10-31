@@ -39,6 +39,21 @@ accepted Coding mode and the Coding deployment ceiling; their authority must not
 through the independent Memory capture policy, even though the Chat wire carries that mode in
 the shared request field. Existing description-scope and envelope validation still apply.
 
+Epic #4081 / #4084 adds ordinary Chat's persisted tool-mode selection, defaulting to Ask for
+approval, and one opaque Jira Pod binding with monotonic binding/authentication generations.
+The authenticated Chat PATCH path requires the current scope identity for Jira or mode intent,
+rejects server-owned generation fields, resolves only a verified Pod belonging to the server's
+current operator, and rechecks that selection inside the existing serialized application path.
+Its effects, denials and conflicts use the existing body-free Chat scope event without duplicate
+application records. The selection and binding are state, not an Authority Envelope or consent. They do not advertise
+or execute tools by themselves. Schema 49 keeps this state in the existing Chat row; an atomic
+update checks the current grounding identity and advances the binding generation for an effective
+mode, Pod or authentication-generation change. Disconnect retains that generation. Legacy Chats
+without Jira state retain their previous grounding identity. Endpoint and credential custody stay
+outside the Chat database. Registered scope-update evidence records counts, generation and mode,
+without Pod identifiers or content. Read grants and approvals must still be composed with this Pod
+resolution through the shared authority owner before the persisted selection can authorize effects.
+
 ## Context
 
 ADR-0124 defined the three Coding Workbench autonomy modes (`governed-assist`,
@@ -64,8 +79,8 @@ at trust boundaries that ADR-0124 was written to prevent inside the Coding Workb
 ### D1 — The three modes are the product-wide authority model
 
 Every autonomy-capable surface in Keiko — current and future — is governed by the three modes
-defined in ADR-0124 and corrected by ADR-0125, displayed as **Ask for approval**
-(`governed-assist`), **Approve for me** (`supervised-coding`), and **Full access**
+defined in ADR-0124 and corrected by ADR-0125 and ADR-0138, displayed as **Ask for approval**
+(`governed-assist`), **Supervised workspace** (`supervised-coding`), and **Full access**
 (`autonomous-delivery`). No surface may introduce an additional user-facing autonomy mode, a
 surface-local approval envelope, or a parallel authority stack.
 
@@ -145,6 +160,106 @@ The machine vocabulary keeps its current home and module naming in
 a workload-neutral module is a cosmetic follow-up that requires its own ADR because it changes the
 public package surface; until then, non-coding surfaces import the existing vocabulary. Semantics
 defined here and in ADR-0124/ADR-0125 take precedence over module naming.
+
+Ordinary Chat tool authority uses the additive `ChatToolAuthorityEnvelope` contract
+(Epic #4081, #4084). Its subject binds the server-owned actor digest, Chat, Jira Pod and
+binding/credential generations. It reuses the existing mode resolver, action-class vocabulary
+and budget dimensions; file-patch capacity is exactly zero. Only Jira connector scopes are
+admissible, with a narrower read-only scope supported. No synthetic repository, branch or
+Coding/Editor session is needed. Unknown fields, invalid generations, inconsistent effective
+modes and non-Jira capabilities fail structural validation with content-free diagnostics.
+This contract does not itself confer authority: registration, current-state revalidation,
+read consent, approvals and budget reservation remain server responsibilities.
+
+The existing `EditorAgentAuthorityRegistry` retains both Coding and Chat variants in one
+bounded store. Its historical name does not imply an Editor session. Consumer-specific
+resolution refuses the other variant; Chat resolution compares the current actor, Chat, Pod,
+both generations and deployment ceiling on every use. Chat records retain an immutable private
+snapshot. Both variants use the same cumulative budget rule, expiry handling and capacity;
+re-registering an identical authority does not reset usage or revive revocation. Chat-wide
+revocation leaves other Chats and Coding records untouched. Registered
+`chat.tool-authority.operation` evidence carries closed decisions, digests, generations and
+counts on the existing Activity Log. Product entrypoints still have to establish human
+acceptance and current live facts before calling this private registry.
+
+Production Chat instances of this owner belong to the composed server dependency graph;
+there is no process-singleton fallback for Chat. Graph disposal clears its authority without
+touching another graph. Committed Jira binding/mode changes, Chat closure/deletion and the
+credential owner's invalidation callback revoke affected Chat authorities. A preview, stale
+update conflict or unchanged mode does not revoke them. Current-state checking at dispatch
+remains mandatory in addition to this lifecycle invalidation.
+
+The private Jira/Chat resolver loads current Chat and owned credential facts from their existing
+owners for each resolution, including verification/custody readiness and the current principal.
+It compares the current mode and generations before returning the registry-approved envelope
+and private connection metadata. Connection PATCH shares the same readiness predicate, so a
+previous successful verification cannot authorize attachment while a new probe is pending.
+This resolver alone does not grant read consent, approve an action, reserve a budget or dispatch
+an external effect; consumers must compose those existing gates before execution.
+
+Coding and Chat pass the same mode, action-class and connector-scope facets to the existing
+Atlassian action policy. Its strictest disposition remains authoritative; a review-required
+read needs the accepted Chat read grant, and a review-required write needs its concrete action
+approval. Policy inspection does not reserve budget. Chat reservation refreshes owned live
+facts before charging the same cumulative authority owner. Neither helper dispatches tools or
+substitutes for explicit consent to model transmission.
+
+The private Jira read-grant contract separately binds actor, Chat, Pod, generations and expiry.
+Its versioned disclosure covers model transmission and conversation retention, without write
+or import authority. Granted state needs a consent-proof digest; pending or rejected state
+cannot claim one. Runtime owners must establish acceptance and invalidate these records;
+structural validation alone never grants access, and browser projections exclude private
+actor/proof facts.
+
+The existing Atlassian approval owner retains these Chat read grants in its same bounded map,
+with a discriminator that excludes them from legacy approval retrieval and consumption.
+Pending grants retain the original authority reference; active consent can be reused only for
+the same current subject while the execution path independently establishes fresh valid
+authority. Acceptance is idempotent without extending TTL or replacing its proof. The owner
+snapshots private facts, handles expiry and supports per-Chat revocation and isolated disposal.
+These retention APIs do not themselves establish a human decision or replace lifecycle and
+execution admission at their callers.
+
+Production lifecycle composition now supplies that same approval owner together with the
+existing authority owner to credential invalidation. Committed Chat binding/mode changes,
+closure/deletion, project removal and credential invalidation revoke retained read grants;
+optimistic previews, stale conflicts and unchanged selections do not. Graph disposal resets
+only its own owner with the disposal correlation. Observed tool-call auth failures still require
+their execution-entrypoint integration.
+
+Human read consent uses a typed subresource of the existing approval API. Its public card omits
+private actor/authority/proof facts; its bounded, closed decision carries only approval/rejection
+and the current disclosure version. The server re-resolves ownership, binding, verification,
+original authority, read scope and grant lifetime after reading the body, and computes acceptance
+evidence itself. Legacy approval routes cannot consume these grants. Consent changes only the
+existing retained record and never dispatches a tool. The current-state authority owner now
+requests/reuses consent through that same bounded approval owner. It preserves a retained
+request's issuing authority and expiry, validates both current and issuing authority on reuse,
+and does not automatically repeat a rejected request within the same authority. Expiry is
+bounded by the issuing authority and existing approval TTL. The private ordinary-Chat read
+consumer uses the shared catalog binder and MCP routes without a Coding session. Its admission
+ports require that consent in every mode, re-resolve current authority before reservation and
+recheck consent/authority at each HTTP effect and again before publishing the read result.
+A successful response arriving after access loss is discarded without exposing its data; its
+already-performed effect retains the shared budget charge and one terminal settlement. A completed UI notification is not approval; the
+existing approval owner must contain the accepted record. Catalog offers create no consent
+requests. The existing Harness counter owner is available to non-Coding compositions; the binder
+retains reservation, cancellation and settlement ownership. Concrete write approval, ordinary Chat orchestration and UI composition remain integration
+requirements. The application graph owns the lazy shared host (ADR-0181). Turn
+settlement must preserve valid Chat consent within its retained scope and expiry; the normal-Chat
+lifecycle must still prove that it does not revoke the issuing authority at each turn boundary.
+
+Accepted-turn authority minting reads the persisted human user message and current owned,
+verified Chat binding. It derives mode/ceiling and acceptance evidence server-side, retains
+the existing authority registry and grants no read consent or concrete write approval. The
+same turn deadline bounds `expiresAt` and runtime; the initial limits are five minutes,
+30 tool calls and 100,000 cumulative prompt tokens. A deterministic identity derived from the stored Chat/message pair makes duplicate minting
+idempotent, with the registry refusing any changed envelope under that identity. The stored human
+message must still be the latest accepted pending turn (or the current legacy user message); its
+stored timestamp fixes the deadline. The caller retains this registration across tool, model and
+retry phases. Registration does not revoke a previous
+turn's valid consent issuer. Component tests prove grant reuse across independently accepted
+turns; the ordinary Chat entrypoint still needs the integrated lifecycle proof.
 
 ### D6 — Forward rule for decision records
 

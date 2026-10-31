@@ -1,3 +1,7 @@
+import {
+  chatAuthorityFixture,
+  CHAT_AUTHORITY_TEST_NOW,
+} from "./editor/chatAuthority.test-support.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -2475,9 +2479,9 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
   });
 
   // #2958 (KEIKO-0115/KEIKO-0135): the autonomous-delivery approval store this used to assert was
-  // deleted with its unmounted route group. The deployment ceiling outlives it and must still fail
-  // closed to undefined, which the mounted readers translate to `governed-assist`.
-  it("leaves the autonomous delivery deployment ceiling unset when nothing configures one", () => {
+  // deleted with its unmounted route group. #4083 threads the shared resolved deployment ceiling
+  // into the surviving connector/coding readers without restoring any retired delivery surface.
+  it("shares the all-mode deployment ceiling with connector consumers by default", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-autonomous-store-"),
@@ -2485,7 +2489,7 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
       store: createInMemoryUiStore(),
     });
 
-    expect(deps.autonomousDeliveryDeploymentCeiling).toBeUndefined();
+    expect(deps.autonomousDeliveryDeploymentCeiling).toBe("autonomous-delivery");
     expect("autonomousDeliveryApprovalStore" in deps).toBe(false);
   });
 
@@ -3203,7 +3207,7 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     );
   });
 
-  it("resolves the ceiling from the option, then the environment, then all-mode availability", () => {
+  it("intersects explicit option and environment ceilings before defaulting to all-mode availability", () => {
     const fromOption = depsWithEnv(
       { KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" },
       "supervised-coding",
@@ -3802,4 +3806,142 @@ describe("production OpenCode tool profile (#3897)", () => {
     expect(productionOpenCodeToolProfile("linux")).toBe("direct");
     expect(productionOpenCodeToolProfile("win32")).toBe("direct");
   });
+});
+
+function chatCatalogTestDeps(
+  activityLog = createBufferedServerLogSink(),
+): ReturnType<typeof buildUiHandlerDeps> {
+  return buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: tmp("chat-catalog-"),
+    env: {},
+    store: createInMemoryUiStore(),
+    activityLog,
+  });
+}
+
+it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", async () => {
+  const activityLog = createBufferedServerLogSink();
+  const deps = chatCatalogTestDeps(activityLog);
+  try {
+    expect(deps.jiraChatCatalog).toBeDefined();
+    const runtime = deps.jiraChatCatalog;
+    if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
+    const [first, second] = await Promise.all([runtime.get(), runtime.get()]);
+    expect(second).toBe(first);
+    expect(
+      activityLog.events.filter((event) => event.op === "mcp.managed.lifecycle"),
+    ).toMatchObject([
+      { extra: { phase: "listed", toolCount: 14, reason: "none" } },
+      { extra: { phase: "admitted", toolCount: 14, reason: "none" } },
+    ]);
+    expect(first.handlerBindings).toHaveLength(14);
+    expect(first.handlerBindings.every((handler) => handler.readiness() === "ready")).toBe(true);
+    await deps.dispose?.();
+    await expect(runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });
+    expect(first.handlerBindings.every((handler) => handler.readiness() === "unavailable")).toBe(
+      true,
+    );
+  } finally {
+    await deps.dispose?.();
+  }
+});
+
+it("isolates Jira catalog hosts between application graphs (#4089)", async () => {
+  const first = chatCatalogTestDeps();
+  const second = chatCatalogTestDeps();
+  try {
+    const [a, b] = await Promise.all([first.jiraChatCatalog?.get(), second.jiraChatCatalog?.get()]);
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+    await first.dispose?.();
+    expect(b?.handlerBindings.every((handler) => handler.readiness() === "ready")).toBe(true);
+    expect(await second.jiraChatCatalog?.get()).toBe(b);
+  } finally {
+    await first.dispose?.();
+    await second.dispose?.();
+  }
+});
+
+it.each([false, true])(
+  "closes a Jira catalog before/during discovery: started=%s (#4089)",
+  async (start) => {
+    const deps = chatCatalogTestDeps();
+    try {
+      const runtime = deps.jiraChatCatalog;
+      if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
+      const pending = start ? runtime.get() : undefined;
+      const results = await Promise.allSettled([pending, runtime.close(), runtime.close()]);
+      expect(results[0].status).toBe(start ? "rejected" : "fulfilled");
+      expect(results.slice(1).every((result) => result.status === "fulfilled")).toBe(true);
+      await expect(runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });
+    } finally {
+      await deps.dispose?.();
+    }
+  },
+);
+
+it("owns Chat authority per deps graph and clears only that graph on disposal (#4084)", async () => {
+  const first = buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: tmp("chat-authority-a-"),
+    env: {},
+    store: createInMemoryUiStore(),
+  });
+  const second = buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: tmp("chat-authority-b-"),
+    env: {},
+    store: createInMemoryUiStore(),
+  });
+  try {
+    expect(first.agentAuthorityRegistry).toBeDefined();
+    expect(first.agentAuthorityRegistry).not.toBe(second.agentAuthorityRegistry);
+    const firstRegistry = first.agentAuthorityRegistry;
+    const secondRegistry = second.agentAuthorityRegistry;
+    if (firstRegistry === undefined || secondRegistry === undefined)
+      throw new Error("Expected graph-owned registries");
+    const value = chatAuthorityFixture();
+    const registered = firstRegistry.registerChat(
+      value,
+      "autonomous-delivery",
+      CHAT_AUTHORITY_TEST_NOW,
+    );
+    if (!registered.ok) throw new Error("Expected graph-owned authority");
+    expect(
+      secondRegistry.resolveChat(
+        registered.authorityRef,
+        value.subject,
+        "autonomous-delivery",
+        CHAT_AUTHORITY_TEST_NOW,
+      ).ok,
+    ).toBe(false);
+    const other = secondRegistry.registerChat(
+      { ...value, runId: "graph-b-authority" },
+      "autonomous-delivery",
+      CHAT_AUTHORITY_TEST_NOW,
+    );
+    if (!other.ok) throw new Error("Expected independent authority");
+    await first.dispose?.();
+    expect(
+      firstRegistry.resolveChat(
+        registered.authorityRef,
+        value.subject,
+        "autonomous-delivery",
+        CHAT_AUTHORITY_TEST_NOW,
+      ).ok,
+    ).toBe(false);
+    expect(
+      secondRegistry.resolveChat(
+        other.authorityRef,
+        value.subject,
+        "autonomous-delivery",
+        CHAT_AUTHORITY_TEST_NOW,
+      ).ok,
+    ).toBe(true);
+  } finally {
+    await first.dispose?.();
+    await second.dispose?.();
+  }
 });

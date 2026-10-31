@@ -74,3 +74,24 @@ it("clears a previous repository error while loading another repository", async 
   await act(async () => rerender("/second"));
   expect(result.current.error).toBeNull();
 });
+
+// Owner decision 2026-10-30: the Workbench works in any folder. A folder Git answers as
+// `available: false` is an ordinary folder; a rejected, refused or still-loading read is not.
+it("marks a root Git answers as not a repository as an ordinary folder", async () => {
+  listBranches.mockResolvedValue({ available: false, state: "unavailable", branches: [] });
+  const { result } = renderHook(useRepositoryBranchState, { initialProps: "/plain-folder" });
+  expect(result.current.ordinaryFolder).toBe(false);
+  await waitFor(() => expect(result.current.ordinaryFolder).toBe(true));
+});
+
+it.each(["rejected", "refused", "repository"] as const)(
+  "never calls a %s read an ordinary folder",
+  async (kind) => {
+    if (kind === "rejected") listBranches.mockRejectedValue(new ApiError("INTERNAL", "x", 500));
+    else if (kind === "refused") listBranches.mockRejectedValue(DENIED);
+    else listBranches.mockResolvedValue({ available: true, branches: [] });
+    const { result } = renderHook(useRepositoryBranchState, { initialProps: "/root" });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.ordinaryFolder).toBe(false);
+  },
+);

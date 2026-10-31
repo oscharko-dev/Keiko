@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { memFs } from "./_memfs.js";
@@ -2132,6 +2133,40 @@ describe("openApiComponentSchemas", () => {
 });
 
 describe("lookupCodeIntelligenceAtoms", () => {
+  it("constructs each directly matched symbol atom once during graph expansion", () => {
+    const { scope, fs } = makeScope({
+      "src/many.ts": Array.from(
+        { length: 500 },
+        (_, index) => `export function value${String(index)}() { return 0; }`,
+      ).join("\n"),
+    });
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+    let geometryReads = 0;
+    const symbols = index.symbols.map((symbol) => ({
+      ...symbol,
+      get lineRange(): typeof symbol.lineRange {
+        geometryReads += 1;
+        return symbol.lineRange;
+      },
+    }));
+    const atoms = queryCodeIntelligenceIndex(
+      scope,
+      nlq("src/many.ts", 500),
+      { ...index, symbols },
+      FIXED_NOW(),
+    );
+    expect(atoms).toHaveLength(500);
+    // Full serialized pre-optimization output: identities, order, scores, edges and timestamps.
+    expect(createHash("sha256").update(JSON.stringify(atoms)).digest("hex")).toBe(
+      "3deaabe9197d16f202576dd9af0f20d1cb80c2833b6d924ed0ef0b710befe17a",
+    );
+    // Each definition supplies its geometry once for the atom and once for each endpoint.
+    expect(geometryReads).toBeLessThanOrEqual(3 * symbols.length);
+  });
+
   it("honors query limits and expands graph neighbors from exact symbols", () => {
     const { scope, fs } = makeScope(enterpriseFixture());
 

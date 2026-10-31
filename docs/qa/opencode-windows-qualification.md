@@ -722,6 +722,40 @@ Next work, in dependency order:
    synthetic repositories and body-free Activity Log evidence, including installed portable/npm
    upgrade/rollback and all three authority modes. Do not close #4068 on this component increment.
 
+## Dev integration revalidation — 2026-10-31
+
+PR #4088 integrates `dev` at `55e4b02b2131f35b2afd7063604eba227f74da1e`.
+The supervisor harness retains the binary PID encoding regression and both ordinary and
+detached descendant cancellation/control-EOF checks. It also executes the new MCP stdio
+ownership and final-response drain checks from `dev`; the complete native Windows harness passes.
+The fixture preserves both the observation-encoding and MCP argument probes.
+
+The supply-chain merge retains the current production dependency-closure projection and applies
+the existing trusted Windows npm invocation at its shared `npmJson` owner. The real Windows gate
+emits all 28 workspace SBOMs and accepts their licenses. The targeted supply-chain, host-executable
+and supervisor-build suites pass 63 tests with nine existing platform skips. Package build,
+package graph, TypeScript, scoped ESLint/Prettier and semantic duplication pass; the latter retains
+920 baseline groups without widening the baseline.
+
+All four original #1300 visual producers were regenerated for this combined source: 427
+component probes, 14 editor captures, seven accessibility modes and 108 browser captures pass.
+The complete stylesheet/evidence suite passes 281 tests. The separate dependency-inventory
+test reproduced a Windows separator mismatch; normalizing only path notation restores both
+tests while preserving every dependency assertion. This is fixture evidence, not W1–W15 closure.
+
+The runtime-approval suite still has four passes and one failure: approved helper source
+`88fb376091f406c3fa63c05d0f963d7ba038f650c0824f893ac77089bb30b28b` does not match
+`29f5e262d3d268b9785a1a2ae7a2875107a5ce106f1cb7d655ec37e97bf0249b` on this branch.
+Passing the same suite on another branch does not qualify this source. Release-owner approval
+and the previously identified reference-environment measurements remain separate obligations.
+
+The latest [Windows gateway run for #4090](https://github.com/oscharko-dev/Keiko/actions/runs/41147212616)
+passes on `5499afbef1c646ac52935daecd809bc30ba59b80`, including both socket proof modes.
+This supersedes historical socket timeouts, but does not implement the installed service or
+qualify Workbench acceptance. The regular PR CI remains separate: its merge-candidate guard
+rejects a candidate based on `55e4b02b2` when the event expects `18648cad9`, and workflow hygiene
+reports dependency advisories in `glob` and `minimatch`. No guard, approval or advisory is waived.
+
 ## Update impact
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows

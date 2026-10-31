@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { EditorDocumentVersion } from "@oscharko-dev/keiko-contracts";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   CommandCancelledError,
@@ -781,9 +782,20 @@ function renderFileLine(file: PatchFileChange): string {
   return `${file.kind} ${file.path} (+${String(file.addedLines)} -${String(file.removedLines)})`;
 }
 
+// Lists at most `maxEntries` lines of one kind and names how many it left out.
+function listedLines(lines: readonly string[], maxEntries: number, what: string): string[] {
+  if (lines.length <= maxEntries) return [...lines];
+  return [...lines.slice(0, maxEntries), `… ${String(lines.length - maxEntries)} more ${what}`];
+}
+
 // Human-readable preview returned by propose_patch. NEVER writes. Lists per-file +/- counts,
 // any rejection reasons, and any conflicts so the reviewer sees exactly what apply would do.
-export function renderDryRun(validation: PatchValidation): string {
+// `maxEntries` bounds each list (files, reasons, conflicts) for a caller whose output has a size
+// ceiling; the header always counts every file.
+export function renderDryRun(
+  validation: PatchValidation,
+  maxEntries = Number.POSITIVE_INFINITY,
+): string {
   const header = validation.ok
     ? `PATCH OK — ${String(validation.files.length)} file(s), ${String(validation.totalChangedLines)} changed line(s)`
     : "PATCH REJECTED";
@@ -795,7 +807,54 @@ export function renderDryRun(validation: PatchValidation): string {
   const conflictLines = validation.conflicts.map(
     (c) => `conflict: ${c.path} hunk#${String(c.hunkIndex)}: ${c.reason}`,
   );
-  return [header, ...fileLines, ...reasonLines, ...conflictLines].join("\n");
+  return [
+    header,
+    ...listedLines(fileLines, maxEntries, "file(s)"),
+    ...listedLines(reasonLines, maxEntries, "rejection(s)"),
+    ...listedLines(conflictLines, maxEntries, "conflict(s)"),
+  ].join("\n");
+}
+
+// The entries of one list the propose_patch result names; the rest are counted.
+const PROPOSAL_LISTED_ENTRIES = 50;
+
+function proposalSummary(validation: PatchValidation, listed: number): Record<string, unknown> {
+  return {
+    ok: validation.ok,
+    totalBytes: validation.totalBytes,
+    totalChangedLines: validation.totalChangedLines,
+    fileCount: validation.files.length,
+    files: validation.files.slice(0, listed).map((file) => ({
+      path: file.path,
+      kind: file.kind,
+      addedLines: file.addedLines,
+      removedLines: file.removedLines,
+    })),
+    reasonCount: validation.reasons.length,
+    reasons: validation.reasons.slice(0, listed),
+    conflictCount: validation.conflicts.length,
+    conflicts: validation.conflicts.slice(0, listed),
+  };
+}
+
+/**
+ * The model-facing result of propose_patch. A patch may now be as large as the shared governed cap,
+ * and the result of a legacy catalog tool is one string of at most
+ * `TOOL_CATALOG_LIMITS.maxStringBytes`, so the result carries the verdict, the counts and a bounded
+ * list of files, rejections and conflicts, never the hunks or the normalized diff: the model sent
+ * those and does not need them back. A result that would still exceed the ceiling (very long paths)
+ * is reduced to the counts alone.
+ */
+export function renderPatchProposal(validation: PatchValidation): string {
+  const full = JSON.stringify({
+    validation: proposalSummary(validation, PROPOSAL_LISTED_ENTRIES),
+    preview: renderDryRun(validation, PROPOSAL_LISTED_ENTRIES),
+  });
+  if (Buffer.byteLength(full, "utf8") <= TOOL_CATALOG_LIMITS.maxStringBytes) return full;
+  return JSON.stringify({
+    validation: proposalSummary(validation, 0),
+    preview: renderDryRun(validation, 0),
+  });
 }
 
 // ─── Inverse patch (guarded revert proposal — Issue #1204) ──────────────────────────────────────

@@ -65,7 +65,13 @@ in the background, independently of held catalog discovery; selected requests jo
 An expired success can share one selected-request renewal. Failed initialization remains
 visible. Inconclusive transport or provider failures recover through configuration-owned background
 probes with exponential backoff capped at five minutes; retries continue at that capped rate until the
-provider recovers or the configuration changes. A conclusive rejection (for example a 4xx the gateway
+provider recovers or the configuration changes. Background renewal and recovery run only while a model is in
+use (#4103, owner decision 2026-10-29): once a model of the current generation has been verified,
+no conversation request for it for 15 minutes (`CONVERSATION_RENEWAL_IDLE_MS`) stops both, and
+`gateway.readiness.renewal.paused` records the pause (`renewal` or `recovery`, with the idle time).
+Its success then expires at the five-minute boundary, and its next request starts the single
+on-demand probe and resumes the schedule. A model never verified in this generation keeps recovering,
+so a gateway that is still starting is reached without anyone asking. A conclusive rejection (for example a 4xx the gateway
 gives while it is still starting) is retried in the background every five minutes. The first
 conversation request that needs the model after the 30-second not-ready cooldown starts one fresh
 probe, dated by the probe that last settled rather than by a preserved feature-observation
@@ -91,6 +97,17 @@ it. The gateway verification state is left unchanged, the probe diagnostic is a 
 instead of an error, and `gateway.readiness.busy-retained` records the closed busy signal and model
 digest. An unreachable provider, a model never proved ready and a replaced configuration keep the
 ordinary not-ready recording.
+A coding run's accepted answer is serving evidence for its model (#3907 AC3, 2026-10-30). The coding
+sidecar route renews a same-generation positive basic-chat observation at the answer's completion
+when the answer finished with `stop`, `tool_calls` or `length` and came from the configuration the
+holder still serves. It never establishes readiness, repairs a failed observation or crosses a
+replaced configuration. A long run therefore no longer lets the model's success expire while
+background renewal is paused, and no probe competes with the run's turns.
+`coding-sidecar.gateway.outcome` records `readinessRenewal` (`renewed`, `not-renewable`) on accepted
+answers. A Workbench profile read that finds the elected model's success expired joins the running
+check or starts the one on-demand check, as a Chat request does; a fresh success adds no probe. The
+Workbench narrates `model-verification-pending` as a check in progress, never as an unavailable
+source or an alert.
 A conversation's first provider dispatch still requires fresh readiness. A completed successful
 call gives only that turn's existing model-port wrapper a continuation witness, valid for the same
 five-minute interval from completion. A bounded follow-up or citation repair can use it when the
@@ -139,7 +156,10 @@ Capability application clears carried observations before restoring only retaine
 original feature and conversation measurement times, so an unrelated tool-only proof cannot grant
 conversation readiness. Missing refinement support fails as retryable rather than reporting an
 applied catalog update. Existing connections and policy are retained. A bounded serial queue verifies missing or expired
-tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
+tool-call proofs without opening Settings or the Workbench. Behind a gateway that is not a
+recognised LiteLLM connection the same targets, including a chat model nobody has proven (#3578),
+are verified through that queue when the Workbench reads its profile (ADR-0124 D5; ADR-0173). A
+refuted proof and a model that is no chat model are never targets. Unknown context windows use the
 existing context proof. Inconclusive discovery and tool checks share a finite three-step
 initialization burst with exponential startup backoff capped at five minutes. The existing timer
 and ordinal belong to the captured configuration generation: a replacement resets that burst,

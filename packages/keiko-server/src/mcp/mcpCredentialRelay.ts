@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   createSecretSpellingStreamRedactor,
   SecretSpellingOverflowError,
@@ -15,6 +15,11 @@ import {
   gatewayFetch,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  activityErrorFields,
+  activityStateLevel,
+  definedActivityFields,
+} from "../activity-line-fields.js";
 
 /**
  * Static credentials of a remote MCP server (#3903 AC3), kept out of the runtime. A registry entry
@@ -56,6 +61,9 @@ export interface McpRelayTarget {
   readonly headers: Readonly<Record<string, string>>;
   /** The credential values behind those headers, without their prefixes; held only by the relay. */
   readonly secrets: readonly string[];
+  /** Server-owned managed transport; no endpoint or credential can be chosen by request data. */
+  readonly upstream?: McpRelayUpstream;
+  readonly signal?: AbortSignal;
 }
 
 export interface McpRelayBinding {
@@ -80,6 +88,7 @@ interface StoredBinding {
   readonly capabilityHash: Buffer;
   readonly target: McpRelayTarget;
   readonly controller: AbortController;
+  readonly detach: () => void;
 }
 
 function capabilityHash(capability: string): Buffer {
@@ -90,9 +99,15 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
   private readonly bindings = new Map<string, StoredBinding>();
 
   public bind(target: McpRelayTarget): McpRelayBinding | undefined {
-    if (this.bindings.size >= MAX_BINDINGS) return undefined;
+    if (this.bindings.size >= MAX_BINDINGS || target.signal?.aborted === true) return undefined;
     const relayId = randomBytes(16).toString("base64url");
     const capability = randomBytes(32).toString("base64url");
+    const controller = new AbortController();
+    const revoke = (): void => {
+      controller.abort();
+      this.bindings.delete(relayId);
+    };
+    target.signal?.addEventListener("abort", revoke, { once: true });
     this.bindings.set(relayId, {
       capabilityHash: capabilityHash(capability),
       target: Object.freeze({
@@ -100,7 +115,8 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
         headers: Object.freeze({ ...target.headers }),
         secrets: Object.freeze([...target.secrets]),
       }),
-      controller: new AbortController(),
+      controller,
+      detach: () => target.signal?.removeEventListener("abort", revoke),
     });
     return { relayId, capability };
   }
@@ -120,6 +136,7 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
     for (const [relayId, stored] of this.bindings) {
       if (stored.target.runId !== runId) continue;
       stored.controller.abort();
+      stored.detach();
       this.bindings.delete(relayId);
     }
   }
@@ -179,6 +196,7 @@ const REASONS = [
   "relay-unavailable",
   "credential-in-response-header",
   "credential-spelling-unbounded",
+  "mutation-outcome-unknown",
 ] as const;
 type RelayReason = (typeof REASONS)[number];
 
@@ -247,47 +265,34 @@ export interface McpRelayLine {
   readonly error?: unknown;
 }
 
-function optionalFields(line: McpRelayLine): Readonly<Record<string, number | string>> {
-  const fields: Record<string, number | string> = {};
-  for (const key of [
-    "reason",
-    "method",
-    "status",
-    "relayedServerCount",
-    "refusedServerCount",
-    "requestBytes",
-    "responseBytes",
-    "redactedCount",
-    "durationMs",
-  ] as const) {
-    const value = line[key];
-    if (value !== undefined) fields[key] = value;
-  }
-  return fields;
-}
-
 /** Counts and closed values only; never a credential, a URL or a server name. */
 export function recordMcpRelay(
   activityLog: ServerLogSink | undefined,
   correlationId: string,
   line: McpRelayLine,
 ): void {
-  const failed = line.outcome === "failed";
   activityLog?.write(
     activityLogEvent(
       MCP_RELAY_OPERATION,
       {
         correlationId,
-        ...(failed ? { level: "warn" as const, errorKind: "internal" as const } : {}),
-        ...(line.outcome === "refused" ? { level: "warn" as const } : {}),
+        ...activityStateLevel(line.outcome),
       },
       {
         action: line.action,
         outcome: line.outcome,
-        ...optionalFields(line),
-        ...(line.error === undefined
-          ? {}
-          : { frames: keikoStackFrames(line.error), causeChain: causeChain(line.error) }),
+        ...definedActivityFields(line, [
+          "reason",
+          "method",
+          "status",
+          "relayedServerCount",
+          "refusedServerCount",
+          "requestBytes",
+          "responseBytes",
+          "redactedCount",
+          "durationMs",
+        ] as const),
+        ...activityErrorFields(line),
       },
     ),
   );
@@ -495,6 +500,15 @@ interface ExchangeState {
   signal?: AbortSignal;
 }
 
+function admittedUpstream(
+  admission: McpRelayAdmission,
+  options: McpRelayServeOptions,
+  signal: AbortSignal,
+): McpRelayUpstream {
+  if (admission.signal.aborted || signal.aborted) throw new RelayRefusal(409, "cancelled");
+  return admission.target.upstream ?? options.upstream;
+}
+
 async function exchange(
   request: IncomingMessage,
   response: ServerResponse,
@@ -505,11 +519,16 @@ async function exchange(
 ): Promise<void> {
   const body = method === "POST" ? await requestBody(request) : undefined;
   state.requestBytes = body?.byteLength ?? 0;
-  const upstream = await options.upstream(admission.target.url, {
+  const signal = state.signal ?? admission.signal;
+  const upstream = await admittedUpstream(
+    admission,
+    options,
+    signal,
+  )(admission.target.url, {
     method,
     headers: upstreamHeaders(request, admission.target),
     ...(body === undefined ? {} : { body }),
-    signal: state.signal ?? admission.signal,
+    signal,
   });
   if (upstream.status >= 300 && upstream.status < 400) {
     await upstream.body?.cancel();

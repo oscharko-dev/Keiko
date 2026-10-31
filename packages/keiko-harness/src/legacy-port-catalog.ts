@@ -115,7 +115,7 @@ export type LegacyPortCatalogLifecycleObserver = (
 export type LegacyPortCatalogResultDisposition = {
   readonly [Status in ToolResultStatus]: {
     readonly status: Status;
-    readonly reason: ToolResultReason<Status>;
+    readonly reason: Exclude<ToolResultReason<Status>, "provider-reported-error">;
   };
 }[ToolResultStatus];
 

@@ -90,6 +90,12 @@ export interface OpenCodeV2LiveText {
    * A message that is not has its projected text decided by the history alone.
    */
   tracks(messageId: string): boolean;
+  /**
+   * The messages with a part that holds live text the history has not yet shown complete. Only such
+   * a message is projected from the overlay as much as from the history; a part tracked without any
+   * text yet (or one that never received any) changes nothing the history does not say.
+   */
+  fedMessageIds(): ReadonlySet<string>;
   /** The history shows the part complete: its live text is spent, and a late delta for it is ignored. */
   retire(messageId: string, kind: LiveTextKind, ordinal: number): void;
   /**
@@ -191,6 +197,15 @@ class LiveTextOverlay implements OpenCodeV2LiveText {
     const needle = `\u0000${messageId}\u0000`;
     for (const key of this.parts.keys()) if (key.includes(needle)) return true;
     return false;
+  }
+
+  fedMessageIds(): ReadonlySet<string> {
+    const ids = new Set<string>();
+    for (const [key, part] of this.parts) {
+      const id = key.split("\u0000")[1];
+      if (id !== undefined && part.text.length > 0) ids.add(id);
+    }
+    return ids;
   }
 
   retire(messageId: string, kind: LiveTextKind, ordinal: number): void {

@@ -171,6 +171,22 @@ export async function selectLocalCheckout(input: {
   return body.active;
 }
 
+// Binds an ordinary folder that is not a Git repository, in place: no branch, no worktree (owner
+// decision 2026-10-30). The server refuses a folder that is a repository.
+export async function selectFolderWorkspace(input: {
+  readonly root: string;
+  readonly requestedBy: string;
+  readonly correlationId?: string;
+}): Promise<ActiveWorkspaceView> {
+  const { correlationId, ...request } = input;
+  const body = await taskWorkspaceFetch<{ active: ActiveWorkspaceView }>(
+    "/api/task-workspaces/folder",
+    { method: "POST", body: JSON.stringify(request) },
+    correlationId,
+  );
+  return body.active;
+}
+
 export async function clearActiveTaskWorkspace(): Promise<void> {
   await taskWorkspaceFetch<{ active: null }>("/api/task-workspaces/active", { method: "DELETE" });
 }

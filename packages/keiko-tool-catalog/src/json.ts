@@ -17,6 +17,7 @@ const ENCODER = new TextEncoder();
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 interface CopyBudget {
   readonly maxBytes: number;
+  readonly maxDepth: number;
   readonly maxStringBytes: number;
   readonly ancestors: Set<object>;
   bytes: number;
@@ -103,7 +104,7 @@ function copyObject(value: object, budget: CopyBudget, depth: number): CatalogJs
 // array/object arms both assign the same declared `CatalogJsonValue` union before one trailing
 // return, rather than returning from inside each branch.
 function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJsonValue {
-  requireCatalog(depth <= TOOL_CATALOG_LIMITS.maxSchemaDepth, "input-bound");
+  requireCatalog(depth <= budget.maxDepth, "input-bound");
   let result: CatalogJsonValue;
   if (typeof value !== "object" || value === null) {
     result = scalar(value, budget);
@@ -120,17 +121,33 @@ function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJs
 
 /**
  * Validate and detach before canonicalization, freezing, hashing, or schema interpretation.
- *
- * `limits` names the per-tool argument ceilings of the one tool whose call is being captured
- * (`toolArgumentLimits`): the whole-copy budget and the largest single string. Without it the copy
- * is held to the generic ceilings, and the largest budget a plain copy may ask for is unchanged.
+ * The contract's per-tool limits bound both the whole copy and each string; arbitrary caller
+ * limits are refused. Ordinary values retain the schema depth, while envelopes alone add levels.
  */
 export function copyCatalogJson(
   value: unknown,
   requestedBytes?: number,
   limits: ToolArgumentLimits = GENERIC_TOOL_ARGUMENT_LIMITS,
 ): CatalogJsonValue {
-  // Only the contract's own ceilings are accepted: a caller cannot invent a larger one.
+  return copyWithinBounds(value, requestedBytes, TOOL_CATALOG_LIMITS.maxSchemaDepth, limits);
+}
+
+/** Catalog/projection/binding wrappers add levels; descriptors are still independently qualified. */
+export function copyCatalogEnvelope(value: unknown): CatalogJsonValue {
+  return copyWithinBounds(
+    value,
+    TOOL_CATALOG_LIMITS.maxArgumentBytes,
+    TOOL_CATALOG_LIMITS.maxSchemaDepth + 6,
+    GENERIC_TOOL_ARGUMENT_LIMITS,
+  );
+}
+
+function copyWithinBounds(
+  value: unknown,
+  requestedBytes: number | undefined,
+  maxDepth: number,
+  limits: ToolArgumentLimits,
+): CatalogJsonValue {
   requireCatalog(
     limits === GENERIC_TOOL_ARGUMENT_LIMITS || limits === CHANGESET_EDIT_ARGUMENT_LIMITS,
     "input-bound",
@@ -146,7 +163,11 @@ export function copyCatalogJson(
   );
   const { maxStringBytes } = limits;
   try {
-    return copyValue(value, { maxBytes, maxStringBytes, ancestors: new Set(), bytes: 0 }, 1);
+    return copyValue(
+      value,
+      { maxBytes, maxDepth, maxStringBytes, ancestors: new Set(), bytes: 0 },
+      1,
+    );
   } catch (error) {
     if (error instanceof ToolCatalogError) throw error;
     throw new ToolCatalogError("invalid-shape");

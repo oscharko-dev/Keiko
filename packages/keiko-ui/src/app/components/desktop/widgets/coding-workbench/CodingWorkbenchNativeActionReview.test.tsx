@@ -8,6 +8,7 @@ import { translateCodingWorkbench, type CodingWorkbenchTranslate } from "./codin
 import {
   CodingWorkbenchNativeActionReview,
   nativeActionLabel,
+  nativePermissionLabel,
 } from "./CodingWorkbenchNativeActionReview";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -43,15 +44,15 @@ describe("CodingWorkbenchNativeActionReview", () => {
   });
 
   it.each([
-    ["shell", "Approve runs this command once in the task workspace"],
-    ["edit", "Approve applies this change to the listed files once"],
-    ["write", "Approve applies this change to the listed files once"],
-    ["patch", "Approve applies this change to the listed files once"],
-    ["webfetch", "Internet access is only available in Full access."],
-    ["websearch", "Internet access is only available in Full access."],
-    ["execute", "Approve runs this Code Mode program once"],
-    ["opencode_worktree_create", "Approve creates a new managed task workspace with this name"],
-    ["external_directory", "Approve allows exactly this action once"],
+    ["shell", "Runs this command once in the task workspace."],
+    ["edit", "Applies this change to the listed files once."],
+    ["write", "Applies this change to the listed files once."],
+    ["patch", "Applies this change to the listed files once."],
+    ["webfetch", "Internet access exists only in Full access."],
+    ["websearch", "Internet access exists only in Full access."],
+    ["execute", "Runs this Code Mode program once"],
+    ["opencode_worktree_create", "Creates a new task workspace on its own branch"],
+    ["external_directory", "Allows exactly this action once."],
   ])("states what approving a %s ask does, per permission", (permission, expected) => {
     render(review({ permission, resources: ["x"] }));
 
@@ -77,16 +78,17 @@ describe("CodingWorkbenchNativeActionReview", () => {
   });
 
   // #3903 AC4: a Code Mode worktree is a new managed task workspace the human names and approves.
+  // #3907: the permission titles the approval card, so the block itself carries the name and help.
   it("names a new task workspace by its requested name, in both languages", () => {
+    expect(nativePermissionLabel("opencode_worktree_create", en)).toBe("New task workspace");
+    expect(nativePermissionLabel("opencode_worktree_create", de)).toBe("Neuer Task-Workspace");
     const { unmount } = render(
       review({ permission: "opencode_worktree_create", resources: ["feature-x"] }),
     );
-    expect(screen.getByText(/New task workspace/u)).toBeVisible();
     expect(screen.getByRole("listitem")).toHaveTextContent("feature-x");
     unmount();
     render(review({ permission: "opencode_worktree_create", resources: ["feature-x"] }, de));
-    expect(screen.getByText(/Neuer Task-Workspace/u)).toBeVisible();
-    expect(screen.getByText(/verwalteten Task-Workspace mit diesem Namen/u)).toBeVisible();
+    expect(screen.getByText(/neuen Aufgaben-Workspace auf eigenem Branch/u)).toBeVisible();
   });
 
   it("claims the task workspace only for the shell command, never for web access", () => {
@@ -102,15 +104,15 @@ describe("CodingWorkbenchNativeActionReview", () => {
     (permission) => {
       render(review({ permission, resources: ["x"] }));
 
-      expect(screen.getByText(/Native action/u)).toBeInTheDocument();
-      expect(screen.getByText(/Approve allows exactly this action once/u)).toBeInTheDocument();
+      expect(nativePermissionLabel(permission, en)).toBe("Native action");
+      expect(screen.getByText(/Allows exactly this action once/u)).toBeInTheDocument();
     },
   );
 
   it("localizes the per-permission help and the empty-resource sentence in German", () => {
     const { unmount } = render(review({ permission: "shell", resources: ["ls"] }, de));
     expect(
-      screen.getByText(/Genehmigen führt diesen Befehl einmal im Aufgaben-Workspace aus/u),
+      screen.getByText(/Führt diesen Befehl einmal im Aufgaben-Workspace aus/u),
     ).toBeInTheDocument();
     unmount();
 

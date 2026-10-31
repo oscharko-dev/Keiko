@@ -45,7 +45,11 @@ export interface CodingWorkbenchMutationCommand {
   readonly requestId: string;
   readonly expected?: { readonly runId: string; readonly revision: number };
   readonly mayInstallNewRun: boolean;
-  readonly run: () => Promise<CodingWorkbenchRuntimeSnapshot>;
+  /**
+   * Sends the request. `signal` is the queue's preemption signal for this mutation: it must reach
+   * the API call, so Stop can end this mutation's client wait instead of queueing behind it.
+   */
+  readonly run: (signal: AbortSignal) => Promise<CodingWorkbenchRuntimeSnapshot>;
 }
 
 type RuntimeModelSelection = {
@@ -123,6 +127,7 @@ function startRequest(
     ...managedGatewayModelSelection(current),
     ...startAgentSelection(current),
     ...startPromptInputs(options),
+    ...(options.jiraPodId === undefined ? {} : { jiraPodId: options.jiraPodId }),
   };
   if (options.issue === undefined) return request;
   return {
@@ -162,7 +167,8 @@ export function createStartMutation(
   return {
     requestId: id,
     mayInstallNewRun: true,
-    run: () => startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options)),
+    run: (signal) =>
+      startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options), signal),
   };
 }
 
@@ -178,31 +184,45 @@ export function createApprovalMutation(
     requestId: permission.requestId,
     expected: { runId: snapshot.runId, revision: snapshot.revision },
     mayInstallNewRun: false,
-    run: () =>
-      decideCodingWorkbenchRuntimeApproval(snapshot.runId!, {
-        requestId: permission.requestId,
-        expectedRevision: snapshot.revision,
-        decision,
-      }),
+    run: (signal) =>
+      decideCodingWorkbenchRuntimeApproval(
+        snapshot.runId!,
+        {
+          requestId: permission.requestId,
+          expectedRevision: snapshot.revision,
+          decision,
+        },
+        signal,
+      ),
   };
+}
+
+/** The run a stop or takeover addresses, or null when the Workbench holds none. */
+export function runBoundTarget(
+  current: CodingWorkbenchRuntimeState,
+): { readonly runId: string; readonly snapshot: CodingWorkbenchRuntimeSnapshot } | null {
+  const snapshot = current.run.value;
+  const runId = snapshot?.runId;
+  return runId && snapshot !== null ? { runId, snapshot } : null;
 }
 
 export function createRunBoundMutation(
   kind: "stop" | "takeover",
   current: CodingWorkbenchRuntimeState,
 ): CodingWorkbenchMutationCommand {
-  const snapshot = current.run.value;
-  const runId = snapshot?.runId;
-  if (!runId || snapshot === null)
+  const target = runBoundTarget(current);
+  if (target === null)
     throw codingWorkbenchRuntimeActionError("No current runtime run is available.");
+  const { runId, snapshot } = target;
+  // The server refuses a stop or takeover whose requestId is not the run id (isEndRequestConsistent).
   return {
     requestId: runId,
     expected: { runId, revision: snapshot.revision },
     mayInstallNewRun: false,
-    run: () =>
+    run: (signal) =>
       kind === "stop"
-        ? stopCodingWorkbenchRuntime(runId, { requestId: runId })
-        : takeOverCodingWorkbenchRuntime(runId, { requestId: runId }),
+        ? stopCodingWorkbenchRuntime(runId, { requestId: runId }, signal)
+        : takeOverCodingWorkbenchRuntime(runId, { requestId: runId }, signal),
   };
 }
 
@@ -223,10 +243,14 @@ export function createLifecycleMutation(
     requestId: runId,
     expected: { runId, revision: snapshot.revision },
     mayInstallNewRun: false,
-    run: () =>
+    run: (signal) =>
       kind === "pause"
-        ? pauseCodingWorkbenchRuntime(runId, { requestId: runId })
-        : resumeCodingWorkbenchRuntime(runId, { requestId: runId, requestedMode: resumeMode }),
+        ? pauseCodingWorkbenchRuntime(runId, { requestId: runId }, signal)
+        : resumeCodingWorkbenchRuntime(
+            runId,
+            { requestId: runId, requestedMode: resumeMode },
+            signal,
+          ),
   };
 }
 
@@ -308,17 +332,21 @@ export function createFollowUpMutation(
     requestId: id,
     expected: { runId, revision: snapshot.revision },
     mayInstallNewRun: false,
-    run: () =>
-      submitCodingWorkbenchRuntimeFollowUp(runId, {
-        requestId: id,
-        expectedRevision: snapshot.revision,
-        taskIntent,
-        // A delivered message joins the turn that runs under its agent and never switches it.
-        ...(delivery === undefined ? agentSelection(current) : { delivery }),
-        ...(references.length === 0 ? {} : { references }),
-        ...(command === undefined ? {} : { command }),
-        ...(mentions === undefined ? {} : { mentions }),
-      }),
+    run: (signal) =>
+      submitCodingWorkbenchRuntimeFollowUp(
+        runId,
+        {
+          requestId: id,
+          expectedRevision: snapshot.revision,
+          taskIntent,
+          // A delivered message joins the turn that runs under its agent and never switches it.
+          ...(delivery === undefined ? agentSelection(current) : { delivery }),
+          ...(references.length === 0 ? {} : { references }),
+          ...(command === undefined ? {} : { command }),
+          ...(mentions === undefined ? {} : { mentions }),
+        },
+        signal,
+      ),
   };
 }
 
@@ -346,12 +374,16 @@ export function createRevertMutation(
     requestId: id,
     expected: { runId, revision: snapshot.revision },
     mayInstallNewRun: false,
-    run: () =>
-      revertCodingWorkbenchRuntime(runId, {
-        requestId: id,
-        expectedRevision: snapshot.revision,
-        action,
-      }),
+    run: (signal) =>
+      revertCodingWorkbenchRuntime(
+        runId,
+        {
+          requestId: id,
+          expectedRevision: snapshot.revision,
+          action,
+        },
+        signal,
+      ),
   };
 }
 
@@ -377,13 +409,17 @@ export function createInboxMutation(
     requestId: id,
     expected: { runId, revision: snapshot.revision },
     mayInstallNewRun: false,
-    run: () =>
-      submitCodingWorkbenchRuntimeInboxAction(runId, {
-        requestId: id,
-        expectedRevision: snapshot.revision,
-        action,
-        itemId,
-      }),
+    run: (signal) =>
+      submitCodingWorkbenchRuntimeInboxAction(
+        runId,
+        {
+          requestId: id,
+          expectedRevision: snapshot.revision,
+          action,
+          itemId,
+        },
+        signal,
+      ),
   };
 }
 
@@ -400,15 +436,19 @@ export function createRetryMutation(
     requestId: id,
     expected: { runId, revision: snapshot.revision },
     mayInstallNewRun: true,
-    run: () =>
-      retryCodingWorkbenchRuntime(runId, {
-        requestId: id,
-        taskIntent,
-        requestedMode: current.requestedMode,
-        runtimePreference: current.runtimePreference,
-        ...managedGatewayModelSelection(current),
-        ...startAgentSelection(current),
-      }),
+    run: (signal) =>
+      retryCodingWorkbenchRuntime(
+        runId,
+        {
+          requestId: id,
+          taskIntent,
+          requestedMode: current.requestedMode,
+          runtimePreference: current.runtimePreference,
+          ...managedGatewayModelSelection(current),
+          ...startAgentSelection(current),
+        },
+        signal,
+      ),
   };
 }
 
@@ -427,12 +467,16 @@ export function createResearchRevokeMutation(
     requestId: id,
     expected: { runId, revision: snapshot.revision },
     mayInstallNewRun: false,
-    run: () =>
-      revokeCodingWorkbenchRuntimeResearchGrant(runId, {
-        requestId: id,
-        expectedRevision: snapshot.revision,
-        grantId: grant.grantId,
-      }),
+    run: (signal) =>
+      revokeCodingWorkbenchRuntimeResearchGrant(
+        runId,
+        {
+          requestId: id,
+          expectedRevision: snapshot.revision,
+          grantId: grant.grantId,
+        },
+        signal,
+      ),
   };
 }
 
@@ -446,10 +490,14 @@ export function createRecoveryAcknowledgementMutation(
     requestId: snapshot.runId,
     expected: { runId: snapshot.runId, revision: snapshot.revision },
     mayInstallNewRun: false,
-    run: () =>
-      acknowledgeCodingWorkbenchRuntimeRecovery(snapshot.runId!, {
-        requestId: snapshot.runId!,
-        acknowledged: true,
-      }),
+    run: (signal) =>
+      acknowledgeCodingWorkbenchRuntimeRecovery(
+        snapshot.runId!,
+        {
+          requestId: snapshot.runId!,
+          acknowledged: true,
+        },
+        signal,
+      ),
   };
 }

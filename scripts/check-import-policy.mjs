@@ -218,6 +218,19 @@ const CLI_HEAVY_PACKAGE_PATTERN =
   /^@oscharko-dev\/keiko-(server|harness|workflows|evaluations|verification|evidence|model-gateway|workspace|quality-intelligence|sdk)($|\/)/;
 const CLI_HEAVY_PACKAGE_ALLOWED_SUBPATHS = /^@oscharko-dev\/keiko-server\/credential-vault($|\/)/;
 
+// ADR-0175 D3: exact synchronous JSON Schema validator imports in their one pure owner.
+// No I/O loader, arbitrary Ajv internals or third-party imports elsewhere become admissible.
+const EXTERNAL_SCHEMA_VALIDATOR_IMPORTS = new Set([
+  "ajv",
+  "ajv/dist/2019.js",
+  "ajv/dist/2020.js",
+  "ajv-formats",
+]);
+const EXTERNAL_SCHEMA_VALIDATOR_OWNERS = new Set([
+  "packages/keiko-tool-catalog/src/external-schema.ts",
+  `${FIXTURE_ROOT}/tool-catalog-pure/external-schema.ts`,
+]);
+
 const IMPORT_POLICY_RULES = [
   {
     name: "adr-0175-tool-catalog-pure-imports",
@@ -227,6 +240,11 @@ const IMPORT_POLICY_RULES = [
         : path.startsWith("packages/keiko-tool-catalog/src/"),
     matchesSpecifier: (specifier, path) => {
       if (/^@oscharko-dev\/keiko-(contracts|security)($|\/)/u.test(specifier)) return false;
+      if (
+        EXTERNAL_SCHEMA_VALIDATOR_OWNERS.has(path) &&
+        EXTERNAL_SCHEMA_VALIDATOR_IMPORTS.has(specifier)
+      )
+        return false;
       return (
         !specifier.startsWith(".") ||
         !candidateImportPaths(specifier, path).some((candidate) =>
@@ -331,6 +349,14 @@ const IMPORT_POLICY_RULES = [
         : /^(packages\/keiko-|src\/)/.test(path) &&
           !/^(packages\/keiko-model-gateway\/src\/|src\/gateway\/)/.test(path),
     matchesSpecifier: (specifier) => PROVIDER_SDK_PATTERN.test(specifier),
+  },
+  {
+    name: "adr-0181-mcp-sdk-isolation",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/mcp-sdk-isolation/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !path.startsWith("packages/keiko-mcp/src/"),
+    matchesSpecifier: (specifier) => specifier.startsWith("@modelcontextprotocol/"),
   },
   {
     name: "adr-0019-trust-4-no-direct-fs-outside-workspace",

@@ -17,6 +17,7 @@ import {
   type GitPullRequestBodyAdapter,
 } from "@oscharko-dev/keiko-tools";
 import {
+  createNodeGitPublishAdapter,
   gitCommitMessageDigest,
   readGitIndexTreeDigest,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -26,10 +27,15 @@ import {
   codingWorkbenchRemoteDigest,
 } from "../coding-context/githubIssueResolution.js";
 import { runMigrations } from "../store/schema.js";
+import { foreignOriginDigest } from "./verifiedRepositoryIdentity.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
-import type { DraftDeliveryRunContext, DraftDeliveryServiceOptions } from "./draftDeliveryTypes.js";
+import type {
+  DraftBranchTargetResolution,
+  DraftDeliveryRunContext,
+  DraftDeliveryServiceOptions,
+} from "./draftDeliveryTypes.js";
 
 const DIGEST = "a".repeat(64);
 const REPOSITORY = "owner/repository";
@@ -56,7 +62,34 @@ function gitTestProcessEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * `issueFree` builds a run with no accepted issue whose `origin` is the local bare repository, so a
+ * push is the whole delivery (ADR-0085 D1b). `realPublish` swaps the stub publish adapter for the
+ * real Node adapter, which runs the pinned `git push origin <sha>:refs/heads/<branch>` against that
+ * bare origin.
+ */
+export interface DraftDeliveryFixtureOptions {
+  readonly issueFree?: boolean;
+  readonly realPublish?: boolean;
+  readonly branch?: string;
+  /**
+   * An issue-free run whose `origin` was admitted as a verified github.com repository. Its bare
+   * repository stands in for GitHub: the run's identity digest and the repository the controller
+   * resolves are those of `owner/repository`, while every push still lands in the local bare remote
+   * through the stub publish adapter (`realPublish` would push to github.com and is not supported).
+   */
+  readonly githubOrigin?: boolean;
+}
+
 export class DraftDeliveryFixture {
+  public readonly issueFree: boolean;
+  public readonly branch: string;
+  public readonly realPublish: boolean;
+  /** What `resolveBranchTarget` answers; flip it to model a drifted or lost `origin`. */
+  public branchTarget: DraftBranchTargetResolution;
+  public branchTargetCalls = 0;
+  public repositoryKind: "github-origin" | "foreign-origin" | "local";
+  public readonly githubOrigin: boolean;
   public readonly root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-draft-service-")));
   public readonly remote = realpathSync(mkdtempSync(join(tmpdir(), "keiko-draft-remote-")));
   public readonly db = new DatabaseSync(":memory:");
@@ -94,7 +127,15 @@ export class DraftDeliveryFixture {
   public readonly bodyAdapter: GitPullRequestBodyAdapter;
   public readonly adapter: GitPullRequestInspectionAdapter;
 
-  public constructor() {
+  public constructor(fixture: DraftDeliveryFixtureOptions = {}) {
+    this.issueFree = fixture.issueFree === true;
+    this.realPublish = fixture.realPublish === true;
+    this.githubOrigin = fixture.issueFree === true && fixture.githubOrigin === true;
+    if (this.githubOrigin && this.realPublish)
+      throw new Error("a github.com origin fixture publishes through the stub adapter");
+    this.repositoryKind = this.githubOrigin ? "github-origin" : "foreign-origin";
+    this.branchTarget = this.githubOrigin ? { ok: true, repository: REPOSITORY } : { ok: true };
+    this.branch = fixture.branch ?? (this.issueFree ? "claude/task-1" : "feature/issue-1");
     this.initializeRepository();
     runMigrations(this.db);
     this.snapshots = createCodingRuntimeSnapshotStore(this.db);
@@ -127,12 +168,17 @@ export class DraftDeliveryFixture {
     this.git(["commit", "-qm", "base"]);
     this.git(["init", "--bare", "-q", this.remote]);
     this.git(["push", "-q", this.remote, "master"]);
-    this.git(["checkout", "-qb", "feature/issue-1"]);
+    this.git(["checkout", "-qb", this.branch]);
     writeFileSync(join(this.root, "code.js"), "export const value = 2;\n");
     this.git(["add", "code.js"]);
     this.git(["commit", "-qm", "feat: bounded change"]);
     this.git(["update-index", "--refresh", "-q"]);
-    this.git(["remote", "add", "origin", `https://github.com/${REPOSITORY}.git`]);
+    this.git([
+      "remote",
+      "add",
+      "origin",
+      this.issueFree && !this.githubOrigin ? this.remote : `https://github.com/${REPOSITORY}.git`,
+    ]);
   }
   private makeIssue(): CodingWorkbenchIssueBinding {
     const fields = {
@@ -146,6 +192,11 @@ export class DraftDeliveryFixture {
     } as const;
     return { ...fields, bindingDigest: codingWorkbenchIssueBindingDigest(fields) };
   }
+  /** The identity digest the run was admitted with: the issue's remote, or the foreign origin's. */
+  public get repositoryDigest(): string {
+    if (this.githubOrigin) return codingWorkbenchRemoteDigest(REPOSITORY);
+    return this.issueFree ? foreignOriginDigest(this.remote) : this.issue.remoteDigest;
+  }
   private makeContext(): DraftDeliveryRunContext {
     return {
       runId: "run-1",
@@ -154,11 +205,12 @@ export class DraftDeliveryFixture {
       envelopeDigest: DIGEST,
       runtimeAuthorityDigest: DIGEST,
       workspaceDigest: DIGEST,
-      repositoryDigest: this.issue.remoteDigest,
-      issueBindingDigest: this.issue.bindingDigest,
-      issueBinding: this.issue,
+      repositoryDigest: this.repositoryDigest,
+      ...(this.issueFree
+        ? { repositoryKind: this.repositoryKind }
+        : { issueBindingDigest: this.issue.bindingDigest, issueBinding: this.issue }),
       baseRef: "master",
-      headRef: "feature/issue-1",
+      headRef: this.branch,
       correlationId: "draft-delivery-test",
       buffersClean: () => this.clean,
       stillAuthorized: () => this.live,
@@ -195,7 +247,7 @@ export class DraftDeliveryFixture {
       toolCallCount: 0,
       patchByteCount: 0,
       modelRequestCount: 0,
-      issueBinding: this.issue,
+      ...(this.issueFree ? {} : { issueBinding: this.issue }),
     });
   }
   public async recordVerifiedCommit(
@@ -214,8 +266,8 @@ export class DraftDeliveryFixture {
       envelopeDigest: DIGEST,
       runtimeAuthorityDigest: DIGEST,
       workspaceDigest: DIGEST,
-      repositoryDigest: this.issue.remoteDigest,
-      issueBindingDigest: this.issue.bindingDigest,
+      repositoryDigest: this.repositoryDigest,
+      ...(this.issueFree ? {} : { issueBindingDigest: this.issue.bindingDigest }),
       baseSha: this.git(["rev-parse", this.context.baseRef]),
       parentSha: this.git(["rev-parse", "HEAD^"]),
       stagedTreeDigest,
@@ -237,7 +289,7 @@ export class DraftDeliveryFixture {
     await this.recordVerifiedCommit("commit-2", "verification-2", "fix: repair the failing check");
     return this.git(["rev-parse", "HEAD"]);
   }
-  private remoteHead(branch: string): string | undefined {
+  public remoteHead(branch: string): string | undefined {
     const value = this.git(
       ["for-each-ref", "--format=%(objectname)", `refs/heads/${branch}`],
       this.remote,
@@ -367,6 +419,10 @@ export class DraftDeliveryFixture {
       onChanged: (record): void => {
         this.changes.push(record);
       },
+      resolveBranchTarget: (): Promise<DraftBranchTargetResolution> => {
+        this.branchTargetCalls += 1;
+        return Promise.resolve(this.branchTarget);
+      },
       resolveTarget: async (): ReturnType<DraftDeliveryServiceOptions["resolveTarget"]> => {
         await this.asyncBeforeTarget?.();
         return this.targetReason === undefined
@@ -378,9 +434,14 @@ export class DraftDeliveryFixture {
       pullRequestSeams: () => ({ ...shared, prAdapterFactory: () => this.adapter }),
       publishSeams: () => ({
         ...shared,
-        publishAdapterFactory: () => ({
-          publish: (request): Promise<GitPublishExecResult> => this.publish(request),
-        }),
+        publishAdapterFactory: (workspace) =>
+          this.realPublish
+            ? createNodeGitPublishAdapter({
+                workspace,
+                processEnv: gitTestProcessEnv(),
+                now: () => this.now,
+              })
+            : { publish: (request): Promise<GitPublishExecResult> => this.publish(request) },
       }),
     };
   }

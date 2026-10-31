@@ -2023,6 +2023,76 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 
+  it.each([
+    {
+      locale: "en",
+      label: "Data sources",
+      none: "No Data sources",
+      mode: "Grounding mode",
+      empty: "No ready Data Pods or Pod Sets are available.",
+    },
+    {
+      locale: "de",
+      label: "Datenquellen",
+      none: "Keine Datenquellen",
+      mode: "Grounding-Modus",
+      empty: "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
+    },
+  ])(
+    "distinguishes bound Jira tools from empty and mixed grounding in $locale",
+    async ({ locale, label, none, mode, empty }) => {
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const user = userEvent.setup();
+      const binding = {
+        podId: "jira-one",
+        bindingGeneration: 1,
+        authenticationGeneration: 1,
+        connectedAtMs: 1,
+      };
+      const scopeIdentity = "gsi-v1:" + "b".repeat(64);
+      const live = makeChat({ jiraPodBinding: binding, groundingScopeIdentity: scopeIdentity });
+      const replaceChat = vi.fn();
+      const mounted = render(
+        <I18nProvider>
+          <ChatSessionProvider value={makeSession({ activeChat: live, replaceChat })}>
+            <ChatWindow />
+          </ChatSessionProvider>
+        </I18nProvider>,
+      );
+      expect(await screen.findByText(empty)).toBeVisible();
+      expect(screen.getByText(label)).toBeVisible();
+      expect(screen.getByRole("combobox", { name: mode })).toHaveTextContent(none);
+      const mixed = {
+        ...live,
+        localKnowledgeScopes: [
+          { kind: "capsule" as const, capsuleId: makeCapsuleId("data-one"), connectedAtMs: 1 },
+        ],
+      };
+      mounted.rerender(
+        <I18nProvider>
+          <ChatSessionProvider value={makeSession({ activeChat: mixed, replaceChat })}>
+            <ChatWindow />
+          </ChatSessionProvider>
+        </I18nProvider>,
+      );
+      expect(screen.queryByText(empty)).toBeNull();
+      expect(screen.getByText(label)).toBeVisible();
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      updateChatMock.mockResolvedValueOnce({ chat: live });
+      await chooseComboboxOption(user, mode, none);
+      await waitFor(() =>
+        expect(updateChatMock).toHaveBeenCalledWith(live.id, {
+          expectedGroundingScopeIdentity: scopeIdentity,
+          connectedScopes: null,
+          localKnowledgeScopes: null,
+        }),
+      );
+      expect(replaceChat).toHaveBeenCalledWith(live);
+      confirm.mockRestore();
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    },
+  );
+
   it("says no ready pods only after a successful load", async () => {
     fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
     renderWindow(makeSession({ activeChat: makeChat() }));

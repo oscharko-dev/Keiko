@@ -33,6 +33,11 @@ int wmain(int argc, wchar_t **argv) {
   /* Deterministic wire check only; these values are never reported as live processes. */
   if (argc == 2 && wcscmp(argv[1], L"--observation-encoding") == 0)
     return write_observation(0x010a0d00u, 0x020a1a04u) ? 0 : 5;
+  if (argc > 1 && wcscmp(argv[1], L"--mcp-argv-probe") == 0) {
+    const wchar_t quoted[] = {L'a', L'\\', L'"', L'b', L' ', L'c', L'\0'};
+    if (argc != 6 || wcscmp(argv[2], quoted) != 0 || wcscmp(argv[3], L"") != 0 ||
+        wcscmp(argv[4], L"tail\\") != 0 || wcscmp(argv[5], L"\u00fc") != 0) return 5;
+  }
   if (argc == 2 && wcscmp(argv[1], L"--descendant") == 0) {
     Sleep(INFINITE);
     return 0;

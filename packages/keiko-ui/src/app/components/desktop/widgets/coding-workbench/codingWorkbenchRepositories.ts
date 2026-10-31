@@ -37,3 +37,14 @@ export async function repositorySelectable(root: string): Promise<boolean> {
   if (project === undefined || !locallyAvailable(project)) return false;
   return gitAvailable(root);
 }
+
+/**
+ * An ordinary folder (not a Git repository) is selectable when it is a registered, locally available
+ * project: the same catalog and availability gate as a repository, without the Git half (owner
+ * decision 2026-10-30). The server independently refuses a folder that is a repository.
+ */
+export async function folderSelectable(root: string): Promise<boolean> {
+  const { projects } = await fetchProjects();
+  const project = projects.find((entry) => entry.path === root);
+  return project !== undefined && locallyAvailable(project);
+}

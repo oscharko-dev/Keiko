@@ -6,7 +6,8 @@ import type { GitChangedFile } from "@oscharko-dev/keiko-contracts";
 
 import type { UseCodingWorkbenchChangesResult } from "@/lib/useCodingWorkbenchChanges";
 import type { CodingWorkbenchPairingState } from "@/lib/coding-workbench-live-state";
-import { DiffFileSection, type DiffViewLabels } from "../cards/shared/diffView";
+import type { DiffViewLabels } from "../cards/shared/diffView";
+import { CodingWorkbenchDiffFiles } from "./CodingWorkbenchWindowedDiff";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -354,16 +355,12 @@ function DiffContent({
       {changes.diffTruncated ? (
         <output className="rv-truncated">{t("codingWorkbench.changes.diff.truncated")}</output>
       ) : null}
-      {changes.diff.files.map((file, index) => (
-        <DiffFileSection
-          key={`${file.path}:${String(index)}`}
-          file={file}
-          index={index}
-          idPrefix="coding-workbench-change-file"
-          sectionRef={() => undefined}
-          labels={labels}
-        />
-      ))}
+      <CodingWorkbenchDiffFiles
+        surface="run-changes"
+        files={changes.diff.files}
+        idPrefix="coding-workbench-change-file"
+        labels={labels}
+      />
     </div>
   );
 }

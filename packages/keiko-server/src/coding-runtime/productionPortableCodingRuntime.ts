@@ -87,6 +87,7 @@ export interface QualifiedPortableOpenCodeRuntime {
   readonly sidecar: PortableSidecarRuntimeVerification;
   readonly qualification: LongLivedRuntimeQualification;
   readonly nativeHelperPath: string;
+  readonly nativeHelperSha256?: string;
   /**
    * The lane this artifact DECLARES in its own activation document (ADR-0163 D9). The field is
    * deliberately not called `evidenceClass` or `lane`: both names are structural discriminators
@@ -471,6 +472,7 @@ function qualifiedRuntime(
     manifest: candidate.activation,
     sidecar: candidate.sidecar,
     qualification,
+    nativeHelperSha256: candidate.supervisorSha256,
     nativeHelperPath: helperPath(
       candidate.resourceRoot,
       candidate.target,

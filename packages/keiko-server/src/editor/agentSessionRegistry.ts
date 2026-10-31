@@ -42,6 +42,15 @@ export const EDITOR_AGENT_ACTION_TIMEOUT_MS = 15_000;
 export const EDITOR_AGENT_REVIEW_TIMEOUT_MS = 30 * 60 * 1_000;
 export const EDITOR_AGENT_MAX_QUEUED_PER_SESSION = 64;
 export const EDITOR_AGENT_MAX_SESSIONS = 256;
+// #4107 — the queue is also bounded by the serialized bytes it retains. One action may carry up to
+// EDITOR_AGENT_ACTION_MAX_BODY_BYTES (about 25 MiB since #4102), so the count bound alone allowed
+// about 1.6 GiB per session. 64 MiB per session holds two maximal actions (the real worst case:
+// only one MUTATING action may be in flight per session, so further bodies are small read or
+// navigation actions); 256 MiB for the process is four full sessions of that, a ceiling that
+// stays far below the heap limit however many of the 256 sessions queue at once. A maximal
+// action therefore always fits an empty queue, and the bounds never refuse a lone legitimate one.
+export const EDITOR_AGENT_MAX_QUEUED_BYTES_PER_SESSION = 64 * 1_048_576;
+export const EDITOR_AGENT_MAX_QUEUED_BYTES_TOTAL = 256 * 1_048_576;
 
 export type EditorAgentSubscriber = (event: EditorAgentEvent) => void;
 
@@ -52,6 +61,9 @@ export interface EditorAgentRegistryOptions {
   readonly reviewTimeoutMs?: number | undefined;
   // Maximum in-flight (queued, not yet resolved) actions per session before QUEUE_FULL backpressure.
   readonly maxQueuedPerSession?: number | undefined;
+  // Maximum serialized bytes of in-flight actions per session / across the process (QUEUE_FULL).
+  readonly maxQueuedBytesPerSession?: number | undefined;
+  readonly maxQueuedBytesTotal?: number | undefined;
   // Maximum registered session snapshots before the oldest idle session is evicted.
   readonly maxSessions?: number | undefined;
   // Injection seams so unit tests drive the action timeout deterministically. Production uses an
@@ -60,9 +72,26 @@ export interface EditorAgentRegistryOptions {
   readonly clearTimer?: ((handle: unknown) => void) | undefined;
 }
 
+// Which capacity bound refused an action (all answer QUEUE_FULL): the in-flight count of the
+// session, the serialized bytes of the session, or the serialized bytes of the whole process.
+export type EditorAgentQueueRefusalReason = "queue-count" | "session-bytes" | "process-bytes";
+
+// Body-free refusal facts for the Activity Log: counts and bytes only, never the action.
+export interface EditorAgentQueueRefusal {
+  readonly reason: EditorAgentQueueRefusalReason;
+  readonly actionBytes: number;
+  readonly sessionQueuedCount: number;
+  readonly sessionQueuedBytes: number;
+  readonly processQueuedBytes: number;
+}
+
 export type EditorAgentQueueOutcome =
   | { readonly kind: "queued"; readonly result: EditorAgentActionResult }
-  | { readonly kind: "rejected"; readonly result: EditorAgentActionResult };
+  | {
+      readonly kind: "rejected";
+      readonly result: EditorAgentActionResult;
+      readonly queueRefusal?: EditorAgentQueueRefusal | undefined;
+    };
 
 export interface EditorAgentRegistry {
   registerBufferSnapshot(snapshot: EditorAgentSessionSnapshot, capabilityDigest: string): boolean;
@@ -110,6 +139,8 @@ export interface EditorAgentRegistry {
   // Reporting alone never clears a queue slot.
   reportResult(result: EditorAgentActionResult): void;
   pendingCount(sessionId: string): number;
+  // Serialized bytes held by queued actions: one session, or the whole process without an id.
+  queuedBytes(sessionId?: string): number;
   reset(): void;
 }
 
@@ -117,6 +148,8 @@ interface PendingAction {
   readonly action: EditorAgentAction;
   readonly timer: unknown;
   readonly runtimeOwned: boolean;
+  // Serialized size of `action`, charged against the byte bounds until the slot is released.
+  readonly bytes: number;
 }
 
 type EditorAgentEventPayload =
@@ -137,6 +170,8 @@ interface RegistryState {
   readonly actionTimeoutMs: number;
   readonly reviewTimeoutMs: number;
   readonly maxQueuedPerSession: number;
+  readonly maxQueuedBytesPerSession: number;
+  readonly maxQueuedBytesTotal: number;
   readonly maxSessions: number;
   readonly setTimer: (handler: () => void, ms: number) => unknown;
   readonly clearTimer: (handle: unknown) => void;
@@ -392,8 +427,11 @@ function queueActionImpl(
   options?: { readonly runtimeOwned?: boolean | undefined },
 ): EditorAgentQueueOutcome {
   const inner = state.pending.get(action.sessionId);
-  const rejection = queueRejection(state, action, inner);
+  const rejection = queueRejection(action, inner);
   if (rejection !== undefined) return rejection;
+  const bytes = serializedActionBytes(action);
+  const refusal = capacityRefusal(state, action, bytes);
+  if (refusal !== undefined) return queueFullOutcome(action, refusal);
   const slots = inner ?? new Map<string, PendingAction>();
   if (inner === undefined) state.pending.set(action.sessionId, slots);
   const timer = state.setTimer(
@@ -402,7 +440,12 @@ function queueActionImpl(
     },
     actionTimeoutMs(state, action),
   );
-  slots.set(action.actionId, { action, timer, runtimeOwned: options?.runtimeOwned === true });
+  slots.set(action.actionId, {
+    action,
+    timer,
+    runtimeOwned: options?.runtimeOwned === true,
+    bytes,
+  });
   if (options?.runtimeOwned === true) state.runtimeOwnedActions.add(action);
   emit(state, { type: "action", action: emitAction });
   return {
@@ -418,7 +461,6 @@ function queueActionImpl(
 }
 
 function queueRejection(
-  state: RegistryState,
   action: EditorAgentAction,
   inner: ReadonlyMap<string, PendingAction> | undefined,
 ): EditorAgentQueueOutcome | undefined {
@@ -440,14 +482,82 @@ function queueRejection(
         "A mutating editor action is already awaiting a terminal result.",
       ),
     };
-  if ((inner?.size ?? 0) < state.maxQueuedPerSession) return undefined;
+  return undefined;
+}
+
+// Slot bytes are summed from the live entries instead of kept in a counter, so a release path
+// (take, timeout, runtime cancellation, reset) can never leave the accounting behind.
+function sessionQueuedBytes(state: RegistryState, sessionId: string): number {
+  let total = 0;
+  for (const entry of state.pending.get(sessionId)?.values() ?? []) total += entry.bytes;
+  return total;
+}
+
+function processQueuedBytes(state: RegistryState): number {
+  let total = 0;
+  for (const sessionId of state.pending.keys()) total += sessionQueuedBytes(state, sessionId);
+  return total;
+}
+
+function queuedBytesFor(state: RegistryState, sessionId: string | undefined): number {
+  return sessionId === undefined ? processQueuedBytes(state) : sessionQueuedBytes(state, sessionId);
+}
+
+function serializedActionBytes(action: EditorAgentAction): number {
+  return Buffer.byteLength(JSON.stringify(action), "utf8");
+}
+
+function refusalFacts(
+  state: RegistryState,
+  action: EditorAgentAction,
+  actionBytes: number,
+  reason: EditorAgentQueueRefusalReason,
+): EditorAgentQueueRefusal {
+  return {
+    reason,
+    actionBytes,
+    sessionQueuedCount: state.pending.get(action.sessionId)?.size ?? 0,
+    sessionQueuedBytes: sessionQueuedBytes(state, action.sessionId),
+    processQueuedBytes: processQueuedBytes(state),
+  };
+}
+
+function capacityRefusal(
+  state: RegistryState,
+  action: EditorAgentAction,
+  actionBytes: number,
+): EditorAgentQueueRefusal | undefined {
+  const facts = (reason: EditorAgentQueueRefusalReason): EditorAgentQueueRefusal =>
+    refusalFacts(state, action, actionBytes, reason);
+  if ((state.pending.get(action.sessionId)?.size ?? 0) >= state.maxQueuedPerSession) {
+    return facts("queue-count");
+  }
+  if (sessionQueuedBytes(state, action.sessionId) + actionBytes > state.maxQueuedBytesPerSession) {
+    return facts("session-bytes");
+  }
+  if (processQueuedBytes(state) + actionBytes > state.maxQueuedBytesTotal) {
+    return facts("process-bytes");
+  }
+  return undefined;
+}
+
+const QUEUE_FULL_MESSAGES: Readonly<Record<EditorAgentQueueRefusalReason, string>> = {
+  "queue-count":
+    "The editor action queue for this session is full; retry once an action completes.",
+  "session-bytes":
+    "The editor action queue for this session holds too many bytes; retry once an action completes.",
+  "process-bytes":
+    "The editor action queues hold too many bytes across sessions; retry once an action completes.",
+};
+
+function queueFullOutcome(
+  action: EditorAgentAction,
+  queueRefusal: EditorAgentQueueRefusal,
+): EditorAgentQueueOutcome {
   return {
     kind: "rejected",
-    result: lifecycleFailure(
-      action,
-      "QUEUE_FULL",
-      "The editor action queue for this session is full; retry once an action completes.",
-    ),
+    result: lifecycleFailure(action, "QUEUE_FULL", QUEUE_FULL_MESSAGES[queueRefusal.reason]),
+    queueRefusal,
   };
 }
 
@@ -648,6 +758,9 @@ function createRegistryState(options: EditorAgentRegistryOptions): RegistryState
     actionTimeoutMs: options.actionTimeoutMs ?? EDITOR_AGENT_ACTION_TIMEOUT_MS,
     reviewTimeoutMs: options.reviewTimeoutMs ?? EDITOR_AGENT_REVIEW_TIMEOUT_MS,
     maxQueuedPerSession: options.maxQueuedPerSession ?? EDITOR_AGENT_MAX_QUEUED_PER_SESSION,
+    maxQueuedBytesPerSession:
+      options.maxQueuedBytesPerSession ?? EDITOR_AGENT_MAX_QUEUED_BYTES_PER_SESSION,
+    maxQueuedBytesTotal: options.maxQueuedBytesTotal ?? EDITOR_AGENT_MAX_QUEUED_BYTES_TOTAL,
     maxSessions: options.maxSessions ?? EDITOR_AGENT_MAX_SESSIONS,
     setTimer: options.setTimer ?? defaultSetTimer,
     clearTimer: options.clearTimer ?? defaultClearTimer,
@@ -699,6 +812,7 @@ export function createEditorAgentRegistry(
       reportResultImpl(state, result);
     },
     pendingCount: (sessionId): number => state.pending.get(sessionId)?.size ?? 0,
+    queuedBytes: (sessionId): number => queuedBytesFor(state, sessionId),
     reset: (): void => {
       resetImpl(state);
     },

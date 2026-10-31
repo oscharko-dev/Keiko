@@ -1127,9 +1127,12 @@ only through that line's parent edge; when it is not retained, the analysis is i
 (`evidence-not-retained`). A child declared without its root, which no producer emits, is refused.
 Another request's failure of the same operation, the root's own included, neither completes the
 incident nor refuses it. A contradiction is `unsafe-report`. Every closure member, each incident
-correlation and every parent a retained line names, needs a directly recorded line: a timeline
+correlation and every parent named by registered causal evidence needs a directly recorded line: a timeline
 derived only through a child never proves its parent (`parent-correlation-missing`,
-`evidence-not-retained`). The selection accounts for exactly the process lifetimes the evidence
+`evidence-not-retained`). The report uses its trusted recorded registry's causal declarations, like
+the query's registered closure (D20): optional non-causal context may borrow a parent identifier
+without requiring that unrelated correlation to be retained. Incident members remain mandatory.
+The selection accounts for exactly the process lifetimes the evidence
 shows, and the evidence must carry that account: a `selected` start missing from it, a start beside
 a `lost` or `absent` one, or a heartbeat (written only after a start) beside an `absent` one is
 `unsafe-report`, so dropping a start never reads as a lifetime that had none; a `lost` start, or an
@@ -1588,22 +1591,32 @@ The Coding Workbench model selector stays a passive catalog reader (ADR-0124 D5)
 profile read, `GET /api/coding-sidecar/gateway/profile`, is not passive any more (owner decision
 for 1.1.1, reversing #3561): what Keiko can determine itself it determines itself, so a customer
 is never sent to Gateway Settings to click a check or copy a value. On that read the server
-verifies, for every chat model that claims tool calling, what the Workbench needs and the stored
-configuration does not prove: an expired or missing forced tool-call proof (`tool_calling`), and a
-context window below the 32,000-token minimum (`long_context`), which is what a gateway that
-declares no token limits leaves behind as the 4,096 setup placeholder. Expect
+verifies, for every chat model whose tool calling nobody has refuted, what the Workbench needs and
+the stored configuration does not prove: an expired, withdrawn or missing forced tool-call proof
+(`tool_calling`), and a context window below the 32,000-token minimum (`long_context`), which is
+what a gateway that declares no token limits leaves behind as the 4,096 setup placeholder. Expect
 `gateway.readiness.automatic.started` / `.completed` under the profile read's correlation id;
 `.completed` carries `verifiedContextTokens` when the long-context probe passed, and the same run
-persists the renewed proof and raises the stored window (raise-only). A model whose proof the
-config loader demoted to `toolCalling: false` after it aged out still claims tool calling (ADR-0124
-D5): after a restart the day after setup its read starts that automatic run, and a read that
-answers while the run is still open logs `coding-sidecar.gateway.readiness-insufficient` with
-`reason: "model-verification-pending"`. For such a model, `reason: "no-tool-calling"` follows only
-a run whose probe refuted tool calling. The work is bounded: one
-attempt per deployment identity within a six-hour cooldown, never for a model that does not
-claim tool calling, never while a subscription source is selected, and only the model the
-Workbench would elect is awaited. A profile read that
-finds nothing to prove writes no automatic record, and its absence is then not a lost call.
+persists the renewed proof and raises the stored window (raise-only). The `.started` line of such a
+run names why and who asked in two closed, optional fields: `probeBasis` (`never-proven`,
+`proof-renewal`, `context-window`) and `probeTrigger` (`profile-read`, or `startup` for the
+recognised-LiteLLM readiness at process start); an on-demand conversation probe carries neither.
+Both entries resolve their targets through one rule (`workbenchProbesNeeded`), so a model behind a
+plain OpenAI-compatible or Azure endpoint that nobody has proven (`probeBasis: never-proven`) is
+probed on its first profile read exactly as a LiteLLM model is at startup (#3578), and the verdict
+follows on `gateway.tool-calling.verification` under the same correlation id. A model whose proof
+the config loader demoted to `toolCalling: false` after it aged out still claims tool calling
+(ADR-0124 D5): after a restart the day after setup its read starts that automatic run, and a read
+that answers while the run is still open logs `coding-sidecar.gateway.readiness-insufficient` with
+`reason: "model-verification-pending"`, with the stored reason (`no-tool-calling` for a model
+nobody proved yet) in `storedReason`. `reason: "no-tool-calling"` then follows a run whose probe
+refuted tool calling, or answered with a failure that proves nothing: that model stays unproven
+until its cooldown ends.
+The work is bounded: one attempt per deployment identity within a six-hour cooldown (one minute
+after a probe the gateway never answered), never for a model that is no chat model or whose proof
+the probe refuted, never while a subscription source is selected, and only the model the
+Workbench would elect is awaited. A profile read that finds nothing to prove writes no automatic
+record, and its absence is then not a lost call.
 
 For received reports, first analyze the artifact without a correlation selector. New exports
 replace local labels with artifact-local ordinal references. Select the exported root from

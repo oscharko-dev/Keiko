@@ -76,18 +76,22 @@ function runBootRecoveryScript(options: {
 }): {
   readonly document: Document;
   readonly reload: ReturnType<typeof vi.fn>;
+  readonly window: EventTarget;
 } {
   const recoveryDocument = bootDocument(options);
   const reload = vi.fn();
+  const recoveryWindow = new EventTarget();
 
   vm.runInNewContext(APP_BOOT_RECOVERY_BOOTSTRAP, {
     document: recoveryDocument,
+    window: recoveryWindow,
+    clearTimeout,
     location: { reload },
     sessionStorage: options.storage ?? makeStorage(),
     setTimeout,
   });
 
-  return { document: recoveryDocument, reload };
+  return { document: recoveryDocument, reload, window: recoveryWindow };
 }
 
 describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
@@ -116,6 +120,45 @@ describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
     expect(storage.getItem(RECOVERY_KEY)).toBe("1");
   });
 
+  it("does not spend recovery retries while initial resources are still progressing", () => {
+    let readyState: DocumentReadyState = "loading";
+    vi.spyOn(document, "readyState", "get").mockImplementation(() => readyState);
+    const storage = makeStorage();
+    const {
+      document: recoveryDocument,
+      reload,
+      window: recoveryWindow,
+    } = runBootRecoveryScript({
+      hasWorkspace: false,
+      hasBootShell: true,
+      storage,
+    });
+    const initialScript = recoveryDocument.createElement("script");
+    initialScript.src = "/_next/static/chunks/synthetic-initial-resource.js";
+    recoveryDocument.body.append(initialScript);
+
+    vi.advanceTimersByTime(6000);
+    readyState = "interactive";
+    recoveryDocument.dispatchEvent(new Event("readystatechange"));
+    vi.advanceTimersByTime(2000);
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(storage.getItem(RECOVERY_KEY)).toBeNull();
+
+    vi.advanceTimersByTime(2000);
+    initialScript.dispatchEvent(new Event("load"));
+    readyState = "complete";
+    recoveryWindow.dispatchEvent(new Event("load"));
+    vi.advanceTimersByTime(1000);
+    const workspace = recoveryDocument.createElement("main");
+    workspace.className = "workspace";
+    recoveryDocument.body.append(workspace);
+    vi.advanceTimersByTime(8000);
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(storage.getItem(RECOVERY_KEY)).toBeNull();
+  });
+
   it("does not reload once the workspace has mounted", () => {
     const { document: recoveryDocument, reload } = runBootRecoveryScript({
       hasWorkspace: true,
@@ -128,6 +171,96 @@ describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
     expect(recoveryDocument.querySelector("main.workspace")).not.toBeNull();
     expect(recoveryDocument.querySelector("[role='alert']")).toBeNull();
   });
+
+  it("gives a loaded document the full hydration window and settles racing signals once", () => {
+    vi.spyOn(document, "readyState", "get").mockReturnValue("loading");
+    const { window: recoveryWindow, reload } = runBootRecoveryScript({
+      hasWorkspace: false,
+      hasBootShell: true,
+    });
+    vi.advanceTimersByTime(58000);
+    expect(reload).not.toHaveBeenCalled();
+    recoveryWindow.dispatchEvent(new Event("load"));
+    recoveryWindow.dispatchEvent(new Event("load"));
+    vi.advanceTimersByTime(7999);
+    expect(reload).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(reload).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(60000);
+    recoveryWindow.dispatchEvent(new Event("load"));
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "bounds resources that never settle with mounted workspace=%s",
+    (mounted) => {
+      vi.spyOn(document, "readyState", "get").mockReturnValue("loading");
+      const { reload } = runBootRecoveryScript({ hasWorkspace: mounted, hasBootShell: true });
+      vi.advanceTimersByTime(59999);
+      expect(reload).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(reload).toHaveBeenCalledTimes(mounted ? 0 : 1);
+    },
+  );
+
+  it.each(["SCRIPT", "LINK"])("recovers a failed initial %s without waiting for load", (tag) => {
+    vi.spyOn(document, "readyState", "get").mockReturnValue("loading");
+    const { window: recoveryWindow, reload } = runBootRecoveryScript({
+      hasWorkspace: false,
+      hasBootShell: true,
+    });
+    const failure = new Event("error");
+    const resource = document.createElement(tag);
+    if (resource instanceof HTMLLinkElement) resource.rel = "stylesheet";
+    Object.defineProperty(failure, "target", { value: resource });
+    recoveryWindow.dispatchEvent(failure);
+    vi.advanceTimersByTime(7999);
+    expect(reload).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(reload).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(60000);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it.each(["preload", "icon"])("does not arm hydration recovery for a failed %s link", (rel) => {
+    vi.spyOn(document, "readyState", "get").mockReturnValue("loading");
+    const { window: recoveryWindow, reload } = runBootRecoveryScript({
+      hasWorkspace: false,
+      hasBootShell: true,
+    });
+    const resource = document.createElement("link");
+    resource.rel = rel;
+    const failure = new Event("error");
+    Object.defineProperty(failure, "target", { value: resource });
+    recoveryWindow.dispatchEvent(failure);
+    vi.advanceTimersByTime(8000);
+    expect(reload).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(52000);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it.each(["load", "error", "deadline"])(
+    "settles racing boot signals once after %s wins",
+    (first) => {
+      vi.spyOn(document, "readyState", "get").mockReturnValue("loading");
+      const { window: recoveryWindow, reload } = runBootRecoveryScript({
+        hasWorkspace: false,
+        hasBootShell: true,
+      });
+      const failure = new Event("error");
+      Object.defineProperty(failure, "target", { value: document.createElement("script") });
+      if (first === "deadline") vi.advanceTimersByTime(60000);
+      else {
+        vi.advanceTimersByTime(58000);
+        recoveryWindow.dispatchEvent(first === "load" ? new Event("load") : failure);
+      }
+      recoveryWindow.dispatchEvent(new Event("load"));
+      recoveryWindow.dispatchEvent(failure);
+      vi.advanceTimersByTime(8000);
+      expect(reload).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("allows one more recovery navigation when the first attempt was too early", () => {
     const storage = makeStorage({ [RECOVERY_KEY]: "1" });

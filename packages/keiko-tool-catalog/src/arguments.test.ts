@@ -5,6 +5,7 @@ import { ToolCatalogError } from "./errors.js";
 import { declaration, fixture } from "./__fixtures__/catalog.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { lookupCatalogTool } from "./catalog.js";
+import { createInitialToolCatalog } from "./legacy.js";
 import { opencodeRegistrationSet } from "./opencode.js";
 import { createToolRef } from "./identity.js";
 import {
@@ -231,5 +232,49 @@ describe("changeset edit argument ceilings", () => {
         read,
       ),
     ).toThrow();
+  });
+});
+
+// #4110 (owner decision 2026-10-29): the legacy patch tools take a unified diff, which the shared
+// patch cap bounds like the changeset edit's strings; the rest of the legacy catalog stays generic.
+describe("legacy patch tool argument ceilings", () => {
+  const catalog = createInitialToolCatalog();
+  function descriptorOf(canonicalId: string): ToolDescriptor {
+    const descriptor = lookupCatalogTool(catalog, createToolRef(canonicalId, 1));
+    if (descriptor === undefined) throw new Error(`missing ${canonicalId}`);
+    return descriptor;
+  }
+
+  describe.each(["keiko.patch.propose", "keiko.patch.apply"])("%s", (canonicalId) => {
+    it("declares the shared patch ceilings on the descriptor", () => {
+      expect(descriptorOf(canonicalId).bounds.maxArgumentBytes).toBe(
+        CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes,
+      );
+      expect(descriptorOf(canonicalId).bounds.maxResultBytes).toBe(
+        TOOL_CATALOG_LIMITS.maxResultBytes,
+      );
+    });
+
+    it("admits a diff above 64 KiB and 256 KiB up to the cap, and refuses one byte more", () => {
+      const tool = descriptorOf(canonicalId);
+      const big = "y".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1);
+      expect(validateToolArguments({ diff: big }, tool)).toEqual({ diff: big });
+      const cap = "z".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes);
+      expect(validateToolArguments({ diff: cap }, tool)).toEqual({ diff: cap });
+      expect(() => validateToolArguments({ diff: `${cap}z` }, tool)).toThrow("input-bound");
+    });
+  });
+
+  it("keeps the generic ceilings on every other legacy tool", () => {
+    for (const canonicalId of ["keiko.file.read", "keiko.file.list", "keiko.command.run"])
+      expect(descriptorOf(canonicalId).bounds.maxArgumentBytes).toBe(
+        TOOL_CATALOG_LIMITS.maxArgumentBytes,
+      );
+    expect(() =>
+      validateToolArguments(
+        { path: "z".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1) },
+        descriptorOf("keiko.file.read"),
+      ),
+    ).toThrow("input-bound");
   });
 });

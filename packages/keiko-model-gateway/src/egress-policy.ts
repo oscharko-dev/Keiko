@@ -226,15 +226,17 @@ const PRIVATE_NETWORK_OVERRIDABLE_TARGET_CLASSES: ReadonlySet<OutboundTargetClas
 
 function isTargetClassBlocked(
   targetClass: OutboundTargetClass,
-  egress: OutboundHttpEgressConfig | undefined,
+  egress: OutboundHttpEgressConfig = {},
 ): boolean {
+  if (egress.requiredTargetClass !== undefined && targetClass !== egress.requiredTargetClass)
+    return true;
   if (targetClass === "public") return false;
-  if (targetClass === "loopback") return egress?.denyLoopback === true;
+  if (targetClass === "loopback") return egress.denyLoopback === true;
   if (ALWAYS_BLOCKED_TARGET_CLASSES.has(targetClass)) return true;
   if (PRIVATE_NETWORK_OVERRIDABLE_TARGET_CLASSES.has(targetClass)) {
-    return egress?.allowLinkLocalAndMetadata !== true;
+    return egress.allowLinkLocalAndMetadata !== true;
   }
-  return egress?.allowPrivateNetwork !== true;
+  return egress.allowPrivateNetwork !== true;
 }
 
 export function outboundTargetBlockedReason(
@@ -242,6 +244,14 @@ export function outboundTargetBlockedReason(
   egress: OutboundHttpEgressConfig | undefined,
 ): string | undefined {
   const targetClass = classifyOutboundHost(url.hostname);
+  if (
+    isDeniedListener(
+      targetClass,
+      Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+      egress,
+    )
+  )
+    return "active loopback listener";
   if (targetClass === undefined || !isTargetClassBlocked(targetClass, egress)) return undefined;
   return `${targetClass} address`;
 }
@@ -249,8 +259,24 @@ export function outboundTargetBlockedReason(
 export function outboundAddressBlockedReason(
   address: string,
   egress: OutboundHttpEgressConfig | undefined,
+  port?: number,
 ): string | undefined {
   const targetClass = classifyOutboundHost(address);
+  if (isDeniedListener(targetClass, port, egress)) return "active loopback listener";
+  if (targetClass === undefined && egress?.requiredTargetClass !== undefined)
+    return "unclassified address";
   if (targetClass === undefined || !isTargetClassBlocked(targetClass, egress)) return undefined;
   return `${targetClass} address`;
+}
+
+function isDeniedListener(
+  targetClass: OutboundTargetClass | undefined,
+  port: number | undefined,
+  egress: OutboundHttpEgressConfig | undefined,
+): boolean {
+  return (
+    targetClass === "loopback" &&
+    port !== undefined &&
+    egress?.deniedLoopbackPorts?.includes(port) === true
+  );
 }

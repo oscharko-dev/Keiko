@@ -323,12 +323,13 @@ export function CodingWorkbenchInfoPanel(props: InfoPanelProps): ReactNode {
         type="button"
         className={styles.cmpInfoTrigger}
         aria-label={t("codingWorkbench.info.open")}
+        title={t("codingWorkbench.info.label")}
         aria-expanded={popover.open}
         aria-haspopup="dialog"
         onClick={popover.toggle}
       >
+        {/* #3907 (owner: less is more): the header's left edge is an icon, like its right one. */}
         <InfoIcon size={16} />
-        <span>{t("codingWorkbench.info.label")}</span>
       </button>
       {popover.open ? (
         <dialog open aria-label={t("codingWorkbench.info.title")} className={styles.cmpInfoPopover}>

@@ -27,10 +27,26 @@ interface BranchReadState {
 export interface RepositoryBranchState extends BranchReadState {
   readonly branches: readonly GitBranchListEntry[];
   readonly currentBranch: string | null;
+  /**
+   * The root answered the read and is an ordinary folder, not a Git repository (`available:
+   * false`, never a rejected or refused read). The Coding Workbench works in such a folder without
+   * a branch (owner decision 2026-10-30).
+   */
+  readonly ordinaryFolder: boolean;
   readonly refresh: () => Promise<void>;
 }
 
 const EMPTY_BRANCHES: readonly GitBranchListEntry[] = [];
+
+function isOrdinaryFolder(state: BranchReadState): boolean {
+  return (
+    state.root !== null &&
+    !state.loading &&
+    state.error === null &&
+    !state.denied &&
+    state.response?.available === false
+  );
+}
 
 function currentBranchOf(response: GitBranchListResponse | null): string | null {
   if (response?.available !== true) return null;
@@ -123,6 +139,7 @@ export function useRepositoryBranchState(root: string | null): RepositoryBranchS
     ...current,
     branches: current.response?.branches ?? EMPTY_BRANCHES,
     currentBranch: currentBranchOf(current.response),
+    ordinaryFolder: isOrdinaryFolder(current),
     refresh,
   };
 }

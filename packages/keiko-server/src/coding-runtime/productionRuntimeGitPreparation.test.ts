@@ -235,3 +235,33 @@ describe("repository identity before runtime confirmation", () => {
     expect(JSON.stringify(events)).not.toMatch(/private.example|customer\/repo/u);
   });
 });
+
+describe("a plain folder workspace (owner decision 2026-10-30)", () => {
+  beforeEach(() => {
+    // The fixture root is a plain directory now: no repository metadata at all.
+    rmSync(join(root, ".git"), { recursive: true, force: true });
+  });
+
+  it("still refuses a repository launch whose directory is not a repository", async () => {
+    await expect(preparation.prepare(request())).rejects.toBeInstanceOf(Error);
+    expect(events.at(-1)).toMatchObject({
+      op: "git.runtime-identity",
+      extra: { state: "failed", runId: "run-1" },
+    });
+  });
+
+  it("prepares and consumes a folder launch without any repository identity", async () => {
+    context = { ...trustedContext(), workspaceKind: "folder" };
+    const input = request();
+    await preparation.prepare(input);
+    const consumed = preparation.consume(input);
+    expect(consumed.workspaceKind).toBe("folder");
+    expect(consumed.repositoryIdentity).toBeUndefined();
+    expect(() => preparation.consume(input)).toThrow("preparation-unavailable");
+    const states = events
+      .filter((event) => event.op === "git.runtime-identity")
+      .map((event) => event.extra?.state);
+    expect(states).toContain("prepared");
+    expect(states).toContain("consumed");
+  });
+});

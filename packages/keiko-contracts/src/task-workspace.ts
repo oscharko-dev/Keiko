@@ -623,6 +623,12 @@ export interface WorkspaceInstance {
   readonly taskBranch: string;
   /** Omitted on existing managed task workspaces. A local checkout is the repository root itself. */
   readonly executionLocation?: "local" | "worktree";
+  /**
+   * Omitted on every repository workspace. `"folder"` is an ordinary directory that is not a Git
+   * repository, bound in place (`executionLocation: "local"`): it carries no branch, no worktree and
+   * no HEAD, and repository delivery is unavailable in it (owner decision 2026-10-30, ADR-0124 D2).
+   */
+  readonly workspaceKind?: WorkspaceKind;
   readonly managedWorktreePath: string;
   readonly gitdirIdentity: string;
   readonly lifecycleState: TaskWorkspaceLifecycleState;
@@ -635,6 +641,29 @@ export interface WorkspaceInstance {
   readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
   readonly recoveryHints: readonly WorkspaceRecoveryHint[];
   readonly auditCorrelationId: string;
+}
+
+export type WorkspaceKind = "git" | "folder";
+
+/**
+ * The branch both `baseBranch` and `taskBranch` carry in a folder workspace. It contains a space,
+ * which is never a valid ref name, so it can neither name a real branch nor reach a Git command.
+ */
+export const FOLDER_WORKSPACE_BRANCH = "(folder - no branch)" as const;
+
+/** True for an ordinary directory bound without a repository (owner decision 2026-10-30). */
+export function isFolderWorkspace(
+  instance: Pick<WorkspaceInstance, "workspaceKind"> | null | undefined,
+): boolean {
+  return instance?.workspaceKind === "folder";
+}
+
+/**
+ * The stand-in for HEAD of a folder workspace: a folder has no commit, so its verified head is the
+ * folder's own identity. It never names a Git object and no Git command may receive it.
+ */
+export function folderWorkspaceHead(gitdirIdentity: string): string {
+  return `folder:${gitdirIdentity}`;
 }
 
 // A workspace still being created, failed or being removed never hosted a settled run.
@@ -715,6 +744,7 @@ export const WORKSPACE_INSTANCE_ALLOWED_KEYS: readonly string[] = [
   "baseBranch",
   "taskBranch",
   "executionLocation",
+  "workspaceKind",
   "managedWorktreePath",
   "gitdirIdentity",
   "lifecycleState",
@@ -751,6 +781,7 @@ export function validateWorkspaceInstance(input: unknown): TaskWorkspaceValidati
   }
   if (!isTaskWorkspaceLifecycleState(input.lifecycleState)) reasons.push("lifecycleState invalid");
   validateExecutionLocation(input.executionLocation, reasons);
+  validateWorkspaceKind(input, reasons);
   if (!isTaskWorkspaceHealth(input.health)) reasons.push("health invalid");
   if (input.lock !== null) validateWorkspaceLock(input.lock, reasons);
   if (input.lastVerifiedAt !== undefined && !isNonEmptyString(input.lastVerifiedAt)) {
@@ -771,6 +802,42 @@ function validateExecutionLocation(value: unknown, reasons: string[]): void {
   if (value !== undefined && value !== "local" && value !== "worktree") {
     reasons.push("executionLocation invalid");
   }
+}
+
+// The reserved spelling identifies a folder workspace in storage; no repository workspace may use it.
+function validateReservedBranches(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
+  for (const key of ["baseBranch", "taskBranch"] as const) {
+    if (input[key] === FOLDER_WORKSPACE_BRANCH) reasons.push(`${key} uses a reserved name`);
+  }
+}
+
+// A folder workspace is bound in place and carries only the branch and head stand-ins; anything
+// else would let a repository-shaped value reach a repository command (fail closed).
+function validateFolderShape(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
+  if (input.executionLocation !== "local") reasons.push("folder workspace must be local");
+  for (const key of ["baseBranch", "taskBranch"] as const) {
+    if (input[key] !== FOLDER_WORKSPACE_BRANCH) reasons.push(`folder workspace ${key} invalid`);
+  }
+  if (
+    typeof input.gitdirIdentity !== "string" ||
+    input.lastVerifiedHead !== folderWorkspaceHead(input.gitdirIdentity)
+  ) {
+    reasons.push("folder workspace lastVerifiedHead invalid");
+  }
+}
+
+function validateWorkspaceKind(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
+  if (input.workspaceKind === "folder") {
+    validateFolderShape(input, reasons);
+    return;
+  }
+  if (input.workspaceKind !== undefined && input.workspaceKind !== "git") {
+    reasons.push("workspaceKind invalid");
+  }
+  validateReservedBranches(input, reasons);
 }
 
 // ─── WorkspaceBinding (the authoritative active project root) ────────────────────────

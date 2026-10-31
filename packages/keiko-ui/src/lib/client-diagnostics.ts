@@ -40,44 +40,18 @@ import {
   type ClientBindingSurface,
   type ClientSessionRepairOutcome,
   type ClientSessionRepairStream,
-  type ClientDiagnosticGitChangeDescription,
-  type ClientDiagnosticGitClientOperation,
-  type ClientDiagnosticAnswerCopy,
-  type ClientDiagnosticAnswerSpeech,
-  type ClientDiagnosticCitationActivation,
-  type ClientDiagnosticScopeNotice,
-  type ClientDiagnosticEvidenceInspection,
-  type ClientDiagnosticCodingRunRestore,
-  type ClientDiagnosticCodingWorkbenchInteraction,
-  type ClientSupportReportDelivery,
-  type ClientSupportReportPreparation,
   type ClientFilesScopeDecision,
-  type ClientUpdateNotice,
-  type ClientDiagnosticKnowledgeCatalog,
-  type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
-  type ClientModuleLoadFailure,
-  type ClientMarkdownLayout,
-  type ClientErrorEvidence,
-  type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
   type ClientDiagnosticLossCounts,
-  type ClientVoiceDialogueStage,
-  type ClientVoiceCaptureReason,
-  type ClientVoiceCaptureError,
-  type ClientDiagnosticWorkspaceTrustBinding,
-  type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
   type ClientModelCatalogEvidence,
-  type HealthDiagnosticsInvalidReason,
   type ClientSourcePreviewCounts,
   type ClientNavigationOutcome,
-  type ClientComposerActivity,
-  type ClientComposerSubmission,
-  type ClientComposerCodeStage,
   type ClientGatewayProfileRefreshEvidence,
   type ClientChatHistoryDeletionCounts,
   type ClientBrowserApprovalEvidence,
+  type ClientDiagnosticIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "./bff-correlation";
 import {
@@ -122,6 +96,9 @@ export interface ClientDiagnosticBindingReport {
   readonly relatedCorrelationIds?: readonly string[] | undefined;
   // How many list loads decided the outcome in total, named or not.
   readonly decidingLoadCount?: number | undefined;
+  // How many times the window opened the chat's project before it held, when more than once: an
+  // attempt another update overtook is repeated (#4123).
+  readonly projectOpenAttemptCount?: number | undefined;
   // `candidates-offered` only: how many chats the window offered the person, zero included.
   readonly candidateCount?: number | undefined;
   // `candidates-offered` only: how many of those offers read alike and show a fingerprint reference.
@@ -152,60 +129,15 @@ export interface ClientDiagnosticGitRetryAttemptReport {
   readonly correlationId: string;
 }
 
-export interface ClientDiagnosticMeta {
+// The structured context a call site may attach: every optional field of the wire request the
+// browser itself fills in (one definition in keiko-contracts, so the two cannot drift), plus the
+// UI-only provenance and routine reports the transport turns into their own wire fields.
+export interface ClientDiagnosticMeta extends Omit<
+  ClientDiagnosticIngestRequest,
+  "message" | "clientTs" | "readyState" | "loss"
+> {
   // UI-only provenance: emitted solely by the browser's uncaught-error listeners.
   readonly globalFailure?: boolean | undefined;
-  readonly composerActivity?: ClientComposerActivity | undefined;
-  readonly composerSubmission?: ClientComposerSubmission | undefined;
-  readonly composerFocusIndicator?: "keyboard" | undefined;
-  readonly composerCodeStage?: ClientComposerCodeStage | undefined;
-  readonly correlationId?: string | undefined;
-  readonly parentCorrelationId?: string | undefined;
-  readonly kind?: ClientDiagnosticKind | undefined;
-  readonly renderFailure?: "shell" | "window-body" | undefined;
-  // The closed class of the failure, when the caller classified it (`bffRequestErrorKind`).
-  readonly errorKind?: ActivityLogErrorKind | undefined;
-  readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
-  readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
-  readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
-  readonly markdownLayout?: ClientMarkdownLayout | undefined;
-  readonly moduleLoadFailure?: ClientModuleLoadFailure | undefined;
-  readonly healthDiagnosticsInvalidReason?: HealthDiagnosticsInvalidReason | undefined;
-  readonly errorEvidence?: ClientErrorEvidence | undefined;
-  readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
-  readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
-  // A Git-client operation (add-repository dialog discard, or manual retry) settling after the
-  // surface that asked for it is already gone (PR #3625 review): which operation, and how it
-  // settled — never the repository, path or URL involved.
-  readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
-  // An open `KeikoSelect` menu dismissed by Escape (PR #3625 review): the closed reason and which
-  // focus location — trigger, search or option — Escape acted from, never a label or option text.
-  readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
-  // The chat's Knowledge Pod picker offered no usable pod (PR #3678 review): counts only, sent as
-  // structured evidence rather than folded into the message the server reduces to a digest.
-  readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
-  // A chat answer copy (PR #3678 review): its outcome and the marker groups removed and kept,
-  // never the copied text.
-  readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
-  // An answer prepared for the voice dialogue (PR #3678 review): the marker groups removed and kept,
-  // under the correlation its synthesis request carries, never the spoken text.
-  readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
-  readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
-  readonly scopeNotice?: ClientDiagnosticScopeNotice | undefined;
-  readonly evidenceInspection?: ClientDiagnosticEvidenceInspection | undefined;
-  readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
-  readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
-  readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
-  readonly updateNotice?: ClientUpdateNotice | undefined;
-  // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
-  // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
-  // and how many were cut, never a message, path or run name.
-  readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
-  // What the human did on the Coding Workbench page (#3897): closed values, a trust binding's two
-  // body-free ids and a changeset's file count — routine evidence, never a failure.
-  readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
-  readonly codingIssueOutcome?: "multiple-issues" | undefined;
-  readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
   readonly failureStage?: ClientStageId | undefined;
   readonly bindingReport?: ClientDiagnosticBindingReport | undefined;

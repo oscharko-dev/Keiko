@@ -141,6 +141,17 @@ notes before and buried the rare real browser failures. `gateway.setup.target.ac
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
 
+`client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
+request the Coding Workbench gave up on at its own client-side deadline (#4109): the closed `call`
+(`status`, `snapshot`, `start`, `approval`, `stop`, `takeover`, `retry`, `recovery-ack`, `pause`,
+`resume`, `follow-up`, `revert`, `inbox`, `research-revoke`, `question-answer`,
+`question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
+Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
+status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
+every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
+while another mutation is pending. Closed values and one duration only.
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
@@ -148,7 +159,10 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. A verified model nobody asked for in 15 minutes is neither renewed nor recovered in
+the background; `gateway.readiness.renewal.paused` records that pause (`paused`: `renewal`,
+`recovery`; optional `idleMs`), and the model's next conversation request verifies it on demand
+(#4103). See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -602,7 +616,15 @@ prepared for the timeline. OpenCode persists a streamed text or reasoning part o
 complete, so the timeline grows from the runtime's delta events: the same line counts, since its
 previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
-(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). A sync
+reads and projects only a bounded tail of the newest messages once the earlier pass is committed and
+caught up (#4104): the projection plans an anchor message, the read ends there, and the older messages
+are carried over unchanged. The runtime completes a streamed part in place, so every message from the
+anchor on is projected again; a complete read replaces the tail when the anchor is gone (a revert or
+compaction), every 256 tail reads, after a pass cut at the event cap, and while an older message still
+holds live text. The same line records how: `readMode` (`tail`, `full`, `verify`, `anchor-lost`),
+`readMessageCount` (messages handed to the projection) and `retainedMessageCount` (older messages
+carried over). The continuation's complete read stays strict (`history-oversized`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
 Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
 #4009) reach the tool byte for byte: the gateway removes only the configured provider literals
@@ -844,3 +866,18 @@ Safety-state publication does not grant an agent a live bridge or an executable 
 Chat repository search and the separate Coding Workbench keep their own existing behavior; shared
 runtime code still used by those consumers is not part of this retirement. See
 [ADR-0061](docs/adr/ADR-0061-browser-editor-agent-bridge.md).
+
+### Managed MCP provider changes (ADR-0181)
+
+Keep official MCP SDK imports inside `keiko-mcp`, whose internal dependencies are contracts
+and security only. Provider and log ports come from server composition; catalog/binder
+admission remains mandatory. Verify modern protocol metadata, request-local context, schema
+and drift refusal, cancellation, registered Activity Log evidence and the architecture
+negative fixtures. Preserve the operator MCP registry and OpenCode compatibility.
+
+Central external MCP OAuth belongs to the shared Settings/connection owner. Chat and native
+Workbench runs use the same server definition and encrypted custody; the native production
+binding receives only a run-bound relay capability. Preserve issuer/resource/scope binding,
+one-use app-session-bound callbacks, credential-generation revocation and no-replay semantics.
+Changes to tool metadata must be refused before dispatch even without notifications. Include
+real SDK, restart/revocation and browser proofs; legacy native OAuth tests do not replace them.

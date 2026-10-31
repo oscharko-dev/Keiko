@@ -27,7 +27,7 @@ import {
   type SpawnFn,
 } from "./exec.js";
 import { CommandCancelledError, ToolArgumentError, UnknownToolError } from "./errors.js";
-import { applyPatch, renderDryRun, validatePatch } from "./patch.js";
+import { applyPatch, renderPatchProposal, validatePatch } from "./patch.js";
 import { TOOL_DEFINITIONS } from "./schemas.js";
 import type { WorkspaceCatalogHandlerCall } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
@@ -338,7 +338,7 @@ export class WorkspaceToolHost implements ToolPort {
       limits: this.config.patchLimits,
     });
     return {
-      output: JSON.stringify({ validation, preview: renderDryRun(validation) }),
+      output: renderPatchProposal(validation),
       commandExecuted: false,
     };
   }

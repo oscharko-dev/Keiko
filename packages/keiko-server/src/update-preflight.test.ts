@@ -533,7 +533,7 @@ describe("update preflight service", () => {
   it("reports current with GitHub release notes when npm latest matches the running version", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.9" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.9" }))
       .mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v0.2.9",
@@ -589,10 +589,10 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
-  it("requests abbreviated npm metadata so the full packument does not trip the response cap", async () => {
+  it("requests only the dist-tags document so the package metadata never trips the response cap", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.9" } }));
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.9" }));
     const deps = depsWith(fetchMock);
 
     await runUpdatePreflight(deps, {
@@ -601,19 +601,110 @@ describe("update preflight service", () => {
     });
 
     const firstCall = fetchMock.mock.calls[0];
-    expect(firstCall?.[0]).toBe("https://registry.npmjs.org/%40oscharko-dev%2Fkeiko");
-    expect(firstCall?.[1]?.headers).toEqual(
-      expect.objectContaining({
-        Accept: "application/vnd.npm.install-v1+json",
-      }),
+    expect(firstCall?.[0]).toBe(
+      "https://registry.npmjs.org/-/package/%40oscharko-dev%2Fkeiko/dist-tags",
     );
+    expect(firstCall?.[1]?.headers).toEqual(
+      expect.objectContaining({ Accept: "application/json" }),
+    );
+    deps.store.close();
+  });
+
+  it("finds a newer release while the package metadata exceeds the old 256 KB cap (#3904)", async () => {
+    // The abbreviated packument of @oscharko-dev/keiko was 291,245 bytes at 1.3.2; read whole, it
+    // tripped the cap and every check reported an unreachable registry.
+    const versions = Object.fromEntries(
+      Array.from({ length: 400 }, (_, index) => [
+        `0.0.${String(index)}`,
+        { name: "@oscharko-dev/keiko", dist: { tarball: "x".repeat(700) } },
+      ]),
+    );
+    const fetchMock = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/dist-tags")) return Promise.resolve(jsonResponse({ latest: "0.2.11" }));
+      if (url.startsWith("https://registry.npmjs.org/")) {
+        return Promise.resolve(jsonResponse({ "dist-tags": { latest: "0.2.11" }, versions }));
+      }
+      return Promise.resolve(textResponse("unavailable", 503));
+    });
+    const deps = depsWith(fetchMock);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+    });
+
+    expect(report.registryStatus).toBe("ok");
+    expect(report.updateAvailable).toBe(true);
+    expect(report.targetVersion).toBe("0.2.11");
+    deps.store.close();
+  });
+
+  it.each([
+    [
+      "an oversized document",
+      (): Response => textResponse("x".repeat(20_000)),
+      "unavailable",
+      "size-exceeded",
+    ],
+    ["invalid JSON", (): Response => textResponse("{"), "malformed", "json-invalid"],
+    [
+      "a non-version latest tag",
+      (): Response => jsonResponse({ latest: "not-a-version" }),
+      "malformed",
+      "malformed-version",
+    ],
+    ["an HTTP error", (): Response => textResponse("gone", 404), "unavailable", "http-status"],
+  ] as const)(
+    "names %s as the registry failure on the Activity Log",
+    async (_label, response, status, failure) => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(response());
+      const events: ServerLogEvent[] = [];
+      const deps = depsWith(fetchMock, {
+        activityLog: { write: (event): void => void events.push(event) },
+      });
+
+      const report = await runUpdatePreflight(
+        deps,
+        { currentVersion: "0.2.10", bundledCatalog: baseCatalog() },
+        "registry-check-0001",
+      );
+
+      expect(report.registryStatus).toBe(status);
+      const line = events.find((event) => event.op === "update.registry.checked");
+      expect(line).toMatchObject({ level: "warn", correlationId: "registry-check-0001" });
+      expect(line?.extra).toMatchObject({ status, failure, updateAvailable: false });
+      deps.store.close();
+    },
+  );
+
+  it("records a usable registry check at info with the update decision", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.10" }))
+      .mockResolvedValueOnce(textResponse("unavailable", 503));
+    const events: ServerLogEvent[] = [];
+    const deps = depsWith(fetchMock, {
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    await runUpdatePreflight(
+      deps,
+      { currentVersion: "0.2.10", bundledCatalog: baseCatalog() },
+      "registry-check-0002",
+    );
+
+    const line = events.find((event) => event.op === "update.registry.checked");
+    expect(line).toMatchObject({ level: "info", correlationId: "registry-check-0002" });
+    expect(line?.extra).toMatchObject({ status: "ok", updateAvailable: false });
+    expect(line?.extra).not.toHaveProperty("failure");
     deps.store.close();
   });
 
   it("keeps the current status when current release notes are unavailable", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.9" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.9" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 
@@ -633,7 +724,7 @@ describe("update preflight service", () => {
   it("keeps the running version as target when it is ahead of the registry latest", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.12" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.12" }))
       .mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v0.2.13",
@@ -667,7 +758,7 @@ describe("update preflight service", () => {
   it("returns live GitHub release metadata when an update is available", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v0.2.11",
@@ -1501,7 +1592,7 @@ describe("update preflight service", () => {
   it("falls back to the bundled catalog when GitHub is unavailable", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(new Response("nope", { status: 503 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 
@@ -1535,7 +1626,7 @@ describe("update preflight service", () => {
   it("treats malformed GitHub metadata as fallback-able metadata", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(jsonResponse({ tag_name: "v0.2.10", body: 42 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 
@@ -1555,7 +1646,7 @@ describe("update preflight service", () => {
   it("builds the release summary from the bundled catalog when GitHub is unavailable", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.10" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.10" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 
@@ -1577,7 +1668,7 @@ describe("update preflight service", () => {
   it("aggregates same-version bundled notes when GitHub fallback is forced", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(new Response("missing", { status: 503 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
     const followUpEntry = {
@@ -1648,7 +1739,7 @@ describe("update preflight service", () => {
   it("blocks one-click readiness when the installed version is outside the reviewed supported path", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.10" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.10" }))
       .mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v0.2.10",
@@ -1686,7 +1777,7 @@ describe("update preflight service", () => {
   it("uses the highest reviewed supported floor across the whole upgrade chain", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v0.2.11",
@@ -1726,7 +1817,7 @@ describe("update preflight service", () => {
   it("deduplicates cumulative impact bullets and state impact across included versions", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 
@@ -1762,7 +1853,7 @@ describe("update preflight service", () => {
   it("drops malformed bundled catalog entries and fails closed without throwing", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.10" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.10" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
     const catalog = {
@@ -1839,7 +1930,7 @@ describe("update preflight service", () => {
     const catalog = baseCatalog();
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v0.2.11",
@@ -1886,7 +1977,7 @@ describe("update preflight service", () => {
     };
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v0.2.11",
@@ -1937,7 +2028,7 @@ describe("update preflight service", () => {
     };
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v0.2.11",
@@ -1990,7 +2081,7 @@ describe("update preflight service", () => {
     };
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(
         jsonResponse({ tag_name: "v0.2.11", name: "Keiko 0.2.11", body: "- Public note" }),
       ) as typeof fetch;
@@ -2035,9 +2126,7 @@ describe("update preflight service", () => {
   });
 
   it("surfaces malformed registry metadata as a degraded state", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: 7 } })) as typeof fetch;
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse({ latest: 7 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 
     const report = await runUpdatePreflight(deps, {
@@ -2054,9 +2143,7 @@ describe("update preflight service", () => {
   it("ignores prerelease latest tags in v1", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({ "dist-tags": { latest: "0.2.12-beta.1" } }),
-      ) as typeof fetch;
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.12-beta.1" })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 
     const report = await runUpdatePreflight(deps, {
@@ -2076,9 +2163,9 @@ describe("update preflight service", () => {
   it("caches the startup result per BFF while manual checks always retry", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.10" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.10" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 }))
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.11" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
     const service = createUpdatePreflightService({
@@ -2101,9 +2188,9 @@ describe("update preflight service", () => {
     let currentVersion = "0.2.9";
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.10" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.10" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 }))
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.10" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.10" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
     const service = createUpdatePreflightService({
@@ -2135,9 +2222,9 @@ describe("update preflight route handlers", () => {
   it("reuses the startup session on GET and retries on manual POST", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.12" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.12" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 }))
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.12" } }))
+      .mockResolvedValueOnce(jsonResponse({ latest: "0.2.12" }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 

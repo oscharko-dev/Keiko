@@ -3862,6 +3862,183 @@
         "verifiedCarryForward": true,
         "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7", "1.3.0", "1.3.1"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-28-keiko-1.3.2-stream-stability-and-parity-fixes",
+      "packageVersion": "1.3.2",
+      "releaseTag": "v1.3.2",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Live streams no longer end because a message is large, larger code changes fit in one Coding Workbench task, a large Git diff opens as a bounded view, and a busy local model stays selectable.",
+      "affectedStateStores": ["activity-log"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "No schema migration. The Activity Log gains additive, body-free fields and operations (the stream drain-wait count, the bounded Git diff view and the busy-provider readiness retention); older segments stay readable and nothing is rewritten.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Live streams no longer end because a message is large. Chat, task timelines and the other live feeds queue a large frame and wait for the browser to read it, and only a browser that reads nothing for 30 seconds is disconnected. Before, any frame of 64 KiB or more could close the stream.",
+        "The Coding Workbench accepts code changes of up to 8 MiB per changeset and 64 MiB per run, and the model is told the same limits.",
+        "A Git diff above the size limit opens as a bounded, truncated view instead of failing with an error (#4113).",
+        "The raw Git diff view of your own repository keeps hunks that cannot be parsed readable and shows a cut diff as a complete patch. Keys, token shapes, configured secrets and private literals stay masked (#4114).",
+        "A local model that is busy answering another request, such as a single-slot server, stays selectable in the Coding Workbench instead of being reported as not ready (#4115).",
+        "Credentials shaped like a JSON Web Token are now removed everywhere the credential floor applies, and the bundled search tool runs only after its checksum has been verified; Keiko never downloads or runs a different one.",
+        "Coding runs are steadier: a model answer that stops mid tool call is repaired once, runs left over from an interrupted session are cleaned up at startup, history reads load the newest window, and the task timeline follows the newest entry, reconnects with a notice and labels its tools.",
+        "`keiko start` reports a healthy instance that is already running on another port instead of starting a second one.",
+        "Updating from 1.3.0 or 1.3.1 needs no action. An installation on 1.2.6 or earlier still runs the verified updater bootstrap once before automatic updates."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-28",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6476730395",
+        "rationale": "The owner approved release 1.3.2 on 2026-10-28 on the condition that no OpenCode parity deviation remains open; the referenced comment on epic #3897 records that approval and the met condition. The entry accounts for every change integrated since v1.3.1: the SSE flow-control fix with the 1.3.1 stress-qualification findings (#4102) and the OpenCode parity deviations in the Git diff view and model readiness (#4113, #4114, #4115, #4116). This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow after the owner's live lab re-check."
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      },
+      "id": "2026-10-30-keiko-1.3.3-central-mcp-hardening",
+      "packageVersion": "1.3.3",
+      "releaseTag": "v1.3.3",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7", "1.3.0", "1.3.1", "1.3.2"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "MCP servers and OAuth are managed centrally for Chat and Coding Workbench, with consistent permission invalidation, encrypted credentials and bounded provider lifetimes.",
+      "affectedStateStores": [
+        "mcp-server-registry",
+        "mcp-credential-vault",
+        "chat-mcp-read-consent",
+        "coding-runtime-state",
+        "knowledge-pod-store",
+        "workspace-and-coding-history"
+      ],
+      "stateImpact": [
+        {
+          "store": "mcp-server-registry",
+          "description": "Existing server definitions remain readable. Settings preserves advanced transport and tool policy fields; legacy bearer URLs are normalized into encrypted header custody. Identity and credential changes rotate the existing configuration generation.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "mcp-credential-vault",
+          "description": "The existing encrypted vault gains issuer/resource/client/scope-bound OAuth grants and bounded token-redaction history. Unbound legacy OAuth records and malformed expiry require central sign-in again; known-token redaction custody remains protected.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "chat-mcp-read-consent",
+          "description": "Conversation read permissions remain separate from central connection availability and are invalidated by relevant configuration or authority changes.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "coding-runtime-state",
+          "description": "Run-bound MCP capabilities and bounded per-call budget identities are checked before effects. An unknown write outcome remains recovery-required across reload and must be reconciled before retrying. Legacy history stays readable.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "knowledge-pod-store",
+          "description": "Existing Cloud Pods remain compatible. New Data Center records require a version supporting that provider; preserve encrypted credentials, consent and mutation recovery records when considering a downgrade.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "workspace-and-coding-history",
+          "description": "No new persisted-state migration. Existing history and dirty-buffer ownership remain readable; stale folder bindings stay invalid while a valid replacement folder can be refreshed through the existing registration owner.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "oneClickEligible": false,
+      "releaseNoteBullets": [
+        "Configure MCP servers and sign in with OAuth once in Settings for both Chat and Coding Workbench. Each conversation and coding task retains its own permissions.",
+        "MCP credentials remain encrypted. Changing a target or signing out invalidates previous permissions; incompatible legacy OAuth records require signing in again centrally.",
+        "A lost response after an MCP write requires explicit reconciliation, survives reload and never triggers an automatic replay.",
+        "Local MCP providers close together with their descendants. Settings preserves advanced stdio, Streamable HTTP and explicitly selected legacy SSE options.",
+        "MCP tool names support 128 characters; invalid stored OAuth expiry is refused, and an unreadable OAuth vault no longer breaks central Settings or healthy server connections.",
+        "Legacy access-token URLs migrate into encrypted headers instead of remaining in server configuration.",
+        "Jira Data Center Knowledge Pods join existing Jira Cloud connections with scoped read consent, governed writes and durable recovery for uncertain mutations.",
+        "Reloading an LF file into an initially empty editor no longer leaves it incorrectly marked as unsaved on Windows browsers.",
+        "Governed patch paths share the 8 MiB ceiling. Project-folder refresh, history synchronization and bounded Git diff views are more reliable."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-30",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4129#6514337888",
+        "rationale": "The owner explicitly selected patch release 1.3.3 in the MCP audit task on 2026-10-30 and authorized integration/publication only after final production qualification, exact-head checks and resolved reviews. This release-cut record carries the accepted MCP hardening scope and its documented sign-in/reconciliation actions; it does not waive any required check or authorize premature publication. The same release cut also includes already owner-merged PR #4093 (shared MCP/Jira Data Center Pods) and reliability fixes #4126/#4144 since v1.3.2. Their public impact is consolidated in this single approval-bound record rather than inventing separate approval artifacts."
+      }
     }
   ]
 }

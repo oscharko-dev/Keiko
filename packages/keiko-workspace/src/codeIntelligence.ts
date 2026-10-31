@@ -6390,6 +6390,7 @@ interface GraphExpansionContext {
   readonly seenAtoms: Set<string>;
   readonly queue: GraphSeed[];
   readonly seenSeeds: Set<string>;
+  readonly seenSymbols: Set<CodeSymbol>;
 }
 
 function graphSeedQueue(directAtoms: readonly EvidenceAtom[], seenSeeds: Set<string>): GraphSeed[] {
@@ -6470,7 +6471,9 @@ function expandSymbolNeighbors(
   nextDepth: number,
 ): void {
   for (const item of context.index.symbols) {
-    if (!seedMatchesSymbol(seed, item.scopePath, item.name)) continue;
+    if (context.seenSymbols.has(item) || !seedMatchesSymbol(seed, item.scopePath, item.name))
+      continue;
+    context.seenSymbols.add(item);
     pushGraphNeighbor(
       context,
       symbolAtom(
@@ -6607,12 +6610,23 @@ function expandGraphNeighborhood(
   nowMs: number,
   index: CodeIntelligenceIndex,
   directAtoms: readonly EvidenceAtom[],
+  seenSymbols: Set<CodeSymbol>,
 ): readonly EvidenceAtom[] {
   const expanded: EvidenceAtom[] = [];
   const seenAtoms = new Set(directAtoms.map((atom) => atom.stableId));
   const seenSeeds = new Set<string>();
   const queue = graphSeedQueue(directAtoms, seenSeeds);
-  const context = { scope, query, nowMs, index, expanded, seenAtoms, queue, seenSeeds };
+  const context = {
+    scope,
+    query,
+    nowMs,
+    index,
+    expanded,
+    seenAtoms,
+    queue,
+    seenSeeds,
+    seenSymbols,
+  };
   let cursor = 0;
   while (cursor < queue.length && expanded.length < GRAPH_NEIGHBOR_ATOM_LIMIT) {
     const seed = queue[cursor];
@@ -6644,6 +6658,9 @@ export function queryCodeIntelligenceIndex(
   nowMs: number,
 ): readonly EvidenceAtom[] {
   const terms = queryTerms(query);
+  // A symbol atom has the same stable identity in direct and neighbor projections. Retain only
+  // record references for this query so expansion does not rebuild atoms it will discard.
+  const seenSymbols = new Set<CodeSymbol>();
   const atoms: EvidenceAtom[] = [
     ...matchingAtoms(
       index.imports,
@@ -6657,7 +6674,10 @@ export function queryCodeIntelligenceIndex(
       terms,
       query,
       (item) => `${item.name} ${item.scopePath} ${item.fields.join(" ")}`,
-      (item) => symbolAtom(scope, query, nowMs, item),
+      (item) => {
+        seenSymbols.add(item);
+        return symbolAtom(scope, query, nowMs, item);
+      },
     ),
     ...matchingAtoms(
       index.calls,
@@ -6699,7 +6719,7 @@ export function queryCodeIntelligenceIndex(
       (item) => packageDependencyAtom(scope, query, nowMs, item),
     ),
   ];
-  atoms.push(...expandGraphNeighborhood(scope, query, nowMs, index, atoms));
+  atoms.push(...expandGraphNeighborhood(scope, query, nowMs, index, atoms, seenSymbols));
   const deduped = new Map<string, EvidenceAtom>();
   atoms.sort(compareEvidenceAtoms);
   for (const atom of atoms) {

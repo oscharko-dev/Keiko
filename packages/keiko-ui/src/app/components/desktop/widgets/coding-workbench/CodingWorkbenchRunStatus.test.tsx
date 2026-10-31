@@ -121,7 +121,7 @@ describe("CodingWorkbenchRunStatus", () => {
     );
 
     const announcement = screen.getByTestId("coding-runtime-announcement");
-    expect(announcement).toHaveTextContent(/^Running\. Revision 4\.$/u);
+    expect(announcement).toHaveTextContent(/^Running$/u);
     expect(announcement).toHaveAttribute("role", "status");
     expect(announcement).toHaveAttribute("aria-live", "polite");
     expect(screen.getByRole("timer")).toHaveTextContent("Elapsed 2 min 14 s");
@@ -160,9 +160,7 @@ describe("CodingWorkbenchRunStatus", () => {
     expect(announcement).toHaveAttribute("aria-live", "polite");
     expect(announcement).toHaveAttribute("aria-atomic", "true");
     expect(announcement).toBeVisible();
-    expect(announcement).toHaveTextContent(
-      /^Running\. Revision 4\. Model gateway unavailable, retrying\.$/u,
-    );
+    expect(announcement).toHaveTextContent(/^Running\. Model gateway unavailable, retrying\.$/u);
     expect(announcement).not.toHaveTextContent("Waiting for the model");
 
     expect(screen.queryByTestId("coding-runtime-phase")).toBeNull();
@@ -181,17 +179,15 @@ describe("CodingWorkbenchRunStatus", () => {
       <CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="model" />,
     );
     const region = screen.getByTestId("coding-runtime-announcement");
-    expect(region).toHaveTextContent(/^Running\. Revision 4\.$/u);
+    expect(region).toHaveTextContent(/^Running$/u);
 
     rerender(<CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="gateway" />);
     expect(screen.getByTestId("coding-runtime-announcement")).toBe(region);
-    expect(region).toHaveTextContent(
-      /^Running\. Revision 4\. Model gateway unavailable, retrying\.$/u,
-    );
+    expect(region).toHaveTextContent(/^Running\. Model gateway unavailable, retrying\.$/u);
 
     rerender(<CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="model" />);
     expect(screen.getByTestId("coding-runtime-announcement")).toBe(region);
-    expect(region).toHaveTextContent(/^Running\. Revision 4\.$/u);
+    expect(region).toHaveTextContent(/^Running$/u);
     expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
   });
 
@@ -208,7 +204,7 @@ describe("CodingWorkbenchRunStatus", () => {
       render(<CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase={phase} />);
 
       const announcement = screen.getByTestId("coding-runtime-announcement");
-      expect(announcement).toHaveTextContent(/^Running\. Revision 4\.$/u);
+      expect(announcement).toHaveTextContent(/^Running$/u);
       expect(announcement).not.toContainElement(screen.getByTestId("coding-runtime-phase"));
       expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent(text);
     },
@@ -267,7 +263,7 @@ describe("CodingWorkbenchRunStatus", () => {
     const announcement = screen.getByRole("status");
     expect(announcement).toHaveAttribute("data-testid", "coding-runtime-announcement");
     expect(announcement).toHaveClass("sr-only");
-    expect(announcement).toHaveTextContent(/^Running\. Revision 4\.$/u);
+    expect(announcement).toHaveTextContent(/^Running$/u);
     expect(screen.queryByTestId("coding-runtime-readiness")).toBeNull();
     expect(screen.queryByRole("timer")).toBeNull();
   });
@@ -301,7 +297,7 @@ describe("CodingWorkbenchRunStatus", () => {
     expect(announcement).toHaveAttribute("aria-live", "polite");
     expect(announcement).toHaveAttribute("aria-atomic", "true");
     expect(announcement).toBeVisible();
-    expect(announcement).toHaveTextContent(/^Running\. Revision 4\. Runtime unavailable\.$/u);
+    expect(announcement).toHaveTextContent(/^Running\. Runtime unavailable\.$/u);
     expect(announcement).not.toHaveTextContent(/Model source ready|Workspace ready/u);
 
     const readiness = screen.getByTestId("coding-runtime-readiness");
@@ -339,9 +335,7 @@ describe("CodingWorkbenchRunStatus", () => {
         phase={null}
       />,
     );
-    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
-      "Failed. Revision 4.",
-    );
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Failed$/u);
     expect(screen.queryByRole("timer")).toBeNull();
   });
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -81,13 +81,13 @@ async function compile(sourcePath, output) {
   );
 }
 
-function runProcess(command, env, args) {
+function runProcess(command, env, args, { timeout, stdin = "ignore" } = {}) {
   return new Promise((resolveResult, reject) => {
     // KEIKO-0802: MSVC's `cl.exe` writes `error C####` diagnostics to STDOUT, not stderr, so the
     // pre-fix stdio: ["ignore", "ignore", "pipe"] tuple threw them away and every compile failure
     // reported an empty `${result.stderr.toString("utf8")}` — a "native compile failed:" with no
     // clue what failed. Capture both streams and hand both back for the assertion message.
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { env, stdio: [stdin, "pipe", "pipe"], timeout });
     const stdout = [];
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
@@ -314,6 +314,87 @@ function assertMutationRejected(rawSource) {
   );
 }
 
+async function qualifyMcpStdioOwner(helper, runtime, root) {
+  const provider = join(root, "MCP provider & quoted name.exe");
+  await copyFile(runtime, provider);
+  const child = spawn(
+    helper,
+    ["--stdio-owner", provider, "--mcp-argv-probe", String.raw`a\"b c`, "", "tail\\", "\u00fc"],
+    {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
+  const reader = streamReader(child.stdout);
+  const exited = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
+  const pids = new Set();
+  try {
+    const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
+    const report = await readBytes(reader, 12).finally(() => clearTimeout(deadline));
+    assert.equal(report.subarray(0, 4).toString(), "KRQ1");
+    pids.add(report.readUInt32LE(4));
+    pids.add(report.readUInt32LE(8));
+    child.kill();
+    await exited;
+    await assertMcpProcessesGone(pids);
+  } finally {
+    child.kill();
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") process.emitWarning("MCP native qualification cleanup failed");
+      }
+    }
+  }
+}
+
+async function assertMcpProcessesGone(pids) {
+  const until = Date.now() + 2000;
+  for (const pid of pids) {
+    let running = true;
+    while (running && Date.now() < until) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+        running = false;
+      }
+      if (running) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(running, false, "MCP native job must remove the provider and grandchild");
+    pids.delete(pid);
+  }
+}
+
+async function qualifyMcpFinalResponse(helper) {
+  const worker = fileURLToPath(
+    new URL("../../packages/keiko-mcp/dist/owned-stdio-worker.js", import.meta.url),
+  );
+  const environment = hermeticWindowsEnv();
+  environment.KEIKO_MCP_STDIO_ENV_0 = JSON.stringify(["SystemRoot", environment.SystemRoot]);
+  const result = await runProcess(
+    helper,
+    environment,
+    [
+      "--stdio-owner",
+      process.execPath,
+      worker,
+      "--native-job",
+      process.execPath,
+      "--eval",
+      "process.stdout.write('MCP_FINAL_RESPONSE\\n');process.exitCode=7;",
+    ],
+    // Keep the transport open: EOF intentionally cancels a lifetime owner before provider exit.
+    { timeout: DEADLINE_MS, stdin: "pipe" },
+  );
+  assert.equal(result.code, 7, "MCP native owner must preserve the provider exit status");
+  assert.equal(result.stdout.toString(), "MCP_FINAL_RESPONSE\n", "MCP final output must drain");
+}
+
 await assertSourceContract();
 // Codex on #3202: validate the ENTIRE argv on Windows too — parallel to the macOS harness's
 // KNOWN_FLAGS check. A typo like `--helpr <path>` or a bare `--helper` (no value) previously
@@ -360,6 +441,8 @@ if (process.platform === "win32") {
         `windows-runtime-supervisor: PASS (${detached ? "detached" : "ordinary"} descendant; cancellation and control EOF)`,
       );
     }
+    await qualifyMcpStdioOwner(helper, runtime, root);
+    await qualifyMcpFinalResponse(helper);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

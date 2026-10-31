@@ -1,3 +1,4 @@
+import { decideOpenCodeNativePolicy } from "./opencodeNativePolicy.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import { createHash } from "node:crypto";
 import {
@@ -5741,3 +5742,59 @@ it("aborts the private cleanup signal when OpenCode disposal explicitly refuses 
   expect(disposalSignal?.aborted).toBe(true);
   expect(release).not.toHaveBeenCalled();
 });
+
+it.each(["governed-assist", "supervised-coding"] as const)(
+  "delivers managed MCP approvals through the runtime in %s",
+  async (mode) => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+    await manager.start({
+      ...governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      requestedMode: mode,
+      effectiveMode: mode,
+    });
+    const decision = decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: fixture.workspaceRoot,
+      nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      mcp: {
+        actions: new Map([
+          ["fixture-server_write", { risk: "write", remote: true, managed: true }],
+        ]),
+        servers: new Map(),
+      },
+      request: {
+        runId: "run-1991",
+        sessionID: "ses_fixture",
+        permission: "fixture-server_write",
+        resources: ["fixture"],
+        agent: "build",
+      },
+    });
+    expect(decision.effect).toBe("ask");
+    if (decision.effect !== "ask") throw new Error("Expected bounded MCP approval");
+    harness.children[0]?.stdout.write(`${JSON.stringify(decision.event)}\n`);
+    await settle();
+    expect(events.filter((event) => event.kind === "failure-redacted")).toEqual([]);
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: {
+        requestId: decision.event.requestId,
+        scopeLabel: "network-egress",
+        nativePermission: "mcp",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("fixture-server_write");
+    expect(manager.pendingApprovalReview("run-1991", decision.event.requestId)).toMatchObject({
+      nativeAction: { permission: "fixture-server_write", resources: ["fixture"] },
+    });
+  },
+);

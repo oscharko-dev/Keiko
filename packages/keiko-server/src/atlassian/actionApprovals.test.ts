@@ -1,7 +1,22 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createFileServerLogSink,
+  createServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import {
+  expectActivityLogProof,
+  readPersistedActivityLog,
+  persistedActivityLogLines,
+} from "../../../../tests/support/activity-log-proof.js";
+import { chatAuthorityFixture } from "../editor/chatAuthority.test-support.js";
 // Hermetic tests for the bounded pending-approval registry (Issue #2244): injected clock (no
 // wall-clock races), TTL eviction, capacity, and single-use consumption.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AtlassianConnectorPendingApproval } from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
@@ -14,6 +29,7 @@ import {
   contentPreviewFor,
   type AtlassianWriteActionInput,
   type PendingAtlassianActionEntry,
+  type ChatReadGrantEntry,
 } from "./actionApprovals.js";
 
 const T0 = 1_700_000_000_000;
@@ -541,5 +557,305 @@ describe("contentPreviewFor", () => {
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x1f600))).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x13441))).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x13442))).toBe(false);
+  });
+});
+
+function readGrantEntry(grantId = "grant-1"): ChatReadGrantEntry {
+  return {
+    grant: {
+      schemaVersion: "1",
+      kind: "jira-chat-read-grant",
+      grantId,
+      subject: chatAuthorityFixture().subject,
+      disclosureVersion: "jira-chat-read-v1",
+      requestedAt: T0,
+      expiresAt: T0 + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+      state: "pending",
+      consentProofDigest: null,
+    },
+    authority: { runId: "chat-run", envelopeDigest: "d".repeat(64) },
+  };
+}
+
+describe("the existing approval owner retains isolated Chat read grants", () => {
+  it("keeps Chat grants invisible and unconsumable to legacy callers", () => {
+    const registry = new AtlassianActionApprovalRegistry(() => T0);
+    const pending = readGrantEntry();
+    expect(registry.createChatReadGrant(pending)).toEqual({ ok: true });
+    expect(registry.get(pending.grant.grantId)).toBeUndefined();
+    expect(registry.consume(pending.grant.grantId)).toBeUndefined();
+    expect(registry.reject(pending.grant.grantId)).toBeUndefined();
+    expect(registry.listPending()).toEqual([]);
+    expect(registry.getChatReadGrant(pending.grant.grantId)?.grant.state).toBe("pending");
+    expect(registry.create(entry(pending.grant.grantId)).ok).toBe(false);
+    expect(registry.create(entry("legacy"))).toEqual({ ok: true });
+    expect(registry.getChatReadGrant("legacy")).toBeUndefined();
+  });
+
+  it("shares the existing capacity and never replaces an occupied identity", () => {
+    const registry = new AtlassianActionApprovalRegistry(() => T0);
+    for (let i = 0; i < ATLASSIAN_ACTION_APPROVAL_MAX_PENDING - 1; i++)
+      registry.create(entry(`legacy-${String(i)}`));
+    expect(registry.createChatReadGrant(readGrantEntry()).ok).toBe(true);
+    expect(registry.createChatReadGrant(readGrantEntry("overflow"))).toEqual({
+      ok: false,
+      reason: "capacity-exhausted",
+    });
+    expect(registry.createChatReadGrant(readGrantEntry()).ok).toBe(false);
+    expect(registry.create(entry("legacy-overflow")).ok).toBe(false);
+  });
+
+  it("snapshots subject and authority facts instead of retaining caller objects", () => {
+    const registry = new AtlassianActionApprovalRegistry(() => T0);
+    const pending = readGrantEntry();
+    registry.createChatReadGrant(pending);
+    Object.assign(pending.grant.subject, { authenticationGeneration: 99 });
+    Object.assign(pending.authority, { runId: "changed" });
+    expect(registry.getChatReadGrant("grant-1")).toMatchObject({
+      grant: { subject: { authenticationGeneration: 3 } },
+      authority: { runId: "chat-run" },
+    });
+    expect(Object.isFrozen(registry.getChatReadGrant("grant-1")?.grant.subject)).toBe(true);
+  });
+
+  it("accepts once without extending expiry or changing the acceptance proof", () => {
+    let now = T0;
+    const registry = new AtlassianActionApprovalRegistry(() => now);
+    const pending = readGrantEntry();
+    registry.createChatReadGrant(pending);
+    const first = registry.acceptChatReadGrant(
+      "grant-1",
+      pending.grant.subject,
+      pending.authority,
+      "a".repeat(64),
+    );
+    expect(first.ok).toBe(true);
+    now += 10;
+    expect(
+      registry.acceptChatReadGrant(
+        "grant-1",
+        pending.grant.subject,
+        pending.authority,
+        "b".repeat(64),
+      ),
+    ).toEqual(first);
+    expect(registry.findGrantedChatReadGrant(pending.grant.subject)).toMatchObject({
+      state: "granted",
+      consentProofDigest: "a".repeat(64),
+      expiresAt: T0 + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+    });
+  });
+
+  it.each(["actorDigest", "chatId", "podId", "bindingGeneration", "authenticationGeneration"])(
+    "denies changed %s on acceptance and reuse",
+    (field) => {
+      const registry = new AtlassianActionApprovalRegistry(() => T0);
+      const pending = readGrantEntry();
+      registry.createChatReadGrant(pending);
+      const subject = {
+        ...pending.grant.subject,
+        [field]: field.endsWith("Generation")
+          ? 99
+          : field === "actorDigest"
+            ? "e".repeat(64)
+            : field === "podId"
+              ? "d5f5681e-ce98-4c3c-b27e-51d707c9d019"
+              : "other-chat",
+      };
+      expect(
+        registry.acceptChatReadGrant("grant-1", subject, pending.authority, "a".repeat(64)).ok,
+      ).toBe(false);
+      registry.acceptChatReadGrant(
+        "grant-1",
+        pending.grant.subject,
+        pending.authority,
+        "a".repeat(64),
+      );
+      expect(registry.findGrantedChatReadGrant(subject)).toBeUndefined();
+    },
+  );
+
+  it("denies another authority and does not revive rejected or revoked grants", () => {
+    const registry = new AtlassianActionApprovalRegistry(() => T0);
+    const pending = readGrantEntry();
+    registry.createChatReadGrant(pending);
+    expect(
+      registry.acceptChatReadGrant(
+        "grant-1",
+        pending.grant.subject,
+        { ...pending.authority, runId: "other" },
+        "a".repeat(64),
+      ).ok,
+    ).toBe(false);
+    expect(
+      registry.rejectChatReadGrant("grant-1", pending.grant.subject, pending.authority).ok,
+    ).toBe(true);
+    expect(
+      registry.acceptChatReadGrant(
+        "grant-1",
+        pending.grant.subject,
+        pending.authority,
+        "a".repeat(64),
+      ).ok,
+    ).toBe(false);
+    expect(registry.createChatReadGrant(pending).ok).toBe(false);
+  });
+
+  it("revokes only the selected Chat and expires without renewal", () => {
+    let now = T0;
+    const registry = new AtlassianActionApprovalRegistry(() => now);
+    const first = readGrantEntry();
+    const second = readGrantEntry("grant-2");
+    Object.assign(second.grant.subject, { chatId: "chat-2" });
+    registry.createChatReadGrant(first);
+    registry.createChatReadGrant(second);
+    registry.acceptChatReadGrant("grant-1", first.grant.subject, first.authority, "a".repeat(64));
+    expect(registry.revokeChatReadGrants(first.grant.subject.chatId)).toBe(1);
+    expect(registry.revokeChatReadGrants(first.grant.subject.chatId)).toBe(0);
+    expect(registry.getChatReadGrant("grant-2")?.grant.state).toBe("pending");
+    expect(registry.findGrantedChatReadGrant(first.grant.subject)).toBeUndefined();
+    now += ATLASSIAN_ACTION_APPROVAL_TTL_MS;
+    expect(
+      registry.acceptChatReadGrant(
+        "grant-2",
+        second.grant.subject,
+        second.authority,
+        "a".repeat(64),
+      ).ok,
+    ).toBe(false);
+    expect(registry.getChatReadGrant("grant-2")).toBeUndefined();
+  });
+
+  it("refuses forged acceptance and excessive or future lifetimes at creation", () => {
+    const registry = new AtlassianActionApprovalRegistry(() => T0);
+    const pending = readGrantEntry();
+    for (const grant of [
+      { ...pending.grant, state: "granted", consentProofDigest: "a".repeat(64) },
+      { ...pending.grant, expiresAt: pending.grant.expiresAt + 1 },
+      { ...pending.grant, requestedAt: T0 + 1 },
+    ] as const)
+      expect(registry.createChatReadGrant({ ...pending, grant }).ok).toBe(false);
+  });
+});
+
+it("clears only its own read grants on disposal", () => {
+  const first = new AtlassianActionApprovalRegistry(() => T0);
+  const second = new AtlassianActionApprovalRegistry(() => T0);
+  first.createChatReadGrant(readGrantEntry());
+  second.createChatReadGrant(readGrantEntry());
+  first.reset();
+  expect(first.getChatReadGrant("grant-1")).toBeUndefined();
+  expect(second.getChatReadGrant("grant-1")?.grant.state).toBe("pending");
+});
+
+it("reconstructs read-grant acceptance, reuse, revocation and expiry through the real log", () => {
+  const root = mkdtempSync(join(tmpdir(), "keiko-chat-read-grant-"));
+  const sink = createFileServerLogSink(root, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  let now = T0;
+  const registry = new AtlassianActionApprovalRegistry(() => now);
+  const entry = readGrantEntry();
+  const correlation = "chat-read-grant-proof";
+  try {
+    registry.createChatReadGrant(entry, correlation);
+    registry.acceptChatReadGrant(
+      "grant-1",
+      entry.grant.subject,
+      entry.authority,
+      "a".repeat(64),
+      correlation,
+    );
+    expect(registry.findGrantedChatReadGrant(entry.grant.subject, correlation)?.state).toBe(
+      "granted",
+    );
+    registry.revokeChatReadGrants(entry.grant.subject.chatId, correlation);
+    registry.createChatReadGrant(readGrantEntry("grant-2"), correlation);
+    now += ATLASSIAN_ACTION_APPROVAL_TTL_MS;
+    expect(registry.getChatReadGrant("grant-2", correlation)).toBeUndefined();
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(root),
+      "chat.tool-authority.operation",
+    );
+    const records = lines.map((line) =>
+      expectActivityLogProof("chat.tool-authority.operation.read-grant", line),
+    );
+    expect(records.map((line) => line.grantState)).toEqual([
+      "pending",
+      "granted",
+      "granted",
+      "revoked",
+      "pending",
+      "expired",
+      "expired",
+    ]);
+    expect(records.map((line) => line.affectedCount)).toEqual([1, 1, 0, 1, 1, 0, 1]);
+    expect(records.every((line) => line.correlationId === correlation)).toBe(true);
+    expect(records.find((line) => line.grantState === "granted")).toMatchObject({
+      consentProofDigest: "a".repeat(64),
+    });
+    for (const raw of ["grant-1", "grant-2", entry.grant.subject.chatId, entry.grant.subject.podId])
+      expect(lines.join("\n")).not.toContain(raw);
+  } finally {
+    sink.close?.();
+    resetServerLogger();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+describe("pending Chat consent waiters", () => {
+  it.each(["accept", "revoke", "reset"] as const)(
+    "resumes only after %s changes the existing grant",
+    async (action) => {
+      const registry = new AtlassianActionApprovalRegistry(() => T0);
+      const pending = readGrantEntry();
+      registry.createChatReadGrant(pending);
+      let resumed = false;
+      const waiting = registry
+        .waitForChatReadGrant(pending.grant.grantId, new AbortController().signal)
+        .then(() => {
+          resumed = true;
+        });
+      await Promise.resolve();
+      expect(resumed).toBe(false);
+      if (action === "accept")
+        registry.acceptChatReadGrant(
+          pending.grant.grantId,
+          pending.grant.subject,
+          pending.authority,
+          "a".repeat(64),
+        );
+      else if (action === "revoke") registry.revokeChatReadGrant(pending.grant.grantId);
+      else registry.reset();
+      await waiting;
+      expect(resumed).toBe(true);
+    },
+  );
+  it("cancellation releases the waiter without granting consent", async () => {
+    const registry = new AtlassianActionApprovalRegistry(() => T0);
+    const pending = readGrantEntry();
+    registry.createChatReadGrant(pending);
+    const controller = new AbortController();
+    const waiting = registry.waitForChatReadGrant(pending.grant.grantId, controller.signal);
+    controller.abort();
+    await waiting;
+    expect(registry.getChatReadGrant(pending.grant.grantId)?.grant.state).toBe("pending");
+  });
+  it("expires the wait at the grant deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(T0);
+      const registry = new AtlassianActionApprovalRegistry();
+      const pending = readGrantEntry();
+      registry.createChatReadGrant(pending);
+      const waiting = registry.waitForChatReadGrant(
+        pending.grant.grantId,
+        new AbortController().signal,
+      );
+      await vi.advanceTimersByTimeAsync(ATLASSIAN_ACTION_APPROVAL_TTL_MS);
+      await waiting;
+      expect(registry.getChatReadGrant(pending.grant.grantId)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
