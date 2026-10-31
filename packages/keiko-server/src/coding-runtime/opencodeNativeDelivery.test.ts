@@ -1,4 +1,4 @@
-import { webcrypto } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
@@ -37,6 +37,7 @@ import {
 
 const EXPECTED_DELIVERY_TOOLS = [
   "keiko_ci_status",
+  "keiko_git_branch",
   "keiko_git_commit",
   "keiko_git_diff",
   "keiko_git_execute",
@@ -243,6 +244,7 @@ const ARGUMENTS: Readonly<Record<string, Record<string, unknown>>> = {
   keiko_pull_request: { title: "feat: add a" },
   keiko_git_execute: { kind: "commit", proposalId: mintProposalId("commit") },
   keiko_git_sync: { pull: false },
+  keiko_git_branch: { name: "feature/x" },
   keiko_ci_status: { forceFresh: false },
 };
 
@@ -362,6 +364,7 @@ describe("the generated native plugins", () => {
     ["keiko_ci_status", ARGUMENTS.keiko_ci_status, "git"],
     ["keiko_git_sync", { pull: false }, "git"],
     ["keiko_git_sync", { pull: true }, "git"],
+    ["keiko_git_branch", { name: "feature/x" }, "git"],
     ["keiko_verification", ARGUMENTS.keiko_verification, "verification"],
     ["keiko_git_commit", ARGUMENTS.keiko_git_commit, "delivery"],
     ["keiko_git_push", {}, "delivery"],
@@ -455,6 +458,44 @@ describe("the generated native plugins", () => {
     expect(full.fetches[0]?.body).not.toHaveProperty("approvalProof");
   });
 
+  // #3907: keiko_git_branch's `name` is the wire's `branchName`. Below Full access it asks first,
+  // naming the branch only by the digest its approval is bound to, and redeems that approval.
+  it("create a task branch with the wire field the facade expects, asking first below Full access", async () => {
+    for (const mode of ["governed-assist", "supervised-coding"]) {
+      const native = await load("native", mode);
+      await toolOf(native, "keiko_git_branch").execute({ name: "feature/x" }, CONTEXT);
+      const bodies = native.fetches.map((call) => call.body);
+      expect(bodies.map((body) => body.action)).toEqual(["permission-request", "git"]);
+      const digest = createHash("sha256").update("feature/x", "utf8").digest("hex");
+      expect(bodies[0]).toMatchObject({
+        properties: {
+          patterns: ["branch"],
+          metadata: {
+            actionKind: "git-branch",
+            kind: "command-execution",
+            commandLabel: "branch",
+            risk: "medium",
+            targetPathHash: digest,
+          },
+        },
+      });
+      expect(JSON.stringify(bodies[0])).not.toContain("feature/x");
+      expect(bodies[1]).toMatchObject({
+        action: "git",
+        operation: "branch",
+        branchName: "feature/x",
+      });
+      expect(bodies[1]).not.toHaveProperty("name");
+      expect(bodies[1]?.approvalProof).toMatchObject({ approvalId: bodies[1]?.actionId });
+    }
+    const full = await load("native", "autonomous-delivery");
+    await toolOf(full, "keiko_git_branch").execute({ name: "feature/x" }, CONTEXT);
+    expect(full.fetches.map((call) => call.body)).toEqual([
+      expect.objectContaining({ action: "git", operation: "branch", branchName: "feature/x" }),
+    ]);
+    expect(full.fetches[0]?.body).not.toHaveProperty("approvalProof");
+  });
+
   it("ask the operator first for a verification below Full access, as the mapped tool does", async () => {
     const native = await load("native", "governed-assist");
     await toolOf(native, "keiko_verification").execute(ARGUMENTS.keiko_verification ?? {}, CONTEXT);
@@ -512,6 +553,7 @@ const DELIVERY_STEPS = [
   "keiko_verification",
   "keiko_ci_status",
   "keiko_git_sync",
+  "keiko_git_branch",
 ];
 
 const POINTER_TOOL = /keiko_[a-z_]+/gu;
@@ -557,9 +599,9 @@ describe("the pointer from the shell to the delivery tools", () => {
   it("names only tools the native run has, and every tool a delivery needs", () => {
     const named = new Set(namedTools(OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE));
     for (const name of named) expect(isOpenCodeNativeDeliveryToolName(name), name).toBe(true);
-    for (const name of [...DELIVERY_PROPOSALS, "keiko_git_sync"])
+    for (const name of [...DELIVERY_PROPOSALS, "keiko_git_sync", "keiko_git_branch"])
       expect(named.has(name), name).toBe(true);
-    expect(OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE.length).toBeLessThan(500);
+    expect(OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE.length).toBeLessThan(560);
   });
 
   it("is the guidance the native run receives, and names only tools the native run has", () => {

@@ -1945,6 +1945,12 @@ describe("CodingWorkbenchTimeline native tool labels", () => {
     expect(titles(container)).toEqual(["Git status", "Workspace read"]);
   });
 
+  // #3907: the governed task-branch tool reads as what it does, in both languages.
+  it("labels the governed task-branch tool in English and German", async () => {
+    expect(titles(await renderIn("en", ["keiko_git_branch"]))).toEqual(["Create task branch"]);
+    expect(titles(await renderIn("de", ["keiko_git_branch"]))).toEqual(["Aufgaben-Branch anlegen"]);
+  });
+
   it("humanizes an unknown or MCP tool id instead of inventing a localized label", async () => {
     const container = await renderIn("de", ["linear.create_issue", "keiko_run_command"]);
 

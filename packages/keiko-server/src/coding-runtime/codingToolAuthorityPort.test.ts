@@ -24,6 +24,7 @@ import type { GovernedNativeFileIO } from "./codingToolReadEditPorts.js";
 import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
 import {
   codingToolApprovalBindingDigest,
+  codingToolBranchApprovalTargetId,
   createCodingToolApprovalBridge,
   type ApprovableToolRequest,
 } from "./codingToolApprovalBridge.js";
@@ -506,6 +507,116 @@ describe("CodingToolAuthorityPort", () => {
         idempotencyKey: "fetch",
       }).ok,
     ).toBe(false);
+  });
+
+  // #3907 (owner decision 2026-10-31): a task branch is created without an ask only in Full access.
+  // Below it, the operator's approval of that exact branch name admits it -- once, and for no other
+  // name.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "admits a task branch at %s only through the operator's approval of that exact name",
+    (mode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode: mode,
+        actionClasses: codingRuntimeActionClassesForMode(mode, false),
+        connectorScopes: codingRuntimeConnectorScopesForMode(mode),
+        networkPolicy: codingRuntimeNetworkPolicyForMode(mode, false),
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const approvalProofVerifier = createCodingToolApprovalBridge();
+      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+        approvalProofVerifier,
+      });
+      const nowMs = Date.parse("2026-07-12T09:00:00.000Z");
+      const request = {
+        action: "git" as const,
+        operation: "branch" as const,
+        branchName: "feature/x",
+        actionId: `branch-${mode}`,
+        idempotencyKey: `branch-${mode}`,
+      };
+      const approvalProof = {
+        approvalId: request.actionId,
+        approvalDigest: codingToolApprovalBindingDigest("run-authority-a", request),
+      };
+      expect(port.admit("capability", request).ok).toBe(false);
+      expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(false);
+      expect(
+        approvalProofVerifier.observePermission({
+          runId: "run-authority-a",
+          requestId: `permission-${request.actionId}`,
+          action: "git",
+          actionId: request.actionId,
+          idempotencyKey: request.idempotencyKey,
+          targetId: codingToolBranchApprovalTargetId("feature/x"),
+          proof: approvalProof,
+          expiresAt: "2026-07-12T09:05:00.000Z",
+          nowMs,
+        }),
+      ).toBe(true);
+      expect(
+        approvalProofVerifier.activatePermission({
+          runId: "run-authority-a",
+          requestId: `permission-${request.actionId}`,
+          approvalAuthorityDigest: "c".repeat(64),
+          expiresAtMs: Date.parse("2026-07-12T09:05:00.000Z"),
+          nowMs,
+        }),
+      ).toBe(true);
+      // The approval names the branch: another name, or another operation, finds none.
+      expect(
+        port.admit("capability", { ...request, branchName: "feature/y", approvalProof }).ok,
+      ).toBe(false);
+      expect(
+        port.admit("capability", {
+          action: "git",
+          operation: "fetch",
+          actionId: request.actionId,
+          idempotencyKey: request.idempotencyKey,
+          approvalProof,
+        }).ok,
+      ).toBe(false);
+      expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(true);
+      expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(false);
+    },
+  );
+
+  it("admits a task branch at autonomous-delivery without an approval, and none without workspace-write", () => {
+    const envelope = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      actionClasses: codingRuntimeActionClassesForMode("autonomous-delivery", false),
+      connectorScopes: codingRuntimeConnectorScopesForMode("autonomous-delivery"),
+      networkPolicy: codingRuntimeNetworkPolicyForMode("autonomous-delivery", false),
+    });
+    const request = {
+      action: "git" as const,
+      operation: "branch" as const,
+      branchName: "feature/x",
+      actionId: "branch",
+      idempotencyKey: "branch",
+    };
+    const admitted = createCodingToolAuthorityPort(
+      {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      },
+      runtimeContext,
+    );
+    expect(admitted.admit("capability", request).ok).toBe(true);
+    const readOnly = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      actionClasses: ["workspace-read"],
+    });
+    const refused = createCodingToolAuthorityPort(
+      {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope: readOnly })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope: readOnly })),
+      },
+      runtimeContext,
+    );
+    expect(refused.admit("capability", request).ok).toBe(false);
   });
 
   it("admits a connector read at supervised-coding once its scoped approval is redeemed, never a mismatched scope", () => {

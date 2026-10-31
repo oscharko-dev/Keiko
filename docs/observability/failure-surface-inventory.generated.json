@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c0b982be59e8cfb83281b03ea2dac229be957a075c963eb74f2c05c1813a9ccd"
+    "catalogDigest": "c9a6ab63d8b276db8638a5b4e4924fe29911967aad17afd98cc8774f43733be5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2402,6 +2402,7 @@
       "packages/keiko-server/src/gitDelivery/repositoryInitializationRoutes.test.ts"
     ],
     "git.runtime-action.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/runtimeGitService.branch.test.ts",
       "packages/keiko-server/src/gitDelivery/runtimeGitService.sync.test.ts",
       "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
     ],

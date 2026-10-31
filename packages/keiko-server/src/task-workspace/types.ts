@@ -209,7 +209,27 @@ export interface WorkspaceLifecycleActionResult {
   readonly binding: WorkspaceBinding;
 }
 
+/** Whether a task branch may be created in a workspace (#3907); see `admitTaskBranch`. */
+export type TaskBranchAdmission =
+  "admitted" | "not-local-checkout" | "not-on-base" | "executable-filters";
+
+export interface TaskBranchAdoption {
+  readonly workspaceId: string;
+  /** The branch Keiko's Git kernel created and switched the checkout to. */
+  readonly branch: string;
+  /** The base branch the checkout stood on; it stays the task's base branch. */
+  readonly baseBranch: string;
+}
+
 export interface WorkspaceLifecycleService {
+  // Whether the workspace is a Local checkout standing on its own base branch (task branch equal to
+  // base branch) with no executable Git filters, so Keiko may create a task branch in it (#3907).
+  readonly admitTaskBranch?: ((workspaceId: string) => TaskBranchAdmission) | undefined;
+  // Records that Keiko's own governed `keiko_git_branch` moved a Local checkout onto a new task
+  // branch: the instance takes it as its task branch and keeps the old one as its base branch, so
+  // the checkout and its record agree again. Fails closed unless the checkout really stands on that
+  // branch, in the same repository (#3907).
+  readonly adoptTaskBranch?: ((request: TaskBranchAdoption) => ActiveWorkspaceView) | undefined;
   // Ordinary checkout selection is available only when the production lifecycle composes the
   // registered-project Git validator. Test lifecycles and managed-only deployments omit it.
   readonly selectLocal?:

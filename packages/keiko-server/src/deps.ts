@@ -510,6 +510,10 @@ import {
   createGovernedSyncHeads,
   type GovernedSyncHeads,
 } from "./coding-runtime/governedSyncHeads.js";
+import {
+  createGovernedTaskBranches,
+  type GovernedTaskBranches,
+} from "./coding-runtime/governedTaskBranches.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
   createProductionCodingRuntimeResolver,
@@ -6827,10 +6831,8 @@ function qualifiedRuntimeResolver(
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
   const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
-  // #3902 AC2: the heads a governed fast-forward writes, recorded by the runtime Git service and
-  // accepted by the workspace authority beside the verified commit's receipt.
-  const governedSyncHeads = createGovernedSyncHeads();
-  const verifiedCommit = runtimeVerifiedCommitDependencies(input, governedSyncHeads);
+  const records = createRuntimeGitRecords();
+  const verifiedCommit = runtimeVerifiedCommitDependencies(input, records);
   const draftDelivery = runtimeDraftDeliveryDependencies(input);
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: {
@@ -6841,8 +6843,10 @@ function qualifiedRuntimeResolver(
         input.deploymentCeiling,
         input.envelopeBounds,
       ),
-      governedSyncHead: governedSyncHeads.latest,
+      governedSyncHead: records.governedSyncHeads.latest,
+      governedTaskBranch: records.governedTaskBranches.latest,
     },
+    governedTaskBranches: records.governedTaskBranches,
     ...input.ports,
     serverRuntimeChangeset: createRuntimeChangesetApplyPort({
       runtimeMutationLease: input.runtimeMutationLeaseBroker,
@@ -6879,9 +6883,25 @@ function qualifiedRuntimeResolver(
   });
 }
 
+// The server-owned per-run records the runtime Git service writes and the workspace authority and
+// the verified-commit context read: #3902 AC2, the heads a governed fast-forward writes, accepted
+// beside the verified commit's receipt; and #3907, the task branches Keiko's own `keiko_git_branch`
+// moves runs onto.
+interface RuntimeGitRecords {
+  readonly governedSyncHeads: GovernedSyncHeads;
+  readonly governedTaskBranches: GovernedTaskBranches;
+}
+
+function createRuntimeGitRecords(): RuntimeGitRecords {
+  return {
+    governedSyncHeads: createGovernedSyncHeads(),
+    governedTaskBranches: createGovernedTaskBranches(),
+  };
+}
+
 function runtimeVerifiedCommitDependencies(
   input: QualifiedRuntimeResolverInput,
-  governedSyncHeads: GovernedSyncHeads,
+  records: RuntimeGitRecords,
 ): ReturnType<typeof createProductionVerifiedCommitDependencies> {
   const { args } = input;
   const verified = createProductionVerifiedCommitDependencies(
@@ -6899,7 +6919,11 @@ function runtimeVerifiedCommitDependencies(
   );
   return verified === undefined
     ? undefined
-    : { ...verified, recordGovernedSyncHead: governedSyncHeads.record };
+    : {
+        ...verified,
+        recordGovernedSyncHead: records.governedSyncHeads.record,
+        governedTaskBranch: records.governedTaskBranches.latest,
+      };
 }
 
 function runtimeDraftDeliveryDependencies(

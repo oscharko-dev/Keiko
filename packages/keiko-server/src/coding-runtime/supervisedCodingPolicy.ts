@@ -514,8 +514,10 @@ function riskForActionKind(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): "medium" | "high" | "critical" {
   if (actionKind === "merge" || actionKind === "system-mutation") return "critical";
-  // A fetch changes only remote-tracking refs; a pull fast-forwards the worktree (#3902 AC2).
-  if (actionKind === "commit" || actionKind === "git-fetch") return "medium";
+  // A fetch changes only remote-tracking refs; a pull fast-forwards the worktree (#3902 AC2). A task
+  // branch is one local ref and a switch of the run's own branch (#3907).
+  if (actionKind === "commit" || actionKind === "git-fetch" || actionKind === "git-branch")
+    return "medium";
   return "high";
 }
 

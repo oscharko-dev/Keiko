@@ -335,6 +335,9 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // `inputMessageCount` describe what is actually sent upstream. A count; the reasoning is never
     // recorded. `required: false` only because a record written before this field existed lacks it.
     droppedReasoningMessageCount: { type: "integer", dataClass: "count", required: false },
+    // #3907 AC3: how many assistant messages of the history carry text beside their tool calls; the
+    // gateway resends that text upstream as the model wrote it. A count; the text is never recorded.
+    toolCallTextMessageCount: { type: "integer", dataClass: "count", required: false },
     // #3897 S14: how many validated image parts the request carries; present only when it carries
     // any. The count is part of what `estimatedPromptTokens` is charged for (the gateway's image
     // allowance per image); the images themselves are never recorded.
@@ -1526,6 +1529,15 @@ function isReasoningOnlyAssistantMessage(entry: unknown): boolean {
     hasNoAnswerText(entry.content) &&
     hasNoToolCalls(entry.tool_calls)
   );
+}
+
+function countToolCallTextMessages(messages: readonly CodingSidecarGatewayChatMessage[]): number {
+  return messages.filter(
+    (message) =>
+      message.role === "assistant" &&
+      (message.toolCalls?.length ?? 0) > 0 &&
+      message.content.trim().length > 0,
+  ).length;
 }
 
 interface ParsedMessages {
@@ -5350,6 +5362,7 @@ function logValidatedRequestBounds(
         inputMessageCount: request.messages.length,
         offeredToolCount: request.tools?.length ?? 0,
         droppedReasoningMessageCount: request.droppedReasoningMessageCount,
+        toolCallTextMessageCount: countToolCallTextMessages(request.messages),
         ...imageCountEvidence(request),
         completeness: "complete",
         loss: "none",
