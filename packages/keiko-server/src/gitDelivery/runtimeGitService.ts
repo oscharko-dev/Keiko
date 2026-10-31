@@ -252,10 +252,13 @@ interface RuntimeGitActivityFields {
   readonly causeChain?: readonly string[];
 }
 
+/** How a runtime Git line settles: its level and whether it carries an error kind. */
+type RuntimeGitLogOutcome = "ok" | "refused" | "failed";
+
 function runtimeGitLogOptions(
   context: VerifiedCommitRunContext | undefined,
   extra: RuntimeGitActivityFields,
-  outcome: "ok" | "refused" | "failed",
+  outcome: RuntimeGitLogOutcome,
 ): {
   readonly correlationId: string;
   readonly level?: "warn";
@@ -425,7 +428,7 @@ function syncEvidence(result: CodingRuntimeGitSync): RuntimeGitActivityFields {
 }
 
 /** The log outcome of a result: a sync that settled anywhere but Git's success is a warning. */
-function resultOutcome(result: RuntimeGitOutcome): "ok" | "refused" | "failed" {
+function resultOutcome(result: RuntimeGitOutcome): RuntimeGitLogOutcome {
   if (result.kind === "refused") return "refused";
   if (result.kind === "branch") return branchOutcome(result);
   return (result.kind === "fetch" || result.kind === "pull") &&
@@ -436,7 +439,7 @@ function resultOutcome(result: RuntimeGitOutcome): "ok" | "refused" | "failed" {
 }
 
 // A task branch Keiko refused is a governance outcome; one it could not make is a failure.
-function branchOutcome(result: CodingRuntimeGitBranch): "ok" | "refused" | "failed" {
+function branchOutcome(result: CodingRuntimeGitBranch): RuntimeGitLogOutcome {
   if (result.status === "succeeded") return "ok";
   return result.status === "blocked" ? "refused" : "failed";
 }
@@ -985,7 +988,7 @@ export class RuntimeGitService {
     context: VerifiedCommitRunContext | undefined,
     phase: RuntimeGitPhase,
     extra: RuntimeGitActivityFields,
-    outcome: "ok" | "refused" | "failed" = "ok",
+    outcome: RuntimeGitLogOutcome = "ok",
   ): void {
     (this.options.execution?.activityLog ?? processServerLogSink()).write(
       activityLogEvent(RUNTIME_GIT_OPERATION, runtimeGitLogOptions(context, extra, outcome), {
