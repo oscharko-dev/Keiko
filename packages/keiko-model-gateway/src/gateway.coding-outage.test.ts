@@ -263,6 +263,20 @@ function linesOf(
   return events.filter((event) => event.op === op);
 }
 
+/** Retries kept going until the outage window, not the attempt count, ended them. */
+function expectOutageWindowSpent(
+  calls: number,
+  elapsedMs: number,
+  events: readonly ModelGatewayLogTransport[],
+): void {
+  expect(calls).toBeGreaterThan(3);
+  expect(elapsedMs).toBeLessThanOrEqual(GATEWAY_CODING_OUTAGE_WINDOW_MS);
+  expect(elapsedMs).toBeGreaterThan(GATEWAY_CODING_OUTAGE_WINDOW_MS - 30_000);
+  const exhausted = linesOf(events, "gateway.retry.exhausted");
+  expect(exhausted).toHaveLength(1);
+  expect(exhausted[0]?.extra).toMatchObject({ reason: "budget", retryPolicy: "outage-window" });
+}
+
 describe("coding-workbench outage tolerance", () => {
   it("keeps retrying a provider that recovers after more failures than its attempt count", async () => {
     const provider = recoveringProvider(8);
@@ -381,12 +395,7 @@ describe("coding-workbench outage tolerance", () => {
       gatewayFor(provider.call, clock, config(), events).chat(request("coding-turn")),
     ).rejects.toBeInstanceOf(TimeoutError);
 
-    expect(provider.calls()).toBeGreaterThan(3);
-    expect(clock.elapsed()).toBeLessThanOrEqual(GATEWAY_CODING_OUTAGE_WINDOW_MS);
-    expect(clock.elapsed()).toBeGreaterThan(GATEWAY_CODING_OUTAGE_WINDOW_MS - 30_000);
-    const exhausted = linesOf(events, "gateway.retry.exhausted");
-    expect(exhausted).toHaveLength(1);
-    expect(exhausted[0]?.extra).toMatchObject({ reason: "budget", retryPolicy: "outage-window" });
+    expectOutageWindowSpent(provider.calls(), clock.elapsed(), events);
   });
 
   it("waits through an open breaker instead of refusing the call", async () => {
@@ -665,12 +674,7 @@ describe("coding-workbench outage tolerance (streamed)", () => {
       ),
     ).rejects.toBeInstanceOf(TimeoutError);
 
-    expect(provider.calls()).toBeGreaterThan(3);
-    expect(clock.elapsed()).toBeLessThanOrEqual(GATEWAY_CODING_OUTAGE_WINDOW_MS);
-    expect(clock.elapsed()).toBeGreaterThan(GATEWAY_CODING_OUTAGE_WINDOW_MS - 30_000);
-    const exhausted = linesOf(events, "gateway.retry.exhausted");
-    expect(exhausted).toHaveLength(1);
-    expect(exhausted[0]?.extra).toMatchObject({ reason: "budget", retryPolicy: "outage-window" });
+    expectOutageWindowSpent(provider.calls(), clock.elapsed(), events);
   });
 
   // A failed half-open probe re-opens the breaker; the streamed turn waits for the next probe

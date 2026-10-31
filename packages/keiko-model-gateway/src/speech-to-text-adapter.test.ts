@@ -1,11 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import {
+  expectHealthyVoiceCompletion,
+  expectRateLimitedVoiceCompletion,
+  fireVoiceTimeoutAtFloor,
+  rethrowAbortedRequest,
+} from "./__fixtures__/speech-adapter-observations.js";
+import { registerSpeechRoutingContract } from "./__fixtures__/speech-routing-contract.js";
+import { describe, expect, it } from "vitest";
 import { observeSpeechCompletionFields } from "./__fixtures__/speech-completion-observation.js";
 import { requestSpeechToText as publicSpeechToText } from "@oscharko-dev/keiko-model-gateway";
-import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import {
-  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
-  resetActivityLogLossCountersForTests,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { resetActivityLogLossCountersForTests } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   classifyDispatchError,
   requestSpeechToText,
@@ -342,89 +345,21 @@ describe("requestSpeechToText", () => {
     expect(body).toContain("\r\n\r\nKeiko, Repository\r\n");
   });
 
-  it.each([
-    {
-      modelId: "model /?#",
-      apiVersion: "v1 &next=1",
-      encodedModel: "model%20%2F%3F%23",
-      encodedVersion: "v1%20%26next%3D1",
-    },
-    { modelId: "model%name", apiVersion: "", encodedModel: "model%25name", encodedVersion: "" },
-    { modelId: "model", apiVersion: undefined, encodedModel: "model", encodedVersion: "" },
-  ])(
-    "encodes Azure speech routing components independently ($modelId)",
-    async ({ modelId, apiVersion, encodedModel, encodedVersion }) => {
-      let seenUrl = "";
-      const outcome = await requestSpeechToText({
-        endpoint: "https://voice.example.invalid/base//",
-        endpointStyle: "azure-openai-deployment",
-        ...(apiVersion === undefined ? {} : { apiVersion }),
-        apiKey: SECRET_API_KEY,
-        modelId,
-        audio: AUDIO,
-        mimeType: "audio/wav",
-        fetchImpl: mockFetch((url) => {
-          seenUrl = url;
-          return ok({ text: "encoded route" });
+  registerSpeechRoutingContract({
+    path: "/audio/transcriptions",
+    endpoint: ENDPOINT,
+    request: (routing, onRequest) =>
+      requestSpeechToText(
+        Object.assign(routing, {
+          apiKey: SECRET_API_KEY,
+          audio: AUDIO,
+          mimeType: "audio/wav",
+          fetchImpl: mockFetch((url) => {
+            onRequest(url);
+            return ok({ text: "routed transcript" });
+          }),
         }),
-      });
-      expect(outcome.ok).toBe(true);
-      expect(seenUrl).toBe(
-        `https://voice.example.invalid/base//openai/deployments/${encodedModel}/audio/transcriptions?api-version=${encodedVersion}`,
-      );
-    },
-  );
-
-  it("does not inspect apiVersion for OpenAI-compatible speech routing", async () => {
-    let seenUrl = "";
-    const outcome = await requestSpeechToText({
-      endpoint: ENDPOINT,
-      get apiVersion(): string {
-        throw new Error("OpenAI routing must not inspect the Azure version");
-      },
-      apiKey: SECRET_API_KEY,
-      modelId: "model",
-      audio: AUDIO,
-      mimeType: "audio/wav",
-      fetchImpl: mockFetch((url) => {
-        seenUrl = url;
-        return ok({ text: "encoded route" });
-      }),
-    });
-    expect(outcome.ok).toBe(true);
-    expect(seenUrl).toBe(`${ENDPOINT}/audio/transcriptions`);
-  });
-
-  it("reads Azure routing fields in their existing order before egress", async () => {
-    const reads: string[] = [];
-    let routingReads: string[] = [];
-    const outcome = await requestSpeechToText({
-      get endpointStyle(): "azure-openai-deployment" {
-        reads.push("style");
-        return "azure-openai-deployment";
-      },
-      get endpoint(): string {
-        reads.push("endpoint");
-        return ENDPOINT;
-      },
-      get modelId(): string {
-        reads.push("model");
-        return "model";
-      },
-      get apiVersion(): string {
-        reads.push("version");
-        return "version";
-      },
-      apiKey: SECRET_API_KEY,
-      audio: AUDIO,
-      mimeType: "audio/wav",
-      fetchImpl: mockFetch(() => {
-        routingReads = reads.slice(-4);
-        return ok({ text: "ordered route" });
-      }),
-    });
-    expect(outcome.ok).toBe(true);
-    expect(routingReads).toEqual(["style", "endpoint", "model", "version"]);
+      ),
   });
 
   it("supports Azure OpenAI deployment endpoints with a separate api-version", async () => {
@@ -706,13 +641,7 @@ describe("requestSpeechToText", () => {
   // already-fired signal so the whole request path — dispatch, classification, and the outcome
   // `requestSpeechToText` returns — is exercised exactly as it would be for a real fired timeout.
   it("wires the floored internal deadline into the outbound fetch and ends in a timeout outcome", async () => {
-    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-      if (ms !== GATEWAY_VOICE_TIMEOUT_FLOOR_MS) return nativeTimeout(ms);
-      const controller = new AbortController();
-      controller.abort(new DOMException("the provider did not answer in time", "TimeoutError"));
-      return controller.signal;
-    });
+    const timeoutSpy = fireVoiceTimeoutAtFloor();
     try {
       const outcome = await requestSpeechToText({
         endpoint: ENDPOINT,
@@ -723,12 +652,7 @@ describe("requestSpeechToText", () => {
         // Below the floor: proves the CALL that reaches AbortSignal.timeout carries the floored
         // value, not the caller's smaller configured one.
         timeoutMs: 5_000,
-        fetchImpl: mockFetch((_url, init) => {
-          if (init.signal?.aborted === true) {
-            throw init.signal.reason as Error;
-          }
-          throw new Error("the request should have carried an already-aborted signal");
-        }),
+        fetchImpl: mockFetch(rethrowAbortedRequest),
       });
       expect(timeoutSpy).toHaveBeenCalledWith(GATEWAY_VOICE_TIMEOUT_FLOOR_MS);
       expect(outcome).toEqual({ ok: false, kind: "timeout" });
@@ -1018,31 +942,14 @@ function expectSttCompletionMetadata(
   });
 }
 
-function expectHealthySttCompletion(
-  dispatch: ModelGatewayLogEvent | undefined,
-  completed: ModelGatewayLogEvent | undefined,
-): void {
-  expect(completed?.extra?.endpointDigest).toBe(dispatch?.extra?.endpointDigest);
-  expect(completed?.correlationId).toBe("corr-stt-completion-request");
-  expect(completed).not.toHaveProperty("errorKind");
-  expect(completed?.extra).not.toHaveProperty("failureKind");
-}
-
-function expectFailedSttCompletion(completed: ModelGatewayLogEvent | undefined): void {
-  expect(completed?.extra?.endpointDigest).toBe(sha256Hex("invalid-endpoint"));
-  expect(completed?.extra?.failureKind).toBe("rate-limited");
-  expect(completed?.errorKind).toBe("rate-limited");
-  expect(completed?.correlationId).toBe(ACTIVITY_LOG_UNKNOWN_CORRELATION_ID);
-}
-
 function expectSttCompletionEvent(state: SttCompletionObservation): void {
   const dispatch = normalFixtureEvent(state.events[0]);
   const completed = normalFixtureEvent(state.events.at(-1));
   expectSttCompletionMetadata(state, completed);
   if (state.status === 200) {
-    expectHealthySttCompletion(dispatch, completed);
+    expectHealthyVoiceCompletion(dispatch, completed, "corr-stt-completion-request");
   } else {
-    expectFailedSttCompletion(completed);
+    expectRateLimitedVoiceCompletion(completed);
   }
   for (const secret of [
     ENDPOINT,

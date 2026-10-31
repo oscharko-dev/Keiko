@@ -293,6 +293,40 @@ function spentBufferedBudgetFixture(failure: () => Error): {
   return { events, requests, gateway: gatewayFor(scripted, events, config(providerValue), clock) };
 }
 
+interface ScriptedRequests {
+  readonly requests: readonly { readonly messages: unknown }[];
+}
+
+/** The failure reached the caller after one request, unrepaired and without a scheduled retry. */
+function expectSurfacedWithoutRepair(
+  error: unknown,
+  scripted: ScriptedRequests,
+  events: readonly ModelGatewayLogTransport[],
+): void {
+  expect((error as GatewayError).outputRepair).toBeUndefined();
+  expect(scripted.requests).toHaveLength(1);
+  expect(scheduledLines(events)).toEqual([]);
+}
+
+/** The repair's correction is kept on the provider retry that follows it. */
+function expectSteeredProviderRetry(
+  scripted: ScriptedRequests,
+  events: readonly ModelGatewayLogTransport[],
+  correction: string,
+  reason: string,
+): void {
+  const steered = [...REQUEST.messages, { role: "system", content: correction }];
+  expect(scripted.requests.map((request) => request.messages)).toEqual([
+    REQUEST.messages,
+    steered,
+    steered,
+  ]);
+  expect(scheduledLines(events).map((event) => normalFixtureEvent(event).extra?.reason)).toEqual([
+    reason,
+    "retryable-error",
+  ]);
+}
+
 describe("Gateway output-exhausted repair (#3873 F17)", () => {
   it("steers exactly one repaired buffered attempt with the fixed correction appended", async () => {
     const events: ModelGatewayLogTransport[] = [];
@@ -587,9 +621,7 @@ describe("Gateway output-exhausted repair after forwarded reasoning (#3873 F17, 
 
     expect(kinds(delivered)).toEqual(["reasoning:thinking", "delta:partial"]);
     expect(failure).toBeInstanceOf(ProviderOutputExhaustedError);
-    expect((failure as GatewayError).outputRepair).toBeUndefined();
-    expect(scripted.requests).toHaveLength(1);
-    expect(scheduledLines(events)).toEqual([]);
+    expectSurfacedWithoutRepair(failure, scripted, events);
   });
 });
 
@@ -676,9 +708,7 @@ describe("Gateway empty-answer repair after reasoning (#3873 F23)", () => {
       .catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
-    expect((failure as GatewayError).outputRepair).toBeUndefined();
-    expect(scripted.requests).toHaveLength(1);
-    expect(scheduledLines(events)).toEqual([]);
+    expectSurfacedWithoutRepair(failure, scripted, events);
   });
 
   it("grants one repair per call whichever of the two failures comes first", async () => {
@@ -819,9 +849,7 @@ describe("Gateway empty-answer repair after reasoning (#3873 F23)", () => {
       );
 
       expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
-      expect((failure as GatewayError).outputRepair).toBeUndefined();
-      expect(scripted.requests).toHaveLength(1);
-      expect(scheduledLines(events)).toEqual([]);
+      expectSurfacedWithoutRepair(failure, scripted, events);
     });
   });
 });
@@ -858,15 +886,7 @@ describe("Gateway steered repair across a provider retry (#3873 F17, F23)", () =
       const result = await gatewayFor(scripted, events).chat(REQUEST);
 
       expect(result.outputRepair).toBe("recovered");
-      const steered = [...REQUEST.messages, { role: "system", content: correction }];
-      expect(scripted.requests.map((request) => request.messages)).toEqual([
-        REQUEST.messages,
-        steered,
-        steered,
-      ]);
-      expect(
-        scheduledLines(events).map((event) => normalFixtureEvent(event).extra?.reason),
-      ).toEqual([reason, "retryable-error"]);
+      expectSteeredProviderRetry(scripted, events, correction, reason);
     },
   );
 
@@ -886,15 +906,7 @@ describe("Gateway steered repair across a provider retry (#3873 F17, F23)", () =
 
       const done = chunks.at(-1);
       expect(done?.type === "done" ? done.response.outputRepair : undefined).toBe("recovered");
-      const steered = [...REQUEST.messages, { role: "system", content: correction }];
-      expect(scripted.requests.map((request) => request.messages)).toEqual([
-        REQUEST.messages,
-        steered,
-        steered,
-      ]);
-      expect(
-        scheduledLines(events).map((event) => normalFixtureEvent(event).extra?.reason),
-      ).toEqual([reason, "retryable-error"]);
+      expectSteeredProviderRetry(scripted, events, correction, reason);
     },
   );
 });
@@ -920,9 +932,7 @@ describe("Gateway steered repair is opt-in (#3873 review)", () => {
         .catch((caught: unknown) => caught);
 
       expect(error).toBeInstanceOf(GatewayError);
-      expect((error as GatewayError).outputRepair).toBeUndefined();
-      expect(scripted.requests).toHaveLength(1);
-      expect(scheduledLines(events)).toEqual([]);
+      expectSurfacedWithoutRepair(error, scripted, events);
     },
   );
 
@@ -937,9 +947,7 @@ describe("Gateway steered repair is opt-in (#3873 review)", () => {
       ).catch((caught: unknown) => caught);
 
       expect(error).toBeInstanceOf(GatewayError);
-      expect((error as GatewayError).outputRepair).toBeUndefined();
-      expect(scripted.requests).toHaveLength(1);
-      expect(scheduledLines(events)).toEqual([]);
+      expectSurfacedWithoutRepair(error, scripted, events);
     },
   );
 });
