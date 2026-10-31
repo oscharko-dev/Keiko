@@ -68,6 +68,7 @@ export {
 export {
   longLivedRuntimeEgressPolicyDigest,
   planLongLivedRuntimeSandbox,
+  planWindowsGatewayRuntimeSandbox,
   verifyLongLivedRuntimeSandboxAttestation,
 } from "./runtime-egress.js";
 export type {

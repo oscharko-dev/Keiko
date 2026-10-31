@@ -4,15 +4,20 @@ name: Windows gateway confinement development proof
 # Development proof only; this does not qualify the production runtime.
 on:
   push:
-    branches: [fix/3666-windows-coding-runtime]
+    branches: [fix/3666-windows-coding-runtime, feature/4068-windows-workbench]
   workflow_dispatch:
+    inputs:
+      verify_transport:
+        description: "Require a real gateway connection and hostile port denial through the installed Workbench adapter"
+        type: boolean
+        default: false
 
 permissions: {}
 
 jobs:
   filter-lifecycle:
     runs-on: windows-2025
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -34,9 +39,20 @@ jobs:
             throw "The native WFP proof requires an administrator token on the hosted runner."
           }
           if ((Get-Service BFE).Status -ne 'Running') { throw "BFE is not running." }
+      - name: Build Workbench server packages for the native adapter proof
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run build:packages
+        shell: pwsh
       - name: Compile, analyze, validate and prove dynamic filter cleanup
         run: node scripts/testing/test-windows-gateway-filters.mjs --filter-lifecycle
       - name: Prove durable-deny guard cleanup after gateway permit revocation
         run: node scripts/testing/test-windows-gateway-filters.mjs --guarded-lifecycle
       - name: Prove real AppContainer gateway access and hostile loopback denial
         run: node scripts/testing/test-windows-gateway-filters.mjs --socket-proof
+      - name: Exercise the installed service and Workbench adapter transport
+        env:
+          VERIFY_TRANSPORT: ${{ (github.event_name == 'push' && github.ref_name == 'feature/4068-windows-workbench') || inputs.verify_transport }}
+        run: ./scripts/testing/test-windows-gateway-scm.ps1 -VerifyTransport:($env:VERIFY_TRANSPORT -eq 'true')
+        shell: pwsh

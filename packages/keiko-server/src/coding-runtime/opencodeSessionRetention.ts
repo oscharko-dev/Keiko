@@ -16,6 +16,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -288,6 +289,9 @@ class Store {
   }
 
   public checkout(input: Parameters<RetainedSessionStore["checkout"]>[0]): CheckoutResult {
+    if (this.existingRoot() === undefined) {
+      return { ok: false, reason: "no-retained-state", removed: false };
+    }
     const entry = join(this.root, retainedSessionKey(input.binding.taskId));
     if (!existsSync(entry)) return { ok: false, reason: "no-retained-state", removed: false };
     const manifest = this.readManifest(entry);
@@ -308,6 +312,7 @@ class Store {
   }
 
   public remove(taskId: string): void {
+    if (this.existingRoot() === undefined) return;
     rmSync(join(this.root, retainedSessionKey(taskId)), { recursive: true, force: true });
   }
 
@@ -315,7 +320,7 @@ class Store {
     isLiveTask: ((taskId: string) => boolean) | undefined = this.isLiveTask,
   ): PruneResult {
     const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0 };
-    if (!existsSync(this.root)) return { ...counts, entryCount: 0 };
+    if (this.existingRoot() === undefined) return { ...counts, entryCount: 0 };
     const entries: PrunableEntry[] = [];
     for (const name of readdirSync(this.root)) {
       if (INTERRUPTED_ENTRY.test(name)) {
@@ -389,7 +394,7 @@ class Store {
     input: Parameters<RetainedSessionStore["checkout"]>[0],
   ): CheckoutResult {
     const source = join(entry, DATABASE_FILE);
-    if (fileSize(source) !== manifest.databaseBytes) {
+    if (fileSize(source, "retained") !== manifest.databaseBytes) {
       return this.refuse(input.binding.taskId, "integrity-failed");
     }
     // Exclusive: a file that is already there is not Keiko's to overwrite, and not to delete either.
@@ -451,20 +456,36 @@ class Store {
 
   private ensureRoot(): void {
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
-    const stat = lstatSync(this.root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("retained-root-invalid");
+    const stat = this.existingRoot();
+    if (stat === undefined) throw new Error("retained-root-invalid");
     if ((stat.mode & 0o077) !== 0) chmodSync(this.root, 0o700);
+  }
+
+  // Recheck at every public entry: a root accepted during retain may have been redirected since.
+  // This rejects an existing link/junction; it is not descriptor-relative protection from races.
+  private existingRoot(): Stats | undefined {
+    let stat: Stats;
+    try {
+      stat = lstatSync(this.root);
+    } catch (error) {
+      if (isAbsentPath(error)) return undefined;
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("retained-root-invalid");
+    return stat;
   }
 
   private readManifest(entry: string): RetainedSessionManifest | undefined {
     const path = join(entry, MANIFEST_FILE);
-    const size = fileSize(path);
-    if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
     try {
+      const directory = lstatSync(entry);
+      if (!directory.isDirectory() || directory.isSymbolicLink()) return undefined;
+      const size = fileSize(path, "retained");
+      if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
       return parseManifest(JSON.parse(readFileSync(path, "utf8")) as unknown);
     } catch (error) {
       // Text that is not JSON is a manifest that cannot be trusted; an unreadable file is a failure.
-      if (error instanceof SyntaxError) return undefined;
+      if (error instanceof SyntaxError || isAbsentPath(error)) return undefined;
       throw error;
     }
   }
@@ -613,10 +634,12 @@ function validManifestEvidence(manifest: RetainedSessionManifest): boolean {
   );
 }
 
-function fileSize(path: string): number | undefined {
+function fileSize(path: string, kind: "source" | "retained" = "source"): number | undefined {
   try {
-    const stat = statSync(path);
-    return stat.isFile() ? stat.size : undefined;
+    // Stored entries are private copies: never read through a final link or a second file name.
+    // The runtime-owned source retains its existing read-only input semantics.
+    const stat = kind === "retained" ? lstatSync(path) : statSync(path);
+    return stat.isFile() && (kind !== "retained" || stat.nlink === 1) ? stat.size : undefined;
   } catch (error) {
     // Only an absent path is "no file"; a path that cannot be examined is a failure.
     if (isAbsentPath(error)) return undefined;

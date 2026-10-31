@@ -21,10 +21,74 @@ on:
       - "scripts/**"
       - "src/**"
   workflow_dispatch:
+    inputs:
+      published_install:
+        description: "Also verify the published root package with npm, npx and Yarn on Windows x64 and Intel macOS"
+        type: boolean
+        default: false
 
 permissions: {}
 
 jobs:
+  published-install:
+    if: github.event_name == 'workflow_dispatch' && inputs.published_install
+    name: Published package on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, macos-15-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify native hardware and published artifact identity
+        shell: pwsh
+        run: |
+          node scripts/check-runtime-toolchain.mjs --exact
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((node -p process.arch) -ne 'x64') { throw 'Expected an x64 Node runtime' }
+          if ($IsMacOS) {
+            if ((uname -m) -ne 'x86_64' -or (sysctl -n machdep.cpu.brand_string) -notmatch 'Intel') { throw 'Expected an Intel Mac' }
+            sw_vers
+            sysctl -n machdep.cpu.brand_string
+          } else {
+            Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture
+          }
+          $spec = node -p "const p=require('./package.json'); p.name+'@'+p.version"
+          npm view $spec name version dist.integrity gitHead --json --registry=https://registry.npmjs.org/
+      - name: Install the published package into fresh npm and pinned Yarn projects
+        shell: pwsh
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run build:packages
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run smoke:registry-install -- --qualify-ui
+      - name: Execute the pinned published CLI with npx
+        shell: pwsh
+        run: |
+          $manifest = Get-Content package.json -Raw | ConvertFrom-Json
+          $spec = "$($manifest.name)@$($manifest.version)"
+          $temp = Join-Path $env:RUNNER_TEMP ("keiko-published-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $temp | Out-Null
+          Push-Location -LiteralPath $temp
+          try {
+            $env:npm_config_cache = Join-Path $temp 'cache'
+            $env:npm_config_registry = 'https://registry.npmjs.org/'
+            $out = npx --yes "--package=$spec" -- keiko --version
+            if ($LASTEXITCODE -or ($out -join [char]10) -notmatch ("(?<![\d.])" + [regex]::Escape($manifest.version) + "(?![\d.])")) {
+              throw 'Published npx CLI did not report the requested version'
+            }
+            Write-Output "Published npx CLI passed for $spec"
+          } finally { Pop-Location }
   qualify:
     name: Qualify staged Coding Workbench on macOS 15
     runs-on: macos-15

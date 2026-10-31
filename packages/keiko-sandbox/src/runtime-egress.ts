@@ -41,7 +41,7 @@ export interface LongLivedRuntimeSandboxRequest {
 
 export interface LongLivedRuntimeSandboxAttestation {
   readonly schemaVersion: 1;
-  readonly backend: SandboxBackend;
+  readonly backend: SandboxBackend | "windows-wfp";
   readonly platform: string;
   readonly networkEnforced: true;
   readonly policyKind: LongLivedRuntimeEgressPolicy["kind"];
@@ -115,6 +115,21 @@ export function verifyLongLivedRuntimeSandboxAttestation(
   );
 }
 
+/** The dedicated Windows supervisor consumes the original command and enforces this
+ * plan before resume. Only the pinned SCM launch path may select this planner. */
+export function planWindowsGatewayRuntimeSandbox(
+  request: LongLivedRuntimeSandboxRequest,
+): LongLivedRuntimeSandboxDecision {
+  if (!requestIsValid(request) || request.policy.kind !== "loopback-only")
+    return { kind: "fail-closed", reason: "policy-unenforceable" };
+  return {
+    kind: "wrapped",
+    command: request.command,
+    args: request.args,
+    attestation: attestation(request, "windows-wfp", "win32"),
+  };
+}
+
 function attestationIsStructurallyValid(
   candidate: unknown,
 ): candidate is LongLivedRuntimeSandboxAttestation {
@@ -135,12 +150,21 @@ function attestationIsStructurallyValid(
   ];
   return (
     value.schemaVersion === 1 &&
-    isSandboxBackend(value.backend) &&
+    validRuntimeBackend(value) &&
     value.networkEnforced === true &&
     isPolicyKind(value.policyKind) &&
     requiredStrings.every((entry) => typeof entry === "string") &&
     isOptionalDirectEgress(value.directEgress) &&
     optionalStrings.every(isOptionalString)
+  );
+}
+
+function validRuntimeBackend(value: Record<string, unknown>): boolean {
+  return (
+    isSandboxBackend(value.backend) ||
+    (value.backend === "windows-wfp" &&
+      value.platform === "win32" &&
+      value.policyKind === "loopback-only")
   );
 }
 
@@ -238,7 +262,7 @@ function selectRuntimeBackend(
 
 function attestation(
   request: LongLivedRuntimeSandboxRequest,
-  backend: Exclude<SandboxBackend, "none">,
+  backend: Exclude<LongLivedRuntimeSandboxAttestation["backend"], "none">,
   platform: NodeJS.Platform,
 ): LongLivedRuntimeSandboxAttestation {
   return Object.freeze({

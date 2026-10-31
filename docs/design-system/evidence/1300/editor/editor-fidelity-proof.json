@@ -109,7 +109,7 @@
     },
     {
       "path": "scripts/lib/host-executable.mjs",
-      "sha256": "bd0f5e8cb05c8f3e5c57414c6da6e437b1b3848400d2b101bd0e6f8eff494d86"
+      "sha256": "bcf519f7f10372d45fcf5f5052a366b94f11f4f723269dca1f370d3d4d31f157"
     },
     {
       "path": "scripts/lib/ui-browser-evidence.mjs",
@@ -132,8 +132,8 @@
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-10-31T00:21:52.911Z",
-    "repoHeadSha": "03310922459fa3ca7dce4070d2434506161ecf6c"
+    "generatedAt": "2026-10-31T15:50:47.027Z",
+    "repoHeadSha": "f564a1de40b7484b9b2942650ae915160eecdb03"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {

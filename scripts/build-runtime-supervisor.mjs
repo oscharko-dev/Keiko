@@ -7,6 +7,20 @@ import { buildCompilerEnvironment } from "./build-secure-workspace-read.mjs";
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.mjs";
 
 const WINDOWS_SOURCE = resolve("native/runtime-supervisor/windows/keiko_runtime_supervisor.c");
+export const windowsGatewaySources = [
+  "gateway_installed",
+  "gateway_service",
+  "gateway_peer",
+  "gateway_request",
+  "gateway_wfp",
+].map((name) => resolve(dirname(WINDOWS_SOURCE), name + ".c"));
+export const windowsGatewayLibraries = [
+  "advapi32.lib",
+  "userenv.lib",
+  "fwpuclnt.lib",
+  "rpcrt4.lib",
+  "ws2_32.lib",
+];
 const LINUX_SOURCE = resolve("native/runtime-supervisor/linux/keiko_runtime_supervisor.c");
 const MACOS_SOURCE = resolve("native/runtime-supervisor/macos/keiko_runtime_supervisor.c");
 const MACOS_EXTENSION_ROOT = resolve("native/runtime-supervisor/macos/system-extension");
@@ -31,11 +45,14 @@ function compilerInvocation(argv) {
         "/D_UNICODE",
         "/D_CRT_SECURE_NO_WARNINGS",
         `/Fe:${output}`,
+        `/Fo:${dirname(output)}\\`,
         WINDOWS_SOURCE,
+        ...windowsGatewaySources,
         "/link",
         // Restrict implicit DLL dependencies before the first instruction runs; wmain's own
         // SetDefaultDllDirectories call only governs later dynamic loads.
         "/DEPENDENTLOADFLAG:0x800",
+        ...windowsGatewayLibraries,
       ],
       compiler: "cl",
       output,
@@ -43,28 +60,31 @@ function compilerInvocation(argv) {
     };
   }
   if (target === "linux-x64") return linuxCompilerInvocation(target, output);
-  if (target === "macos-arm64" || target === "macos-x64") {
-    return {
-      args: [
-        "clang",
-        "-std=c11",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-        "-O2",
-        "-D_DARWIN_C_SOURCE",
-        "-arch",
-        target === "macos-arm64" ? "arm64" : "x86_64",
-        "-o",
-        output,
-        MACOS_SOURCE,
-      ],
-      compiler: "xcrun",
-      output,
-      target,
-    };
-  }
+  if (target === "macos-arm64" || target === "macos-x64")
+    return macosCompilerInvocation(target, output);
   return undefined;
+}
+
+function macosCompilerInvocation(target, output) {
+  return {
+    args: [
+      "clang",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-O2",
+      "-D_DARWIN_C_SOURCE",
+      "-arch",
+      target === "macos-arm64" ? "arm64" : "x86_64",
+      "-o",
+      output,
+      MACOS_SOURCE,
+    ],
+    compiler: "xcrun",
+    output,
+    target,
+  };
 }
 
 function linuxCompilerInvocation(target, output) {

@@ -354,6 +354,33 @@ export function shellCommandForTrustedExecutable(executable, platform = process.
   return platform === "win32" ? `"${executable}"` : executable;
 }
 
+/** Build a shell-free invocation from an npm executable resolved by this module. */
+export function hostNpmInvocation(
+  executable,
+  {
+    platform = process.platform,
+    runtimeExecutable = process.execPath,
+    workspaceRoot = repoRoot,
+  } = {},
+) {
+  if (platform !== "win32") return { command: executable, args: [] };
+  // Windows cannot spawn npm.cmd directly. Use its installed CLI, never npm_execpath from the
+  // environment. Keep both the workspace exclusion and containment within the selected npm tree.
+  const npmRoot = dirname(executable);
+  const cli = trustedCandidate(
+    join(npmRoot, "node_modules", "npm", "bin", "npm-cli.js"),
+    workspaceRoot,
+    runtimeExecutable,
+    platform,
+    [],
+    [],
+  );
+  if (cli === undefined || !isContained(npmRoot, cli) || !statSync(cli).isFile()) {
+    throw new Error("trusted host npm CLI is unavailable");
+  }
+  return { command: runtimeExecutable, args: [cli] };
+}
+
 function resolveFromPath(
   path,
   names,

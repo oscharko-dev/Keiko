@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -15,6 +18,15 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
+  createStateCodingSessionContinuity,
+  retainedSessionRoot,
+} from "./codingSessionContinuity.js";
 import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 import {
   auditDatabase,
@@ -273,6 +285,46 @@ describe("retaining a settled run's session state", () => {
     }
   });
 
+  it("retains only committed WAL state while another connection holds a write transaction", () => {
+    const f = fixture();
+    const writer = new DatabaseSync(f.source);
+    try {
+      writer.exec("PRAGMA journal_mode=WAL");
+      writer.exec("BEGIN IMMEDIATE");
+      writer
+        .prepare("INSERT INTO session_message (id, session_id, data) VALUES (?, ?, ?)")
+        .run("msg_uncommitted", SESSION_ID, "UNCOMMITTED-CONTENT");
+
+      expect(retain(f)).toMatchObject({ ok: true, messageCount: 3 });
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 3 });
+      writer.exec("COMMIT");
+      expect(retain(f)).toMatchObject({ ok: true, messageCount: 4 });
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 4 });
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("preserves the previous entry on an exclusive database lock and recovers after release", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const previousDatabase = sha256(join(entryDirectory(f), "opencode.db"));
+    const previousManifest = sha256(join(entryDirectory(f), "manifest.json"));
+    const writer = new DatabaseSync(f.source);
+    try {
+      writer.exec("PRAGMA journal_mode=DELETE");
+      writer.exec("BEGIN EXCLUSIVE");
+      expect(() => retain(f)).toThrow(expect.objectContaining({ errcode: 5 }));
+      expect(sha256(join(entryDirectory(f), "opencode.db"))).toBe(previousDatabase);
+      expect(sha256(join(entryDirectory(f), "manifest.json"))).toBe(previousManifest);
+      expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 3 });
+    } finally {
+      writer.close();
+    }
+    expect(retain(f)).toMatchObject({ ok: true, messageCount: 3 });
+  });
+
   it.each([
     ["a saved permission grant", { rows: { permission: 1 } }, "grant-present"],
     [
@@ -470,6 +522,42 @@ describe("retaining a settled run's session state", () => {
     expect(readdirSync(join(f.root, "elsewhere"))).toEqual([]);
   });
 
+  it.runIf(process.platform === "win32")(
+    "refuses a Windows directory junction as the store root",
+    () => {
+      const f = fixture();
+      const target = join(f.root, "elsewhere");
+      mkdirSync(target);
+      symlinkSync(target, f.storeRoot, "junction");
+
+      expect(() => retain(f)).toThrow("retained-root-invalid");
+      expect(readdirSync(target)).toEqual([]);
+    },
+  );
+
+  it.each(["checkout", "prune", "remove"] as const)(
+    "refuses a redirected retention root during %s without touching its target",
+    (operation) => {
+      const f = fixture();
+      expect(retain(f)).toMatchObject({ ok: true });
+      const target = join(f.root, "redirected");
+      renameSync(f.storeRoot, target);
+      symlinkSync(target, f.storeRoot, process.platform === "win32" ? "junction" : "dir");
+      const entry = join(target, retainedSessionKey("task-1"));
+      const databaseBefore = sha256(join(entry, "opencode.db"));
+      const manifestBefore = sha256(join(entry, "manifest.json"));
+
+      expect(() => {
+        if (operation === "checkout") return checkout(f);
+        if (operation === "prune") return f.store.prune(() => false);
+        f.store.remove("task-1");
+      }).toThrow("retained-root-invalid");
+      expect(sha256(join(entry, "opencode.db"))).toBe(databaseBefore);
+      expect(sha256(join(entry, "manifest.json"))).toBe(manifestBefore);
+      expect(readdirSync(target)).toEqual([retainedSessionKey("task-1")]);
+    },
+  );
+
   it("throws, rather than reporting a missing database, when the source cannot be examined", () => {
     const f = fixture();
 
@@ -486,6 +574,90 @@ describe("retaining a settled run's session state", () => {
 });
 
 describe("checking a retained entry out for a resuming run", () => {
+  it("records startup removal of a redirected entry without exposing or changing its target", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const target = join(f.root, "outside-entry");
+    renameSync(entryDirectory(f), target);
+    const before = sha256(join(target, "opencode.db"));
+    symlinkSync(target, entryDirectory(f), process.platform === "win32" ? "junction" : "dir");
+    mkdirSync(join(f.root, "coding-runtime"));
+    renameSync(f.storeRoot, retainedSessionRoot(f.root));
+    const log = createBufferedServerLogSink();
+
+    createStateCodingSessionContinuity({
+      stateDir: f.root,
+      retention: undefined,
+      history: { get: () => ({}), forRun: () => undefined },
+      activityLog: log,
+    });
+
+    expect(readdirSync(retainedSessionRoot(f.root))).toEqual([]);
+    expect(sha256(join(target, "opencode.db"))).toBe(before);
+    expect(log.events).toHaveLength(1);
+    const [event] = log.events;
+    expect(event).toMatchObject({
+      op: "coding-runtime.session-continuity",
+      correlationId: "session-retention-startup",
+      extra: { action: "prune", outcome: "pruned", prunedCount: 1, entryCount: 0 },
+    });
+    expectActivityLogProof(
+      "coding-runtime.session-continuity.emitted-line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(JSON.stringify(event)).not.toContain(f.root);
+  });
+
+  it.each(["checkout", "prune"] as const)(
+    "refuses a redirected retained entry during %s without traversing its target",
+    (operation) => {
+      const f = fixture();
+      expect(retain(f)).toMatchObject({ ok: true });
+      const entry = entryDirectory(f);
+      const target = join(f.root, "outside-entry");
+      renameSync(entry, target);
+      symlinkSync(target, entry, process.platform === "win32" ? "junction" : "dir");
+      const databaseBefore = sha256(join(target, "opencode.db"));
+      const manifestBefore = sha256(join(target, "manifest.json"));
+
+      if (operation === "checkout") {
+        const { result, destination } = checkout(f);
+        expect(result).toEqual({ ok: false, reason: "integrity-failed", removed: true });
+        expect(existsSync(destination)).toBe(false);
+      } else {
+        expect(f.store.prune()).toMatchObject({ invalid: 1, entryCount: 0 });
+      }
+      expect(existsSync(entry)).toBe(false);
+      expect(sha256(join(target, "opencode.db"))).toBe(databaseBefore);
+      expect(sha256(join(target, "manifest.json"))).toBe(manifestBefore);
+    },
+  );
+
+  it.each([
+    ["manifest.json", 0o600],
+    ["opencode.db", 0o600],
+    ["manifest.json", 0o400],
+    ["opencode.db", 0o400],
+  ] as const)(
+    "refuses a retained %s with another hard link at mode %i without changing that file",
+    (name, mode) => {
+      const f = fixture();
+      expect(retain(f)).toMatchObject({ ok: true });
+      const outside = join(f.root, `outside-${name}`);
+      linkSync(join(entryDirectory(f), name), outside);
+      chmodSync(outside, mode);
+      const before = sha256(outside);
+      const modeBefore = statSync(outside).mode;
+
+      const { result, destination } = checkout(f);
+      expect(result).toEqual({ ok: false, reason: "integrity-failed", removed: true });
+      expect(existsSync(destination)).toBe(false);
+      expect(existsSync(entryDirectory(f))).toBe(false);
+      expect(sha256(outside)).toBe(before);
+      expect(statSync(outside).mode).toBe(modeBefore);
+    },
+  );
+
   it("places a verified copy and reports the session and its age, never its content", () => {
     const f = fixture();
     retain(f);

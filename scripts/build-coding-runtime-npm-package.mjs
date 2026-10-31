@@ -40,7 +40,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { runSecureWorkspaceReadBuild } from "./build-secure-workspace-read.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
 import { prepareApprovedSidecarPayloads } from "./prepare-approved-sidecar-payloads.mjs";
 import { hashHelperSourceTree } from "./stage-dev-coding-runtime.mjs";
 import {
@@ -404,10 +404,19 @@ function runtimeCandidateReceipt({
   };
 }
 
-function packRuntimeCandidate(packageDir, artifactDir) {
+export function packRuntimeCandidate(packageDir, artifactDir) {
+  const npm = hostNpmInvocation(resolveHostExecutable("npm"));
   const result = execFileSync(
-    resolveHostExecutable("npm"),
-    ["pack", packageDir, "--ignore-scripts", "--json", "--pack-destination", artifactDir],
+    npm.command,
+    [
+      ...npm.args,
+      "pack",
+      packageDir,
+      "--ignore-scripts",
+      "--json",
+      "--pack-destination",
+      artifactDir,
+    ],
     { cwd: repoRoot, encoding: "utf8", timeout: 120_000, maxBuffer: NPM_PACK_STDIO_MAX_BUFFER },
   );
   return JSON.parse(result).at(0);

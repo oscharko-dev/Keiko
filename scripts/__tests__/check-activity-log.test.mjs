@@ -189,6 +189,7 @@ describe("the Activity Log gate command", () => {
           return result;
         },
         () => "/trusted/npm",
+        { platform: "linux" },
       )("check:op-catalog");
     expect(outcome({ status: 0, signal: null })).toBe(true);
     expect(calls[0]).toEqual({
@@ -201,6 +202,26 @@ describe("the Activity Log gate command", () => {
     expect(outcome({ status: null, signal: null, error: new Error("spawn npm ENOENT") })).toBe(
       false,
     );
+  });
+
+  it("runs Windows npm through Node with literal paths and preserves the child exit status", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko npm & %PATH% ü "));
+    try {
+      const cliDirectory = join(root, "node_modules", "npm", "bin");
+      mkdirSync(cliDirectory, { recursive: true });
+      const wrapper = join(root, "npm.cmd");
+      writeFileSync(wrapper, "@exit /b 99\r\n", { mode: 0o755 });
+      writeFileSync(
+        join(cliDirectory, "npm-cli.js"),
+        'process.exit(process.argv[2] === "run" && process.argv[3] === "fixture:pass" ? 0 : 7);\n',
+        { mode: 0o755 },
+      );
+      const run = npmScriptRunner(spawnSync, () => wrapper, { platform: "win32" });
+      expect(run("fixture:pass")).toBe(true);
+      expect(run("fixture:fail")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

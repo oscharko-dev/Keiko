@@ -2087,13 +2087,49 @@ async function assertWindowsPolicies(binary, fixture) {
       `Windows path policy mismatch for ${JSON.stringify(denied)}`,
     );
   }
-  for (const invalidRoot of ["C:relative", String.raw`\\server\share`, "relative"]) {
+  const invalidRoots = [
+    "C:relative",
+    "\\\\server\\share",
+    "relative",
+    "\\\\?\\" + fixture,
+    "\\\\.\\" + fixture,
+    "\\??\\" + fixture,
+  ];
+  for (const invalidRoot of invalidRoots) {
     assert.equal(
       response(await run(binary, request(invalidRoot, "safe.txt"))).status,
       1,
       `Windows root policy mismatch for ${JSON.stringify(invalidRoot)}`,
     );
   }
+  await assertWindowsPathSpellings(binary, fixture);
+}
+
+async function assertWindowsPathSpellings(binary, fixture) {
+  const directory = "Windows Pfade 東京";
+  const root = join(fixture, directory);
+  const name = "Grüße 東京.txt";
+  await mkdir(root);
+  await writeFile(join(root, name), SAFE_TEXT);
+  await writeFile(join(root, "Case Probe.txt"), SAFE_TEXT);
+  await writeFile(join(root, "Case Probe.txt:private"), "ALTERNATE_STREAM_CANARY");
+  // Compare returned bytes, not only a success code: aliases must resolve the intended file.
+  assertSafeResult(await run(binary, request(root, name)));
+  assertSafeResult(await run(binary, request(root, "case probe.TXT")));
+  assertSafeResult(await run(binary, request(join(fixture.toUpperCase(), directory), name)));
+  assertSafeResult(await run(binary, request(root.replaceAll("\\", "/"), name)));
+  assert.equal(response(await run(binary, request(root, "Case Probe.txt:private"))).status, 3);
+
+  const segments = Array.from({ length: 3 }, (_, index) => "long" + index + "-".repeat(90));
+  const longDirectory = join(root, ...segments);
+  await mkdir(longDirectory, { recursive: true });
+  await writeFile(join(longDirectory, name), SAFE_TEXT);
+  const relative = [...segments, name].join("/");
+  assert.ok(join(root, relative).length > 260, "long-path fixture must exceed legacy MAX_PATH");
+  assertSafeResult(await run(binary, request(root, relative)));
+  console.log(
+    "secure-workspace-read Windows paths: spaces/unicode, case/root aliases, long path and ADS refusal passed",
+  );
 }
 
 function assertRaceResult(result, label) {
@@ -2287,6 +2323,8 @@ function assertKnownGeneration(result, generations) {
 
 async function assertFileGenerationConsistency(binary, fixture) {
   const target = join(fixture, "concurrent-generation.txt");
+  const staging = join(fixture, "concurrent-staging");
+  await mkdir(staging);
   const generations = [
     Buffer.from(`${"a".repeat(2_584)}\n`),
     Buffer.from(`${"b".repeat(32_767)}\n`),
@@ -2301,7 +2339,10 @@ async function assertFileGenerationConsistency(binary, fixture) {
   await runConcurrentUpdater(
     "file-generation",
     async (attempt) => {
-      const staged = join(fixture, `.concurrent-generation-${attempt}.tmp`);
+      // Keep staging churn outside the reader's ancestor chain. On Windows the helper denies
+      // target replacement while reading; creating/removing an unrelated sibling still changes
+      // the observed root and correctly refuses every read, hiding that sharing protection.
+      const staged = join(staging, `.concurrent-generation-${attempt}.tmp`);
       await writeFile(staged, generations[attempt % generations.length]);
       try {
         await rename(staged, target);
@@ -2326,6 +2367,7 @@ async function assertFileGenerationConsistency(binary, fixture) {
       "reads observed a known generation — a helper that fails closed under all contention would " +
       "satisfy every other assertion in this suite",
   );
+  console.log(`secure-workspace-read consistency: knownGenerationReads=${successfulReads}`);
 }
 
 async function assertAncestorAliasConsistency(binary, fixture, outside) {

@@ -63,7 +63,7 @@ describe("the resolver the guard relies on", () => {
     });
 
     expect(unresolvableImports("scripts/entry.mjs", root)).toEqual([
-      { from: "packages/x/src/lib.ts", specifier: "./dep.js" },
+      { from: join("packages", "x", "src", "lib.ts"), specifier: "./dep.js" },
     ]);
   });
 
@@ -91,7 +91,7 @@ describe("the resolver the guard relies on", () => {
     });
 
     expect(unresolvableImports("scripts/entry.mjs", root)).toEqual([
-      { from: "scripts/bridge.cjs", specifier: "./missing.cjs" },
+      { from: join("scripts", "bridge.cjs"), specifier: "./missing.cjs" },
     ]);
   });
 

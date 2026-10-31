@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatMessage,
@@ -161,7 +161,7 @@ describe("coding task export document", () => {
   it("names the repository folder only and never carries the workspace location", () => {
     const { response } = built(detail([message(1, "hello")]), "json");
     const document = JSON.parse(response.content) as CodingTaskExportDocument;
-    expect(document.task.repository).toBe(workspace.split("/").at(-1));
+    expect(document.task.repository).toBe(basename(workspace));
     expect(response.content).not.toContain(workspace);
     expect(Object.keys(document.task)).not.toContain("projectPath");
     expect(Object.keys(document.task)).not.toContain("modelId");
