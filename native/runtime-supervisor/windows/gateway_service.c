@@ -132,7 +132,7 @@ static BOOL tree_matches(HANDLE job, PSID expected_sid) {
   return ok;
 }
 
-static void serve(HANDLE pipe, HANDLE image) {
+static DWORD serve(HANDLE pipe, HANDLE image) {
   BYTE hello[4], frame[KEIKO_GATEWAY_OPEN_BYTES], nonce[CHALLENGE_SIZE];
   BYTE ack[4 + CHALLENGE_SIZE] = {'K','G','A','1'};
   struct keiko_gateway_peer peer = {0};
@@ -142,6 +142,7 @@ static void serve(HANDLE pipe, HANDLE image) {
   HANDLE source = NULL, job = NULL;
   PSID sid = NULL;
   BOOL owned = FALSE;
+  DWORD cleanup = ERROR_SUCCESS;
   if (!transfer(pipe, hello, sizeof(hello), FALSE, stopping) || memcmp(hello, "KGH1", 4) ||
       keiko_gateway_peer_authenticate(pipe, image, &peer) != ERROR_SUCCESS ||
       keiko_gateway_challenge_issue(&challenge) != ERROR_SUCCESS) goto done;
@@ -170,13 +171,17 @@ done:
   if (owned) {
     (void)TerminateJobObject(job, 137);
     /* Retain durable denies if termination cannot be verified within the shutdown budget. */
-    for (unsigned i = 0; i < 100 && keiko_gateway_filters_close(&filters) == ERROR_BUSY; i++)
+    for (unsigned i = 0; i < 100; i++) {
+      cleanup = keiko_gateway_filters_close(&filters);
+      if (cleanup != ERROR_BUSY) break;
       Sleep(20);
+    }
   }
   if (job) CloseHandle(job);
   if (source) CloseHandle(source);
   if (sid) FreeSid(sid);
   keiko_gateway_peer_close(&peer);
+  return cleanup;
 }
 
 static BOOL accept_client(HANDLE pipe) {
@@ -242,10 +247,12 @@ static void WINAPI service_main(DWORD argc, LPWSTR *argv) {
   if (pipe == INVALID_HANDLE_VALUE) { error = GetLastError(); goto done; }
   report(SERVICE_RUNNING, ERROR_SUCCESS);
   while (WaitForSingleObject(stopping, 0) == WAIT_TIMEOUT && accept_client(pipe)) {
-    serve(pipe, image);
+    error = serve(pipe, image);
     DisconnectNamedPipe(pipe);
+    if (error != ERROR_SUCCESS) break;
   }
-  if (WaitForSingleObject(stopping, 0) != WAIT_OBJECT_0) error = ERROR_BROKEN_PIPE;
+  if (error == ERROR_SUCCESS && WaitForSingleObject(stopping, 0) != WAIT_OBJECT_0)
+    error = ERROR_BROKEN_PIPE;
 done:
   free(path);
   if (pipe && pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);

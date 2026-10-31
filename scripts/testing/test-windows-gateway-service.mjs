@@ -1,10 +1,11 @@
 // Exercises the installed SCM image through the native control protocol on Windows.
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import {
   launchPacket,
   response,
@@ -15,6 +16,7 @@ import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../lib/windows-msvc.
 const [operation, helper] = process.argv.slice(2);
 const root = dirname(helper);
 const probe = join(root, "gateway-service-probe.exe");
+const observe = promisify(execFile);
 
 if (operation === "build") {
   const env = resolveWindowsMsvcEnv();
@@ -32,6 +34,8 @@ if (operation === "build") {
       resolve("native/runtime-supervisor/windows/gateway_service.test.c"),
       "/link",
       "/DEPENDENTLOADFLAG:0x800",
+      "fwpuclnt.lib",
+      "advapi32.lib",
     ],
     { env, stdio: "inherit" },
   );
@@ -78,14 +82,15 @@ async function qualify(valid, unavailable = false) {
   try {
     child.stdio[3].write(launchPacket(probe, root, [["SystemRoot", process.env.SystemRoot]], []));
     if (!unavailable) {
-      const observer = spawnSync(probe, ["--observe"], { encoding: "utf8", timeout: 6000 });
-      assert.equal(observer.status, 0, "no suspended root observed in the named job");
+      await observe(probe, ["--observe"], { timeout: 6000, windowsHide: true });
       await delay(150);
       assert.equal(output.length, 0, "child ran before policy submission");
       child.stdio[3].write(frame(valid));
     }
     assert.equal((await response(responses)).kind, valid ? 1 : 3);
     if (valid) {
+      await observe(probe, ["--inspect-filters"], { timeout: 6000, windowsHide: true });
+      child.stdin.end("X\n");
       const reap = await response(responses);
       assert.equal(reap.kind, 2);
       assert.equal(reap.payload.readUInt32LE(0), 0);
