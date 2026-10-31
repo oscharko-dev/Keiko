@@ -18,7 +18,8 @@ export function fireVoiceTimeoutAtFloor(): MockInstance<typeof AbortSignal.timeo
 /** A fetch body that fails the way a fetch on an already-fired signal does. */
 export function rethrowAbortedRequest(_url: string, init: RequestInit): never {
   if (init.signal?.aborted === true) {
-    throw init.signal.reason as Error;
+    const reason: unknown = init.signal.reason;
+    throw reason instanceof Error ? reason : new Error("the aborted signal carried no error");
   }
   throw new Error("the request should have carried an already-aborted signal");
 }
