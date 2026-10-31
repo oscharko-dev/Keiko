@@ -41,7 +41,7 @@ describe("reviewed runtime override ancestors", () => {
   });
 
   it.each([
-    ["key range narrower than the descriptor", { "leaf@^10": "11.0.3" }, ">=9.0.0"],
+    ["key range narrower than the descriptor", { "leaf@^10": "11.0.3" }, ">=9.0.0 <11.0.0"],
     ["key range disjoint from the descriptor", { "leaf@^9": "11.0.3" }, "^10.2.1"],
     ["invalid key range", { "leaf@not-a-range": "11.0.3" }, "^10.2.1"],
     ["another package's key", { "leafy@^10": "11.0.3" }, "^10.2.1"],
