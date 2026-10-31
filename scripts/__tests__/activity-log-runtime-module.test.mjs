@@ -188,6 +188,26 @@ describe("generated field construction preservation", () => {
     });
   });
 
+  it("renders constructor runs and repeated larger field sets once without repeating them", () => {
+    const source = runtimeOperationsModule(catalog.typedRegistry);
+    const single = /"\w+": (activityLog(?:Count|Duration|Boolean)Field\((?:true|false)\))/gu;
+    const calls = [...source.matchAll(single)];
+    const repeated = calls.some(
+      (call, index) =>
+        index >= 2 &&
+        call[1] === calls[index - 1]?.[1] &&
+        call[1] === calls[index - 2]?.[1] &&
+        source.slice(calls[index - 2].index, call.index).split(",").length === 3,
+    );
+    expect(repeated).toBe(false);
+    expect(source).toContain("...activityLogCountFields(false, [");
+    const factories = [...source.matchAll(/const (sharedOperationFields\d+) = \(\) =>/gu)];
+    expect(factories.length).toBeGreaterThan(0);
+    for (const [, name] of factories) {
+      expect(source.split(`${name}()`).length - 1).toBeGreaterThan(1);
+    }
+  });
+
   it("retains independent descriptor and enum occurrences with ordinary mutable properties", () => {
     withGeneratedRuntime(
       ({ inspection }) => {

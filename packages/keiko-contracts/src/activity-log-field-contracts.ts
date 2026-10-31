@@ -142,6 +142,53 @@ export function activityLogBooleanField<const Required extends boolean>(
   return { type: "boolean", dataClass: "closed-enum", required };
 }
 
+/** One contract per listed field name, in list order; the generated registry spreads runs of these. */
+type ActivityLogFieldRun<Names extends readonly string[], Contract> = Readonly<
+  Record<Names[number], Contract>
+>;
+
+function activityLogFieldRun<const Names extends readonly string[], Contract>(
+  names: Names,
+  contract: () => Contract,
+): ActivityLogFieldRun<Names, Contract> {
+  // SAFETY: `Object.fromEntries` creates exactly one own entry for every listed name, each holding
+  // a fresh contract of the one shared shape, so every key of the mapped record is present.
+  return Object.fromEntries(names.map((name) => [name, contract()])) as ActivityLogFieldRun<
+    Names,
+    Contract
+  >;
+}
+
+export function activityLogCountFields<
+  const Required extends boolean,
+  const Names extends readonly string[],
+>(
+  required: Required,
+  names: Names,
+): ActivityLogFieldRun<Names, Readonly<ActivityLogCountFieldContract<Required>>> {
+  return activityLogFieldRun(names, () => activityLogCountField(required));
+}
+
+export function activityLogDurationFields<
+  const Required extends boolean,
+  const Names extends readonly string[],
+>(
+  required: Required,
+  names: Names,
+): ActivityLogFieldRun<Names, Readonly<ActivityLogDurationFieldContract<Required>>> {
+  return activityLogFieldRun(names, () => activityLogDurationField(required));
+}
+
+export function activityLogBooleanFields<
+  const Required extends boolean,
+  const Names extends readonly string[],
+>(
+  required: Required,
+  names: Names,
+): ActivityLogFieldRun<Names, Readonly<ActivityLogBooleanFieldContract<Required>>> {
+  return activityLogFieldRun(names, () => activityLogBooleanField(required));
+}
+
 export function activityLogStringEnumField<
   const Required extends boolean,
   const Values extends readonly string[],

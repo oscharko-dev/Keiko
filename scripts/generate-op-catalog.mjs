@@ -98,6 +98,16 @@ import {
   activityLogBoundedStringField,
   activityLogBoundedStringArrayField,
 } from "../packages/keiko-contracts/dist/activity-log-field-contracts.js";
+
+// Consecutive fields built by one of these constructors with the same argument render as one
+// spread of the plural constructor, so the generated registry carries no repeated field runs.
+const FIELD_RUN_CONSTRUCTORS = {
+  activityLogCountField: "activityLogCountFields",
+  activityLogDurationField: "activityLogDurationFields",
+  activityLogBooleanField: "activityLogBooleanFields",
+};
+const FIELD_RUN_MIN = 3;
+const FIELD_RUN_CALL = /^(activityLog(?:Count|Duration|Boolean)Field)\((true|false)\)$/u;
 import { ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS } from "../packages/keiko-contracts/dist/activity-log-failure-class-contracts.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { generateFailureSurfaceInventory } from "./lib/activity-log-failure-surface-inventory.mjs";
@@ -1876,6 +1886,28 @@ function renderedFieldDescriptor(descriptor) {
   return JSON.stringify(descriptor);
 }
 
+function renderedFieldRun(run) {
+  const [[, call]] = run;
+  const match = FIELD_RUN_CALL.exec(call);
+  if (match === null || run.length < FIELD_RUN_MIN)
+    return run.map(([name, value]) => `${JSON.stringify(name)}: ${value}`);
+  const names = run.map(([name]) => JSON.stringify(name)).join(", ");
+  return [`...${FIELD_RUN_CONSTRUCTORS[match[1]]}(${match[2]}, [${names}])`];
+}
+
+function renderedFieldEntries(entries) {
+  const rendered = entries.map(([name, descriptor]) => [name, renderedFieldDescriptor(descriptor)]);
+  const output = [];
+  let start = 0;
+  while (start < rendered.length) {
+    let end = start + 1;
+    while (end < rendered.length && rendered[end][1] === rendered[start][1]) end += 1;
+    output.push(...renderedFieldRun(rendered.slice(start, end)));
+    start = end;
+  }
+  return output;
+}
+
 function matchesOrderedFieldContracts(fields, expected) {
   const keys = Reflect.ownKeys(expected);
   const actualKeys = Reflect.ownKeys(fields);
@@ -1917,12 +1949,8 @@ function renderedCommitDraftRuntimeFields(operation, fields) {
     ...layout.trailing,
   };
   if (!matchesOrderedFieldContracts(fields, expected)) return undefined;
-  const leading = Object.entries(layout.leading).map(
-    ([name, descriptor]) => `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`,
-  );
-  const trailing = Object.entries(layout.trailing).map(
-    ([name, descriptor]) => `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`,
-  );
+  const leading = renderedFieldEntries(Object.entries(layout.leading));
+  const trailing = renderedFieldEntries(Object.entries(layout.trailing));
   return `{${[...leading, "...activityLogCommitDraftModelFields()", ...trailing].join(",")}}`;
 }
 
@@ -1968,10 +1996,8 @@ function renderedWorkspaceIoRuntimeFields(operation, fields) {
     )
   )
     return undefined;
-  const render = ([name, descriptor]) =>
-    `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`;
-  const leading = entries.slice(0, start).map(render);
-  const trailing = entries.slice(start + segment.length).map(render);
+  const leading = renderedFieldEntries(entries.slice(0, start));
+  const trailing = renderedFieldEntries(entries.slice(start + segment.length));
   const renderedFields = [
     ...leading,
     `...activityLogWorkspaceIoFields(${String(required)})`,
@@ -1988,28 +2014,54 @@ function renderedRuntimeFields(operation, fields) {
   const prefix = ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS;
   const bundle = runtimeFieldBundle(operation, fields, prefix);
   if (bundle !== undefined) {
-    return `{${Object.entries(prefix)
-      .map(
-        ([name, descriptor]) => `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`,
-      )
-      .join(",")}, ...${bundle}()}`;
+    return `{${renderedFieldEntries(Object.entries(prefix)).join(",")}, ...${bundle}()}`;
   }
-  return `{${Object.entries(fields)
-    .map(([name, descriptor]) => `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`)
-    .join(",")}}`;
+  return `{${renderedFieldEntries(Object.entries(fields)).join(",")}}`;
 }
 
-function renderedRuntimeOperation(operation) {
+function renderedRuntimeOperation(operation, sharedFields) {
   return `{${Object.entries(runtimeOperationContract(operation))
     .map(([key, value]) => {
-      const rendered =
-        key === "fields" ? renderedRuntimeFields(operation, value) : JSON.stringify(value);
+      let rendered = JSON.stringify(value);
+      if (key === "fields") {
+        const fields = renderedRuntimeFields(operation, value);
+        rendered = sharedFields.has(fields) ? `${sharedFields.get(fields)}()` : fields;
+      }
       return `${JSON.stringify(key)}: ${rendered}`;
     })
     .join(",")}}`;
 }
 
+// A larger field set several operations declare identically is rendered once, as a factory, so
+// every operation still receives its own fresh field contracts and the module repeats no such set.
+const SHARED_FIELDS_MIN = 6;
+
+function sharedRuntimeFields(typedRegistry) {
+  const counts = new Map();
+  for (const operation of typedRegistry.operations) {
+    const contract = runtimeOperationContract(operation).fields;
+    if (Object.keys(contract).length < SHARED_FIELDS_MIN) continue;
+    const fields = renderedRuntimeFields(operation, contract);
+    counts.set(fields, (counts.get(fields) ?? 0) + 1);
+  }
+  const shared = new Map();
+  for (const [fields, count] of counts) {
+    if (count > 1) shared.set(fields, `sharedOperationFields${String(shared.size)}`);
+  }
+  return shared;
+}
+
 export function runtimeOperationsModule(typedRegistry) {
+  const sharedFields = sharedRuntimeFields(typedRegistry);
+  const operations = typedRegistry.operations
+    .map((operation) => renderedRuntimeOperation(operation, sharedFields))
+    .join(",\n");
+  const factories = [...sharedFields].map(
+    ([fields, name]) => `const ${name} = () => (${fields}) as const;`,
+  );
+  const runConstructors = Object.values(FIELD_RUN_CONSTRUCTORS).filter((name) =>
+    `${operations}${factories.join("")}`.includes(`...${name}(`),
+  );
   return [
     "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
     'import * as fieldContracts from "./activity-log-field-contracts.js";',
@@ -2019,8 +2071,10 @@ export function runtimeOperationsModule(typedRegistry) {
       ...Object.keys(FIELD_CONSTRUCTORS).filter(
         (name) => !Object.hasOwn(BOUNDED_FIELD_CONSTRUCTORS, name),
       ),
+      ...runConstructors,
     ].join(", ")} } from "./activity-log-field-contracts.js";`,
-    `export const ACTIVITY_LOG_OPERATION_REGISTRY = [${typedRegistry.operations.map(renderedRuntimeOperation).join(",\n")}] as const;`,
+    ...factories,
+    `export const ACTIVITY_LOG_OPERATION_REGISTRY = [${operations}] as const;`,
     "",
   ].join("\n");
 }
