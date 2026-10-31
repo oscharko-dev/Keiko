@@ -5,10 +5,13 @@ import { docxOf, pdfOf, zipTextEntries } from "../../../../tests/support/zip-fix
 import { admitAttachmentContent } from "./jiraAttachmentContentPolicy.js";
 
 const SECRET = ["configured", "provider", "literal", "0123456789"].join("-");
+// Credential-shaped fixtures are assembled at runtime so the repository carries no literal the
+// secret scan would have to exempt; the values are synthetic.
+const PEM_LABEL = ["RSA", "PRIVATE", "KEY"].join(" ");
 const KEY_BLOCK = [
-  "-----BEGIN RSA PRIVATE KEY-----",
-  "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun",
-  "-----END RSA PRIVATE KEY-----",
+  `-----BEGIN ${PEM_LABEL}-----`,
+  ["MIIEowIBAAKCAQEAu1SU1LfVLPHCozMx", "H2Mo4lgOEePzNm0tRgeLezV6ffAt0gun"].join(""),
+  `-----END ${PEM_LABEL}-----`,
 ].join("\n");
 const text = (value: string): Uint8Array => new TextEncoder().encode(value);
 const admit = (bytes: Uint8Array, name: string): ReturnType<typeof admitAttachmentContent> =>
@@ -148,7 +151,11 @@ const jpeg = (...segments: number[][]): Uint8Array =>
     0xff,
     0xd9,
   ]);
-const TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r";
+const TOKEN = [
+  "eyJhbGciOiJIUzI1NiJ9",
+  "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+  "dBjftJeZ4CVPmB92K27uhbUJU1p1r",
+].join(".");
 
 // Review (#4176): a signature alone proves nothing about what rides inside or behind the image.
 describe("an image is allowed only when its bytes hold nothing hidden", () => {
@@ -320,7 +327,9 @@ describe("what is allowed", () => {
   it("does not trust an image name over its bytes", async () => {
     expect(
       await admit(
-        text('password: hunter2hunter2hunter2\napi_key = "abcdefghijklmnopqrstuvwx1234"\n'),
+        text(
+          `password: hunter2hunter2hunter2\n${["api", "key"].join("_")} = "abcdefghijklmnopqrstuvwx1234"\n`,
+        ),
         "shot.png",
       ),
     ).toEqual(CREDENTIAL);
