@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/harness";
+import { chatToolTurnBudget } from "../chat-tool-turn-budget.js";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { MCP_CHAT_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import type {
@@ -32,6 +32,7 @@ export type McpChatAuthorityDeps = Pick<
   | "agentAuthorityRegistry"
   | "autonomousDeliveryDeploymentCeiling"
   | "atlassianActionApprovalRegistry"
+  | "chatToolTurnBudget"
 >;
 export type McpChatAuthorityEnvelope = ChatToolAuthorityEnvelope & {
   readonly subject: McpChatToolAuthoritySubject;
@@ -66,8 +67,8 @@ function currentSubject(
   return { kind: "configured-mcp", actorDigest, chatId, configurationDigest: settings.revision };
 }
 
-function validTurnLifetime(turn: AcceptedJiraChatTurn): boolean {
-  const deadline = turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs;
+function validTurnLifetime(deps: McpChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
+  const deadline = turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs;
   return (
     Number.isSafeInteger(turn.startedAtMs) &&
     Number.isSafeInteger(turn.nowMs) &&
@@ -80,7 +81,7 @@ function validTurnLifetime(turn: AcceptedJiraChatTurn): boolean {
 function acceptedTurn(deps: McpChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
   const message = deps.store.findMessageById(turn.userMessageId);
   return (
-    validTurnLifetime(turn) &&
+    validTurnLifetime(deps, turn) &&
     message?.role === "user" &&
     message.chatId === turn.chatId &&
     message.timestamp === turn.startedAtMs &&
@@ -107,13 +108,8 @@ function envelopeFor(
     effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
     actionClasses: ["connector-access", "network-egress"],
     connectorScopes: ["mcp.tools"],
-    budget: {
-      maxRuntimeMs: DEFAULT_LIMITS.maxWallTimeMs,
-      maxToolCalls: DEFAULT_LIMITS.maxToolCalls,
-      maxPromptTokens: 100_000,
-      maxPatchBytes: 0,
-    },
-    expiresAt: new Date(turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs).toISOString(),
+    budget: chatToolTurnBudget(deps),
+    expiresAt: new Date(turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs).toISOString(),
     approvalProofDigest: sha256Hex(
       canonicalise({
         runId,

@@ -536,14 +536,14 @@ const CHAT_TOOL_ERROR_RESPONSES: Readonly<
   failed: [503, "CHAT_TOOL_UNAVAILABLE", "Chat tools are currently unavailable."],
 };
 
-function catalogDispatchErrorResult(
+export function catalogDispatchErrorResult(
   error: CatalogDispatchFault,
   deps: UiHandlerDeps,
   correlationId: string | undefined,
   emitDiagnostic: boolean,
+  site: readonly [operation: string, source: string] = ["POST /api/desktop/chat", "chat.send"],
 ): RouteResult {
-  if (emitDiagnostic)
-    emitGatewayErrorDiagnostic(deps, error, correlationId, "POST /api/desktop/chat", "chat.send");
+  if (emitDiagnostic) emitGatewayErrorDiagnostic(deps, error, correlationId, ...site);
   const [status, code, message] = CHAT_TOOL_ERROR_RESPONSES[error.status];
   return { status, body: errorBody(code, message, correlationId) };
 }

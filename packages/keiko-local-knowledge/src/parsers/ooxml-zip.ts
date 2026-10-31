@@ -91,14 +91,6 @@ function openZip(bytes: Uint8Array, format: string): Promise<yauzl.ZipFile> {
   });
 }
 
-function closeZipQuietly(zip: yauzl.ZipFile): void {
-  try {
-    zip.close();
-  } catch {
-    // Close failures are non-fatal during parser cleanup.
-  }
-}
-
 function assertEntryDeclaredSize(entry: yauzl.Entry, plan: OoxmlZipReadPlan, total: number): void {
   if (entry.uncompressedSize > plan.maxEntryInflatedBytes) {
     throw new Error(`${plan.format} entry inflated size exceeds limit`);
@@ -209,39 +201,56 @@ async function inflateWantedEntry(
   progress.parts.set(entry.fileName, text);
 }
 
+interface EntryWalk {
+  readonly zip: yauzl.ZipFile;
+  readonly limits: ScanLimits;
+  readonly progress: ScanProgress;
+  /** Claims the single settlement; false once the read already settled. */
+  readonly claim: () => boolean;
+}
+
+async function walkEntry(
+  walk: EntryWalk,
+  entry: yauzl.Entry,
+  reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1],
+): Promise<void> {
+  const { zip, limits, progress } = walk;
+  progress.entriesSeen += 1;
+  const stop = scanStop(limits, progress.entriesSeen);
+  if (stop !== undefined) {
+    if (walk.claim()) reject(stop);
+    return;
+  }
+  try {
+    if (limits.plan.isWanted(entry.fileName)) {
+      await inflateWantedEntry(zip, entry, limits.plan, progress);
+    }
+    zip.readEntry();
+  } catch (error) {
+    // The entry failure rejects the whole read; the parser classifies it.
+    if (walk.claim()) reject(error);
+  }
+}
+
 function walkEntries(zip: yauzl.ZipFile, limits: ScanLimits): Promise<ReadonlyMap<string, string>> {
   const { plan } = limits;
   return new Promise((resolve, reject) => {
     const progress: ScanProgress = { parts: new Map(), entriesSeen: 0, totalInflated: 0 };
     let settled = false;
-    const finish = (error?: Error): void => {
-      if (settled) return;
+    const claim = (): boolean => {
+      if (settled) return false;
       settled = true;
-      if (error === undefined) resolve(progress.parts);
-      else reject(error);
+      return true;
     };
-    const handleEntry = async (entry: yauzl.Entry): Promise<void> => {
-      progress.entriesSeen += 1;
-      const stop = scanStop(limits, progress.entriesSeen);
-      if (stop !== undefined) {
-        finish(stop);
-        return;
-      }
-      try {
-        if (plan.isWanted(entry.fileName)) await inflateWantedEntry(zip, entry, plan, progress);
-        zip.readEntry();
-      } catch (error) {
-        finish(toError(error, `failed to read ${plan.format} entry`));
-      }
-    };
+    const walk: EntryWalk = { zip, limits, progress, claim };
     zip.on("entry", (entry: yauzl.Entry) => {
-      void handleEntry(entry);
+      void walkEntry(walk, entry, reject);
     });
     zip.once("end", () => {
-      finish();
+      if (claim()) resolve(progress.parts);
     });
     zip.once("error", (error: unknown) => {
-      finish(toError(error, `failed to read ${plan.format} zip`));
+      if (claim()) reject(toError(error, `failed to read ${plan.format} zip`));
     });
     zip.readEntry();
   });
@@ -262,6 +271,7 @@ export async function readOoxmlZipEntries(
   try {
     return await walkEntries(zip, { plan, options, startedAt });
   } finally {
-    closeZipQuietly(zip);
+    // A buffer-backed archive releases no descriptor; close only marks it closed.
+    zip.close();
   }
 }

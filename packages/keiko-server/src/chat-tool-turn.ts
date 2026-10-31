@@ -24,11 +24,18 @@ import type {
 } from "./tool-catalog/catalogToolPorts.js";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { createHarnessCatalogBudget, type ModelPort } from "@oscharko-dev/keiko-harness";
+import type { HarnessLimits } from "@oscharko-dev/keiko-contracts/runtime/harness";
+import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
+import { chatToolTurnLimits } from "./chat-tool-turn-budget.js";
 import {
-  DEFAULT_LIMITS,
-  createHarnessCatalogBudget,
-  type ModelPort,
-} from "@oscharko-dev/keiko-harness";
+  chatToolTurnEndReason,
+  chatToolTurnPartialAnswer,
+  recordChatToolTurnContextFitted,
+  recordChatToolTurnEnded,
+} from "./chat-tool-turn-ending.js";
+import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
+import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   findConfiguredCapability,
   toolCallingConfigurationFingerprint,
@@ -51,6 +58,9 @@ const TOOL_TURN_INSTRUCTION: GatewayMessage = {
     "When the user requests an operation supported by an offered tool, invoke the matching tool to request Keiko's required read consent or action approval. Keiko presents the actual consent or approval control and waits for any required decision before the effect. Asking for permission in prose does not open or replace those controls. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, consent, approval and budget checks remain binding.",
 };
 
+// Local estimates are not provider counts; the margin keeps the gateway's exact admission and its
+// one context-window retry as the authority.
+const CONTINUATION_WINDOW_SHARE = 0.8;
 type ModelAttempt = NonNullable<GatewayCallRequest["attemptAdmission"]>;
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly deps: Pick<UiHandlerDeps, "store" | "gatewayConfig" | "atlassianActionApprovalRegistry">;
@@ -58,6 +68,8 @@ export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly context: Context;
   readonly managed: Pick<ManagedProviderCatalog<CatalogConsumer>, "catalog" | "projection">;
   readonly correlationId: string;
+  /** The accepted Authority Envelope budget; it is the turn's only duration and call bound. */
+  readonly budget: ChatToolAuthorityEnvelope["budget"];
   readonly bind: (
     context: Context,
     budget: ReturnType<typeof createHarnessCatalogBudget>["port"],
@@ -95,6 +107,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private readonly budget: ReturnType<typeof createHarnessCatalogBudget>;
   private bound: CatalogToolBinder | undefined;
   private readonly continuation: GatewayMessage[] = [];
+  private readonly settledExchanges: ChatToolExchange[] = [];
   private usableObservation = false;
   private readonly callIds = new Set<string>();
   private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
@@ -102,15 +115,18 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private readonly abortController = new AbortController();
   private promptTokens = 0;
   private completionTokens = 0;
+  private readonly limits: HarnessLimits;
+  private elidedResults = 0;
   protected constructor(private readonly options: ChatToolTurnOptions<Context>) {
     this.context = {
       ...options.context,
       signal: AbortSignal.any([options.context.signal, this.abortController.signal]),
     };
+    this.limits = chatToolTurnLimits(options.budget);
     this.budget = createHarnessCatalogBudget({
       ...this.context,
       counters: this.counters,
-      limits: DEFAULT_LIMITS,
+      limits: this.limits,
       now: Date.now,
       deadlineAt: Date.parse(this.context.deadlineAt),
     });
@@ -204,10 +220,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       );
   }
   private readonly admitAttempt: ModelAttempt = ({ promptTokens }) => {
-    if (
-      this.counters.modelCalls >= DEFAULT_LIMITS.maxModelCalls ||
-      !this.reservePrompt(promptTokens)
-    )
+    if (this.counters.modelCalls >= this.limits.maxModelCalls || !this.reservePrompt(promptTokens))
       return undefined;
     this.counters.modelCalls++;
     let settled = false;
@@ -336,6 +349,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === id);
     requireDispatch(stored?.result !== undefined, "invalid", "recovery-required");
     this.continuation.push(...gatewayMessagesForToolExchange(stored));
+    this.settledExchanges.push(stored);
     // Only this turn's validated, redacted result actually published to the model is evidence.
     // A successful empty list is useful; a settled denial, failure or missing payload is not.
     if (
@@ -365,6 +379,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   }
 
   private admitRound(modelId: string, signal: AbortSignal): void {
+    // A round past the envelope's tool-call budget could only be refused after a model call.
+    requireDispatch(
+      this.counters.toolCalls < this.limits.maxToolCalls,
+      "denied",
+      "budget-exhausted",
+    );
     this.counters.iterations++;
     requireDispatch(
       !signal.aborted && !this.context.signal.aborted && !this.uncertainBudget,
@@ -398,9 +418,95 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     if (signal.aborted) cancel();
     try {
       return await this.runRounds(model, request, signal, observeRound);
+    } catch (error) {
+      const partial = this.partialAnswer(error, request.modelId, signal);
+      if (partial === undefined) throw error;
+      return partial;
     } finally {
       signal.removeEventListener("abort", cancel);
     }
+  }
+
+  /**
+   * A turn that already settled tool calls and then ends early answers from its own transcript
+   * (#4175): the human sees exactly which writes Jira acknowledged. A human stop is not replaced.
+   */
+  private partialAnswer(
+    error: unknown,
+    modelId: string,
+    signal: AbortSignal,
+  ): NormalizedResponse | undefined {
+    const { deps, message, correlationId, budget } = this.options;
+    const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
+    if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
+    const reason = expired ? "deadline" : chatToolTurnEndReason(error);
+    const exchanges =
+      deps.store
+        .findMessageById(message.id)
+        ?.toolTranscript?.exchanges.filter((exchange) => exchange.result !== undefined) ?? [];
+    if (reason === undefined || exchanges.length === 0) return undefined;
+    recordChatToolTurnEnded(processServerLogSink(), {
+      correlationId,
+      messageId: message.id,
+      reason,
+      exchanges,
+      budget,
+    });
+    return {
+      modelId,
+      content: chatToolTurnPartialAnswer(exchanges, reason),
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: randomUUID(),
+        promptTokens: this.promptTokens,
+        completionTokens: this.completionTokens,
+        latencyMs: 0,
+        costClass: "low",
+      },
+    };
+  }
+
+  private roundRequest(
+    request: GatewayCallRequest,
+    offered: ReturnType<CatalogToolBinder["offer"]>,
+  ): GatewayCallRequest {
+    const { managed } = this.options;
+    return {
+      ...request,
+      stream: false,
+      messages: [TOOL_TURN_INSTRUCTION, ...request.messages, ...this.fittedContinuation(request)],
+      toolCatalog: {
+        kind: "bound",
+        catalog: managed.catalog,
+        projection: managed.projection,
+        offered,
+      },
+    };
+  }
+  /** The copy of the continuation sent this round, fitted to the model window (#4175). */
+  private fittedContinuation(request: GatewayCallRequest): readonly GatewayMessage[] {
+    const config = this.options.deps.gatewayConfig?.current();
+    const capability =
+      config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
+    if (capability?.kind !== "chat") return this.continuation;
+    const output = request.maxOutputTokens ?? capability.maxOutputTokens;
+    const fixed =
+      estimateGatewayMessageTokens([TOOL_TURN_INSTRUCTION, ...request.messages]) +
+      estimateTokens(JSON.stringify(this.options.managed.projection));
+    const budget = Math.floor((capability.contextWindow - output) * CONTINUATION_WINDOW_SHARE);
+    const fitted = fitToolContinuation(this.continuation, this.settledExchanges, budget - fixed);
+    if (fitted.elidedCount > this.elidedResults) {
+      this.elidedResults = fitted.elidedCount;
+      recordChatToolTurnContextFitted(processServerLogSink(), {
+        correlationId: this.options.correlationId,
+        messageId: this.options.message.id,
+        elidedResultCount: fitted.elidedCount,
+        continuationMessageCount: this.continuation.length,
+      });
+    }
+    return fitted.messages;
   }
 
   private async runRounds(
@@ -409,24 +515,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     signal: AbortSignal,
     observeRound?: (response: NormalizedResponse) => void,
   ): Promise<NormalizedResponse> {
-    const { managed } = this.options;
-    while (this.counters.iterations < DEFAULT_LIMITS.maxIterations) {
+    while (this.counters.iterations < this.limits.maxIterations) {
       this.admitRound(request.modelId, signal);
       const offered = this.binder.offer();
-      const response = await model.call(
-        {
-          ...request,
-          stream: false,
-          messages: [TOOL_TURN_INSTRUCTION, ...request.messages, ...this.continuation],
-          toolCatalog: {
-            kind: "bound",
-            catalog: managed.catalog,
-            projection: managed.projection,
-            offered,
-          },
-        },
-        this.context.signal,
-      );
+      const round = this.roundRequest(request, offered);
+      const response = await model.call(round, this.context.signal); // NOSONAR typescript:S9382 -- each round depends on the previous round's results
       observeRound?.(response);
       this.promptTokens +=
         response.usage.promptTokens + (response.discardedAttemptUsage?.promptTokens ?? 0);
@@ -442,7 +535,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           },
         };
       requireDispatch(
-        response.toolCalls.length <= DEFAULT_LIMITS.maxToolCalls - this.counters.toolCalls,
+        response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
         "denied",
         "budget-exhausted",
       );

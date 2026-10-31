@@ -5,6 +5,8 @@ import { fileURLToPath, URL } from "node:url";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
+import { request as httpRequest } from "node:http";
+import { Buffer } from "node:buffer";
 import {
   buildUiHandlerDeps,
   createUiServer,
@@ -79,8 +81,69 @@ export async function request(origin, cookie, name, path, body, method = "POST",
   }
   return response;
 }
-export async function jsonRequest(origin, cookie, name, path, body, method, signal) {
-  return (await request(origin, cookie, name, path, body, method, signal)).json();
+function failedStage(name, status, failure) {
+  console.log(
+    JSON.stringify({
+      operation: "jira-chat-live-http",
+      stage: name,
+      status,
+      code: failure.error?.code,
+      message:
+        typeof failure.error?.message === "string"
+          ? failure.error.message.slice(0, 240)
+          : undefined,
+    }),
+  );
+  return new TypeError("Live Chat HTTP stage failed");
+}
+// A buffered Chat turn sends its response headers only when the turn ends. Global fetch gives up
+// on headers after five minutes, which is shorter than an accepted turn's Authority Envelope
+// (#4175), so loopback JSON requests use node:http without a response timeout.
+function loopbackJson(origin, cookie, path, body, method, signal) {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const outgoing = httpRequest(
+      new URL(path, origin),
+      {
+        method,
+        signal,
+        headers: {
+          Origin: origin,
+          "X-Keiko-CSRF": "1",
+          "Content-Type": "application/json",
+          ...(cookie ? { Cookie: cookie } : {}),
+          ...(payload === undefined ? {} : { "Content-Length": Buffer.byteLength(payload) }),
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    outgoing.on("error", reject);
+    outgoing.end(payload);
+  });
+}
+export async function jsonRequest(origin, cookie, name, path, body, method = "POST", signal) {
+  if (!origin.startsWith("http:"))
+    return (await request(origin, cookie, name, path, body, method, signal)).json();
+  const { status, text } = await loopbackJson(origin, cookie, path, body, method, signal);
+  const parsed = (() => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return {};
+    }
+  })();
+  if (status < 200 || status >= 300) throw failedStage(name, status, parsed);
+  return parsed;
 }
 function assertLiveModelOptions(modelId, modelRetries, embeddingModelId) {
   if (modelRetries !== 0 && modelRetries !== 1)

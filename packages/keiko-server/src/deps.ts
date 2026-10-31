@@ -1,3 +1,4 @@
+import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
 import {
@@ -1004,6 +1005,9 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
+  // Authority Envelope budget of one accepted Chat tool turn (#4175). Absent uses the backlog-sized
+  // default; composition may narrow it, never a request.
+  readonly chatToolTurnBudget?: ChatToolAuthorityEnvelope["budget"] | undefined;
   // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;

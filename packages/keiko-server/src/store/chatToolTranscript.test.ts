@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { buildUiStoreOverDatabase, type UiStore } from "./index.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { runMigrations } from "./schema.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -153,7 +154,9 @@ describe("ordinary Chat structured tool transcript", () => {
   });
   it("bounds the transcript and refuses writes after canonical turn termination", () => {
     const { store, db, id } = fixture();
-    for (let index = 0; index < 30; index++)
+    // The bound is one exchange per tool call the largest turn envelope admits (#4175).
+    const bound = CHAT_TOOL_TURN_BUDGET.maxToolCalls;
+    for (let index = 0; index < bound; index++)
       store.updateChatToolTranscript(
         id,
         { kind: "started", call: { ...call, id: `call-${String(index)}` } },
@@ -166,7 +169,7 @@ describe("ordinary Chat structured tool transcript", () => {
         "bounded",
       );
     }).toThrow();
-    expect(store.findMessageById(id)?.toolTranscript?.exchanges).toHaveLength(30);
+    expect(store.findMessageById(id)?.toolTranscript?.exchanges).toHaveLength(bound);
     db.prepare("UPDATE chat_messages SET client_turn_state = 'failed' WHERE id = ?").run(id);
     expect(() => {
       store.updateChatToolTranscript(id, { kind: "started", call }, "terminated");

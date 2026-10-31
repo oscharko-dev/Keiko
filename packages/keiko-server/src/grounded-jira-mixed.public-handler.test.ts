@@ -52,6 +52,14 @@ import {
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 
 const MODEL = "mixed-chat-proof";
+// The former fixed coding-harness caps (30 calls, 300 s), now supplied as the turn's Authority
+// Envelope budget (#4175). These pins keep their invariants against an explicit envelope.
+const THIRTY_CALL_BUDGET = {
+  maxRuntimeMs: 300_000,
+  maxToolCalls: 30,
+  maxPromptTokens: 100_000,
+  maxPatchBytes: 0,
+} as const;
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const CITED =
   "Feature returns true [src/Feature.ts:1].\n\nJira tool result: project SYN is visible.";
@@ -853,8 +861,9 @@ it.each(["input", "output"] as const)(
   },
 );
 
-it("retains the thirty-call Jira allowance across mixed model rounds and rejects the next batch", async () => {
+it("retains the thirty-call envelope Jira allowance across mixed model rounds and rejects the next batch", async () => {
   const f = runtime();
+  Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
   configure(f.deps, 0, 131072);
   const requests = provider(
     Array.from({ length: 8 }, () => "tool"),
@@ -872,10 +881,13 @@ it("retains the thirty-call Jira allowance across mixed model rounds and rejects
     }),
     f.deps,
   );
-  expect(requests).toHaveLength(7);
+  // Six rounds of five calls exhaust the envelope; the turn stops before a seventh model round
+  // that could no longer act (#4175), so no further batch is even requested.
+  expect(requests).toHaveLength(6);
   expect(f.jiraRequests).toHaveLength(30);
   expect(f.jiraRequests.every((method) => method === "GET")).toBe(true);
   expect(result.status).toBe(200);
+  expect(JSON.stringify(result.body)).toContain("used up its tool-call or prompt budget");
   const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges;
   expect(exchanges).toHaveLength(30);
   expect(exchanges?.every((exchange) => exchange.result?.status === "completed")).toBe(true);
@@ -947,6 +959,7 @@ it("cancels mixed synthesis at the accepted turn deadline after time spent await
     return controller.signal;
   });
   const f = runtime();
+  Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
   const startedAt = Date.now();
   const registry = approvalOwner(f.deps);
   const waitForRead = vi.spyOn(registry, "waitForChatReadGrant");

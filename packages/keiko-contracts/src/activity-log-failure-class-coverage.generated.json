@@ -2995,7 +2995,12 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["chat.tool-mutation.projected", "chat.tool-transcript.updated"],
+        "state": [
+          "chat.tool-mutation.projected",
+          "chat.tool-transcript.updated",
+          "chat.tool-turn.context-fitted",
+          "chat.tool-turn.ended"
+        ],
         "end": [],
         "failure": [],
         "loss": []
@@ -3008,10 +3013,23 @@
         {
           "op": "chat.tool-transcript.updated",
           "mode": "correlation"
+        },
+        {
+          "op": "chat.tool-turn.context-fitted",
+          "mode": "correlation"
+        },
+        {
+          "op": "chat.tool-turn.ended",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["chat.tool-mutation.projected", "chat.tool-transcript.updated"],
+      "resourceSignals": [
+        "chat.tool-mutation.projected",
+        "chat.tool-transcript.updated",
+        "chat.tool-turn.context-fitted",
+        "chat.tool-turn.ended"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -3077,6 +3095,121 @@
             "causeChain": false
           },
           "proofIds": ["chat.tool-transcript.updated.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-turn.context-fitted",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "continuationMessageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "elidedResultCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-turn.context-fitted.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-turn.ended",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "exchangeCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "maxRuntimeMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "maxToolCalls",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "readCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "refusedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "succeededWriteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "unconfirmedWriteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-turn.ended.line"],
           "replayReferences": [],
           "missingObligations": []
         }

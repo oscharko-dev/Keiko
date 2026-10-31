@@ -27,6 +27,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
+import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { invalidRequest, notFound } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
 
@@ -51,8 +52,9 @@ interface StoredExchange extends ChatToolExchange {
 interface StoredTranscript extends ChatToolTranscript {
   readonly exchanges: readonly StoredExchange[];
 }
-const MAX_EXCHANGES = 30;
-const MAX_TRANSCRIPT_BYTES = 4_194_304;
+// One exchange per tool call the turn's Authority Envelope admits (#4175).
+const MAX_EXCHANGES = CHAT_TOOL_TURN_BUDGET.maxToolCalls;
+const MAX_TRANSCRIPT_BYTES = 16_777_216;
 const UPDATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,

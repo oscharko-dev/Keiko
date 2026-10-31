@@ -67,6 +67,7 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       managed,
       context,
       correlationId,
+      budget: authority.envelope.budget,
       bind: (current, budgetPort) =>
         bindChatToolCatalog<JiraChatCatalogConsumer>({
           deps,

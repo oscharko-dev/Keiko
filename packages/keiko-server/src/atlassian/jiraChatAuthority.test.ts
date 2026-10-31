@@ -222,7 +222,7 @@ describe("accepted ordinary Chat turn authority", () => {
         first.reference,
         first.envelope.subject,
         "autonomous-delivery",
-        { toolCalls: 30, promptTokens: 0, patchBytes: 0 },
+        { toolCalls: first.envelope.budget.maxToolCalls, promptTokens: 0, patchBytes: 0 },
         CHAT_AUTHORITY_TEST_NOW,
       ).ok,
     ).toBe(true);
