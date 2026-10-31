@@ -20,9 +20,13 @@ import {
   approvalPolicyText,
   assertCheckoutSelected,
   assertLabRepository,
+  LAB_FIXTURE_MARKER,
   assertProjectRegistered,
   browserBaseUrl,
   checkoutRequest,
+  folderRequest,
+  isGitCheckout,
+  selectLabCheckout,
   describeRefusal,
   describeSnapshot,
   exitCodeForState,
@@ -37,6 +41,7 @@ import {
   registerProjectRequest,
   resolveMode,
   resolveTaskInput,
+  stopUnfinishedRun,
 } from "../testing/coding-workbench-lab/lab-common.mjs";
 
 const TEMP_DIRECTORIES = [];
@@ -174,6 +179,17 @@ describe("lab repository (fail closed)", () => {
     expect(() => assertLabRepository(empty)).toThrow(UsageError);
   });
 
+  it("accepts a folder with the exact lab fixture marker and refuses any other marker text", () => {
+    const fixture = mkdtempSync(join(tmpdir(), "keiko-lab-fixture-"));
+    TEMP_DIRECTORIES.push(fixture);
+    expect(() => assertLabRepository(fixture)).toThrow(UsageError);
+    writeFileSync(join(fixture, LAB_FIXTURE_MARKER), "something else\n");
+    expect(() => assertLabRepository(fixture)).toThrow(UsageError);
+    writeFileSync(join(fixture, LAB_FIXTURE_MARKER), "keiko-lab-fixture\n");
+    expect(() => assertLabRepository(fixture)).not.toThrow();
+    expect(labRepositoryPath(fixture, {})).toBe(resolve(fixture));
+  });
+
   it("reads the marker through the injected reader", () => {
     const read = vi.fn(() => JSON.stringify({ name: LAB_REPOSITORY_NAME }));
     expect(() => assertLabRepository("/anywhere", read)).not.toThrow();
@@ -190,6 +206,38 @@ describe("lab repository (fail closed)", () => {
     expect(() => assertCheckoutSelected(204)).not.toThrow();
     for (const status of [199, 300, 400, 409, 500]) {
       expect(() => assertCheckoutSelected(status)).toThrow(/not starting a run/u);
+    }
+  });
+
+  it("binds a copy without Git in place as a folder workspace, and a Git copy as its checkout", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lab-select-"));
+    try {
+      const folder = join(dir, "folder");
+      const repo = join(dir, "repo");
+      mkdirSync(folder);
+      mkdirSync(join(repo, ".git"), { recursive: true });
+      const calls = [];
+      const post = async (path, body) => {
+        calls.push([path, body]);
+        return { status: path === "/api/projects" ? 201 : 200, json: {} };
+      };
+      expect(await isGitCheckout(folder)).toBe(false);
+      expect(await isGitCheckout(repo)).toBe(true);
+      await selectLabCheckout(post, folder, "main");
+      await selectLabCheckout(post, repo, "main");
+      const selections = calls.filter(([path]) => path !== "/api/projects");
+      expect(selections.map(([path]) => path)).toEqual([
+        "/api/task-workspaces/folder",
+        "/api/task-workspaces/local",
+      ]);
+      expect(Object.keys(selections[0][1])).toEqual(["root", "requestedBy"]);
+      expect(folderRequest("/f")).toEqual({ root: "/f", requestedBy: "studio-operator" });
+      const refused = async (path) => ({ status: path === "/api/projects" ? 201 : 409, json: {} });
+      await expect(selectLabCheckout(refused, folder, "main")).rejects.toThrow(
+        /not starting a run/u,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -361,6 +409,23 @@ describe("numbers, modes and run ids", () => {
     }
     expect(exitCodeForState("running")).toBe(3);
     expect(exitCodeForState(undefined)).toBe(3);
+  });
+
+  // #3907 parity batch: a lane that hit its deadline left its run active, and every later task in
+  // the batch was refused with LOCK_CONTENTION before it started.
+  it("stops a run the deadline left active, and leaves an ended run alone", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const post = vi.fn(async () => ({ status: 200 }));
+    await expect(stopUnfinishedRun(post, "run-7", { state: "running" })).resolves.toBe(200);
+    expect(post).toHaveBeenCalledExactlyOnceWith("/api/coding-workbench/runtime/runs/run-7/stop", {
+      requestId: "run-7",
+    });
+    await expect(stopUnfinishedRun(post, "run-8", {})).resolves.toBe(200);
+    post.mockClear();
+    for (const state of TERMINAL_STATES) {
+      await expect(stopUnfinishedRun(post, "run-9", { state })).resolves.toBeNull();
+    }
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("describes a run snapshot with the kind of a pending permission", () => {

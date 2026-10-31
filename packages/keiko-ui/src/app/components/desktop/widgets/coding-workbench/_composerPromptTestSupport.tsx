@@ -73,6 +73,7 @@ export function props(
     canResume: true,
     runState,
     mutationPending: false,
+    stopPending: false,
     startBusy: false,
     startBlockedReason: null,
     projectMemoryEnabled: true,

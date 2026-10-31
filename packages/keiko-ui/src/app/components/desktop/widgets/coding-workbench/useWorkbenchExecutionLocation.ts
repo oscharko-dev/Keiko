@@ -13,7 +13,7 @@ import {
 } from "react";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { fetchGitStatus } from "@/lib/api";
-import { selectLocalCheckout } from "@/lib/task-workspace-api";
+import { selectFolderWorkspace, selectLocalCheckout } from "@/lib/task-workspace-api";
 import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
 import { secureRandomId } from "@/lib/secure-random";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -41,14 +41,24 @@ function bindingReady(
   root: string | null,
   branch: string | undefined,
   location: WorkbenchExecutionLocation,
+  folderMode: boolean,
 ): boolean {
   if (instance === null || root === null || instance.repositoryRoot !== root) return false;
-  if (location === "local") {
-    return (
-      instance.executionLocation === "local" &&
-      (branch === undefined || instance.taskBranch === branch)
-    );
-  }
+  // An ordinary folder is bound in place as a folder workspace, and only as one (owner decision
+  // 2026-10-30); a repository is never ready through a folder binding.
+  if (folderMode) return instance.workspaceKind === "folder";
+  if (instance.workspaceKind === "folder") return false;
+  return location === "local" ? checkoutReady(instance, branch) : worktreeReady(instance, branch);
+}
+
+function checkoutReady(instance: WorkspaceInstance, branch: string | undefined): boolean {
+  return (
+    instance.executionLocation === "local" &&
+    (branch === undefined || instance.taskBranch === branch)
+  );
+}
+
+function worktreeReady(instance: WorkspaceInstance, branch: string | undefined): boolean {
   return (
     instance.executionLocation !== "local" &&
     (branch === undefined || instance.baseBranch === branch)
@@ -92,6 +102,8 @@ interface LocationInput {
   readonly root: string | null;
   readonly branch: string | undefined;
   readonly location: WorkbenchExecutionLocation;
+  /** The root is an ordinary folder (not a Git repository): bound in place, without a branch. */
+  readonly folderMode: boolean;
   readonly activeInstance: WorkspaceInstance | null;
   readonly branchLoading: boolean;
   readonly branchError: boolean;
@@ -106,6 +118,7 @@ function useStableLocationInput(input: LocationInput): LocationInput {
     root,
     branch,
     location,
+    folderMode,
     activeInstance,
     branchLoading,
     branchError,
@@ -119,6 +132,7 @@ function useStableLocationInput(input: LocationInput): LocationInput {
       root,
       branch,
       location,
+      folderMode,
       activeInstance,
       branchLoading,
       branchError,
@@ -131,6 +145,7 @@ function useStableLocationInput(input: LocationInput): LocationInput {
       root,
       branch,
       location,
+      folderMode,
       activeInstance,
       branchLoading,
       branchError,
@@ -146,7 +161,8 @@ function selectionChanged(previous: LocationInput, current: LocationInput): bool
   return (
     current.root !== previous.root ||
     current.branch !== previous.branch ||
-    current.location !== previous.location
+    current.location !== previous.location ||
+    current.folderMode !== previous.folderMode
   );
 }
 
@@ -176,7 +192,13 @@ function selectionNeedsBinding(previous: LocationInput, current: LocationInput):
     !current.workspaceLoading &&
     !current.workspaceError &&
     !current.runIsActive &&
-    !bindingReady(current.activeInstance, current.root, current.branch, current.location)
+    !bindingReady(
+      current.activeInstance,
+      current.root,
+      current.branch,
+      current.location,
+      current.folderMode,
+    )
   );
 }
 
@@ -205,7 +227,10 @@ async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
   if (input.root === null) return;
   const correlationId = newClientCorrelationId();
   try {
-    const branch = await targetBranch(input.root, input.branch, correlationId);
+    // A folder has no branch to resolve: it is bound in place as it is.
+    const branch = input.folderMode
+      ? ""
+      : await targetBranch(input.root, input.branch, correlationId);
     if (!selectionNeedsBinding(input, latest.current)) {
       reportClientDiagnostic("[keiko] coding workbench checkout selection superseded", {
         correlationId,
@@ -213,7 +238,9 @@ async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
       });
       return;
     }
-    if (input.location === "local") {
+    if (input.folderMode) {
+      await selectFolderWorkspace({ root: input.root, requestedBy: OPERATOR, correlationId });
+    } else if (input.location === "local") {
       await selectLocalCheckout({
         root: input.root,
         branch,
@@ -304,11 +331,11 @@ function bindingError(
 export function useWorkbenchExecutionLocation(
   input: LocationInput,
 ): WorkbenchExecutionLocationState {
-  const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}`;
+  const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}\0${String(input.folderMode)}`;
   const ready =
     !input.workspaceLoading &&
     !input.workspaceError &&
-    bindingReady(input.activeInstance, input.root, input.branch, input.location);
+    bindingReady(input.activeInstance, input.root, input.branch, input.location, input.folderMode);
   const attempt = useBindingAttempt(input, ready, key);
   const pending = attempt.pending || input.workspaceLoading || (!ready && input.branchLoading);
   return {

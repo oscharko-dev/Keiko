@@ -358,6 +358,23 @@ persist records while delivering nothing. Without evidence the run settles `fail
 `delivery-not-evidenced`. Ad-hoc runs are exempt, because one legitimately ends with no commit and
 inferring delivery intent from free text would turn honest successes into false failures.
 
+**A run with no issue binding delivers by pushing its own task branch (owner decision,
+2026-10-30).** The Coding Workbench works without any issue binding; the binding is a legacy
+leftover and is not a delivery precondition. The draft delivery context of such a run resolves like
+any other, and `keiko_git_push` proposes pushing the run's verified commit to its own task branch on
+`origin`, which may be any Git remote. The proposal is redeemed with `keiko_git_execute`
+(`kind: push`) under the existing delivery approval plane (ADR-0085 D1b); protected targets stay
+blocked and a force push is never constructed. A pull request never depends on an issue
+(ADR-0086 D13): on a verified github.com origin `keiko_pull_request` opens a draft pull request from
+the task branch with no closing line, and an accepted issue only links it; on any other remote it
+refuses with `github-origin-required`. Every refusal of the delivery controller is
+now written as a `git.draft-delivery` line (`phase: refused`, a closed `reason`, `errorKind`,
+the run's correlation id), and the coding tool facade forwards the complete
+`CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS` vocabulary, including `repository-required`,
+`remote-required`, `github-origin-required` and `issue-binding-required` (the CI observation of a
+pull request opened without an issue), with guidance text for the delivery action, so the
+model learns the true cause instead of inventing one ("remote inaccessible", live lab 2026-10-30).
+
 **Under Full access, a run that stops one step short is given a bounded continuation first**
 (PR #3452, 2026-09-11). In `autonomous-delivery` the operator's accepted Authority Envelope
 authorizes delivery without a per-action approval (D4). When an issue-bound run's model ends a turn normally while no delivery is
@@ -645,12 +662,33 @@ closed states/codes, and safe labels.
 The authenticated live safe-activity tool projection also carries canonical per-call facts
 (#3874): a completed read's workspace-relative path, returned-window bytes and whole-file line
 count; the actual number of discovery entries returned; a closed edit refusal and the affected
-relative path only when materialization identified it; and elapsed bridge service time. Service
-time includes governed waits and excludes model generation. These facts come from the governed
-producer, remain bounded by the existing aggregate feed limits, and survive native restatement
-and immutable replay. Raw arguments/results, unknown refusal strings and unsafe paths are rejected.
+relative path only when materialization identified it; a governed verification's closed outcome
+(`passed`, `failed-check`, `waiting-for-trust`, `no-runnable-steps`, `not-run`, #3579); and elapsed
+bridge service time. Service time includes governed waits and excludes model generation. These
+facts come from the governed producer, remain bounded by the existing aggregate feed limits, and
+survive native restatement and immutable replay. Raw arguments/results, unknown refusal strings,
+unknown outcomes and unsafe paths are rejected. The verification outcome is derived from the closed
+result code the model received (`codingToolVerificationPresentation`), so the timeline shows a
+package-script decision still waiting on the operator, a repository with nothing the verifier can
+run and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
+check; only a check that ran and went red keeps the failed badge, and a timeout, a resource ceiling
+or a refusal before the runner claim nothing beyond the generic failure.
 Paths never enter Activity Log evidence, model-facing edit refusal replies or Coding History;
-the existing tool-result operation records service duration through its standard duration field.
+the existing tool-result operation records service duration through its standard duration field,
+and the existing `coding-runtime.tool-result-rendered` operation records the closed verification
+outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
+report keeps a verification that did not pass.
+
+An explicit Stop or takeover keeps the run's live safe-activity feed, as standalone OpenCode keeps
+the tool steps of an aborted session (owner decision 2026-10-30, #3907 F3). Until then both ends
+purged the feed, so a stopped run lost every tool row the human had just watched while the
+transcript kept only text. Now the calls that had not settled are shown as `cancelled`, every
+settled call keeps its verdict, and a later native restatement of an aborted call cannot replace
+that verdict. The feed then expires like any settled run's feed, by its TTL, a workspace switch,
+a new run or server shutdown; a recovery retry and the dismissal of an already settled run still
+purge. The existing `coding-runtime.safe-activity` operation records the settlement as
+`event=interrupted` with the closed `reason` (`stop`, `takeover`) and the number of calls it
+settled as `occurrenceCount`; no tool name, argument or path enters the line.
 
 The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
 in the existing local UI conversation store. Native V2 history is validated and captured continuously
@@ -1214,7 +1252,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `coding-runtime.native-narrowing.refused`) instead of acknowledged while a shell or a Code Mode
   `fetch` keeps Internet access; narrowing between the modes below Full access applies in place.
   Continuing the same OpenCode session under a relaunched, narrower tree is not implemented.
-- **Managed providers (#4089):** [ADR-0181](ADR-0181-shared-managed-mcp-host.md) adds a shared in-process protocol host for governed non-OpenCode consumers. Its server-declared providers do not enter the operator registry below; that registry, relay and OAuth contract remains unchanged.
+- **Managed providers (#4089):** [ADR-0181](ADR-0181-shared-managed-mcp-host.md) adds a shared in-process protocol host for governed non-OpenCode consumers. Its server-declared providers do not enter the operator registry below; that registry, relay and OAuth contract remains unchanged. A Coding run reaches the managed Jira provider only for a Jira Pod the human picked in the composer for that run (owner decision 2026-10-30, #3907, `jiraPodId` on the start request): the pick is checked against the caller's own, ready Pods before the start confirmation is consumed, joins that confirmation, and becomes a run-local synthetic `jira` server of the same managed relay. The pick grants the Jira read tools in every mode; the Jira write tools keep following the autonomy mode (ask below Full access, allowed in Full access). A run without a pick has no Jira tools.
 - **MCP servers come from the operator's registry, never from the repository (#3903, parity row
   C04, owner decision of 2026-10-24).** `mcp-servers.json` in Keiko's state directory, owned by the
   user Keiko runs as and writable by nobody else, is read for each native run at its launch
@@ -1890,6 +1928,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`, `keiko_git_push`,
   `keiko_pull_request`, `keiko_git_execute`, `keiko_git_sync`, `keiko_ci_status` and
   `keiko_verification` (`opencodeNativeDeliveryTools.ts` holds the list once).
+  `keiko_git_push` proposes pushing the run's verified commit to its own task branch on `origin`,
+  any Git remote and no issue needed (ADR-0085 D1b); `keiko_pull_request` opens a draft pull request
+  from that task branch on a verified GitHub origin, no issue needed (an accepted issue only links
+  it), and otherwise returns `github-origin-required` or `remote-required` (ADR-0086 D13).
   `keiko_git_sync` fetches the upstream or fast-forwards the run's branch to it through the Git
   sync owner, under the owner's own mode decision (ADR-0138 D3 item 5); the shell's own fetch and
   pull stay refused (#3902 AC2). The managed worktree's Git directory is
@@ -1973,6 +2015,53 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   credited check publishes its own `verification-summarized` event at the admitted edit revision,
   and `coding-runtime.verification` records it (`state: "credited"`, `verifierId`, `creditedBy`)
   or why the scripts could not be read (`credit-unavailable`, warn, frames and causes).
+  The same line also proves the staged commit candidate (#3907 AC3). The ledger credit alone
+  never reached the verified commit, so on macOS, where every governed check is
+  `native-shell-required`, no native run could commit: each `keiko_git_commit` of the Keiko T6
+  parity run settled `verification-failed` with zero failed checks. Admission now opens the
+  verified-commit ticket the governed verifier opens before its run, and settlement completes it
+  with the line's own result (its checks, exit code and duration; no output) through the same
+  service. The ticket opens only for a fully staged, clean candidate and completes only when the
+  staged tree is unchanged, so the proof covers exactly the content the check read; a failing line
+  records a failed proof, and a line whose status another command decided completes nothing.
+  `coding-runtime.verification` records the outcome (`state: "native-proof"`, `verifierId`,
+  `stepCount`, `commitProof`, `commitProofReason`). A governed verification run that executed no
+  step (each one skipped, denied or `native-shell-required`) says nothing about the candidate: it
+  is kept for the run's check list, but no longer completes the ticket as a failed proof, which had
+  replaced the passing native proof for the same staged tree and refused every later commit.
+  The same parity run then showed a proven, approved commit settling `recovery-required` after
+  its signed object already existed: a human who checks out the task branch locally gives the run
+  that branch as its own base, and Git refuses a ref transaction that both verifies and updates one
+  ref. The governed commit now guards such a branch by the update's own expected old value alone,
+  which is equivalent only while the verified base and head agree; when they differ it fails closed
+  before any ref update. A distinct base keeps its separate `verify` line in the same atomic
+  transaction.
+  A red check is the commit gate in Ask for approval and Supervised workspace, and failing
+  evidence in Full access (owner decision 2026-10-30, #3907 AC3). The same parity lane asked for a
+  branch, commit and push while the repository's own `npm run check` was already red; standalone
+  committed and pushed, Keiko refused every commit until the run's deadline. A verification that
+  ran every check to its own end (a non-zero exit, no signal, no breached limit) on the unchanged
+  staged candidate now forms failing evidence alongside the passing proof. In Full access, whose
+  policy already commits without per-action approval, that evidence admits the commit the task
+  asked for; the receipt keeps the failing `verificationEvidenceId`, and the `git.verified-commit`
+  approval line records `passed: false` beside it, so nothing reports the commit as verified green.
+  A denied, cancelled, timed-out, limit-breached or entirely skipped run, a candidate that changed
+  during its verification, an unstaged candidate and unsaved editor buffers still refuse. A mode
+  lowered after the proposal turns the red checks back into the gate before the Git effect.
+  Untracked files outside the staged candidate follow the same owner decision (#3907 AC3, lab lane
+  T17): the model's own `npm install` left an untracked `package-lock.json`, the model rightly kept
+  it out of the commit, and every verification answered `candidate-not-staged` until the run's
+  deadline while standalone committed the staged change. In Full access a verification of a staged
+  candidate with nothing unstaged and no unsaved buffer, beside untracked files, now runs and forms
+  evidence that never proves the commit: the `git.verified-commit` verification line records
+  `passed: false`, `reason: candidate-not-staged` and the untracked count, the model reads
+  `commitProof: "admitted"` with the untracked paths, and the commit carries only the staged tree.
+  The proposal, its review and the execution recheck the same staged candidate and leave the
+  untracked files out of the comparison; any other mode, an unstaged change, or Full access ending
+  before execution still refuses. The same comparison covers untracked files that appear after a
+  verification passed on a clean tree (lab lane T19: the model's next pytest run left its cache):
+  in Full access the passing proof still describes the unchanged staged tree and the commit
+  proceeds; in any other mode the later untracked file remains drift.
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the
@@ -2280,7 +2369,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   change made while a turn ran, to a file no edit of that turn wrote, is the one change Keiko cannot
   tell apart from the turn's own once the turn settled; the runtime's snapshot counts it as the
   turn's. Evidence is `coding-runtime.revert.applied`, `.refused` and `.dispatch-failed`: counts
-  and closed words, never a path, patch or message.
+  and closed words, never a path, patch or message. A revert-state read that
+  a stop overtook (the run disposed under it, #4119, or its session interrupted before the disposal,
+  #3907: `abortTask` advances the run's `interruptSeq` around the interrupt) ends like a read of a gone
+  run, with no `.refused` line; a failure on a live, uninterrupted run still logs it. A stop closes
+  the read before it revokes anything (`OpenCodeLifecycleAdapter.beginStop`, #3907), so a read
+  between the revocation and the reaping never reaches the dying runtime.
 - **A healthy settled native run keeps its undo for a bounded window (#3904 AC3).** A run used to settle when its turn ended and to remove its private state,
   snapshots included, so a settled turn could not be undone, unlike standalone OpenCode. Now a
   native run that succeeded or failed with an undoable newest turn (`session.diff` names a file, or an undo

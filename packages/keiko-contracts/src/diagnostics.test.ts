@@ -22,6 +22,8 @@ import {
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
+  CLIENT_CODING_REQUEST_DEADLINE_MS_MAX,
+  CLIENT_CODING_RUNTIME_CALLS,
   CLIENT_CODING_RUN_RESTORE_SIZE_MAX,
   CLIENT_CODING_RUN_RESTORE_COUNT_MAX,
   CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
@@ -2418,4 +2420,80 @@ it("keeps browser approval lifecycle evidence closed and free of key or approval
   ]) {
     expect(isClientStageIngestRequest({ ...settled, browserApproval })).toBe(false);
   }
+});
+
+describe("coding request timeout evidence (#4109)", () => {
+  const report = (codingRequestTimeout: unknown, extra: Record<string, unknown> = {}): unknown => ({
+    ...validRequest(),
+    correlationId: "ui_request-timeout-0001",
+    codingRequestTimeout,
+    ...extra,
+  });
+
+  it("names every call kind the Workbench bounds with a deadline", () => {
+    expect([...CLIENT_CODING_RUNTIME_CALLS]).toEqual([
+      "status",
+      "snapshot",
+      "start",
+      "approval",
+      "stop",
+      "takeover",
+      "retry",
+      "recovery-ack",
+      "pause",
+      "resume",
+      "follow-up",
+      "revert",
+      "inbox",
+      "research-revoke",
+      "question-answer",
+      "question-reject",
+    ]);
+  });
+
+  it.each(CLIENT_CODING_RUNTIME_CALLS)("accepts a %s timeout with its deadline", (call) => {
+    expect(isClientDiagnosticIngestRequest(report({ call, deadlineMs: 15_000 }))).toBe(true);
+  });
+
+  it("accepts the report without a correlation id and at the deadline bound", () => {
+    const body = {
+      ...validRequest(),
+      codingRequestTimeout: { call: "stop", deadlineMs: CLIENT_CODING_REQUEST_DEADLINE_MS_MAX },
+    };
+    expect(isClientDiagnosticIngestRequest(body)).toBe(true);
+  });
+
+  it.each([
+    ["an unknown call", { call: "launch", deadlineMs: 15_000 }],
+    ["a missing call", { deadlineMs: 15_000 }],
+    ["a call that is not a string", { call: 7, deadlineMs: 15_000 }],
+    ["a negative deadline", { call: "stop", deadlineMs: -1 }],
+    ["a zero deadline", { call: "stop", deadlineMs: 0 }],
+    ["a fractional deadline", { call: "stop", deadlineMs: 1.5 }],
+    ["a deadline above the bound", { call: "stop", deadlineMs: 3_600_001 }],
+    ["a deadline that is not a number", { call: "stop", deadlineMs: "15000" }],
+    ["a missing deadline", { call: "stop" }],
+    ["an extra field", { call: "stop", deadlineMs: 15_000, runId: "run-1" }],
+  ])("refuses %s", (_name, codingRequestTimeout) => {
+    expect(isClientDiagnosticIngestRequest(report(codingRequestTimeout))).toBe(false);
+  });
+
+  it("refuses a report that is not an object", () => {
+    for (const value of [null, "stop", 15_000, ["stop", 15_000]]) {
+      expect(isClientDiagnosticIngestRequest(report(value))).toBe(false);
+    }
+  });
+
+  it("refuses the report beside another closed report or a failure field", () => {
+    const timeout = { call: "stop", deadlineMs: 15_000 };
+    expect(
+      isClientDiagnosticIngestRequest(
+        report(timeout, {
+          codingWorkbenchInteraction: { interaction: "pending-decision-focused" },
+        }),
+      ),
+    ).toBe(false);
+    expect(isClientDiagnosticIngestRequest(report(timeout, { kind: "other" }))).toBe(false);
+    expect(isClientDiagnosticIngestRequest(report(timeout, { errorKind: "timeout" }))).toBe(false);
+  });
 });

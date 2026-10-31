@@ -3,8 +3,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { isReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { GitCiProviderFacts } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { ciReadinessIsCurrent, produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
-import { AT, DIGEST, createDraftRun, readySnapshot } from "./ciObservationTest/_support.js";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  AT,
+  DIGEST,
+  createDraftRun,
+  readySnapshot,
+  recordedIssueDraft,
+} from "./ciObservationTest/_support.js";
+import type { IssueBoundDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 
 import { CHECK, failureFacts } from "./ciObservationTest/_providerFacts.js";
 
@@ -12,10 +18,13 @@ const databases: DatabaseSync[] = [];
 afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
-function fixture(): { readonly draft: DraftDeliveryRecord; readonly facts: GitCiProviderFacts } {
+function fixture(): {
+  readonly draft: IssueBoundDraftDeliveryRecord;
+  readonly facts: GitCiProviderFacts;
+} {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
-  const draft = createDraftRun(db).get("run-1")?.draftDelivery;
+  const draft = recordedIssueDraft(createDraftRun(db));
   if (draft?.pullRequest === undefined) throw new Error("Missing fixture pull request");
   const page = {
     values: [],

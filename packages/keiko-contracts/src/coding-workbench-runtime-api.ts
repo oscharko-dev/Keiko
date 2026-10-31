@@ -43,6 +43,7 @@ import type {
   CodingWorkbenchTurnFailureCode,
 } from "./coding-workbench-runtime-constants.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
+import { isChatJiraPodId } from "./bff-wire.js";
 export {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   type CodingWorkbenchGatewayEventKind,
@@ -52,7 +53,13 @@ import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-bi
 export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
-import { isDraftDeliveryRecord, type DraftDeliveryRecord } from "./draft-delivery.js";
+import {
+  isDraftDeliveryIssueBinding,
+  isDraftDeliveryRecord,
+  isIssueBoundDraftDeliveryRecord,
+  type DraftDeliveryBinding,
+  type DraftDeliveryRecord,
+} from "./draft-delivery.js";
 import { isReadinessSnapshot, type ReadinessSnapshot } from "./git-ci-readiness.js";
 import {
   isWorkbenchDescriptionStatus,
@@ -738,6 +745,14 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * does not list refuses the start (`invalid-intent`) instead of starting without it.
    */
   readonly mentions?: CodingWorkbenchPromptMentions | undefined;
+  /**
+   * The Jira Pod the human picked for this run in the composer (owner decision 2026-10-30). The
+   * selection is the run's Jira read grant: the server checks that the Pod is the caller's own and
+   * ready before the start confirmation is consumed, binds its current generation into that
+   * confirmation, and offers the run the Jira tools through Keiko's managed MCP relay. Absent keeps
+   * the run exactly as before. An id, never a name, URL or credential.
+   */
+  readonly jiraPodId?: string | undefined;
 }
 
 /**
@@ -1351,6 +1366,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateIssuePurpose(value.issuePurpose, value.issueRef, errors);
   validateProjectMemoryRequest(value.projectMemory, errors);
   validateStartAgent(value.agent, errors);
+  validateJiraPodId(value.jiraPodId, errors);
   validateStartPromptInputs(value, errors);
   if (
     value.expectedIssueBindingDigest !== undefined &&
@@ -1380,7 +1396,14 @@ const START_REQUEST_KEYS: readonly string[] = [
   "command",
   "mentions",
   "fork",
+  "jiraPodId",
 ];
+
+// The Pod is named by the id Jira Pod custody minted; what it is allowed to do is decided by the
+// server against the caller's own, ready Pods, never by this shape.
+function validateJiraPodId(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isChatJiraPodId(value)) errors.push("jiraPodId is invalid");
+}
 
 // A fork names the task to fork and, optionally, the message to fork before; it starts a NEW task, so
 // it cannot also continue one.
@@ -1792,11 +1815,23 @@ function validateSnapshotDraftDelivery(snapshot: Record<string, unknown>, errors
     errors.push("draftDelivery must be a closed durable delivery record");
     return;
   }
+  if (!draftDeliveryMatchesSnapshot(snapshot, delivery.binding)) {
+    errors.push("draftDelivery must match the snapshot run and frozen issue binding");
+  }
+}
+
+// An issue-bound record must agree with the run's frozen issue on every fact. An issue-free branch
+// push (ADR-0085 D1b) is bound to a run that has no issue, so it agrees only with an absent one.
+function draftDeliveryMatchesSnapshot(
+  snapshot: Record<string, unknown>,
+  target: DraftDeliveryBinding,
+): boolean {
   const issue = snapshot.issueBinding;
-  const target = delivery.binding;
-  if (
-    !isRecord(issue) ||
-    ![
+  if (!isDraftDeliveryIssueBinding(target))
+    return target.runId === snapshot.runId && issue === undefined;
+  return (
+    isRecord(issue) &&
+    [
       target.runId === snapshot.runId,
       target.issueBindingDigest === issue.bindingDigest,
       target.remoteDigest === issue.remoteDigest,
@@ -1804,16 +1839,18 @@ function validateSnapshotDraftDelivery(snapshot: Record<string, unknown>, errors
       target.issueNumber === issue.issueNumber,
       target.baseRef === issue.defaultBaseRef,
     ].every(Boolean)
-  ) {
-    errors.push("draftDelivery must match the snapshot run and frozen issue binding");
-  }
+  );
 }
 
 function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: string[]): void {
   const readiness = snapshot.ciReadiness;
   if (readiness === undefined) return;
   const draft = snapshot.draftDelivery;
-  if (!isReadinessSnapshot(readiness) || !isDraftDeliveryRecord(draft)) {
+  if (
+    !isReadinessSnapshot(readiness) ||
+    !isDraftDeliveryRecord(draft) ||
+    !isIssueBoundDraftDeliveryRecord(draft)
+  ) {
     errors.push("ciReadiness must be a closed observation of a confirmed delivery");
     return;
   }

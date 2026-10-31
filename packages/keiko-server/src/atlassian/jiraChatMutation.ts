@@ -3,15 +3,9 @@ import type {
   AtlassianHttpBodyRequest,
   AtlassianHttpRequest,
 } from "@oscharko-dev/keiko-connectors";
-import {
-  ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
-  isSafeAtlassianIdentifier,
-  type AtlassianConnectorWriteFailureReason,
-  type JiraMutationAttempt,
-  type JiraMutationOutcome,
-  type JiraMutationResultState,
-  type JiraMutationReceipt,
-  type JiraMutationOperation,
+import type {
+  JiraMutationAttempt,
+  JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type {
@@ -21,6 +15,11 @@ import type {
 } from "../store/chatToolMutationTypes.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
+import {
+  jiraAttemptToolResult,
+  jiraMutationToolResult as result,
+  validJiraMutationAttempt,
+} from "./jiraMutationResult.js";
 
 export interface JiraChatMutationExecution {
   readonly journal: ChatToolMutationStore | undefined;
@@ -33,23 +32,10 @@ export interface JiraChatMutationExecution {
   readonly beforeMutation: () => boolean;
   readonly execute: (http: AtlassianHttpBodyPort) => Promise<JiraMutationAttempt>;
 }
-const REASONS: ReadonlySet<string> = new Set(ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS);
-const RECEIPT_KEYS: ReadonlySet<string> = new Set([
-  "issueKey",
-  "issueId",
-  "commentId",
-  "transitionId",
-]);
 const FAILED: JiraMutationAttempt = { ok: false, reason: "unavailable" };
-const REQUIRED_RECEIPTS: Readonly<
-  Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
-> = {
-  "jira.create": ["issueKey", "issueId"],
-  "jira.edit": ["issueKey"],
-  "jira.assign": ["issueKey"],
-  "jira.comment": ["issueKey", "commentId"],
-  "jira.transition": ["issueKey", "transitionId"],
-};
+function confirmed(value: unknown): boolean {
+  return value === true;
+}
 function mutationDiagnostic(
   intent: ChatToolMutationIntent,
   error: unknown,
@@ -61,42 +47,6 @@ function mutationDiagnostic(
     error,
     redact: () => "server-operation-failed",
   });
-}
-function confirmed(value: unknown): boolean {
-  return value === true;
-}
-function validAttempt(
-  value: JiraMutationAttempt,
-  operation: JiraMutationOperation,
-): JiraMutationAttempt {
-  if (!value.ok) {
-    const reason = value.reason;
-    return REASONS.has(reason) ? { ok: false, reason } : { ok: false, reason: "malformed-payload" };
-  }
-  const receipt = Object.freeze({ ...value.receipt });
-  const valid =
-    confirmed(value.ok) &&
-    REQUIRED_RECEIPTS[operation].every((key) => receipt[key] !== undefined) &&
-    Object.entries(receipt).every(
-      ([key, id]) => RECEIPT_KEYS.has(key) && isSafeAtlassianIdentifier(id),
-    );
-  return valid ? { ok: true, receipt } : { ok: false, reason: "malformed-payload" };
-}
-function result(
-  outcome: JiraMutationResultState,
-  reason?: AtlassianConnectorWriteFailureReason,
-  receipt: JiraMutationReceipt = {},
-  replayed = false,
-): ManagedMcpToolResult {
-  return {
-    data: {
-      ...receipt,
-      outcome,
-      ...(reason === undefined ? {} : { reason }),
-      ...(replayed ? { replayed: true } : {}),
-    },
-    ...(outcome === "succeeded" ? {} : { isError: true }),
-  };
 }
 function observedOutcome(record: ChatToolMutationRecord | undefined): JiraMutationOutcome {
   if (record === undefined) return "unknown";
@@ -131,7 +81,7 @@ async function attempt(
   journal: ChatToolMutationStore,
 ): Promise<JiraMutationAttempt> {
   try {
-    return validAttempt(
+    return validJiraMutationAttempt(
       await input.execute(mutationTransport(input, journal)),
       input.intent.operation,
     );
@@ -155,19 +105,8 @@ function finish(
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
     return result(observedOutcome(current), "unavailable");
   }
-  return attemptResult(outcome, attempt);
+  return jiraAttemptToolResult(outcome, attempt);
 }
-function attemptResult(
-  outcome: JiraMutationOutcome,
-  attempt: JiraMutationAttempt,
-): ManagedMcpToolResult {
-  return result(
-    outcome,
-    attempt.ok ? undefined : attempt.reason,
-    outcome === "succeeded" && attempt.ok ? attempt.receipt : {},
-  );
-}
-
 /** One owner composes the existing journal and HTTP port; replay never executes provider code. */
 export async function executeJiraChatMutation(
   source: JiraChatMutationExecution,

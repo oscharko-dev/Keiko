@@ -90,6 +90,7 @@ function composerProps(
     canResume: true,
     runState,
     mutationPending: false,
+    stopPending: false,
     startBusy: false,
     startBlockedReason: null,
     projectMemoryEnabled: true,
@@ -233,6 +234,45 @@ describe("Coding Workbench composer", () => {
     expect(actions.onStop).toHaveBeenCalledOnce();
   });
 
+  // #4109: Stop is the one control a pending mutation must not lock; it preempts that mutation.
+  it.each(["starting", "ready", "awaiting-approval", "running"] as const)(
+    "keeps Stop enabled and clickable while another action is pending in a %s run",
+    async (runState) => {
+      const user = userEvent.setup();
+      const actions = composerActions();
+      render(
+        <TaskStartSection
+          {...composerProps(runState, actions)}
+          mutationPending
+          stopPending={false}
+        />,
+      );
+      const stop = screen.getByRole("button", { name: "Stop run" });
+      expect(stop).toBeEnabled();
+      await user.click(stop);
+      expect(actions.onStop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["starting", "ready", "awaiting-approval", "running"] as const)(
+    "disables Stop only while a Stop is itself pending in a %s run",
+    (runState) => {
+      render(
+        <TaskStartSection
+          {...composerProps(runState, composerActions())}
+          mutationPending
+          stopPending
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Stop run" })).toBeDisabled();
+    },
+  );
+
+  it("disables Stop once the run is stopping", () => {
+    renderComposer("stopping", composerActions());
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeDisabled();
+  });
+
   it("admits a follow-up only while paused and offers a resume control", async () => {
     const user = userEvent.setup();
     const actions = composerActions();
@@ -321,6 +361,58 @@ describe("Coding Workbench composer", () => {
 
     expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
+  });
+
+  // Owner decision 2026-10-30: one compact choice, "Jira: none" by default; picking a Pod is the
+  // run's Jira read grant, so it is shown in the composer and sent with the start.
+  describe("the Jira Pod choice for the next run", () => {
+    const POD = { id: "d5f5681e-ce98-4c3c-b27e-51d707c9d018", name: "Acme Jira", ready: true };
+
+    it("shows no Jira control when the person has no ready Pod", () => {
+      renderComposerWithOverrides({ jiraPod: undefined });
+
+      expect(screen.queryByRole("combobox", { name: /Jira/u })).toBeNull();
+    });
+
+    it("offers none first and picks a Pod by its name", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderComposerWithOverrides({ jiraPod: { choices: [POD], value: "", onChange } });
+
+      const control = screen.getByRole("combobox", { name: "Jira Pod for this run" });
+      expect(control).toHaveTextContent("Jira: none");
+      await user.click(control);
+      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(
+        expect.arrayContaining(["Jira: none", "Jira: Acme Jira"]),
+      );
+      await user.click(screen.getByRole("option", { name: "Jira: Acme Jira" }));
+
+      expect(onChange).toHaveBeenCalledWith(POD.id);
+    });
+
+    it("shows the chosen Pod and goes back to none", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderComposerWithOverrides({ jiraPod: { choices: [POD], value: POD.id, onChange } });
+
+      const control = screen.getByRole("combobox", { name: "Jira Pod for this run" });
+      expect(control).toHaveTextContent("Jira: Acme Jira");
+      await user.click(control);
+      await user.click(screen.getByRole("option", { name: "Jira: none" }));
+
+      expect(onChange).toHaveBeenCalledWith("");
+    });
+
+    it("cannot be changed while a run is active", () => {
+      render(
+        <TaskStartSection
+          {...composerProps("running", composerActions())}
+          jiraPod={{ choices: [POD], value: POD.id, onChange: vi.fn() }}
+        />,
+      );
+
+      expect(screen.getByRole("combobox", { name: "Jira Pod for this run" })).toBeDisabled();
+    });
   });
 
   // #3873 live review: both listboxes exposed every option as a nameless "option" in the

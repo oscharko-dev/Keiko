@@ -645,9 +645,12 @@ describe("installable package smoke optional-dependency coverage", () => {
         expect(bundled.filter((name) => !name.startsWith("@oscharko-dev/")).sort()).toEqual([
           "@chevrotain/cst-dts-gen",
           "@chevrotain/gast",
+          "@sigstore/tuf",
+          "@tufjs/models",
           "chevrotain",
           "chevrotain-allstar",
           "java-parser",
+          "tuf-js",
         ]);
       } finally {
         artifact?.cleanup();

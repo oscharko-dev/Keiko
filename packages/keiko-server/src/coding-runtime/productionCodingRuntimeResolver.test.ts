@@ -25,10 +25,17 @@ import {
 import {
   CodingRuntimeAgentUnsupportedError,
   CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeJiraPodRefusedError,
 } from "./launchFailure.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import type { CodingJiraPodBinding, CodingJiraPodResolution } from "./codingJiraPodBinding.js";
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  FOLDER_WORKSPACE_BRANCH,
+  folderWorkspaceHead,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
@@ -1081,6 +1088,164 @@ describe("production coding runtime resolver", () => {
   // KfQ 3954841973: a backend process (plus its HTTP/SSE client and tool bridge) was already
   // spawned by `createRun` below by the time the lease broker rejects attachment -- verifies the
   // already-built backend is disposed instead of leaked when that happens.
+  describe("Jira Pod admission at launch (owner decision 2026-10-30)", () => {
+    const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+    const BOUND: CodingJiraPodBinding = {
+      podId: POD,
+      authenticationGeneration: 3,
+      verificationRevision: 1,
+    };
+
+    function fakePods(resolution: CodingJiraPodResolution) {
+      const pods = {
+        resolve: vi.fn(() => resolution),
+        recordBind: vi.fn(),
+        connections: vi.fn(),
+        attach: vi.fn(),
+        close: vi.fn(),
+      };
+      return { pods, port: pods as unknown as CodingJiraPods };
+    }
+
+    function jiraHost(
+      options: {
+        readonly resolution?: CodingJiraPodResolution;
+        readonly toolProfile?: OpenCodeToolProfile;
+        readonly withPods?: boolean;
+      } = {},
+    ) {
+      const fixture = workspaceFixture();
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      const { pods, port } = fakePods(options.resolution ?? { ok: true, binding: BOUND });
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+          backend: { createRun, toolProfile: options.toolProfile ?? "native" },
+          ...(options.withPods === false ? {} : { jiraPods: port }),
+        }),
+      );
+      if (host === undefined) throw new Error("expected qualified host");
+      const request = launchRequest(fixture.workspace);
+      return { host, createRun, pods, confirmations, fixture, request };
+    }
+
+    it("binds the chosen Pod's identity into the confirmation claim and hands it to the backend", () => {
+      const { host, createRun, pods, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
+          ...request,
+          jiraPod: BOUND,
+        }),
+      );
+
+      host.launchResolver.resolve({ ...request, jiraPodId: POD });
+
+      expect(pods.resolve).toHaveBeenCalledWith(POD);
+      expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "bound" });
+      expect(createRun.mock.calls[0]?.[0].request.jiraPod).toEqual(BOUND);
+    });
+
+    it("refuses a confirmation issued for another Pod credential, so the binding cannot be swapped", () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
+          ...request,
+          jiraPod: { ...BOUND, authenticationGeneration: 2 },
+        }),
+      );
+
+      expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+        "runtime-start-unconfirmed",
+      );
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
+    it("keeps a claim without a Pod from starting a run that names one", () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+
+      expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+        "runtime-start-unconfirmed",
+      );
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
+    it("does not change the claim, or the run, of a start without a Pod", () => {
+      const { host, createRun, pods, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+
+      host.launchResolver.resolve(request);
+
+      expect(pods.resolve).not.toHaveBeenCalled();
+      expect(createRun.mock.calls[0]?.[0].request.jiraPod).toBeUndefined();
+    });
+
+    it.each(["pod-not-found", "pod-not-ready", "unavailable"] as const)(
+      "refuses a %s Pod before the confirmation is consumed or a run exists",
+      (reason) => {
+        const { host, createRun, pods, confirmations, fixture, request } = jiraHost({
+          resolution: { ok: false, reason },
+        });
+        confirmations.issue(
+          resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+        );
+
+        expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+          expect.objectContaining({ reason }),
+        );
+        expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+          CodingRuntimeJiraPodRefusedError,
+        );
+        expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "refused", reason });
+        expect(createRun).not.toHaveBeenCalled();
+        // The one-use confirmation survived: the same start without the Pod proceeds.
+        host.launchResolver.resolve(request);
+        expect(createRun).toHaveBeenCalledOnce();
+      },
+    );
+
+    it.each(["direct", "code-mode"] as const)(
+      "refuses a Pod on the governed %s profile, which has no MCP relay",
+      (toolProfile) => {
+        const { host, createRun, pods, request } = jiraHost({ toolProfile });
+
+        expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+          expect.objectContaining({ reason: "unsupported-runtime" }),
+        );
+        expect(pods.resolve).not.toHaveBeenCalled();
+        expect(createRun).not.toHaveBeenCalled();
+      },
+    );
+
+    it("refuses a Pod for a Codex subscription run", () => {
+      const { host, createRun, request } = jiraHost();
+
+      expect(() =>
+        host.launchResolver.resolve({
+          ...request,
+          runtimePreference: "codex-subscription",
+          jiraPodId: POD,
+        }),
+      ).toThrow(expect.objectContaining({ reason: "unsupported-runtime" }));
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
+    it("refuses a Pod when this deployment composes no Jira Pod service", () => {
+      const { host, createRun, request } = jiraHost({ withPods: false });
+
+      expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+        expect.objectContaining({ reason: "unavailable" }),
+      );
+      expect(createRun).not.toHaveBeenCalled();
+    });
+  });
+
   it("disposes an already-spawned backend when lease attachment fails after creation", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();
@@ -1837,3 +2002,179 @@ describe("accepted initialization STARTING projection", () => {
     expect(guard?.check()).toBe(false);
   });
 });
+
+// Owner decision 2026-10-30: the Workbench works in any folder. This drives a launch through the
+// real composition (authority context, launch preparation, run services and the governed tool
+// facade) over a folder that is not a repository, with every repository dependency a spy that must
+// never be touched.
+describe("a run in a plain folder through the real composition (owner decision 2026-10-30)", () => {
+  function folderRunFixture() {
+    const fixture = workspaceFixture();
+    const identity = "f".repeat(64);
+    const instance = {
+      workspaceId: "workspace-private",
+      repositoryId: "repository-private",
+      repositoryRoot: fixture.workspace,
+      managedWorktreePath: fixture.workspace,
+      taskId: "task-private",
+      taskBranch: FOLDER_WORKSPACE_BRANCH,
+      baseBranch: FOLDER_WORKSPACE_BRANCH,
+      executionLocation: "local" as const,
+      workspaceKind: "folder" as const,
+      gitdirIdentity: identity,
+      lastVerifiedHead: folderWorkspaceHead(identity),
+      lifecycleState: "active",
+      health: "healthy",
+      driftMarkers: [],
+    };
+    const readWorkspaceHead = vi.fn((): string | undefined => {
+      throw new Error("a folder run must never read a repository head");
+    });
+    const authority = {
+      ...fixture.authority,
+      deploymentCeiling: "autonomous-delivery" as const,
+      readWorkspaceHead,
+      workspaceLifecycle: {
+        getActive: () => ({ instance, binding: { activeRoot: fixture.workspace } }),
+      } as never,
+    };
+    const verifiedCommit = {
+      resolveWorkspace: vi.fn(),
+      buffersClean: vi.fn(),
+      snapshots: { get: vi.fn() },
+      execution: {},
+    };
+    return { fixture, authority, readWorkspaceHead, verifiedCommit };
+  }
+
+  let sequence = 0;
+  function toolBody(action: Record<string, unknown>): string {
+    sequence += 1;
+    const id = `folder-run-${String(sequence)}`;
+    return JSON.stringify({ actionId: id, idempotencyKey: id, ...action });
+  }
+
+  it("prepares, mints and runs governed tools without any repository, refusing only delivery", async () => {
+    const log = createBufferedServerLogSink();
+    const originalSink = processLog.processServerLogSink();
+    vi.spyOn(processLog, "processServerLogSink").mockReturnValue({
+      ...originalSink,
+      write: log.write,
+    });
+    const { fixture, authority, readWorkspaceHead, verifiedCommit } = folderRunFixture();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(fixture.nowMs());
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const runToReport = vi.fn(() =>
+      Promise.resolve({
+        report: folderVerificationReport(fixture.workspace),
+        failureOutput: [] as never[],
+      }),
+    );
+    const resolver = resolverFor(
+      { ...fixture, authority: authority as unknown as typeof fixture.authority },
+      createRun,
+      confirmations.consumer,
+      undefined,
+      {
+        verifiedCommit: verifiedCommit as never,
+        verificationRunner: { runToReport },
+      },
+    );
+    const host = createProductionCodingRuntimeHost(resolver);
+    if (host === undefined) throw new Error("expected qualified composition");
+    const runId = "run-12345678";
+    const request = {
+      ...launchRequest(fixture.workspace),
+      runId,
+      requestedMode: "autonomous-delivery",
+    };
+
+    await host.launchResolver.prepare?.(request as never);
+    confirmations.issue(
+      resolveProductionRuntimeStartConfirmationClaim(authority, request as never),
+    );
+    const launch = host.launchResolver.resolve(request as never);
+    const composed = createRun.mock.calls[0]?.[0];
+    if (composed === undefined) throw new Error("expected minted composition");
+    await expect(
+      host.createManager(vi.fn()).start({
+        ...launch,
+        runId,
+        workspaceRoot: fixture.workspace,
+        requestedMode: "autonomous-delivery",
+      }),
+    ).resolves.toMatchObject({ ok: true, runId });
+
+    // Verification is independent of any repository and runs in the folder.
+    const verification = await composed.toolFacade.execute({
+      capability: composed.minted.toolFacadeCapability,
+      body: toolBody({ action: "verification", verifierId: "test" }),
+    });
+    expect(verification).toMatchObject({ status: "completed" });
+    expect(runToReport).toHaveBeenCalledTimes(1);
+
+    // Every repository tool stays registered and refuses with the one closed reason.
+    for (const action of [
+      { action: "git", operation: "stage", phase: "propose", paths: ["notes.txt"] },
+      { action: "git", operation: "ci" },
+      { action: "delivery", intent: "commit", phase: "propose", message: "feat: note" },
+    ]) {
+      await expect(
+        composed.toolFacade.execute({
+          capability: composed.minted.toolFacadeCapability,
+          body: toolBody(action),
+        }),
+      ).resolves.toMatchObject({ status: "failed", reasonCode: "repository-required" });
+    }
+    const refusals = log.events.filter(
+      (event) =>
+        event.op === "coding-runtime.tool-result" && event.extra?.reason === "repository-required",
+    );
+    expect(refusals.map((event) => event.extra?.actionKind)).toEqual(["git", "git", "delivery"]);
+    for (const event of refusals) expect(event.correlationId).toBe(runId);
+
+    // No repository dependency was consulted at any point.
+    expect(readWorkspaceHead).not.toHaveBeenCalled();
+    expect(verifiedCommit.resolveWorkspace).not.toHaveBeenCalled();
+    expect(verifiedCommit.snapshots.get).not.toHaveBeenCalled();
+    expect(verifiedCommit.buffersClean).not.toHaveBeenCalled();
+  });
+});
+
+function folderVerificationReport(workspaceRoot: string) {
+  return {
+    workspaceRoot,
+    results: [
+      {
+        kind: "test" as const,
+        scriptName: "test",
+        command: "npm",
+        args: ["test"],
+        status: "passed" as const,
+        exitCode: 0,
+        signal: null,
+        durationMs: 2,
+        truncated: false,
+        redacted: true,
+        outputSummary: "command completed",
+        appliedLimits: [],
+      },
+    ],
+    overallStatus: "passed" as const,
+    startedAtMs: 1,
+    durationMs: 2,
+    counts: {
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      denied: 0,
+      "timed-out": 0,
+      cancelled: 0,
+      "resource-exceeded": 0,
+    },
+  };
+}

@@ -234,6 +234,7 @@ import {
   handleResumeTaskWorkspace,
   handleSetActiveTaskWorkspace,
   handleSelectLocalCheckout,
+  handleSelectFolderWorkspace,
 } from "./task-workspace/routes.js";
 import {
   handleContainerCapability,
@@ -883,6 +884,7 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/task-workspaces/active", handler: handleGetActiveTaskWorkspace },
   { method: "POST", pattern: "/api/task-workspaces/active", handler: handleSetActiveTaskWorkspace },
   { method: "POST", pattern: "/api/task-workspaces/local", handler: handleSelectLocalCheckout },
+  { method: "POST", pattern: "/api/task-workspaces/folder", handler: handleSelectFolderWorkspace },
   {
     method: "DELETE",
     pattern: "/api/task-workspaces/active",

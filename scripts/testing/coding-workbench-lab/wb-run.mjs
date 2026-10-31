@@ -24,6 +24,7 @@ import {
   parseCli,
   resolveTaskInput,
   runMain,
+  stopUnfinishedRun,
   selectLabCheckout,
 } from "./lab-common.mjs";
 
@@ -174,6 +175,7 @@ export async function operateRun(session, { approve, repo, branch, task, model, 
   await selectCheckout(session, repo, branch);
   const runId = await startRun(session, { text: task.text, mode: task.mode, model });
   const snapshot = await watchRun(session, runId, { approve, deadline: Date.now() + timeoutMs });
+  await stopUnfinishedRun((path, body) => session.request("POST", path, body), runId, snapshot);
   const summary = {
     state: snapshot?.state,
     failure: snapshot?.failure,

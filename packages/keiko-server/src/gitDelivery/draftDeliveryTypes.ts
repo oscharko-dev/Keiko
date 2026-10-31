@@ -25,8 +25,39 @@ import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-
 export interface DraftDeliveryRunContext extends VerifiedCommitRunContext {
   readonly taskId: string;
   readonly workspaceId: string;
+  /** Absent for an issue-free run, which delivers by pushing its own task branch (ADR-0085 D1b). */
+  readonly issueBinding?: CodingWorkbenchIssueBinding;
+}
+
+/** A run context whose accepted issue exists: the only one that resolves a GitHub target or opens a PR. */
+export interface IssueBoundDraftDeliveryRunContext extends DraftDeliveryRunContext {
   readonly issueBinding: CodingWorkbenchIssueBinding;
 }
+
+export function isIssueBoundContext(
+  context: DraftDeliveryRunContext,
+): context is IssueBoundDraftDeliveryRunContext {
+  return context.issueBinding !== undefined;
+}
+
+/**
+ * An issue-free run whose `origin` was admitted as a verified github.com repository. It opens a
+ * draft pull request without an accepted issue; an issue only ever links one (ADR-0086 D13).
+ */
+export function isGitHubOriginContext(context: DraftDeliveryRunContext): boolean {
+  return context.issueBinding === undefined && context.repositoryKind === "github-origin";
+}
+
+/**
+ * The closed outcome of verifying an issue-free run's `origin` before a branch push. A github.com
+ * origin also names its live `owner/repository`, whose identity digest equals the run's own.
+ */
+export type DraftBranchTargetResolution =
+  | { readonly ok: true; readonly repository?: string }
+  | {
+      readonly ok: false;
+      readonly reason: "remote-drift" | "provider-failed" | "authority-denied";
+    };
 
 export type DraftDeliveryTargetResolution =
   | { readonly ok: true; readonly repository: string }
@@ -60,10 +91,25 @@ export interface DraftDeliveryDependencies {
    * the pull request's related-issue line. Best effort: an unavailable answer is no line, never a
    * refused delivery. Absent in compositions without an issue reader.
    */
-  readonly resolveRelatedIssues?: (context: DraftDeliveryRunContext) => Promise<readonly number[]>;
+  readonly resolveRelatedIssues?: (
+    context: IssueBoundDraftDeliveryRunContext,
+  ) => Promise<readonly number[]>;
+  /**
+   * The repository a pull request opens in. An issue-bound run re-reads its frozen issue; an
+   * issue-free run on a github.com origin is re-verified against its admitted identity and the
+   * checkout's GitHub grant, and no issue is read.
+   */
   readonly resolveTarget: (
     context: DraftDeliveryRunContext,
   ) => Promise<DraftDeliveryTargetResolution>;
+  /**
+   * Verifies an issue-free run's `origin` before a branch push: still the remote the run was
+   * admitted with, not a local-only repository, and, when its push URL is canonical GitHub, the
+   * URL `publishSeams` may then use. Absent in compositions without a checkout authority.
+   */
+  readonly resolveBranchTarget?: (
+    context: DraftDeliveryRunContext,
+  ) => Promise<DraftBranchTargetResolution>;
   readonly inspectionAdapter: (
     context: DraftDeliveryRunContext,
   ) => GitPullRequestInspectionAdapter | undefined;
@@ -80,6 +126,11 @@ export interface DraftDeliveryDependencies {
 
 export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {
   readonly context: () => DraftDeliveryRunContext | undefined;
+  /**
+   * The run this service belongs to. Only names a refusal when `context` resolves nothing, so the
+   * Activity Log still carries the run and its correlation.
+   */
+  readonly runId?: string;
   /** See VerifiedCommitServiceOptions.policyAllowsWithoutApproval. */
   readonly policyAllowsWithoutApproval?:
     ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;

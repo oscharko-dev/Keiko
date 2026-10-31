@@ -1403,6 +1403,27 @@ it("posts Coding Workbench interactions on the wire and spends the routine budge
   expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
 });
 
+// #4109: a runtime request that hit its own deadline is a genuine failure report. It reaches the
+// wire as its closed report and spends the failure budget, bounded there like any other failure.
+it("posts a coding request timeout on the wire and spends the failure budget", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const codingRequestTimeout = { call: "stop", deadlineMs: 15_000 } as const;
+  for (let index = 1; index <= 21; index += 1) {
+    fanOutClientDiagnostic("[keiko] coding workbench request timed out", {
+      correlationId: "ui_request-timeout-0001",
+      codingRequestTimeout,
+    });
+  }
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "ui_request-timeout-0001",
+    codingRequestTimeout,
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(20);
+  expect(clientDiagnosticPostThrottledCount()).toBe(1);
+});
+
 it("posts reduced production frames and closed causes through the existing transport", () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

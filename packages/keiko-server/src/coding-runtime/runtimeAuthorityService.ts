@@ -602,6 +602,12 @@ export interface CodingRuntimeTrustedContext {
   readonly projectDigest: string;
   readonly workspaceId: string;
   readonly workspaceRoot: string;
+  /**
+   * `"folder"` for an ordinary directory bound without a repository (owner decision 2026-10-30):
+   * its branch and head fields hold the contract's folder stand-ins, no repository identity is read
+   * and repository delivery refuses with `repository-required`. Absent for a repository workspace.
+   */
+  readonly workspaceKind?: "folder";
   readonly branchRef: string;
   readonly branchHeadDigest: string;
   readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;

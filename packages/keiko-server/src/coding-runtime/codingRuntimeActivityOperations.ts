@@ -38,7 +38,13 @@ export const CODING_RUNTIME_TOOL_RESULT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["discarded", "proposal-ready", "approval-wait-settled", "approval-wait-failed"],
+      values: [
+        "discarded",
+        "refused",
+        "proposal-ready",
+        "approval-wait-settled",
+        "approval-wait-failed",
+      ],
     },
     reason: {
       type: "string",
@@ -46,6 +52,8 @@ export const CODING_RUNTIME_TOOL_RESULT_OPERATION = defineActivityLogOperation({
       required: true,
       values: [
         "authority-denied",
+        // The workspace is an ordinary folder: repository tools refuse (owner decision 2026-10-30).
+        "repository-required",
         "policy-authorized",
         "approved",
         "denied",

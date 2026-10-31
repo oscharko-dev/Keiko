@@ -317,6 +317,36 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  it("accepts only a Jira Pod id as the run's explicit Jira selection (#3907)", () => {
+    const start = {
+      requestId: "request-1",
+      taskIntent: "Implement the ticket and report back",
+      requestedMode: "supervised-coding",
+    };
+    const podId = "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10";
+
+    expect(parseCodingWorkbenchRuntimeStartRequest({ ...start, jiraPodId: podId })).toEqual({
+      ok: true,
+      value: { ...start, jiraPodId: podId },
+    });
+    expect(parseCodingWorkbenchRuntimeStartRequest(start)).toEqual({ ok: true, value: start });
+    for (const jiraPodId of [
+      "",
+      "pod-1",
+      "https://jira.example.com",
+      `${podId} `,
+      podId.toUpperCase(),
+      1,
+      null,
+      {},
+    ]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...start, jiraPodId }),
+        JSON.stringify(jiraPodId),
+      ).toEqual({ ok: false, errors: ["jiraPodId is invalid"] });
+    }
+  });
+
   it("keeps approval decisions and run controls closed", () => {
     expect(CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS).toEqual(["approved", "denied"]);
     expect(CODING_WORKBENCH_RUNTIME_PREFERENCES).toEqual(["managed-gateway", "codex-subscription"]);

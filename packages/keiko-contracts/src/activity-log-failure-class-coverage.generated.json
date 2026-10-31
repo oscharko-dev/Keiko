@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 396,
-  "completeClassCount": 396,
+  "supportedClassCount": 398,
+  "completeClassCount": 398,
   "completeness": "complete",
   "classes": [
     {
@@ -4763,6 +4763,12 @@
               "required": true
             },
             {
+              "name": "notice",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "progressState",
               "type": "string",
               "dataClass": "closed-enum",
@@ -4823,6 +4829,62 @@
             "causeChain": false
           },
           "proofIds": ["client.coding-workbench.interaction.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "client-coding-workbench-request-timeout",
+      "requirementContract": "client-coding-workbench-request-timeout",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["client.coding-workbench.request-timed-out"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "client.coding-workbench.request-timed-out",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "client.coding-workbench.request-timed-out",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "call",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "deadlineMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "duration", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["client.coding-workbench.request-timed-out.line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -9964,6 +10026,112 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "coding-runtime-jira-pod",
+      "requirementContract": "coding-runtime-jira-pod",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.jira-pod"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.jira-pod",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.jira-pod"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.jira-pod",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "risk",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "tool",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "toolCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.jira-pod.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "coding-runtime-linked-files-unscanned",
       "requirementContract": "coding-runtime-linked-files-unscanned",
       "productSurfaces": ["keiko-server"],
@@ -14185,6 +14353,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "verificationOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -15265,6 +15439,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "readinessRenewal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "reasoningFrames",
@@ -22775,6 +22955,12 @@
               "required": false
             },
             {
+              "name": "workspaceKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "worktreeCount",
               "type": "integer",
               "dataClass": "count",
@@ -24849,7 +25035,8 @@
         "state": [
           "gateway.conversation.admission",
           "gateway.readiness.automatic.joined",
-          "gateway.readiness.busy-retained"
+          "gateway.readiness.busy-retained",
+          "gateway.readiness.renewal.paused"
         ],
         "end": ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
         "failure": [],
@@ -24881,6 +25068,10 @@
           "mode": "correlation"
         },
         {
+          "op": "gateway.readiness.renewal.paused",
+          "mode": "correlation"
+        },
+        {
           "op": "gateway.readiness.started",
           "mode": "correlation"
         }
@@ -24893,6 +25084,7 @@
         "gateway.readiness.automatic.started",
         "gateway.readiness.busy-retained",
         "gateway.readiness.completed",
+        "gateway.readiness.renewal.paused",
         "gateway.readiness.started"
       ],
       "replayReferences": [],
@@ -25050,10 +25242,22 @@
               "required": false
             },
             {
+              "name": "probeBasis",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "probeCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "probeTrigger",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "rerankerProbeTimeoutMs",
@@ -25062,7 +25266,14 @@
               "required": false
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "digest", "duration", "loss-state"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "loss-state"
+          ],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -25158,6 +25369,48 @@
             "causeChain": false
           },
           "proofIds": ["gateway.readiness.completed.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.readiness.renewal.paused",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "idleMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "modelIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "paused",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "duration",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.readiness.renewal.paused.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -30586,7 +30839,7 @@
               "name": "issueBindingDigest",
               "type": "string",
               "dataClass": "digest",
-              "required": true
+              "required": false
             },
             {
               "name": "reason",
@@ -42848,6 +43101,12 @@
               "required": true
             },
             {
+              "name": "segmentSeparatorsRemoved",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "timeoutMs",
               "type": "number",
               "dataClass": "duration",
@@ -45352,6 +45611,12 @@
               "name": "workspaceIdentity",
               "type": "string",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "workspaceKind",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {

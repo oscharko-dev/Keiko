@@ -7,7 +7,7 @@
 // dev server happens to have selected.
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { parseArgs } from "node:util";
@@ -213,11 +213,25 @@ export function gateActions(snapshot, approve, decided) {
   return actions;
 }
 
+/** The marker file of a lab fixture that is not the ledger-lab copy (a Python project, an empty or a plain folder). */
+export const LAB_FIXTURE_MARKER = ".keiko-lab-fixture";
+const LAB_FIXTURE_MARKER_TEXT = "keiko-lab-fixture";
+
+function hasLabFixtureMarker(root, readText) {
+  try {
+    return readText(join(root, LAB_FIXTURE_MARKER), "utf8").trim() === LAB_FIXTURE_MARKER_TEXT;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Fails closed unless `root` is a lab repository: the drivers approve edits and run commands on
- * the repository they are given, so they only accept a copy of the ledger-lab fixture.
+ * the repository they are given, so they only accept a copy of the ledger-lab fixture or a folder
+ * that carries the explicit lab fixture marker (#3907 AC3: other languages, empty and plain folders).
  */
 export function assertLabRepository(root, readText = readFileSync) {
+  if (hasLabFixtureMarker(root, readText)) return;
   const { name, failure } = packageName(root, readText);
   if (name === LAB_REPOSITORY_NAME) return;
   const reason = failure ?? `its package.json names ${JSON.stringify(name ?? null)}`;
@@ -242,6 +256,14 @@ export function labRepositoryPath(explicit, env = process.env, readText = readFi
 /** The body that makes the dev server work on the lab repository (POST /api/task-workspaces/local). */
 export function checkoutRequest(repo, branch) {
   return { root: repo, branch, requestedBy: "studio-operator" };
+}
+
+/**
+ * The body that binds an ordinary folder in place (POST /api/task-workspaces/folder, as the UI's
+ * `selectFolderWorkspace`): a folder that is not a Git repository has no branch to select.
+ */
+export function folderRequest(root) {
+  return { root, requestedBy: "studio-operator" };
 }
 
 /**
@@ -311,9 +333,26 @@ export async function registerLabRepository(post, repo) {
  */
 export async function selectLabCheckout(post, repo, branch) {
   const root = await registerLabRepository(post, repo);
+  if (!(await isGitCheckout(root))) {
+    const folder = await post("/api/task-workspaces/folder", folderRequest(root));
+    log("folder workspace", folder.status);
+    assertCheckoutSelected(folder.status, folder.json);
+    return;
+  }
   const selected = await post("/api/task-workspaces/local", checkoutRequest(root, branch));
   log("local checkout", selected.status);
   assertCheckoutSelected(selected.status, selected.json);
+}
+
+/** A lab copy is a Git checkout when it has a `.git` entry (a directory, or a worktree's file). */
+export async function isGitCheckout(root) {
+  try {
+    await stat(join(root, ".git"));
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 /** Normalizes `run-123...` or a trailing part of the id; refuses suffixes that would match the whole log. */
@@ -436,6 +475,20 @@ export function describeSnapshot(snapshot) {
 export function exitCodeForState(state) {
   if (state === "succeeded") return 0;
   return TERMINAL_STATES.includes(state) ? 1 : 3;
+}
+
+/**
+ * Stops a run the driver started when its deadline passed before the run ended. An active run keeps
+ * holding the dev server's checkout, so the next task would be refused with LOCK_CONTENTION.
+ * `post(path, body)` resolves to `{ status }`. Returns the stop's status, or null for an ended run.
+ */
+export async function stopUnfinishedRun(post, runId, snapshot) {
+  if (TERMINAL_STATES.includes(snapshot?.state)) return null;
+  const { status } = await post(`/api/coding-workbench/runtime/runs/${runId}/stop`, {
+    requestId: runId,
+  });
+  log(`deadline passed while ${String(snapshot?.state)}; stopped the run (${String(status)})`);
+  return status;
 }
 
 export function loadTasks() {

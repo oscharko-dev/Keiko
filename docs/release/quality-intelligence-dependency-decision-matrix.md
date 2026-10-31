@@ -113,6 +113,20 @@ staging; unchanged children and reviewed leaves remain registry dependencies.
 | lodash-es                 | 4.18.1  | MIT        | LICENSE               | Reviewed registry leaf                                 |
 | yaml                      | 2.9.1   | ISC        | LICENSE               | Direct registry dependency; empty runtime closure      |
 
+The reviewed `minimatch` 11.0.3 pin closes GHSA-g3hv-75wg-m249, which no `^10` release fixes.
+`@tufjs/models` declares `^10.2.1`, so a consumer installing Keiko would otherwise resolve an
+affected 10.x copy. ADR-0021 D1 therefore stages the three ancestors of that edge; Keiko still
+imports only the `@sigstore/tuf` seeds export and performs no TUF fetch. None of these packages
+declares an install lifecycle hook.
+
+| Package               | Version | License       | Retained license file | Delivery                                  |
+| --------------------- | ------- | ------------- | --------------------- | ----------------------------------------- |
+| @sigstore/tuf         | 5.0.0   | Apache-2.0    | LICENSE               | Selective ancestor archive and npm bundle |
+| tuf-js                | 6.0.0   | MIT           | LICENSE               | Selective ancestor archive and npm bundle |
+| @tufjs/models         | 5.0.0   | MIT           | LICENSE               | Selective ancestor archive and npm bundle |
+| @tufjs/canonical-json | 2.0.0   | MIT           | LICENSE               | Unchanged registry child                  |
+| minimatch             | 11.0.3  | BlueOak-1.0.0 | LICENSE.md            | Reviewed registry leaf                    |
+
 ### 2.2 Denied — explicit deny rows
 
 | package                         | namespace      | runtime role                                           | decision | license      | owner             | rationale                                                                                                                         | risk-class | rejection alternative                                                             |

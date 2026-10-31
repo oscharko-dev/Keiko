@@ -71,6 +71,19 @@ function sourceUnavailableReasonKey(
   return SOURCE_UNAVAILABLE_REASON_KEYS[source.unavailableReason];
 }
 
+// #3907 AC3: a check the server is running is not a failure. It is narrated as "checking", never
+// joins the run's status sentence as "unavailable" and raises no alert; the start blocker and the
+// readiness details still name it.
+function sourceVerificationPending(
+  source: CodingWorkbenchRuntimeState["source"]["value"],
+): boolean {
+  return (
+    source !== null &&
+    !source.available &&
+    source.unavailableReason === "model-verification-pending"
+  );
+}
+
 /** The operator-facing sentence for an unavailable source's reason, or null when it has none. */
 function sourceUnavailableReasonText(
   source: CodingWorkbenchRuntimeState["source"]["value"],
@@ -100,12 +113,9 @@ function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchT
   ) {
     return t("codingWorkbench.header.readyEvaluation");
   }
-  // #3873: a revision belongs to a run; with no run yet the state alone is the status.
-  if (snapshot.runId === undefined) return runStateLabel(snapshot.state, t);
-  return t("codingWorkbench.announcement.runRevision", {
-    state: runStateLabel(snapshot.state, t),
-    revision: snapshot.revision,
-  });
+  // #3907 (owner: less is more): the run's state is the status; its internal revision counter told
+  // the human nothing they could act on.
+  return runStateLabel(snapshot.state, t);
 }
 
 function setupKey(status: CodingWorkbenchResourceStatus): CodingWorkbenchMessageKey | undefined {
@@ -163,7 +173,7 @@ function phaseAnnouncement(
 }
 
 /**
- * What the run itself is doing, for the live run status region: its state and revision, its phase
+ * What the run itself is doing, for the live run status region: its state, its phase
  * when that is one the operator must hear (`runPhaseIsAnnounced`: a model gateway that is being
  * retried), a completed recovery acknowledgement and an active research grant, then — only when
  * there are any — the readiness facts that need attention (`readinessAttentionFacts`). #3873 live
@@ -224,7 +234,9 @@ function readinessKeys(state: CodingWorkbenchRuntimeState): readonly CodingWorkb
   const runtimeAvailable = state.runtime.value?.runtimeAvailable === true;
   return [
     pairingKey(state),
-    readinessKey("modelSource", state.source.status, sourceAvailable),
+    sourceVerificationPending(state.source.value)
+      ? "codingWorkbench.announcement.modelSource.checking"
+      : readinessKey("modelSource", state.source.status, sourceAvailable),
     sourceUnavailableReasonKey(state.source.value),
     authenticationKey(state),
     readinessKey("workspace", state.workspace.status, workspaceAvailable),
@@ -687,7 +699,9 @@ function standingConditionAlert(
   // the remedy existed for the sr-only live region alone (#3381 review). Ungated by `setupVisible`,
   // unlike the runtime note below: the bootstrap setup card states the runtime posture itself but
   // says nothing about the model source, so there is nothing to duplicate.
-  const sourceReason = sourceUnavailableReasonText(state.source.value, t);
+  const sourceReason = sourceVerificationPending(state.source.value)
+    ? null
+    : sourceUnavailableReasonText(state.source.value, t);
   if (sourceReason !== null) return sourceReason;
   // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
   // states the same condition itself, and duplicating it would announce it twice to assistive
