@@ -756,6 +756,21 @@ qualify Workbench acceptance. The regular PR CI remains separate: its merge-cand
 rejects a candidate based on `55e4b02b2` when the event expects `18648cad9`, and workflow hygiene
 reports dependency advisories in `glob` and `minimatch`. No guard, approval or advisory is waived.
 
+## Unsafe Job Object admission on 2026-10-31 (W1/W2 component)
+
+On Windows 11 Home 10.0.26200 x64, NTFS, Node 24.18.0, the default
+`node scripts/testing/test-windows-gateway-filters.mjs` run compiled the native
+fixture with MSVC and reported `gateway-policy-validation: passed` (exit 0).
+The run used production WFP sources from `377ce5ddd898587c6e045bde817e2e1b3930b27a`
+with the additional Job Object cases in this change. SHA-256 of the test executable
+was `159682bd233b7d18d993bb4c9ed2c6ed6b9eacc5a96cc45f55f4bea987cfa97d`.
+
+Both guarded open and recovery rejected real jobs missing kill-on-close, or permitting
+explicit or silent breakaway despite kill-on-close, with `ERROR_INVALID_PARAMETER`.
+The fixture retained no job or engine handle. This default validation mode installs
+no filters. Installed-service recovery, positive and negative socket isolation, and
+the production Workbench launch remain outside this run.
+
 ## Update impact
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows
