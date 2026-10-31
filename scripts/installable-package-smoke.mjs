@@ -183,7 +183,17 @@ function commandForPlatform(cmd, args, options = {}) {
     return { command: cmd, shell: false };
   }
   assertWindowsShellArguments(cmd, args);
-  const executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
+  let executable;
+  try {
+    executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
+  } catch (failure) {
+    // Report resolution failure through the same body-free result path as a failed spawn.
+    // In particular, never fall back to the unverified command on PATH.
+    const error = Object.assign(new Error(`trusted ${cmd} executable unavailable`), {
+      code: failure?.code ?? "UNTRUSTED_OR_MISSING",
+    });
+    return { error, status: null, signal: null, stdout: "", stderr: "" };
+  }
   // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with trusted absolute executable.
   return { command: shellCommandForTrustedExecutable(executable), shell: true };
 }
@@ -191,7 +201,9 @@ function commandForPlatform(cmd, args, options = {}) {
 function runResult(cmd, args, options = {}) {
   // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with the executable resolved to a
   // trusted absolute path before the shell is enabled. POSIX and node/bin paths stay shell:false.
-  const { command, shell } = commandForPlatform(cmd, args, options);
+  const invocation = commandForPlatform(cmd, args, options);
+  if (invocation.error) return invocation;
+  const { command, shell } = invocation;
   return spawnSync(command, args, { encoding: "utf8", ...options, shell });
 }
 
@@ -217,6 +229,7 @@ function safeErrorCode(error) {
 
 function corepackSpawnFailureSetupSummary(error, timeoutMs) {
   const code = safeErrorCode(error);
+  if (code === "UNTRUSTED_OR_MISSING") return "trusted corepack executable was not found";
   if (code === "ETIMEDOUT") {
     return `corepack did not finish before the ${String(timeoutMs)}ms setup timeout`;
   }
@@ -237,6 +250,10 @@ export function terminateProcessTree(child) {
     });
     return;
   }
+  terminatePosixProcessGroup(child);
+}
+
+export function terminatePosixProcessGroup(child) {
   try {
     process.kill(-child.pid, "SIGKILL");
   } catch (error) {
@@ -299,7 +316,9 @@ export function runAsync(cmd, args, options = {}) {
     throw new TypeError("runAsync requires a positive finite timeout in milliseconds");
   }
   const outputState = { capturedBytes: 0, limitBytes: asyncOutputLimitBytes(outputLimitBytes) };
-  const { command, shell } = commandForPlatform(cmd, args, spawnOptions);
+  const invocation = commandForPlatform(cmd, args, spawnOptions);
+  if (invocation.error) return Promise.resolve(invocation);
+  const { command, shell } = invocation;
   return new Promise((resolvePromise) => {
     let settled = false;
     const stdout = [];
