@@ -8,6 +8,9 @@ const REPO = join(import.meta.dirname, "..", "..", "..", "..");
 const fieldMetadata = await import(
   pathToFileURL(join(REPO, "packages/keiko-connectors/dist/jira-field-metadata.js")).href
 );
+const connectorContracts = await import(
+  pathToFileURL(join(REPO, "packages/keiko-contracts/dist/atlassian-connectors.js")).href
+);
 
 async function adminGet(session, path) {
   const result = await labRequest(session, "GET", path, basicAuth(session, "admin"));
@@ -38,14 +41,27 @@ async function editFields(session, projectKey, typeName) {
   return Object.entries(meta.fields).map(([fieldId, field]) => ({ ...field, fieldId }));
 }
 
-// Fixed by the create call itself, or written through a dedicated tool (jira.comment).
-const NOT_FIELD_WRITES = new Set(["project", "issuetype", "comment"]);
+// Fixed by the create call itself.
+const FIXED_BY_CREATE = new Set(["project", "issuetype"]);
+// Written through a dedicated governed tool instead of a field write. A field counts as covered
+// only while Keiko's production contracts actually declare that tool.
+const DEDICATED_TOOLS = Object.freeze({ comment: "jira.comment", attachment: "jira.attach" });
+
+/** Whether a field is not a field write: set by the create call or by a declared dedicated tool. */
+export function isNotFieldWrite(
+  fieldId,
+  actionTypes = connectorContracts.JIRA_MANAGED_ACTION_TYPES,
+) {
+  if (FIXED_BY_CREATE.has(fieldId)) return true;
+  const tool = DEDICATED_TOOLS[fieldId];
+  return tool !== undefined && Object.hasOwn(actionTypes, tool);
+}
 
 /** Every field Jira offers for the operation must be writable through Keiko's projection. */
 function coverage(raw, operation) {
   const parsed = fieldMetadata.parseJiraFieldMetadata(raw);
   if (!parsed.ok) return { offered: raw.length, refused: [`metadata ${parsed.reason}`] };
-  const offered = parsed.fields.filter((field) => !NOT_FIELD_WRITES.has(field.id));
+  const offered = parsed.fields.filter((field) => !isNotFieldWrite(field.id));
   const refused = offered
     .filter((field) => field.kind === "unsupported" || field.operations.length === 0)
     .map((field) => `${field.name} (${operation})`);
