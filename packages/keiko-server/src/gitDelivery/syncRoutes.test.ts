@@ -1,3 +1,4 @@
+import { buildManagedGitWorktree } from "./managedGitWorktree.test-support.js";
 // Route tests for the governed fetch/pull sync preview + execute routes (Issue #1573, Epic #1572).
 //
 // Drives the handlers at the BFF seam with an injected fake GitProcessRunner (no real git). Proves:
@@ -7,10 +8,9 @@
 //   * a content-free sync evidence record lands after execute (no URLs / secrets).
 
 import { captureActivityLog } from "../activityLogCapture.test-support.js";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +40,6 @@ import {
   deriveWorkspaceId,
 } from "../task-workspace/naming.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
-import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 const FETCH_PREVIEW = "/api/git-delivery/fetch/preview";
 const FETCH_APPROVE = "/api/git-delivery/fetch/approve";
@@ -213,30 +212,6 @@ function ctxFor(path: string, body: unknown): RouteContext {
 
 function syncBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { schemaVersion: "1", projectId, ...overrides };
-}
-
-// A genuine `git worktree add` linkage rooted at `sourceRepo`; matches the fixture in
-// commitRoutes.test.ts / localMutationRoutes.test.ts so the sibling managed-worktree test uses the
-// same identity that the production managed-workspace resolver actually accepts (#3347).
-function buildManagedGitWorktree(
-  sourceRepo: string,
-  worktreePath: string,
-  taskBranch: string,
-): string {
-  execFileSync("git", ["init", "-q"], { cwd: sourceRepo });
-  execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: sourceRepo });
-  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: sourceRepo });
-  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: sourceRepo });
-  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: sourceRepo });
-  mkdirSync(dirname(worktreePath), { recursive: true });
-  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, worktreePath, "HEAD"], {
-    cwd: sourceRepo,
-  });
-  const inspection = inspectManagedGitdirIdentity(worktreePath, sourceRepo);
-  if (inspection === undefined) {
-    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
-  }
-  return inspection.identity;
 }
 
 function managedWorkspaceDeps(taskId = "task-443"): {
