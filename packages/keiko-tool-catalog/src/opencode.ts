@@ -435,7 +435,10 @@ function verificationSpec(): OpenCodeToolSpec {
       "confirm which checks ran successfully. The optional verification.commit describes " +
       "commit eligibility separately: candidate-not-staged never means checks did not run. " +
       "Only when the accepted task requests a commit, stage the intended changes and rerun " +
-      'verification until verification.commit.commitProof is "recorded". For that workflow, ' +
+      'verification until verification.commit.commitProof is "recorded", or, in Full access ' +
+      "only, until its checks ran and failed: that also admits the commit, recorded as " +
+      'failing. In Full access, commitProof "admitted" admits the staged commit while the ' +
+      "untracked paths under commit.blocking stay outside it. For that workflow, " +
       "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
       "the intended paths or ignore generated output deliberately before verifying again.",
     inputSchema: managedObjectSchema(
@@ -631,8 +634,10 @@ function gitCommitSpec(): OpenCodeToolSpec {
     alias: "keiko_git_commit",
     description:
       "Create a commit proposal over the staged changes. This call does not " +
-      "create a commit. First complete staging and rerun verification until it reports " +
-      'verification: { status: "passed", commit: { commitProof: "recorded" } }.' +
+      "create a commit. First complete staging, then verify until it reports " +
+      'verification: { status: "passed", commit: { commitProof: "recorded" } }, or, in Full ' +
+      "access only, until its checks ran and failed or it reports commitProof " +
+      '"admitted": that also admits the commit, recorded as failing or unproven.' +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       { message: { type: "string", minLength: 1, maxLength: 8_192 } },
@@ -722,6 +727,33 @@ function gitSyncSpec(): OpenCodeToolSpec {
   };
 }
 
+// #3907 (owner decision 2026-10-31): the one governed way a run gets a task branch. Keiko's Git
+// kernel creates the branch at the current commit and switches the run to it. The shell keeps
+// refusing `git checkout -b`. It prepares delivery (a commit on a protected branch is blocked until
+// the run has a task branch of its own), so it carries the delivery-substrate effect beside the
+// local ref write.
+function gitBranchSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.branch",
+    alias: "keiko_git_branch",
+    description:
+      "Create a new local task branch at the current commit and switch this run to it; " +
+      "uncommitted changes carry over. Use it when keiko_git_commit is blocked because the run " +
+      "works on a protected branch such as main or dev. It refuses a protected name, an invalid " +
+      "name, an existing branch, a run that is not on its base branch and a run that is not in a " +
+      "Local checkout. It never deletes, renames or resets anything. This call waits for any " +
+      "required operator decision.",
+    inputSchema: managedObjectSchema({ name: { type: "string", minLength: 1, maxLength: 255 } }, [
+      "name",
+    ]),
+    effects: ["workspace-write", "delivery-substrate"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-branch-port",
+    // It waits in place for the operator's approval of the call below Full access.
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  };
+}
+
 function ciStatusSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.ci.status",
@@ -769,6 +801,7 @@ export function opencodeRegistrationSet(
       gitPullRequestSpec(),
       gitExecuteSpec(),
       gitSyncSpec(),
+      gitBranchSpec(),
       ciStatusSpec(),
     ].map((spec) => entryFor(spec)),
   };

@@ -200,6 +200,7 @@ import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPrefe
 import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
+import { useCodingWorkbenchJiraPod } from "./useCodingWorkbenchJiraPod";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
 
@@ -1602,6 +1603,7 @@ function WorkbenchColumns({
 }: Omit<WorkbenchContentProps, "alert" | "workbenchLabel" | "onOpenMcpSettings">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
+  const jiraPod = useCodingWorkbenchJiraPod();
   const issueIntake = useCodingWorkbenchIssueIntake(
     repositoryRoot ?? "",
     `${activeWorkspace.activeBinding?.workspaceId ?? ""}:${history.conversationId ?? ""}`,
@@ -1712,6 +1714,7 @@ function WorkbenchColumns({
     promptDelivery,
     taskIntent,
     projectMemoryEnabled,
+    jiraPodId: jiraPod.podId,
     conversationId: history.conversationId,
     fork: history.fork,
     resumeMode,
@@ -1736,6 +1739,7 @@ function WorkbenchColumns({
       startBlockedReason={startBlocker}
       projectMemoryEnabled={projectMemoryEnabled}
       onProjectMemoryEnabledChange={setProjectMemoryEnabled}
+      jiraPod={jiraPod.selection}
       autonomyMode={confirmedMode(state)}
       autonomyLabel={confirmedModeLabel(state, t)}
       activeRunMode={activeRunMode(state)}
@@ -2831,6 +2835,7 @@ const ACTION_KIND_MESSAGE_KEYS: Record<
   "git-unstage": "codingWorkbench.approval.actionKind.git-unstage",
   "git-fetch": "codingWorkbench.approval.actionKind.git-fetch",
   "git-pull": "codingWorkbench.approval.actionKind.git-pull",
+  "git-branch": "codingWorkbench.approval.actionKind.git-branch",
   "verification-command": "codingWorkbench.approval.actionKind.verification-command",
   "ci-observe": "codingWorkbench.approval.actionKind.ci-observe",
   "connector-read": "codingWorkbench.approval.actionKind.connector-read",

@@ -40,9 +40,20 @@ export function isIssueBoundContext(
   return context.issueBinding !== undefined;
 }
 
-/** The closed outcome of verifying an issue-free run's `origin` before a branch push. */
+/**
+ * An issue-free run whose `origin` was admitted as a verified github.com repository. It opens a
+ * draft pull request without an accepted issue; an issue only ever links one (ADR-0086 D13).
+ */
+export function isGitHubOriginContext(context: DraftDeliveryRunContext): boolean {
+  return context.issueBinding === undefined && context.repositoryKind === "github-origin";
+}
+
+/**
+ * The closed outcome of verifying an issue-free run's `origin` before a branch push. A github.com
+ * origin also names its live `owner/repository`, whose identity digest equals the run's own.
+ */
 export type DraftBranchTargetResolution =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly repository?: string }
   | {
       readonly ok: false;
       readonly reason: "remote-drift" | "provider-failed" | "authority-denied";
@@ -83,8 +94,13 @@ export interface DraftDeliveryDependencies {
   readonly resolveRelatedIssues?: (
     context: IssueBoundDraftDeliveryRunContext,
   ) => Promise<readonly number[]>;
+  /**
+   * The repository a pull request opens in. An issue-bound run re-reads its frozen issue; an
+   * issue-free run on a github.com origin is re-verified against its admitted identity and the
+   * checkout's GitHub grant, and no issue is read.
+   */
   readonly resolveTarget: (
-    context: IssueBoundDraftDeliveryRunContext,
+    context: DraftDeliveryRunContext,
   ) => Promise<DraftDeliveryTargetResolution>;
   /**
    * Verifies an issue-free run's `origin` before a branch push: still the remote the run was
@@ -106,6 +122,9 @@ export interface DraftDeliveryDependencies {
   readonly bodyAdapter?: (
     context: DraftDeliveryRunContext,
   ) => GitPullRequestBodyAdapter | undefined;
+  /** See VerifiedCommitServiceOptions.policyAllowsWithoutApproval. */
+  readonly policyAllowsWithoutApproval?:
+    ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;
 }
 
 export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {
@@ -115,9 +134,6 @@ export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {
    * Activity Log still carries the run and its correlation.
    */
   readonly runId?: string;
-  /** See VerifiedCommitServiceOptions.policyAllowsWithoutApproval. */
-  readonly policyAllowsWithoutApproval?:
-    ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;
   /** Existing runtime event ingestion refreshes the public snapshot after every durable phase. */
   readonly onChanged: (record: DraftDeliveryRecord) => void;
 }

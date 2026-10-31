@@ -10,6 +10,13 @@ export type RuntimeGitRequest = CodingToolRequestIdentity & { readonly action: "
     // a narrower mode redeems the operator's approval of this exact call.
     | { readonly operation: "fetch"; readonly approvalProof?: CodingToolApprovalProof | undefined }
     | { readonly operation: "pull"; readonly approvalProof?: CodingToolApprovalProof | undefined }
+    // #3907: one local task branch, created at the current commit and switched to through the Git
+    // kernel; a narrower mode redeems the operator's approval of this exact branch name.
+    | {
+        readonly operation: "branch";
+        readonly branchName: string;
+        readonly approvalProof?: CodingToolApprovalProof | undefined;
+      }
     | {
         readonly operation: "diff";
         readonly scope: "working-tree" | "index";
@@ -33,6 +40,21 @@ export type RuntimeGitSyncOperation = "fetch" | "pull";
 
 export function isRuntimeGitSyncOperation(value: unknown): value is RuntimeGitSyncOperation {
   return value === "fetch" || value === "pull";
+}
+/** The longest branch name a request may carry; Git's own ref names stop at 255 bytes. */
+export const RUNTIME_GIT_BRANCH_NAME_MAX_LENGTH = 255;
+
+/**
+ * A branch name as the wire carries it: a bounded, non-empty string. Whether it is a name Keiko
+ * will create is the Git service's decision, so a bad name is refused with a closed reason the
+ * model can act on instead of as a malformed request.
+ */
+export function isRuntimeGitBranchName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= RUNTIME_GIT_BRANCH_NAME_MAX_LENGTH
+  );
 }
 const PROPOSAL_ID: Readonly<Record<RuntimeGitIndexOperation, RegExp>> = {
   stage: /^stage-\d{1,39}$/u,

@@ -67,7 +67,8 @@ import {
 } from "@oscharko-dev/keiko-activity-log";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 
-const KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS = [
+/** The branches a governed local commit refuses, and a task branch may therefore not be named after. */
+export const KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS = [
   { matchKind: "exact", value: "dev" },
   { matchKind: "exact", value: "main" },
 ] as const;

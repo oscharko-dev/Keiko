@@ -114,3 +114,36 @@ describe("C2 owning Git change admission", () => {
     expect(isCodingRuntimeGitResult(value)).toBe(true);
   });
 });
+
+// #3907 (owner decision 2026-10-31): the closed outcome of the governed task-branch tool.
+describe("closed runtime Git branch result", () => {
+  const branch = { kind: "branch", status: "succeeded", reason: "none", branch: "feature/x" };
+  it.each([
+    ["succeeded", "none"],
+    ["blocked", "invalid-name"],
+    ["blocked", "protected-name"],
+    ["blocked", "branch-exists"],
+    ["blocked", "not-on-base"],
+    ["blocked", "not-local-checkout"],
+    ["blocked", "executable-filters"],
+    ["blocked", "authority-denied"],
+    ["blocked", "policy-block"],
+    ["blocked", "preflight-block"],
+    ["failed", "execution-failed"],
+    ["failed", "rebind-failed"],
+    ["recovery-required", "execution-uncertain"],
+  ] as const)("accepts exactly %s/%s", (status, reason) => {
+    expect(isCodingRuntimeGitResult({ ...branch, status, reason })).toBe(true);
+    expect(isCodingRuntimeGitResult({ kind: "branch", status, reason })).toBe(true);
+  });
+  it("rejects contradictory pairs, unsafe or option-like names and unreviewed fields", () => {
+    expect(
+      isCodingRuntimeGitResult({ ...branch, status: "succeeded", reason: "branch-exists" }),
+    ).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...branch, status: "blocked", reason: "none" })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...branch, status: "pending" })).toBe(false);
+    for (const name of ["-D", "a b", "x..y", "", "a:b"])
+      expect(isCodingRuntimeGitResult({ ...branch, branch: name })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...branch, argv: ["branch"] })).toBe(false);
+  });
+});

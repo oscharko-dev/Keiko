@@ -828,7 +828,12 @@ describe("production issue-free branch push target (ADR-0085 D1b)", () => {
   }
   it("verifies a GitHub origin and pins its canonical push URL for this exact effect context", async () => {
     const f = await fixture({ issueFree: true });
-    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({ ok: true });
+    // The live repository rides with the verified origin, so the run's pull request binding names it
+    // (ADR-0086 D13); a foreign remote below answers no repository.
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: true,
+      repository: "owner/repo",
+    });
     f.factory.publishSeams(f.branchContext).publishAdapterFactory?.(f.branchContext.workspace);
     expect(lastVerifiedRemoteUrl()).toBe("https://github.com/owner/repo.git");
     expect(() =>
@@ -865,6 +870,42 @@ describe("production issue-free branch push target (ADR-0085 D1b)", () => {
         formatActivityLogProofLine(line),
       ),
     ).toMatchObject({ state: "ready", reason: "completed" });
+  });
+  it("resolves an issue-free GitHub run's pull request repository without reading any issue", async () => {
+    const f = await fixture({ issueFree: true });
+    expect(await f.factory.resolveTarget(f.branchContext)).toEqual({
+      ok: true,
+      repository: "owner/repo",
+    });
+    expect(f.readJson).not.toHaveBeenCalled();
+    expect(f.events.at(-1)).toMatchObject({
+      op: "git.draft-target.resolved",
+      correlationId: "delivery-42",
+      extra: { state: "ready", reason: "completed" },
+    });
+    expect(f.events.at(-1)?.extra).not.toHaveProperty("issueBindingDigest");
+  });
+  it("holds an issue-free pull request target to the checkout's GitHub grant", async () => {
+    const f = await fixture({ issueFree: true });
+    const repositoryId = githubIssueReaderRepositoryId(f.root);
+    f.store.updateGitHubIssueReaderAuthorization(repositoryId ?? "missing", false, 1);
+    expect(await f.factory.resolveTarget(f.branchContext)).toEqual({
+      ok: false,
+      reason: "authority-denied",
+    });
+    // The push of the same run needs no GitHub grant and stays admissible.
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: true,
+      repository: "owner/repo",
+    });
+  });
+  it("refuses an issue-free pull request target whose origin moved to another repository", async () => {
+    const f = await fixture({ issueFree: true });
+    git(f.root, "remote", "set-url", "origin", "https://github.com/foreign/repo.git");
+    expect(await f.factory.resolveTarget(f.branchContext)).toEqual({
+      ok: false,
+      reason: "remote-drift",
+    });
   });
   it.each([
     ["an origin that moved to another repository", FOREIGN],

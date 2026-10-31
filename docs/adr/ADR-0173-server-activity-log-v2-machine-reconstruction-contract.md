@@ -1727,7 +1727,9 @@ and a turn that ended empty after reasoning from `gateway.retry.scheduled reason
 upstream (#3873, F23): `coding-sidecar.gateway.request-validated` records
 `droppedReasoningMessageCount`, the number of prior assistant messages that carried nothing but
 reasoning and were dropped before the gateway request was built (the line's prompt estimate and
-`inputMessageCount` describe what is sent), a count and never the reasoning.
+`inputMessageCount` describe what is sent), a count and never the reasoning. The same line's
+optional `toolCallTextMessageCount` counts the assistant messages whose text beside their tool calls
+is resent upstream as written (#3907), never the text.
 A refused turn is answered to the runtime as a final 400 — an HTTP 400 before the stream opened, an
 error chunk with `code: 400` and `type: invalid_request_error` after it — which OpenCode 2.0.10
 reads as final; `finish_reason: "error"` or a 503, which it retries, stays the answer to everything

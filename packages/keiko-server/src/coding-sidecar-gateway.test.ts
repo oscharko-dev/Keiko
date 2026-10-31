@@ -57,9 +57,14 @@ import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contrac
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { buildRedactor, CONVERSATION_READINESS_MAX_AGE_MS, type UiHandlerDeps } from "./deps.js";
+import {
+  buildRedactor,
+  CONVERSATION_READINESS_MAX_AGE_MS,
+  currentConversationReadinessObservation,
+  type UiHandlerDeps,
+} from "./deps.js";
 import type { VerifiedModelCapabilityObservation } from "./deps.js";
-import { runGatewayReadiness } from "./gateway-readiness.js";
+import { runGatewayReadiness, stopConfiguredConversationReadiness } from "./gateway-readiness.js";
 import { handleModels } from "./read-handlers.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -1162,6 +1167,8 @@ describe("coding-sidecar gateway", () => {
       ["keiko_changeset_edit", "e22472d477c4bafd0e04282d09baee185286dad3d984394740c681c7f8477a4e"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
+      // #3907: the governed task branch, whose only argument is the new branch's name.
+      ["keiko_git_branch", "798fbc8729f917eeaa10ce6a7a84ddd73033d3521b66ce6e5209ae929114fd79"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
       ["keiko_git_diff", "0d3a0f35cca521a4883ce70ad847f2585425483ae0d9c58d8ff6cea14119c079"],
       // #3902 AC2: `unstage` joined the redeemable kinds and the proposal-id prefixes.
@@ -2103,6 +2110,102 @@ describe("coding-sidecar gateway", () => {
       "coding-sidecar.gateway.outcome.line",
       formatActivityLogProofLine(outcome ?? {}),
     );
+  });
+
+  // #3907 AC3: a coding run pauses the chat model's background renewal, so without this an expired
+  // success left the Workbench reading "still checking this model" after every long run.
+  it("renews the model's expired chat readiness from an accepted answer, and nothing else", async () => {
+    const sink = captureServerLog("info");
+    const answer = (deps: UiHandlerDeps): Promise<unknown> =>
+      handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            stream: true,
+            messages: [{ role: "user", content: "answer" }],
+            tools: modelVisibleTools(),
+          }),
+          res: mockResponse({ captureBody: true }).res,
+        },
+        { ...deps, codingSidecarGatewayEvidenceAggregator: { record: vi.fn() } },
+      );
+    const base = (
+      runId: string,
+      finishReason: NormalizedResponse["finishReason"] = "stop",
+    ): UiHandlerDeps =>
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse({
+            ...assistantResponse("azure-coding-model"),
+            content: "Done.",
+            finishReason,
+          }),
+      );
+    const expired = new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString();
+    const withObservation = (
+      runId: string,
+      conversationReady: boolean,
+      finishReason: NormalizedResponse["finishReason"] = "stop",
+    ): {
+      readonly deps: UiHandlerDeps;
+      readonly holder: ReturnType<typeof probeVerifiedGatewayConfig>;
+    } => {
+      const deps = base(runId, finishReason);
+      if (deps.config === undefined) throw new TypeError("the fixture has a gateway config");
+      const holder = probeVerifiedGatewayConfig(deps.config);
+      holder.recordVerifiedCapability(
+        "azure-coding-model",
+        { conversationReady },
+        expired,
+        holder.generation(),
+      );
+      return { deps: { ...deps, gatewayConfig: holder }, holder };
+    };
+    const renewal = (runId: string): unknown =>
+      sink.events.find(
+        (event) => event.op === "coding-sidecar.gateway.outcome" && event.extra?.runId === runId,
+      )?.extra?.readinessRenewal;
+
+    const expiredSuccess = withObservation("run-renews", true);
+    expect(
+      currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model"),
+    ).toBeUndefined();
+    expect(await answer(expiredSuccess.deps)).toBe(STREAMING);
+    expect(currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model")).toBe(
+      true,
+    );
+    expect(renewal("run-renews")).toBe("renewed");
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(
+        sink.events.find(
+          (event) =>
+            event.extra?.runId === "run-renews" && event.op === "coding-sidecar.gateway.outcome",
+        ) ?? {},
+      ),
+    );
+
+    // A failed observation is never repaired by an answer: only a probe can clear it.
+    const failed = withObservation("run-failed-proof", false);
+    await answer(failed.deps);
+    expect(currentConversationReadinessObservation(failed.deps, "azure-coding-model")).toBe(false);
+    expect(renewal("run-failed-proof")).toBe("not-renewable");
+
+    // A filtered answer reached the runtime but does not prove the model served the turn.
+    const filtered = withObservation("run-filtered", true, "content_filter");
+    await answer(filtered.deps);
+    expect(
+      currentConversationReadinessObservation(filtered.deps, "azure-coding-model"),
+    ).toBeUndefined();
+    expect(renewal("run-filtered")).toBe("not-renewable");
+
+    // Without a success to renew, an answer establishes nothing.
+    const holderless = base("run-no-holder");
+    await answer(holderless);
+    expect(renewal("run-no-holder")).toBe("not-renewable");
   });
 
   it("preserves a smaller positive provider token count over the stream byte estimate", async () => {
@@ -3908,6 +4011,47 @@ describe("coding-sidecar gateway", () => {
     });
 
     expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
+  });
+
+  // #3907 AC3: an expired success read as `model-verification-pending` while nothing checked the
+  // model, so the Workbench polled a promise no probe kept until another surface asked for models.
+  it("starts the one on-demand check when a profile read finds the chat success expired", async () => {
+    const context = {
+      req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+      res: mockResponse().res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      correlationId: "corr-profile-expired",
+    } satisfies RouteContext;
+    const config = configValue(provider(), capability());
+    const holder = probeVerifiedGatewayConfig(config);
+    holder.recordVerifiedCapability(
+      "azure-coding-model",
+      { conversationReady: true },
+      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      holder.generation(),
+    );
+    const fetch = vi.fn(() =>
+      Promise.resolve(
+        Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      ),
+    );
+    const deps: UiHandlerDeps = {
+      ...depsValue(config),
+      gatewayConfig: holder,
+      gatewayReadinessFetch: fetch,
+    };
+    try {
+      const result = await handleCodingSidecarGatewayProfile(context, deps);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(result.body).toMatchObject({ status: "available", modelAlias: "azure-coding-model" });
+
+      // A fresh success adds nothing: a polling Workbench never probes on its own.
+      await handleCodingSidecarGatewayProfile(context, deps);
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      await stopConfiguredConversationReadiness(deps);
+    }
   });
 
   // #3591 (1.1.7): the browser reads this profile with a 15 s deadline. While the automatic probe
@@ -6207,10 +6351,10 @@ describe("coding sidecar gateway rejection activity log", () => {
       extra: {
         reason: "tool-contract-drift",
         runId: "run-1",
-        expectedToolCount: 19,
+        expectedToolCount: 20,
         receivedToolCount: 2,
         unexpectedToolCount: 0,
-        missingToolCount: 17,
+        missingToolCount: 18,
         completeness: "complete",
         loss: "none",
       },
@@ -6242,7 +6386,7 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(result).toMatchObject({ status: 403 });
     expect(sink.events[0]?.extra).toMatchObject({
       unexpectedToolCount: 1,
-      missingToolCount: 19,
+      missingToolCount: 20,
       completeness: "complete",
       loss: "none",
     });
@@ -8482,6 +8626,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
     expect(validated?.extra).toMatchObject({
       inputMessageCount: 6,
       droppedReasoningMessageCount: 2,
+      toolCallTextMessageCount: 1,
       offeredToolCount: OPENCODE_MODEL_VISIBLE_TOOL_NAMES.length,
     });
     expect(
@@ -8489,7 +8634,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
         "coding-sidecar.gateway.request-validated.line",
         formatActivityLogProofLine(validated ?? {}),
       ),
-    ).toMatchObject({ droppedReasoningMessageCount: 2 });
+    ).toMatchObject({ droppedReasoningMessageCount: 2, toolCallTextMessageCount: 1 });
     expect(JSON.stringify(sink.events)).not.toContain("private");
   });
 
@@ -9686,7 +9831,7 @@ describe("inactive Code Mode readiness selection", () => {
     expect(readiness.isVerified("run-1")).toBe(false);
   });
 
-  it("advertises two outer tools and retains the eighteen canonical inner bindings", async () => {
+  it("advertises two outer tools and retains the nineteen canonical inner bindings", async () => {
     const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
     const chat = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
@@ -9711,8 +9856,8 @@ describe("inactive Code Mode readiness selection", () => {
       "execute",
       "question",
     ]);
-    expect(catalog?.projection.tools).toHaveLength(18);
-    expect(catalog?.offered.toolRefs).toHaveLength(18);
+    expect(catalog?.projection.tools).toHaveLength(19);
+    expect(catalog?.offered.toolRefs).toHaveLength(19);
     expect(catalog?.projection.profile).toEqual({
       id: "opencode-code-mode",
       version: 1,

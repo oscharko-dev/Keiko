@@ -24,7 +24,7 @@ import { startJiraChatTransports } from "./jira-chat-4081-transport.mjs";
 
 const directory = process.env.KEIKO_E2E_JIRA_STATE;
 if (!directory) throw new TypeError("KEIKO_E2E_JIRA_STATE is required");
-const port = Number(process.env.KEIKO_E2E_UI_PORT ?? "33581");
+const port = Number(process.env.KEIKO_E2E_UI_PORT ?? "32381");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 const transport = await startJiraChatTransports(directory, port + 1, port + 2);
 const modelId = "jira-browser-verified";

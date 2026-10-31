@@ -1127,6 +1127,48 @@ describe("OpenAiAdapter.call", () => {
       tool_call_id: "call_1",
     });
   });
+
+  // #3907 AC3: the text a model wrote next to its tool calls is part of the conversation it sees
+  // again on the next turn, exactly as a standalone OpenCode run resends it. Only an assistant turn
+  // without text keeps the bare `content: null` of a tool-only call.
+  it("resends the text an assistant turn wrote next to its tool calls", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        ...REQUEST,
+        messages: [
+          { role: "user", content: "search" },
+          {
+            role: "assistant",
+            content: "I will search for it first.",
+            toolCalls: [{ id: "call_1", name: "search", arguments: { q: "hi" } }],
+          },
+          { role: "tool", content: "result", toolCallId: "call_1" },
+          {
+            role: "assistant",
+            content: "  \n",
+            toolCalls: [{ id: "call_2", name: "search", arguments: { q: "again" } }],
+          },
+          { role: "tool", content: "result", toolCallId: "call_2" },
+        ],
+      },
+      CONFIG,
+    );
+    const body = sentBody as { messages: { role: string; content: string | null }[] };
+    expect(body.messages[1]).toMatchObject({
+      role: "assistant",
+      content: "I will search for it first.",
+      tool_calls: [{ id: "call_1", function: { name: "search", arguments: '{"q":"hi"}' } }],
+    });
+    expect(body.messages[3]).toMatchObject({ role: "assistant", content: null });
+  });
 });
 
 // ---------------------------------------------------------------------------

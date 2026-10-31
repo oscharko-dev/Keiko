@@ -676,9 +676,12 @@ allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemp
 sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
 upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
 assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
-records the number dropped as `droppedReasoningMessageCount`. The gateway hands reasoning only to a
-call that asks for it with the explicit `reasoningDelivery: "forward"` (the coding sidecar route
-alone); the `coding-workbench` latency profile selects timeout floors only.
+records the number dropped as `droppedReasoningMessageCount`. The text a model wrote beside its tool
+calls is resent as written, like a standalone OpenCode run (#3907); only a tool-calling turn without
+text goes upstream as `content: null`, and the same line counts the others as
+`toolCallTextMessageCount`. The gateway hands reasoning only to a call that asks for it with the
+explicit `reasoningDelivery: "forward"` (the coding sidecar route alone); the `coding-workbench`
+latency profile selects timeout floors only.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`

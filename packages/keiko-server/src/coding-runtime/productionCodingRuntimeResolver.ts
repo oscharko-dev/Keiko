@@ -1,8 +1,10 @@
 import {
   CodingRuntimeAgentUnsupportedError,
   CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeJiraPodRefusedError,
   CodingRuntimeLaunchRejectedError,
 } from "./launchFailure.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
@@ -15,6 +17,9 @@ import type {
   DraftDeliveryService,
 } from "../gitDelivery/draftDeliveryTypes.js";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { RuntimeGitTaskBranchPort } from "../gitDelivery/runtimeGitBranch.js";
+import type { GovernedTaskBranches } from "./governedTaskBranches.js";
+import { createProductionTaskBranchPort } from "./productionTaskBranchPort.js";
 import type { GitDeliveryDescriptionAuthorityMintRequest } from "../gitDelivery/runBoundAuthority.js";
 import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
 import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
@@ -218,9 +223,20 @@ export interface ProductionRuntimeBackendResolver {
 }
 
 export interface ProductionCodingRuntimeResolverInput {
+  /**
+   * The Jira Pods a Coding run may be started with (owner decision 2026-10-30). Absent, a start that
+   * names a Pod is refused before the confirmation is consumed.
+   */
+  readonly jiraPods?: CodingJiraPods | undefined;
   readonly verifiedCommit?: VerifiedCommitRuntimeDependencies;
   readonly draftDelivery?: DraftDeliveryDependencies;
   readonly workspaceAuthority: ProductionWorkspaceAuthorityInput;
+  /**
+   * The task branches Keiko's own `keiko_git_branch` moved runs onto (governedTaskBranches.ts,
+   * #3907). The same instance backs `workspaceAuthority.governedTaskBranch` and
+   * `verifiedCommit.governedTaskBranch`; absent, a run cannot be given a task branch.
+   */
+  readonly governedTaskBranches?: GovernedTaskBranches | undefined;
   readonly backend: ProductionRuntimeBackendResolver;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
@@ -675,12 +691,14 @@ function launchResolver(
   const preparation = repositoryPreparationFor(input);
   return {
     ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
-    resolve: (request): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
-      const context = launchContext(input, preparation, request);
+    resolve: (requested): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
+      const context = launchContext(input, preparation, requested);
       // Before the one-use confirmation is consumed or authority minted: a refused agent leaves
       // nothing to undo, and the operator's confirmation stays valid for the corrected request.
-      refuseUnsupportedAgent(request.agent, context.runtimeSource, shared.toolProfile);
-      refuseUnsupportedPromptInputs(request, context.runtimeSource, shared.toolProfile);
+      refuseUnsupportedAgent(requested.agent, context.runtimeSource, shared.toolProfile);
+      refuseUnsupportedPromptInputs(requested, context.runtimeSource, shared.toolProfile);
+      // The Pod the human chose is checked here too, and its identity joins the confirmation claim.
+      const request = withBoundJiraPod(input, requested, context, shared.toolProfile);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
       const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
@@ -751,6 +769,32 @@ function refuseUnsupportedPromptInputs(
   }
 }
 
+/**
+ * The Jira Pod the human picked (owner decision 2026-10-30), checked before the confirmation is
+ * consumed: only the caller's own, ready Pod of a native keiko-sidecar run can be bound. The bound
+ * identity (Pod, credential generation, verification revision) travels with the request, joins the
+ * confirmation claim so it cannot be swapped, and is the identity every later Jira call must match.
+ */
+function withBoundJiraPod(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  toolProfile: OpenCodeToolProfile,
+): ProductionRuntimeBackendInput["request"] {
+  if (request.jiraPodId === undefined) return request;
+  const resolution =
+    context.runtimeSource !== "keiko-sidecar" || toolProfile !== "native"
+      ? ({ ok: false, reason: "unsupported-runtime" } as const)
+      : (input.jiraPods?.resolve(request.jiraPodId) ??
+        ({ ok: false, reason: "unavailable" } as const));
+  input.jiraPods?.recordBind(
+    request.runId,
+    resolution.ok ? { outcome: "bound" } : { outcome: "refused", reason: resolution.reason },
+  );
+  if (!resolution.ok) throw new CodingRuntimeJiraPodRefusedError(resolution.reason);
+  return { ...request, jiraPod: resolution.binding };
+}
+
 function consumeStartConfirmation(
   input: ProductionCodingRuntimeResolverInput,
   request: ProductionRuntimeBackendInput["request"],
@@ -795,6 +839,7 @@ function confirmationFacts(
     ...(context.issueBinding === undefined
       ? {}
       : { issueBindingDigest: context.issueBinding.bindingDigest }),
+    ...(request.jiraPod === undefined ? {} : { jiraPod: request.jiraPod }),
   };
 }
 
@@ -899,18 +944,16 @@ function repositoryRuntimeServices(
     onRuntimeEvent,
     notifyVerifiedHeadAdvanced,
   );
-  const runtimeGitService = createProductionRuntimeGitService(
-    input.verifiedCommit,
-    binding,
-    () => authority.effectiveMode(),
-    () => verifiedCommitService?.invalidate(),
-  );
   const draftDeliveryService = createProductionDraftDeliveryService(
     input.draftDelivery,
     input.verifiedCommit,
     binding,
     onRuntimeEvent,
   );
+  const runtimeGitService = runtimeGitServiceFor(input, binding, authority, {
+    verifiedCommitService,
+    draftDeliveryService,
+  });
   const codingToolApprovals = createCodingToolApprovalBridge(
     verifiedCommitService,
     runtimeGitService,
@@ -924,6 +967,48 @@ function repositoryRuntimeServices(
     ciObservationService,
     codingToolApprovals,
   };
+}
+
+// The runtime Git service of one run. What a branch change makes stale, open commit proposals and
+// their verification, and push and pull-request proposals, is invalidated through the two services
+// that hold them (#3907).
+function runtimeGitServiceFor(
+  input: ProductionCodingRuntimeResolverInput,
+  binding: VerifiedCommitRuntimeBinding,
+  authority: CodingRuntimeAuthorityService,
+  held: {
+    readonly verifiedCommitService: VerifiedCommitService | undefined;
+    readonly draftDeliveryService: DraftDeliveryService | undefined;
+  },
+): RuntimeGitService | undefined {
+  return createProductionRuntimeGitService(
+    input.verifiedCommit,
+    binding,
+    () => authority.effectiveMode(),
+    () => held.verifiedCommitService?.invalidate(),
+    {
+      port: taskBranchPortFor(input, binding.context, authority),
+      invalidateDelivery: () => held.draftDeliveryService?.invalidate(),
+    },
+  );
+}
+
+// The workspace side of a governed task branch for this run (productionTaskBranchPort.ts); absent
+// when the deployment composes no branch record or no lifecycle that can adopt one, in which case
+// `keiko_git_branch` refuses with `not-local-checkout`.
+function taskBranchPortFor(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  authority: CodingRuntimeAuthorityService,
+): RuntimeGitTaskBranchPort | undefined {
+  return input.governedTaskBranches === undefined
+    ? undefined
+    : createProductionTaskBranchPort({
+        workspaceId: context.workspaceId,
+        lifecycle: input.workspaceAuthority.workspaceLifecycle,
+        branches: input.governedTaskBranches,
+        authority,
+      });
 }
 
 function runtimeCiServices(

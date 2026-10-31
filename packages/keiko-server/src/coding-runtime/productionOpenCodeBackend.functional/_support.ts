@@ -93,6 +93,7 @@ export interface ScriptState {
     | "probe"
     | "index"
     | "sync"
+    | "branch"
     | "websearch";
   calls: number;
   readonly old: string;
@@ -828,6 +829,7 @@ function processResponse(script: ScriptState, transcript: string): NormalizedRes
     return lifecycleResponse(script, transcript);
   if (script.mode === "index") return indexResponse(transcript);
   if (script.mode === "sync") return syncResponse(transcript);
+  if (script.mode === "branch") return branchResponse(transcript);
   if (script.mode === "websearch") return webSearchResponse(transcript);
   return script.mode === "probe" ? probeResponse(script, transcript) : undefined;
 }
@@ -858,6 +860,33 @@ function syncResponse(transcript: string): NormalizedResponse {
     (): NormalizedResponse =>
       tool("shell", {
         command: `printf '${FUNCTIONAL_SYNC_HEAD_MARKER}%s\\n' "$(git log -1 --format=%s)"`,
+      }),
+  ];
+  return steps[toolReplyCount(transcript)]?.() ?? normal();
+}
+
+/** Printed by the agent's shell once it has the branch Keiko created for it checked out. */
+export const FUNCTIONAL_BRANCH_HEAD_MARKER = "branch.head=";
+/** The task branch the journey asks Keiko for. */
+export const FUNCTIONAL_BRANCH_NAME = "feature/x";
+
+// #3907: a model on a Local checkout of `main` tries its shell's own `git checkout -b` first (refused
+// in every mode, with the pointer to the governed tool), edits the working tree, asks Keiko for a task
+// branch through `keiko_git_branch`, reads Git's state through Keiko's own `keiko_git_status` (which
+// only answers once the run's authority stands on the new branch) and prints the branch it is on with
+// its own Git. Each step answers the previous tool result, as a model does.
+function branchResponse(transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX)) return normal();
+  const steps: readonly (() => NormalizedResponse)[] = [
+    (): NormalizedResponse =>
+      tool("shell", { command: `git checkout -b ${FUNCTIONAL_BRANCH_NAME}` }),
+    (): NormalizedResponse =>
+      tool("shell", { command: `printf 'edited by the agent\\n' >> ${FUNCTIONAL_INDEX_PATH}` }),
+    (): NormalizedResponse => tool("keiko_git_branch", { name: FUNCTIONAL_BRANCH_NAME }),
+    (): NormalizedResponse => tool("keiko_git_status", {}),
+    (): NormalizedResponse =>
+      tool("shell", {
+        command: `printf '${FUNCTIONAL_BRANCH_HEAD_MARKER}%s\\n' "$(git rev-parse --abbrev-ref HEAD)"`,
       }),
   ];
   return steps[toolReplyCount(transcript)]?.() ?? normal();
@@ -1099,6 +1128,8 @@ function tool(
     | "keiko_git_stage"
     | "keiko_git_execute"
     | "keiko_git_sync"
+    | "keiko_git_branch"
+    | "keiko_git_status"
     | "question"
     | "shell"
     | "websearch",

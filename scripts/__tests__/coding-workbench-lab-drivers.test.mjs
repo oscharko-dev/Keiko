@@ -8,6 +8,7 @@
 // talks to a dev server: its two checkout routes are modelled by `devServer` below.
 
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -43,6 +44,7 @@ import {
 } from "../testing/coding-workbench-lab/wb-run.mjs";
 import {
   answerGates,
+  chooseOption,
   operateRun as operateUiRun,
   selectCheckout as selectUiCheckout,
 } from "../testing/coding-workbench-lab/wb-ui.mjs";
@@ -337,6 +339,103 @@ describe("wb-ui.mjs: the gates of a run in the Workbench", () => {
   });
 });
 
+describe("wb-ui.mjs: choosing an option of a Workbench select", () => {
+  // A KeikoSelect option renders its label and its description in separate elements; the accessible
+  // name joins them, so a prefix match on the name could choose a longer near-match.
+  function selectPage(labels, { offeredFrom = 0, emptyReads = 0 } = {}) {
+    const clicked = [];
+    const escapes = [];
+    let opened = 0;
+    let reads = 0;
+    const option = (label) => ({
+      locator: () => ({ allTextContents: async () => [label] }),
+      click: async () => {
+        clicked.push(label);
+      },
+    });
+    // The requested labels are offered only from the `offeredFrom`-th opening on (0 = at once), as
+    // a model returns to the select after its readiness re-probe.
+    // The first `emptyReads` counts after each opening see the list the picker empties while it
+    // re-reads the catalog.
+    const offered = () => (opened > offeredFrom ? labels : labels.slice(0, 1));
+    const counted = () => {
+      reads += 1;
+      return reads <= emptyReads ? 0 : offered().length;
+    };
+    const page = {
+      getByRole: (role) =>
+        role === "combobox"
+          ? {
+              click: async () => {
+                opened += 1;
+                reads = 0;
+              },
+            }
+          : { count: async () => counted(), nth: (index) => option(offered()[index]) },
+      keyboard: {
+        press: async (key) => {
+          escapes.push(key);
+        },
+      },
+    };
+    return { page, clicked, escapes, opened: () => opened };
+  }
+
+  it("chooses the option whose label is exactly the requested one", async () => {
+    const { page, clicked } = selectPage(["Jira: none", "Jira: Lab Pod 2", "Jira: Lab Pod"]);
+    await chooseOption(page, "Jira Pod for this run", "Jira: Lab Pod");
+    expect(clicked).toEqual(["Jira: Lab Pod"]);
+  });
+
+  it("refuses a Pod that is offered only as a longer near-match, at once and clicking nothing", async () => {
+    const { page, clicked, opened } = selectPage(["Jira: none", "Jira: Lab Podcast"]);
+    await expect(chooseOption(page, "Jira Pod for this run", "Jira: Lab Pod")).rejects.toThrow(
+      /no option is labelled "Jira: Lab Pod"/u,
+    );
+    expect(clicked).toEqual([]);
+    // Only the model select waits for a readiness re-probe; this select was opened exactly once.
+    expect(opened()).toBe(1);
+  });
+
+  it("waits for a model that returns to the select after its readiness re-probe", async () => {
+    const { page, clicked, escapes } = selectPage(["Model: none", "gemma-4-31b-it"], {
+      offeredFrom: 2,
+    });
+    await chooseOption(page, "Coding model", "gemma-4-31b-it", { waitMs: 60_000, retryMs: 0 });
+    expect(clicked).toEqual(["gemma-4-31b-it"]);
+    expect(escapes).toEqual(["Escape", "Escape"]);
+  });
+
+  it("reads the model select only once its re-read catalog has landed", async () => {
+    const { page, clicked, escapes, opened } = selectPage(["Model: none", "gemma-4-31b-it"], {
+      emptyReads: 2,
+    });
+    await chooseOption(page, "Coding model", "gemma-4-31b-it", {
+      waitMs: 60_000,
+      retryMs: 0,
+      pollMs: 1,
+    });
+    expect(clicked).toEqual(["gemma-4-31b-it"]);
+    expect(escapes).toEqual([]);
+    expect(opened()).toBe(1);
+  });
+
+  it("refuses the model once the readiness wait has run out", async () => {
+    let clock = 0;
+    const { page, clicked } = selectPage(["Model: none", "gemma-4-31b-it"], {
+      offeredFrom: Number.POSITIVE_INFINITY,
+    });
+    const now = () => {
+      clock += 20_000;
+      return clock;
+    };
+    await expect(
+      chooseOption(page, "Coding model", "gemma-4-31b-it", { waitMs: 60_000, retryMs: 0, now }),
+    ).rejects.toThrow(/no option is labelled "gemma-4-31b-it"/u);
+    expect(clicked).toEqual([]);
+  });
+});
+
 describe("wb-ui.mjs: the change review of Ask for approval", () => {
   const gates = (approve) => ({ approve, decided: new Set() });
   const READY = { visible: true, enabled: true };
@@ -425,12 +524,15 @@ describe("wb-ui.mjs: the change review of Ask for approval", () => {
 });
 
 /** A lab copy and a symlink to it: the dev server only knows a repository by its real path. */
-function labRepository() {
+// A lab copy is a Git checkout unless `git: false`: the drivers bind a copy without `.git` as an
+// ordinary folder, as the UI does (T14-T16).
+function labRepository({ git = true } = {}) {
   const real = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lab-drivers-")));
   const alias = `${real}-alias`;
   symlinkSync(real, alias);
   TEMP_PATHS.push(real, alias);
   writeFileSync(join(real, "package.json"), JSON.stringify({ name: LAB_REPOSITORY_NAME }));
+  if (git) mkdirSync(join(real, ".git"));
   return { real, alias };
 }
 
@@ -468,6 +570,9 @@ function devServer({ refuse, registration } = {}) {
         if (registration !== undefined) return registration;
         projects.add(body.path);
         return { status: 201, json: { project: { path: body.path } } };
+      }
+      if (path === "/api/task-workspaces/folder") {
+        return projects.has(body.root) ? { status: 200, json: { active: {} } } : MISSING_REPOSITORY;
       }
       if (path !== "/api/task-workspaces/local") return undefined;
       if (refuse !== undefined) return refuse;
@@ -531,6 +636,21 @@ describe("wb-run.mjs: the lab copy is registered and selected before a run start
         method: "POST",
         path: "/api/task-workspaces/local",
         body: { root: real, branch: "main", requestedBy: "studio-operator" },
+      },
+    ]);
+  });
+
+  it("binds a copy without .git as a folder workspace, with no branch", async () => {
+    silent();
+    const { real, alias } = labRepository({ git: false });
+    const session = runSession(devServer());
+    await selectApiCheckout(session, alias, "main");
+    expect(session.calls).toEqual([
+      { method: "POST", path: "/api/projects", body: { path: real } },
+      {
+        method: "POST",
+        path: "/api/task-workspaces/folder",
+        body: { root: real, requestedBy: "studio-operator" },
       },
     ]);
   });

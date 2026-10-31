@@ -108,6 +108,38 @@ describe("issue-free branch push to a local bare origin", () => {
     GIT_FIXTURE_TIMEOUT_MS,
   );
 
+  // AC3 lab T17 (round I, #3907): Full access committed the staged candidate beside the untracked
+  // package-lock.json its own `npm install` had left, and then every push was refused as
+  // remote-drift because the push re-read demanded a tree with no untracked file at all. The push
+  // sends the verified commit only, so Full access admits the same untracked files the commit did;
+  // every other mode still refuses.
+  it(
+    "pushes a Full-access commit while an untracked file lies beside it, and refuses in other modes",
+    async () => {
+      const subject = await branchFixture();
+      const head = subject.git(["rev-parse", "HEAD"]);
+      writeFileSync(join(subject.root, "package-lock.json"), "{}\n");
+      await expect(subject.service.proposePush()).resolves.toMatchObject({
+        status: "unavailable",
+      });
+      expect(subject.remoteHead(subject.branch)).toBeUndefined();
+
+      const fullAccess = new DraftDeliveryController({
+        ...subject.options,
+        policyAllowsWithoutApproval: (): boolean => true,
+      });
+      const proposal = await fullAccess.proposePush();
+      const id = recordedId(subject, proposal);
+      const result = await fullAccess.executeApproved(id, undefined, { check: () => true });
+      expect(result, JSON.stringify(subject.events)).toMatchObject({
+        status: "recorded",
+        record: { phase: "pushed", reason: "completed" },
+      });
+      expect(subject.remoteHead(subject.branch)).toBe(head);
+    },
+    GIT_FIXTURE_TIMEOUT_MS,
+  );
+
   it(
     "never substitutes a later local commit for the approved one",
     async () => {
@@ -191,42 +223,11 @@ describe("issue-free branch push to a local bare origin", () => {
   );
 });
 
+// The pull request refusals of an issue-free run - a foreign origin (`github-origin-required`) and a
+// repository with no origin (`remote-required`) - live with the github.com origin journey in
+// draftDeliveryGitHubOrigin.test.ts. This file's former `issue-binding-required` refusal encoded the
+// retired rule that a pull request needs an issue (ADR-0086 D13).
 describe("issue-free delivery refusals name their true cause", () => {
-  it(
-    "refuses a pull request with issue-binding-required and logs the refusal",
-    async () => {
-      const subject = await branchFixture();
-      await approveAndExecute(subject, await subject.service.proposePush());
-      subject.events.length = 0;
-      expect(await subject.service.proposePullRequest("feat: bounded change")).toEqual({
-        status: "unavailable",
-        reason: "issue-binding-required",
-      });
-      expect(subject.createCount).toBe(0);
-      expect(refusalLines(subject)).toEqual([
-        expect.objectContaining({
-          runId: "run-1",
-          reason: "issue-binding-required",
-          errorKind: "unavailable",
-          level: "warn",
-        }),
-      ]);
-      const line = subject.events.find((event) => event.op === "git.draft-delivery");
-      expect(line?.correlationId).toBe("draft-delivery-test");
-      const persisted = expectActivityLogProof(
-        "git.draft-delivery.emitted-line",
-        formatActivityLogProofLine(line ?? {}),
-      );
-      expect(persisted).toMatchObject({
-        phase: "refused",
-        reason: "issue-binding-required",
-        errorKind: "unavailable",
-        correlationId: "draft-delivery-test",
-      });
-    },
-    GIT_FIXTURE_TIMEOUT_MS,
-  );
-
   it(
     "refuses a repository with no origin as remote-required without any effect",
     async () => {

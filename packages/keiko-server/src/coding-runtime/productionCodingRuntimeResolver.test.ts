@@ -25,7 +25,10 @@ import {
 import {
   CodingRuntimeAgentUnsupportedError,
   CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeJiraPodRefusedError,
 } from "./launchFailure.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import type { CodingJiraPodBinding, CodingJiraPodResolution } from "./codingJiraPodBinding.js";
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -1051,6 +1054,164 @@ describe("production coding runtime resolver", () => {
   // KfQ 3954841973: a backend process (plus its HTTP/SSE client and tool bridge) was already
   // spawned by `createRun` below by the time the lease broker rejects attachment -- verifies the
   // already-built backend is disposed instead of leaked when that happens.
+  describe("Jira Pod admission at launch (owner decision 2026-10-30)", () => {
+    const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+    const BOUND: CodingJiraPodBinding = {
+      podId: POD,
+      authenticationGeneration: 3,
+      verificationRevision: 1,
+    };
+
+    function fakePods(resolution: CodingJiraPodResolution) {
+      const pods = {
+        resolve: vi.fn(() => resolution),
+        recordBind: vi.fn(),
+        connections: vi.fn(),
+        attach: vi.fn(),
+        close: vi.fn(),
+      };
+      return { pods, port: pods as unknown as CodingJiraPods };
+    }
+
+    function jiraHost(
+      options: {
+        readonly resolution?: CodingJiraPodResolution;
+        readonly toolProfile?: OpenCodeToolProfile;
+        readonly withPods?: boolean;
+      } = {},
+    ) {
+      const fixture = workspaceFixture();
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      const { pods, port } = fakePods(options.resolution ?? { ok: true, binding: BOUND });
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+          backend: { createRun, toolProfile: options.toolProfile ?? "native" },
+          ...(options.withPods === false ? {} : { jiraPods: port }),
+        }),
+      );
+      if (host === undefined) throw new Error("expected qualified host");
+      const request = launchRequest(fixture.workspace);
+      return { host, createRun, pods, confirmations, fixture, request };
+    }
+
+    it("binds the chosen Pod's identity into the confirmation claim and hands it to the backend", () => {
+      const { host, createRun, pods, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
+          ...request,
+          jiraPod: BOUND,
+        }),
+      );
+
+      host.launchResolver.resolve({ ...request, jiraPodId: POD });
+
+      expect(pods.resolve).toHaveBeenCalledWith(POD);
+      expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "bound" });
+      expect(createRun.mock.calls[0]?.[0].request.jiraPod).toEqual(BOUND);
+    });
+
+    it("refuses a confirmation issued for another Pod credential, so the binding cannot be swapped", () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, {
+          ...request,
+          jiraPod: { ...BOUND, authenticationGeneration: 2 },
+        }),
+      );
+
+      expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+        "runtime-start-unconfirmed",
+      );
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
+    it("keeps a claim without a Pod from starting a run that names one", () => {
+      const { host, createRun, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+
+      expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+        "runtime-start-unconfirmed",
+      );
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
+    it("does not change the claim, or the run, of a start without a Pod", () => {
+      const { host, createRun, pods, confirmations, fixture, request } = jiraHost();
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+
+      host.launchResolver.resolve(request);
+
+      expect(pods.resolve).not.toHaveBeenCalled();
+      expect(createRun.mock.calls[0]?.[0].request.jiraPod).toBeUndefined();
+    });
+
+    it.each(["pod-not-found", "pod-not-ready", "unavailable"] as const)(
+      "refuses a %s Pod before the confirmation is consumed or a run exists",
+      (reason) => {
+        const { host, createRun, pods, confirmations, fixture, request } = jiraHost({
+          resolution: { ok: false, reason },
+        });
+        confirmations.issue(
+          resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+        );
+
+        expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+          expect.objectContaining({ reason }),
+        );
+        expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+          CodingRuntimeJiraPodRefusedError,
+        );
+        expect(pods.recordBind).toHaveBeenCalledWith("run-1", { outcome: "refused", reason });
+        expect(createRun).not.toHaveBeenCalled();
+        // The one-use confirmation survived: the same start without the Pod proceeds.
+        host.launchResolver.resolve(request);
+        expect(createRun).toHaveBeenCalledOnce();
+      },
+    );
+
+    it.each(["direct", "code-mode"] as const)(
+      "refuses a Pod on the governed %s profile, which has no MCP relay",
+      (toolProfile) => {
+        const { host, createRun, pods, request } = jiraHost({ toolProfile });
+
+        expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+          expect.objectContaining({ reason: "unsupported-runtime" }),
+        );
+        expect(pods.resolve).not.toHaveBeenCalled();
+        expect(createRun).not.toHaveBeenCalled();
+      },
+    );
+
+    it("refuses a Pod for a Codex subscription run", () => {
+      const { host, createRun, request } = jiraHost();
+
+      expect(() =>
+        host.launchResolver.resolve({
+          ...request,
+          runtimePreference: "codex-subscription",
+          jiraPodId: POD,
+        }),
+      ).toThrow(expect.objectContaining({ reason: "unsupported-runtime" }));
+      expect(createRun).not.toHaveBeenCalled();
+    });
+
+    it("refuses a Pod when this deployment composes no Jira Pod service", () => {
+      const { host, createRun, request } = jiraHost({ withPods: false });
+
+      expect(() => host.launchResolver.resolve({ ...request, jiraPodId: POD })).toThrow(
+        expect.objectContaining({ reason: "unavailable" }),
+      );
+      expect(createRun).not.toHaveBeenCalled();
+    });
+  });
+
   it("disposes an already-spawned backend when lease attachment fails after creation", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();

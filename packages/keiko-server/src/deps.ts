@@ -17,6 +17,7 @@ import {
   type JiraChatCatalogRuntime,
 } from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
 import {
   createStateCodingSessionContinuity,
   KEIKO_CODING_SESSION_RETENTION_ENV,
@@ -504,6 +505,10 @@ import {
   createGovernedSyncHeads,
   type GovernedSyncHeads,
 } from "./coding-runtime/governedSyncHeads.js";
+import {
+  createGovernedTaskBranches,
+  type GovernedTaskBranches,
+} from "./coding-runtime/governedTaskBranches.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
   createProductionCodingRuntimeResolver,
@@ -4481,6 +4486,8 @@ interface UiHandlerDepsAssemblyArgs {
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
   readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
+  /** The Jira Pods a Coding run may be started with; absent without the managed MCP relay. */
+  readonly codingJiraPods?: CodingJiraPods | undefined;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4890,6 +4897,7 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
   mcpSettings: McpSettingsStore;
   mcpConnections: ConfiguredMcpConnections;
   mcpAuthorization: McpAuthorization;
+  codingJiraPods: CodingJiraPods | undefined;
 } {
   const mcpSettings = buildMcpSettings(args);
   const mcpAuthorization = createMcpAuthorization({
@@ -4911,13 +4919,16 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
     log: args.options.activityLog ?? processServerLogSink(),
     egress: () => resolveOutboundHttpEgressConfig(undefined, args.options.env),
   });
-  return { mcpSettings, mcpConnections, mcpAuthorization };
+  return { mcpSettings, mcpConnections, mcpAuthorization, codingJiraPods: codingJiraPodsFor(args) };
 }
 
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
-  const { mcpSettings, mcpConnections, mcpAuthorization } = buildMcpServices(args);
+  const { mcpSettings, mcpConnections, mcpAuthorization, codingJiraPods } = buildMcpServices(args);
   const dapRuntime = createDapRuntimeReference(args.options);
-  const services = assembleUiHandlerRuntimeServices({ ...args, mcpConnections }, dapRuntime);
+  const services = assembleUiHandlerRuntimeServices(
+    { ...args, mcpConnections, codingJiraPods },
+    dapRuntime,
+  );
   // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
   // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
   // than each call building an independent, uncoordinated bridge over the same durable store.
@@ -4975,7 +4986,36 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     deps,
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
+  installCodingJiraPods(deps, codingJiraPods);
   return installConversationReadinessInitialization(installChatToolCatalogs(deps, args.options));
+}
+
+// Owner decision 2026-10-30: a Coding run started with a Jira Pod reaches the Pod's tools through
+// the managed MCP relay, so the service exists only where that relay does. Its custody graph is
+// attached once the deps graph exists.
+function codingJiraPodsFor(args: UiHandlerDepsAssemblyArgs): CodingJiraPods | undefined {
+  return args.mcpCredentialRelay === undefined
+    ? undefined
+    : createCodingJiraPods(args.options.activityLog ?? processServerLogSink());
+}
+
+/** Attach the Pod custody to the Coding Jira service and close its hosts with the deps graph. */
+function installCodingJiraPods(
+  deps: UiHandlerDeps,
+  pods: CodingJiraPods | undefined,
+): UiHandlerDeps {
+  if (pods === undefined) return deps;
+  pods.attach(deps);
+  const previousDispose = deps.dispose;
+  return Object.assign(deps, {
+    dispose: async (): Promise<void> => {
+      try {
+        await pods.close();
+      } finally {
+        await previousDispose?.();
+      }
+    },
+  });
 }
 
 function installChatToolCatalogs(
@@ -6239,6 +6279,7 @@ function resolveProductionRuntimePorts(
     sessionContinuity: args.codingSessionContinuity,
     ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
     ...(args.mcpConnections === undefined ? {} : { mcpConnections: args.mcpConnections }),
+    ...(args.codingJiraPods === undefined ? {} : { codingJiraPods: args.codingJiraPods }),
     mcpMutations: nativeMcpMutationJournalFor(args),
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
@@ -6433,10 +6474,8 @@ function qualifiedRuntimeResolver(
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
   const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
-  // #3902 AC2: the heads a governed fast-forward writes, recorded by the runtime Git service and
-  // accepted by the workspace authority beside the verified commit's receipt.
-  const governedSyncHeads = createGovernedSyncHeads();
-  const verifiedCommit = runtimeVerifiedCommitDependencies(input, governedSyncHeads);
+  const records = createRuntimeGitRecords();
+  const verifiedCommit = runtimeVerifiedCommitDependencies(input, records);
   const draftDelivery = runtimeDraftDeliveryDependencies(input);
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: {
@@ -6447,8 +6486,10 @@ function qualifiedRuntimeResolver(
         input.deploymentCeiling,
         input.envelopeBounds,
       ),
-      governedSyncHead: governedSyncHeads.latest,
+      governedSyncHead: records.governedSyncHeads.latest,
+      governedTaskBranch: records.governedTaskBranches.latest,
     },
+    governedTaskBranches: records.governedTaskBranches,
     ...input.ports,
     serverRuntimeChangeset: createRuntimeChangesetApplyPort({
       runtimeMutationLease: input.runtimeMutationLeaseBroker,
@@ -6466,6 +6507,7 @@ function qualifiedRuntimeResolver(
     workspaceScriptTrust: args.bundle.workspaceScriptTrust,
     ...(verifiedCommit === undefined ? {} : { verifiedCommit }),
     ...(draftDelivery === undefined ? {} : { draftDelivery }),
+    ...(args.codingJiraPods === undefined ? {} : { jiraPods: args.codingJiraPods }),
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
     materializedPatches: input.materializedPatches,
     resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),
@@ -6484,9 +6526,25 @@ function qualifiedRuntimeResolver(
   });
 }
 
+// The server-owned per-run records the runtime Git service writes and the workspace authority and
+// the verified-commit context read: #3902 AC2, the heads a governed fast-forward writes, accepted
+// beside the verified commit's receipt; and #3907, the task branches Keiko's own `keiko_git_branch`
+// moves runs onto.
+interface RuntimeGitRecords {
+  readonly governedSyncHeads: GovernedSyncHeads;
+  readonly governedTaskBranches: GovernedTaskBranches;
+}
+
+function createRuntimeGitRecords(): RuntimeGitRecords {
+  return {
+    governedSyncHeads: createGovernedSyncHeads(),
+    governedTaskBranches: createGovernedTaskBranches(),
+  };
+}
+
 function runtimeVerifiedCommitDependencies(
   input: QualifiedRuntimeResolverInput,
-  governedSyncHeads: GovernedSyncHeads,
+  records: RuntimeGitRecords,
 ): ReturnType<typeof createProductionVerifiedCommitDependencies> {
   const { args } = input;
   const verified = createProductionVerifiedCommitDependencies(
@@ -6504,7 +6562,11 @@ function runtimeVerifiedCommitDependencies(
   );
   return verified === undefined
     ? undefined
-    : { ...verified, recordGovernedSyncHead: governedSyncHeads.record };
+    : {
+        ...verified,
+        recordGovernedSyncHead: records.governedSyncHeads.record,
+        governedTaskBranch: records.governedTaskBranches.latest,
+      };
 }
 
 function runtimeDraftDeliveryDependencies(

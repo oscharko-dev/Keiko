@@ -140,6 +140,10 @@ other modes ask the operator.
   pull request fact. The legacy issue-bound binding is persisted without a `kind` and stays valid
   unchanged. A branch-push record is admissible only in the push phases (`push-proposed`,
   `pushing`, `pushed`, `recovery-required`) and only for a run whose snapshot carries no issue.
+  When `origin` is a verified github.com repository the record instead carries a
+  `DraftDeliveryRepositoryBinding` (`kind: "github-repository"`, the same fields plus the
+  `owner/repository`) from its first push, so the draft pull request that may follow shares it
+  (ADR-0086 D13); the push itself is identical and still reads nothing from GitHub.
 - **Same exact commit, same pinned path.** The effect is the unchanged non-force pinned push of the
   record's `verifiedCommitSha`. When the checkout's single push URL is canonical GitHub and names
   the repository the run was admitted with, the verified-URL path above applies. Every other
@@ -158,8 +162,9 @@ other modes ask the operator.
   answers as already up to date.
 - **Unchanged hard limits.** Protected targets (`dev`, `main`, `master`, `release/*`, ...) stay
   blocked by `KEIKO_DEFAULT_PUBLISH_POLICY_PACK`; a force push is never constructed; no pull
-  request is opened (ADR-0086 D13). A repository with no `origin` is refused as `remote-required`,
-  and a run with no verified delivery context as `repository-required`.
+  request is opened for a non-GitHub remote (ADR-0086 D13: it is refused as
+  `github-origin-required`). A repository with no `origin` is refused as `remote-required`, and a
+  run with no verified delivery context as `repository-required`.
 - **Refusals are logged and named.** The controller writes every refusal as a `git.draft-delivery`
   line with `phase: refused`, a closed `reason` and `errorKind` (`unavailable`, or
   `authority-denied` for a failed caller guard), under the run's correlation id, and the coding

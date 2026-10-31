@@ -96,9 +96,11 @@ import {
 import { readJsonObject } from "./files.js";
 import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
 import {
+  awaitInitializedConversationReadiness,
   ensureCodingWorkbenchContextWindows,
   isAnyCodingWorkbenchProbePending,
   isCodingWorkbenchProbePending,
+  renewConversationReadinessFromAnswer,
 } from "./gateway-readiness.js";
 import { getServerLogger } from "./observability/index.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
@@ -329,6 +331,9 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // `inputMessageCount` describe what is actually sent upstream. A count; the reasoning is never
     // recorded. `required: false` only because a record written before this field existed lacks it.
     droppedReasoningMessageCount: { type: "integer", dataClass: "count", required: false },
+    // #3907 AC3: how many assistant messages of the history carry text beside their tool calls; the
+    // gateway resends that text upstream as the model wrote it. A count; the text is never recorded.
+    toolCallTextMessageCount: { type: "integer", dataClass: "count", required: false },
     // #3897 S14: how many validated image parts the request carries; present only when it carries
     // any. The count is part of what `estimatedPromptTokens` is charged for (the gateway's image
     // allowance per image); the images themselves are never recorded.
@@ -865,6 +870,14 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
       values: ["client-disconnect", "route-deadline", "backpressure-killed", "run-stopped"],
     },
     ...OUTPUT_REPAIR_FIELDS,
+    // #3907 AC3: on an accepted answer, whether it renewed the model's same-generation chat
+    // readiness; `not-renewable` when there was no success to renew or the configuration changed.
+    readinessRenewal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["renewed", "not-renewable"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1511,6 +1524,15 @@ function isReasoningOnlyAssistantMessage(entry: unknown): boolean {
   );
 }
 
+function countToolCallTextMessages(messages: readonly CodingSidecarGatewayChatMessage[]): number {
+  return messages.filter(
+    (message) =>
+      message.role === "assistant" &&
+      (message.toolCalls?.length ?? 0) > 0 &&
+      message.content.trim().length > 0,
+  ).length;
+}
+
 interface ParsedMessages {
   readonly messages: readonly CodingSidecarGatewayChatMessage[];
   readonly droppedReasoningMessageCount: number;
@@ -1899,6 +1921,8 @@ interface GatewayOutcomeMetrics {
   readonly limit?: "answer" | "reasoning";
   /** A delivered buffered answer whose oversized reasoning was withheld (#3873 review). */
   readonly reasoningWithheld?: true;
+  /** On an accepted answer, whether it renewed the model's chat readiness (#3907 AC3). */
+  readonly readinessRenewal?: "renewed" | "not-renewable";
 }
 
 const NO_GATEWAY_OUTPUT: GatewayOutcomeMetrics = {
@@ -1966,6 +1990,9 @@ function recordGatewayOutcome(
         forwardedReasoningBytes: metrics.forwardedReasoningBytes,
         ...(metrics.limit === undefined ? {} : { limit: metrics.limit }),
         ...(metrics.reasoningWithheld === undefined ? {} : { reasoningWithheld: true }),
+        ...(metrics.readinessRenewal === undefined
+          ? {}
+          : { readinessRenewal: metrics.readinessRenewal }),
         deadlineMs: cancellation.deadlineMs,
         ...gatewayOutcomeCancellationCause(cancellation, outcome),
         ...repairEvidence(repair),
@@ -3601,6 +3628,27 @@ type RecordBufferedOutcome = (
 
 // The outcome line of a buffered turn: the answer's counts, the reasoning it carried to the
 // runtime (#3878) or withheld, and — from the settled answer — the gateway's steered repair (#3873).
+// The finish reasons that prove the model served the turn (ADR-0171): an error, a cancellation or a
+// content filter never renews readiness, even when its answer reached the runtime.
+const SERVING_FINISH_REASONS: ReadonlySet<NormalizedResponse["finishReason"]> = new Set<
+  NormalizedResponse["finishReason"]
+>(["stop", "tool_calls", "length"]);
+
+function answeredReadiness(
+  deps: UiHandlerDeps,
+  modelAlias: string,
+  answeredConfig: GatewayConfig,
+  outcome: CodingSidecarGatewayRunOutcome,
+  finishReason: NormalizedResponse["finishReason"] | undefined,
+): Pick<GatewayOutcomeMetrics, "readinessRenewal"> {
+  if (outcome !== "accepted") return {};
+  if (finishReason === undefined || !SERVING_FINISH_REASONS.has(finishReason))
+    return { readinessRenewal: "not-renewable" };
+  return {
+    readinessRenewal: renewConversationReadinessFromAnswer(deps, modelAlias, answeredConfig),
+  };
+}
+
 function bufferedOutcomeRecorder(
   ctx: RouteContext,
   dispatch: GatewayChatDispatchContext,
@@ -3615,7 +3663,19 @@ function bufferedOutcomeRecorder(
       runId,
       cancellation,
       outcome,
-      { reasoningFrames: 0, forwardedReasoningBytes: 0, ...metrics, ...delivery },
+      {
+        reasoningFrames: 0,
+        forwardedReasoningBytes: 0,
+        ...metrics,
+        ...delivery,
+        ...answeredReadiness(
+          deps,
+          dispatch.modelAlias,
+          dispatch.binding.config,
+          outcome,
+          response.finishReason,
+        ),
+      },
       settledRepair(response.outputRepair),
     );
   };
@@ -3765,6 +3825,8 @@ interface GatewayStreamSession {
   readonly request: GatewayRequest;
   readonly runId: string;
   readonly cancellation: GatewayRequestCancellation;
+  /** The configuration the answer came from; only it can renew the model's readiness. */
+  readonly answeredConfig: GatewayConfig;
   readonly iterator: AsyncIterator<GatewayStreamChunk>;
   readonly promptTokenReservation: PromptTokenReservation;
   readonly metrics: {
@@ -3794,6 +3856,7 @@ function createGatewayStreamSession(
     request,
     runId,
     cancellation,
+    answeredConfig: dispatch.binding.config,
     iterator,
     promptTokenReservation,
     metrics: {
@@ -3835,6 +3898,7 @@ function recordSessionOutcome(
   outcome: CodingSidecarGatewayRunOutcome,
   repair: RepairEvidence,
   limit?: "answer" | "reasoning",
+  finishReason?: NormalizedResponse["finishReason"],
 ): void {
   const { ctx, deps, runId, cancellation, metrics } = session;
   recordGatewayOutcome(
@@ -3849,6 +3913,7 @@ function recordSessionOutcome(
       reasoningFrames: metrics.reasoningFrames,
       forwardedReasoningBytes: metrics.forwardedReasoningBytes,
       ...(limit === undefined ? {} : { limit }),
+      ...answeredReadiness(deps, session.modelId, session.answeredConfig, outcome, finishReason),
     },
     repair,
   );
@@ -4000,7 +4065,7 @@ async function streamGatewayResponse(
   session: GatewayStreamSession,
   response: NormalizedResponse,
 ): Promise<void> {
-  const { ctx, id, created, modelId, request, iterator, metrics, promptTokenReservation } = session;
+  const { ctx, request, iterator, metrics, promptTokenReservation } = session;
   const outcome = outputMetrics(response);
   const producedBytes = Math.max(producedOutputBytes(response), metrics.outputBytes);
   metrics.outputBytes = Math.max(outcome.outputBytes, metrics.outputBytes);
@@ -4020,31 +4085,40 @@ async function streamGatewayResponse(
     writeSessionTerminal(session, "length");
     return;
   }
-  if (response.toolCalls.length > 0) {
-    const wrote = writeOpenAiSse(
-      ctx,
-      openAiStreamChunk(
-        id,
-        created,
-        modelId,
-        { tool_calls: openAiToolCalls(response.toolCalls) },
-        null,
-      ),
-      session.cancellation.transport,
-    );
-    if (!wrote) {
-      ctx.res.destroy();
-      await iterator.return?.();
-      recordSessionOutcome(session, "cancelled", settledRepair(response.outputRepair));
-      return;
-    }
-  }
+  if (!(await writeStreamedToolCalls(session, response))) return;
   writeSessionTerminal(session, response.finishReason);
   recordSessionOutcome(
     session,
     ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
     settledRepair(response.outputRepair),
+    undefined,
+    response.finishReason,
   );
+}
+
+/** Writes the answer's tool calls as one chunk; false when the reader went away mid-write. */
+async function writeStreamedToolCalls(
+  session: GatewayStreamSession,
+  response: NormalizedResponse,
+): Promise<boolean> {
+  if (response.toolCalls.length === 0) return true;
+  const { ctx, id, created, modelId, iterator } = session;
+  const wrote = writeOpenAiSse(
+    ctx,
+    openAiStreamChunk(
+      id,
+      created,
+      modelId,
+      { tool_calls: openAiToolCalls(response.toolCalls) },
+      null,
+    ),
+    session.cancellation.transport,
+  );
+  if (wrote) return true;
+  ctx.res.destroy();
+  await iterator.return?.();
+  recordSessionOutcome(session, "cancelled", settledRepair(response.outputRepair));
+  return false;
 }
 
 function settleStreamCompletionUsage(
@@ -4680,15 +4754,36 @@ export async function handleCodingSidecarGatewayProfile(
     // answer with the projection (`model-verification-pending` while the probe runs) and let
     // the Workbench read again — never leave the read hanging until the browser gives up.
     await Promise.race([
-      ensureCodingWorkbenchContextWindows(
-        deps,
-        elected.status === "available" ? elected.modelAlias : undefined,
-        ctx.correlationId,
-      ),
+      Promise.all([
+        ensureCodingWorkbenchContextWindows(
+          deps,
+          elected.status === "available" ? elected.modelAlias : undefined,
+          ctx.correlationId,
+        ),
+        electedConversationReadiness(ctx, deps, elected),
+      ]),
       boundedProfileWait(),
     ]);
   }
   return { status: 200, body: gatewayReadinessProjection(ctx, deps) };
+}
+
+// #3907 AC3: a model nobody used for a while lets its chat success expire, and the Workbench then
+// reads `model-verification-pending` every ten seconds. That projection promises a check the
+// Workbench waits for, so a read that finds no fresh success is the model's use: it joins the
+// running probe or starts the one on-demand check, exactly as a Chat request does. A fresh success
+// adds nothing, so a polling Workbench never keeps background renewal going on its own.
+function electedConversationReadiness(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  elected: CodingWorkbenchSidecarGatewayResult,
+): Promise<void> {
+  if (
+    elected.status !== "available" ||
+    currentConversationReadinessObservation(deps, elected.modelAlias) === true
+  )
+    return Promise.resolve();
+  return awaitInitializedConversationReadiness(deps, elected.modelAlias, ctx.correlationId);
 }
 
 // Under the browser's 15 s read deadline for this profile (keiko-ui `DEFAULT_READ_TIMEOUT_MS`).
@@ -5256,6 +5351,7 @@ function logValidatedRequestBounds(
         inputMessageCount: request.messages.length,
         offeredToolCount: request.tools?.length ?? 0,
         droppedReasoningMessageCount: request.droppedReasoningMessageCount,
+        toolCallTextMessageCount: countToolCallTextMessages(request.messages),
         ...imageCountEvidence(request),
         completeness: "complete",
         loss: "none",

@@ -72,6 +72,13 @@ export interface DraftDeliveryFixtureOptions {
   readonly issueFree?: boolean;
   readonly realPublish?: boolean;
   readonly branch?: string;
+  /**
+   * An issue-free run whose `origin` was admitted as a verified github.com repository. Its bare
+   * repository stands in for GitHub: the run's identity digest and the repository the controller
+   * resolves are those of `owner/repository`, while every push still lands in the local bare remote
+   * through the stub publish adapter (`realPublish` would push to github.com and is not supported).
+   */
+  readonly githubOrigin?: boolean;
 }
 
 export class DraftDeliveryFixture {
@@ -79,9 +86,10 @@ export class DraftDeliveryFixture {
   public readonly branch: string;
   public readonly realPublish: boolean;
   /** What `resolveBranchTarget` answers; flip it to model a drifted or lost `origin`. */
-  public branchTarget: DraftBranchTargetResolution = { ok: true };
+  public branchTarget: DraftBranchTargetResolution;
   public branchTargetCalls = 0;
-  public repositoryKind: "github-origin" | "foreign-origin" | "local" = "foreign-origin";
+  public repositoryKind: "github-origin" | "foreign-origin" | "local";
+  public readonly githubOrigin: boolean;
   public readonly root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-draft-service-")));
   public readonly remote = realpathSync(mkdtempSync(join(tmpdir(), "keiko-draft-remote-")));
   public readonly db = new DatabaseSync(":memory:");
@@ -122,6 +130,11 @@ export class DraftDeliveryFixture {
   public constructor(fixture: DraftDeliveryFixtureOptions = {}) {
     this.issueFree = fixture.issueFree === true;
     this.realPublish = fixture.realPublish === true;
+    this.githubOrigin = fixture.issueFree === true && fixture.githubOrigin === true;
+    if (this.githubOrigin && this.realPublish)
+      throw new Error("a github.com origin fixture publishes through the stub adapter");
+    this.repositoryKind = this.githubOrigin ? "github-origin" : "foreign-origin";
+    this.branchTarget = this.githubOrigin ? { ok: true, repository: REPOSITORY } : { ok: true };
     this.branch = fixture.branch ?? (this.issueFree ? "claude/task-1" : "feature/issue-1");
     this.initializeRepository();
     runMigrations(this.db);
@@ -164,7 +177,7 @@ export class DraftDeliveryFixture {
       "remote",
       "add",
       "origin",
-      this.issueFree ? this.remote : `https://github.com/${REPOSITORY}.git`,
+      this.issueFree && !this.githubOrigin ? this.remote : `https://github.com/${REPOSITORY}.git`,
     ]);
   }
   private makeIssue(): CodingWorkbenchIssueBinding {
@@ -181,6 +194,7 @@ export class DraftDeliveryFixture {
   }
   /** The identity digest the run was admitted with: the issue's remote, or the foreign origin's. */
   public get repositoryDigest(): string {
+    if (this.githubOrigin) return codingWorkbenchRemoteDigest(REPOSITORY);
     return this.issueFree ? foreignOriginDigest(this.remote) : this.issue.remoteDigest;
   }
   private makeContext(): DraftDeliveryRunContext {

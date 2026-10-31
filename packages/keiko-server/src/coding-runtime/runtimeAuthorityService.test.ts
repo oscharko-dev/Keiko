@@ -2204,6 +2204,67 @@ describe("CodingRuntimeAuthorityService.bindPublishedPullRequest", () => {
   });
 });
 
+// #3907: Keiko's own governed `keiko_git_branch` moves a run onto a task branch. The minted
+// envelope stays immutable; the projection Git delivery reads follows the run, against the base the
+// run started from, and can be put back if the rest of the move could not be completed.
+describe("CodingRuntimeAuthorityService.rebindGitDeliveryBranch", () => {
+  function projected(authority: CodingRuntimeAuthorityService): {
+    readonly branch: { readonly headRef: string; readonly baseRef: string };
+    readonly runId: string;
+    readonly envelopeDigest: string;
+  } {
+    const current = authority.gitDeliveryAuthorityPort().current(NOW);
+    if (current === undefined) throw new Error("expected an active Git-delivery authority");
+    return current;
+  }
+
+  it("moves the projected head branch to the task branch and keeps the base branch", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const before = projected(authority);
+    const undo = authority.rebindGitDeliveryBranch(minted.authorityRef.runId, {
+      headRef: "feature/x",
+      baseRef: before.branch.baseRef,
+    });
+    expect(undo).toBeTypeOf("function");
+    const after = projected(authority);
+    expect(after.branch).toEqual({
+      ...before.branch,
+      headRef: "feature/x",
+      allowedPrefixes: ["feature/x"],
+    });
+    expect(after.branch.baseRef).toBe("dev");
+    expect(after.runId).toBe(before.runId);
+    expect(after.envelopeDigest).toBe(before.envelopeDigest);
+    undo?.();
+    expect(projected(authority).branch).toEqual(before.branch);
+  });
+
+  it("refuses another run, a base that is not the run's own, and no active run at all", () => {
+    const authority = service();
+    expect(
+      authority.rebindGitDeliveryBranch("run-1", { headRef: "feature/x", baseRef: "dev" }),
+    ).toBeUndefined();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const before = projected(authority).branch;
+    expect(
+      authority.rebindGitDeliveryBranch("some-other-run", {
+        headRef: "feature/x",
+        baseRef: "dev",
+      }),
+    ).toBeUndefined();
+    expect(
+      authority.rebindGitDeliveryBranch(minted.authorityRef.runId, {
+        headRef: "feature/x",
+        baseRef: "not-the-base",
+      }),
+    ).toBeUndefined();
+    expect(projected(authority).branch).toEqual(before);
+  });
+});
+
 describe("accepted pending-spawn authority", () => {
   it("admits only the exact starting capability without admitting a tool mutation", () => {
     const authority = service();

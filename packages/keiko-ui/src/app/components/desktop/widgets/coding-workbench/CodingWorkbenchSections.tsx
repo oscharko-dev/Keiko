@@ -74,6 +74,7 @@ import { supportsDictation, useVoiceCapability } from "../../hooks/useVoiceCapab
 import { dictationCaptureSupported } from "../../hooks/dictation-recorder";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import styles from "./CodingWorkbenchWindow.module.css";
+import type { CodingWorkbenchJiraPodSelection } from "./useCodingWorkbenchJiraPod";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CodingWorkbenchIcon = Icons.codingWorkbench;
@@ -216,6 +217,8 @@ interface TaskStartSectionProps {
   readonly runId?: string | undefined;
   /** What the last message sent to the running turn came to; announced beside the composer. */
   readonly deliveryNotice?: PromptDeliveryNotice | undefined;
+  /** The Jira Pods the person may pick for the next run; absent shows no Jira control. */
+  readonly jiraPod?: CodingWorkbenchJiraPodSelection | undefined;
 }
 
 interface TaskComposerController {
@@ -820,6 +823,7 @@ function ComposerConfigurationControls({ input, t }: ControlProps): ReactNode {
       <CodingModelControl input={input} t={t} />
       <ReasoningControl input={input} efforts={efforts} t={t} />
       <AuthorityControl input={input} t={t} />
+      <JiraPodControl input={input} t={t} />
       <CodingWorkbenchAgentToggle
         agents={input.offeredAgents}
         customAgents={customAgents}
@@ -929,6 +933,41 @@ function ReasoningControl({ input, efforts, t }: ReasoningControlProps): ReactNo
         onValueChange={(value): void => {
           const effort = efforts.find((item) => item === value);
           if (effort !== undefined) input.onReasoningEffortChange(effort);
+        }}
+      />
+    </div>
+  );
+}
+
+// One compact choice, "Jira: none" by default. Picking a Pod is the run's Jira read grant; Jira
+// writes keep following the autonomy mode, so nothing else needs to be shown here.
+function JiraPodControl({ input, t }: ControlProps): ReactNode {
+  const jira = input.jiraPod;
+  if (jira === undefined) return null;
+  const options = [
+    { value: "", label: t("codingWorkbench.composer.jira.none") },
+    ...jira.choices.map((pod) => ({
+      value: pod.id,
+      label: t("codingWorkbench.composer.jira.pod", { name: pod.name }),
+    })),
+  ];
+  return (
+    <div className={`cmp-model mono ${styles.reasoningControl}`}>
+      <KeikoSelect
+        triggerClassName="cmp-model-select"
+        value={jira.value}
+        triggerTitle={options.find((option) => option.value === jira.value)?.label}
+        ariaLabel={t("codingWorkbench.composer.jira.label")}
+        menuTitle={t("codingWorkbench.composer.jira.menu")}
+        menuMinWidth={180}
+        menuPopoverMinWidth={220}
+        menuPlacement="up"
+        attached={false}
+        disabled={input.configurationLocked}
+        mono
+        sections={[{ options }]}
+        onValueChange={(value): void => {
+          if (value === "" || jira.choices.some((pod) => pod.id === value)) jira.onChange(value);
         }}
       />
     </div>

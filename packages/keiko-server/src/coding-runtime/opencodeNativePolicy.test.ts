@@ -26,6 +26,7 @@ import {
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
+import { codingJiraServerDefinition } from "./codingJiraPodBinding.js";
 import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   expectActivityLogProof,
@@ -246,9 +247,8 @@ describe("native policy effects per autonomy mode", () => {
       'grep -rn "git push" docs',
       "echo 'git commit is done by Keiko'",
     ]) {
-      expect(effectOf("supervised-coding", "shell", [command]), command).not.toBe(
-        "deny:delivery-reserved",
-      );
+      // Read-only Git runs as vetted inspection (opencode-capability-parity.md), not as an ask.
+      expect(effectOf("supervised-coding", "shell", [command]), command).toBe("allow");
     }
     for (const command of [
       "git branch feature/x",
@@ -261,6 +261,43 @@ describe("native policy effects per autonomy mode", () => {
         "deny:delivery-reserved",
       );
     }
+  });
+
+  // Plumbing that writes refs or repository configuration reaches the same outcome as the
+  // porcelain it stands in for: `update-ref` moves a protected branch past the verified commit,
+  // `config remote.origin.url` re-targets Keiko's own push (#3907).
+  it("refuses ref and configuration writes through Git plumbing in every mode (#3907)", () => {
+    const writes = [
+      "git update-ref refs/heads/main 0123abcd",
+      "git symbolic-ref HEAD refs/heads/feature",
+      "git config remote.origin.url https://example.invalid/x.git",
+      "git config --global core.hooksPath hooks",
+      "git config --unset user.email",
+      "git reflog expire --expire=now --all",
+      "git replace 0123abcd 4567ef01",
+      "git notes add -m x",
+      "git fast-import",
+      "git send-pack origin main",
+      "git pack-refs --all",
+    ];
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"])
+      for (const command of writes)
+        expect(effectOf(mode, "shell", [command]), `${mode}: ${command}`).toBe(
+          "deny:delivery-reserved",
+        );
+    for (const command of [
+      "git config --get user.name",
+      "git config --list",
+      "git config -l --show-origin",
+      "git config --get-all remote.origin.fetch",
+      "git symbolic-ref HEAD",
+      "git symbolic-ref --short HEAD",
+      "git reflog",
+      "git reflog show main",
+      "git notes list",
+      "git notes show HEAD",
+    ])
+      expect(effectOf("supervised-coding", "shell", [command]), command).toBe("allow");
   });
 
   it("checks the searched directory of glob and grep, not their pattern (#3897 audit)", () => {
@@ -1281,4 +1318,146 @@ it("asks before managed MCP effects in either restricted mode while retaining di
       mcp: direct,
     }),
   ).toMatchObject({ effect: "deny", reason: "mode-denied" });
+});
+
+describe("a Jira Pod the human chose for the run (owner decision 2026-10-30)", () => {
+  const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
+  const READS = [
+    "jira.projects",
+    "jira.issue-types",
+    "jira.create-fields",
+    "jira.edit-fields",
+    "jira.search",
+    "jira.issue",
+    "jira.comments",
+    "jira.transitions",
+    "jira.assignable-users",
+  ] as const;
+  const WRITES = [
+    "jira.create",
+    "jira.edit",
+    "jira.assign",
+    "jira.comment",
+    "jira.transition",
+  ] as const;
+  const jira = (
+    binding: "bound" | "registry-only",
+  ): ReturnType<typeof openCodeNativeMcpAdmission>["grants"] => {
+    const definition = codingJiraServerDefinition({
+      podId: "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10",
+      authenticationGeneration: 3,
+      verificationRevision: 1,
+    });
+    return openCodeNativeMcpAdmission({
+      servers: [definition],
+      mode: "governed-assist",
+      home: "/synthetic/home",
+      managed: true,
+      relays: new Map([
+        ["jira", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
+      ]),
+      ...(binding === "bound" ? { grantedServers: new Set(["jira"]) } : {}),
+    }).grants;
+  };
+  const decideTool = (
+    grants: ReturnType<typeof jira>,
+    mode: (typeof MODES)[number],
+    tool: string,
+  ): OpenCodeNativePolicyDecision =>
+    decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: WORKSPACE,
+      request: request(mcpToolAction("jira", tool), ["*"]),
+      nowMs: NOW,
+      mcp: grants,
+    });
+
+  it("allows every Jira read in all three modes without asking", () => {
+    const grants = jira("bound");
+    for (const tool of READS)
+      for (const mode of MODES)
+        expect(decideTool(grants, mode, tool).effect, `${mode} ${tool}`).toBe("allow");
+  });
+
+  it("lets Jira writes follow the mode: ask below Full access, allowed in Full access", () => {
+    const grants = jira("bound");
+    for (const tool of WRITES)
+      expect(
+        MODES.map((mode) => decideTool(grants, mode, tool).effect),
+        tool,
+      ).toEqual(["ask", "ask", "allow"]);
+  });
+
+  it("keeps the classification the approval card and the effect admission already use", () => {
+    const grants = jira("bound");
+    expect(decideTool(grants, "governed-assist", "jira.issue")).toMatchObject({
+      effect: "allow",
+      classification: { actionClass: "network-egress", scope: "internet", label: "native-mcp" },
+    });
+    expect(decideTool(grants, "supervised-coding", "jira.comment")).toMatchObject({
+      effect: "ask",
+      classification: { actionClass: "network-egress", scope: "internet", label: "native-mcp" },
+    });
+  });
+
+  it("grants nothing without the human's choice: reads follow the ordinary managed matrix", () => {
+    const grants = jira("registry-only");
+    for (const tool of [...READS, ...WRITES])
+      expect(
+        MODES.map((mode) => decideTool(grants, mode, tool).effect),
+        tool,
+      ).toEqual(["ask", "ask", "allow"]);
+  });
+
+  it("admits no Jira tool at all for a run whose Pod was refused or revoked at the start", () => {
+    const none = openCodeNativeMcpAdmission({
+      servers: [],
+      mode: "autonomous-delivery",
+      home: "/synthetic/home",
+      managed: true,
+      relays: new Map(),
+      grantedServers: new Set(["jira"]),
+    }).grants;
+    for (const tool of [...READS, ...WRITES])
+      for (const mode of MODES)
+        expect(decideTool(none, mode, tool), `${mode} ${tool}`).toMatchObject({
+          effect: "deny",
+          reason: "unsupported-action",
+        });
+  });
+
+  it("never grants an action of another server, a resource listing, or an unknown tool", () => {
+    const grants = jira("bound");
+    for (const mode of MODES) {
+      expect(
+        decideOpenCodeNativePolicy({
+          mode,
+          workspaceRoot: WORKSPACE,
+          request: request("other_jira_issue", ["*"]),
+          nowMs: NOW,
+          mcp: grants,
+        }),
+      ).toMatchObject({ effect: "deny", reason: "unsupported-action" });
+      expect(decideTool(grants, mode, "jira.delete-everything")).toMatchObject({
+        effect: "deny",
+        reason: "unsupported-action",
+      });
+    }
+  });
+
+  it("marks only read tools as run-granted, and never a registry server of the same shape", () => {
+    const granted = jira("bound");
+    for (const tool of READS)
+      expect(granted.actions.get(mcpToolAction("jira", tool))).toMatchObject({
+        risk: "read",
+        managed: true,
+        runGrantedRead: true,
+      });
+    for (const tool of WRITES)
+      expect(granted.actions.get(mcpToolAction("jira", tool))?.runGrantedRead).toBeUndefined();
+    for (const tool of READS)
+      expect(
+        jira("registry-only").actions.get(mcpToolAction("jira", tool))?.runGrantedRead,
+      ).toBeUndefined();
+  });
 });

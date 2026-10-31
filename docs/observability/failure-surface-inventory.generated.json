@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6a68c0c272e69ca8274906ae7ea6e798df879c2d752146b067b03dd5b2e1b986"
+    "catalogDigest": "47df4bdf9e159797b548bc6a5832265a5ba0088d57502d845e4204c542646fc8"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 621,
-    "proofCount": 644,
-    "resolvedProofCount": 644,
-    "failureClassCount": 390,
+    "operationCount": 622,
+    "proofCount": 645,
+    "resolvedProofCount": 645,
+    "failureClassCount": 391,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -365,6 +365,7 @@
         "coding-runtime.inbox.dispatch-failed",
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
+        "coding-runtime.jira-pod",
         "coding-runtime.linked-files.resolved",
         "coding-runtime.mcp-authorization",
         "coding-runtime.mcp-credentials",
@@ -901,6 +902,7 @@
     "coding-runtime-remote-skills": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-credentials": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-relay": ["tools-workflows.dependency-failure"],
+    "coding-runtime-jira-pod": ["tools-workflows.dependency-failure"],
     "coding-runtime-descendant-sweep": ["tools-workflows.dependency-failure"],
     "coding-runtime-websearch": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-authorization": ["tools-workflows.dependency-failure"],
@@ -1646,6 +1648,9 @@
     "coding-runtime.initial-turn.stop-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
     ],
+    "coding-runtime.jira-pod.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
+    ],
     "coding-runtime.linked-files.resolved.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeLinkedFiles.test.ts"
     ],
@@ -2328,6 +2333,7 @@
     ],
     "git.draft-delivery.emitted-line": [
       "packages/keiko-server/src/gitDelivery/draftDeliveryBranchPush.test.ts",
+      "packages/keiko-server/src/gitDelivery/draftDeliveryGitHubOrigin.test.ts",
       "packages/keiko-server/src/gitDelivery/draftDeliveryService.test.ts"
     ],
     "git.draft-delivery.repository-drift.emitted-line": [
@@ -2373,6 +2379,7 @@
       "packages/keiko-server/src/gitDelivery/repositoryInitializationRoutes.test.ts"
     ],
     "git.runtime-action.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/runtimeGitService.branch.test.ts",
       "packages/keiko-server/src/gitDelivery/runtimeGitService.sync.test.ts",
       "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
     ],

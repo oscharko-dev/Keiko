@@ -242,6 +242,23 @@ describe("createStartMutation", () => {
     );
   });
 
+  it("sends the Jira Pod the person picked, and no key when none was", async () => {
+    const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+    const state = stateWithRun(null, { canStart: true });
+
+    await createStartMutation("implement the ticket", state, {
+      projectMemoryEnabled: true,
+      jiraPodId,
+    }).run(SIGNAL);
+    await createStartMutation("implement the ticket", state, {
+      projectMemoryEnabled: true,
+    }).run(SIGNAL);
+
+    const [picked, bare] = apiMocks.startCodingWorkbenchRuntime.mock.calls.slice(-2);
+    expect(picked?.[0]).toMatchObject({ jiraPodId });
+    expect(bare?.[0]).not.toHaveProperty("jiraPodId");
+  });
+
   it("sends the selected model settings for the managed gateway", async () => {
     const state = stateWithRun(null, {
       canStart: true,

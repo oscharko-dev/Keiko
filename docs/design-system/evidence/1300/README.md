@@ -206,3 +206,14 @@ bundle-size gate pass. No producer assertions, tolerances or budgets changed.
 
 These are synthetic visual fixtures; real MCP/Jira effects and model behavior are
 qualified separately.
+
+## minimatch and glob advisory overrides — 2026-10-31
+
+GHSA-g3hv-75wg-m249 and GHSA-3g3m-2fjr-6pw4 moved the root overrides to minimatch 11.0.3 and glob
+14.0.3, which changes `package.json` and `package-lock.json`, two of the declared source inputs. The
+four original producers were rerun on that tree on Node 24.18.0 (macOS arm64), as for release 1.3.2,
+and all passed: component fidelity with zero gated differences and no missing selectors, editor
+token fidelity with zero gated differences and all 14 reference captures, the seven-mode
+accessibility proof with zero serious/critical violations and zero unresolved incomplete findings,
+and all 108 running-app captures with zero page errors, unexpected API requests, missing selectors,
+crashed windows or unavailable workspace-trust states. No gate, fixture or rule was changed.

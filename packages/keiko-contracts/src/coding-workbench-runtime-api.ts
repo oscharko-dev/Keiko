@@ -43,6 +43,7 @@ import type {
   CodingWorkbenchTurnFailureCode,
 } from "./coding-workbench-runtime-constants.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
+import { isChatJiraPodId } from "./bff-wire.js";
 export {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   type CodingWorkbenchGatewayEventKind,
@@ -809,6 +810,14 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * does not list refuses the start (`invalid-intent`) instead of starting without it.
    */
   readonly mentions?: CodingWorkbenchPromptMentions | undefined;
+  /**
+   * The Jira Pod the human picked for this run in the composer (owner decision 2026-10-30). The
+   * selection is the run's Jira read grant: the server checks that the Pod is the caller's own and
+   * ready before the start confirmation is consumed, binds its current generation into that
+   * confirmation, and offers the run the Jira tools through Keiko's managed MCP relay. Absent keeps
+   * the run exactly as before. An id, never a name, URL or credential.
+   */
+  readonly jiraPodId?: string | undefined;
 }
 
 /**
@@ -1351,6 +1360,7 @@ function checkStartRequest(
   const memory = validateProjectMemoryRequest(value.projectMemory, errors);
   const promptBefore = errors.length;
   validateStartAgent(value.agent, errors);
+  validateJiraPodId(value.jiraPodId, errors);
   validateStartPromptInputs(value, errors);
   const prompt = errors.length === promptBefore;
   const digest = validateExpectedIssueDigest(value, errors);
@@ -1598,7 +1608,14 @@ const START_REQUEST_KEYS: readonly string[] = [
   "command",
   "mentions",
   "fork",
+  "jiraPodId",
 ];
+
+// The Pod is named by the id Jira Pod custody minted; what it is allowed to do is decided by the
+// server against the caller's own, ready Pods, never by this shape.
+function validateJiraPodId(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isChatJiraPodId(value)) errors.push("jiraPodId is invalid");
+}
 
 // A fork names the task to fork and, optionally, the message to fork before; it starts a NEW task, so
 // it cannot also continue one.

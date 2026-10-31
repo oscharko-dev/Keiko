@@ -5271,6 +5271,7 @@ export type {
   CodingRuntimeGitStage,
   CodingRuntimeGitUnstage,
   CodingRuntimeGitSync,
+  CodingRuntimeGitBranch,
 } from "./coding-runtime-git.js";
 
 export type {

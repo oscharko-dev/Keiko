@@ -427,23 +427,49 @@ provider-side facts.
   "read GitHub immediately before mutating GitHub" check in one place and one pattern, rather than
   inventing a second one inside a local-snapshot evaluator that cannot make network calls.
 
-### D13 — A Workbench pull request stays issue-bound; an issue-free run refuses it with `issue-binding-required` (owner decision, 2026-10-30)
+### D13 — A Workbench pull request never depends on an issue; an accepted issue only links it (owner decision, 2026-10-30)
 
-The Coding Workbench works without any issue binding, and an issue-free run delivers by pushing its
-own task branch to `origin` (ADR-0085 D1b). That does not extend to pull requests. A Workbench
-draft pull request takes its target repository, base and head branches, closing line and
-related-issue references from the accepted issue (D9) and its identity from the GitHub provider,
-and the draft delivery record's pull request, CI observation and journey outcome are all keyed to
-that binding. A run with no issue therefore has nothing to open one against, and a non-GitHub
-remote has no pull request provider at all.
+The Coding Workbench works without any issue binding. An issue-free run delivers by pushing its own
+task branch to `origin` (ADR-0085 D1b), and when that `origin` is a verified github.com repository
+it also opens a draft pull request from that branch. An accepted issue is never a precondition: it
+only LINKS the pull request. (The earlier text of this decision made the pull request issue-bound
+and refused an issue-free run with `issue-binding-required`; that was corrected the same day.)
 
-`keiko_pull_request` for such a run does not fail silently and does not fall back to anything
-else: the controller refuses the proposal with the closed reason `issue-binding-required` before
-any provider read, writes it as a `git.draft-delivery` line with `phase: refused`, and the coding
-tool facade forwards the reason with guidance telling the model that the branch push is the
-complete delivery and that it must not retry. The branch-push record has no pull request phase, no
-pull request identity and no CI or journey observation (the contract validator refuses them), so a
-later issue-bound run cannot adopt it by accident.
+- **Binding.** A run on a verified github.com origin with no issue carries a
+  `DraftDeliveryRepositoryBinding` (`kind: "github-repository"`): the branch-push fields plus the
+  live `owner/repository`, whose identity digest equals the run's own `repositoryDigest`. The record
+  has this kind from its FIRST push, because the persistence layer pins a stored target across every
+  transition (a record never changes kind), so the push and the pull request that follows share one
+  binding. It admits every phase and carries a pull request identity exactly like the issue-bound
+  record, validated against the same repository, head, base and draft/open facts. A branch-push
+  binding (any other remote) still has no pull request phase or identity, and a record of that
+  older shape on a GitHub run keeps pushing but cannot become a pull request's record.
+- **The pull request.** `keiko_pull_request` for such a run proposes a DRAFT pull request whose
+  repository is the live verified one (re-resolved immediately before every provider read and
+  effect, and held to the checkout's GitHub grant exactly as an issue-bound run is), whose head is
+  the run's task branch and whose base is the branch the task was cut from. The remote base head is
+  drift-checked against the verified commit's `baseSha` and the remote head against the pushed
+  commit, the base-pinned `pr-create` policy pack and the `verifiedCommitSha` pin apply unchanged,
+  and the one-use approval binds the exact title and body. The title is the model's argument; the
+  body is the server-composed template WITHOUT the `Closes #N` and related-issue lines (the
+  template, the Checks section and the framed description region stay). An issue-bound run's body
+  is unchanged and still carries `Closes #N` (D9).
+- **What an issue adds.** CI observation, the journey outcome, the ready/merge steps and the
+  description application are keyed to the accepted issue (their records, readiness snapshot and
+  repair budget bind its digests). A pull request opened without an issue is delivered and shown,
+  but those observations are not offered for it: `keiko_ci_status` answers the existing closed
+  `draft-unavailable` and the observation reconcile answers `issue-binding-required`. With no repair
+  budget to bind, the run's later model prompts and tools are not charged against one, so the run
+  keeps working after its pull request opens, for example to comment on the tracker (#3907 AC3; it
+  was refused every prompt as `invalid-binding` before). A later push
+  keeps the record and the pull request identity but does not refresh the body's Checks section.
+- **Refusals.** A run whose `origin` is not a verified github.com repository has no pull request
+  provider. `keiko_pull_request` is refused with the closed reason `github-origin-required` (a
+  repository with no `origin` at all: `remote-required`) before any provider read, written as a
+  `git.draft-delivery` line with `phase: refused`, and the coding tool facade forwards the reason
+  with guidance that the branch push is the complete delivery and that it must not retry. No
+  refusal blames a missing issue. `issue-binding-required` remains only for the CI observation
+  above.
 
 ## Consequences
 

@@ -387,7 +387,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["not-applicable", "recorded", "unavailable"],
+      values: ["not-applicable", "recorded", "unavailable", "admitted"],
     },
     commitProofReason: {
       type: "string",
@@ -1708,47 +1708,67 @@ const VERIFICATION_OUTCOME_REASON_CODES: Readonly<
 function buildVerificationRunner(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolGovernedPorts["verificationRunner"] {
-  let verificationSequence = 0;
-  return {
-    execute: async (request, signal, guard): Promise<VerificationPortResult> => {
-      const kind = verificationRunnerEntry(input, request, guard, signal);
-      if (typeof kind !== "string") return kind;
-      // Taken at entry, right after the catalog armed its settlement timer: the registry's and the
-      // catalog's ceilings both run from admission, so the wait below must be measured from here
-      // and not from the moment the first attempt failed (owner review, PR #3452).
-      const enteredAtMs = Date.now();
-      const editRevision = input.verificationRevision?.();
-      const executed = input.verificationAdmitted?.();
-      let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
-      if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
-        if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
-          attempt = await runVerificationAttempt(input, request, kind, guard, signal);
-        }
-      }
-      if (attempt.outcome === "refused") return attempt.result;
-      if (attempt.outcome === "threw") {
-        recordVerificationBlocker(input, request, attempt.error);
-        return verificationRefused(input, attempt.error);
-      }
-      const completionRefusal = verificationLivenessRefusal(input, guard, signal);
-      if (completionRefusal !== undefined) {
-        return verificationPortRefusal(input, "verification-authority-revoked", completionRefusal);
-      }
-      observeVerificationExecution(input, request, attempt.report, executed);
-      verificationSequence += 1;
-      publishVerification(
-        input,
-        verificationSequence,
-        attempt.report,
-        {
-          ...request,
-          verifierId: kind,
-        },
-        editRevision,
-      );
-      return verificationOutcome(input, attempt, guard, signal);
-    },
+  const sequence = { value: 0 };
+  // One verification of the run at a time (#3907 AC3, lab lane T6): every candidate ticket voids
+  // the ones issued before it, so parallel calls (typecheck, lint and test at once) refused each
+  // other as candidate-not-staged on a fully staged tree. A queued call starts, ticket and liveness
+  // checks included, only once the one before it has settled.
+  let previous: Promise<unknown> = Promise.resolve();
+  const execute: VerificationRunnerExecute = (request, signal, guard) => {
+    const next = Promise.allSettled([previous]).then(() =>
+      runVerificationCall(input, sequence, request, signal, guard),
+    );
+    previous = next;
+    return next;
   };
+  return { execute };
+}
+
+type VerificationRunnerExecute = CodingToolGovernedPorts["verificationRunner"]["execute"];
+
+async function runVerificationCall(
+  input: ProductionManagedWorktreeToolInput,
+  sequence: { value: number },
+  request: Parameters<VerificationRunnerExecute>[0],
+  signal: Parameters<VerificationRunnerExecute>[1],
+  guard: Parameters<VerificationRunnerExecute>[2],
+): Promise<VerificationPortResult> {
+  const kind = verificationRunnerEntry(input, request, guard, signal);
+  if (typeof kind !== "string") return kind;
+  // Taken at entry, right after the catalog armed its settlement timer: the registry's and the
+  // catalog's ceilings both run from admission, so the wait below must be measured from here
+  // and not from the moment the first attempt failed (owner review, PR #3452).
+  const enteredAtMs = Date.now();
+  const editRevision = input.verificationRevision?.();
+  const executed = input.verificationAdmitted?.();
+  let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
+  if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
+    if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
+      attempt = await runVerificationAttempt(input, request, kind, guard, signal);
+    }
+  }
+  if (attempt.outcome === "refused") return attempt.result;
+  if (attempt.outcome === "threw") {
+    recordVerificationBlocker(input, request, attempt.error);
+    return verificationRefused(input, attempt.error);
+  }
+  const completionRefusal = verificationLivenessRefusal(input, guard, signal);
+  if (completionRefusal !== undefined) {
+    return verificationPortRefusal(input, "verification-authority-revoked", completionRefusal);
+  }
+  observeVerificationExecution(input, request, attempt.report, executed);
+  sequence.value += 1;
+  publishVerification(
+    input,
+    sequence.value,
+    attempt.report,
+    {
+      ...request,
+      verifierId: kind,
+    },
+    editRevision,
+  );
+  return verificationOutcome(input, attempt, guard, signal);
 }
 
 function verificationRunnerEntry(
@@ -2338,9 +2358,12 @@ async function recordCandidateVerification(
     check: guard.check,
     signal,
   });
-  return recorded
-    ? { commitProof: "recorded" }
-    : { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" };
+  if (recorded) return { commitProof: "recorded" };
+  // Full access: the staged candidate may be committed beside untracked files, unproven (#3907).
+  const outside = service.unprovenAdmission?.();
+  return outside === undefined
+    ? { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" }
+    : { commitProof: "admitted", blocking: outside };
 }
 // Unsaved editor buffers are saved, not staged (#3612); every other refusal names the paths the
 // model has to stage (run 16, 2026-09-10), and a vanished run context has none.

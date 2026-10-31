@@ -208,6 +208,17 @@ const RESERVED_GIT_SUBCOMMANDS = new Set([
   "submodule",
   "gc",
   "filter-branch",
+  // Plumbing and configuration writes that reach the same outcome as the porcelain above (#3907).
+  "update-ref",
+  "symbolic-ref",
+  "pack-refs",
+  "reflog",
+  "replace",
+  "notes",
+  "config",
+  "fast-import",
+  "send-pack",
+  "http-push",
 ]);
 /**
  * Commands a Supervised workspace runs without a decision (ADR-0138: "vetted commands and
@@ -263,6 +274,18 @@ const VETTED_BUILD_TOOLS: Readonly<Record<string, ReadonlySet<string>>> = {
     "describe",
     "grep",
     "shortlog",
+    // Reserved subcommands whose read-only forms stay available (READ_ONLY_GIT_FORMS). The reserved
+    // check runs before vetting, so only those forms reach this set; their writes stay refused.
+    "branch",
+    "stash",
+    "remote",
+    "tag",
+    "worktree",
+    "submodule",
+    "config",
+    "symbolic-ref",
+    "reflog",
+    "notes",
   ]),
 };
 const VETTED_INSPECTION_TOOLS = new Set([
@@ -877,6 +900,12 @@ export interface OpenCodeNativeMcpGrants {
       readonly risk: McpToolRisk;
       readonly remote: boolean;
       readonly managed?: boolean;
+      /**
+       * The human selected this managed server for this run (a Jira Pod chosen in the composer,
+       * owner decision 2026-10-30): its read tools are allowed in every mode. The grant never
+       * reaches a write tool, which keeps following the mode matrix.
+       */
+      readonly runGrantedRead?: boolean;
       readonly mutation?: import("./opencodeNativeMcpMutationJournal.js").NativeMcpMutationSource;
     }
   >;
@@ -893,7 +922,8 @@ export function decideOpenCodeNativePolicy(
     classifyMcpAction(request, input.mcp) ?? classifyNativeAction(request, admittedRootsOf(input));
   if ("reason" in classification) return deny(classification.reason, classification.message);
   // Reads and planning are allowed in every mode (ADR-0124 D1); only effects consult the matrix.
-  if (alwaysAllowedRead(classification)) return { effect: "allow", classification };
+  if (alwaysAllowedRead(classification, request, input.mcp))
+    return { effect: "allow", classification };
   // Below Full access the sandbox has no route beyond this machine, and customer networks are often
   // firewalled anyway: refuse at once with a clear reason instead of an approval the kernel would
   // then block (#3897), so the agent continues with local files and tools. Managed MCP uses the
@@ -925,6 +955,15 @@ export function decideOpenCodeNativePolicy(
   };
 }
 
+/** A read tool of a managed server the human chose for this run; a write never qualifies. */
+function runGrantedRead(
+  request: OpenCodeNativePolicyRequest,
+  mcp: OpenCodeNativeMcpGrants | undefined,
+): boolean {
+  const grant = mcp?.actions.get(request.permission);
+  return grant?.runGrantedRead === true && grant.managed === true && grant.risk === "read";
+}
+
 function nativeInternetUnavailable(input: OpenCodeNativePolicyInput): boolean {
   return input.mode !== "autonomous-delivery" && !managedMcpRequest(input.request, input.mcp);
 }
@@ -951,10 +990,16 @@ function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
 }
 
 // Reads and planning in the workspace are allowed in every mode (ADR-0124 D1); a read of an
-// accepted external reference is an `external-file` action the mode decides (#3900 AC5).
-function alwaysAllowedRead(classification: OpenCodeNativeActionClassification): boolean {
+// accepted external reference is an `external-file` action the mode decides (#3900 AC5). A read
+// tool of a managed server the human chose for this run is the human's explicit grant (#3907).
+function alwaysAllowedRead(
+  classification: OpenCodeNativeActionClassification,
+  request: OpenCodeNativePolicyRequest,
+  mcp: OpenCodeNativeMcpGrants | undefined,
+): boolean {
   return (
-    classification.actionClass === "workspace-read" && classification.scope !== "external-file"
+    (classification.actionClass === "workspace-read" && classification.scope !== "external-file") ||
+    runGrantedRead(request, mcp)
   );
 }
 
@@ -1435,6 +1480,28 @@ const READ_ONLY_BRANCH_FLAGS = new Set([
   "--color",
 ]);
 
+const CONFIG_READ_OPTIONS = new Set(["--get", "--get-all", "--get-regexp", "--list", "-l"]);
+const CONFIG_WRITE_OPTIONS = new Set([
+  "--add",
+  "--replace-all",
+  "--unset",
+  "--unset-all",
+  "--rename-section",
+  "--remove-section",
+  "--edit",
+  "-e",
+]);
+
+/** `git config` reads only through an explicit read option or the `get`/`list` verbs. */
+function readOnlyConfig(args: readonly string[]): boolean {
+  const [first] = args;
+  if (first === "get" || first === "list") return true;
+  return (
+    args.some((arg) => CONFIG_READ_OPTIONS.has(arg)) &&
+    !args.some((arg) => CONFIG_WRITE_OPTIONS.has(arg))
+  );
+}
+
 const READ_ONLY_GIT_FORMS: Readonly<Record<string, (args: readonly string[]) => boolean>> = {
   branch: (args) => args.every((arg) => READ_ONLY_BRANCH_FLAGS.has(arg)),
   stash: ([first]) => first === "list" || first === "show",
@@ -1443,6 +1510,14 @@ const READ_ONLY_GIT_FORMS: Readonly<Record<string, (args: readonly string[]) => 
   tag: ([first]) => first === undefined || first === "-l" || first === "--list",
   worktree: ([first]) => first === "list",
   submodule: ([first]) => first === "status",
+  config: readOnlyConfig,
+  "symbolic-ref": (args) =>
+    args.filter((arg) => !arg.startsWith("-")).length <= 1 &&
+    args.every(
+      (arg) => arg === "-q" || arg === "--quiet" || arg === "--short" || !arg.startsWith("-"),
+    ),
+  reflog: ([first]) => first === undefined || first === "show" || first === "exists",
+  notes: ([first]) => first === undefined || first === "list" || first === "show",
 };
 
 function isReadOnlyGitForm(subcommand: string, args: readonly string[]): boolean {

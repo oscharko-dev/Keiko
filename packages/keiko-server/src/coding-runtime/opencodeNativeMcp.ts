@@ -197,6 +197,11 @@ export function openCodeNativeMcpAdmission(input: {
   readonly validations?: ReadonlyMap<string, McpOAuthIssuerValidation> | undefined;
   /** The relays bound for the remote servers with credential headers; absent, none is bound. */
   readonly relays?: ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> | undefined;
+  /**
+   * Managed servers the human chose for this run (a Jira Pod, owner decision 2026-10-30): the
+   * choice is the grant of their read tools. Absent, no server is granted anything.
+   */
+  readonly grantedServers?: ReadonlySet<string> | undefined;
 }): OpenCodeNativeMcpAdmission {
   const validations = input.validations ?? new Map<string, McpOAuthIssuerValidation>();
   const relays = input.relays ?? new Map<string, OpenCodeNativeMcpRelayEndpoint>();
@@ -221,13 +226,18 @@ export function openCodeNativeMcpAdmission(input: {
       ),
     },
     oauth,
-    grants: nativeGrants(admitted, input.managed === true ? new Set(relays.keys()) : new Set()),
+    grants: nativeGrants(
+      admitted,
+      input.managed === true ? new Set(relays.keys()) : new Set(),
+      input.grantedServers ?? new Set(),
+    ),
   };
 }
 
 function nativeGrants(
   servers: readonly McpServerDefinition[],
   managedNames: ReadonlySet<string>,
+  grantedNames: ReadonlySet<string>,
 ): OpenCodeNativeMcpGrants {
   const actions = new Map<
     string,
@@ -244,6 +254,7 @@ function nativeGrants(
               ...grant,
               remote: true,
               managed: true,
+              ...(risk === "read" && grantedNames.has(server.name) ? { runGrantedRead: true } : {}),
               ...(risk === "write"
                 ? {
                     mutation: {

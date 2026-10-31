@@ -1652,6 +1652,7 @@ type GeneratedToolAction =
   | "git-pull-request"
   | "git-ci"
   | "git-sync"
+  | "git-branch"
   | "git-execute";
 
 /**
@@ -1659,36 +1660,32 @@ type GeneratedToolAction =
  * `git-execute` builds its request entirely at runtime from the model-supplied `kind` instead (see
  * `toolSource`), so it is deliberately absent here.
  */
-function wireRequestFor(
-  action: GeneratedToolAction,
-): { readonly action: string; readonly literal: Readonly<Record<string, unknown>> } | undefined {
-  switch (action) {
-    // #3406/#3414: projects #3386's H1 search handler through the same "search" wire action
-    // codingToolIpc.ts's `searchRequest` parser already accepts; `toolSource` below nests the
-    // model-supplied arguments under `repositoryRequest` instead of the flat top-level fields
-    // every other action uses (see the `repository-search` special case there).
-    case "repository-search":
-      return { action: "search", literal: {} };
-    case "git-status":
-      return { action: "git", literal: { operation: "status" } };
-    case "git-diff":
-      return { action: "git", literal: { operation: "diff" } };
-    case "git-stage":
-      return { action: "git", literal: { operation: "stage", phase: "propose" } };
-    case "git-ci":
-      return { action: "git", literal: { operation: "ci" } };
-    // #3902 AC2: `toolSource` sets the operation from the model-supplied `pull` flag.
-    case "git-sync":
-      return { action: "git", literal: {} };
-    case "git-commit":
-      return { action: "delivery", literal: { intent: "commit", phase: "propose" } };
-    case "git-push":
-      return { action: "delivery", literal: { intent: "push", phase: "propose" } };
-    case "git-pull-request":
-      return { action: "delivery", literal: { intent: "pull-request", phase: "propose" } };
-    default:
-      return undefined;
-  }
+interface WireRequestShape {
+  readonly action: string;
+  readonly literal: Readonly<Record<string, unknown>>;
+}
+
+const WIRE_REQUESTS: Readonly<Partial<Record<GeneratedToolAction, WireRequestShape>>> = {
+  // #3406/#3414: projects #3386's H1 search handler through the same "search" wire action
+  // codingToolIpc.ts's `searchRequest` parser already accepts; `toolSource` below nests the
+  // model-supplied arguments under `repositoryRequest` instead of the flat top-level fields
+  // every other action uses (see the `repository-search` special case there).
+  "repository-search": { action: "search", literal: {} },
+  "git-status": { action: "git", literal: { operation: "status" } },
+  "git-diff": { action: "git", literal: { operation: "diff" } },
+  "git-stage": { action: "git", literal: { operation: "stage", phase: "propose" } },
+  "git-ci": { action: "git", literal: { operation: "ci" } },
+  // #3902 AC2: `toolSource` sets the operation from the model-supplied `pull` flag.
+  "git-sync": { action: "git", literal: {} },
+  // #3907: one governed task branch; the model supplies only the name.
+  "git-branch": { action: "git", literal: { operation: "branch" } },
+  "git-commit": { action: "delivery", literal: { intent: "commit", phase: "propose" } },
+  "git-push": { action: "delivery", literal: { intent: "push", phase: "propose" } },
+  "git-pull-request": { action: "delivery", literal: { intent: "pull-request", phase: "propose" } },
+};
+
+function wireRequestFor(action: GeneratedToolAction): WireRequestShape | undefined {
+  return WIRE_REQUESTS[action];
 }
 
 // The catalog descriptor of every generated tool, by alias, compiled once when this module loads.
@@ -1718,14 +1715,10 @@ function toolClientTimeoutMs(action: GeneratedToolAction): number {
   return openCodeToolClientTimeoutMs(toolCatalogDescriptor(action).bounds.maxDurationMs);
 }
 
-function toolApprovalProofSource(): readonly string[] {
+// The asks of the governed Git actions that name their own target: a fetch or pull as its operation
+// (#3902 AC2) and a task branch as the digest of its name (#3907).
+function gitAskPermissionSource(): readonly string[] {
   return [
-    "function ciObservationPermission(approvalProof) {",
-    '  if (!approvalProof) throw new Error("keiko-tool-invalid");',
-    "  return {",
-    '    patterns: ["ci"], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "ci-observe", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: "ci", ...approvalProof },',
-    "  };",
-    "}",
     // #3902 AC2: a governed fetch or pull asks on the same lane, as what it is.
     "function syncPermission(operation, approvalProof) {",
     '  if (!approvalProof) throw new Error("keiko-tool-invalid");',
@@ -1736,21 +1729,51 @@ function toolApprovalProofSource(): readonly string[] {
     "function isGitSync(request) {",
     '  return request.action === "git" && (request.operation === "fetch" || request.operation === "pull");',
     "}",
+    // #3907: a governed task branch asks on the same lane, naming itself by the digest of its name.
+    "function branchPermission(approvalProof) {",
+    '  if (!approvalProof || typeof approvalProof.targetPathHash !== "string") throw new Error("keiko-tool-invalid");',
+    "  return {",
+    '    patterns: ["branch"], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "git-branch", scopeLabel: "workspace-scope", risk: "medium", policyReason: "approval-required", commandLabel: "branch", ...approvalProof },',
+    "  };",
+    "}",
+    "function isGitBranch(request) {",
+    '  return request.action === "git" && request.operation === "branch";',
+    "}",
+  ];
+}
+
+function toolApprovalProofSource(): readonly string[] {
+  return [
+    "function ciObservationPermission(approvalProof) {",
+    '  if (!approvalProof) throw new Error("keiko-tool-invalid");',
+    "  return {",
+    '    patterns: ["ci"], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "ci-observe", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: "ci", ...approvalProof },',
+    "  };",
+    "}",
+    ...gitAskPermissionSource(),
     "function toolApprovalRequired(request) {",
     "  const mode = process.env.KEIKO_CODING_MODE;",
-    '  if ((request.action === "git" && request.operation === "ci") || isGitSync(request)) return mode === "governed-assist" || mode === "supervised-coding";',
+    '  if ((request.action === "git" && request.operation === "ci") || isGitSync(request) || isGitBranch(request)) return mode === "governed-assist" || mode === "supervised-coding";',
     '  return mode === "governed-assist" && ["verification", "command"].includes(request.action);',
+    "}",
+    "async function sha256Hex(text) {",
+    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));',
+    '  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
     "}",
     "async function toolApprovalTarget(request) {",
     '  if (request.action === "verification" && request.verifierId === "targeted-test") {',
     '    if (typeof request.targetPath !== "string") throw new Error("keiko-tool-invalid");',
-    '    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.targetPath));',
-    '    const targetPathHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "    const targetPathHash = await sha256Hex(request.targetPath);",
     "    return { targetId: `targeted-test:${targetPathHash}`, targetPathHash };",
     "  }",
     '  if (request.action === "verification") return { targetId: request.verifierId };',
     '  if (request.action === "command") return { targetId: request.commandId };',
     "  if (isGitSync(request)) return { targetId: request.operation };",
+    "  if (isGitBranch(request)) {",
+    '    if (typeof request.branchName !== "string") throw new Error("keiko-tool-invalid");',
+    "    const targetPathHash = await sha256Hex(request.branchName);",
+    "    return { targetId: `branch:${targetPathHash}`, targetPathHash };",
+    "  }",
     '  return request.action === "git" && request.operation === "ci" ? { targetId: "ci" } : undefined;',
     "}",
     "async function toolApprovalProof(request) {",
@@ -1760,8 +1783,7 @@ function toolApprovalProofSource(): readonly string[] {
     '  if (!runId || !target || typeof target.targetId !== "string") throw new Error("keiko-tool-invalid");',
     "  const { targetId, targetPathHash } = target;",
     '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
-    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
-    '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "  const approvalDigest = await sha256Hex(payload);",
     "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest, ...(targetPathHash ? { targetPathHash } : {}) };",
     "}",
   ];
@@ -1786,6 +1808,7 @@ function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[
     '  if (mode === "governed-assist" && action === "verification") request = verificationPermission(args, approvalProof);',
     '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-ci") request = ciObservationPermission(approvalProof);',
     '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-sync") request = syncPermission(args.pull === true ? "pull" : "fetch", approvalProof);',
+    '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-branch") request = branchPermission(approvalProof);',
     "  if (!request) return;",
     // The ask expires with the one human-decision wait every governed layer budgets (PR #3452 review).
     `  const metadata = { ...request.metadata, expiresAt: new Date(Date.now() + ${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS)}).toISOString() };`,
@@ -1935,6 +1958,11 @@ function toolSource(
     '    if (action === "git-sync") {',
     '      request.operation = args.pull === true ? "pull" : "fetch";',
     "      delete request.pull;",
+    "    }",
+    // #3907: keiko_git_branch's `name` is the wire's `branchName`.
+    '    if (action === "git-branch") {',
+    "      request.branchName = args.name;",
+    "      delete request.name;",
     "    }",
     // git-execute is the one action whose wire shape depends on a model-supplied argument
     // (`kind`): redeeming a stage or unstage proposal posts `{action:"git",operation:kind,...}`

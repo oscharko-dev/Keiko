@@ -945,7 +945,11 @@ describe("inactive native Code Mode provider advertisement", () => {
       () => NOW,
     );
     expect(bridge.tools.map((tool) => tool.name).sort()).toEqual(["execute", "question"]);
-    expect(advertisement.projection.tools).toHaveLength(18);
+    // Every governed inner binding stays, including keiko_git_branch (#3907).
+    expect(advertisement.projection.tools).toHaveLength(19);
+    expect(advertisement.projection.tools.map((tool) => tool.toolRef.canonicalId)).toContain(
+      "keiko.git.branch",
+    );
     const native = JSON.parse(
       readFileSync(
         new URL(
