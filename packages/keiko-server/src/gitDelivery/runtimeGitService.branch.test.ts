@@ -399,6 +399,31 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
     ).toEqual([["warn", "recovery-required", "execution-uncertain"]]);
   });
 
+  // #4170 review: a refused adoption whose switch back throws (here the snapshot read before it
+  // fails on a corrupt index) leaves the checkout on the task branch; that is the same uncertain
+  // execution, not a generic refusal.
+  it("reports an uncertain execution when the switch back after a refused adoption throws", async () => {
+    const gitService = service({
+      admit: () => "admitted",
+      adopt: (adoption): boolean => {
+        adoptions.push(adoption);
+        writeFileSync(join(root, ".git", "index"), "not an index");
+        return false;
+      },
+    });
+    await expect(branch(gitService, "feature/x")).resolves.toEqual({
+      kind: "branch",
+      status: "recovery-required",
+      reason: "execution-uncertain",
+      branch: "feature/x",
+    });
+    expect(git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/x");
+    expect(branchLines().at(-1)?.extra).toMatchObject({
+      state: "recovery-required",
+      reason: "execution-uncertain",
+    });
+  });
+
   it("keeps a thrown adoption the primary failure when the switch back fails as well", async () => {
     const gitService = service({
       admit: () => "admitted",

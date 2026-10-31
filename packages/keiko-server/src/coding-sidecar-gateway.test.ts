@@ -8634,7 +8634,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
         "coding-sidecar.gateway.request-validated.line",
         formatActivityLogProofLine(validated ?? {}),
       ),
-    ).toMatchObject({ droppedReasoningMessageCount: 2 });
+    ).toMatchObject({ droppedReasoningMessageCount: 2, toolCallTextMessageCount: 1 });
     expect(JSON.stringify(sink.events)).not.toContain("private");
   });
 

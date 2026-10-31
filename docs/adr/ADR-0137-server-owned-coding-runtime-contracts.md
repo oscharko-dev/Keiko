@@ -395,8 +395,10 @@ that workspace and that base, and from then on never again through the envelope'
 `resolveVerifiedCommitContext` reads both refs from the record, the one seam commit, push, pull
 request and CI share. If the run cannot adopt the branch, the checkout is switched back to the base
 branch and the result is `rebind-failed`; when the kernel cannot switch it back, the result is
-`recovery-required` (`execution-uncertain`), never a restored checkout, and an adoption that threw
-stays the logged primary failure. One task-branch step of a run runs at a time: a concurrent call
+`recovery-required` (`execution-uncertain`), never a restored checkout, whether the adoption was
+refused or threw and whether the switch back failed or threw; an adoption that threw stays the
+logged primary failure, and a Local checkout record that could not be verified as active again goes
+back on its base branch. One task-branch step of a run runs at a time: a concurrent call
 waits, then reads the live context and head and is refused as `not-on-base`. Open stage and commit proposals, the verification and
 draft-delivery proposals are invalidated after a switch. A commit blocked as `protected-branch`
 therefore now tells the model to create a task branch with `keiko_git_branch` and commit again; the

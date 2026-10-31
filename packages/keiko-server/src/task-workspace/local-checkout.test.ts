@@ -668,6 +668,24 @@ describe("a governed task branch in a local checkout (#3907)", () => {
     expect(service.getActive()?.instance.taskBranch).toBe(switched ? undefined : "main");
   });
 
+  // #4170 review: an adoption whose active view cannot be verified afterwards leaves the record on
+  // its base branch, so the rolled-back run can ask for its task branch again.
+  it("restores the instance when the adopted checkout cannot be verified as active", () => {
+    const service = fixture();
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("switch", "-c", "task/x");
+    service.clearActive();
+    expect(() =>
+      service.adoptTaskBranch({
+        workspaceId: instance.workspaceId,
+        branch: "task/x",
+        baseBranch: "main",
+      }),
+    ).toThrow(expect.objectContaining({ code: "POINTER_DRIFT" }));
+    git("switch", "main");
+    expect(service.admitTaskBranch(instance.workspaceId)).toBe("admitted");
+  });
+
   it("refuses to adopt a branch in an unknown workspace", () => {
     const service = fixture();
     expect(() =>

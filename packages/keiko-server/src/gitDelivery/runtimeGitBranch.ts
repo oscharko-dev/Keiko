@@ -245,7 +245,8 @@ export function checkoutUncertainResult(name: string): CodingRuntimeGitBranch {
   return branchResult("recovery-required", "execution-uncertain", name);
 }
 
-// The failure of an adoption that threw, once the checkout has been put back as far as it can be.
+// The failure of an adoption that threw or was refused, once the checkout has been put back as far
+// as it can be.
 async function settledAdoptionFailure(
   input: RuntimeGitBranchInput,
   failure: TaskBranchAdoptionFailure,
@@ -275,7 +276,13 @@ async function adoptOrRestore(input: RuntimeGitBranchInput): Promise<CodingRunti
     throw await settledAdoptionFailure(input, new TaskBranchAdoptionFailure(cause));
   }
   if (adopted) return branchResult("succeeded", "none", name);
-  return (await switchBack(input)) ? adoptionFailedResult(name) : checkoutUncertainResult(name);
+  // A refused adoption settles like a thrown one: a switch back that throws leaves the checkout off
+  // its base, which the caller reports as an uncertain execution.
+  const refused = await settledAdoptionFailure(
+    input,
+    new TaskBranchAdoptionFailure(new Error("task-branch-adoption-refused")),
+  );
+  return refused.checkoutRestored ? adoptionFailedResult(name) : checkoutUncertainResult(name);
 }
 
 /**
