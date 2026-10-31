@@ -24,6 +24,7 @@ import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { executeJiraChatDraft } from "./jiraChatDraft.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
+import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
 
 type ChatCatalog = ManagedProviderCatalog<JiraChatCatalogConsumer>;
 type CatalogInitialization =
@@ -138,6 +139,7 @@ function connection(
     http: credentials.httpBodyPortFactory(current.credential, context.correlationId, {
       beforeDispatch: () => context.beforeEffect(),
     }),
+    issueTemplates: jiraIssueTemplateSource(deps.store),
   };
 }
 

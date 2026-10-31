@@ -1,4 +1,5 @@
 import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connectors.js";
+import type { JiraTemplateViolation } from "./jira-issue-template.js";
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
@@ -123,6 +124,8 @@ export type JiraMutationAttempt =
       /** Set only when the issue itself exists although the attempt did not finish (partial effect). */
       readonly receipt?: JiraMutationReceipt;
       readonly links?: JiraMutationLinkAccount;
+      /** Only an issue-template refusal (`field-validation`) carries violations (#4177). */
+      readonly violations?: readonly JiraTemplateViolation[];
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.

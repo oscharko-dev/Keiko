@@ -225,16 +225,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["skills.library.operation", "skills.workflow.attached"],
+      state: ["jira.template.admission", "skills.library.operation", "skills.workflow.attached"],
       end: [],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["skills.library.operation", "skills.workflow.attached"],
+    requiredCausalOperations: [
+      "jira.template.admission",
+      "skills.library.operation",
+      "skills.workflow.attached",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["skills.library.operation", "skills.workflow.attached"],
+    requiredProofOperations: [
+      "jira.template.admission",
+      "skills.library.operation",
+      "skills.workflow.attached",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["skills.library.operation", "skills.workflow.attached"],
+    requiredResourceOperations: [
+      "jira.template.admission",
+      "skills.library.operation",
+      "skills.workflow.attached",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

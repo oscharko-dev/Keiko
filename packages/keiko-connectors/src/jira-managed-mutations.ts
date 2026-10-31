@@ -31,6 +31,11 @@ import {
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import {
+  gateJiraMutationByTemplates,
+  type JiraIssueTemplateSource,
+  type JiraTemplateGateResult,
+} from "./jira-managed-template-gate.js";
+import {
   jiraDraftIdentity,
   jiraDraftParentKey,
   reconcileJiraDraftItem,
@@ -55,6 +60,12 @@ import {
 } from "./jira-mutation-confirmation.js";
 
 type MutationValidation = { readonly ok: true } | Extract<JiraMutationAttempt, { ok: false }>;
+/** Templates govern the write; `check` stops after admission, before any POST or PUT. */
+interface MutationPolicy {
+  readonly templates: JiraIssueTemplateSource | undefined;
+  readonly check: boolean;
+}
+const CHECKED: JiraMutationAttempt = { ok: true, receipt: {} };
 const INVALID = { ok: false, reason: "field-validation" } as const;
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
@@ -110,7 +121,8 @@ function fieldsInput(value: unknown): Record<string, unknown> | undefined {
     ? fields
     : undefined;
 }
-function requestFor(
+/** One bounded Jira request function over the composed transport; also used by read-only tools. */
+export function requestFor(
   connection: JiraManagedConnection,
   context: ManagedMcpInvocationContext,
 ): JiraMutationRequest {
@@ -175,6 +187,7 @@ function createArgumentsValid(
 async function createIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
+  policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const { projectId, issueTypeId } = args;
   const fields = fieldsInput(args.fields);
@@ -189,7 +202,12 @@ async function createIssue(
     return INVALID;
   const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
   if (!metadata.ok) return metadata;
-  return createWithMetadata(request, { projectId, issueTypeId, fields, links }, metadata.fields);
+  return createWithMetadata(
+    request,
+    { projectId, issueTypeId, fields, links },
+    metadata.fields,
+    policy,
+  );
 }
 interface CreateRequest {
   readonly projectId: string;
@@ -201,6 +219,7 @@ async function createWithMetadata(
   request: JiraMutationRequest,
   create: CreateRequest,
   metadata: readonly JiraFieldMetadata[],
+  policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const validated = validateJiraFieldChanges(
     createContextFields(metadata),
@@ -211,6 +230,17 @@ async function createWithMetadata(
   if (!validated.ok) return validationFailure(validated);
   const refused = linkOffer(metadata, create.links);
   if (refused !== undefined) return refused;
+  const gate = await gateJiraMutationByTemplates({
+    request,
+    source: policy.templates,
+    operation: "create",
+    metadata,
+    validated,
+    links: create.links,
+    target: { projectId: create.projectId, issueTypeId: create.issueTypeId },
+  });
+  if (!gate.ok) return gate;
+  if (policy.check) return CHECKED;
   const plan = planJiraIssueLinks(create.links);
   const response = await request("issue", "POST", {
     fields: validated.fields,
@@ -281,19 +311,40 @@ function linkedFieldChanges(
   const links = parseJiraIssueLinks(args.links) ?? [];
   return linkOffer(fields, links) ?? { ok: true, validated, links };
 }
+interface FieldTarget {
+  readonly purpose: "edit" | "transition";
+  readonly issueKey: string;
+  readonly targetStatusId?: string;
+  readonly transition?: {
+    readonly id: string;
+    readonly name?: string;
+    readonly targetStatusName?: string;
+  };
+}
 async function fieldMutation(
   request: JiraMutationRequest,
   metadata: JiraMutationMetadata,
   args: CatalogJsonObject,
-  purpose: "edit" | "transition",
-  issueKey: string,
-  targetStatusId?: string,
+  { purpose, issueKey, targetStatusId, transition }: FieldTarget,
+  policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   if (!metadata.ok) return metadata;
   const changes = linkedFieldChanges(metadata.fields, args, purpose);
   if (!changes.ok) return changes;
   const { validated } = changes;
   const values = withLinks(validated, changes.links);
+  const gate = await gateJiraMutationByTemplates({
+    request,
+    source: policy.templates,
+    operation: purpose,
+    metadata: metadata.fields,
+    validated,
+    links: changes.links,
+    target: { issueKey },
+    ...(transition === undefined ? {} : { transition }),
+  });
+  if (!gate.ok) return gate;
+  if (policy.check) return CHECKED;
   const transitionId = purpose === "transition" ? transitionArgument(args) : undefined;
   const target = fieldMutationTarget(issueKey, transitionId);
   const prior = await readJiraMutationIssue(
@@ -327,6 +378,7 @@ async function editIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
   issueKey: string,
+  policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const fields = fieldsInput(args.fields ?? {});
   const updates = asArray(args.updates ?? []);
@@ -343,14 +395,15 @@ async function editIssue(
     request,
     await jiraEditMutationMetadata(request, issueKey),
     args,
-    "edit",
-    issueKey,
+    { purpose: "edit", issueKey },
+    policy,
   );
 }
 async function transitionIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
   issueKey: string,
+  policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const transitionId = args.transitionId;
   if (
@@ -362,7 +415,24 @@ async function transitionIssue(
     return INVALID;
   const metadata = await jiraTransitionMutationMetadata(request, issueKey, transitionId);
   if (!metadata.ok) return metadata;
-  return fieldMutation(request, metadata, args, "transition", issueKey, metadata.targetStatusId);
+  return fieldMutation(
+    request,
+    metadata,
+    args,
+    {
+      purpose: "transition",
+      issueKey,
+      targetStatusId: metadata.targetStatusId,
+      transition: {
+        id: transitionId,
+        ...(metadata.transitionName === undefined ? {} : { name: metadata.transitionName }),
+        ...(metadata.targetStatusName === undefined
+          ? {}
+          : { targetStatusName: metadata.targetStatusName }),
+      },
+    },
+    policy,
+  );
 }
 function userName(value: unknown): value is string {
   return (
@@ -483,6 +553,7 @@ export async function executeJiraDraftItem(
     request,
     { projectId: item.projectId, issueTypeId: item.issueTypeId, fields: identified, links },
     metadata.fields,
+    { templates: connection.issueTemplates, check: false },
   );
 }
 
@@ -510,6 +581,29 @@ export async function findJiraDraftItem(
   return found.kind === "absent" ? { ok: false, reason: "not-found" } : found.attempt;
 }
 
+function dispatchMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  policy: MutationPolicy,
+): Promise<JiraMutationAttempt> {
+  if (operation === "jira.create") return createIssue(request, args, policy);
+  const issueKey = args.issueKey;
+  if (!isSafeAtlassianIdentifier(issueKey)) return Promise.resolve(INVALID);
+  switch (operation) {
+    case "jira.edit":
+      return editIssue(request, args, issueKey, policy);
+    case "jira.assign":
+      return assignIssue(request, args, issueKey);
+    case "jira.comment":
+      return addComment(request, args, issueKey);
+    case "jira.transition":
+      return transitionIssue(request, args, issueKey, policy);
+    default:
+      return Promise.resolve(INVALID);
+  }
+}
+
 /** Fresh capability metadata and one mutation request. Durability/authority remain server-owned. */
 export function executeJiraManagedMutation(
   operation: JiraMutationOperation,
@@ -519,21 +613,30 @@ export function executeJiraManagedMutation(
 ): Promise<JiraMutationAttempt> {
   if (connection.deployment !== "data-center")
     return Promise.resolve({ ok: false, reason: "unavailable" });
-  const args = structuredClone(source);
-  const request = requestFor(connection, context);
-  if (operation === "jira.create") return createIssue(request, args);
-  const issueKey = args.issueKey;
-  if (!isSafeAtlassianIdentifier(issueKey)) return Promise.resolve(INVALID);
-  switch (operation) {
-    case "jira.edit":
-      return editIssue(request, args, issueKey);
-    case "jira.assign":
-      return assignIssue(request, args, issueKey);
-    case "jira.comment":
-      return addComment(request, args, issueKey);
-    case "jira.transition":
-      return transitionIssue(request, args, issueKey);
-    default:
-      return Promise.resolve(INVALID);
-  }
+  return dispatchMutation(operation, structuredClone(source), requestFor(connection, context), {
+    templates: connection.issueTemplates,
+    check: false,
+  });
+}
+
+/**
+ * The same admission pipeline without the write: Chat runs it before asking a human to approve, so
+ * a draft that violates an active template is refused instead of being put in front of a person.
+ * It reads and validates only; it never issues a POST or PUT.
+ */
+export async function checkJiraManagedMutationTemplates(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<JiraTemplateGateResult> {
+  if (connection.deployment !== "data-center") return { ok: true };
+  const attempt = await dispatchMutation(
+    operation,
+    structuredClone(source),
+    requestFor(connection, context),
+    { templates: connection.issueTemplates, check: true },
+  );
+  if (attempt.ok || attempt.violations === undefined) return { ok: true };
+  return { ok: false, reason: attempt.reason, violations: attempt.violations };
 }

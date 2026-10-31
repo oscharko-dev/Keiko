@@ -207,3 +207,38 @@ export {
 } from "./jira-draft.js";
 export { executeJiraDraftItem, findJiraDraftItem } from "./jira-managed-mutations.js";
 export { jiraBrowseUrl } from "./jira-browse-url.js";
+export {
+  JIRA_TEMPLATE_FINDING_CODES,
+  checkJiraIssueTemplate,
+  checkJiraIssueTemplates,
+  jiraTemplateValuePresent,
+  jiraTemplateValueText,
+  matchingJiraIssueTemplates,
+  resolveJiraTemplateFieldIds,
+  validateJiraIssueTemplateAgainstInstance,
+  type JiraFieldCatalogEntry,
+  type JiraTemplateFinding,
+  type JiraTemplateFindingCode,
+  type JiraTemplateInstanceMetadata,
+  type JiraTemplateSubject,
+} from "./jira-issue-template-check.js";
+export {
+  gateJiraMutationByTemplates,
+  type JiraIssueTemplateSet,
+  type JiraIssueTemplateSource,
+  type JiraTemplateGateInput,
+  type JiraTemplateGateResult,
+} from "./jira-managed-template-gate.js";
+export {
+  checkJiraManagedMutationTemplates,
+  requestFor as createJiraReadRequest,
+} from "./jira-managed-mutations.js";
+export {
+  deriveJiraTemplateSections,
+  proposeJiraIssueTemplates,
+  readJiraTemplateInstanceMetadata,
+  renderProposedJiraIssueTemplate,
+  type JiraTemplateInstanceRead,
+  type JiraTemplateProposal,
+  type JiraTemplateProposalInput,
+} from "./jira-issue-template-instance.js";

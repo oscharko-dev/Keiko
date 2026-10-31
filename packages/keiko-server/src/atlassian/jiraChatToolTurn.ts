@@ -24,9 +24,13 @@ import {
 } from "./jiraChatCatalogConsumer.js";
 import type { ManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
+import { createJiraChatTemplatePreflight } from "./jiraChatTemplatePreflight.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
 import { observedJiraDraftOutcome } from "./jiraChatDraft.js";
-import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogJsonObject,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   ChatToolTurn,
   bindChatToolCatalog,
@@ -36,7 +40,11 @@ export { chatModelSupportsTools as jiraChatModelSupportsTools } from "../chat-to
 type TurnDeps = JiraChatAuthorityDeps &
   Pick<
     UiHandlerDeps,
-    "jiraChatCatalog" | "gatewayConfig" | "atlassianActionApprovalRegistry" | "diagnostics"
+    | "jiraChatCatalog"
+    | "gatewayConfig"
+    | "atlassianActionApprovalRegistry"
+    | "diagnostics"
+    | "atlassianConnectorCredentials"
   >;
 type Accepted = Extract<ReturnType<typeof mintAcceptedJiraChatAuthority>, { ok: true }>;
 export interface JiraChatTurnOptions {
@@ -81,10 +89,31 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
             context: () => current,
             now: Date.now,
             ...this.consentPorts(),
+            preflightWrite: createJiraChatTemplatePreflight({
+              deps,
+              writeArguments: (action) => this.proposedWriteArguments(action),
+              readAllowed: () => !current.signal.aborted,
+            }),
           }),
         }),
     });
   }
+  /** The model's proposed arguments for a write, only while they match the approval digest. */
+  private proposedWriteArguments(action: {
+    readonly actionId: string;
+    readonly argumentsDigest: string;
+  }): CatalogJsonObject | undefined {
+    const exchange = this.writeExchange(action.actionId);
+    const args: unknown = exchange?.call.arguments;
+    return exchange !== undefined &&
+      typeof args === "object" &&
+      args !== null &&
+      !Array.isArray(args) &&
+      sha256Hex(canonicalise(args)) === action.argumentsDigest
+      ? (args as CatalogJsonObject)
+      : undefined;
+  }
+
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
     return reserveChatToolPrompt(this.jiraOptions, reserveCurrentJiraChatAuthority, promptTokens);
   }

@@ -32,7 +32,9 @@ import {
   jiraLinkCountsOfResult,
   validJiraMutationAttempt,
 } from "../atlassian/jiraMutationResult.js";
+import { jiraIssueTemplateSource, recordJiraTemplateAttempt } from "../atlassian/jiraTemplateLog.js";
 import type { JiraPodAccessDeps, JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
+import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 
@@ -61,6 +63,8 @@ import {
  */
 
 export interface CodingJiraPodDeps extends JiraPodAccessDeps {
+  /** The skill library holds the customer-defined issue templates every Jira write is checked by. */
+  readonly store?: Pick<UiHandlerDeps["store"], "markdownSkills"> | undefined;
   readonly atlassianConnectorCredentials?:
     Pick<AtlassianConnectorCredentialDeps, "custody" | "httpBodyPortFactory"> | undefined;
 }
@@ -343,6 +347,9 @@ class CodingJiraPodService implements CodingJiraPods {
       http: factory(credential, context.correlationId, {
         beforeDispatch: () => this.admit(binding, context),
       }),
+      ...(this.#deps?.store === undefined
+        ? {}
+        : { issueTemplates: jiraIssueTemplateSource(this.#deps.store) }),
     };
   }
 
@@ -365,6 +372,7 @@ class CodingJiraPodService implements CodingJiraPods {
     let attempt: JiraMutationAttempt;
     try {
       attempt = validJiraMutationAttempt(await execute(http), operation);
+      recordJiraTemplateAttempt(context.correlationId, operation, attempt);
     } catch (error) {
       recordCodingJiraPod(this.log, context.correlationId, {
         action: "call",

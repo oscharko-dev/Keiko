@@ -1555,3 +1555,26 @@ export {
   type JiraMutationFailureDetail,
   type JiraMutationFieldError,
 } from "./jira-tool-execution.js";
+
+export {
+  JIRA_ISSUE_TEMPLATE_LIMITS,
+  JIRA_ISSUE_TEMPLATE_MARKER,
+  JIRA_ISSUE_TEMPLATE_VERSION,
+  JIRA_TEMPLATE_PARSE_ERROR_CODES,
+  JIRA_TEMPLATE_RULE_IDS,
+  JIRA_TEMPLATE_VIOLATIONS_MAX,
+  compileJiraTemplatePattern,
+  describeJiraTemplateParseErrors,
+  isJiraIssueTemplateDocument,
+  jiraIssueTemplateLabel,
+  jiraTemplatePatternIssue,
+  normalizeJiraSectionHeading,
+  parseJiraIssueTemplate,
+  type JiraIssueTemplate,
+  type JiraIssueTemplateParseResult,
+  type JiraTemplateActivation,
+  type JiraTemplateParseError,
+  type JiraTemplateParseErrorCode,
+  type JiraTemplateRuleId,
+  type JiraTemplateViolation,
+} from "./jira-issue-template.js";

@@ -18,6 +18,7 @@ import type {
 } from "../store/chatToolMutationTypes.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
+import { recordJiraTemplateAttempt } from "./jiraTemplateLog.js";
 import {
   jiraAttemptToolResult,
   jiraLinkCounts,
@@ -106,10 +107,12 @@ async function attempt(
   journal: ChatToolMutationStore,
 ): Promise<JiraMutationAttempt> {
   try {
-    return validJiraMutationAttempt(
+    const result = validJiraMutationAttempt(
       await input.execute(mutationTransport(input, journal)),
       input.intent.operation,
     );
+    recordJiraTemplateAttempt(input.intent.correlationId, input.intent.operation, result);
+    return result;
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
     return FAILED;

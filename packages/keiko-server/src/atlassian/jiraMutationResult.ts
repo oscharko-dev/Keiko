@@ -1,5 +1,7 @@
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+  JIRA_TEMPLATE_RULE_IDS,
+  JIRA_TEMPLATE_VIOLATIONS_MAX,
   isSafeAtlassianIdentifier,
   sanitizeJiraMutationFailureDetail,
   sanitizeJiraMutationLinkAccount,
@@ -11,6 +13,7 @@ import {
   type JiraMutationOutcome,
   type JiraMutationReceipt,
   type JiraMutationResultState,
+  type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 
@@ -19,6 +22,7 @@ import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime
  * Coding runs both end a mutation here, so a receipt or a reason can never mean two things.
  */
 const REASONS: ReadonlySet<string> = new Set(ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS);
+const RULE_IDS: ReadonlySet<string> = new Set(JIRA_TEMPLATE_RULE_IDS);
 const RECEIPT_KEYS: ReadonlySet<string> = new Set([
   "issueKey",
   "issueId",
@@ -58,6 +62,9 @@ function failedAttempt(
   if (!REASONS.has(value.reason)) return { ok: false, reason: "malformed-payload" };
   const detail = sanitizeJiraMutationFailureDetail(value.detail);
   const links = sanitizeJiraMutationLinkAccount(value.links);
+  // Only an issue-template refusal carries violations; no other reason may smuggle them in.
+  const violations =
+    value.reason === "field-validation" ? boundedViolations(value.violations) : undefined;
   const receipt =
     value.receipt !== undefined &&
     isSafeAtlassianIdentifier(value.receipt.issueKey) &&
@@ -70,7 +77,28 @@ function failedAttempt(
     ...(detail === undefined ? {} : { detail }),
     ...(receipt === undefined ? {} : { receipt }),
     ...(links === undefined ? {} : { links }),
+    ...(violations === undefined ? {} : { violations }),
   };
+}
+
+function boundedViolations(
+  value: readonly JiraTemplateViolation[] | undefined,
+): readonly JiraTemplateViolation[] | undefined {
+  if (value === undefined) return undefined;
+  const valid = value
+    .filter(
+      (item) =>
+        RULE_IDS.has(item.ruleId) &&
+        typeof item.subject === "string" &&
+        typeof item.template === "string",
+    )
+    .slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX)
+    .map(({ ruleId, subject, template }) => ({
+      ruleId,
+      subject: subject.slice(0, 120),
+      template: template.slice(0, 256),
+    }));
+  return valid.length === 0 ? undefined : valid;
 }
 
 /** An attempt is a success only with the validated identities its operation must return. */
@@ -144,6 +172,7 @@ export function jiraMutationToolResult(
   replayed = false,
   detail?: JiraMutationFailureDetail,
   links?: JiraMutationLinkAccount,
+  violations?: readonly JiraTemplateViolation[],
 ): ManagedMcpToolResult {
   return {
     data: {
@@ -153,6 +182,7 @@ export function jiraMutationToolResult(
       ...(replayed ? { replayed: true } : {}),
       ...detailData(detail),
       ...linkData(links),
+      ...(violations === undefined ? {} : { violations: violations.map((item) => ({ ...item })) }),
     },
     ...(outcome === "succeeded" ? {} : { isError: true }),
   };
@@ -181,5 +211,6 @@ export function jiraAttemptToolResult(
     false,
     attempt.ok ? undefined : attempt.detail,
     attempt.links,
+    attempt.ok ? undefined : attempt.violations,
   );
 }

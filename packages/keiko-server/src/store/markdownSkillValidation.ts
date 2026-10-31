@@ -3,6 +3,11 @@ import {
   MARKDOWN_SKILL_LIMITS,
   type MarkdownSkillUpload,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  describeJiraTemplateParseErrors,
+  isJiraIssueTemplateDocument,
+  parseJiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { invalidRequest, UiStoreError } from "./errors.js";
 
 export interface ValidatedMarkdownSkill {
@@ -62,6 +67,17 @@ function boundedDisplayName(value: string): string {
   return /\p{Cs}/u.test(bounded) ? bounded.slice(0, -1) : bounded;
 }
 
+/** A document that declares itself a Jira issue template must be one: it becomes enforcement. */
+function assertValidJiraTemplate(body: string): void {
+  if (!isJiraIssueTemplateDocument(body)) return;
+  const parsed = parseJiraIssueTemplate(body);
+  if (!parsed.ok) {
+    throw invalidRequest(
+      `Jira issue template is invalid: ${describeJiraTemplateParseErrors(parsed.errors)}.`,
+    );
+  }
+}
+
 export function validateMarkdownSkillUpload(input: MarkdownSkillUpload): ValidatedMarkdownSkill {
   validateFileName(input.fileName);
   if (input.contentBase64.length > Math.ceil(MARKDOWN_SKILL_LIMITS.importBytes / 3) * 4) {
@@ -71,6 +87,7 @@ export function validateMarkdownSkillUpload(input: MarkdownSkillUpload): Validat
   if (body.trim().length === 0 || /\p{Cc}/u.test(body.replace(/[\n\t]/gu, ""))) {
     throw invalidRequest("Skill file must contain nonempty Markdown text.");
   }
+  assertValidJiraTemplate(body);
   const heading = firstHeading(body);
   const name = boundedDisplayName(heading ?? input.fileName.slice(0, -3));
   return { name, body, digest: markdownSkillDigest(body), byteCount: Buffer.byteLength(body) };

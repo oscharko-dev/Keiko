@@ -92,13 +92,24 @@ export type JiraTransitionMutationMetadata =
       readonly ok: true;
       readonly fields: readonly JiraFieldMetadata[];
       readonly targetStatusId: string;
+      readonly transitionName?: string;
+      readonly targetStatusName?: string;
     };
 function selectedTransitionMetadata(value: unknown): JiraTransitionMutationMetadata {
   const transition = asRecord(value);
-  const targetStatusId = asRecord(transition?.to)?.id;
+  const target = asRecord(transition?.to);
+  const targetStatusId = target?.id;
   if (!isSafeAtlassianIdentifier(targetStatusId)) return MALFORMED;
   const parsed = parsedMetadata(parseJiraFieldMap(transition?.fields));
-  return parsed.ok ? { ...parsed, targetStatusId } : parsed;
+  if (!parsed.ok) return parsed;
+  const transitionName = transition?.name;
+  const targetStatusName = target?.name;
+  return {
+    ...parsed,
+    targetStatusId,
+    ...(typeof transitionName === "string" ? { transitionName } : {}),
+    ...(typeof targetStatusName === "string" ? { targetStatusName } : {}),
+  };
 }
 export async function jiraTransitionMutationMetadata(
   request: JiraMutationRequest,

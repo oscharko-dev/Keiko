@@ -1,6 +1,6 @@
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
-import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
+import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
   ChatToolReadGrantView,
   ChatToolWriteApprovalView,
@@ -164,6 +164,14 @@ export interface JiraChatAdmissionOptions {
   readonly reviewableWrite?: (action: JiraChatCatalogAction) => boolean;
   /** Item refs of the persisted backlog draft preview; the registry validates a deselection. */
   readonly draftItemRefs?: (action: JiraChatCatalogAction) => readonly string[] | undefined;
+  /**
+   * Runs before a human is asked to approve a write. A returned object is the structured refusal
+   * the model receives instead (issue-template violations, #4177); the approval is never created.
+   */
+  readonly preflightWrite?: (
+    action: JiraChatCatalogAction,
+    context: JiraChatCatalogContext,
+  ) => Promise<CatalogJsonObject | undefined>;
 }
 type AdmissionPorts = Pick<
   CatalogToolBinderInput<JiraChatCatalogConsumer>,
@@ -282,8 +290,13 @@ async function requestConsent(
   if (request.kind === "review-required")
     await options.requestReadConsent(request.grant, context.signal);
   if (!readPermission(options, action).ok) return undefined;
-  if (!READ_TOOLS.has(action.tool))
+  if (!READ_TOOLS.has(action.tool)) {
+    const refusal = await options.preflightWrite?.(action, context);
+    if (refusal !== undefined) {
+      throw new CatalogDispatchFault("failed", "provider-reported-error", undefined, refusal);
+    }
     await requestCatalogWriteApproval({ ...options, context: () => context }, action);
+  }
   return preview(options, context.authority, action).ok ? action : undefined;
 }
 

@@ -9,6 +9,11 @@ import {
   handleReadMarkdownSkillSelection,
   handleSelectMarkdownSkill,
 } from "./markdown-skill-routes.js";
+import {
+  handleListJiraTemplates,
+  handleProposeJiraTemplates,
+  handleValidateJiraTemplate,
+} from "./markdown-skill-jira-template-routes.js";
 // BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
 // (method + pattern) is static and dependency-free; each entry names a handler that receives the
 // request context AND the per-server handler dependencies (resolved config, evidence store, run
@@ -698,6 +703,21 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/chats/context", handler: handleChatContextStatus },
   { method: "GET", pattern: "/api/skills", handler: handleListMarkdownSkills },
   { method: "POST", pattern: "/api/skills", handler: handleImportMarkdownSkill },
+  {
+    method: "GET",
+    pattern: "/api/skills/jira-templates",
+    handler: handleListJiraTemplates,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skills/jira-templates/validate",
+    handler: handleValidateJiraTemplate,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skills/jira-templates/propose",
+    handler: handleProposeJiraTemplates,
+  },
   { method: "GET", pattern: "/api/skills/:id", handler: handleReadMarkdownSkill },
   { method: "PUT", pattern: "/api/skills/:id", handler: handleReplaceMarkdownSkill },
   { method: "DELETE", pattern: "/api/skills/:id", handler: handleDeleteMarkdownSkill },
