@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createObservedSseSubscription,
+  defineSseBackpressureContract,
   defineSseSubscriptionObservationContract,
   type NativeSseSubscription,
 } from "../../../tests/support/sse-subscription-observations.js";
@@ -26,7 +27,6 @@ import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import { openCommandSseStream } from "./command-runner-routes.js";
-import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "./sse-write.js";
 import type {
   CommandRunInput,
   CommandRunnerEventEmitter,
@@ -438,164 +438,24 @@ function makeFakeSseRes(): FakeSseRes {
 }
 
 describe("openCommandSseStream backpressure", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("destroys once and signals when the reader stalls on the ready frame itself", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeCommandRunnerManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openCommandSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    expect(fake.writes).toHaveLength(1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    // The stall bound aborted the stream before any event: nothing further is written or destroyed.
-    const writesAfterKill = fake.writes.length;
-    manager.emitExternal({
-      kind: "run-failed",
-      runId: "run-bp",
-      payload: { failureReason: "spawn-error" },
-    });
-    expect(fake.writes).toHaveLength(writesAfterKill);
-    expect(fake.destroyCount).toBe(1);
-  });
-
-  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeCommandRunnerManager();
-    const signals: SseBackpressureSignal[] = [];
-    openCommandSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    // The client took the ready frame and goes slow only once events flow, so the first EVENT frame
-    // is the queued one. A stalled ready frame has its own case.
-    expect(fake.writes).toHaveLength(1);
-    fake.writeReturns = false;
-
-    manager.emitExternal({
-      kind: "run-failed",
-      runId: "run-bp",
-      payload: { failureReason: "spawn-error" },
-    });
-
-    // The frame is queued, not dropped, and nothing is torn down yet.
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.writes[1]).toContain("run-failed");
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    // The socket is destroyed once and the observer fired exactly once.
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
-
-    // The abort unsubscribed from the manager, so a second event produces no further work.
-    const writesAfterKill = fake.writes.length;
-    manager.emitExternal({
-      kind: "run-completed",
-      runId: "run-bp",
-      payload: { failureReason: "none" },
-    });
-    expect(fake.writes).toHaveLength(writesAfterKill);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-
-    // res.on("close") firing after an abort-driven unsubscribe must not double-unsubscribe/throw.
-    expect(() => {
-      fake.emitClose();
-    }).not.toThrow();
-  });
-
-  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeCommandRunnerManager();
-    const signals: SseBackpressureSignal[] = [];
-    openCommandSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    fake.writeReturns = false;
-    manager.emitExternal({
-      kind: "run-failed",
-      runId: "run-drain",
-      payload: { failureReason: "spawn-error" },
-    });
-
-    fake.emitDrain();
-    fake.writeReturns = true;
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
-
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    const writesBefore = fake.writes.length;
-    manager.emitExternal({
-      kind: "run-completed",
-      runId: "run-drain",
-      payload: { failureReason: "none" },
-    });
-    expect(fake.writes).toHaveLength(writesBefore + 1);
-    expect(fake.destroyCount).toBe(0);
-  });
-
-  it("keeps the normal write path intact when res.write returns true", () => {
-    const fake = makeFakeSseRes();
-    const manager = new FakeCommandRunnerManager();
-    const signals: SseBackpressureSignal[] = [];
-    openCommandSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    manager.emitExternal({
-      kind: "run-completed",
-      runId: "run-ok",
-      payload: { failureReason: "none" },
-    });
-
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    expect(fake.writes.join("")).toContain("command:run-completed");
+  defineSseBackpressureContract<FakeCommandRunnerManager>({
+    manager: () => new FakeCommandRunnerManager(),
+    open: openCommandSseStream,
+    emitFirst: (manager, runId): void => {
+      manager.emitExternal({
+        kind: "run-failed",
+        runId,
+        payload: { failureReason: "spawn-error" },
+      });
+    },
+    firstKind: "run-failed",
+    emitNext: (manager, runId): void => {
+      manager.emitExternal({ kind: "run-completed", runId, payload: { failureReason: "none" } });
+    },
+    emitCompleted: (manager, runId): void => {
+      manager.emitExternal({ kind: "run-completed", runId, payload: { failureReason: "none" } });
+    },
+    completedFrame: "command:run-completed",
   });
 });
 

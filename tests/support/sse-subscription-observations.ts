@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resetServerLogger } from "./activity-log-test-support.js";
 import { createBufferedServerLogSink } from "./buffered-server-log.js";
 import {
@@ -312,4 +312,142 @@ export function defineSseSubscriptionObservationContract<
 >(binding: SubscriptionObservationBinding<Manager, Response>): void {
   registerPair(binding);
   registerReadyStall(binding);
+}
+
+interface BackpressureBinding<Manager> {
+  readonly manager: () => Manager;
+  readonly open: (
+    res: ServerResponse,
+    manager: Manager,
+    redactor: (value: unknown) => unknown,
+    onBackpressure?: (signal: SseBackpressureSignal) => void,
+  ) => void;
+  /** Emits the run event a slow reader is handed first; `firstKind` names its kind. */
+  readonly emitFirst: (manager: Manager, runId: string) => void;
+  readonly firstKind: string;
+  /** Emits a later run event of another kind. */
+  readonly emitNext: (manager: Manager, runId: string) => void;
+  /** Emits a run-completed event; `completedFrame` is the namespaced frame it produces. */
+  readonly emitCompleted: (manager: Manager, runId: string) => void;
+  readonly completedFrame: string;
+}
+
+interface OpenedBackpressureStream<Manager> {
+  readonly fake: SseResponseObservation;
+  readonly manager: Manager;
+  readonly signals: SseBackpressureSignal[];
+}
+
+function openBackpressureStream<Manager>(
+  binding: BackpressureBinding<Manager>,
+  stallReady = false,
+): OpenedBackpressureStream<Manager> {
+  const fake = createEmittingSseResponseObservation();
+  const manager = binding.manager();
+  const signals: SseBackpressureSignal[] = [];
+  if (stallReady) fake.writeReturns = false;
+  binding.open(
+    fake.res,
+    manager,
+    (value) => value,
+    (signal) => {
+      signals.push(signal);
+    },
+  );
+  return { fake, manager, signals };
+}
+
+function registerReadyFrameStall<Manager>(binding: BackpressureBinding<Manager>): void {
+  it("destroys once and signals when the reader stalls on the ready frame itself", () => {
+    vi.useFakeTimers();
+    const { fake, manager, signals } = openBackpressureStream(binding, true);
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    vi.advanceTimersByTime(1);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    // The stall bound aborted the stream before any event: nothing further is written or destroyed.
+    const writesAfterKill = fake.writes.length;
+    binding.emitFirst(manager, "run-bp");
+    expect(fake.writes).toHaveLength(writesAfterKill);
+    expect(fake.destroyCount).toBe(1);
+  });
+}
+
+function registerEventFrameStall<Manager>(binding: BackpressureBinding<Manager>): void {
+  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
+    vi.useFakeTimers();
+    const { fake, manager, signals } = openBackpressureStream(binding);
+    // The client took the ready frame and goes slow only once events flow, so the first EVENT frame
+    // is the queued one. A stalled ready frame has its own case.
+    expect(fake.writes).toHaveLength(1);
+    fake.writeReturns = false;
+    binding.emitFirst(manager, "run-bp");
+    // The frame is queued, not dropped, and nothing is torn down yet.
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.writes[1]).toContain(binding.firstKind);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    // The socket is destroyed once and the observer fired exactly once.
+    vi.advanceTimersByTime(1);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
+    // The abort unsubscribed from the manager, so a second event produces no further work.
+    const writesAfterKill = fake.writes.length;
+    binding.emitNext(manager, "run-bp");
+    expect(fake.writes).toHaveLength(writesAfterKill);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    // res.on("close") firing after an abort-driven unsubscribe must not double-unsubscribe/throw.
+    expect(() => {
+      fake.emitClose();
+    }).not.toThrow();
+  });
+}
+
+function registerDrainAndHealthyWrites<Manager>(binding: BackpressureBinding<Manager>): void {
+  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
+    vi.useFakeTimers();
+    const { fake, manager, signals } = openBackpressureStream(binding);
+    fake.writeReturns = false;
+    binding.emitFirst(manager, "run-drain");
+    fake.emitDrain();
+    fake.writeReturns = true;
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    const writesBefore = fake.writes.length;
+    binding.emitNext(manager, "run-drain");
+    expect(fake.writes).toHaveLength(writesBefore + 1);
+    expect(fake.destroyCount).toBe(0);
+  });
+  it("keeps the normal write path intact when res.write returns true", () => {
+    const { fake, manager, signals } = openBackpressureStream(binding);
+    binding.emitCompleted(manager, "run-ok");
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    expect(fake.writes.join("")).toContain(binding.completedFrame);
+  });
+}
+
+/** Registers the stalled-reader cases every namespaced runner SSE stream must satisfy. */
+export function defineSseBackpressureContract<Manager>(
+  binding: BackpressureBinding<Manager>,
+): void {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  registerReadyFrameStall(binding);
+  registerEventFrameStall(binding);
+  registerDrainAndHealthyWrites(binding);
 }

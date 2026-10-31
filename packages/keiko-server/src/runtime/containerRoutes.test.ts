@@ -1,4 +1,7 @@
-import { createEmittingSseResponseObservation } from "../../../../tests/support/sse-subscription-observations.js";
+import {
+  createEmittingSseResponseObservation,
+  defineSseBackpressureContract,
+} from "../../../../tests/support/sse-subscription-observations.js";
 // Issue #1388 — /api/containers/* route integration tests. A FakeContainerRunnerManager replaces the
 // real spawn-backed manager so these tests never run a real container. The createUiServer fixture
 // mirrors command-runner-routes.test.ts so the CSRF guard, host-check, and SSE framer run live.
@@ -8,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   ContainerCapabilityResponse,
   ContainerRunnerEvent,
@@ -21,7 +24,6 @@ import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import { openContainerSseStream } from "./containerRoutes.js";
-import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "../sse-write.js";
 import type {
   ContainerRunInput,
   ContainerRunnerEventEmitter,
@@ -451,140 +453,20 @@ function makeFakeSseRes(): FakeSseRes {
 }
 
 describe("openContainerSseStream backpressure", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("destroys once and signals when the reader stalls on the ready frame itself", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeContainerRunnerManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openContainerSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    expect(fake.writes).toHaveLength(1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    // The stall bound aborted the stream before any event: nothing further is written or destroyed.
-    const writesAfterKill = fake.writes.length;
-    manager.emitExternal({ kind: "run-completed", runId: "run-bp", payload: { note: "x" } });
-    expect(fake.writes).toHaveLength(writesAfterKill);
-    expect(fake.destroyCount).toBe(1);
-  });
-
-  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeContainerRunnerManager();
-    const signals: SseBackpressureSignal[] = [];
-    openContainerSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    // The client took the ready frame and goes slow only once events flow, so the first EVENT frame
-    // is the queued one. A stalled ready frame has its own case.
-    expect(fake.writes).toHaveLength(1);
-    fake.writeReturns = false;
-
-    manager.emitExternal({ kind: "run-completed", runId: "run-bp", payload: { note: "x" } });
-
-    // The frame is queued, not dropped, and nothing is torn down yet.
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.writes[1]).toContain("run-completed");
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    // The socket is destroyed once and the observer fired exactly once.
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
-
-    // The abort unsubscribed from the manager, so a second event produces no further work.
-    const writesAfterKill = fake.writes.length;
-    manager.emitExternal({ kind: "run-started", runId: "run-bp", payload: { taskId: "t" } });
-    expect(fake.writes).toHaveLength(writesAfterKill);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-
-    // res.on("close") firing after an abort-driven unsubscribe must not double-unsubscribe/throw.
-    expect(() => {
-      fake.emitClose();
-    }).not.toThrow();
-  });
-
-  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeContainerRunnerManager();
-    const signals: SseBackpressureSignal[] = [];
-    openContainerSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    fake.writeReturns = false;
-    manager.emitExternal({ kind: "run-completed", runId: "run-drain", payload: { note: "x" } });
-
-    fake.emitDrain();
-    fake.writeReturns = true;
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
-
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    const writesBefore = fake.writes.length;
-    manager.emitExternal({ kind: "run-started", runId: "run-drain", payload: { taskId: "t" } });
-    expect(fake.writes).toHaveLength(writesBefore + 1);
-    expect(fake.destroyCount).toBe(0);
-  });
-
-  it("keeps the normal write path intact when res.write returns true", () => {
-    const fake = makeFakeSseRes();
-    const manager = new FakeContainerRunnerManager();
-    const signals: SseBackpressureSignal[] = [];
-    openContainerSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    manager.emitExternal({ kind: "run-completed", runId: "run-ok", payload: { note: "x" } });
-
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    expect(fake.writes.join("")).toContain("container:run-completed");
+  defineSseBackpressureContract<FakeContainerRunnerManager>({
+    manager: () => new FakeContainerRunnerManager(),
+    open: openContainerSseStream,
+    emitFirst: (manager, runId): void => {
+      manager.emitExternal({ kind: "run-completed", runId, payload: { note: "x" } });
+    },
+    firstKind: "run-completed",
+    emitNext: (manager, runId): void => {
+      manager.emitExternal({ kind: "run-started", runId, payload: { taskId: "t" } });
+    },
+    emitCompleted: (manager, runId): void => {
+      manager.emitExternal({ kind: "run-completed", runId, payload: { note: "x" } });
+    },
+    completedFrame: "container:run-completed",
   });
 });
 
