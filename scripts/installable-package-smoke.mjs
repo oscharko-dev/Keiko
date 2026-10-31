@@ -186,13 +186,13 @@ function commandForPlatform(cmd, args, options = {}) {
   let executable;
   try {
     executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
-  } catch (failure) {
+  } catch (error) {
     // Report resolution failure through the same body-free result path as a failed spawn.
     // In particular, never fall back to the unverified command on PATH.
-    const error = Object.assign(new Error(`trusted ${cmd} executable unavailable`), {
-      code: failure?.code ?? "UNTRUSTED_OR_MISSING",
+    const spawnError = Object.assign(new Error(`trusted ${cmd} executable unavailable`), {
+      code: error?.code ?? "UNTRUSTED_OR_MISSING",
     });
-    return { error, status: null, signal: null, stdout: "", stderr: "" };
+    return { error: spawnError, status: null, signal: null, stdout: "", stderr: "" };
   }
   // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with trusted absolute executable.
   return { command: shellCommandForTrustedExecutable(executable), shell: true };
