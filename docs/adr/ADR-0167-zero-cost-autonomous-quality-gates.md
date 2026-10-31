@@ -124,6 +124,33 @@ ADR-0168 temporarily superseded the rollback's installation state and restored G
 quota-tolerant reviewer. ADR-0169 supersedes that later state as well: the provider, App,
 configuration, and review authority are fully retired.
 
+### D6 — Anti-slop findings ratchet on `dev` (owner decision, 2026-10-30)
+
+Epic #3914 built a repository-owned code-quality engine: Oxlint 1.78.0 running
+`oxlint-plugin-anti-slop` with 22 noncosmetic rules under `scripts/code-quality-policy.json`. Its
+complete enforcement depends on responsibility qualifications that remain on the epic branch until
+#3991. The owner's "Delivery amendment 2" to #3914 (2026-10-30) lands the engine on `dev` first,
+under #4145, as a ratchet rather than as complete enforcement:
+
+- `npm run check:code-quality-policy -- --mode ratchet` scans the whole repository and counts
+  findings per (file, rule). The required `ci` context runs it on every pull request.
+- The counts are compared with the committed register `scripts/code-quality-register.json`. An
+  increase, or a new file with findings, fails with file, rule and line. A decrease fails until the
+  register is shrunk with `--prune-register`, which only lowers counts or removes entries and
+  refuses to widen. Entries for deleted or renamed files fail as stale.
+- Inline Oxlint suppression directives remain rejected, so the register is the only tolerance. It is
+  a shrink-only bridge, the same model as the `keiko-ui` ESLint bulk-suppression register, not a
+  permanent baseline.
+- The ratchet does not run the epic's responsibility qualifications and therefore does not claim
+  that any rule is qualified or fully enforced. Rule dispositions, thresholds, required contexts,
+  review loops and integration authority are unchanged.
+- Baseline on `dev` `6194949d5`: 7,216 files and 46,560 findings. Epic workstreams and ordinary
+  `dev` work prune the register; #3991 removes it at zero and activates full enforcement.
+
+Known limitation: counts are per file and rule, so fixing one finding and adding another of the same
+rule in the same file nets out. This is accepted for the bridge period and closes when #3991
+removes the register.
+
 ## Consequences
 
 - A stopped review subscription can no longer deadlock or falsely satisfy Keiko's core quality bar.
@@ -135,10 +162,12 @@ configuration, and review authority are fully retired.
 - The longest deterministic jobs still dominate pull-request latency; the new gates run alongside
   them instead of serially extending the path.
 - Hosted services remain replaceable supplemental producers and are represented honestly as such.
+- Existing anti-slop findings on `dev` can only decrease until #3991 activates full enforcement (D6).
 
 ## References
 
 - [Autonomous quality gates](../qa/autonomous-quality-gates.md)
+- [Code-quality policy and dev ratchet](../qa/code-quality-policy.md)
 - [External quality-gate runbook](../qa/external-quality-gates.md)
 - [Review standards](../qa/review-standards.md)
 - [CodSpeed benchmark variance](https://codspeed.io/docs/instruments/cpu/regression-causes)

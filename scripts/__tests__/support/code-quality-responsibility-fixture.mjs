@@ -1,0 +1,2688 @@
+import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { pathToFileURL, URL } from "node:url";
+import { join } from "node:path";
+import {
+  createSymbolFixture,
+  emitSymbolFixture,
+  publicParserRecord,
+} from "./code-quality-symbol-fixture.mjs";
+
+import ts from "typescript";
+import { SYMBOL_LIMITS } from "../../lib/code-quality-policy.mjs";
+
+import { fixtureOwnedPolicy } from "./code-quality-fixture.mjs";
+
+function assembleResponsibilityFixture(prepare, additionalOwners = []) {
+  return createSymbolFixture(true, prepare, additionalOwners);
+}
+
+export function responsibilityPolicy(records = []) {
+  return fixtureOwnedPolicy(records);
+}
+
+export function createCollectiveParserFixture(variant = "direct", rules = []) {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", collectiveParserOwner(variant));
+    own.put("packages/alpha/src/index.ts", 'export { first as parse } from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { first } from "alpha/runtime"; import { parse } from "alpha"; export const value = first(1); export const alias = parse(1);\n',
+    );
+    own.put("packages/alpha/src/proof.test.ts", collectiveParserProof(variant));
+    const records = ["first", "second"].map((name) => collectiveParserRecord(name, rules));
+    if (["public-alias", "public-const-alias"].includes(variant)) {
+      const alias = collectiveParserRecord("firstAlias", rules);
+      for (const role of ["input", "transform", "output"])
+        Object.assign(alias[role], { specifier: "alpha", exportName: "parse" });
+      alias.consumer.specifier = "alpha";
+      records.push(alias);
+    }
+    const policy = responsibilityPolicy(records);
+    for (const record of records) activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { records, policy });
+  });
+}
+
+function collectiveParserRecord(name, rules) {
+  const record = publicParserRecord();
+  record.id = `fixture-${name}`;
+  record.rules.push(...rules);
+  for (const role of ["input", "transform", "output"]) record[role].exportName = name;
+  record.consumer.exportName = `public${name}`;
+  record.proofAssertions = ["healthy", "malformed"].map((kind) => ({
+    path: record.consumer.consumerPath,
+    testName: `${name} ${kind}`,
+  }));
+  return record;
+}
+
+export function createPrivateModuleParserFixture(variant = "direct", rules = []) {
+  return assembleResponsibilityFixture(
+    (own) => {
+      const rootManifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+      rootManifest.exports = {};
+      own.put("package.json", rootManifest);
+      const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+      config.exclude = ["**/*.test.ts"];
+      own.put("packages/alpha/tsconfig.json", config);
+      const names = variant === "one-root" ? ["first"] : ["first", "second"];
+      const type =
+        "export type ParseResult = { ok: true; value: number } | { ok: false; errors: readonly string[] };\n";
+      const exported = names.length === 2 ? 'export { second } from "./second.js";\n' : "";
+      own.put("packages/alpha/src/owner.ts", type + exported + privateModuleRoot("first"));
+      if (names.length === 2)
+        own.put(
+          "packages/alpha/src/second.ts",
+          'import type { ParseResult } from "./owner.js";\n' + privateModuleRoot("second"),
+        );
+      own.put("packages/alpha/src/helper.ts", privateModuleHelper());
+      for (const path of ["leaf", "leaf-other"])
+        own.put(
+          `packages/alpha/src/${path}.ts`,
+          'export function finite(/* é */ input: unknown): boolean { return typeof input === "number" && Number.isFinite(input); }\n',
+        );
+      own.put("packages/alpha/src/index.ts", 'export { first as parse } from "./owner.js";\n');
+      own.put(
+        "src/consumer.ts",
+        'import { first } from "alpha/runtime"; export const result = first(1);\n',
+      );
+      own.put("packages/alpha/src/proof.test.ts", privateModuleProof(names));
+      const records = names.map((name) => collectiveParserRecord(name, rules));
+      const policy = responsibilityPolicy(records);
+      for (const record of records) activateResponsibilityFixtureRules(policy, record);
+      Object.assign(own, { records, policy });
+      privateModuleVariant(own, variant);
+      own.put("scripts/code-quality-policy.json", policy);
+    },
+    variant === "unrelated-noexports" ? ["packages/unrelated-ui"] : [],
+  );
+}
+
+// Capacity data describes concrete source declarations, not a replica of the resolver's graph walk.
+export function createPrivateModuleCapacityFixture(stateCount, variant = "connected") {
+  const own = createPrivateModuleParserFixture();
+  const shape = privateCapacityShape(stateCount, variant);
+  own.put("packages/alpha/src/owner.ts", privateCapacityOwner(shape));
+  own.put("packages/alpha/src/second.ts", "export {};\n");
+  own.put("packages/alpha/src/capacity-helpers.ts", privateCapacityHelpers(shape));
+  own.put("packages/alpha/src/capacity-shared.ts", privateCapacityShared(shape, variant));
+  const names = shape.branches.map((branch) => branch.name);
+  if (variant === "refused-root-pair") appendRefusedCapacityRoot(own, names);
+  if (variant === "unrelated-oversized") appendUnrelatedCapacityRoot(own, names);
+  if (variant === "public-terminal" || variant === "public-gate" || variant === "public-cycle")
+    appendPublicCapacityHelper(own, shape, variant);
+  own.put("packages/alpha/src/proof.test.ts", privateModuleProof(names));
+  own.records = names.map((name) => collectiveParserRecord(name, []));
+  own.policy = responsibilityPolicy(own.records);
+  for (const record of own.records) activateResponsibilityFixtureRules(own.policy, record);
+  own.put("scripts/code-quality-policy.json", own.policy);
+  own.capacity = { ...shape, names };
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+function privateCapacityShape(stateCount, variant) {
+  const single = variant === "single-root" || variant === "refused-root-pair";
+  const rootCount = single
+    ? 1
+    : Math.max(2, Math.ceil((stateCount - 1) / (SYMBOL_LIMITS.aliases - 1)));
+  const terminals = Array.from(
+    { length: variant === "disconnected" ? rootCount : 1 },
+    (_, index) => `terminal${index}`,
+  );
+  let remaining = stateCount - rootCount - terminals.length;
+  if (!Number.isSafeInteger(remaining) || remaining < rootCount)
+    throw new TypeError("capacity-fixture-state-count");
+  const branches = Array.from({ length: rootCount }, (_, index) => {
+    const name = index === 0 ? "first" : index === 1 ? "second" : `root${index}`;
+    const count = Math.floor(remaining / (rootCount - index));
+    remaining -= count;
+    return {
+      name,
+      terminal: terminals[variant === "disconnected" ? index : 0],
+      gates: Array.from({ length: count }, (_, gate) => `${name}Gate${gate}`),
+    };
+  });
+  return { stateCount, branches, terminals };
+}
+
+function privateCapacityOwner(shape) {
+  const gates = shape.branches.flatMap((branch) => branch.gates);
+  const roots = shape.branches.map(
+    (branch) => `export function ${branch.name}(input: unknown): ParseResult {
+  if (!(${branch.gates.map((name) => `${name}(input)`).join(" && ")}))
+    return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: 0 };
+}\n`,
+  );
+  return (
+    "export type ParseResult = { ok: true; value: number } | { ok: false; errors: readonly string[] };\n" +
+    `import { ${gates.join(", ")} } from "./capacity-helpers.js";\n` +
+    roots.join("")
+  );
+}
+
+function privateCapacityHelpers(shape) {
+  return (
+    `import { ${shape.terminals.join(", ")} } from "./capacity-shared.js";\n` +
+    shape.branches
+      .flatMap((branch) =>
+        branch.gates.map(
+          (name) =>
+            `export function ${name}(input: unknown): boolean { return ${branch.terminal}(input); }\n`,
+        ),
+      )
+      .join("")
+  );
+}
+
+function privateCapacityShared(shape, variant) {
+  if (variant === "private-cycle")
+    return (
+      `import { ${shape.branches[0].gates[0]} } from "./capacity-helpers.js";\n` +
+      `export function terminal0(input: unknown): boolean { return ${shape.branches[0].gates[0]}(input); }\n`
+    );
+  if (variant === "mixed-cycle" || variant === "public-cycle")
+    return (
+      'import { first } from "./owner.js";\n' +
+      "export function terminal0(input: unknown): boolean { return first(input).ok; }\n"
+    );
+  return shape.terminals
+    .map(
+      (name) =>
+        `export function ${name}(input: unknown): boolean { return typeof input === "number"; }\n`,
+    )
+    .join("");
+}
+
+function appendRefusedCapacityRoot(own, names) {
+  const path = "packages/alpha/src/owner.ts";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8") + 'export { second } from "./second.js";\n',
+  );
+  own.put(
+    "packages/alpha/src/second.ts",
+    'import { first, type ParseResult } from "./owner.js";\n' +
+      "export function second(input: unknown): ParseResult { return first(input); }\n",
+  );
+  names.push("second");
+}
+
+function appendUnrelatedCapacityRoot(own, names) {
+  const gates = Array.from(
+    { length: SYMBOL_LIMITS.aliases },
+    (_, index) => `unrelatedGate${index}`,
+  );
+  const path = "packages/alpha/src/owner.ts";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8") +
+      `import { ${gates.join(", ")} } from "./capacity-unrelated.js";\n` +
+      `export function oversized(input: unknown): ParseResult {
+  if (!(${gates.map((name) => `${name}(input)`).join(" && ")}))
+    return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: 0 };
+}\n`,
+  );
+  own.put(
+    "packages/alpha/src/capacity-unrelated.ts",
+    gates
+      .map(
+        (name) =>
+          `export function ${name}(input: unknown): boolean { return typeof input === "number"; }\n`,
+      )
+      .join(""),
+  );
+  names.push("oversized");
+}
+
+function appendPublicCapacityHelper(own, shape, variant) {
+  const path = "packages/alpha/src/owner.ts";
+  const terminal = variant === "public-terminal" || variant === "public-cycle";
+  const name = terminal ? shape.terminals[0] : shape.branches[0].gates[0];
+  const source = terminal ? "capacity-shared" : "capacity-helpers";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8") + `export { ${name} } from "./${source}.js";\n`,
+  );
+  if (variant === "public-cycle")
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8") +
+        `export { ${shape.branches[0].gates[0]} } from "./capacity-helpers.js";\n`,
+    );
+}
+
+function privateModuleRoot(name) {
+  return `import { isRecord as record, fields } from "./helper.js";
+const check = record;
+export function ${name}(input: unknown): ParseResult {
+  if (!check(input) || !fields(input)) return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: input.value };
+}
+`;
+}
+
+function privateModuleHelper() {
+  return `// Module coordinate control: é
+import { finite } from "./leaf.js";
+import { finite as other } from "./leaf-other.js";
+export function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+export function fields(input: Record<string, unknown>): input is Record<string, unknown> & { value: number } {
+  return finite(input.value) && other(input.value) && typeof input.value === "number";
+}
+export function guard(input: number): boolean { return input > 0; }
+`;
+}
+
+function privateModuleProof(names) {
+  return (
+    `import { ${names.join(", ")}, type ParseResult } from "alpha/runtime";\n` +
+    names
+      .map(
+        (name) =>
+          `export function public${name}(input: unknown): ParseResult { const result = ${name}(input); return result; }\n`,
+      )
+      .join("")
+  );
+}
+
+function privateModuleVariant(own, variant) {
+  privateModuleReferenceVariant(own, variant);
+  privateModuleShapeVariant(own, variant);
+  if (
+    variant === "public-subpath" ||
+    variant === "default-condition" ||
+    variant === "relevant-unsupported"
+  )
+    privateModuleManifest(own, variant);
+  if (variant === "unrelated-noexports") privateUnrelatedUiFixture(own);
+  if (variant === "relevant-main" || variant === "unsealed-ancestor")
+    privateUnsealedAncestor(own, variant);
+}
+
+function privateModuleReferenceVariant(own, variant) {
+  const append = (path, text) => own.put(path, readFileSync(join(own.root, path), "utf8") + text);
+  const owner = "packages/alpha/src/owner.ts";
+  const publicExports = {
+    "public-named": 'export { isRecord } from "./helper.js";\n',
+    "public-star": 'export * from "./helper.js";\n',
+    "public-namespace": 'export * as helpers from "./helper.js";\n',
+    "public-default": 'export { isRecord as default } from "./helper.js";\n',
+    "unrelated-public": 'export { guard } from "./helper.js";\n',
+    "colocated-type-reexport": 'export type { isRecord } from "./helper.js";\n',
+    "colocated-inline-type-reexport": 'export { type isRecord } from "./helper.js";\n',
+  };
+  if (publicExports[variant]) append(owner, publicExports[variant]);
+  const extra = privateModuleExtra(variant);
+  if (extra) own.put("packages/alpha/src/extra.ts", extra);
+  if (variant === "foreign-caller")
+    own.put(
+      "src/foreign.ts",
+      'import { isRecord } from "../packages/alpha/src/helper.js"; export const result = isRecord(1);\n',
+    );
+  if (variant === "mutable-alias")
+    own.put(owner, readFileSync(join(own.root, owner), "utf8").replace("const check", "let check"));
+}
+
+function privateUnsealedAncestor(own, variant) {
+  const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+  delete manifest.exports;
+  if (variant === "relevant-main") manifest.main = "./packages/alpha/dist/helper";
+  own.put("package.json", manifest);
+}
+
+function privateUnrelatedUiFixture(own) {
+  own.put("packages/unrelated-ui/package.json", {
+    name: "unrelated-ui",
+    version: "0.0.0",
+    type: "module",
+    private: true,
+    description: "Static UI served by another workspace; no package exports.",
+    scripts: {
+      dev: "next dev",
+      build: "next build",
+      typecheck: "tsc --noEmit",
+      test: "vitest run",
+    },
+    dependencies: { alpha: "0.0.0" },
+  });
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  Object.assign(config.compilerOptions, {
+    noEmit: true,
+    composite: false,
+    declaration: false,
+    declarationMap: false,
+  });
+  own.put("packages/unrelated-ui/tsconfig.json", config);
+  own.put(
+    "packages/unrelated-ui/src/owner.ts",
+    'import { first } from "alpha/runtime"; export function render(): boolean { return first({ value: 1 }).ok; }\n',
+  );
+}
+
+function privateModuleShapeVariant(own, variant) {
+  if (variant === "cycle") privateModuleCycle(own);
+  if (variant === "unsafe") {
+    const path = "packages/alpha/src/helper.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        'return finite(input.value) && other(input.value) && typeof input.value === "number";',
+        "return (finite(input.value) && other(input.value)) || true;",
+      ),
+    );
+  }
+  if (variant === "collector") privateModuleCollector(own);
+  if (variant === "import-order") {
+    const path = "packages/alpha/src/helper.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        'import { finite } from "./leaf.js";\nimport { finite as other } from "./leaf-other.js";',
+        'import { finite as other } from "./leaf-other.js";\nimport { finite } from "./leaf.js";',
+      ),
+    );
+  }
+  if (variant === "readonly-dictionary") {
+    const path = "packages/alpha/src/helper.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        "fields(input: Record<string, unknown>)",
+        "fields(input: Readonly<Record<string, unknown>>)",
+      ),
+    );
+  }
+  if (variant === "colocated-type-only" || variant === "colocated-inline-type-only")
+    privateColocatedTypeImport(own, variant);
+  if (variant === "default-named-escape") privateDefaultNamedEscape(own);
+  if (variant === "export-alias-escape") privateExportAliasEscape(own);
+}
+
+function privateColocatedTypeImport(own, variant) {
+  const path = "packages/alpha/src/owner.ts";
+  let source = readFileSync(join(own.root, path), "utf8");
+  source =
+    variant === "colocated-type-only"
+      ? source + 'import type { isRecord as Guard } from "./helper.js";\n'
+      : source.replace("record, fields }", "record, fields, type isRecord as Guard }");
+  own.put(path, source + "export type ImportedGuard = typeof Guard;\n");
+}
+
+function privateDefaultNamedEscape(own) {
+  const helper = "packages/alpha/src/helper.ts";
+  own.put(
+    helper,
+    readFileSync(join(own.root, helper), "utf8").replace(
+      "export function isRecord",
+      "export default function isRecord",
+    ),
+  );
+  for (const path of ["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"])
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        "isRecord as record",
+        "default as record",
+      ) + "export const escaped = record;\n",
+    );
+}
+
+function privateExportAliasEscape(own) {
+  const helper = "packages/alpha/src/helper.ts";
+  own.put(
+    helper,
+    readFileSync(join(own.root, helper), "utf8").replace(
+      "export function isRecord",
+      "function isRecord",
+    ) + "export { isRecord as recordAlias };\n",
+  );
+  for (const path of ["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"])
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8").replace(
+        "isRecord as record",
+        "recordAlias as record",
+      ) + "export const escaped = record;\n",
+    );
+}
+
+function privateModuleCollector(own) {
+  const helper = "packages/alpha/src/helper.ts";
+  own.put(
+    helper,
+    readFileSync(join(own.root, helper), "utf8") +
+      "export function collect(input: Record<string, unknown>): string[] { return Object.keys(input); }\n",
+  );
+  for (const path of ["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"])
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8")
+        .replace("record, fields", "record, fields, collect")
+        .replace("  return { ok: true", "  collect(input);\n  return { ok: true"),
+    );
+}
+
+function privateModuleExtra(variant) {
+  const prefix = 'import { isRecord } from "./helper.js";\n';
+  const extras = {
+    "third-caller":
+      prefix + "export function third(input: unknown): boolean { return isRecord(input); }\n",
+    "typed-caller":
+      prefix + "export function third(input: number): boolean { return isRecord(input); }\n",
+    callback: prefix + "export const callbacks = [isRecord];\n",
+    "return-escape": prefix + "export function escaped(): typeof isRecord { return isRecord; }\n",
+    namespace: 'import * as helper from "./helper.js"; export const result = helper.isRecord(1);\n',
+    dynamic: 'export const loaded = import("./helper.js");\n',
+    computed:
+      'const helper = await import("./helper.js"); const key = Math.random() > 0.5 ? "isRecord" : "fields"; export const result = helper[key]({});\n',
+    "finite-loader":
+      'const path = Math.random() > 0.5 ? "./helper.js" : "./leaf.js"; export const loaded = import(path);\n',
+    "unknown-loader":
+      "export function load(path: string): Promise<unknown> { return import(path); }\n",
+    "type-only":
+      'import type { isRecord } from "./helper.js"; export type Guard = typeof isRecord;\n',
+  };
+  return extras[variant];
+}
+
+function privateModuleCycle(own) {
+  const path = "packages/alpha/src/helper.ts";
+  own.put(
+    path,
+    readFileSync(join(own.root, path), "utf8").replace(
+      'return typeof input === "object"',
+      'return finite(input) && typeof input === "object"',
+    ),
+  );
+  own.put(
+    "packages/alpha/src/leaf.ts",
+    'import { isRecord } from "./helper.js"; export function finite(input: unknown): boolean { return isRecord(input) && typeof input === "number"; }\n',
+  );
+}
+
+function privateModuleManifest(own, variant) {
+  const path = "packages/alpha/package.json";
+  const manifest = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+  if (variant === "public-subpath")
+    manifest.exports["./helper"] = { types: "./dist/helper.d.ts", import: "./dist/helper.js" };
+  else if (variant === "relevant-unsupported")
+    manifest.exports["./helper-unsupported"] = {
+      types: "./dist/helper.d.ts",
+      require: "./dist/helper.js",
+    };
+  else {
+    own.put("packages/alpha/src/public-context.ts", "export const healthy = true;\n");
+    manifest.exports["./private-context"] = {
+      types: "./dist/public-context.d.ts",
+      default: "./dist/public-context.js",
+    };
+  }
+  own.put(path, manifest);
+}
+
+function collectiveParserOwner(variant) {
+  const helper =
+    variant === "unsafe"
+      ? "return finite(input.value) || true;"
+      : 'return finite(input.value) && typeof input.value === "number";';
+  const third =
+    variant === "third-caller"
+      ? "export function third(input: unknown): boolean { return isRecord(input); }\n"
+      : "";
+  const source = `// Multibyte coordinate control: é\n
+export type ParseResult = { ok: true; value: number } | { ok: false; errors: readonly string[] };
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+function fields(input: Record<string, unknown>): input is Record<string, unknown> & { value: number } {
+  ${helper}
+}
+function finite(/* é */ input: unknown): boolean { return typeof input === "number" && Number.isFinite(input); }
+export function first(input: unknown): ParseResult {
+  if (!isRecord(input) || !fields(input)) return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: input.value };
+}
+export function second(input: unknown): ParseResult {
+  if (!isRecord(input) || !fields(input)) return { ok: false, errors: ["invalid"] };
+  return { ok: true, value: input.value };
+}
+${third}`;
+  return collectiveParserVariant(source, variant);
+}
+
+function collectiveParserVariant(source, variant) {
+  const variants = {
+    cardinality: collectiveCardinalityOwner(source),
+    "public-alias": source,
+    "public-const-alias": source
+      .replace(
+        "export function first(input: unknown): ParseResult {",
+        "export const first = (input: unknown): ParseResult => {",
+      )
+      .replace("\n}\nexport function second", "\n};\nexport function second"),
+    domain:
+      source +
+      '\nexport function domain(input: Record<string, unknown>): boolean { return typeof input.value === "number"; }\n',
+    "second-parameter": source
+      .replace(
+        "fields(input: Record<string, unknown>)",
+        "fields(input: Record<string, unknown>, known: unknown)",
+      )
+      .replaceAll("fields(input)", "fields(input, 42)"),
+    narrowed:
+      source.replaceAll(
+        "if (!isRecord(input)",
+        'if (typeof input === "number") primitive(input); if (!isRecord(input)',
+      ) + '\nfunction primitive(input: unknown): boolean { return typeof input === "number"; }\n',
+    counterfeit: "type Record<K extends string, V> = { [P in K]: V };\n" + source,
+    "alias-member":
+      "type Raw = Record<string, unknown>;\n" +
+      source.replace("fields(input: Record<string, unknown>)", "fields(input: Raw)"),
+    "export-helper": source.replace("function isRecord", "export function isRecord"),
+    "reexport-helper": source + "\nexport { isRecord };\n",
+    "typed-caller":
+      source + "\nexport function third(input: number): boolean { return isRecord(input); }\n",
+    callback: source + "\nconst callbacks = [isRecord];\n",
+    "return-escape": source + "\nexport function escaped(): typeof isRecord { return isRecord; }\n",
+    "mutable-alias": source + "\nlet check = isRecord;\n",
+    deferred: source + "\nconst delayed = (): boolean => isRecord({});\n",
+  };
+  return variants[variant] ?? collectiveParserMutation(source, variant);
+}
+
+function collectiveCardinalityOwner(source) {
+  const helpers = [];
+  for (const name of ["first", "second"]) {
+    const checks = [];
+    for (let index = 0; index < 32; index += 1) {
+      const helper = `${name}Gate${String(index)}`;
+      checks.push(`${helper}(input)`);
+      helpers.push(`function ${helper}(input: unknown): boolean { return downstream(input); }`);
+    }
+    source = source.replace(
+      `export function ${name}(input: unknown): ParseResult {`,
+      `export function ${name}(input: unknown): ParseResult {
+` + `  if (!(${checks.join(" && ")})) return { ok: false, errors: ["invalid"] };`,
+    );
+  }
+  return (
+    source +
+    "\n" +
+    helpers.join("\n") +
+    '\nfunction downstream(input: unknown): boolean { return typeof input === "object"; }\n'
+  );
+}
+
+function collectiveParserMutation(source, variant) {
+  const variants = {
+    "helper-write": source.replace(
+      'return typeof input === "object"',
+      'input = {}; return typeof input === "object"',
+    ),
+    "root-write": source.replace(
+      "export function first(input: unknown): ParseResult {",
+      "export function first(input: unknown): ParseResult { input = { value: 1 };",
+    ),
+    cycle:
+      source.replace(
+        'return typeof input === "object"',
+        'return cycle(input) && typeof input === "object"',
+      ) + "\nfunction cycle(input: unknown): boolean { return isRecord(input); }\n",
+  };
+  return variants[variant] ?? source;
+}
+
+function collectiveParserProof(variant) {
+  const hasAlias = ["public-alias", "public-const-alias"].includes(variant);
+  const alias = hasAlias ? 'import { parse as firstAlias } from "alpha";\n' : "";
+  const proof = `import { first, second, type ParseResult } from "alpha/runtime";
+${alias}
+export function publicfirst(input: unknown): ParseResult { const result = first(input); return result; }
+export function publicsecond(input: unknown): ParseResult { const result = second(input); return result; }
+`;
+  return hasAlias
+    ? proof +
+        "export function publicfirstAlias(input: unknown): ParseResult { const result = firstAlias(input); return result; }\n"
+    : proof;
+}
+
+export function responsibilityRecord(kind = "validator") {
+  const selector = (exportName) => ({
+    consumerPath: "src/consumer.ts",
+    specifier: "alpha/runtime",
+    exportName,
+  });
+  return {
+    id: "fixture-validator",
+    owner: "alpha",
+    kind,
+    rules: ["anti-slop/no-unknown-parameters", "anti-slop/no-unknown-returns"],
+    input: { ...selector("validate"), parameterIndex: 0 },
+    transform: selector("validate"),
+    output: selector("validate"),
+    consumer: { ...selector("consume"), owner: "alpha" },
+    proofs: ["packages/alpha/src/proof.test.ts"],
+  };
+}
+
+export function createResponsibilityFixture(variant = "valid") {
+  return assembleResponsibilityFixture((own) => configureResponsibilityFixture(own, variant));
+}
+
+function configureResponsibilityFixture(own, variant = "valid") {
+  const validator =
+    variant === "unchecked"
+      ? "export function validate(input: unknown): unknown { return input; }"
+      : "export function validate(input: unknown): { ok: true; value: number } | { ok: false } { return typeof input === 'number' ? { ok: true, value: input } : { ok: false }; }";
+  const predicate = "export function validate(input: unknown): input is number { return true; }";
+  const predicateConsumer =
+    "export function consume(input: unknown): number { if (!validate(input)) throw new TypeError('invalid'); return input; }";
+  const consumer =
+    variant === "domain-unknown"
+      ? "export function consume(input: unknown): unknown { return input; }"
+      : "export function consume(input: unknown): number { const result = validate(input); if (!result.ok) throw new TypeError('invalid'); return result.value; }";
+  own.put(
+    "packages/alpha/src/owner.ts",
+    `${variant === "lying-predicate" ? predicate : validator}\n${variant === "lying-predicate" ? predicateConsumer : variant === "unchecked" ? "export function consume(input: unknown): number { return 1; }" : consumer}\n`,
+  );
+  own.put(
+    "src/consumer.ts",
+    'import { validate, consume } from "alpha/runtime"; export const result = validate(1); export const value = consume(1);',
+  );
+  own.put("packages/alpha/src/proof.test.ts", "export const proof = true;\n");
+  return own;
+}
+
+export async function executeResponsibilityFixture(own) {
+  return import(pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href);
+}
+
+export function createEnforcementFixture(kind = "validator", variant = "valid") {
+  return assembleResponsibilityFixture((own) => configureEnforcementFixture(own, kind, variant));
+}
+
+function configureEnforcementFixture(own, kind = "validator", variant = "valid") {
+  configureResponsibilityFixture(own);
+  const validator =
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } { return typeof input === 'number' ? { ok: true, value: input } : { ok: false }; }";
+  const consumer =
+    "export function consume(input: number): number { const result = validate(input); if (!result.ok) throw new TypeError('invalid'); return result.value; }";
+  const redactor = "export function validate(input: unknown): unknown { return input; }";
+  const redactorConsumer =
+    "export function consume(input: number): number { const result = validate(input); if (typeof result !== 'number') throw new TypeError('invalid'); return result; }";
+  own.put(
+    "packages/alpha/src/owner.ts",
+    `${kind === "structural-redactor" || variant === "unchecked" ? redactor : validator}\n${kind === "structural-redactor" ? redactorConsumer : variant === "unchecked" ? "export function consume(input: number): number { return 1; }" : consumer}\n`,
+  );
+  const record = responsibilityRecord(kind);
+  const policy = responsibilityPolicy([record]);
+  activateResponsibilityFixtureRules(policy, record);
+  own.put("scripts/code-quality-policy.json", policy);
+  Object.assign(own, { record, policy });
+  return own;
+}
+
+function activateResponsibilityFixtureRules(policy, record) {
+  const scopes = [record.owner, record.consumer.owner].map((owner) => `package:${owner}`);
+  for (const rule of policy.rules) {
+    if (record.rules.includes(rule.id))
+      rule.activeScopes = [...new Set([...rule.activeScopes, ...scopes])];
+  }
+}
+
+export function replaceEnforcementOwner(own, variant) {
+  const sources = {
+    "lying-predicate":
+      "export function validate(input: unknown): input is number { return true; }\nexport function consume(input: number): number { if (!validate(input)) throw new TypeError('invalid'); return input; }",
+    "union-dictionary":
+      "export function validate(input: unknown): Record<string, unknown> | number { return typeof input === 'number' ? input : { value: input }; }\nexport function consume(input: number): number { const result = validate(input); if (typeof result !== 'number') throw new TypeError('invalid'); return result; }",
+    "open-dictionary":
+      "export function validate(input: unknown): Record<string, unknown> { return { value: input }; }\nexport function consume(input: number): number { return validate(input).value as number; }",
+    "generic-assertion":
+      "export function validate(input: unknown): { ok: true; value: number } | { ok: false } { return { ok: true, value: input as number }; }\nexport function consume(input: number): number { const result = validate(input); if (!result.ok) throw new TypeError('invalid'); return result.value; }",
+    "extra-slot":
+      "export function validate(input: unknown, unrelated: unknown = 1): { ok: true; value: number } | { ok: false } { return typeof input === 'number' ? { ok: true, value: input } : { ok: false }; }\nexport function consume(input: number): number { const result = validate(input); if (!result.ok) throw new TypeError('invalid'); return result.value; }",
+    "unknown-consumer":
+      "export function validate(input: unknown): { ok: true; value: number } | { ok: false } { return typeof input === 'number' ? { ok: true, value: input } : { ok: false }; }\nexport function consume(input: unknown): unknown { return input; }",
+  };
+  own.put("packages/alpha/src/owner.ts", sources[variant]);
+  emitSymbolFixture(own.root);
+}
+
+export function createCrossOwnerEnforcementFixture(variant = "valid") {
+  return assembleResponsibilityFixture(
+    (own) => configureCrossOwnerEnforcementFixture(own, variant),
+    ["packages/beta"],
+  );
+}
+
+function configureCrossOwnerEnforcementFixture(own, variant = "valid") {
+  configureEnforcementFixture(own);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+  own.put("packages/beta/tsconfig.json", config);
+  own.put("packages/beta/package.json", {
+    name: "beta",
+    version: "0.0.0",
+    type: "module",
+    files: ["dist"],
+    dependencies: { alpha: "0.0.0" },
+    exports: { "./runtime": { types: "./dist/owner.d.ts", import: "./dist/owner.js" } },
+  });
+  own.put(
+    "packages/beta/src/owner.ts",
+    'import { validate } from "alpha/runtime"; export function consume(input: number): number { const result = validate(input); if (!result.ok) throw new TypeError("invalid"); return result.value; }',
+  );
+  symlinkSync(join(own.root, "packages/beta"), join(own.root, "node_modules/beta"));
+  own.put(
+    "src/consumer.ts",
+    'import { validate } from "alpha/runtime"; import { consume } from "beta/runtime"; export const result = validate(1); export const value = consume(1);',
+  );
+  own.record.consumer.specifier = "beta/runtime";
+  own.record.consumer.owner = "beta";
+  activateResponsibilityFixtureRules(own.policy, own.record);
+  if (variant === "alias-producer")
+    own.put("packages/beta/src/owner.ts", 'export { consume } from "alpha/runtime";');
+  if (variant === "noncallable") {
+    own.put("packages/beta/src/owner.ts", "export const consume = 42;");
+    own.put(
+      "src/consumer.ts",
+      'import { validate } from "alpha/runtime"; import { consume } from "beta/runtime"; export const result = validate(1); export const value = consume;',
+    );
+  }
+  own.put("scripts/code-quality-policy.json", own.policy);
+  return own;
+}
+
+export function createConsumerSeamFixture(variant = "direct") {
+  return assembleResponsibilityFixture(
+    (own) => configureConsumerSeamFixture(own, variant),
+    ["packages/beta"],
+  );
+}
+
+function configureConsumerSeamFixture(own, variant = "direct") {
+  configureCrossOwnerEnforcementFixture(own);
+  own.put("src/public-consumer.test.mjs", 'export { consume } from "beta/runtime";\n');
+  if (["alias", "callback"].includes(variant)) {
+    configureConsumerCallFixture(own, variant);
+    return own;
+  }
+  const checked =
+    'const result = validate(input); if (!result.ok) throw new TypeError("invalid"); return result.value;';
+  const bodies = {
+    direct: `export function consume(input: number): number { ${checked} }`,
+    one: `function first(input: number): number { ${checked} } export function consume(input: number): number { return first(input); }`,
+    two: `function first(input: number): number { ${checked} } function second(input: number): number { return first(input); } export function consume(input: number): number { return second(input); }`,
+    overloadAlias: `function handle(input: number, evidence?: number): number; function handle(input: number, ...[evidence]: [evidence?: number | undefined]): number { void evidence; ${checked} } export const consume = handle;`,
+    siblingAlias: `function first(input: number): number { ${checked} } const call = first; export function consume(input: number): number { return call(input); }`,
+    exported: `export function first(input: number): number { ${checked} } export function consume(input: number): number { return first(input); }`,
+    exportAlias: `function first(input: number): number { ${checked} } export { first as guard }; export function consume(input: number): number { return first(input); }`,
+    escaped: `function first(input: number): number { ${checked} } export const holder = { first }; export function consume(input: number): number { return first(input); }`,
+    mutableSibling: `let first = (input: number): number => { ${checked} }; export function consume(input: number): number { return first(input); }`,
+    destructuredSibling: `function first(input: number): number { ${checked} } const { call } = { call: first }; export function consume(input: number): number { return call(input); }`,
+    computedSibling: `function first(input: number): number { ${checked} } const holder = { first }; export function consume(input: number): number { return holder["first"](input); }`,
+    unusedSibling: `function first(input: number): number { ${checked} } export function consume(input: number): number { void first; return input; }`,
+    nestedSibling: `export function consume(input: number): number { function first(input: number): number { ${checked} } return first(input); }`,
+    classSibling: `export function consume(input: number): number { class Deferred { result = validate(input); } void Deferred; return input; }`,
+    mixedOverload: `function first(input: number): number { if (input < 0) return consume(input); ${checked} } export function consume(input: number, evidence?: number): number; export function consume(input: number, ...[evidence]: [evidence?: number | undefined]): number { void evidence; return first(input); }`,
+    overloadSelf: `export function consume(input: number, evidence?: number): number; export function consume(input: number, ...[evidence]: [evidence?: number | undefined]): number { void evidence; if (input < 0) return consume(input); ${checked} }`,
+    mixedAlias: `function first(input: number): number { if (input < 0) return consume(input); ${checked} } function handle(input: number): number { return first(input); } export const consume = handle;`,
+    mixedCycle: `function first(input: number): number { if (input < 0) return consume(input); ${checked} } export function consume(input: number): number { return first(input); }`,
+    cycle: `function first(input: number): number { if (input < 0) return first(input); ${checked} } export function consume(input: number): number { return first(input); }`,
+    mutual: `function first(input: number): number { if (input < 0) return second(input); ${checked} } function second(input: number): number { return first(input); } export function consume(input: number): number { return first(input); }`,
+    ambiguous: `export function consume(input: number): number; export function consume(input: number, evidence: number): number; export function consume(input: number, evidence?: number): number { void evidence; ${checked} }`,
+    overload: `export function consume(input: number, evidence?: number): number; export function consume(input: number, ...[evidence]: [evidence?: number | undefined]): number { void evidence; ${checked} }`,
+  };
+  own.put(
+    "packages/beta/src/owner.ts",
+    `import { validate } from "alpha/runtime"; ${bodies[variant]}`,
+  );
+  return own;
+}
+
+export function replaceConsumerCallFixture(own, variant) {
+  configureConsumerCallFixture(own, variant);
+  emitSymbolFixture(own.root, "packages/beta");
+}
+
+function configureConsumerCallFixture(own, variant) {
+  const imported = 'import { validate } from "alpha/runtime";';
+  const checked =
+    'const result = validate(input); if (!result.ok) throw new TypeError("invalid"); return result.value;';
+  const bodies = {
+    arrow: `${imported} export const consume = (input: number): number => { ${checked} };`,
+    expression: `${imported} export const consume = function(input: number): number { ${checked} };`,
+    alias: `${imported} function handleValidateImpl(input: number): number { ${checked} } export const consume = handleValidateImpl;`,
+    callback: `${imported} function withOp(action: () => number): number { return action(); } function handleValidateImpl(input: number): number { return withOp(() => { ${checked} }); } export const consume = handleValidateImpl;`,
+    namespace: `import * as ns from "alpha/runtime"; const validate = ns.validate; function handleValidateImpl(input: number): number { ${checked} } export const consume = handleValidateImpl;`,
+    reexport: 'export { handleValidateImpl as consume } from "./implementation.js";',
+    fake: "function validate(input: number): number { return input; } export function consume(input: number): number { return validate(input); }",
+    mutable: `${imported} let selected = validate; export function consume(input: number): number { selected(input); return input; }`,
+    destructured:
+      'import * as ns from "alpha/runtime"; const { validate } = ns; export function consume(input: number): number { validate(input); return input; }',
+    computed:
+      'import * as ns from "alpha/runtime"; let key: "validate" = "validate"; const selected = ns[key]; export function consume(input: number): number { selected(input); return input; }',
+    "computed-alias":
+      'import * as ns from "alpha/runtime"; let key: "validate" = "validate"; const selected = ns[key]; const forwarded = selected; export function consume(input: number): number { forwarded(input); return input; }',
+    unused: `${imported} export function consume(input: number): number { const unused = () => validate(input); return input; }`,
+    nested: `${imported} export function consume(input: number): number { function unused(): unknown { return validate(input); } return input; }`,
+    class: `${imported} export function consume(input: number): number { class Deferred { result = validate(input); } return input; }`,
+    dispatch: `${imported} function dispatch(action: typeof validate, input: number): number { action(input); return input; } export function consume(input: number): number { return dispatch(validate, input); }`,
+    foreign:
+      'import { consume as implementation } from "alpha/runtime"; export const consume = implementation;',
+    "mutable-consumer": `${imported} function handleValidateImpl(input: number): number { ${checked} } export let consume = handleValidateImpl;`,
+  };
+  if (variant === "reexport")
+    own.put(
+      "packages/beta/src/implementation.ts",
+      `${imported} export function handleValidateImpl(input: number): number { ${checked} }`,
+    );
+  own.put("packages/beta/src/owner.ts", bodies[variant]);
+}
+
+export function createRawHelperEnforcementFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) => configureRawHelperEnforcementFixture(own, variant));
+}
+
+function configureRawHelperEnforcementFixture(own, variant = "direct") {
+  configureEnforcementFixture(own);
+  own.put("packages/alpha/src/owner.ts", rawHelperSource(variant));
+  if (["nonzero", "unicode-extra-slot"].includes(variant)) {
+    own.record.input.parameterIndex = 1;
+    own.put(
+      "src/consumer.ts",
+      'import { validate, consume } from "alpha/runtime"; export const result = validate(0, 1); export const value = consume(1);',
+    );
+  }
+  if (variant === "other-api")
+    own.put(
+      "packages/alpha/src/other.ts",
+      'export function other(input: unknown): boolean { return typeof input === "number"; }',
+    );
+  own.record.rules.push("anti-slop/no-runtime-typeof", "anti-slop/no-known-value-widening");
+  activateResponsibilityFixtureRules(own.policy, own.record);
+  own.put("scripts/code-quality-policy.json", own.policy);
+  return own;
+}
+
+function directRawHelperSource() {
+  return [
+    "function finite(input: unknown): input is number {",
+    '  return typeof input === "number" && Number.isFinite(input);',
+    "}",
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } {",
+    "  if (!finite(input)) return { ok: false };",
+    "  const narrowed: number = input;",
+    "  if (!finite(narrowed)) return { ok: false };",
+    "  return { ok: true, value: narrowed };",
+    "}",
+    "export function consume(input: number): number {",
+    "  const result = validate(input);",
+    '  if (!result.ok) throw new TypeError("invalid");',
+    "  return result.value;",
+    "}",
+    "",
+  ].join("\n");
+}
+
+function rawHelperSource(variant) {
+  if (variant.startsWith("optional-capture")) return optionalCapturedRawSource(variant);
+  const source = directRawHelperSource();
+  const variants = {
+    wrapper: () => rawWrapperSource(),
+    "optional-typeof": () => optionalTypeofRawSource(),
+    captured: () => capturedRawSource(),
+    "typed-capture": () => capturedRawSource("typed"),
+    "unchecked-capture": () => capturedRawSource("unchecked"),
+    "unicode-wrapper": () => rawWrapperSource().replaceAll("input", "είσοδος"),
+    property: () => rawPropertySource(),
+    "partially-narrowed": () =>
+      rawPropertySource().replace(
+        'typeof input !== "object" || input === null',
+        'input === null || typeof input !== "object"',
+      ),
+    nonzero: () => nonzeroRawSource(source),
+    "unicode-extra-slot": () =>
+      source
+        .replace("validate(input: unknown)", "validate(λλλλλλλλλλλλλλλλ: unknown, input: unknown)")
+        .replace("validate(input)", "validate(0, input)"),
+    "parameter-write": () =>
+      source.replace("  if (!finite(input))", "  input = 42;\n  if (!finite(input))"),
+    "helper-write": () =>
+      source.replace("  return typeof input", "  input = 42; return typeof input"),
+    "extra-slot": () =>
+      source.replace(
+        "validate(input: unknown)",
+        "validate(input: unknown, unrelated: unknown = 42)",
+      ),
+    "other-api": () => source,
+    "literal-erasure": () => source + "const known = 42; const erased: unknown = known;\n",
+    "unrelated-typeof": () => source + "const unrelated = typeof 42;\n",
+    unicode: () => "/* λ boundary */\n" + source.replaceAll("finite", "πεπερασμένο"),
+  };
+  return variants[variant]?.() ?? rawHelperVariant(source, variant);
+}
+
+function optionalTypeofRawSource() {
+  return [
+    "interface Domain { value: string }",
+    "interface EmptyDomain {}",
+    "type EmptyAlias = {}; type CanonicalTop = NonNullable<unknown>;",
+    "type GenericTop<T> = NonNullable<T>; type IntersectionTop = unknown & {};",
+    'function record(input: unknown): input is Record<string, unknown> { return typeof input === "object" && input !== null; }',
+    'function domain(input: unknown): input is Domain { return typeof input === "object" && input !== null && "value" in input; }',
+    "function emptyDomain(input: unknown): input is EmptyDomain { return input !== null && input !== undefined; }",
+    "function emptyAlias(input: unknown): input is EmptyAlias { return input !== null && input !== undefined; }",
+    "function fields(input: Record<string, unknown>): boolean {",
+    '  let valid = /* direct */ typeof input.direct === "number";',
+    '  if (input.optional !== undefined) valid = (/* optional */ typeof input.optional === "number") && valid;',
+    '  if (input.nullish != null) valid = (/* nullish */ typeof input.nullish === "number") && valid;',
+    '  if (input.notNull !== null) valid = (/* not-null */ typeof input.notNull === "number") && valid;',
+    '  if (input.nullOnly === null) valid = (/* null-only */ typeof input.nullOnly === "object") && valid;',
+    '  if (input.undefinedOnly === undefined) valid = (/* undefined-only */ typeof input.undefinedOnly === "undefined") && valid;',
+    '  const alias = input.alias; if (alias !== undefined) valid = (/* alias */ typeof alias === "number") && valid;',
+    '  if (/* primitive-guard */ typeof input.primitive === "string" && input.primitive != null) valid = (/* primitive-domain */ typeof input.primitive === "string") && valid;',
+    '  if (domain(input.domain) && input.domain != null) valid = (/* named-domain */ typeof input.domain === "object") && valid;',
+    '  if (emptyDomain(input.empty) && input.empty != null) valid = (/* empty-domain */ typeof input.empty === "object") && valid;',
+    '  if (emptyAlias(input.emptyAlias) && input.emptyAlias != null) valid = (/* empty-alias */ typeof input.emptyAlias === "object") && valid;',
+    '  if (domain(input.known)) { const erased: NonNullable<unknown> = input.known; valid = (/* top-erasure */ typeof erased === "object") && valid; }',
+    '  if (domain(input.known)) { const erased: CanonicalTop = input.known; valid = (/* top-alias-erasure */ typeof erased === "object") && valid; }',
+    '  if (domain(input.known)) { const erased: GenericTop<unknown> = input.known; valid = (/* generic-erasure */ typeof erased === "object") && valid; }',
+    '  if (domain(input.known)) { const erased: IntersectionTop = input.known; valid = (/* intersection-erasure */ typeof erased === "object") && valid; }',
+    '  const erased: unknown = input.erased; if (erased !== undefined) valid = (/* unknown-erasure */ typeof erased === "number") && valid;',
+    '  const { destructured } = input; if (destructured !== undefined) valid = (/* destructured */ typeof destructured === "number") && valid;',
+    '  valid = (/* cast */ typeof (input.casted as unknown) === "number") && valid;',
+    "  const callback = (): string => /* callback */ typeof input.callback; void callback;",
+    "  return valid;",
+    "}",
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } {",
+    "  if (!record(input) || !fields(input)) return { ok: false }; return { ok: true, value: 0 };",
+    "}",
+    'export function consume(input: number): number { const result = validate({ direct: input }); if (!result.ok) throw new TypeError("invalid"); return result.value; }',
+    "",
+  ].join("\n");
+}
+
+function capturedRawSource(variant = "raw") {
+  const source = [
+    "interface CheckedCounts { first: number; second: number }",
+    'function record(input: unknown): input is Record<string, unknown> { return typeof input === "object" && input !== null; }',
+    'function finite(input: unknown): input is number { return typeof input === "number" && Number.isFinite(input); }',
+    "function fields(input: Record<string, unknown>): boolean { const { first, second } = input; return finite(first) && finite(second); }",
+    "export function validate(input: unknown): input is CheckedCounts { return record(input) && fields(input); }",
+    'export function consume(input: unknown): number { if (!validate(input)) throw new TypeError("invalid"); return input.first + input.second; }',
+    "",
+  ].join("\n");
+  if (variant === "typed")
+    return source.replace(
+      "const { first, second } = input;",
+      "const typed: { first: number; second: number } = { first: 1, second: 2 }; const { first, second }: Record<string, unknown> = typed;",
+    );
+  if (variant === "unchecked")
+    return source
+      .replace(
+        "export function validate(input: unknown): input is CheckedCounts { return record(input) && fields(input); }",
+        'export function validate(input: unknown): Record<string, unknown> { if (!record(input)) throw new TypeError("invalid"); fields(input); return input; }',
+      )
+      .replace(
+        'export function consume(input: unknown): number { if (!validate(input)) throw new TypeError("invalid"); return input.first + input.second; }',
+        "export function consume(input: unknown): Record<string, unknown> { return validate(input); }",
+      );
+  return source;
+}
+
+function optionalCapturedRawSource(variant) {
+  const source = [
+    "interface CheckedCounts { first: number; second: number }",
+    "interface CheckedReport { payload?: CheckedCounts }",
+    'function record(input: unknown): input is Record<string, unknown> { return typeof input === "object" && input !== null; }',
+    'function finite(input: unknown): input is number { return typeof input === "number" && Number.isFinite(input); }',
+    "function optional(value: unknown, guard: (candidate: unknown) => boolean): boolean { return value === undefined || guard(value); }",
+    "function fields(input: Record<string, unknown>): boolean { const { first, second } = input; return finite(first) && finite(second); }",
+    "function nested(input: unknown): input is CheckedCounts { return record(input) && fields(input); }",
+    "export function validate(input: unknown): input is CheckedReport { return record(input) && optional(input.payload, nested); }",
+    'export function consume(input: unknown): number { if (!validate(input)) throw new TypeError("invalid"); return 0; }',
+    "function unrelatedGuard(input: unknown): boolean { return input !== null; }",
+    "const unrelatedOptional = optional(1, unrelatedGuard); void unrelatedOptional;",
+    "",
+  ].join("\n");
+  return optionalCapturedVariant(source, variant);
+}
+
+const OPTIONAL_CAPTURE_REPLACEMENTS = {
+  "optional-capture-wrong-value": ["guard(value)", "guard(undefined)"],
+  "optional-capture-altered-body": [
+    "value === undefined || guard(value)",
+    "value !== undefined && guard(value)",
+  ],
+  "optional-capture-wrapper-export-alias": [
+    "const unrelatedOptional",
+    "export { optional as exportedOptional }; const unrelatedOptional",
+  ],
+  "optional-capture-wrapper-export-default": [
+    "const unrelatedOptional",
+    "export default optional; const unrelatedOptional",
+  ],
+  "optional-capture-exported": ["function nested(", "export function nested("],
+  "optional-capture-escape": [
+    "const unrelatedOptional",
+    "const escaped = [nested]; void escaped; const unrelatedOptional",
+  ],
+  "optional-capture-reference": ["const unrelatedOptional", "void nested; const unrelatedOptional"],
+  "optional-capture-predicate-write": [
+    'return typeof input === "number"',
+    'input = 42; return typeof input === "number"',
+  ],
+  "optional-capture-write": [
+    "return record(input) && fields(input);",
+    "input = { first: 1, second: 2 }; return record(input) && fields(input);",
+  ],
+  "optional-capture-shadow": [
+    "return record(input) && optional(input.payload, nested);",
+    "const nested = (value: unknown): boolean => value !== null; return record(input) && optional(input.payload, nested);",
+  ],
+  "optional-capture-shadow-undefined": [
+    "interface CheckedCounts",
+    "const undefined = 42; interface CheckedCounts",
+  ],
+  "optional-capture-extra-argument": [
+    "optional(input.payload, nested)",
+    "optional(input.payload, nested, true)",
+  ],
+  "optional-capture-optional-call": [
+    "optional(input.payload, nested)",
+    "optional?.(input.payload, nested)",
+  ],
+  "optional-capture-default": [
+    "guard: (candidate: unknown) => boolean",
+    "guard: (candidate: unknown) => boolean = finite",
+  ],
+  "optional-capture-cycle": [
+    "record(input) && fields(input)",
+    "record(input) && optional(input.payload, nested) && fields(input)",
+  ],
+};
+
+function optionalCapturedVariant(source, variant) {
+  const replacement = OPTIONAL_CAPTURE_REPLACEMENTS[variant];
+  if (variant === "optional-capture-extra-argument")
+    source = source.replace(
+      "=> boolean): boolean { return value",
+      "=> boolean, extra?: boolean): boolean { return value",
+    );
+  return replacement ? source.replace(...replacement) : source;
+}
+
+function rawPropertySource() {
+  return [
+    'function finite(input: unknown): input is number { return typeof input === "number" && Number.isFinite(input); }',
+    "function checked(input: unknown): boolean { return finite(input); }",
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } {",
+    '  if (typeof input !== "object" || input === null || !("etag" in input)) return {ok:false};',
+    '  const raw = input["etag"]; if (!checked(raw) || !finite(raw)) return {ok:false};',
+    "  if (!finite(raw)) return {ok:false}; return {ok:true,value:raw};",
+    "}",
+    'export function consume(input: number): number { const result = validate({etag:input}); if(!result.ok) throw new TypeError("invalid"); return result.value; }',
+    "",
+  ].join("\n");
+}
+
+function nonzeroRawSource(source) {
+  return source
+    .replace("finite(input: unknown)", "finite(prefix: number, input: unknown)")
+    .replace("validate(input: unknown)", "validate(prefix: number, input: unknown)")
+    .replaceAll("finite(input)", "finite(0, input)")
+    .replace("finite(narrowed)", "finite(0, narrowed)")
+    .replace("validate(input)", "validate(0, input)");
+}
+
+function rawWrapperSource() {
+  return [
+    "type Result = { ok: true; value: number } | { ok: false };",
+    'function finite(input: unknown): input is number { return typeof input === "number" && Number.isFinite(input); }',
+    "function checked(input: unknown): Result { if (!finite(input)) return {ok:false}; return {ok:true,value:input}; }",
+    "export function validate(input: unknown): Result { return checked(input); }",
+    'export function consume(input: number): number { const result=validate(input); if(!result.ok) throw new TypeError("invalid"); return result.value; }',
+    "",
+  ].join("\n");
+}
+
+function rawHelperVariant(source, variant) {
+  const additions = {
+    direct: "",
+    export: "export { finite };",
+    "export-alias": "export { finite as guard };",
+    trusted: "function unrelated(input: number): boolean { return finite(input); }",
+    "exported-trusted":
+      "export function unrelated(input: number): boolean { return finite(input); }",
+    returned: "export function escape(): typeof finite { return finite; }",
+    callback: "const unused = (): boolean => finite(42);",
+    "mutable-callee": "let guard = finite; guard(42);",
+    "destructured-callee": "const { guard } = { guard: finite }; guard(42);",
+    "computed-callee": "const holder = { guard: finite }; holder['guard'](42);",
+  };
+  if (Object.hasOwn(additions, variant)) return source + additions[variant] + "\n";
+  const insertions = {
+    "nested-unused": "function unused(): boolean { return finite(input); }",
+    "deferred-class": "class Deferred { value = finite(input); }",
+    "asserted-origin": "finite(input as unknown);",
+    "nonnull-origin": "finite(input!);",
+    "satisfies-origin": "finite(input satisfies number);",
+    "erased-origin": "const erased: unknown = input; finite(erased);",
+    "mutable-origin": "let raw = input; finite(raw);",
+    "reassigned-origin": "let raw = input; raw = 42; finite(raw);",
+    "destructured-origin": "const { value: raw } = { value: input }; finite(raw);",
+    aliases:
+      "const first = input; const second: number = first; const guard = finite; guard(second);",
+  };
+  if (Object.hasOwn(insertions, variant))
+    return source.replace(
+      "  const narrowed: number = input;",
+      insertions[variant] + "\n  const narrowed: number = input;",
+    );
+  if (variant === "self-cycle")
+    return source.replace("return typeof input", "finite(input); return typeof input");
+  if (variant === "mutual-cycle")
+    return (
+      source.replace("return typeof input", "other(input); return typeof input") +
+      "function other(input: unknown): boolean { return finite(input); }\n"
+    );
+  throw new TypeError("unknown raw helper fixture variant");
+}
+
+export function createDiagnosticFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) => configureDiagnosticFixture(own, variant));
+}
+
+function configureDiagnosticFixture(own, variant = "direct") {
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+  config.exclude = ["**/*.test.ts"];
+  own.put("packages/alpha/tsconfig.json", config);
+  own.put(
+    "packages/alpha/src/owner.ts",
+    'export function validate(input: unknown): readonly string[] { return typeof input === "number" ? [] : ["invalid"]; }\n',
+  );
+  own.put("src/consumer.ts", 'import { parse } from "alpha"; export const result = parse(1);');
+  own.put("packages/alpha/src/proof.test.ts", diagnosticProofSource(variant));
+  const path = "packages/alpha/src/proof.test.ts";
+  const selector = { consumerPath: path, specifier: "alpha", exportName: "parse" };
+  const record = {
+    ...responsibilityRecord(),
+    kind: "diagnostic-checker",
+    input: { ...selector, parameterIndex: 0 },
+    transform: selector,
+    output: selector,
+    consumer: {
+      kind: "public-api-proof",
+      owner: "alpha",
+      consumerPath: path,
+      specifier: "alpha",
+      exportName: "countDiagnostics",
+    },
+    proofs: [path],
+  };
+  Object.assign(own, { record, policy: responsibilityPolicy([record]) });
+  return own;
+}
+
+function diagnosticProofSource(variant) {
+  const prefix = 'import { parse as check } from "alpha";\n';
+  const bodies = {
+    direct: "const diagnostics = check(input); return diagnostics.length;",
+    constant: "const diagnostics = check(input); return 0;",
+    discarded:
+      "check(input); const diagnostics: readonly string[] = []; return diagnostics.length;",
+    receiver:
+      "const diagnostics = check(input); const other: readonly string[] = []; return other.length;",
+    input: "const diagnostics = check(1); return diagnostics.length;",
+    mutable: "let diagnostics = check(input); return diagnostics.length;",
+    asserted: "const diagnostics = check(input as unknown); return diagnostics.length;",
+    nonnull: "const diagnostics = check(input!); return diagnostics.length;",
+    satisfies: "const diagnostics = check(input satisfies unknown); return diagnostics.length;",
+    nested: "const diagnostics = (() => check(input))(); return diagnostics.length;",
+    extra: "const diagnostics = check(input); check(input); return diagnostics.length;",
+    wrapper: "const diagnostics = helper(input); return diagnostics.length;",
+    destructured: "const [diagnostics] = [check(input)]; return diagnostics.length;",
+    dynamic:
+      "const diagnostics = Reflect.apply(check, undefined, [input]); return diagnostics.length;",
+    overload: "const diagnostics = check(input); return diagnostics.length;",
+    counterfeit: "const diagnostics = fake(input); return diagnostics.length;",
+  };
+  const extra =
+    variant === "wrapper"
+      ? "function helper(input: unknown): readonly string[] { return check(input); }\n"
+      : variant === "counterfeit"
+        ? "function fake(input: unknown): readonly string[] { return []; }\n"
+        : "";
+  if (!(variant in bodies)) throw new TypeError("invalid diagnostic fixture variant");
+  return (
+    prefix +
+    extra +
+    (variant === "overload" ? "export function countDiagnostics(input: number): number;\n" : "") +
+    `export function countDiagnostics(input: unknown): number { ${bodies[variant]} }\n`
+  );
+}
+
+export function createForeignDiagnosticFixture() {
+  return assembleResponsibilityFixture(
+    (own) => configureForeignDiagnosticFixture(own),
+    ["packages/beta"],
+  );
+}
+
+function configureForeignDiagnosticFixture(own) {
+  configureDiagnosticFixture(own);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+  own.put("packages/beta/tsconfig.json", config);
+  own.put("packages/beta/package.json", {
+    name: "beta",
+    type: "module",
+    version: "0.0.0",
+    exports: { ".": { types: "./dist/owner.d.ts", import: "./dist/owner.js" } },
+  });
+  own.put("packages/beta/src/owner.ts", "export const healthy = true;\n");
+  own.put("packages/beta/src/proof.test.ts", diagnosticProofSource("direct"));
+  symlinkSync(join(own.root, "packages/beta"), join(own.root, "node_modules/beta"));
+  const path = "packages/beta/src/proof.test.ts";
+  for (const role of ["input", "transform", "output", "consumer"])
+    own.record[role].consumerPath = path;
+  own.record.consumer.owner = "beta";
+  own.record.proofs = [path];
+  return own;
+}
+
+export function createDictionaryEnforcementFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) =>
+    configureDictionaryEnforcementFixture(own, variant),
+  );
+}
+
+function configureDictionaryEnforcementFixture(own, variant = "direct") {
+  configureEnforcementFixture(own);
+  const source = dictionaryCheckingSource();
+  const sources = {
+    ...dictionarySignatureVariants(source),
+    ...dictionaryOwnershipVariants(source),
+    ...dictionaryDispatchVariants(source),
+  };
+  own.put("packages/alpha/src/owner.ts", sources[variant]);
+  own.record.rules.push("anti-slop/no-unsafe-dictionary-type", "anti-slop/no-known-value-widening");
+  activateResponsibilityFixtureRules(own.policy, own.record);
+  own.put("scripts/code-quality-policy.json", own.policy);
+  return own;
+}
+
+function dictionaryCheckingSource() {
+  return [
+    'function record(input: unknown): input is Record<string, unknown> { return typeof input === "object" && input !== null && !Array.isArray(input); }',
+    'function fields(input: Record<string, unknown>): input is Record<string, unknown> & { value: number } { return typeof input.value === "number" && Number.isFinite(input.value); }',
+    "export function validate(input: unknown): { ok: true; value: number } | { ok: false } { if (!record(input) || !fields(input)) return { ok: false }; return { ok: true, value: input.value }; }",
+    'export function consume(input: number): number { const result = validate({ value: input }); if (!result.ok) throw new TypeError("invalid"); return result.value; }',
+    "export function unrelated(input: Record<string, unknown>): Record<string, unknown> { return input; }",
+    "",
+  ].join("\n");
+}
+
+function dictionarySignatureVariants(source) {
+  return {
+    direct: source,
+    unicode: source.replaceAll("input", "είσοδος"),
+    erasure: source
+      .replace(
+        "if (!record(input) || !fields(input)) return { ok: false };",
+        "if (!record(input)) return { ok: false }; const erased: Record<string, unknown> & { tag?: boolean } = input; if (!fields(erased)) return { ok: false };",
+      )
+      .replace("value: input.value", "value: erased.value"),
+    "typed-index": source.replaceAll("Record<string, unknown>", "Record<string, number>"),
+    "any-index": source.replaceAll("Record<string, unknown>", "Record<string, any>"),
+    counterfeit: "type Record<K extends string, V> = { [P in K]: V };\n" + source,
+    "alias-member":
+      "type Bag = Record<string, unknown>;\n" + source.replaceAll("Record<string, unknown>", "Bag"),
+  };
+}
+
+function dictionaryOwnershipVariants(source) {
+  return {
+    "export-helper": source.replace("function fields", "export function fields"),
+    "reexport-helper": source + "export { fields };\n",
+    "second-caller":
+      source +
+      "export function trusted(input: Record<string, unknown>): boolean { return fields(input); }\n",
+    callback: source + "const callbacks = [fields];\n",
+    "return-escape": source + "export function expose() { return fields; }\n",
+    "helper-write": source.replace(
+      "return typeof input.value",
+      "input = {}; return typeof input.value",
+    ),
+    "root-write": source.replace("if (!record(input)", "input = { value: 1 }; if (!record(input)"),
+  };
+}
+
+function dictionaryDispatchVariants(source) {
+  return {
+    unused: source.replace("!fields(input)", 'typeof input.value !== "number"'),
+    deferred: source
+      .replace("!fields(input)", 'typeof input.value !== "number"')
+      .replace(
+        "return { ok: true, value: input.value };",
+        "const later = () => fields(input); return { ok: true, value: input.value };",
+      ),
+    computed: source.replace("fields(input)", "({ check: fields }).check(input)"),
+    reflective: source.replace(
+      "!fields(input)",
+      '!Reflect.apply(fields, null, [input]) || typeof input.value !== "number"',
+    ),
+    destructured: source
+      .replace(
+        "export function validate",
+        "const { check } = { check: fields }; export function validate",
+      )
+      .replace("fields(input)", "check(input)"),
+    "mutable-alias": source
+      .replace("export function validate", "let check = fields; export function validate")
+      .replace("fields(input)", "check(input)"),
+    cycle: source.replace(
+      "return typeof input.value",
+      "if (!fields(input)) return false; return typeof input.value",
+    ),
+    "parameter-intersection": source.replace(
+      "fields(input: Record<string, unknown>)",
+      "fields(input: Record<string, unknown> & { tag?: boolean })",
+    ),
+    "other-predicate-parameter": source
+      .replace(
+        "fields(input: Record<string, unknown>): input is",
+        "fields(input: Record<string, unknown>, other: unknown = input): other is",
+      )
+      .replace("!fields(input)", '!fields(input) || typeof input.value !== "number"'),
+    intersection: [
+      "export function validate(input: unknown): Record<string, unknown> & { value: number } { return { value: 1 }; }",
+      "export function consume(input: number): number { return validate(input).value; }",
+    ].join("\n"),
+  };
+}
+
+// One actual native-emitted owner shared by typed-origin resolver/evaluator controls.
+// Existing raw fixture defaults and their assembly path remain unchanged.
+export function createTypedRecheckFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", typedRecheckOwner(variant));
+    if (variant === "foreign")
+      own.put(
+        "packages/alpha/src/foreign.ts",
+        'import type { State } from "./owner.js"; export function foreign(value: unknown): value is State { return value === "ready" || value === "done"; }\n',
+      );
+    own.put("packages/alpha/src/index.ts", 'export * from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { transition } from "alpha/runtime"; export const value = transition("ready", "done");\n',
+    );
+    own.put("packages/alpha/src/proof.test.ts", typedRecheckProof(variant));
+    const records = [
+      ["transition", 0],
+      ["transition", 1],
+      ["next", 0],
+      ["eligible", 0],
+    ].map(([name, index]) => typedRecheckRecord(name, index));
+    const policy = responsibilityPolicy(records);
+    for (const record of records) activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { records, policy });
+  });
+}
+
+function typedRecheckRecord(name, index) {
+  const path = "packages/alpha/src/proof.test.ts";
+  const selector = { consumerPath: path, specifier: "alpha/runtime", exportName: name };
+  return {
+    id: `typed-${name}-${index}`,
+    owner: "alpha",
+    kind: "typed-parameter-recheck",
+    rules: ["anti-slop/no-known-value-widening"],
+    input: { ...selector, parameterIndex: index },
+    transform: selector,
+    output: selector,
+    consumer: {
+      ...selector,
+      exportName: `public${name}`,
+      kind: "public-api-proof",
+      owner: "alpha",
+    },
+    proofs: [path],
+    proofAssertions: [{ path, testName: "typed public finite admission" }],
+  };
+}
+
+function typedRecheckOwner(variant) {
+  const source = `export type State = "ready" | "done";
+export function isState(value: unknown): value is State { return value === "ready" || value === "done"; }
+const TABLE: Readonly<Record<State, readonly State[]>> = { ready: ["done"], done: [] };
+const ELIGIBLE: readonly State[] = ["done"];
+export function transition(from: State, to: State): boolean {
+  if (!isState(from) || !isState(to)) return false;
+  return TABLE[from].includes(to);
+}
+export function next(from: State): readonly State[] {
+  if (!isState(from)) return [];
+  return TABLE[from];
+}
+export function eligible(value: State): boolean {
+  return isState(value) && ELIGIBLE.includes(value);
+}
+`;
+  return typedRecheckOwnerMutation(source, variant);
+}
+
+function typedRecheckOwnerMutation(source, variant) {
+  const start = "if (!isState(from) || !isState(to)) return false;";
+  const replacements = {
+    removed: "if (!isState(to)) return false;",
+    "removed-to": "if (!isState(from)) return false;",
+    inert: "isState(from); if (!isState(to)) return false;",
+    alias: "const alias = from; if (!isState(alias) || !isState(to)) return false;",
+    written: 'from = "ready"; ' + start,
+    deferred:
+      "const later = (): boolean => isState(from); if (!later() || !isState(to)) return false;",
+    duplicate: "if (!isState(from) || !isState(from) || !isState(to)) return false;",
+
+    asserted: "if (!isState(from as State) || !isState(to)) return false;",
+    rebound: "if (!check(from) || !isState(to)) return false;",
+  };
+  if (replacements[variant]) source = source.replace(start, replacements[variant]);
+  if (variant === "forwarding")
+    source =
+      source.replace("return TABLE[from].includes(to);", "return consume(from);") +
+      'function consume(value: unknown): boolean { return value === "ready"; }\n';
+  if (variant === "captured-tail")
+    source = source.replace(
+      "return TABLE[from].includes(to);",
+      "return (() => TABLE[from].includes(to))();",
+    );
+  if (variant === "asserted-tail")
+    source = source.replace(
+      "return TABLE[from].includes(to);",
+      "return TABLE[from as State].includes(to);",
+    );
+  if (variant === "mutated-tail")
+    source = source.replace(
+      "return TABLE[from].includes(to);",
+      'return TABLE[(from = "ready")].includes(to);',
+    );
+  if (variant === "rebound") source += "const check = isState;\n";
+  return typedRecheckPredicateMutation(source, variant);
+}
+
+function typedRecheckPredicateMutation(source, variant) {
+  if (variant === "foreign-domain")
+    source =
+      source.replace("value is State", "value is OtherState") + "\ntype OtherState = State;\n";
+  if (variant === "lying")
+    source = source.replace('return value === "ready" || value === "done";', "return true;");
+  if (variant === "foreign")
+    source =
+      'import { foreign } from "./foreign.js";\n' +
+      source.replaceAll("!isState(from)", "!foreign(from)");
+  if (variant === "wrong-index")
+    source =
+      source.replace(
+        "if (!isState(from) || !isState(to))",
+        'if (!second("ready", from) || !isState(to))',
+      ) +
+      "\nfunction second(other: State, value: unknown): value is State { return other === value; }\n";
+  if (variant === "overloaded")
+    source = source.replace(
+      "export function isState(value: unknown): value is State {",
+      "export function isState(value: unknown): value is State;\nexport function isState(value: unknown): value is State {",
+    );
+  if (variant === "generic")
+    source = source.replace("isState(value: unknown)", "isState<T>(value: unknown)");
+  return source;
+}
+
+function typedRecheckProof(variant) {
+  const source = `import { transition, next, eligible, type State } from "alpha/runtime";
+export function publictransition(from: State, to: State): boolean { const result = transition(from, to); return result; }
+export function publicnext(from: State): readonly State[] { const result = next(from); return result; }
+export function publiceligible(value: State): boolean { const result = eligible(value); return result; }
+`;
+  const replacements = {
+    "proof-swapped": source.replace("transition(from, to)", "transition(to, from)"),
+    "proof-constant": source.replace("transition(from, to)", 'transition("ready", to)'),
+    "proof-result": source.replace("return result;", "return true;"),
+    "proof-wide-result": source.replace("to: State): boolean", "to: State): unknown"),
+    "proof-clone": source.replace(
+      "const result = next(from); return result;",
+      "const result = next(from); return [...result];",
+    ),
+    "proof-alias": source.replace(
+      "const result = transition",
+      "const original = from; const result = transition",
+    ),
+    "proof-wide": source
+      .replace("publictransition(from: State", "publictransition(from: State | undefined")
+      .replace("transition(from, to)", 'transition(from ?? "ready", to)'),
+    "proof-counterfeit":
+      source.replace("type State }", "type State as ImportedState }") +
+      '\ntype State = "ready" | "done";\n',
+  };
+  return replacements[variant] ?? source;
+}
+
+// Preserve the actual producer and its constants in the native-emitted fixture; do not copy its
+// canonicalization or budget formulas into test expectations.
+export function createCanonicalDecoderFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    config.compilerOptions.lib.push("DOM");
+    own.put("packages/alpha/tsconfig.json", config);
+    const original = readFileSync(
+      new URL("../../../packages/keiko-contracts/src/support-report-json.ts", import.meta.url),
+      "utf8",
+    );
+    own.put("packages/alpha/src/owner.ts", canonicalDecoderVariant(original, variant));
+    own.put("packages/alpha/src/support-report.ts", canonicalDecoderConstants());
+    own.put("packages/alpha/src/index.ts", 'export * from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { parseCanonicalSupportJson } from "alpha/runtime"; export const value = parseCanonicalSupportJson("null", 4);\n',
+    );
+    own.put("packages/alpha/src/proof.test.ts", canonicalDecoderProof(variant));
+    const record = canonicalDecoderRecord();
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { records: [record], policy });
+  });
+}
+
+function canonicalDecoderConstants() {
+  const path = new URL("../../../packages/keiko-contracts/src/support-report.ts", import.meta.url);
+  const text = readFileSync(path, "utf8");
+  const source = ts.createSourceFile(path.pathname, text, ts.ScriptTarget.Latest, true);
+  const names = new Set([
+    "MAX_SUPPORT_REPORT_BYTES",
+    "MAX_SUPPORT_REPORT_CONTAINERS",
+    "MAX_SUPPORT_REPORT_DEPTH",
+    "MAX_SUPPORT_REPORT_OBJECT_KEYS",
+    "MAX_SUPPORT_REPORT_RECORDS",
+    "MAX_SUPPORT_REPORT_VALUES",
+    "SUPPORT_REPORT_FAILURES",
+    "SupportReportFailure",
+  ]);
+  const selected = source.statements.filter((statement) => {
+    if (ts.isTypeAliasDeclaration(statement)) return names.has(statement.name.text);
+    return (
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (declaration) => ts.isIdentifier(declaration.name) && names.has(declaration.name.text),
+      )
+    );
+  });
+  if (selected.length !== names.size) throw new TypeError("canonical-decoder-fixture-constants");
+  return selected.map((statement) => statement.getText(source)).join("\n");
+}
+
+function canonicalDecoderReplacement(variant) {
+  return {
+    "decoder-generic": [
+      "function parseCanonicalSupportJson(",
+      "function parseCanonicalSupportJson<T>(",
+    ],
+    "decoder-default": ["text: string, maxBytes: number", "text: string, maxBytes: number = 64"],
+    "canonicalizer-generic": [
+      "function canonicalSupportJson(",
+      "function canonicalSupportJson<T>(",
+    ],
+    "coerced-parse": ["JSON.parse(text)", "JSON.parse(String(text))"],
+    "removed-preflight": ["  checkJsonShape(text);\n", ""],
+    "removed-byte-budget": [
+      "text.length > maxBytes || new TextEncoder().encode(text).byteLength > maxBytes",
+      "text.length > maxBytes",
+    ],
+    "bypassed-canonicality": [
+      '  if (canonicalSupportJson(value) !== text) throw new SupportReportError("corrupt-report");',
+      "",
+    ],
+    "lying-decoder": ["    value = JSON.parse(text);", "    value = null;"],
+  }[variant];
+}
+
+function canonicalDecoderPreflightStatement(statement) {
+  return (
+    ts.isExpressionStatement(statement) &&
+    ts.isCallExpression(statement.expression) &&
+    ts.isIdentifier(statement.expression.expression) &&
+    statement.expression.expression.text === "checkJsonShape"
+  );
+}
+
+function canonicalDecoderControlNodes(source) {
+  const parsed = ts.createSourceFile("owner.ts", source, ts.ScriptTarget.Latest, true);
+  const declarations = parsed.statements.filter(
+    (statement) =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === "parseCanonicalSupportJson",
+  );
+  if (declarations.length !== 1 || !declarations[0].body)
+    throw new TypeError("canonical-decoder-fixture-declaration");
+  const decoder = declarations[0];
+  const statements = decoder.body.statements;
+  const returned = statements.at(-1);
+  const preflights = statements.filter(canonicalDecoderPreflightStatement);
+  if (statements.length !== 6 || !ts.isReturnStatement(returned) || !returned.expression)
+    throw new TypeError("canonical-decoder-fixture-return");
+  if (preflights.length !== 1) throw new TypeError("canonical-decoder-fixture-preflight");
+  return { parsed, decoder, statements, returned, preflight: preflights[0] };
+}
+
+function canonicalDecoderControlText(before, source, variant) {
+  const start = before.decoder.getStart(before.parsed);
+  const text = source.slice(start, before.decoder.end);
+  const relative = (node) => node.getStart(before.parsed) - start;
+  if (variant === "reordered-preflight") {
+    return (
+      text.slice(0, relative(before.preflight)) +
+      text.slice(before.preflight.end - start, relative(before.returned)) +
+      before.preflight.getText(before.parsed) +
+      "\n  " +
+      text.slice(relative(before.returned))
+    );
+  }
+  const expression = before.returned.expression;
+  const raw = expression.getText(before.parsed);
+  const replacement = variant === "captured-return" ? `(() => ${raw})()` : `{ ${raw} }`;
+  return text.slice(0, relative(expression)) + replacement + text.slice(expression.end - start);
+}
+
+function canonicalDecoderControlShape(before, after, variant) {
+  const original = before.statements.map((statement) => statement.getText(before.parsed));
+  const changed = after.statements.map((statement) => statement.getText(after.parsed));
+  if (variant === "reordered-preflight") {
+    const expected = [original[0], original[2], original[3], original[4], original[1], original[5]];
+    return JSON.stringify(changed) === JSON.stringify(expected);
+  }
+  if (JSON.stringify(changed.slice(0, -1)) !== JSON.stringify(original.slice(0, -1))) return false;
+  const raw = before.returned.expression.getText(before.parsed);
+  const expression = after.returned.expression;
+  const expected = variant === "captured-return" ? `(() => ${raw})()` : `{ ${raw} }`;
+  const expectedKind =
+    variant === "captured-return"
+      ? ts.SyntaxKind.CallExpression
+      : ts.SyntaxKind.ObjectLiteralExpression;
+  return expression?.kind === expectedKind && expression.getText(after.parsed) === expected;
+}
+
+function canonicalDecoderControlVariant(source, variant) {
+  const before = canonicalDecoderControlNodes(source);
+  if (!ts.isIdentifier(before.returned.expression) || before.statements[1] !== before.preflight)
+    throw new TypeError("canonical-decoder-fixture-original-shape");
+  const start = before.decoder.getStart(before.parsed);
+  const replacement = canonicalDecoderControlText(before, source, variant);
+  const prefix = source.slice(0, start);
+  const suffix = source.slice(before.decoder.end);
+  const changed = prefix + replacement + suffix;
+  const after = canonicalDecoderControlNodes(changed);
+  if (
+    changed === source ||
+    changed.slice(0, after.decoder.getStart(after.parsed)) !== prefix ||
+    changed.slice(after.decoder.end) !== suffix ||
+    !canonicalDecoderControlShape(before, after, variant)
+  )
+    throw new TypeError("canonical-decoder-fixture-mutation-target");
+  return changed;
+}
+
+function canonicalDecoderBudgetVariant(source, variant) {
+  const parsed = ts.createSourceFile("owner.ts", source, ts.ScriptTarget.Latest, true);
+  const name = variant === "budget-outer-return" ? "parseCanonicalSupportJson" : "budgetExceeded";
+  const declarations = parsed.statements.filter(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+  );
+  if (declarations.length !== 1 || !declarations[0].body)
+    throw new TypeError("canonical-decoder-budget-fixture-owner");
+  const owner = declarations[0];
+  const original = owner.body.getText(parsed);
+  const replacements = {
+    "budget-helper-throws": '{ throw new SupportReportError("report-budget-exceeded"); }',
+    "budget-helper-wrong-reason": '{ return new SupportReportError("corrupt-report"); }',
+    "budget-helper-extra-statement":
+      '{ void 0; return new SupportReportError("report-budget-exceeded"); }',
+    "budget-outer-return": original.replace("throw budgetExceeded();", "return budgetExceeded();"),
+  };
+  const replacement = replacements[variant];
+  if (!replacement || replacement === original)
+    throw new TypeError("canonical-decoder-budget-fixture-unchanged");
+  return canonicalDecoderBudgetTarget(source, parsed, owner, replacement);
+}
+
+function canonicalDecoderBudgetTarget(source, parsed, owner, replacement) {
+  const name = owner.name.text;
+  const start = owner.body.getStart(parsed);
+  const prefix = source.slice(0, start);
+  const suffix = source.slice(owner.body.end);
+  const changed = prefix + replacement + suffix;
+  const after = ts.createSourceFile("owner.ts", changed, ts.ScriptTarget.Latest, true);
+  const updated = after.statements.find(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+  );
+  if (
+    !updated?.body ||
+    updated.body.getText(after) !== replacement ||
+    changed.slice(0, updated.body.getStart(after)) !== prefix ||
+    changed.slice(updated.body.end) !== suffix
+  )
+    throw new TypeError("canonical-decoder-budget-fixture-target");
+  return changed;
+}
+
+function canonicalDecoderVariant(source, variant) {
+  if (variant.startsWith("budget-")) return canonicalDecoderBudgetVariant(source, variant);
+  if (["captured-return", "cloned-return", "reordered-preflight"].includes(variant))
+    return canonicalDecoderControlVariant(source, variant);
+  if (variant === "lying-canonicalizer") {
+    const parsed = ts.createSourceFile("owner.ts", source, ts.ScriptTarget.Latest, true);
+    const canonicalizer = parsed.statements.find(
+      (statement) =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === "canonicalSupportJson",
+    );
+    if (!canonicalizer?.body) throw new TypeError("canonical-decoder-fixture-canonicalizer");
+    return (
+      source.slice(0, canonicalizer.body.getStart(parsed)) +
+      '{ return "null"; }' +
+      source.slice(canonicalizer.body.end)
+    );
+  }
+
+  if (variant === "shadowed-json")
+    source =
+      "const JSON = { parse: (text: string): unknown => globalThis.JSON.parse(text), stringify: globalThis.JSON.stringify };\n" +
+      source;
+  if (variant === "shadowed-encoder")
+    source =
+      "class TextEncoder { encode(text: string): Uint8Array { return new globalThis.TextEncoder().encode(text); } }\n" +
+      source;
+  const replacement = canonicalDecoderReplacement(variant);
+  if (replacement) source = source.replace(...replacement);
+  return source;
+}
+
+function canonicalDecoderRecord() {
+  const path = "packages/alpha/src/proof.test.ts";
+  const decoder = {
+    consumerPath: path,
+    specifier: "alpha/runtime",
+    exportName: "parseCanonicalSupportJson",
+  };
+  return {
+    id: "canonical-json-decoder",
+    owner: "alpha",
+    kind: "raw-canonical-json-decoder",
+    rules: ["anti-slop/no-unknown-returns"],
+    input: { ...decoder, parameterIndex: 0 },
+    transform: decoder,
+    output: { ...decoder, exportName: "canonicalSupportJson" },
+    consumer: {
+      ...decoder,
+      kind: "public-api-proof",
+      owner: "alpha",
+      exportName: "publicCanonicalDecoderWitness",
+    },
+    proofs: [path],
+    proofAssertions: [{ path, testName: "actual public canonical decoder admission" }],
+  };
+}
+
+function canonicalDecoderProof(variant) {
+  const rawCall =
+    variant === "wrong-argument"
+      ? 'publicDecode("null", maxBytes)'
+      : "publicDecode(text, maxBytes)";
+  const resultCall = variant === "raw-alias" ? "publicCanonical({ raw })" : "publicCanonical(raw)";
+  const result = variant === "wrong-result" ? '"null"' : "result";
+  const declaration = variant === "mutable-raw" ? "let" : "const";
+  return `import { parseCanonicalSupportJson as publicDecode, canonicalSupportJson as publicCanonical } from "alpha/runtime";
+export function publicCanonicalDecoderWitness(text: string, maxBytes: number): string {
+  ${declaration} raw = ${rawCall};
+  const result = ${resultCall};
+  return ${result};
+}
+`;
+}
+
+export function createContextDiagnosticFixture(variant = "direct") {
+  return assembleResponsibilityFixture((own) => {
+    configureDiagnosticFixture(own);
+    if (variant === "foreign-alias") configureForeignContextResult(own);
+    own.put("packages/alpha/src/owner.ts", contextDiagnosticOwner(variant));
+    own.put("packages/alpha/src/proof.test.ts", contextDiagnosticProof(variant));
+    own.record.proofAssertions = ["healthy", "malformed"].map((kind) => ({
+      path: own.record.consumer.consumerPath,
+      testName: `context diagnostics ${kind}`,
+    }));
+    own.put("scripts/code-quality-policy.json", own.policy);
+  });
+}
+
+function contextDiagnosticType(variant) {
+  const types = {
+    direct: "{ readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] }",
+    erased: "any",
+    "unknown-reasons":
+      "{ readonly ok: true } | { readonly ok: false; readonly reasons: readonly unknown[] }",
+    "mutable-array": "{ readonly ok: true } | { readonly ok: false; readonly reasons: string[] }",
+    "mutable-property":
+      "{ readonly ok: true } | { readonly ok: false; reasons: readonly string[] }",
+    "mutable-ok": "{ ok: true } | { ok: false; readonly reasons: readonly string[] }",
+    "nonstring-reasons":
+      "{ readonly ok: true } | { readonly ok: false; readonly reasons: readonly number[] }",
+    "optional-reasons":
+      "{ readonly ok: true } | { readonly ok: false; readonly reasons?: readonly string[] }",
+    "optional-ok":
+      "{ readonly ok?: true } | { readonly ok: false; readonly reasons: readonly string[] }",
+    index:
+      "{ readonly ok: true; readonly [key: string]: unknown } | { readonly ok: false; readonly reasons: readonly string[]; readonly [key: string]: unknown }",
+    "success-value":
+      "{ readonly ok: true; readonly value: number } | { readonly ok: false; readonly reasons: readonly string[] }",
+    unrelated:
+      "{ readonly valid: true } | { readonly valid: false; readonly reasons: readonly string[] }",
+  };
+  return types[variant] ?? types.direct;
+}
+
+function contextDiagnosticOwner(variant) {
+  const type = contextDiagnosticType(variant);
+  const declaration =
+    variant === "foreign-alias"
+      ? 'import type { ContextValidationResult } from "beta";'
+      : `export type ContextValidationResult = ${type};`;
+  const discriminant = variant === "unrelated" ? "valid" : "ok";
+  const extra = variant === "success-value" ? ", value: 1" : "";
+  const reason = variant === "nonstring-reasons" ? "1" : '"invalid"';
+  const annotation = variant === "unaliased" ? type : "ContextValidationResult";
+  return `${declaration}
+export function validate(input: unknown): ${annotation} {
+  ${variant === "unsafe-body" ? "return { ok: true };" : `return typeof input === "number" ? { ${discriminant}: true${extra} } : { ${discriminant}: false, reasons: [${reason}] };`}
+}
+${variant === "wrong-producer" ? "export function other(input: unknown): ContextValidationResult { return validate(input); }" : ""}
+`;
+}
+
+function contextDiagnosticProof(variant) {
+  const prefix = 'import { parse as check } from "alpha";\n';
+  const normal =
+    "const diagnostics = check(input); return diagnostics.ok ? 0 : diagnostics.reasons.length;";
+  const bodies = {
+    constant: "const diagnostics = check(input); return 0;",
+    polarity:
+      "const diagnostics = check(input); return diagnostics.ok ? 1 : diagnostics.reasons.length;",
+    fabricated: "const diagnostics = check(input); return diagnostics.ok ? 0 : 1;",
+    negated:
+      "const diagnostics = check(input); return !diagnostics.ok ? diagnostics.reasons.length : 0;",
+    input: "const diagnostics = check(1); return diagnostics.ok ? 0 : diagnostics.reasons.length;",
+    local: "const diagnostics = check(input); return other.ok ? 0 : other.reasons.length;",
+    "optional-reasons":
+      "const diagnostics = check(input); return diagnostics.ok ? 0 : (diagnostics.reasons?.length ?? 0);",
+    "optional-ok":
+      "const diagnostics = check(input); return diagnostics.ok === false ? diagnostics.reasons.length : 0;",
+    unrelated:
+      "const diagnostics = check(input); return diagnostics.valid ? 0 : diagnostics.reasons.length;",
+    "wrong-producer":
+      "const diagnostics = otherCheck(input); return diagnostics.ok ? 0 : diagnostics.reasons.length;",
+    annotated:
+      "const diagnostics: ReturnType<typeof check> = check(input); return diagnostics.ok ? 0 : diagnostics.reasons.length;",
+  };
+  const extra =
+    variant === "local"
+      ? 'const other = { ok: false, reasons: ["invalid"] };\n'
+      : variant === "wrong-producer"
+        ? 'import { other as otherCheck } from "alpha/runtime";\n'
+        : "";
+  const returnType = variant === "numeric-erasure" ? "any" : "number";
+  return (
+    prefix +
+    extra +
+    `export function countDiagnostics(input: unknown): ${returnType} { ${bodies[variant] ?? normal} }\n`
+  );
+}
+
+function configureForeignContextResult(own) {
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+  own.put("packages/beta/tsconfig.json", config);
+  own.put("packages/beta/package.json", {
+    name: "beta",
+    version: "0.0.0",
+    type: "module",
+    exports: { ".": { types: "./dist/owner.d.ts", import: "./dist/owner.js" } },
+  });
+  own.put(
+    "packages/beta/src/owner.ts",
+    `export type ContextValidationResult = ${contextDiagnosticType("direct")};\n`,
+  );
+  symlinkSync(join(own.root, "packages/beta"), join(own.root, "node_modules/beta"));
+  emitSymbolFixture(own.root, "packages/beta");
+}
+
+export function createCollectiveContextDiagnosticFixture(variant = "direct") {
+  const own = createCollectiveParserFixture(variant === "cardinality" ? variant : "direct", [
+    "anti-slop/no-runtime-typeof",
+  ]);
+  const path = "packages/alpha/src/owner.ts";
+  let source = readFileSync(join(own.root, path), "utf8");
+  source = source
+    .replace(
+      "{ ok: true; value: number } | { ok: false; errors: readonly string[] }",
+      contextDiagnosticType("direct"),
+    )
+    .replaceAll('errors: ["invalid"]', 'reasons: ["invalid"]')
+    .replaceAll("{ ok: true, value: input.value }", "{ ok: true }");
+  source =
+    source.replaceAll(
+      "if (!isRecord(input)",
+      'if (diagnosticIssues(input).length !== 0) return { ok: false, reasons: ["invalid"] }; if (!isRecord(input)',
+    ) +
+    '\nfunction diagnosticIssues(input: unknown): string[] { return typeof input === "object" && input !== null ? [] : ["invalid"]; }\n';
+  own.put(path, source);
+  own.put(
+    "packages/alpha/src/proof.test.ts",
+    `import { first, second } from "alpha/runtime";
+export function publicfirst(input: unknown): number { const result = first(input); return result.ok ? 0 : result.reasons.length; }
+export function publicsecond(input: unknown): number { const result = second(input); return result.ok ? 0 : result.reasons.length; }
+`,
+  );
+  for (const record of own.records) record.kind = "diagnostic-checker";
+  own.put("scripts/code-quality-policy.json", own.policy);
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+export function createObservationOptionsFixture(options = {}) {
+  const own = createResponsibilityFixture();
+  own.put(
+    "packages/alpha/src/owner.ts",
+    `
+function runtimeProperty(value: object, key: PropertyKey): unknown {
+  const property: unknown = Reflect.get(value, key);
+  return property;
+}
+function exactKeys(left: object, right: object): boolean {
+  const leftKeys = Reflect.ownKeys(left);
+  const rightKeys = new Set(Reflect.ownKeys(right));
+  return leftKeys.length === rightKeys.size && leftKeys.every((key) => rightKeys.has(key));
+}
+export interface Observation { readonly admitted: boolean; }
+export function validate(event: object): Observation {
+  return { admitted: runtimeProperty(event, "value") === 1 && exactKeys(event, {value: 1}) };
+}
+`,
+  );
+  own.put(
+    "src/consumer.ts",
+    'import { validate } from "alpha/runtime"; export const result = validate({value: 1});',
+  );
+  const path = "packages/alpha/src/proof.test.ts";
+  own.put(
+    path,
+    `import { validate, type Observation } from "alpha/runtime";
+export function observe(event: object): Observation { const result = validate(event); return result; }
+`,
+  );
+  own.record = observationFixtureRecord(path, options);
+  own.policy = responsibilityPolicy([own.record]);
+  own.put("scripts/code-quality-policy.json", own.policy);
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+function observationFixtureRecord(path, options) {
+  const selector = { consumerPath: path, specifier: "alpha/runtime", exportName: "validate" };
+  return {
+    ...responsibilityRecord(),
+    kind: "raw-property-observation",
+    input: { ...selector, parameterIndex: 0 },
+    transform: selector,
+    output: selector,
+    consumer: { kind: "public-api-proof", owner: "alpha", ...selector, exportName: "observe" },
+    rules: [
+      "anti-slop/no-object-parameters",
+      "anti-slop/no-unknown-returns",
+      "anti-slop/no-reflect-get",
+    ],
+    proofs: [path],
+    proofAssertions: [{ path, testName: "observation preservation" }],
+    ...options,
+  };
+}
+
+export function createDirectObservationCheckerFixture(options = {}) {
+  const own = createObservationOptionsFixture({
+    rawObjectInput: true,
+    additionalObservationForms: ["own-key-identity"],
+    directRawCheckerInputs: true,
+    ...options,
+  });
+  const path = "packages/alpha/src/owner.ts";
+  const helpers = `
+function readEnvelope(event: object): { readonly duration: unknown } {
+  return { duration: runtimeProperty(event, "duration") };
+}
+function locate(event: object): number {
+  const value = runtimeProperty(event, "value");
+  if (typeof value !== "number") throw new TypeError("invalid value");
+  return value;
+}
+function compare(event: object, registration: object, canonical: number): void {
+  if (runtimeProperty(event, "value") !== canonical) throw new TypeError("mismatch");
+  void registration;
+}
+function readFields(event: object): unknown { return runtimeProperty(event, "extra"); }
+function sharedCarrier(event: object): unknown { return runtimeProperty(event, "marker"); }
+export function otherCarrier(event: object): unknown { return sharedCarrier(event); }
+`;
+  let source = readFileSync(join(own.root, path), "utf8");
+  source =
+    helpers +
+    source.replace(
+      '  return { admitted: runtimeProperty(event, "value") === 1',
+      '  const original = event; const envelope = readEnvelope(original); const value = locate(original); compare(original, {}, value); const fields = readFields(original); void envelope; void fields; sharedCarrier(original); return { admitted: runtimeProperty(event, "value") === 1',
+    );
+  own.put(path, source);
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+export function objectValidatorRecord() {
+  const record = responsibilityRecord();
+  record.rawObjectInput = true;
+  record.rules = ["anti-slop/no-object-parameters"];
+  record.proofAssertions = [
+    "preserves original optional view",
+    "refuses malformed view before use",
+  ].map((name) => ({ path: record.proofs[0], testName: `object boundary ${name}` }));
+  return record;
+}
+
+function objectValidatorOwner(variant) {
+  const signatures = {
+    "wrong-input": "input: unknown",
+    "aliased-input": "input: Raw",
+    "optional-input": "input?: object",
+  };
+  const results = {
+    "unknown-result": "unknown",
+    "foreign-result": "Date | undefined",
+    "anonymous-result":
+      '{ readonly owner: string; readonly lifecycle: "loss" | "state" } | undefined',
+    "extra-arm": "View | string | undefined",
+  };
+  const input = signatures[variant] ?? "input: object";
+  const output = results[variant] ?? "View | undefined";
+  const generic = variant === "generic" ? "<T>" : "";
+  const body = ["valid", "unchecked"].includes(variant)
+    ? "const view = raw(input); return view !== undefined && complete(view) ? view : undefined;"
+    : "return undefined;";
+  const shape =
+    variant === "unchecked"
+      ? "return true;"
+      : 'try { return typeof Reflect.get(view, "owner") === "string" && ["loss", "state"].includes(Reflect.get(view, "lifecycle")); } catch { return false; }';
+  const alias = variant === "aliased-input" ? "type Raw = object;\n" : "";
+  return `${alias}export interface View { readonly owner: string; readonly lifecycle: "loss" | "state" }
+const marker = Symbol("fixture-view");
+function raw(input: object): object | undefined {
+  const value: unknown = Reflect.get(input, marker);
+  return typeof value === "object" && value !== null ? value : undefined;
+}
+function complete(view: object): view is View { ${shape} }
+export function validate${generic}(${input}): ${output} { ${body} }
+export function consume(input: object): boolean { return validate(input) !== undefined; }
+export function carrier(value: unknown): object {
+  const input = {}; Object.defineProperty(input, marker, { value }); return input;
+}
+`;
+}
+
+function objectValidatorProof() {
+  return `import { it, expect } from "vitest";
+import { validate, consume, carrier } from "alpha/runtime";
+it("object boundary preserves original optional view", () => {
+  const view = { owner: "fixture", lifecycle: "loss" };
+  const input = carrier(view);
+  expect(validate(input)).toBe(view);
+  expect(consume(input)).toBe(true);
+});
+it("object boundary refuses malformed view before use", () => {
+  const input = carrier({ owner: 42, lifecycle: "loss" });
+  expect(validate(input)).toBeUndefined();
+  expect(consume(input)).toBe(false);
+});
+`;
+}
+
+export function createObjectValidatorFixture(variant = "valid", ownedPredicateStage = false) {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", objectValidatorOwner(variant));
+    own.put("packages/alpha/src/proof.test.ts", objectValidatorProof());
+    own.put(
+      "src/consumer.ts",
+      'import { validate, consume } from "alpha/runtime"; export const view = validate({}); export const kept = consume({});',
+    );
+    const record = objectValidatorRecord();
+    if (ownedPredicateStage) record.ownedPredicateStage = true;
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { record, policy });
+  });
+}
+
+export async function installResponsibilityFixtureTools(own) {
+  const { symlinkSync } = await import("node:fs");
+  const tools = new URL("../../../", import.meta.url);
+  mkdirSync(join(own.root, "node_modules/.bin"));
+  for (const name of ["vitest", "typescript"])
+    symlinkSync(
+      new URL(`node_modules/${name}`, tools),
+      join(own.root, "node_modules", name),
+      "junction",
+    );
+  symlinkSync(
+    new URL("node_modules/.bin/vitest", tools),
+    join(own.root, "node_modules/.bin/vitest"),
+  );
+  own.put("package-lock.json", readFileSync(new URL("package-lock.json", tools), "utf8"));
+}
+
+export async function installSemanticFixtureBuild(own, args) {
+  const { nativeCompilerExecutable } = await import("../../lib/code-quality-provenance.mjs");
+  own.put(
+    "scripts/semantic-fixture-build.mjs",
+    `import { execFileSync } from "node:child_process";
+execFileSync(${JSON.stringify(nativeCompilerExecutable())}, ${JSON.stringify(args)}, {
+  cwd: process.cwd(), timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
+});`,
+  );
+  const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+  manifest.scripts = { "build:packages": "node scripts/semantic-fixture-build.mjs" };
+  own.put("package.json", manifest);
+}
+
+export function embeddedSemanticOptions() {
+  return { mode: "enforce", scope: "repository", json: true, qualifyResponsibilities: true };
+}
+
+export async function createCollectiveSemanticFixture(variant, roots) {
+  const privateModule = variant.startsWith("private-module");
+  const create = privateModule ? createPrivateModuleParserFixture : createCollectiveParserFixture;
+  const sourceVariant = privateModule
+    ? variant.slice("private-module-".length) || "direct"
+    : variant;
+  const own = create(sourceVariant, [
+    "anti-slop/no-runtime-typeof",
+    "anti-slop/no-unsafe-dictionary-type",
+  ]);
+  roots.push(own.root);
+  await installResponsibilityFixtureTools(own);
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  // Actual Vitest declarations require browser globals even for this Node-only runtime proof.
+  config.compilerOptions.lib.push("DOM");
+  own.put("packages/alpha/tsconfig.json", config);
+  const path = own.records[0].proofs[0];
+  const wrappers = readFileSync(join(own.root, path), "utf8");
+  own.put(
+    path,
+    wrappers +
+      '\nimport { it, expect } from "vitest";\n' +
+      ["first", "second"]
+        .map(
+          (name) => `
+it("${name} healthy", () => { expect(public${name}({ value: 3 })).toEqual({ ok: true, value: 3 }); });
+it("${name} malformed", () => { expect(public${name}({ value: "wrong" }).ok).toBe(false); });
+`,
+        )
+        .join("\n"),
+  );
+  if (variant === "missing-assertion" || variant === "private-module-missing-assertion")
+    own.records[1].proofAssertions[1].testName = "absent assertion";
+  own.put("scripts/code-quality-policy.json", own.policy);
+  await installSemanticFixtureBuild(own, ["-b", "packages/alpha/tsconfig.json", "--force"]);
+  return own;
+}
+
+export function metadataSourceRecord(ownedMarkerPair = false, ownedRegistrationTransport = false) {
+  const record = responsibilityRecord("raw-property-observation");
+  const consumer = (exportName) => ({
+    owner: "alpha",
+    consumerPath: "packages/alpha/src/owner.ts",
+    specifier: "alpha/runtime",
+    exportName,
+  });
+  record.id = "fixture-metadata-source";
+  if (ownedMarkerPair) record.ownedMarkerPair = true;
+  if (ownedRegistrationTransport) record.ownedRegistrationTransport = true;
+  record.rules = ["anti-slop/no-object-parameters"];
+  for (const role of ["input", "transform", "output"]) record[role].exportName = "copyMetadata";
+  record.consumer = consumer("first");
+  record.metadataSourceInput = { companion: consumer("second") };
+  record.proofAssertions = ["retains target and raw identity", "retains malformed attachment"].map(
+    (name) => ({ path: record.proofs[0], testName: `metadata source ${name}` }),
+  );
+  return record;
+}
+
+function metadataSourceOwner(variant) {
+  const copy = ["wrong-source", "wrong-target"].includes(variant)
+    ? 'throw new TypeError("unsupported fixture signature");'
+    : variant === "dropped"
+      ? "void source;"
+      : "Object.defineProperty(target, marker, { value: Reflect.get(source, marker) });";
+  let source = `export const marker = Symbol("fixture-registration");
+export function copyMetadata<Target extends object>(source: object, target: Target): Target {
+  ${copy}
+  ${["wrong-source", "wrong-target"].includes(variant) ? "" : "return target;"}
+}
+function rebound<Event extends object, Copy extends Event>(event: Event, target: Copy): Copy {
+  return copyMetadata<Copy>(event, target);
+}
+export function first<Event extends object>(event: Event): Event { return rebound(event, { ...event }); }
+export function second<Event extends object>(event: Event): Event { return rebound(event, { ...event }); }
+`;
+  if (variant === "wrong-source") source = source.replace("source: object", "source: unknown");
+  if (variant === "wrong-target") source = source.replace("target: Target", "target: object");
+  if (variant === "third-caller")
+    source +=
+      "export function third(event: object): object { return rebound(event, { ...event }); }\n";
+  if (variant === "callback-escape") source += "const escaped = [rebound]; void escaped;\n";
+  if (variant === "unbound-second")
+    source = source.replace(
+      "second<Event extends object>(event: Event): Event { return rebound(event, { ...event }); }",
+      "second<Event extends object>(event: Event): Event { return event; }",
+    );
+  return source;
+}
+
+function metadataSourceProof(ownedMarkerPair = false) {
+  if (ownedMarkerPair) return markerMetadataSourceProof();
+  return `import { it, expect } from "vitest";
+import { copyMetadata, first, second, marker } from "alpha/runtime";
+it("metadata source retains target and raw identity", () => {
+  const raw = { owner: "fixture" }; const source = {};
+  Object.defineProperty(source, marker, { value: raw }); const target = {};
+  expect(copyMetadata(source, target)).toBe(target);
+  expect(Object.getOwnPropertyDescriptor(target, marker)).toEqual({ value: raw,
+    enumerable: false, writable: false, configurable: false });
+  for (const rebound of [first(source), second(source)]) expect(Reflect.get(rebound, marker)).toBe(raw);
+});
+it("metadata source retains malformed attachment", () => {
+  const raw = {}; const source = {}; Object.defineProperty(source, marker, { value: raw });
+  for (const target of [copyMetadata(source, {}), first(source), second(source)])
+    expect(Reflect.get(target, marker)).toBe(raw);
+});
+`;
+}
+
+export function createMetadataSourceFixture(
+  variant = "valid",
+  ownedMarkerPair = false,
+  ownedRegistrationTransport = false,
+) {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      metadataFixtureOwner(variant, ownedMarkerPair, ownedRegistrationTransport),
+    );
+    own.put("packages/alpha/src/index.ts", 'export { copyMetadata as parse } from "./owner.js";\n');
+    own.put(
+      "packages/alpha/src/proof.test.ts",
+      metadataSourceProof(ownedMarkerPair || ownedRegistrationTransport),
+    );
+    own.put(
+      "src/consumer.ts",
+      'import { copyMetadata, first, second } from "alpha/runtime"; export const copy = copyMetadata({}, {}); export const one = first({}); export const two = second({});',
+    );
+    const record = metadataSourceRecord(ownedMarkerPair, ownedRegistrationTransport);
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { record, policy });
+  });
+}
+
+function markerMetadataSourceOwner(variant) {
+  const original = metadataSourceOwner("valid");
+  const tail = `const refusal = readRefusal(source);
+  if (refusal !== undefined) writeRefusal(target, refusal);
+  return target;`;
+  const source =
+    original.replace("return target;", tail) +
+    `
+const refusalKey = Symbol.for("fixture-refusal");
+type FailureKind = "refused" | "blocked";
+function writeRefusal(event: object, kind: FailureKind): void {
+  Object.defineProperty(event, refusalKey, {
+    value: kind, enumerable: false, configurable: false, writable: false,
+  });
+}
+function readRefusal(event: object): FailureKind | undefined {
+  const value = observeRefusal(event, refusalKey);
+  return isFailureKind(value) ? value : undefined;
+}
+function observeRefusal(value: object, key: PropertyKey): unknown {
+  const observed: unknown = Reflect.get(value, key);
+  return observed;
+}
+function isFailureKind(value: unknown): value is FailureKind {
+  return value === "refused" || value === "blocked";
+}
+`;
+  return markerMetadataVariant(source, variant);
+}
+
+function markerMetadataVariant(source, variant) {
+  if (variant === "unchecked")
+    source = source.replace('return value === "refused" || value === "blocked";', "return true;");
+  if (variant === "wrong-key")
+    source = source.replace(
+      "Object.defineProperty(event, refusalKey,",
+      'Object.defineProperty(event, Symbol.for("other-refusal"),',
+    );
+  if (variant === "mutable-descriptor")
+    source = source.replace("configurable: false", "configurable: true");
+  if (variant === "wrong-builtin")
+    source = source.replace(
+      "Object.defineProperty(event, refusalKey,",
+      "Reflect.defineProperty(event, refusalKey,",
+    );
+  if (variant === "shadowed-builtin")
+    source +=
+      "const Object = { defineProperty(target: object, _key: PropertyKey, _descriptor: PropertyDescriptor): object { return target; } };\n";
+  if (variant === "helper-escape") source += "const escaped = [writeRefusal]; void escaped;\n";
+  if (variant === "key-escape") source += "const escapedKey = { refusalKey }; void escapedKey;\n";
+  return markerMetadataSignatureVariant(source, variant);
+}
+
+function markerMetadataSignatureVariant(source, variant) {
+  if (variant === "default-parameter")
+    source = source.replace("kind: FailureKind", 'kind: FailureKind = "refused"');
+  if (variant === "foreign-domain") {
+    source += 'type OtherKind = "refused" | "blocked";\n';
+    source = source.replace("value is FailureKind", "value is OtherKind");
+  }
+  if (variant === "direct-caller")
+    source +=
+      'function other(event: object): void { writeRefusal(event, "blocked"); }\nvoid other;\n';
+  if (variant === "key-type") source += "type Rejected = { readonly [refusalKey]: FailureKind };\n";
+  return source;
+}
+
+function markerMetadataSourceProof() {
+  const healthy = `
+  const refusalKey = Symbol.for("fixture-refusal");
+  const refused = {}; Object.defineProperty(refused, refusalKey, { value: "refused" });
+  for (const target of [copyMetadata(refused, {}), first(refused), second(refused)])
+    expect(Object.getOwnPropertyDescriptor(target, refusalKey)).toEqual({ value: "refused",
+      enumerable: false, writable: false, configurable: false });`;
+  const malformed = `
+  const refusalKey = Symbol.for("fixture-refusal");
+  const invalid = {}; Object.defineProperty(invalid, refusalKey, { value: "other" });
+  for (const target of [copyMetadata(invalid, {}), first(invalid), second(invalid)])
+    expect(Object.hasOwn(target, refusalKey)).toBe(false);`;
+  return metadataSourceProof()
+    .replace(
+      '});\nit("metadata source retains malformed attachment"',
+      `${healthy}\n});\nit("metadata source retains malformed attachment"`,
+    )
+    .replace(
+      "    expect(Reflect.get(target, marker)).toBe(raw);\n});",
+      `    expect(Reflect.get(target, marker)).toBe(raw);${malformed}\n});`,
+    );
+}
+
+function registrationTransportOwner(variant) {
+  let source = markerMetadataSourceOwner("valid")
+    .replace('Symbol("fixture-registration")', 'Symbol.for("fixture-registration")')
+    .replace(
+      "Object.defineProperty(target, marker, { value: Reflect.get(source, marker) });",
+      "attachRegistration(target, readRegistration(source));",
+    );
+  source += `
+function readRegistration(event: object): object | undefined {
+  const registration = observeRefusal(event, marker);
+  return typeof registration === "object" && registration !== null ? registration : undefined;
+}
+function attachRegistration(event: object, registration: object | undefined): void {
+  if (registration !== undefined) {
+    Object.defineProperty(event, marker, { value: registration,
+      enumerable: false, configurable: false, writable: false });
+  }
+}
+`;
+  return registrationTransportVariant(source, variant);
+}
+
+function registrationTransportVariant(source, variant) {
+  if (variant === "registration-key") {
+    source += 'const foreignRegistrationKey = Symbol.for("fixture-registration-other");\n';
+    source = source.replace(
+      "Object.defineProperty(event, marker,",
+      "Object.defineProperty(event, foreignRegistrationKey,",
+    );
+  }
+  if (variant === "registration-copy")
+    source = source.replace("value: registration,", "value: { ...registration },");
+  if (variant === "registration-default")
+    source = source.replace(
+      "registration: object | undefined)",
+      "registration: object | undefined = {})",
+    );
+  if (variant === "registration-side-call")
+    source = source.replace(
+      "  const registration = observeRefusal(event, marker);",
+      "  void event; const registration = observeRefusal(event, marker);",
+    );
+  if (variant === "registration-escape")
+    source += "const escapedRegistration = [readRegistration]; void escapedRegistration;\n";
+  return source;
+}
+
+function metadataFixtureOwner(variant, ownedMarkerPair, ownedRegistrationTransport) {
+  if (ownedRegistrationTransport) return registrationTransportOwner(variant);
+  if (ownedMarkerPair) return markerMetadataSourceOwner(variant);
+  return metadataSourceOwner(variant);
+}
+
+function physicalRegistrationOwner(variant) {
+  let source = registrationTransportOwner(variant === "foreign-key" ? "registration-key" : "valid");
+  source += `
+export interface Observation { readonly code: string; }
+const canonical: Observation = { code: "checked" };
+function exactKeys(left: object, right: object): boolean {
+  const keys = Reflect.ownKeys(left);
+  const expected = new Set(Reflect.ownKeys(right));
+  return keys.length === expected.size && keys.every((key) => expected.has(key));
+}
+function canonicalForEvent(event: object): Observation {
+  if (observeRefusal(event, "code") !== canonical.code) throw new TypeError("unregistered");
+  return canonical;
+}
+function matchesRegistration(registration: object, expected: Observation): boolean {
+  return exactKeys(registration, expected) && observeRefusal(registration, "code") === expected.code;
+}
+function checkRegistration(event: object, registration: object, expected: Observation): void {
+  if (!matchesRegistration(registration, expected) || observeRefusal(event, "code") !== expected.code)
+    throw new TypeError("mismatch");
+}
+export function validate(event: object): Observation {
+  const registration = readRegistration(event);
+  if (registration === undefined) { throw new TypeError("unregistered"); }
+  const expected = canonicalForEvent(event);
+  checkRegistration(event, registration, expected);
+  return expected;
+}
+`;
+  if (variant === "missing-refusal")
+    source = source.replace(
+      '  if (registration === undefined) { throw new TypeError("unregistered"); }',
+      "  if (registration === undefined) return canonical;",
+    );
+  if (variant === "copied-registration")
+    source = source.replace(
+      "checkRegistration(event, registration, expected);",
+      "checkRegistration(event, { ...registration }, expected);",
+    );
+  if (variant === "receiver-escape")
+    source =
+      source.replace(
+        "  checkRegistration(event, registration, expected);",
+        "  persist(registration); checkRegistration(event, registration, expected);",
+      ) + "\nfunction persist(value: object): void { void value; }\n";
+  if (variant === "outside-caller")
+    source +=
+      "\nexport function other(event: object, raw: object): void { checkRegistration(event, raw, canonical); }\n";
+  return source;
+}
+
+function physicalRegistrationProof() {
+  return `import { expect, it } from "vitest";
+import { validate, marker, type Observation } from "alpha/runtime";
+export function observe(event: object): Observation { const result = validate(event); return result; }
+it("physical registration preservation", () => {
+  const healthy = { code: "checked" };
+  Object.defineProperty(healthy, marker, { value: { code: "checked" } });
+  expect(observe(healthy).code).toBe("checked");
+  const malformed = { code: "checked" };
+  Object.defineProperty(malformed, marker, { value: { code: 42 } });
+  expect(() => observe(malformed)).toThrow("mismatch");
+});
+`;
+}
+
+export function createPhysicalRegistrationObservationFixture(variant = "valid") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    own.put("packages/alpha/src/owner.ts", physicalRegistrationOwner(variant));
+    own.put("packages/alpha/src/index.ts", 'export { validate as parse } from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { validate, marker } from "alpha/runtime"; const event = { code: "checked" }; Object.defineProperty(event, marker, { value: { code: "checked" } }); export const result = validate(event);',
+    );
+    const path = "packages/alpha/src/proof.test.ts";
+    own.put(path, physicalRegistrationProof());
+    const record = observationFixtureRecord(path, {
+      rawObjectInput: true,
+      additionalObservationForms: ["own-key-identity"],
+      directRawCheckerInputs: true,
+    });
+    record.proofAssertions = [{ path, testName: "physical registration preservation" }];
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { record, policy });
+  });
+}
+
+export function createBooleanObservationFixture(variant = "valid") {
+  return assembleResponsibilityFixture((own) => {
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    own.put("packages/alpha/tsconfig.json", config);
+    const returned = variant === "unchecked" ? "value === true && false" : "value === true";
+    own.put(
+      "packages/alpha/src/owner.ts",
+      `
+function runtimeProperty(event: object, key: PropertyKey): unknown {
+  const property: unknown = Reflect.get(event, key);
+  return property;
+}
+export function validate(event: object): boolean {
+  const value: unknown = runtimeProperty(event, "marker");
+  return ${returned};
+}
+`,
+    );
+    own.put(
+      "src/consumer.ts",
+      'import { validate } from "alpha/runtime"; export const result = validate({marker: true});',
+    );
+    const path = "packages/alpha/src/proof.test.ts";
+    own.put(path, booleanObservationProof());
+    const record = observationFixtureRecord(path, { rawObjectInput: true });
+    record.rules = ["anti-slop/no-object-parameters"];
+    record.proofAssertions = ["admits marked carrier", "refuses unmarked carrier"].map((name) => ({
+      path,
+      testName: `boolean observation ${name}`,
+    }));
+    const policy = responsibilityPolicy([record]);
+    activateResponsibilityFixtureRules(policy, record);
+    own.put("scripts/code-quality-policy.json", policy);
+    Object.assign(own, { record, policy });
+  });
+}
+
+function booleanObservationProof() {
+  return `import { it, expect } from "vitest";
+import { validate } from "alpha/runtime";
+export function observe(event: object): boolean { const result = validate(event); return result; }
+it("boolean observation admits marked carrier", () => { expect(observe({marker: true})).toBe(true); });
+it("boolean observation refuses unmarked carrier", () => { expect(observe({})).toBe(false); });
+`;
+}
+
+// A real emitted public DATA export, not a callable or a parser/witness surrogate.
+export function createReadonlyLiteralDataFixture(variant = "valid") {
+  return createSymbolFixture(false, (own) => {
+    own.put("packages/alpha/src/owner.ts", readonlyLiteralDataOwner(variant));
+    own.put("packages/alpha/src/index.ts", 'export { SURFACES as surfaces } from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { surfaces as accepted } from "alpha"; import { SURFACES as direct } from "alpha/runtime"; export const first = accepted; export const second = direct;\n',
+    );
+  });
+}
+
+function readonlyLiteralDataOwner(variant) {
+  const header = 'export type Surface = "runtime" | "tools";\n';
+  const tables = {
+    valid:
+      'export const SURFACES: Readonly<Record<string, Surface>> = { one: "tools", two: "runtime" };',
+    mutable: 'export let SURFACES: Readonly<Record<string, Surface>> = { one: "tools" };',
+    "mutable-view": 'export const SURFACES: Record<string, Surface> = { one: "tools" };',
+    "open-value": 'export const SURFACES: Readonly<Record<string, string>> = { one: "tools" };',
+    "unknown-value": 'export const SURFACES: Readonly<Record<string, unknown>> = { one: "tools" };',
+    spread:
+      'const base = { one: "tools" as Surface }; export const SURFACES: Readonly<Record<string, Surface>> = { ...base };',
+    computed: 'export const SURFACES: Readonly<Record<string, Surface>> = { ["one"]: "tools" };',
+    accessor:
+      'export const SURFACES: Readonly<Record<string, Surface>> = { get one(): Surface { return "tools"; } };',
+    asserted:
+      'export const SURFACES: Readonly<Record<string, Surface>> = { one: "tools" } as Record<string, Surface>;',
+    "asserted-value":
+      'export const SURFACES: Readonly<Record<string, Surface>> = { one: "foreign" as Surface };',
+    dynamic:
+      'const value: Surface = "tools"; export const SURFACES: Readonly<Record<string, Surface>> = { one: value };',
+    shadow:
+      'type Readonly<T> = T; export const SURFACES: Readonly<Record<string, Surface>> = { one: "tools" };',
+    proto: 'export const SURFACES: Readonly<Record<string, Surface>> = { "__proto__": "tools" };',
+  };
+  const entry = Object.entries(tables).find(([name]) => name === variant);
+  if (!entry) throw new TypeError("unknown literal data fixture variant");
+  return header + entry[1] + "\n";
+}
