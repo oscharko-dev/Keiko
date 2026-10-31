@@ -1455,6 +1455,52 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
       );
     expect(syncAsk("fetch")).toMatchObject({ actionKind: "git-fetch", commandLabel: "fetch" });
     expect(syncAsk("pull")).toMatchObject({ actionKind: "git-pull", risk: "high" });
+    // #3907: a governed task branch is asked as itself, at medium risk, and its name travels only
+    // as the digest the approval is bound to; without that digest, or with a foreign label, it is
+    // not the ask.
+    const branchAsk = (
+      overrides: Readonly<Record<string, unknown>> = {},
+      patterns: readonly string[] = ["branch"],
+    ): unknown =>
+      projectOpenCodePermissionEvent(
+        {
+          ...base,
+          properties: {
+            ...base.properties,
+            patterns,
+            metadata: {
+              kind: "command-execution",
+              actionClass: "command-execution",
+              reasonCode: "approval-required",
+              expiresAt: "2026-07-23T14:05:00.000Z",
+              actionKind: "git-branch",
+              scopeLabel: "workspace-scope",
+              risk: "medium",
+              policyReason: "approval-required",
+              commandLabel: "branch",
+              actionId: "session:branch-call",
+              idempotencyKey: "session:branch-call",
+              approvalId: "session:branch-call",
+              approvalDigest: "b".repeat(64),
+              targetPathHash: "c".repeat(64),
+              ...overrides,
+            },
+          },
+        },
+        "ses_1",
+      );
+    expect(branchAsk()).toMatchObject({
+      actionKind: "git-branch",
+      commandLabel: "branch",
+      risk: "medium",
+      targetPathHash: "c".repeat(64),
+    });
+    expect(branchAsk({ targetPathHash: undefined })).toBeUndefined();
+    expect(branchAsk({ targetPathHash: "feature/x" })).toBeUndefined();
+    expect(branchAsk({ commandLabel: "fetch" }, ["fetch"])).toBeUndefined();
+    expect(branchAsk({ risk: "low" })).toBeUndefined();
+    expect(branchAsk({}, ["feature/x"])).toBeUndefined();
+    expect(branchAsk({ branchName: "feature/x" })).toBeUndefined();
     expect(syncAsk("pull", { commandLabel: "fetch" }, ["fetch"])).toBeUndefined();
     expect(syncAsk("pull", { risk: "low" })).toBeUndefined();
     expect(syncAsk("fetch", {}, ["origin"])).toBeUndefined();

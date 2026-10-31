@@ -7209,6 +7209,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "git-unstage",
           "git-fetch",
           "git-pull",
+          "git-branch",
           "verification-command",
           "ci-observe",
           "connector-read",
@@ -15204,6 +15205,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       droppedReasoningMessageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      toolCallTextMessageCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -26762,6 +26768,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unstage-execute",
           "fetch",
           "pull",
+          "branch",
         ],
       },
       runId: {
@@ -26814,6 +26821,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "run-not-live",
           "guard-rejected",
           "mode-unavailable",
+          "invalid-name",
+          "protected-name",
+          "branch-exists",
+          "not-on-base",
+          "not-local-checkout",
+          "executable-filters",
+          "rebind-failed",
         ],
       },
       proposalId: {

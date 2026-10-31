@@ -3,6 +3,7 @@ import {
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import type { GovernedSyncHead } from "./governedSyncHeads.js";
+import type { GovernedTaskBranch } from "./governedTaskBranches.js";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
@@ -111,7 +112,12 @@ export interface ProductionWorkspaceAuthorityInput {
   readonly verifiedCommitResult?: (runId: string) => VerifiedCommitResult | undefined;
   /** The last head a governed fast-forward of the run wrote (governedSyncHeads.ts, #3902 AC2). */
   readonly governedSyncHead?: (runId: string) => GovernedSyncHead | undefined;
-  readonly workspaceLifecycle: Pick<WorkspaceLifecycleService, "getActive">;
+  /** The task branch Keiko's own `keiko_git_branch` moved the run onto (governedTaskBranches.ts, #3907). */
+  readonly governedTaskBranch?: (runId: string) => GovernedTaskBranch | undefined;
+  readonly workspaceLifecycle: Pick<
+    WorkspaceLifecycleService,
+    "getActive" | "admitTaskBranch" | "adoptTaskBranch"
+  >;
   readonly managedTaskWorkspaceRoot: string;
   readonly deploymentCeiling: CodingWorkbenchMode;
   /** Trusted deployment ceiling for a newly minted run; never changes an existing envelope. */
@@ -439,7 +445,7 @@ export function productionWorkspaceMatches(
     const head = workspaceHeadOf(input, workspaceRoot, active.instance);
     return (
       trustedIdentityMatches(active.instance, context) &&
-      trustedBranchMatches(active.instance, context) &&
+      trustedBranchMatches(input, active.instance, context) &&
       trustedHeadMatches(input, active.instance, context, head)
     );
   } catch {
@@ -460,9 +466,15 @@ function trustedIdentityMatches(
 }
 
 function trustedBranchMatches(
+  input: ProductionWorkspaceAuthorityInput,
   instance: WorkspaceInstance,
   context: CodingRuntimeTrustedContext,
 ): boolean {
+  const rebound =
+    context.runId === undefined ? undefined : input.governedTaskBranch?.(context.runId);
+  // Once Keiko moved this run onto a task branch, that record is the only branch fact that holds:
+  // the envelope's own branch is no longer where the workspace stands, and it must not match again.
+  if (rebound !== undefined) return reboundBranchMatches(instance, context, rebound);
   return (
     instance.baseBranch === context.branch.baseRef &&
     instance.taskBranch === context.branchRef &&
@@ -470,6 +482,24 @@ function trustedBranchMatches(
     !context.branch.allowDetachedHead &&
     context.branch.allowedPrefixes.length === 1 &&
     context.branch.allowedPrefixes[0] === branchPrefix(instance.taskBranch)
+  );
+}
+
+// #3907: the branch a governed `keiko_git_branch` created for this very run in this very workspace,
+// held to the same facts as a governed fast-forward's head: the run, the workspace and the live
+// instance itself. The base branch is the envelope's own and never moves.
+function reboundBranchMatches(
+  instance: WorkspaceInstance,
+  context: CodingRuntimeTrustedContext,
+  rebound: GovernedTaskBranch,
+): boolean {
+  return (
+    rebound.runId === context.runId &&
+    rebound.workspaceDigest === digest(context.workspaceRoot) &&
+    rebound.baseBranch === context.branch.baseRef &&
+    instance.baseBranch === rebound.baseBranch &&
+    instance.taskBranch === rebound.taskBranch &&
+    !context.branch.allowDetachedHead
   );
 }
 

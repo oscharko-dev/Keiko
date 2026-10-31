@@ -607,6 +607,43 @@ below its committed ceiling. The host was shared with other work, and five earli
 of the producer on the same tree exceeded the cold-start or throughput ceiling; the committed run
 is the first in a quieter window, with no sample deleted or retried within it.
 
+**Reference re-established, 2026-10-31 (owner decision, PR #4170, #3907 AC3).** The functional test
+support (`productionOpenCodeBackend.functional/_support.ts`, a ruler input) gained the task-branch
+journey, so the ruler moved and the evidence had to be measured again. The recorded environment is
+unchanged: host, kernel 27.0.0, cores, memory, CPU model digest, Node 24.18.0 / npm 11.16.0,
+Apple Git 2.54.0, OpenCode 2.1.4 and the secure-read helper digest. The host itself had drifted:
+
+- At first, `fseventsd` had been pinned at 100 % CPU for days, and every revision measured several times
+  slower. That included the 1.3.2 commit `434b407e7`: bounded throughput p50 1.1 s instead of about
+  120 ms.
+- After `fseventsd` was restarted, throughput returned to its previous range, but cold start did not.
+  In the same quiet window, the shrink-only `--recalibrate` candidate measured cold start at p95
+  1672.0 at the head under review, 1692.1 at the merge base `d273b65c6` and 1728.1 at `434b407e7`.
+  The last of these measured 1570.2 when it was committed four days earlier.
+
+The rise is therefore the host, not code: the head under review is the fastest of the three. The
+owner decided to re-establish the reference.
+
+The step 2 procedure ran at `6a3c8a7b5` in one quiet window: a fresh `npm ci`, `--calibrate`, an
+independent measurement and the freshness check. The fresh calibration's cold-start range includes
+one 1827.2 ms sample, which makes its ceiling 2206.9. By owner decision, the committed cold-start
+ceiling is 1907.0 instead. That is the same policy (`maximum + (maximum - minimum)`) applied to the
+outlier-free 32-sample shrink-only calibration of the same tree in the same quiet window, earlier
+the same morning. It is tighter than the fresh ceiling, so the judge accepts it. Readiness, the
+first SSE byte and bounded throughput have no cause to rise and keep their previously reviewed
+ceilings.
+
+| Metric                | Previous ceiling (2026-10-26) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1614.3                        | 2206.9                    | 1907.0            | 1678.8       |
+| `readinessMs`         | 3.26                          | 3.83                      | 3.26              | 1.72         |
+| `sseFirstByteMs`      | 4.48                          | 5.09                      | 4.48              | 2.03         |
+| `boundedThroughputMs` | 160.0                         | 271.8                     | 160.0             | 128.7        |
+
+The cold-start ceiling rose by 18 %. The measured p95 rose by 7 % over the 1.3.2 measurement, and the
+unchanged 1.3.2 commit itself rose by 10 % on the same host. The next ordinary re-measurement on this
+reference uses `--recalibrate` and its shrink-only ratchet again.
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for

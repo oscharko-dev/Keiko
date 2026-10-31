@@ -1,3 +1,5 @@
+import { createBoundedRunRecords } from "./boundedRunRecords.js";
+
 /**
  * The heads a governed fast-forward pull moved a run's own branch to (#3902 AC2, PR #4064 review
  * 4373825976).
@@ -28,15 +30,6 @@ export interface GovernedSyncHeads {
 export const GOVERNED_SYNC_HEADS_MAX_RUNS = 256;
 
 export function createGovernedSyncHeads(): GovernedSyncHeads {
-  const heads = new Map<string, GovernedSyncHead>();
-  return {
-    record: (head): void => {
-      heads.delete(head.runId);
-      heads.set(head.runId, Object.freeze({ ...head }));
-      if (heads.size <= GOVERNED_SYNC_HEADS_MAX_RUNS) return;
-      const oldest = heads.keys().next().value;
-      if (oldest !== undefined) heads.delete(oldest);
-    },
-    latest: (runId): GovernedSyncHead | undefined => heads.get(runId),
-  };
+  const heads = createBoundedRunRecords<GovernedSyncHead>(GOVERNED_SYNC_HEADS_MAX_RUNS);
+  return { record: heads.record, latest: heads.latest };
 }

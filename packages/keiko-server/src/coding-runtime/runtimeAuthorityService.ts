@@ -1007,6 +1007,31 @@ export class CodingRuntimeAuthorityService {
     return true;
   }
 
+  // #3907: Keiko's own governed `keiko_git_branch` moved the run onto a task branch. The envelope
+  // that was minted names the branch the run started on and stays immutable; this server-private
+  // projection is the one place Git delivery reads the run's branch from, so it follows the run:
+  // the head is the new branch (and the only prefix its exact name), the base is the one the run
+  // started from. Requires the exact runId of the still-active run, so a stale or mismatched caller
+  // cannot move a different (or ended) run's branch, and refuses a base that is not the run's own.
+  // Returns the function that puts the previous branch back, or undefined when it refused.
+  public rebindGitDeliveryBranch(
+    runId: string,
+    rebound: { readonly headRef: string; readonly baseRef: string },
+  ): (() => void) | undefined {
+    const active = this.activeGitDeliveryAuthority;
+    if (active?.runId !== runId || active.branch.baseRef !== rebound.baseRef) return undefined;
+    const previous = active.branch;
+    this.activeGitDeliveryAuthority = {
+      ...active,
+      branch: { ...previous, headRef: rebound.headRef, allowedPrefixes: [rebound.headRef] },
+    };
+    return (): void => {
+      const current = this.activeGitDeliveryAuthority;
+      if (current?.runId === runId)
+        this.activeGitDeliveryAuthority = { ...current, branch: previous };
+    };
+  }
+
   // A same-scope remint can only narrow a live grant's mode and expiry. An expired grant may
   // be replaced only by a newly admitted caller; it cannot become live through a read.
   public mintGitDeliveryDescriptionAuthority(

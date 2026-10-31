@@ -997,6 +997,7 @@ function runtimeGitPolicyAllowed(
     return gitPolicyAllowed(envelope, request.operation, approved);
   if (isRuntimeGitSyncOperation(request.operation))
     return gitSyncPolicyAllowed(envelope, request.operation, approved);
+  if (request.operation === "branch") return gitBranchPolicyAllowed(envelope, approved);
   if (
     (request.operation === "stage" || request.operation === "unstage") &&
     request.phase === "execute"
@@ -1016,6 +1017,18 @@ function gitSyncPolicyAllowed(
 ): boolean {
   const decision = gitOperationEnvelopeDecision(envelope.authority, operation);
   return decision.ok || (approved && decision.reason === "approval-required");
+}
+
+// #3907 (owner decision 2026-10-31): a task branch is one bounded local ref write the model asks
+// Keiko's Git kernel for. Full access creates it inside the validated envelope; Supervised
+// workspace and Ask for approval ask the operator about this exact branch name first (the approval
+// is bound to the branch's digest), and the envelope must carry the workspace-write class the
+// request requires. The kernel's own policy pack and preflight decide again at the effect.
+function gitBranchPolicyAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  approved: boolean,
+): boolean {
+  return envelope.authority.effectiveMode === "autonomous-delivery" || approved;
 }
 
 function gitPolicyAllowed(

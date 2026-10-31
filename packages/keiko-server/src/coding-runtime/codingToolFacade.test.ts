@@ -810,8 +810,10 @@ describe("CodingToolFacade", () => {
 
   // Coding Workbench Jira lab, 2026-10-30: a Local checkout on `main` had its verified commit blocked
   // as `protected-branch`, the model saw only the code, tried the pull request and looped until the
-  // run timed out. The blocked commit now names the cause and the one step that is the model's.
-  it("tells the model a commit on a protected branch is the operator's blocker (#3907)", async () => {
+  // run timed out. The blocked commit names the cause and the one step that is the model's: since
+  // the owner decision of 2026-10-31 that is a task branch of its own through keiko_git_branch, and
+  // the operator report stays only as the fallback when that tool refuses too.
+  it("tells the model to create a task branch when a commit is blocked on a protected branch (#3907)", async () => {
     const digest = "a".repeat(64);
     const verifiedCommit = {
       schemaVersion: "1",
@@ -847,7 +849,14 @@ describe("CodingToolFacade", () => {
       verifiedCommit: { status: "blocked", blockReason: "protected-branch" },
       guidance: expect.stringContaining("protected branch") as string,
     });
-    expect(JSON.stringify(result)).not.toMatch(/git (checkout|switch|branch)/u);
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+    // It points at the governed tool, keeps the operator report as the fallback, and never hands
+    // the model a raw shell command: the shell keeps refusing `git checkout -b`.
+    expect(guidance).toContain("Create a task branch with keiko_git_branch");
+    expect(guidance).toContain("commit again");
+    expect(guidance).toContain("report to the operator");
+    expect(guidance).not.toMatch(/git (checkout|switch|branch)/u);
+    expect(guidance).not.toContain("does not create or switch branches");
 
     verifiedCommit.blockReason = "risk-class-ceiling";
     const other = await subject.execute({
@@ -855,6 +864,54 @@ describe("CodingToolFacade", () => {
       capability,
     });
     expect(other).not.toHaveProperty("guidance");
+  });
+
+  // AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier
+  // could not run on this host and named the shell instead, and the model, reading only
+  // `verification-missing` on each commit, restaged and re-proposed until the deadline. The refusal
+  // now names the one step that is the model's: verify the staged change, then commit again.
+  it("tells the model to verify the staged change when a commit has no verification (#3907)", async () => {
+    const digest = "a".repeat(64);
+    const verifiedCommit = {
+      schemaVersion: "1",
+      proposalId: "commit-unverified",
+      runId: "run-1",
+      envelopeDigest: digest,
+      runtimeAuthorityDigest: digest,
+      workspaceDigest: digest,
+      repositoryDigest: digest,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: digest,
+      verificationEvidenceId: "verification-1",
+      messageDigest: digest,
+      status: "verification-failed",
+      reason: "verification-missing",
+      recordedAt: "2026-10-31T08:30:56.000Z",
+    };
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], verifiedCommit }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const propose = (): Promise<unknown> =>
+      subject.execute({
+        body: requestBody({ action: "delivery", intent: "commit", phase: "propose", message: "m" }),
+        capability,
+      });
+
+    const result = await propose();
+    expect(result).toMatchObject({
+      status: "completed",
+      verifiedCommit: { status: "verification-failed", reason: "verification-missing" },
+    });
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+    expect(guidance).toContain("keiko_verification");
+    expect(guidance).toContain("in your shell");
+    expect(guidance).toContain("Do not stage again");
+
+    verifiedCommit.reason = "verification-failed";
+    expect(await propose()).not.toHaveProperty("guidance");
   });
 
   it("keeps the delivery vocabulary out of every other action", async () => {
@@ -1144,6 +1201,35 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // AC3 lab T19 (#3907): in a repository without package.json the guidance read "add the script"
+  // as an order, and the model added an npm project the task forbade. It now points to the
+  // repository's own command in the shell, which already counts, and rules the manifest out.
+  it("sends a repository without a verifier script to its own command, never to a new package.json", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        notRun: [{ kind: "test", reason: "script-missing" }],
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    });
+
+    expect(result).toMatchObject({ reasonCode: "VERIFICATION_NOT_RUN" });
+    const guidance = (result as { guidance?: string }).guidance ?? "";
+    expect(guidance).toContain("or the repository has no package.json at all");
+    expect(guidance).toContain("python3 -m unittest");
+    expect(guidance).toContain(
+      "Never add a package.json or a script only to satisfy this verifier",
+    );
+    expect(guidance).not.toContain("add the script as part of your change");
+  });
+
   // Keiko 1.3.0 test on macOS (#3897): a check the isolated verifier cannot install for is named
   // as one to run in the runtime's own shell, and the guidance says that result counts.
   it("tells the model to run a check its isolated verifier cannot install for in its own shell", async () => {
@@ -1233,6 +1319,65 @@ describe("CodingToolFacade", () => {
       },
       guidance: expect.stringContaining("keiko_git_status") as string,
     });
+  });
+
+  // #3907: a task branch Keiko refused is a completed Git result with a closed reason, and each
+  // refusal the model can act on carries the one step that is its own.
+  it.each([
+    ["invalid-name", "not starting with '-'"],
+    ["protected-name", "Choose a new task branch name"],
+    ["branch-exists", "never moves, resets or deletes"],
+    ["not-on-base", "Continue on it"],
+    ["not-local-checkout", "Local checkout"],
+    ["executable-filters", "executable Git filters"],
+    ["authority-denied", "Report this blocker"],
+    ["policy-block", "Git policy"],
+    ["preflight-block", "keiko_git_status"],
+  ] as const)(
+    "tells the model what to do about a task branch refused as %s",
+    async (reason, coaching) => {
+      const ports = facade();
+      const git = { kind: "branch", status: "blocked", reason };
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], git }),
+      );
+      const subject = createCodingToolFacade(ports);
+
+      await expect(
+        subject.execute({
+          body: requestBody({ action: "git", operation: "branch", branchName: "main" }),
+          capability,
+        }),
+      ).resolves.toEqual({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        git,
+        guidance: expect.stringContaining(coaching) as string,
+      });
+    },
+  );
+
+  it("keeps a created task branch, and a failed one, free of guidance", async () => {
+    for (const git of [
+      { kind: "branch", status: "succeeded", reason: "none", branch: "feature/x" },
+      { kind: "branch", status: "failed", reason: "rebind-failed", branch: "feature/x" },
+    ]) {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], git }),
+      );
+      const subject = createCodingToolFacade(ports);
+      await expect(
+        subject.execute({
+          body: requestBody({ action: "git", operation: "branch", branchName: "feature/x" }),
+          capability,
+        }),
+      ).resolves.toEqual({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        git,
+      });
+    }
   });
 
   it("keeps a ready stage proposal free of guidance", async () => {
