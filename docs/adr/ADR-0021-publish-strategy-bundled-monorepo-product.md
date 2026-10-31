@@ -10,7 +10,7 @@ Accepted
 
 ## Version
 
-1.3
+1.4
 
 ## Context
 
@@ -98,7 +98,9 @@ external ancestors of that edge, including peer-coupled ancestors, through the e
 bundle/archive representation. Their existing edges to delivered siblings and pinned leaves become
 exact peers. Unchanged children remain registry dependencies and are promoted from the actual
 lockfile owner, retaining required or optional reachability; a required origin wins. The current
-exception contains five Java parser ancestors, not the complete third-party runtime closure.
+exception contains five Java parser ancestors plus the three TUF ancestors (`@tufjs/models`,
+`tuf-js`, `@sigstore/tuf`) affected by the reviewed minimatch 11.0.3 security pin
+(GHSA-g3hv-75wg-m249), not the complete third-party runtime closure.
 The planner accepts only exact flat pins selected by the reviewed lockfile; unsupported alias
 identity changes fail closed. Upstream source and license bytes are preserved, lifecycle scripts
 are removed from staged manifests, and installed/source manifests are never rewritten. Clean npm
@@ -387,3 +389,4 @@ version and record the reason in the Version History table below.
 | 1.1     | 2026-08-13 | Replaced the Yarn-incompatible published bundle with isolated `file:` vendoring and mandatory npm/Yarn install proofs.               |
 | 1.2     | 2026-08-18 | Recorded that `@oscharko-dev/keiko-connectors` (ADR-0128) and `@oscharko-dev/keiko-git` (ADR-0115) joined the vendored inventory since v1.1. |
 | 1.3     | 2026-10-20 | D1/D6: selectively stage the five Java parser ancestors affected by reviewed exact root override pins; retain unchanged registry children and clarify identity/license ownership (#4037, #4046). |
+| 1.4     | 2026-10-31 | D1/D6: the exact flat minimatch 11.0.3 security pin (GHSA-g3hv-75wg-m249) adds the three TUF ancestors `@tufjs/models`, `tuf-js` and `@sigstore/tuf` to the selectively staged set (#4168). |
