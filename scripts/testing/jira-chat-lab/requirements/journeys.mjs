@@ -219,8 +219,14 @@ function logMatchCount(root, needle) {
   return count;
 }
 
+/**
+ * The mode a journey runs in. Full access by default; S05 proves the single approval of a backlog
+ * draft, which only exists in Ask for approval.
+ */
+const JOURNEY_MODES = Object.freeze({ S05: "governed-assist" });
+
 /** A fresh Chat per journey, so no answer leaks into the next scenario. */
-async function freshBoundChat(ctx, session, modelId, capsuleId) {
+async function freshBoundChat(ctx, session, modelId, capsuleId, toolMode) {
   const base = await prepareChat(ctx.origin, ctx.cookie, session, ctx.projectPath, modelId);
   const bound = await api(
     ctx,
@@ -228,7 +234,7 @@ async function freshBoundChat(ctx, session, modelId, capsuleId) {
     `/api/chats?id=${encodeURIComponent(base.id)}`,
     {
       localKnowledgeScopes: [{ kind: "capsule", capsuleId, connectedAtMs: Date.now() }],
-      toolMode: "autonomous-delivery",
+      toolMode,
       expectedGroundingScopeIdentity: base.groundingScopeIdentity,
     },
     "PATCH",
@@ -260,7 +266,8 @@ export async function runJourneys({ session, modelId, embeddingModelId, truth, i
       for (const id of ids) {
         const started = Date.now();
         try {
-          const bound = await freshBoundChat(ctx, session, modelId, capsuleId);
+          const mode = JOURNEY_MODES[id] ?? "autonomous-delivery";
+          const bound = await freshBoundChat(ctx, session, modelId, capsuleId, mode);
           checks[id] = await JOURNEYS[id](ctx, bound.chat);
         } catch (error) {
           checks[id] = { status: "red", detail: `lab error: ${error.message}` };
