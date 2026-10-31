@@ -1,8 +1,8 @@
-// Bounded OOXML package reader shared by presentation-style parsers. It carries the same
-// guards the docx/xlsx adapters apply to their packages: input stays in memory, every inflated
-// entry is capped by size and compression ratio, the central-directory walk honours the entry
-// count, the deadline and the caller's abort signal, and an archive that lists the same wanted
-// part twice is rejected instead of guessing which one is authoritative.
+// The one bounded OOXML package reader, shared by the docx, xlsx and pptx parsers. Input stays in
+// memory and every inflated entry is capped by size and compression ratio. Unless a plan opts
+// out, the central-directory walk honours the entry count, the deadline and the caller's abort
+// signal, the inflated total is capped, and an archive that lists the same wanted part twice is
+// rejected instead of guessing which one is authoritative.
 
 import { Buffer } from "node:buffer";
 
@@ -19,12 +19,22 @@ export interface OoxmlZipReadPlan {
   readonly format: string;
   /** Selects the entries to inflate; every other entry is skipped without decompression. */
   readonly isWanted: (entryName: string) => boolean;
-  /** Ceiling on central-directory entries walked before the scan gives up. */
-  readonly maxEntries: number;
+  /** Ceiling on central-directory entries walked before the scan gives up; absent = unbounded. */
+  readonly maxEntries?: number;
   /** Ceiling on one inflated entry. */
   readonly maxEntryInflatedBytes: number;
-  /** Ceiling on all inflated entries together. */
-  readonly maxTotalInflatedBytes: number;
+  /** Ceiling on all inflated entries together; absent = only the per-entry ceiling applies. */
+  readonly maxTotalInflatedBytes?: number;
+  /**
+   * Whether the central-directory walk honours the caller's deadline and abort signal between
+   * entries. Defaults to `enforced`; `none` leaves the walk uncooperative.
+   */
+  readonly scanBudget?: "enforced" | "none";
+  /**
+   * What a second listing of a wanted part does: `reject` fails the read (default), `replace`
+   * lets the later listing win.
+   */
+  readonly duplicateParts?: "reject" | "replace";
 }
 
 export type OoxmlZipFailure = "budget" | "cancelled" | "malformed";
@@ -93,7 +103,10 @@ function assertEntryDeclaredSize(entry: yauzl.Entry, plan: OoxmlZipReadPlan, tot
   if (entry.uncompressedSize > plan.maxEntryInflatedBytes) {
     throw new Error(`${plan.format} entry inflated size exceeds limit`);
   }
-  if (total + entry.uncompressedSize > plan.maxTotalInflatedBytes) {
+  if (
+    plan.maxTotalInflatedBytes !== undefined &&
+    total + entry.uncompressedSize > plan.maxTotalInflatedBytes
+  ) {
     throw new Error(`${plan.format} package inflated size exceeds limit`);
   }
   if (
@@ -106,10 +119,11 @@ function assertEntryDeclaredSize(entry: yauzl.Entry, plan: OoxmlZipReadPlan, tot
 
 function scanStop(limits: ScanLimits, entriesSeen: number): Error | undefined {
   const { plan, options, startedAt } = limits;
+  if (plan.scanBudget === "none") return undefined;
   if (options.signal?.aborted === true) {
     return markedError(`${plan.format} zip scan cancelled`, OOXML_SCAN_CANCELLED);
   }
-  if (entriesSeen > plan.maxEntries) {
+  if (plan.maxEntries !== undefined && entriesSeen > plan.maxEntries) {
     return markedError(
       `${plan.format} zip scan exceeded entry ceiling`,
       OOXML_SCAN_BUDGET_EXCEEDED,
@@ -182,11 +196,14 @@ async function inflateWantedEntry(
   plan: OoxmlZipReadPlan,
   progress: ScanProgress,
 ): Promise<void> {
-  if (progress.parts.has(entry.fileName)) {
+  if (plan.duplicateParts !== "replace" && progress.parts.has(entry.fileName)) {
     throw new Error(`${plan.format} package lists a part twice`);
   }
   assertEntryDeclaredSize(entry, plan, progress.totalInflated);
-  const remaining = plan.maxTotalInflatedBytes - progress.totalInflated;
+  const remaining =
+    plan.maxTotalInflatedBytes === undefined
+      ? Number.POSITIVE_INFINITY
+      : plan.maxTotalInflatedBytes - progress.totalInflated;
   const text = await readEntryText(zip, entry, plan, remaining);
   progress.totalInflated += Buffer.byteLength(text, "utf8");
   progress.parts.set(entry.fileName, text);

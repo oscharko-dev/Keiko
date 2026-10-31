@@ -1,5 +1,3 @@
-import { Buffer } from "node:buffer";
-
 import type {
   ParsedUnit,
   ParserDiagnostic,
@@ -7,7 +5,6 @@ import type {
   SectionRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
-import yauzl from "yauzl";
 
 import {
   decodeXmlEntities as decodeXmlEntitiesShared,
@@ -18,6 +15,12 @@ import {
   parserIdentity,
   shouldStop,
 } from "./_internal.js";
+import {
+  classifyOoxmlZipError,
+  ooxmlEntryInflatedLimit,
+  readOoxmlZipEntries,
+  type OoxmlZipReadPlan,
+} from "./ooxml-zip.js";
 import type {
   AsyncParserAdapter,
   InternalParserResult,
@@ -36,7 +39,6 @@ const DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessing
 const DOCUMENT_XML_ENTRY = "word/document.xml";
 const FOOTNOTES_XML_ENTRY = "word/footnotes.xml";
 const MAX_DOCUMENT_XML_INFLATED_BYTES = 16 * 1024 * 1024;
-const MAX_DOCUMENT_XML_INFLATE_RATIO = 100;
 // KEIKO-0428: cap the number of central-directory entries the zip scan is willing to walk before
 // aborting. A real .docx has on the order of a few dozen entries (`word/document.xml`,
 // `word/footnotes.xml`, styles, themes, media, `[Content_Types].xml`); the ceiling here is a
@@ -44,35 +46,11 @@ const MAX_DOCUMENT_XML_INFLATE_RATIO = 100;
 // hundreds of thousands of tiny non-matching entries (each entry costs ~46 bytes of central
 // directory + filename, so a maxBytes budget in the tens of MB comfortably admits that regime).
 const MAX_DOCX_ZIP_ENTRIES = 4_096;
-// KEIKO-0428: a distinguishable marker so asyncParse's catch translates the scan-budget stop
-// into a PARSER_TIMEOUT diagnostic instead of the generic MALFORMED_INPUT surface. Attached as
-// a symbol-keyed property so subclassing yauzl's Error surface is unnecessary.
-const DOCX_SCAN_BUDGET_EXCEEDED = Symbol("keiko:docx:scanBudgetExceeded");
-// PR-review follow-up on KEIKO-0428: distinguish caller-cancellation from entry/deadline
-// exhaustion at the marker level so the asyncParse catch can map the two to different
-// diagnostic codes (PARSER_CANCELLED vs PARSER_TIMEOUT). Downstream discovery routes those
-// two codes to different failure classifications.
-const DOCX_SCAN_CANCELLED = Symbol("keiko:docx:scanCancelled");
 const HEADING_STYLE_PATTERN = /<w:pStyle\b[^>]*w:val="Heading([1-6])"/i;
 const PARAGRAPH_PATTERN = /<w:p\b[\s\S]*?<\/w:p>/gi;
 const TEXT_RUN_PATTERN = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
 const WORD_STRUCTURE_TAG_PATTERN = /<(\/?)w:(p|tbl|tr|tc)\b[^>]*>/giu;
 const DOCX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS);
-
-interface ZipFileLike {
-  readonly readEntry: () => void;
-  readonly close: () => void;
-  readonly openReadStream: (
-    entry: yauzl.Entry,
-    callback: (error: Error | null, stream?: NodeJS.ReadableStream) => void,
-  ) => void;
-  readonly on: (event: string, listener: (...args: readonly unknown[]) => void) => ZipFileLike;
-  readonly once: (event: string, listener: (...args: readonly unknown[]) => void) => ZipFileLike;
-  readonly removeListener: (
-    event: string,
-    listener: (...args: readonly unknown[]) => void,
-  ) => ZipFileLike;
-}
 
 function isDocx(input: ParserSelectionInput): boolean {
   return (
@@ -110,165 +88,6 @@ function syncFallback(capability: ParserCapability): ParserAdapter["parse"] {
   };
 }
 
-function toError(error: unknown, fallback: string): Error {
-  return error instanceof Error ? error : new Error(fallback);
-}
-
-function closeZipQuietly(zip: ZipFileLike): void {
-  try {
-    zip.close();
-  } catch {
-    // Close failures are non-fatal during parser cleanup.
-  }
-}
-
-function openZip(bytes: Uint8Array): Promise<yauzl.ZipFile> {
-  return new Promise((resolve, reject) => {
-    yauzl.fromBuffer(
-      Buffer.from(bytes),
-      { lazyEntries: true, decodeStrings: true },
-      (error, zip) => {
-        if (error !== null) {
-          reject(toError(error, "failed to open docx zip"));
-          return;
-        }
-        resolve(zip);
-      },
-    );
-  });
-}
-
-interface DocxZipLimits {
-  readonly maxInflatedEntryBytes: number;
-  readonly maxInflateRatio: number;
-  // KEIKO-0428: cooperative bounds on the CENTRAL-DIRECTORY WALK itself. The existing
-  // maxInflated*/maxInflateRatio bounds only guard the CONTENT of the two entries that are
-  // actually decompressed; a many-entry ZIP whose central directory is huge could walk past
-  // options.timeoutMs undetected because asyncParse's shouldStop() check fires ONCE, AFTER
-  // readDocxXmlParts has already resolved. These bounds land inside the loop so the scan can
-  // give up cooperatively when it hits either the caller's deadline or the entry-count ceiling.
-  readonly now: () => number;
-  readonly startedAt: number;
-  readonly timeoutMs: number;
-  readonly maxEntries: number;
-  // PR-review follow-up: the caller's cancellation signal, threaded into the loop so an
-  // abort surfaces AS SOON AS the current entry finishes rather than at the end of the
-  // central-directory walk. Undefined when no signal is present (production tests, cheap
-  // callers) and left unchecked.
-  readonly signal?: AbortSignal | undefined;
-}
-
-function docxScanBudgetError(message: string): Error {
-  const error = new Error(message);
-  Object.defineProperty(error, DOCX_SCAN_BUDGET_EXCEEDED, {
-    value: true,
-    enumerable: false,
-  });
-  return error;
-}
-
-function docxScanCancelledError(message: string): Error {
-  const error = new Error(message);
-  Object.defineProperty(error, DOCX_SCAN_CANCELLED, {
-    value: true,
-    enumerable: false,
-  });
-  return error;
-}
-
-function isDocxScanBudgetError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as Record<PropertyKey, unknown>)[DOCX_SCAN_BUDGET_EXCEEDED] === true
-  );
-}
-
-function isDocxScanCancelledError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as Record<PropertyKey, unknown>)[DOCX_SCAN_CANCELLED] === true
-  );
-}
-
-function maxInflatedEntryBytes(maxInputBytes: number): number {
-  const inputCap = Math.max(1, Math.floor(maxInputBytes));
-  return Math.min(MAX_DOCUMENT_XML_INFLATED_BYTES, inputCap * 10);
-}
-
-function assertEntryWithinLimits(entry: yauzl.Entry, limits: DocxZipLimits): void {
-  if (entry.uncompressedSize > limits.maxInflatedEntryBytes) {
-    throw new Error(
-      `docx document.xml inflated size ${String(entry.uncompressedSize)} exceeds limit ${String(
-        limits.maxInflatedEntryBytes,
-      )}`,
-    );
-  }
-  if (
-    entry.compressedSize > 0 &&
-    entry.uncompressedSize / entry.compressedSize > limits.maxInflateRatio
-  ) {
-    throw new Error("docx document.xml compression ratio exceeds limit");
-  }
-}
-
-function destroyStream(readStream: NodeJS.ReadableStream, error: Error): void {
-  const destroy = (readStream as { readonly destroy?: (cause?: Error) => void }).destroy;
-  if (typeof destroy === "function") {
-    destroy.call(readStream, error);
-  }
-}
-
-function readEntryText(
-  zip: yauzl.ZipFile,
-  entry: yauzl.Entry,
-  limits: DocxZipLimits,
-): Promise<string> {
-  assertEntryWithinLimits(entry, limits);
-  return new Promise((resolve, reject) => {
-    zip.openReadStream(entry, (error, stream) => {
-      if (error !== null) {
-        reject(toError(error, "failed to open docx entry stream"));
-        return;
-      }
-      const readStream = stream as NodeJS.ReadableStream;
-      const chunks: Buffer[] = [];
-      let inflatedBytes = 0;
-      let settled = false;
-      const rejectOnce = (streamError: Error): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        reject(streamError);
-        destroyStream(readStream, streamError);
-      };
-      readStream.on("data", (chunk: Buffer) => {
-        if (settled) {
-          return;
-        }
-        inflatedBytes += chunk.byteLength;
-        if (inflatedBytes > limits.maxInflatedEntryBytes) {
-          rejectOnce(new Error("docx document.xml inflated stream exceeds limit"));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      readStream.on("end", () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve(Buffer.concat(chunks).toString("utf8"));
-      });
-      readStream.on("error", (streamError: Error) => {
-        rejectOnce(streamError);
-      });
-    });
-  });
-}
-
 interface DocxXmlParts {
   readonly documentXml: string;
   readonly footnotesXml?: string;
@@ -278,108 +97,17 @@ function isDocxXmlEntry(name: string): boolean {
   return name === DOCUMENT_XML_ENTRY || name === FOOTNOTES_XML_ENTRY;
 }
 
-function scanBudgetStop(limits: DocxZipLimits, entriesSeen: number): Error | undefined {
-  if (limits.signal?.aborted === true) {
-    // PR-review follow-up: caller cancellation is distinct from entry/deadline exhaustion,
-    // so map to a separate marker that asyncParse translates to PARSER_CANCELLED rather
-    // than PARSER_TIMEOUT. Downstream discovery routes the two to different failure classes.
-    return docxScanCancelledError(`docx zip scan cancelled after ${String(entriesSeen)} entries`);
-  }
-  if (entriesSeen > limits.maxEntries) {
-    return docxScanBudgetError(
-      `docx zip scan exceeded ${String(limits.maxEntries)} central-directory entries`,
-    );
-  }
-  const elapsed = limits.now() - limits.startedAt;
-  if (elapsed > limits.timeoutMs) {
-    return docxScanBudgetError(
-      `docx zip scan exceeded ${String(limits.timeoutMs)}ms deadline after ${String(entriesSeen)} entries`,
-    );
-  }
-  return undefined;
-}
-
-// eslint-disable-next-line max-lines-per-function
-function readDocxXmlPartsFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promise<DocxXmlParts> {
-  // eslint-disable-next-line max-lines-per-function
-  return new Promise((resolve, reject) => {
-    const parts: { documentXml?: string; footnotesXml?: string } = {};
-    let settled = false;
-    let entriesSeen = 0;
-
-    const resolveOnce = (): void => {
-      if (settled) {
-        return;
-      }
-      if (parts.documentXml === undefined) {
-        rejectOnce(new Error("docx missing word/document.xml"));
-        return;
-      }
-      settled = true;
-      zip.removeListener("entry", onEntry);
-      zip.removeListener("end", onEnd);
-      zip.removeListener("error", onError);
-      resolve({
-        documentXml: parts.documentXml,
-        ...(parts.footnotesXml ? { footnotesXml: parts.footnotesXml } : {}),
-      });
-    };
-
-    const rejectOnce = (error: Error): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      zip.removeListener("entry", onEntry);
-      zip.removeListener("end", onEnd);
-      zip.removeListener("error", onError);
-      reject(error);
-    };
-
-    const onEnd = (): void => {
-      resolveOnce();
-    };
-
-    const onError = (error: unknown): void => {
-      rejectOnce(toError(error, "failed to read docx zip"));
-    };
-
-    const handleEntry = async (entry: yauzl.Entry): Promise<void> => {
-      entriesSeen += 1;
-      // KEIKO-0428: cooperative bound on the central-directory walk itself. Fires whether the
-      // entry is the one we want (skipped or not) so an adversarial ZIP whose first 100k
-      // entries are non-matching still gets stopped inside the loop instead of after it.
-      const scanStop = scanBudgetStop(limits, entriesSeen);
-      if (scanStop !== undefined) {
-        rejectOnce(scanStop);
-        return;
-      }
-      if (!isDocxXmlEntry(entry.fileName)) {
-        zip.readEntry();
-        return;
-      }
-      try {
-        const xml = await readEntryText(zip as yauzl.ZipFile, entry, limits);
-        if (entry.fileName === DOCUMENT_XML_ENTRY) {
-          parts.documentXml = xml;
-        } else {
-          parts.footnotesXml = xml;
-        }
-        zip.readEntry();
-      } catch (error) {
-        rejectOnce(toError(error, "failed to read docx entry"));
-      }
-    };
-
-    const onEntry = (entry: unknown): void => {
-      void handleEntry(entry as yauzl.Entry);
-    };
-
-    zip.on("entry", onEntry);
-    zip.once("end", onEnd);
-    zip.once("error", onError);
-    zip.readEntry();
-  });
+function docxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
+  return {
+    format: "docx",
+    isWanted: isDocxXmlEntry,
+    maxEntries: MAX_DOCX_ZIP_ENTRIES,
+    maxEntryInflatedBytes: ooxmlEntryInflatedLimit(
+      options.maxBytes,
+      MAX_DOCUMENT_XML_INFLATED_BYTES,
+    ),
+    duplicateParts: "replace",
+  };
 }
 
 async function readDocxXmlParts(
@@ -387,20 +115,13 @@ async function readDocxXmlParts(
   options: ParserOptions,
   startedAt: number,
 ): Promise<DocxXmlParts> {
-  const zip = (await openZip(bytes)) as ZipFileLike;
-  try {
-    return await readDocxXmlPartsFromZip(zip, {
-      maxInflatedEntryBytes: maxInflatedEntryBytes(options.maxBytes),
-      maxInflateRatio: MAX_DOCUMENT_XML_INFLATE_RATIO,
-      now: options.now,
-      startedAt,
-      timeoutMs: options.timeoutMs,
-      maxEntries: MAX_DOCX_ZIP_ENTRIES,
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
-  } finally {
-    closeZipQuietly(zip);
+  const parts = await readOoxmlZipEntries(bytes, options, startedAt, docxZipPlan(options));
+  const documentXml = parts.get(DOCUMENT_XML_ENTRY);
+  if (documentXml === undefined) {
+    throw new Error("docx missing word/document.xml");
   }
+  const footnotesXml = parts.get(FOOTNOTES_XML_ENTRY);
+  return { documentXml, ...(footnotesXml ? { footnotesXml } : {}) };
 }
 
 // GRD-027: delegate to the shared decoder so docx text runs also resolve numeric character
@@ -1103,12 +824,13 @@ function docxAsyncParseError(
   options: ParserOptions,
   error: unknown,
 ): ParserResult {
-  if (isDocxScanCancelledError(error)) {
+  const failure = classifyOoxmlZipError(error);
+  if (failure === "cancelled") {
     return emptyResult(capability, input.documentId, options, [
       diagnostic("PARSER_CANCELLED", "caller aborted parser", input.documentId, "info"),
     ]);
   }
-  if (isDocxScanBudgetError(error)) {
+  if (failure === "budget") {
     return emptyResult(capability, input.documentId, options, [
       diagnostic(
         "PARSER_TIMEOUT",

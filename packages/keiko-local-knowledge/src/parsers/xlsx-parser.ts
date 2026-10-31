@@ -1,8 +1,5 @@
-import { Buffer } from "node:buffer";
-
 import type { ParsedUnit, ParserDiagnostic, ParserResult } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
-import yauzl from "yauzl";
 
 import {
   decodeXmlEntities,
@@ -13,6 +10,11 @@ import {
   readAttribute,
   shouldStop,
 } from "./_internal.js";
+import {
+  ooxmlEntryInflatedLimit,
+  readOoxmlZipEntries,
+  type OoxmlZipReadPlan,
+} from "./ooxml-zip.js";
 import type {
   AsyncParserAdapter,
   InternalParserResult,
@@ -29,24 +31,8 @@ const DEPENDENCY_VERSIONS = Object.freeze([
 ]);
 const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const MAX_XML_INFLATED_BYTES = 32 * 1024 * 1024;
-const MAX_XML_INFLATE_RATIO = 100;
 const SHEET_ENTRY_PREFIX = "xl/worksheets/";
 const XLSX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS);
-
-interface ZipFileLike {
-  readonly readEntry: () => void;
-  readonly close: () => void;
-  readonly openReadStream: (
-    entry: yauzl.Entry,
-    callback: (error: Error | null, stream?: NodeJS.ReadableStream) => void,
-  ) => void;
-  readonly on: (event: string, listener: (...args: readonly unknown[]) => void) => ZipFileLike;
-  readonly once: (event: string, listener: (...args: readonly unknown[]) => void) => ZipFileLike;
-  readonly removeListener: (
-    event: string,
-    listener: (...args: readonly unknown[]) => void,
-  ) => ZipFileLike;
-}
 
 interface XlsxEntry {
   readonly name: string;
@@ -117,39 +103,6 @@ function syncFallback(capability: ParserCapability): ParserAdapter["parse"] {
     );
 }
 
-function toError(error: unknown, fallback: string): Error {
-  return error instanceof Error ? error : new Error(fallback);
-}
-
-function closeZipQuietly(zip: ZipFileLike): void {
-  try {
-    zip.close();
-  } catch {
-    // Close failures are non-fatal during parser cleanup.
-  }
-}
-
-function openZip(bytes: Uint8Array): Promise<yauzl.ZipFile> {
-  return new Promise((resolve, reject) => {
-    yauzl.fromBuffer(
-      Buffer.from(bytes),
-      { lazyEntries: true, decodeStrings: true },
-      (error, zip) => {
-        if (error !== null) {
-          reject(toError(error, "failed to open xlsx zip"));
-          return;
-        }
-        resolve(zip);
-      },
-    );
-  });
-}
-
-function maxInflatedEntryBytes(maxInputBytes: number): number {
-  const inputCap = Math.max(1, Math.floor(maxInputBytes));
-  return Math.min(MAX_XML_INFLATED_BYTES, inputCap * 10);
-}
-
 function isRelevantEntry(name: string): boolean {
   return (
     name === "xl/workbook.xml" ||
@@ -160,133 +113,22 @@ function isRelevantEntry(name: string): boolean {
   );
 }
 
-function assertEntryWithinLimits(entry: yauzl.Entry, maxInflatedBytes: number): void {
-  if (entry.uncompressedSize > maxInflatedBytes) {
-    throw new Error("xlsx xml inflated size exceeds parser limit");
-  }
-  if (
-    entry.compressedSize > 0 &&
-    entry.uncompressedSize / entry.compressedSize > MAX_XML_INFLATE_RATIO
-  ) {
-    throw new Error("xlsx xml compression ratio exceeds parser limit");
-  }
+function xlsxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
+  return {
+    format: "xlsx",
+    isWanted: isRelevantEntry,
+    maxEntryInflatedBytes: ooxmlEntryInflatedLimit(options.maxBytes, MAX_XML_INFLATED_BYTES),
+    scanBudget: "none",
+    duplicateParts: "replace",
+  };
 }
 
-function destroyStream(readStream: NodeJS.ReadableStream, error: Error): void {
-  const destroy = (readStream as { readonly destroy?: (cause?: Error) => void }).destroy;
-  if (typeof destroy === "function") {
-    destroy.call(readStream, error);
-  }
-}
-
-function readEntryText(
-  zip: yauzl.ZipFile,
-  entry: yauzl.Entry,
-  maxInflatedBytes: number,
-): Promise<string> {
-  assertEntryWithinLimits(entry, maxInflatedBytes);
-  return new Promise((resolve, reject) => {
-    zip.openReadStream(entry, (error, stream) => {
-      if (error !== null) {
-        reject(toError(error, "failed to open xlsx entry stream"));
-        return;
-      }
-      const readStream = stream as NodeJS.ReadableStream;
-      const chunks: Buffer[] = [];
-      let inflatedBytes = 0;
-      let settled = false;
-      const rejectOnce = (streamError: Error): void => {
-        if (settled) return;
-        settled = true;
-        reject(streamError);
-        destroyStream(readStream, streamError);
-      };
-      readStream.on("data", (chunk: Buffer) => {
-        if (settled) return;
-        inflatedBytes += chunk.byteLength;
-        if (inflatedBytes > maxInflatedBytes) {
-          rejectOnce(new Error("xlsx xml inflated stream exceeds parser limit"));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      readStream.on("end", () => {
-        if (settled) return;
-        settled = true;
-        resolve(Buffer.concat(chunks).toString("utf8"));
-      });
-      readStream.on("error", (streamError: Error) => {
-        rejectOnce(streamError);
-      });
-    });
-  });
-}
-
-function removeZipEntryListeners(
-  zip: ZipFileLike,
-  listeners: {
-    readonly onEntry: (entry: unknown) => void;
-    readonly onEnd: () => void;
-    readonly onError: (error: unknown) => void;
-  },
-): void {
-  zip.removeListener("entry", listeners.onEntry);
-  zip.removeListener("end", listeners.onEnd);
-  zip.removeListener("error", listeners.onError);
-}
-
-function readRelevantEntries(
-  zip: ZipFileLike,
-  maxInflatedBytes: number,
+async function readRelevantEntries(
+  bytes: Uint8Array,
+  options: ParserOptions,
 ): Promise<readonly XlsxEntry[]> {
-  return new Promise((resolve, reject) => {
-    const entries: XlsxEntry[] = [];
-    let settled = false;
-
-    const resolveOnce = (): void => {
-      if (settled) return;
-      settled = true;
-      removeZipEntryListeners(zip, { onEntry, onEnd, onError });
-      resolve(entries);
-    };
-
-    const rejectOnce = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      removeZipEntryListeners(zip, { onEntry, onEnd, onError });
-      reject(error);
-    };
-
-    const onEnd = (): void => {
-      resolveOnce();
-    };
-    const onError = (error: unknown): void => {
-      rejectOnce(toError(error, "failed to read xlsx zip"));
-    };
-
-    const handleEntry = async (entry: yauzl.Entry): Promise<void> => {
-      if (!isRelevantEntry(entry.fileName)) {
-        zip.readEntry();
-        return;
-      }
-      try {
-        const xml = await readEntryText(zip as yauzl.ZipFile, entry, maxInflatedBytes);
-        entries.push({ name: entry.fileName, xml });
-        zip.readEntry();
-      } catch (error) {
-        rejectOnce(toError(error, "failed to read xlsx entry"));
-      }
-    };
-
-    const onEntry = (entry: unknown): void => {
-      void handleEntry(entry as yauzl.Entry);
-    };
-
-    zip.on("entry", onEntry);
-    zip.on("end", onEnd);
-    zip.on("error", onError);
-    zip.readEntry();
-  });
+  const parts = await readOoxmlZipEntries(bytes, options, options.now(), xlsxZipPlan(options));
+  return [...parts].map(([name, xml]) => ({ name, xml }));
 }
 
 // GRD-027: delegate to the shared decoder so cell text resolves numeric character references
@@ -881,13 +723,8 @@ export const xlsxParser: AsyncParserAdapter = Object.freeze({
       return cancelled(xlsxParser.capability, input, options);
     }
     try {
-      const zip = await openZip(input.bytes);
-      try {
-        const entries = await readRelevantEntries(zip, maxInflatedEntryBytes(options.maxBytes));
-        return parseWorkbook(entries, input, options);
-      } finally {
-        closeZipQuietly(zip);
-      }
+      const entries = await readRelevantEntries(input.bytes, options);
+      return parseWorkbook(entries, input, options);
     } catch {
       return emptyResult(xlsxParser.capability, input.documentId, options, [
         diagnostic(
