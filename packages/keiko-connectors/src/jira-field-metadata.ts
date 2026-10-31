@@ -46,15 +46,18 @@ const CUSTOM: Readonly<Record<string, JiraFieldKind>> = {
   userpicker: "user",
   multiuserpicker: "users",
 };
-// A plugin or unmapped custom field keeps the kind its declared schema type states (#4176).
+// An unmapped system custom type keeps the kind of its declared schema type only when that type
+// fully states the value shape (a plain scalar). A type that names a choice or a user says nothing
+// about the composite shape behind it, so it stays opaque (#4176).
 const SCHEMA_TYPE: Readonly<Record<string, JiraFieldKind>> = {
   string: "text",
   number: "number",
   date: "date",
   datetime: "datetime",
-  option: "option",
-  user: "user",
 };
+const CASCADING_CUSTOM = `${CUSTOM_PREFIX}cascadingselect`;
+/** The schema type Jira states for a cascading select: a parent option with an optional child. */
+export const JIRA_CASCADING_SCHEMA_TYPE = "option-with-child";
 // Written through their own tools or fixed by the create call; never a plain field write.
 const DEDICATED_SYSTEM_FIELDS: ReadonlySet<string> = new Set([
   "attachment",
@@ -127,7 +130,18 @@ const STRUCTURAL: Readonly<Partial<Record<JiraFieldKind, readonly [string, unkno
   issue: ["issuelink", undefined],
   links: ["array", "issuelinks"],
 };
+function isCascading(schema: Record<string, unknown>): boolean {
+  return schema.custom === CASCADING_CUSTOM;
+}
+/** Whether a field takes the parent-and-child value of Jira's cascading select. */
+export function isJiraCascadingField(field: JiraFieldMetadata): boolean {
+  return field.kind === "option" && field.schemaType === JIRA_CASCADING_SCHEMA_TYPE;
+}
 function fieldKind(id: string, schema: Record<string, unknown>): JiraFieldKind {
+  if (isCascading(schema))
+    return schema.type === JIRA_CASCADING_SCHEMA_TYPE || schema.type === "option"
+      ? "option"
+      : "opaque";
   const kind = declaredKind(id, schema);
   if (kind === undefined) return "unsupported";
   if (kind === "opaque") return kind;
@@ -234,7 +248,10 @@ function metadataFieldDetails(
   if (schema === undefined || operations === undefined) return undefined;
   const definition = boundedReferences(fieldKind(id, schema), raw.allowedValues);
   if (definition === undefined) return undefined;
-  const schemaType = declaredSchemaType(schema);
+  const schemaType =
+    definition.kind === "option" && isCascading(schema)
+      ? JIRA_CASCADING_SCHEMA_TYPE
+      : declaredSchemaType(schema);
   return {
     id,
     name,
@@ -300,21 +317,51 @@ function calendarDate(value: string): boolean {
   const date = new Date(`${value}T00:00:00.000Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+function referenceOf(
+  value: unknown,
+  key: "id" | "name" | "accountId",
+  allowed: readonly JiraFieldReference[] | undefined,
+): ValueResult {
+  const raw = asRecord(value);
+  if (raw === undefined || Object.keys(raw).length !== 1 || !boundedText(raw[key], 256))
+    return INVALID;
+  const ref = raw[key];
+  if (allowed !== undefined && !allowed.some((entry) => entry[key] === ref)) return INVALID;
+  return { ok: true, value: { [key]: ref } };
+}
 function reference(
   field: JiraFieldMetadata,
   value: unknown,
   user: boolean,
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
-  const raw = asRecord(value);
   const userKey = deployment === "cloud" ? "accountId" : "name";
-  const key = user ? userKey : "id";
-  if (raw === undefined || Object.keys(raw).length !== 1 || !boundedText(raw[key], 256))
-    return INVALID;
-  const ref = raw[key];
-  if (field.allowedValues !== undefined && !field.allowedValues.some((entry) => entry[key] === ref))
-    return INVALID;
-  return { ok: true, value: { [key]: ref } };
+  return referenceOf(value, user ? userKey : "id", field.allowedValues);
+}
+/**
+ * A cascading select: the parent option by `id`, checked against the allowed parents, with an
+ * optional `child` option by `id` and nothing else. A grandchild, another key or a non-object child
+ * is refused; Jira's own validation decides whether the child belongs to the parent.
+ */
+function cascadingValue(field: JiraFieldMetadata, value: unknown): ValueResult {
+  const raw = asRecord(value);
+  if (raw === undefined) return INVALID;
+  const { child, ...parentPart } = raw;
+  const parent = referenceOf(parentPart, "id", field.allowedValues);
+  if (!parent.ok || !Object.hasOwn(raw, "child")) return parent;
+  const selected = referenceOf(child, "id", undefined);
+  return selected.ok
+    ? { ok: true, value: { ...(parent.value as Record<string, unknown>), child: selected.value } }
+    : INVALID;
+}
+function optionValue(
+  field: JiraFieldMetadata,
+  value: unknown,
+  deployment: AtlassianConnectorDeployment,
+): ValueResult {
+  return isJiraCascadingField(field)
+    ? cascadingValue(field, value)
+    : reference(field, value, false, deployment);
 }
 function textValue(
   field: JiraFieldMetadata,
@@ -369,7 +416,7 @@ function scalar(
     case "user":
       return reference(field, value, true, deployment);
     case "option":
-      return reference(field, value, false, deployment);
+      return optionValue(field, value, deployment);
     case "issue":
       return issueValue(value);
     case "opaque":

@@ -340,7 +340,13 @@ remote effect or imply rollback, and an orphaned pending record never authorizes
 for its managed Jira provider. It admits standard text, finite numbers, calendar dates,
 millisecond datetime values, user/option references and explicit bounded list types. Core Jira
 custom-field types are named explicitly; a core custom type without an explicit entry takes the
-kind its declared schema type states. Every field Jira offers is writable (owner decision
+kind its declared schema type states only when that type is a plain scalar (string, number, date,
+datetime) and is otherwise `opaque`, so a choice, user or composite type whose full shape is not
+implemented is never narrowed to a simpler validator. Jira's cascading select is the exception that
+is implemented: an `option` field whose `schemaType` is `option-with-child` takes `{ id }` for the
+parent (checked against the allowed parents) with an optional `child` of the same one-`id` shape and
+no other key; a grandchild, another key or a non-object child is refused, and Jira validates that
+the child belongs to the parent. Every field Jira offers is writable (owner decision
 2026-10-31, #4176): a plugin field (any custom type outside Jira's own namespace, e.g. Epic Name,
 Epic Link, Sprint) and a non-routing system field without an explicit entry are `opaque`. Their
 meaning is never guessed from a familiar base schema: an opaque value is bounded plain JSON
@@ -356,7 +362,9 @@ metadata offers `add` on the canonical `array:issuelinks` field. Keiko translate
 `update.issuelinks` add operations in the same create or edit request, so no new operation or
 approval path exists; `outward` means this issue → `issueKey`. Jira validates the link type and the
 target; read-back confirms every requested link in its requested direction, existing links are
-kept, and a link read returns `{ type, direction, issueKey }` JSON text. Field
+kept, and a link read returns `{ type, direction, issueKey }` JSON text only for the complete set:
+more than 100 links, or one entry that cannot be read, leaves the field `unavailable` (never a
+truncated `value`), so a caller treats the links as unknown rather than absent. Field
 metadata projects Jira's declared `schemaType` so a caller can shape an opaque value. A refused
 write returns, to the model only, the refused field with Keiko's closed validation reason, or
 Jira's own bounded field errors and messages (at most 8 and 3, each cut on code-point boundaries
@@ -377,7 +385,8 @@ Issue reads may select at most 20 additional field IDs. Their `names`/`schema` e
 interpreted by the same field matrix and value validator; no edit permission is inferred from
 readable values. Missing values or schemas remain unavailable, null/empty values remain empty,
 and opaque values are returned as bounded serialized JSON text; an issue reference reads as its
-key. User/option
+key; a cascading select reads as its parent reference followed by its child reference, and any other
+shape is unavailable. User/option
 references retain only the deployment identity and bounded display label; email addresses and
 self links are omitted. Datetimes accept both ISO offsets and Jira's compact offset representation.
 The expanded `jira.issue` input/result contract is version 3; its ordinary unexpanded read remains
