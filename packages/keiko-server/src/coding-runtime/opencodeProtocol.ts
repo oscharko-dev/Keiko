@@ -426,7 +426,8 @@ function projectGovernedPermissionByKind(
     metadata.actionKind === "ci-observe" ||
     metadata.actionKind === "connector-read" ||
     metadata.actionKind === "git-fetch" ||
-    metadata.actionKind === "git-pull"
+    metadata.actionKind === "git-pull" ||
+    metadata.actionKind === "git-branch"
   ) {
     return projectGovernedCommandPermission(properties, metadata);
   }
@@ -436,7 +437,8 @@ function projectGovernedPermissionByKind(
 // The risk a governed command ask states (supervisedCodingPolicy.ts states the same): a fetch moves
 // only remote-tracking refs, a pull the worktree (#3902 AC2); the bounded commands are low.
 function governedCommandRisk(actionKind: string): string {
-  if (actionKind === "git-fetch") return "medium";
+  // A task branch is one local ref write and a switch of the run's own branch (#3907).
+  if (actionKind === "git-fetch" || actionKind === "git-branch") return "medium";
   return actionKind === "git-pull" ? "high" : "low";
 }
 
@@ -477,7 +479,8 @@ function projectGovernedCommandPermission(
 ): Record<string, unknown> | undefined {
   const actionKind = metadata.actionKind;
   const metadataKeys =
-    actionKind === "verification-command" && metadata.commandLabel === "targeted-test"
+    (actionKind === "verification-command" && metadata.commandLabel === "targeted-test") ||
+    actionKind === "git-branch"
       ? GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS
       : GOVERNED_VERIFICATION_METADATA_KEYS;
   if (
@@ -513,7 +516,9 @@ function validCommandApproval(
     validApprovalIdentities(metadata) &&
     typeof approvalDigest === "string" &&
     /^[0-9a-f]{64}$/u.test(approvalDigest) &&
-    (commandLabel === "targeted-test"
+    // The asks whose approval is bound to the digest of their target: a targeted verification's
+    // path and a governed task branch's name (#3907).
+    (commandLabel === "targeted-test" || metadata.actionKind === "git-branch"
       ? typeof targetPathHash === "string" && /^[0-9a-f]{64}$/u.test(targetPathHash)
       : targetPathHash === undefined) &&
     sameStrings(properties.patterns, [commandLabel])
@@ -526,6 +531,8 @@ function validGovernedCommandTarget(actionKind: unknown, commandLabel: string): 
   // #3902 AC2: a governed fetch or pull is approved as its own operation.
   if (actionKind === "git-fetch") return commandLabel === "fetch";
   if (actionKind === "git-pull") return commandLabel === "pull";
+  // #3907: a governed task branch is approved as itself; the branch name travels as its digest.
+  if (actionKind === "git-branch") return commandLabel === "branch";
   return actionKind === "connector-read" && boundedApprovalIdentity(commandLabel);
 }
 
