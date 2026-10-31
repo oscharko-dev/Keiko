@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "baa9129297f8bbbb3c50feb5fd4aa89211b2491608272e7fe393ed24d7375725"
+    "catalogDigest": "1286381815ebe02331a89bf66dc27888d1637aabd7f3ca0337e5ab355c5779ab"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 619,
-    "proofCount": 642,
-    "resolvedProofCount": 642,
+    "operationCount": 621,
+    "proofCount": 644,
+    "resolvedProofCount": 644,
     "failureClassCount": 386,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -105,6 +105,7 @@
         "atlassian.credential.listed",
         "atlassian.credential.rejected",
         "atlassian.credential.updated",
+        "atlassian.jira-report",
         "chat.compaction.facts.classified",
         "chat.context.failed",
         "chat.context.management",
@@ -132,6 +133,7 @@
         "http.request.body.failed",
         "http.request.body.received",
         "http.request.body.rejected",
+        "jira.template.admission",
         "pr-description.chat.turn.admitted",
         "pr-description.chat.turn.denied",
         "project.workspace.reconnect",
@@ -1262,6 +1264,10 @@
     ],
     "atlassian.credential.updated.line": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
+    ],
+    "atlassian.jira-report.line": [
+      "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
+      "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
@@ -2491,6 +2497,9 @@
     ],
     "indexing.start.refused.line": [
       "packages/keiko-server/src/local-knowledge-handlers.logging.test.ts"
+    ],
+    "jira.template.admission.line": [
+      "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
     ],
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"
