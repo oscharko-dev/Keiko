@@ -8,6 +8,7 @@ import {
   field,
   REQUIRED_CUSTOM,
   FIELDS,
+  LINKS_FIELD,
   response,
   fixtureRead,
   fixtureWrite,
@@ -93,7 +94,11 @@ it.each(["summary", "customfield_10000"])(
         issueTypeId: "10001",
         fields: { summary: "Synthetic", customfield_10000: "Required" },
       }),
-    ).toEqual({ ok: false, reason: "field-validation" });
+    ).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: id, validation: "invalid-operation" },
+    });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
@@ -119,7 +124,11 @@ it("keeps selected routing references inside current metadata allowed values", a
       issueTypeId: "10001",
       fields: { summary: "Synthetic", customfield_10000: "Required" },
     }),
-  ).toEqual({ ok: false, reason: "field-validation" });
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "issuetype", validation: "invalid-field" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
 it.each(["legacy", "current", "immutable-current"])(
@@ -309,7 +318,11 @@ it.each(["jira.create", "jira.transition"] as const)(
       operation === "jira.create"
         ? { projectId: "10000", issueTypeId: "10001", fields: { summary: "Synthetic" } }
         : { issueKey: "SYN-1", transitionId: "31", fields: {} };
-    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "field-validation" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: "customfield_10000", validation: "required-field" },
+    });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
@@ -353,7 +366,11 @@ it("collects all create pages before validating a required field on a later page
       issueTypeId: "10001",
       fields: { summary: "Synthetic" },
     }),
-  ).toEqual({ ok: false, reason: "field-validation" });
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "customfield_10000", validation: "required-field" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET"]);
   expect(f.http.mock.calls[1]?.[0].url).toContain("startAt=2");
 });
@@ -411,7 +428,11 @@ it("does not fabricate a required unsupported plugin field", async () => {
       issueTypeId: "10001",
       fields: { summary: "Synthetic", customfield_10000: "Required" },
     }),
-  ).toEqual({ ok: false, reason: "field-validation" });
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { validation: "required-field", fieldId: "customfield_10001" },
+  });
   expect(f.http).toHaveBeenCalledOnce();
 });
 it("revalidates metadata when edit operations change between actions", async () => {
@@ -421,7 +442,11 @@ it("revalidates metadata when edit operations change between actions", async () 
   f.http.mockResolvedValueOnce(
     response({ fields: { summary: { ...field("summary", "string"), operations: [] } } }),
   );
-  expect(await f.run("jira.edit", args)).toEqual({ ok: false, reason: "field-validation" });
+  expect(await f.run("jira.edit", args)).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "summary", validation: "invalid-operation" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
     "GET",
     "GET",
@@ -756,3 +781,144 @@ it.each(["jira.create", "jira.comment"] as const)(
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
+it("forwards an opaque plugin value and returns Jira's field error when it refuses it (#4176)", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [
+        ...FIELDS,
+        {
+          ...field("customfield_10105", "array"),
+          schema: { type: "array", items: "string", custom: "vendor.agile:sprint" },
+        },
+      ],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  f.http.mockResolvedValueOnce({
+    kind: "response",
+    status: 400,
+    bodyText: JSON.stringify({ errorMessages: [], errors: { customfield_10105: "Sprint id" } }),
+    bodyBytes: 64,
+    truncated: false,
+  });
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", customfield_10105: "S1" },
+    }),
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldErrors: [{ fieldId: "customfield_10105", message: "Sprint id" }] },
+  });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    fields: { customfield_10105: "S1" },
+  });
+});
+
+it("adds issue links on Jira's own update and confirms them in their direction (#4176)", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [
+        { type: "Blocks", direction: "outward", issueKey: "SYN-2" },
+        { type: "blocks", direction: "outward", issueKey: "syn-2" },
+        { type: "Relates", direction: "inward", issueKey: "SYN-3" },
+      ],
+    }),
+  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "PUT")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toEqual({
+    fields: {},
+    update: {
+      issuelinks: [
+        { add: { type: { name: "blocks" }, outwardIssue: { key: "syn-2" } } },
+        { add: { type: { name: "Relates" }, inwardIssue: { key: "SYN-3" } } },
+      ],
+    },
+  });
+});
+it("creates an issue with links when create metadata offers them (#4176)", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, LINKS_FIELD],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+      links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
+    }),
+  ).toMatchObject({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    update: {
+      issuelinks: [{ add: { type: { name: "Relates" }, outwardIssue: { key: "SYN-9" } } }],
+    },
+  });
+});
+it("refuses links before dispatch when current metadata does not offer them (#4176)", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+      links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
+    }),
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "issuelinks", validation: "unsupported-field" },
+  });
+  expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+});
+it.each([
+  [{ type: "Blocks", direction: "sideways", issueKey: "SYN-2" }],
+  [{ type: "Blocks", direction: "outward", issueKey: "not a key" }],
+  [{ type: "Blocks\n", direction: "outward", issueKey: "SYN-2" }],
+  [{ type: "Blocks", direction: "outward", issueKey: "SYN-2", extra: true }],
+  Array.from({ length: 21 }, (_, index) => ({
+    type: "Relates",
+    direction: "outward",
+    issueKey: `SYN-${String(index + 2)}`,
+  })),
+])("refuses malformed links without contacting Jira (#4176)", async (...links) => {
+  const f = fixture();
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", links })).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+  });
+  expect(f.http).not.toHaveBeenCalled();
+});
+it("does not confirm an edit whose requested link is missing on readback (#4176)", async () => {
+  const f = fixture();
+  f.http.mockImplementation((request) => {
+    const path = new URL(request.url).pathname;
+    if (request.method !== "GET") return Promise.resolve(response(undefined, 204));
+    return Promise.resolve(
+      fixtureRead(path, { fields: { summary: "Original", issuelinks: [] }, comment: "" }),
+    );
+  });
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [{ type: "Blocks", direction: "outward", issueKey: "SYN-2" }],
+    }),
+  ).toEqual({ ok: false, reason: "conflict" });
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
+});

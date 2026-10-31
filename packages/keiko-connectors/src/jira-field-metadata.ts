@@ -46,6 +46,41 @@ const CUSTOM: Readonly<Record<string, JiraFieldKind>> = {
   userpicker: "user",
   multiuserpicker: "users",
 };
+// A plugin or unmapped custom field keeps the kind its declared schema type states (#4176).
+const SCHEMA_TYPE: Readonly<Record<string, JiraFieldKind>> = {
+  string: "text",
+  number: "number",
+  date: "date",
+  datetime: "datetime",
+  option: "option",
+  user: "user",
+};
+// Written through their own tools or fixed by the create call; never a plain field write.
+const DEDICATED_SYSTEM_FIELDS: ReadonlySet<string> = new Set([
+  "attachment",
+  "comment",
+  "issuekey",
+  "project",
+  "issuetype",
+  "status",
+  "resolution",
+  "created",
+  "updated",
+  "creator",
+  "votes",
+  "watches",
+  "worklog",
+  "thumbnail",
+  "subtasks",
+  "lastViewed",
+  "aggregateprogress",
+  "progress",
+  "workratio",
+  "timespent",
+  "aggregatetimespent",
+]);
+const OPAQUE_MAX_BYTES = 16_384;
+const OPAQUE_MAX_DEPTH = 4;
 const OPERATIONS: ReadonlySet<string> = new Set(["set", "add", "remove"]);
 const ARRAY_ITEM: Readonly<Record<string, string>> = {
   strings: "string",
@@ -63,25 +98,49 @@ function boundedText(value: unknown, max = 255): value is string {
 export function isJiraFieldId(value: unknown): value is string {
   return boundedText(value, 64) && FIELD_ID.test(value) && !FORBIDDEN.has(value);
 }
+function systemKind(id: string, schema: Record<string, unknown>): JiraFieldKind | undefined {
+  if (schema.system !== id) return undefined;
+  if (Object.hasOwn(STANDARD, id)) return STANDARD[id];
+  if (id === "parent") return "issue";
+  if (id === "issuelinks") return "links";
+  return DEDICATED_SYSTEM_FIELDS.has(id) ? undefined : "opaque";
+}
 function declaredKind(id: string, schema: Record<string, unknown>): JiraFieldKind | undefined {
-  if (schema.custom === undefined)
-    return schema.system === id && Object.hasOwn(STANDARD, id) ? STANDARD[id] : undefined;
-  if (
-    typeof schema.custom !== "string" ||
-    !schema.custom.startsWith(CUSTOM_PREFIX) ||
-    !id.startsWith("customfield_")
-  )
-    return undefined;
+  if (schema.custom === undefined) return systemKind(id, schema);
+  if (typeof schema.custom !== "string" || !id.startsWith("customfield_")) return undefined;
+  // A plugin field's meaning is never guessed from a familiar base type: its value is opaque and
+  // Jira's own validation decides (#4176). Only Jira's system custom types carry known semantics.
+  if (!schema.custom.startsWith(CUSTOM_PREFIX)) return "opaque";
   const custom = schema.custom.slice(CUSTOM_PREFIX.length);
-  return Object.hasOwn(CUSTOM, custom) ? CUSTOM[custom] : undefined;
+  if (Object.hasOwn(CUSTOM, custom)) return CUSTOM[custom];
+  const type = schema.type;
+  return typeof type === "string" && Object.hasOwn(SCHEMA_TYPE, type)
+    ? SCHEMA_TYPE[type]
+    : "opaque";
 }
 function expectedItem(id: string, item: string): string {
   if (id === "components") return "component";
   return id === "versions" || id === "fixVersions" ? "version" : item;
 }
+// Kinds whose shape is fixed by one Jira schema type (and item type).
+const STRUCTURAL: Readonly<Partial<Record<JiraFieldKind, readonly [string, unknown]>>> = {
+  issue: ["issuelink", undefined],
+  links: ["array", "issuelinks"],
+};
 function fieldKind(id: string, schema: Record<string, unknown>): JiraFieldKind {
   const kind = declaredKind(id, schema);
   if (kind === undefined) return "unsupported";
+  if (kind === "opaque") return kind;
+  const structural = STRUCTURAL[kind];
+  if (structural !== undefined)
+    return schema.type === structural[0] && schema.items === structural[1] ? kind : "unsupported";
+  return typedKind(id, kind, schema);
+}
+function typedKind(
+  id: string,
+  kind: JiraFieldKind,
+  schema: Record<string, unknown>,
+): JiraFieldKind {
   const item = ARRAY_ITEM[kind];
   if (item !== undefined)
     return schema.type === "array" && schema.items === expectedItem(id, item)
@@ -122,7 +181,8 @@ function boundedReferences(
   kind: JiraFieldKind,
   value: unknown,
 ): Pick<JiraFieldMetadata, "kind" | "allowedValues"> | undefined {
-  if (kind === "unsupported" || value === undefined) return { kind };
+  // Plugin-specific choice structures are never parsed; an opaque value is Jira's to validate.
+  if (kind === "unsupported" || kind === "opaque" || value === undefined) return { kind };
   const values = asArray(value);
   if (values === undefined) return undefined;
   if (values.length > 500) return { kind: "unsupported" };
@@ -135,6 +195,7 @@ function supportedOperations(
   operations: readonly JiraFieldOperation[],
 ): readonly JiraFieldOperation[] {
   if (kind === "unsupported") return [];
+  if (kind === "links") return operations.includes("add") ? ["add"] : [];
   return [
     ...new Set(
       operations.filter(
@@ -173,16 +234,25 @@ function metadataFieldDetails(
   if (schema === undefined || operations === undefined) return undefined;
   const definition = boundedReferences(fieldKind(id, schema), raw.allowedValues);
   if (definition === undefined) return undefined;
+  const schemaType = declaredSchemaType(schema);
   return {
     id,
     name,
     required,
     hasDefaultValue: raw.hasDefaultValue === true,
     ...definition,
+    ...(schemaType === undefined ? {} : { schemaType }),
     richText:
       id === "description" || id === "environment" || schema.custom === `${CUSTOM_PREFIX}textarea`,
     operations: supportedOperations(id, definition.kind, operations),
   };
+}
+
+function declaredSchemaType(schema: Record<string, unknown>): string | undefined {
+  const type = schema.type;
+  if (!boundedText(type, 64)) return undefined;
+  const items = schema.items;
+  return type === "array" && boundedText(items, 64) ? `array:${items}` : type;
 }
 
 export type JiraMetadataResult =
@@ -300,9 +370,52 @@ function scalar(
       return reference(field, value, true, deployment);
     case "option":
       return reference(field, value, false, deployment);
+    case "issue":
+      return issueValue(value);
+    case "opaque":
+      return opaqueValue(value);
     default:
       return INVALID;
   }
+}
+const ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
+/** `{ key }`, `{ id }` or a bare issue key; the result is always one canonical reference. */
+function issueValue(value: unknown): ValueResult {
+  if (typeof value === "string")
+    return ISSUE_KEY.test(value) ? { ok: true, value: { key: value } } : INVALID;
+  const raw = asRecord(value);
+  if (raw === undefined || Object.keys(raw).length !== 1) return INVALID;
+  if (typeof raw.key === "string" && ISSUE_KEY.test(raw.key))
+    return { ok: true, value: { key: raw.key } };
+  return typeof raw.id === "string" && /^\d{1,32}$/u.test(raw.id)
+    ? { ok: true, value: { id: raw.id } }
+    : INVALID;
+}
+function opaqueScalar(value: unknown): boolean | undefined {
+  if (value === null || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return value.length <= 4096 && !CONTROL.test(value);
+  return undefined;
+}
+function opaqueShape(value: unknown, depth: number): boolean {
+  const scalar = opaqueScalar(value);
+  if (scalar !== undefined) return scalar;
+  if (depth >= OPAQUE_MAX_DEPTH) return false;
+  if (Array.isArray(value))
+    return value.length <= MAX_VALUES && value.every((item) => opaqueShape(item, depth + 1));
+  const raw = asRecord(value);
+  if (raw === undefined || Object.keys(raw).length > 50) return false;
+  return Object.entries(raw).every(
+    ([key, item]) => boundedText(key, 64) && !FORBIDDEN.has(key) && opaqueShape(item, depth + 1),
+  );
+}
+/** Bounded plain JSON, forwarded as given; Jira's validation decides what it means. */
+function opaqueValue(value: unknown): ValueResult {
+  if (!opaqueShape(value, 0)) return INVALID;
+  const serialized = JSON.stringify(value);
+  return new TextEncoder().encode(serialized).byteLength <= OPAQUE_MAX_BYTES
+    ? { ok: true, value: JSON.parse(serialized) as unknown }
+    : INVALID;
 }
 function dateValue(value: unknown): ValueResult {
   return typeof value === "string" && calendarDate(value) ? { ok: true, value } : INVALID;

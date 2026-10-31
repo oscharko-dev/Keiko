@@ -288,6 +288,13 @@ it("observes a Chat write approval with GET and posts only its concrete decision
     decision: "approve",
     actionDigest: approval.actionDigest,
   });
+  const draftCalls = stubFetch(200, { approval: { ...approval, state: "approved" } });
+  await decideJiraChatWriteApproval(approval, "approve", ["story"]);
+  await decideJiraChatWriteApproval(approval, "reject", ["story"]);
+  expect(draftCalls.map((entry) => JSON.parse(entry.body ?? "null") as unknown)).toEqual([
+    { decision: "approve", actionDigest: approval.actionDigest, excludedItemRefs: ["story"] },
+    { decision: "reject", actionDigest: approval.actionDigest },
+  ]);
 });
 
 it.each([null, {}, { state: "pending" }])(

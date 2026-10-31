@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  AtlassianHttpBodyPort,
   JiraManagedConnection,
   JiraManagedMutationExecutor,
 } from "@oscharko-dev/keiko-connectors";
@@ -20,6 +21,8 @@ import {
   type JiraChatCatalogConsumer,
 } from "./jiraChatCatalogConsumer.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { executeJiraChatDraft } from "./jiraChatDraft.js";
+import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 
 type ChatCatalog = ManagedProviderCatalog<JiraChatCatalogConsumer>;
@@ -27,9 +30,19 @@ type CatalogInitialization =
   | { readonly ok: true; readonly value: ChatCatalog }
   | { readonly ok: false; readonly error: unknown };
 type MutationExecutor = JiraManagedMutationExecutor<CatalogHandlerContext<JiraChatCatalogConsumer>>;
+type ApprovalRegistry = NonNullable<UiHandlerDeps["atlassianActionApprovalRegistry"]>;
 export interface JiraChatCatalogRuntime {
   readonly get: () => Promise<ChatCatalog>;
   readonly close: () => Promise<void>;
+}
+
+function turnMessage(
+  deps: UiHandlerDeps,
+  context: CatalogHandlerContext<JiraChatCatalogConsumer>,
+): ReturnType<UiHandlerDeps["store"]["findMessageById"]> {
+  return context.userMessageId === undefined
+    ? undefined
+    : deps.store.findMessageById(context.userMessageId);
 }
 
 function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
@@ -43,10 +56,7 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
     );
     const credentials = deps.atlassianConnectorCredentials;
     const write = context.mutationGuard.write;
-    const message =
-      context.userMessageId === undefined
-        ? undefined
-        : deps.store.findMessageById(context.userMessageId);
+    const message = turnMessage(deps, context);
     requireDispatch(
       current.ok && credentials !== undefined && write !== undefined && message !== undefined,
       "denied",
@@ -58,22 +68,55 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
       "invalid",
       "invalid-arguments",
     );
-    return executeJiraChatMutation({
+    const intent = createJiraChatMutationIntent(
+      message,
+      current.envelope.subject,
+      context.authorityReference,
+      write.action,
+      context.correlationId,
+    );
+    const shared = {
       journal: deps.store.chatToolMutations,
-      intent: createJiraChatMutationIntent(
-        message,
-        current.envelope.subject,
-        context.authorityReference,
-        write.action,
-        context.correlationId,
-      ),
-      httpPortFactory: (lifecycle) =>
+      intent,
+      httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpBodyPort =>
         credentials.httpBodyPortFactory(current.credential, context.correlationId, lifecycle),
       beforeEffect: context.beforeEffect,
       beforeMutation: write.beforeMutation,
-      execute,
+    };
+    if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute });
+    return executeJiraChatDraft({
+      ...shared,
+      arguments: args,
+      deselected: approvedDeselection(deps, current.envelope.subject, context, intent),
+      context,
+      connection: draftConnection(current.credential),
     });
   };
+}
+
+/** Only the routing a draft needs; credentials stay with the custody-owned HTTP port. */
+function draftConnection(
+  credential: Pick<JiraManagedConnection, "baseUrl" | "deployment">,
+): Omit<JiraManagedConnection, "http"> {
+  return { baseUrl: credential.baseUrl, deployment: credential.deployment };
+}
+
+/** The items the human left out when approving this draft; none without an approval. */
+function approvedDeselection(
+  deps: UiHandlerDeps,
+  subject: Parameters<ApprovalRegistry["findChatWriteApproval"]>[0],
+  context: CatalogHandlerContext<JiraChatCatalogConsumer>,
+  intent: { readonly invocationId: string; readonly actionDigest: string },
+): readonly string[] {
+  const approval = deps.atlassianActionApprovalRegistry?.findChatWriteApproval(
+    subject,
+    context.authorityReference,
+    intent.invocationId,
+    context.correlationId,
+  )?.approval;
+  return approval?.kind === "jira-chat-write" && approval.actionDigest === intent.actionDigest
+    ? (approval.excludedItemRefs ?? [])
+    : [];
 }
 
 function connection(

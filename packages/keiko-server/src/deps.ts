@@ -1,3 +1,4 @@
+import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
 import {
@@ -1004,6 +1005,9 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
+  // Authority Envelope budget of one accepted Chat tool turn (#4175). Absent uses the backlog-sized
+  // default; composition may narrow it, never a request.
+  readonly chatToolTurnBudget?: ChatToolAuthorityEnvelope["budget"] | undefined;
   // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
@@ -1709,6 +1713,26 @@ function setRuntimeGateway(
   state.listeners.notify(correlationId);
 }
 
+// Capabilities live beside the providers, so identical providers mean identical connections.
+function sameCatalogConnections(
+  current: GatewayConfig | undefined,
+  active: GatewayConfig,
+): boolean {
+  return (
+    current !== undefined && JSON.stringify(current.providers) === JSON.stringify(active.providers)
+  );
+}
+
+function refineRuntimeCatalog(
+  state: RuntimeGatewayState,
+  next: GatewayConfig,
+  correlationId?: string,
+): void {
+  state.configured = mergeConfiguredGateway(state, next);
+  state.config = next;
+  state.listeners.notify(correlationId);
+}
+
 function replaceRuntimeCatalog(
   state: RuntimeGatewayState,
   active: GatewayConfig,
@@ -1716,6 +1740,12 @@ function replaceRuntimeCatalog(
   correlationId?: string,
 ): boolean {
   if (state.generation !== observedGeneration) return false;
+  if (sameCatalogConnections(state.config, active)) {
+    // A capability-only refinement of unchanged connections (a readiness or tool-calling proof)
+    // keeps the generation: turns admitted against these exact connections remain valid (#4175).
+    refineRuntimeCatalog(state, active, correlationId);
+    return true;
+  }
   const previous = new Map(state.config?.providers.map((provider) => [provider.modelId, provider]));
   const next = new Map(active.providers.map((provider) => [provider.modelId, provider]));
   state.configured = mergeConfiguredGateway(state, active);
@@ -1773,9 +1803,7 @@ function runtimeCatalogFacets(
     replaceCatalog: (active, generation, correlationId): boolean =>
       replaceRuntimeCatalog(state, active, generation, correlationId),
     refine(next, correlationId): void {
-      state.configured = mergeConfiguredGateway(state, next);
-      state.config = next;
-      state.listeners.notify(correlationId);
+      refineRuntimeCatalog(state, next, correlationId);
     },
   };
 }

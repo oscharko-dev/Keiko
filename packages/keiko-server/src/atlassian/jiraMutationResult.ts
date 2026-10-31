@@ -1,7 +1,9 @@
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   isSafeAtlassianIdentifier,
+  sanitizeJiraMutationFailureDetail,
   type AtlassianConnectorWriteFailureReason,
+  type JiraMutationFailureDetail,
   type JiraMutationAttempt,
   type JiraMutationOperation,
   type JiraMutationOutcome,
@@ -29,6 +31,8 @@ const REQUIRED_RECEIPTS: Readonly<
   "jira.assign": ["issueKey"],
   "jira.comment": ["issueKey", "commentId"],
   "jira.transition": ["issueKey", "transitionId"],
+  // A draft is never one attempt: each item is a journaled jira.create with its own receipt.
+  "jira.draft": ["issueKey", "issueId"],
 };
 
 function confirmed(value: unknown): boolean {
@@ -42,7 +46,9 @@ export function validJiraMutationAttempt(
 ): JiraMutationAttempt {
   if (!value.ok) {
     const reason = value.reason;
-    return REASONS.has(reason) ? { ok: false, reason } : { ok: false, reason: "malformed-payload" };
+    if (!REASONS.has(reason)) return { ok: false, reason: "malformed-payload" };
+    const detail = sanitizeJiraMutationFailureDetail(value.detail);
+    return { ok: false, reason, ...(detail === undefined ? {} : { detail }) };
   }
   const receipt = Object.freeze({ ...value.receipt });
   const valid =
@@ -54,11 +60,23 @@ export function validJiraMutationAttempt(
   return valid ? { ok: true, receipt } : { ok: false, reason: "malformed-payload" };
 }
 
+function detailData(detail: JiraMutationFailureDetail | undefined): Record<string, unknown> {
+  if (detail === undefined) return {};
+  return {
+    ...(detail.fieldId === undefined ? {} : { fieldId: detail.fieldId }),
+    ...(detail.validation === undefined ? {} : { validation: detail.validation }),
+    ...(detail.fieldErrors === undefined
+      ? {}
+      : { fieldErrors: detail.fieldErrors.map((error) => ({ ...error })) }),
+    ...(detail.messages === undefined ? {} : { messages: [...detail.messages] }),
+  };
+}
 export function jiraMutationToolResult(
   outcome: JiraMutationResultState,
   reason?: AtlassianConnectorWriteFailureReason,
   receipt: JiraMutationReceipt = {},
   replayed = false,
+  detail?: JiraMutationFailureDetail,
 ): ManagedMcpToolResult {
   return {
     data: {
@@ -66,6 +84,7 @@ export function jiraMutationToolResult(
       outcome,
       ...(reason === undefined ? {} : { reason }),
       ...(replayed ? { replayed: true } : {}),
+      ...detailData(detail),
     },
     ...(outcome === "succeeded" ? {} : { isError: true }),
   };
@@ -79,5 +98,7 @@ export function jiraAttemptToolResult(
     outcome,
     attempt.ok ? undefined : attempt.reason,
     outcome === "succeeded" && attempt.ok ? attempt.receipt : {},
+    false,
+    attempt.ok ? undefined : attempt.detail,
   );
 }

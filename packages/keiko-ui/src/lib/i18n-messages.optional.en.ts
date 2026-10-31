@@ -45,6 +45,13 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.writeApproval.allow": "Approve this action",
   "chat.jira.writeApproval.deny": "Decline this action",
   "chat.jira.writeApproval.refresh": "Refresh action state",
+  "chat.jira.draft.legend": "Issues to create ({selected} of {total} selected)",
+  "chat.jira.draft.dependent": "Left out because an issue it depends on is left out",
+  "chat.jira.draft.parentIssue": "Under {issueKey}",
+  "chat.jira.draft.linkOutward": "{type} → {target}",
+  "chat.jira.draft.linkInward": "{target} → {type} this issue",
+  "chat.jira.draft.moreField": "1 more field",
+  "chat.jira.draft.moreFields": "{count} more fields",
 
   "chat.jira.resultUnavailable": "Result unavailable",
   "chat.jira.partial": "Partial Jira result. Some available data is not included.",

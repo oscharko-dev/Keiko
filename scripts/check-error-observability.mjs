@@ -319,6 +319,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
     "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile":
       "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+    "packages/keiko-local-knowledge/src/parsers/pptx-parser.ts:asyncParse":
+      "The catch returns the closed classifyOoxmlZipError parser diagnostic (cancelled, budget, inflate bound or malformed archive) as the parser result; the indexing owner records it on indexing.document.extraction-failed with its failureKind. This is the same parser boundary docx and xlsx hold in the legacy register (#4180).",
   }),
 );
 

@@ -394,9 +394,13 @@ export async function getJiraChatWriteApproval(
 export async function decideJiraChatWriteApproval(
   approval: ChatToolWriteApprovalView,
   decision: "approve" | "reject",
+  excludedItemRefs: readonly string[] = [],
 ): Promise<ChatToolWriteApprovalView> {
+  // Only an approved backlog draft carries the items the human left out (#4178).
+  const deselection =
+    decision === "approve" && excludedItemRefs.length > 0 ? { excludedItemRefs } : {};
   return writeApprovalRequest(approval.approvalId, {
     method: "POST",
-    body: JSON.stringify({ decision, actionDigest: approval.actionDigest }),
+    body: JSON.stringify({ decision, actionDigest: approval.actionDigest, ...deselection }),
   });
 }

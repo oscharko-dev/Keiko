@@ -34,6 +34,7 @@ import {
   PNG_MAGIC,
   XLSX_SIMPLE,
 } from "../parsers/parser-test-fixtures.js";
+import { buildPptx, paragraphXml, shapeXml, slidePartXml } from "../parsers/pptx-test-fixtures.js";
 
 import { extractDocument } from "./extract.js";
 import { folderScope, memoryFs } from "./test-support.js";
@@ -371,6 +372,48 @@ describe("extractDocument — normalized binary text", () => {
       table_name: "Controls",
       row_index: 1,
     });
+  });
+
+  it("persists PPTX slide text and slide section lineage", async () => {
+    const deck = buildPptx([
+      {
+        file: "slide1.xml",
+        relationshipId: "rId1",
+        xml: slidePartXml(
+          shapeXml("title", paragraphXml("Rollout plan")),
+          shapeXml(undefined, paragraphXml("Phase one starts in March")),
+        ),
+        notes: ["Owner is the platform team"],
+      },
+    ]);
+    const fs = memoryFs(ROOT, [{ relativePath: "plan.pptx", content: deck }]);
+    const result = await extractDocument(
+      { fs, store, parserRegistry: createDefaultParserRegistry() },
+      { capsuleId, source, file: { relativePath: "plan.pptx", sizeBytes: deck.byteLength } },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("extracted");
+    expect(result.outcome.document.parser.parserId).toBe("pptx");
+    expect(result.outcome.document.mediaType).toBe(
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    );
+    const row = store._internal.db
+      .prepare(
+        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: result.outcome.document.id }) as
+      { readonly normalized_text?: string } | undefined;
+    expect(row?.normalized_text).toContain("Phase one starts in March");
+    expect(row?.normalized_text).toContain("Speaker notes: Owner is the platform team");
+    const sections = store._internal.db
+      .prepare(
+        "SELECT kind FROM parsed_units WHERE capsule_id = :c AND document_id = :d ORDER BY id ASC",
+      )
+      .all({ c: capsuleId, d: result.outcome.document.id }) as unknown as readonly {
+      readonly kind: string;
+    }[];
+    expect(sections).toEqual([{ kind: "section" }]);
   });
 });
 

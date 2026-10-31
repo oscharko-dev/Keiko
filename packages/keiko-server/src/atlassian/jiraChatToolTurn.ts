@@ -25,6 +25,7 @@ import {
 import type { ManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
+import { observedJiraDraftOutcome } from "./jiraChatDraft.js";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   ChatToolTurn,
@@ -67,6 +68,7 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       managed,
       context,
       correlationId,
+      budget: authority.envelope.budget,
       bind: (current, budgetPort) =>
         bindChatToolCatalog<JiraChatCatalogConsumer>({
           deps,
@@ -119,6 +121,15 @@ export function observeJiraChatMutation(
     },
     correlationId,
   );
+  if (operation === "jira.draft") {
+    // A draft is never dispatched itself; its items' journal records are its outcome (#4178).
+    const observed = observedJiraDraftOutcome(
+      deps.store.chatToolMutations,
+      expected,
+      call.arguments,
+    );
+    return observed ?? (result.effectStarted ? undefined : "not-dispatched");
+  }
   return jiraChatMutationOutcome({
     result,
     expected,

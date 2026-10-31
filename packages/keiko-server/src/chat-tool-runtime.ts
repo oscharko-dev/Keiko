@@ -36,3 +36,37 @@ export function scopeChatToolTurn(
     },
   };
 }
+
+/**
+ * The cancellation signal for work that follows an accepted tool turn (#4175). A human stop or an
+ * authority revocation cancels at once. The turn's deadline cancels too, except when the turn
+ * already settled an exchange: it then answers from its transcript, and that deterministic answer
+ * must reach the human instead of a cancellation. The deadline still bounds every provider dispatch
+ * through the turn's own signal and the synthesis grants.
+ */
+export function chatToolTurnCancellationSignal(
+  signal: AbortSignal,
+  turn: Pick<ChatToolTurnPort, "signal" | "deadlineAtMs" | "answersAtDeadline">,
+): AbortSignal {
+  const controller = new AbortController();
+  const cancel = (reason: unknown): void => {
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+  const onTurnAbort = (): void => {
+    const deadlineOnly = !signal.aborted && Date.now() >= turn.deadlineAtMs;
+    if (!deadlineOnly || !turn.answersAtDeadline) cancel(turn.signal.reason);
+  };
+  const deadline = AbortSignal.timeout(Math.max(0, turn.deadlineAtMs - Date.now()));
+  signal.addEventListener(
+    "abort",
+    () => {
+      cancel(signal.reason);
+    },
+    { once: true },
+  );
+  turn.signal.addEventListener("abort", onTurnAbort, { once: true });
+  deadline.addEventListener("abort", onTurnAbort, { once: true });
+  if (signal.aborted) cancel(signal.reason);
+  else if (turn.signal.aborted) onTurnAbort();
+  return controller.signal;
+}

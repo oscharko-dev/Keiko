@@ -339,12 +339,33 @@ remote effect or imply rollback, and an orphaned pending record never authorizes
 **Bounded Jira field validation (#4083).** The connector owns one metadata-driven field matrix
 for its managed Jira provider. It admits standard text, finite numbers, calendar dates,
 millisecond datetime values, user/option references and explicit bounded list types. Core Jira
-custom-field types are named explicitly; an unknown plugin type is unsupported even if its base
-schema looks familiar. A choice list above 500 entries makes only that field unsupported; other
-fields remain usable, and a required unsupported field without a server default still blocks
-creation. Unsupported plugin choice structures are not interpreted. Known-field structural errors
+custom-field types are named explicitly; a core custom type without an explicit entry takes the
+kind its declared schema type states. Every field Jira offers is writable (owner decision
+2026-10-31, #4176): a plugin field (any custom type outside Jira's own namespace, e.g. Epic Name,
+Epic Link, Sprint) and a non-routing system field without an explicit entry are `opaque`. Their
+meaning is never guessed from a familiar base schema: an opaque value is bounded plain JSON
+(depth 4, 100 items, 50 keys, 4096 characters per string, 16 KiB serialized, no control characters
+or prototype keys), forwarded as given, never converted to rich text, and Jira's own validation is
+authoritative; read-back confirms presence or clearing, not equality, because Jira reshapes such
+values on read. The system `parent` field is an `issue` reference (`{ key }`, `{ id }` or a bare
+key, canonicalized to one identity). `attachment`, `issuelinks`, `comment`, routing and computed
+system fields stay outside plain field writes and are written through their own tools or
+arguments. Issue links are the `links` kind: `jira.create` and `jira.edit` take a bounded `links`
+argument (at most 20 `{ type, direction, issueKey }` entries; duplicates collapse) only when current
+metadata offers `add` on the canonical `array:issuelinks` field. Keiko translates it into Jira's own
+`update.issuelinks` add operations in the same create or edit request, so no new operation or
+approval path exists; `outward` means this issue → `issueKey`. Jira validates the link type and the
+target; read-back confirms every requested link in its requested direction, existing links are
+kept, and a link read returns `{ type, direction, issueKey }` JSON text. Field
+metadata projects Jira's declared `schemaType` so a caller can shape an opaque value. A refused
+write returns, to the model only, the refused field with Keiko's closed validation reason, or
+Jira's own bounded field errors and messages (at most 8 and 3, each cut on code-point boundaries
+to 200 UTF-8 bytes of its JSON encoding, control characters removed, so quotes and non-ASCII text
+cannot push the detail past the 4 KiB result bound); none of it is logged. A choice list above 500 entries makes only that field
+unsupported; other fields remain usable, and a required field without a server default still
+blocks creation. Plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
-unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
+opaque and issue fields offer only `set`, links only `add`, and unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
 Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
 Create may leave a Jira-declared default omitted without copying or fabricating it. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
@@ -355,7 +376,8 @@ provider obligations; the pure validator grants no execution authority.
 Issue reads may select at most 20 additional field IDs. Their `names`/`schema` expansion is
 interpreted by the same field matrix and value validator; no edit permission is inferred from
 readable values. Missing values or schemas remain unavailable, null/empty values remain empty,
-and unknown plugin values remain unsupported without exposing their content. User/option
+and opaque values are returned as bounded serialized JSON text; an issue reference reads as its
+key. User/option
 references retain only the deployment identity and bounded display label; email addresses and
 self links are omitted. Datetimes accept both ISO offsets and Jira's compact offset representation.
 The expanded `jira.issue` input/result contract is version 3; its ordinary unexpanded read remains
@@ -522,6 +544,31 @@ tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → 
 `transition-issue`. The nine read tools retain their names. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
 
+**Backlog drafts (#4178, 2026-10-31).** `jira.draft` maps to `create-issue` (high): it proposes
+up to 32 related issues — the Chat journal's existing per-turn write bound, which a draft never
+widens — that reference each other by a local `ref` and are approved once. The draft itself is
+never dispatched. The server runs each selected item, in dependency order, as its own journaled
+`jira.create` under a child identity derived from the draft's invocation and action digest, so an
+item already sent is never sent again on replay. The draft's one approval is claimed once at the
+first item's dispatch and covers its remaining items. The approving human may deselect items; the
+deselection is bound into the approval proof and extends to every item that depends on a deselected
+one. Before creating an item the connector searches by a deterministic identity label
+(`keiko-draft-<20 hex>` from project, issue type, normalized summary and the item's relation
+scope — its parent field and target, and its links, each resolved to the existing issue's key or to
+the target draft item's own identity, never to the draft-local `ref`; items identical in all of that
+are told apart by their order of occurrence — so two same-summary tasks under different parents are
+two issues). When the create screen offers no labels, the exact summary plus the resolved parent key
+is the identity. The search reads every candidate page (50 per page, at most 10 pages): one match is
+reconciled without a write, several are refused as a conflict, and a candidate set that cannot be
+read completely is refused as `bounds-exceeded` instead of creating a possible duplicate. A replayed
+item keeps its journal outcome: a created item and a reconciled (`existing`) item both recover their
+key through the same read-only lookup, so dependents resolve without resending any mutation. The
+draft call is an error only when an item did not settle (`failed`, `uncertain`, `skipped`); when
+every item is created, already existing or deselected it succeeds, and a draft that wrote nothing
+reports the truthful `not-dispatched` outcome. An item whose parent or linked item has no key is
+skipped; an item whose outcome is uncertain stops the draft, because the journal admits no further
+write in that turn. Coding runs do not offer `jira.draft`.
+
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
 Additive, non-destructive writes with no lasting external side effect beyond their own content
@@ -583,7 +630,8 @@ action digest, arguments and current subject generations; the mutation journal c
 once at actual mutation dispatch, after metadata reads. Every mode still needs first-read consent,
 including the metadata reads required to prepare a mutation. Mixed Data-Pod/Jira turns preserve
 existing grounding citations and attribute Jira results separately; their orchestration phases share
-the original turn budgets.
+the accepted turn's Authority Envelope, while the grounded answer keeps its own synthesis grant
+(ADR-0181, amended for #4175).
 
 ### D5 — Sync bounds and lifecycle
 

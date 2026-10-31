@@ -64,6 +64,7 @@ export class McpChatToolTurn extends ChatToolTurn<McpChatCatalogContext> {
       managed,
       correlationId,
       context: mcpChatTurnContext(mcpOptions),
+      budget: mcpOptions.authority.envelope.budget,
       bind: (context, budgetPort) =>
         bindChatToolCatalog<McpChatCatalogConsumer>({
           deps,

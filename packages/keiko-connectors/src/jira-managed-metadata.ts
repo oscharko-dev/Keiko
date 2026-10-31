@@ -34,6 +34,7 @@ function fieldProjection(field: JiraFieldMetadata): CatalogJsonObject {
     ...(field.allowedValues === undefined
       ? {}
       : { allowedValues: field.allowedValues.map(referenceProjection) }),
+    ...(field.schemaType === undefined ? {} : { schemaType: field.schemaType }),
   };
 }
 export function metadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {

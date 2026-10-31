@@ -47,6 +47,13 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.allow": "Diese Aktion genehmigen",
   "chat.jira.writeApproval.deny": "Diese Aktion ablehnen",
   "chat.jira.writeApproval.refresh": "Aktionsstatus aktualisieren",
+  "chat.jira.draft.legend": "Anzulegende Vorgänge ({selected} von {total} ausgewählt)",
+  "chat.jira.draft.dependent": "Ausgelassen, weil ein Vorgang, von dem er abhängt, ausgelassen ist",
+  "chat.jira.draft.parentIssue": "Unter {issueKey}",
+  "chat.jira.draft.linkOutward": "{type} → {target}",
+  "chat.jira.draft.linkInward": "{target} → {type} diesen Vorgang",
+  "chat.jira.draft.moreField": "1 weiteres Feld",
+  "chat.jira.draft.moreFields": "{count} weitere Felder",
 
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",

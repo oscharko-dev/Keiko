@@ -13,6 +13,7 @@ import {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   AtlassianCredentialMetadata,
+  AtlassianHttpBodyPort,
   JiraManagedMutationExecutor,
 } from "@oscharko-dev/keiko-connectors";
 import {
@@ -42,6 +43,8 @@ import {
 } from "../tool-catalog/__fixtures__/conversationConsumer.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { executeJiraChatDraft, jiraDraftChildIntent } from "./jiraChatDraft.js";
+import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
@@ -51,6 +54,21 @@ const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
+/** Single-issue mutations; a backlog draft dispatches its items as journaled creates (#4178). */
+type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
+const SINGLE_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
+  (operation): operation is SingleMutation => operation !== "jira.draft",
+);
+const DRAFT: CatalogJsonObject = {
+  items: [
+    {
+      ref: "one",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Changed", customfield_10000: "Required" },
+    },
+  ],
+};
 const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
   "jira.create": {
     projectId: "10000",
@@ -65,8 +83,9 @@ const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
     transitionId: "31",
     fields: { customfield_10000: "Screen value" },
   },
+  "jira.draft": DRAFT,
 };
-const REMOTE_STATE: Readonly<Record<JiraMutationOperation, object>> = {
+const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
   "jira.create": {
     fields: {
       summary: "Changed",
@@ -232,10 +251,10 @@ async function fixture(
       operation,
       correlationId: context.correlationId,
     });
-    return executeJiraChatMutation({
+    const shared = {
       journal: db.journal,
       intent: activeIntent,
-      httpPortFactory: (lifecycle) =>
+      httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpBodyPort =>
         credentials.httpBodyPortFactory(metadata, context.correlationId, {
           ...lifecycle,
           onResponse: (request, status): boolean => {
@@ -246,7 +265,16 @@ async function fixture(
         }),
       beforeEffect: context.beforeEffect,
       beforeMutation: context.beforeEffect,
-      execute,
+    };
+    if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute });
+    // The draft itself is never journaled; its one synthetic item is what reaches Jira.
+    activeInvocation = jiraDraftChildIntent(activeIntent, "one").invocationId;
+    return executeJiraChatDraft({
+      ...shared,
+      arguments: args,
+      deselected: [],
+      context,
+      connection: { deployment: "data-center", baseUrl: "https://jira.example.invalid/context" },
     });
   };
   const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(
@@ -352,7 +380,7 @@ it.each(["binding-revoked", "cancelled"] as const)(
   },
 );
 
-it.each(JIRA_MUTATION_OPERATIONS)(
+it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture();
@@ -382,7 +410,7 @@ it.each(JIRA_MUTATION_OPERATIONS)(
     );
   },
 );
-it.each(JIRA_MUTATION_OPERATIONS)(
+it.each(SINGLE_MUTATIONS)(
   "keeps %s unconfirmed when readback is denied and blocks further writes",
   async (operation) => {
     const f = await fixture("readback-denied");
@@ -403,7 +431,7 @@ it.each(JIRA_MUTATION_OPERATIONS)(
     expect(f.writes()).toBe(1);
   },
 );
-it.each(JIRA_MUTATION_OPERATIONS)(
+it.each(SINGLE_MUTATIONS)(
   "never repeats %s after losing the response to an applied mutation",
   async (operation) => {
     const f = await fixture("lost-response");
@@ -437,6 +465,69 @@ it("requires explicit clearing and rejects ambiguous assignment through the SDK 
     result: { data: { outcome: "succeeded" } },
   });
   expect(f.state.fields.assignee).toBeNull();
+  expect(f.writes()).toBe(1);
+});
+
+it("runs a backlog draft through the real gateway/binder/SDK as journaled item creates (#4178)", async () => {
+  const f = await fixture();
+  expect(await f.invoke("jira.draft")).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "completed",
+      data: {
+        outcome: "succeeded",
+        createdCount: 1,
+        items: [
+          {
+            ref: "one",
+            state: "created",
+            issueKey: "SYN-1",
+            browseUrl: "https://jira.example.invalid/context/browse/SYN-1",
+          },
+        ],
+      },
+    },
+  });
+  expect(f.writes()).toBe(1);
+  expect(f.state).toMatchObject(REMOTE_STATE["jira.create"]);
+  const child = jiraDraftChildIntent(f.intent(), "one");
+  expect(f.journal.find(child.invocationId)).toMatchObject({
+    operation: "jira.create",
+    outcome: "succeeded",
+  });
+  expect(f.journal.find(f.intent().invocationId)).toBeUndefined();
+  expect(await f.invoke("jira.draft")).toMatchObject({
+    kind: "settled",
+    result: { data: { outcome: "succeeded", items: [{ ref: "one", state: "created" }] } },
+  });
+  expect(f.writes()).toBe(1);
+  expect(f.logs.lines().join()).not.toMatch(/synthetic-test-pat|jira\.example|SYN-1/u);
+});
+
+it("treats a draft whose items all exist already as a completed no-op, not a tool error (#4178)", async () => {
+  const f = await fixture();
+  expect(await f.invoke("jira.draft")).toMatchObject({
+    kind: "settled",
+    result: { status: "completed", data: { outcome: "succeeded", createdCount: 1 } },
+  });
+  expect(f.writes()).toBe(1);
+  // The same backlog under another local reference is a new draft action with a fresh journal:
+  // its one item is reconciled to the issue that exists, so Jira receives nothing.
+  const [first] = DRAFT.items as readonly Record<string, unknown>[];
+  const rerun = { items: [{ ...first, ref: "uno" }] } as unknown as CatalogJsonObject;
+  expect(await f.invoke("jira.draft", rerun)).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "completed",
+      data: {
+        outcome: "not-dispatched",
+        existingCount: 1,
+        createdCount: 0,
+        failedCount: 0,
+        items: [{ ref: "uno", state: "existing", issueKey: "SYN-1" }],
+      },
+    },
+  });
   expect(f.writes()).toBe(1);
 });
 

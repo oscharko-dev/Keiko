@@ -1338,9 +1338,11 @@ it.each([
 
 it("maps every managed Jira tool to one existing connector-policy action", () => {
   for (const name of JIRA_MANAGED_READ_TOOLS) expect(JIRA_MANAGED_ACTION_TYPES[name]).toBe(name);
-  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(14);
+  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(15);
   expect(JIRA_MANAGED_ACTION_TYPES).toMatchObject({
     "jira.create": "create-issue",
+    // A backlog draft only creates issues and is governed like one create (#4178).
+    "jira.draft": "create-issue",
     "jira.edit": "update-issue-fields",
     "jira.assign": "assign-issue",
     "jira.comment": "add-issue-comment",

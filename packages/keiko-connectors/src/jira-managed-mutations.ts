@@ -19,7 +19,20 @@ import {
   type AtlassianWriteHttpOutcome,
 } from "./atlassian-write-http.js";
 import { validateJiraFieldChanges } from "./jira-field-metadata.js";
+import {
+  jiraIssueLinkUpdate,
+  parseJiraIssueLinks,
+  type JiraIssueLinkRequest,
+} from "./jira-issue-links.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
+import {
+  jiraDraftIdentity,
+  jiraDraftParentKey,
+  reconcileJiraDraftItem,
+  resolveJiraDraftItem,
+  withJiraDraftIdentity,
+  type JiraDraftItem,
+} from "./jira-draft.js";
 import {
   jiraCreateMutationMetadata,
   jiraEditMutationMetadata,
@@ -42,6 +55,50 @@ const INVALID = { ok: false, reason: "field-validation" } as const;
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+type HttpFailure = Extract<AtlassianWriteHttpOutcome, { ok: false }>;
+/** The dispatch's own refusal, with Jira's explanation when it gave one. */
+function dispatchFailure(response: HttpFailure): Extract<JiraMutationAttempt, { ok: false }> {
+  return {
+    ok: false,
+    reason: response.reason,
+    ...(response.remote === undefined ? {} : { detail: response.remote }),
+  };
+}
+/** Keiko's own pre-dispatch refusal names the field and the closed reason. */
+function validationFailure(
+  result: Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: false }>,
+): Extract<JiraMutationAttempt, { ok: false }> {
+  return {
+    ...INVALID,
+    detail: {
+      validation: result.reason,
+      ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
+    },
+  };
+}
+type Validated = Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: true }>;
+type Linked =
+  | {
+      readonly ok: true;
+      readonly values: JiraValidatedMutationFields;
+      readonly update: Readonly<Record<string, unknown>>;
+    }
+  | Extract<JiraMutationAttempt, { ok: false }>;
+/** Requested links join Jira's own update; confirmation then reads them back (#4176). */
+function withLinks(
+  metadata: readonly JiraFieldMetadata[],
+  validated: Validated,
+  links: readonly JiraIssueLinkRequest[],
+): Linked {
+  if (links.length === 0) return { ok: true, values: validated, update: validated.update };
+  const linkUpdate = jiraIssueLinkUpdate(metadata, links);
+  if (!linkUpdate.ok) return linkUpdate;
+  return {
+    ok: true,
+    values: { ...validated, links },
+    update: { ...validated.update, issuelinks: linkUpdate.update },
+  };
+}
 function numericId(value: unknown): value is string {
   return typeof value === "string" && /^\d{1,32}$/u.test(value);
 }
@@ -92,7 +149,7 @@ async function statusMutation(
   body: Readonly<Record<string, unknown>>,
 ): Promise<MutationValidation> {
   const response = await request(path, method, body, "none");
-  if (!response.ok) return response;
+  if (!response.ok) return dispatchFailure(response);
   return response.status === 204 ? { ok: true } : MALFORMED;
 }
 function isCreateRoutingField(id: string): boolean {
@@ -107,35 +164,63 @@ function createContextFields(fields: readonly JiraFieldMetadata[]): readonly Jir
       : field,
   );
 }
+function createArgumentsValid(
+  args: CatalogJsonObject,
+  fields: Record<string, unknown> | undefined,
+  links: readonly JiraIssueLinkRequest[] | undefined,
+): boolean {
+  return (
+    keysAllowed(args, ["projectId", "issueTypeId", "fields", "links"]) &&
+    fields !== undefined &&
+    links !== undefined &&
+    !Object.keys(fields).some(isCreateRoutingField)
+  );
+}
 async function createIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
 ): Promise<JiraMutationAttempt> {
   const { projectId, issueTypeId } = args;
   const fields = fieldsInput(args.fields);
+  const links = parseJiraIssueLinks(args.links);
   if (
-    !keysAllowed(args, ["projectId", "issueTypeId", "fields"]) ||
+    !createArgumentsValid(args, fields, links) ||
     !numericId(projectId) ||
     !numericId(issueTypeId) ||
-    fields === undefined
+    fields === undefined ||
+    links === undefined
   )
     return INVALID;
-  if (Object.keys(fields).some(isCreateRoutingField)) return INVALID;
   const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
   if (!metadata.ok) return metadata;
+  return createWithMetadata(request, { projectId, issueTypeId, fields, links }, metadata.fields);
+}
+interface CreateRequest {
+  readonly projectId: string;
+  readonly issueTypeId: string;
+  readonly fields: Readonly<Record<string, unknown>>;
+  readonly links: readonly JiraIssueLinkRequest[];
+}
+async function createWithMetadata(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+): Promise<JiraMutationAttempt> {
   const validated = validateJiraFieldChanges(
-    createContextFields(metadata.fields),
-    { ...fields, project: { id: projectId }, issuetype: { id: issueTypeId } },
+    createContextFields(metadata),
+    { ...create.fields, project: { id: create.projectId }, issuetype: { id: create.issueTypeId } },
     "create",
     "data-center",
   );
-  if (!validated.ok) return INVALID;
+  if (!validated.ok) return validationFailure(validated);
+  const linked = withLinks(metadata, validated, create.links);
+  if (!linked.ok) return linked;
   const response = await request("issue", "POST", {
     fields: validated.fields,
-    update: validated.update,
+    update: linked.update,
   });
-  if (!response.ok) return response;
-  return confirmCreatedIssue(request, response, metadata.fields, validated);
+  if (!response.ok) return dispatchFailure(response);
+  return confirmCreatedIssue(request, response, metadata, linked.values);
 }
 function confirmCreatedIssue(
   request: JiraMutationRequest,
@@ -173,6 +258,27 @@ function fieldMutationTarget(
         receipt: { issueKey, transitionId },
       };
 }
+function transitionArgument(args: CatalogJsonObject): string | undefined {
+  return typeof args.transitionId === "string" ? args.transitionId : undefined;
+}
+function linkedFieldChanges(
+  fields: readonly JiraFieldMetadata[],
+  args: CatalogJsonObject,
+  purpose: "edit" | "transition",
+):
+  | (Extract<Linked, { ok: true }> & { readonly validated: Validated })
+  | Extract<Linked, { ok: false }> {
+  const validated = validateJiraFieldChanges(
+    fields,
+    args.fields ?? {},
+    purpose,
+    "data-center",
+    args.updates ?? [],
+  );
+  if (!validated.ok) return validationFailure(validated);
+  const linked = withLinks(fields, validated, parseJiraIssueLinks(args.links) ?? []);
+  return linked.ok ? { ...linked, validated } : linked;
+}
 async function fieldMutation(
   request: JiraMutationRequest,
   metadata: JiraMutationMetadata,
@@ -182,28 +288,20 @@ async function fieldMutation(
   targetStatusId?: string,
 ): Promise<JiraMutationAttempt> {
   if (!metadata.ok) return metadata;
-  const validated = validateJiraFieldChanges(
-    metadata.fields,
-    args.fields ?? {},
-    purpose,
-    "data-center",
-    args.updates ?? [],
-  );
-  if (!validated.ok) return INVALID;
-  const transitionId =
-    purpose === "transition" && typeof args.transitionId === "string"
-      ? args.transitionId
-      : undefined;
+  const linked = linkedFieldChanges(metadata.fields, args, purpose);
+  if (!linked.ok) return linked;
+  const { validated } = linked;
+  const transitionId = purpose === "transition" ? transitionArgument(args) : undefined;
   const target = fieldMutationTarget(issueKey, transitionId);
   const prior = await readJiraMutationIssue(
     request,
     issueKey,
-    jiraMutationFieldSelection(validated, transitionId !== undefined),
+    jiraMutationFieldSelection(linked.values, transitionId !== undefined),
   );
   if (!prior.ok) return prior;
   const acknowledged = await statusMutation(request, target.path, target.method, {
     fields: validated.fields,
-    update: validated.update,
+    update: linked.update,
     ...target.body,
   });
   if (!acknowledged.ok) return acknowledged;
@@ -211,7 +309,7 @@ async function fieldMutation(
     issueKey,
     receipt: target.receipt,
     metadata: metadata.fields,
-    values: validated,
+    values: linked.values,
     prior,
     ...(targetStatusId === undefined ? {} : { targetStatusId }),
   });
@@ -223,11 +321,13 @@ async function editIssue(
 ): Promise<JiraMutationAttempt> {
   const fields = fieldsInput(args.fields ?? {});
   const updates = asArray(args.updates ?? []);
+  const links = parseJiraIssueLinks(args.links);
   if (
-    !keysAllowed(args, ["issueKey", "fields", "updates"]) ||
+    !keysAllowed(args, ["issueKey", "fields", "updates", "links"]) ||
     fields === undefined ||
     updates === undefined ||
-    (Object.keys(fields).length === 0 && updates.length === 0)
+    links === undefined ||
+    Object.keys(fields).length + updates.length + links.length === 0
   )
     return INVALID;
   return fieldMutation(
@@ -336,11 +436,69 @@ async function addComment(
   )
     return INVALID;
   const response = await request(`issue/${encodeURIComponent(issueKey)}/comment`, "POST", { body });
-  if (!response.ok) return response;
+  if (!response.ok) return dispatchFailure(response);
   const id = response.body?.id;
   return response.status === 201 && numericId(id)
     ? confirmJiraComment(request, issueKey, id, body)
     : MALFORMED;
+}
+
+/**
+ * One backlog-draft item (#4178): its relations resolved to the keys earlier items received, then
+ * reconciled against the issue its draft identity already names before anything is created.
+ * A reconciled item sends no mutation; the server's journal records that nothing was dispatched.
+ */
+export async function executeJiraDraftItem(
+  item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<JiraMutationAttempt> {
+  if (connection.deployment !== "data-center") return { ok: false, reason: "unavailable" };
+  const resolved = resolveJiraDraftItem(item, keys);
+  const links = parseJiraIssueLinks(resolved?.links);
+  const fields = fieldsInput(resolved?.fields);
+  if (resolved === undefined || links === undefined || fields === undefined) return INVALID;
+  const request = requestFor(connection, context);
+  const metadata = await jiraCreateMutationMetadata(request, item.projectId, item.issueTypeId);
+  if (!metadata.ok) return metadata;
+  const found = await reconcileJiraDraftItem(
+    request,
+    item,
+    metadata.fields,
+    jiraDraftParentKey(item, keys),
+  );
+  if (found.kind !== "absent") return found.attempt;
+  const identified = withJiraDraftIdentity(fields, metadata.fields, jiraDraftIdentity(item));
+  return createWithMetadata(
+    request,
+    { projectId: item.projectId, issueTypeId: item.issueTypeId, fields: identified, links },
+    metadata.fields,
+  );
+}
+
+/**
+ * Read-only: the issue a draft item already created or reconciled to, found by its draft
+ * identity. A replayed item keeps its journal outcome but not its receipt, so this recovers the
+ * key its dependents need. `keys` are the keys its earlier items received.
+ */
+export async function findJiraDraftItem(
+  item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<JiraMutationAttempt> {
+  if (connection.deployment !== "data-center") return { ok: false, reason: "unavailable" };
+  const request = requestFor(connection, context);
+  const metadata = await jiraCreateMutationMetadata(request, item.projectId, item.issueTypeId);
+  if (!metadata.ok) return metadata;
+  const found = await reconcileJiraDraftItem(
+    request,
+    item,
+    metadata.fields,
+    jiraDraftParentKey(item, keys),
+  );
+  return found.kind === "absent" ? { ok: false, reason: "not-found" } : found.attempt;
 }
 
 /** Fresh capability metadata and one mutation request. Durability/authority remain server-owned. */

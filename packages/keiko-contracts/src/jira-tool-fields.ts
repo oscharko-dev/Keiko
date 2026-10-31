@@ -11,6 +11,13 @@ export const JIRA_FIELD_KINDS = [
   "strings",
   "users",
   "options",
+  /** A single issue reference (`{ key }` or `{ id }`), e.g. the system `parent` field (#4176). */
+  "issue",
+  /** A field whose value shape Jira's metadata does not describe beyond its schema type; a bounded
+   * JSON value is forwarded and Jira's own validation is authoritative (#4176). */
+  "opaque",
+  /** The system `issuelinks` field: links are added through a create/edit `links` argument. */
+  "links",
   "unsupported",
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
@@ -43,6 +50,9 @@ export interface JiraFieldMetadata {
   readonly richText: boolean;
   readonly operations: readonly JiraFieldOperation[];
   readonly allowedValues?: readonly JiraFieldReference[];
+  /** Jira's declared schema type (`string`, `array:string`, `any`, …) so a caller can shape an
+   * opaque value; metadata only, never a mutation identity. */
+  readonly schemaType?: string;
 }
 export interface JiraFieldUpdate {
   readonly fieldId: string;

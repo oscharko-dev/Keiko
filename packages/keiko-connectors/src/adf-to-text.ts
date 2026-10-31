@@ -42,7 +42,7 @@ const MAX_LINK_HREF_CHARS = 2_048;
 // `Array.prototype.sort()` order this converter has always produced. A locale-aware comparator
 // (`String.localeCompare`) would make the output depend on the host locale and must not be used —
 // the converter's output is required to be byte-identical for the same input.
-function compareByCodeUnit(a: string, b: string): number {
+export function compareByCodeUnit(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;

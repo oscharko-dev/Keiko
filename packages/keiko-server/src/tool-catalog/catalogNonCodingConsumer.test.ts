@@ -938,7 +938,10 @@ it.each([
   }
 });
 
-it("reads selected current field values without exposing unknown plugin data", async () => {
+// Owner decision 2026-10-31 (#4176, ADR-0128): a plugin field the caller explicitly selects is
+// returned as bounded opaque JSON text, like any other readable field; a field nobody selected is
+// still never returned.
+it("reads selected current field values without exposing unrequested data", async () => {
   const m = await jiraFixture(
     {
       ...readIssue,
@@ -993,7 +996,13 @@ it("reads selected current field values without exposing unknown plugin data", a
                   state: "value",
                   text: "Synthetic field",
                 },
-                { id: "customfield_2", name: "Plugin", kind: "unsupported", state: "unsupported" },
+                {
+                  id: "customfield_2",
+                  name: "Plugin",
+                  kind: "opaque",
+                  state: "value",
+                  text: '{"private":"plugin-private"}',
+                },
                 { id: "customfield_3", name: "Number", kind: "number", state: "empty" },
                 {
                   id: "customfield_4",
@@ -1009,7 +1018,6 @@ it("reads selected current field values without exposing unknown plugin data", a
     });
     expect(m.requests).toHaveLength(1);
     expect(m.requests[0]).toContain("expand=names%2Cschema");
-    expect(JSON.stringify(result)).not.toContain("plugin-private");
     expect(JSON.stringify(result)).not.toContain("unrequested-private");
   } finally {
     f.dispose();

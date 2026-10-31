@@ -44,6 +44,7 @@ const FIELD = object(
       items: { type: "string", enum: ["set", "add", "remove"] },
     },
     allowedValues: { type: "array", maxItems: 500, items: REFERENCE },
+    schemaType: text(129),
   },
   ["id", "name", "required", "hasDefaultValue", "kind", "richText", "operations"],
 );

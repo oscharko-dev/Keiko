@@ -12,6 +12,11 @@ const LABEL_FIELD = {
   operations: ["set", "add", "remove"],
   schema: { type: "array", items: "string", system: "labels" },
 };
+export const LINKS_FIELD = {
+  ...field("issuelinks", "array"),
+  operations: ["add"],
+  schema: { type: "array", items: "issuelinks", system: "issuelinks" },
+};
 export const FIELDS: readonly Record<string, unknown>[] = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
@@ -41,6 +46,7 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
         summary: field("summary", "string"),
         assignee: field("assignee", "user"),
         labels: LABEL_FIELD,
+        issuelinks: LINKS_FIELD,
       },
     });
   if (path.endsWith("transitions"))
@@ -49,6 +55,13 @@ export function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBo
     });
   if (path.endsWith("assignable/search"))
     return response([{ name: "synthetic-user", active: true }]);
+  // A draft item's identity search: the synthetic project holds the one issue SYN-1, found by its
+  // summary (the connector keeps only an exact summary match).
+  if (path.endsWith("/search"))
+    return response({
+      total: 1,
+      issues: [{ key: "SYN-1", id: "10001", fields: { summary: state.fields.summary } }],
+    });
   if (path.endsWith("/comment/10002")) return response({ id: "10002", body: state.comment });
   if (path.endsWith("/issue/SYN-1"))
     return response({ id: "10001", key: "SYN-1", fields: state.fields });
@@ -64,6 +77,16 @@ function fixtureLabelUpdates(mutation: Record<string, unknown>, state: Synthetic
   }
   state.fields.labels = [...labels];
 }
+/** Jira stores an added link and reads it back with the other issue on its own side. */
+function fixtureLinkUpdates(mutation: Record<string, unknown>, state: SyntheticJira): void {
+  const update = mutation.update as { issuelinks?: { add: Record<string, unknown> }[] } | undefined;
+  if (update?.issuelinks === undefined) return;
+  const links = (state.fields.issuelinks as readonly unknown[] | undefined) ?? [];
+  state.fields.issuelinks = [
+    ...links,
+    ...update.issuelinks.map(({ add }, index) => ({ id: String(20000 + index), ...add })),
+  ];
+}
 export function fixtureWrite(
   path: string,
   body: string | undefined,
@@ -73,6 +96,7 @@ export function fixtureWrite(
   if (typeof mutation.fields === "object" && mutation.fields !== null)
     state.fields = { ...state.fields, ...mutation.fields };
   fixtureLabelUpdates(mutation, state);
+  fixtureLinkUpdates(mutation, state);
   if (path.endsWith("/assignee"))
     state.fields.assignee = mutation.name === null ? null : { name: mutation.name };
   if (path.endsWith("/transitions")) state.fields.status = { id: "3" };

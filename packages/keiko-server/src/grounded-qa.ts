@@ -2,6 +2,7 @@ import {
   type ParsedDesktopChatSend,
   buildCanonicalTurnMemoryResult,
   buildMemoryResult,
+  catalogDispatchErrorResult,
   chatClosedResult,
   parseClientTurnId,
   parseMemoryRequest,
@@ -10,7 +11,12 @@ import {
   type CanonicalTurnMemoryRequest,
   type ParsedConversationMemoryRequest,
 } from "./chat-handlers.js";
-import { createChatToolTurn, scopeChatToolTurn } from "./chat-tool-runtime.js";
+import {
+  chatToolTurnCancellationSignal,
+  createChatToolTurn,
+  scopeChatToolTurn,
+} from "./chat-tool-runtime.js";
+import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
   callGroundedSynthesisModel,
   requiresObservedToolResult,
@@ -386,7 +392,13 @@ export function mappedGatewayError(
 ): RouteResult | undefined {
   return (
     mappedConversationReadinessError(error) ??
-    (error instanceof GatewayError ? gatewayErrorResult(error, deps, correlationId) : undefined)
+    (error instanceof GatewayError ? gatewayErrorResult(error, deps, correlationId) : undefined) ??
+    (error instanceof CatalogDispatchFault
+      ? catalogDispatchErrorResult(error, deps, correlationId, true, [
+          "POST /api/chats/messages/grounded",
+          "grounded.qa",
+        ])
+      : undefined)
   );
 }
 
@@ -3453,10 +3465,7 @@ async function executeGroundedAskInTurn(
         ? admitted
         : {
             ...admitted,
-            signal: AbortSignal.any([
-              toolTurn.signal,
-              AbortSignal.timeout(Math.max(0, toolTurn.deadlineAtMs - Date.now())),
-            ]),
+            signal: chatToolTurnCancellationSignal(admitted.signal, toolTurn),
           },
       scoped,
       runner,

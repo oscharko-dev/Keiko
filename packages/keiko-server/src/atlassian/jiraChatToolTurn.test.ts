@@ -255,6 +255,59 @@ function fixture(
     writes: () => writes,
   };
 }
+// #4175: a turn that reaches its deadline after settling tool calls answers from its transcript on
+// the buffered and the streamed path; the deadline admits no further model or tool work.
+function stallAfterFirstRound(f: ReturnType<typeof fixture>): void {
+  const original = f.model.callStream;
+  if (original === undefined) throw new Error("Missing stream port");
+  let rounds = 0;
+  const stalled = (signal: AbortSignal): AsyncIterable<GatewayStreamChunk> => ({
+    async *[Symbol.asyncIterator](): AsyncIterator<GatewayStreamChunk> {
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+        });
+      });
+      yield* [];
+    },
+  });
+  const callStream: NonNullable<ModelPort["callStream"]> = (request, signal) => {
+    rounds++;
+    return rounds === 1 ? original(request, signal) : stalled(signal);
+  };
+  Object.assign(f.model, {
+    callStream,
+    call: async (request: GatewayCallRequest, signal: AbortSignal): Promise<NormalizedResponse> => {
+      for await (const chunk of callStream(request, signal))
+        if (chunk.type === "done") return chunk.response;
+      throw new Error("Missing done chunk");
+    },
+  });
+}
+it.each([false, true])(
+  "delivers the transcript answer when the turn reaches its deadline (stream=%s)",
+  async (stream) => {
+    const f = fixture(false, undefined, true, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 1_500 } });
+    stallAfterFirstRound(f);
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `deadline-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    const result = await pending;
+    expect(f.requests()).toBe(1);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.toolTranscript?.exchanges).toHaveLength(1);
+    expect(assistant?.content).toContain("this turn reached its time limit");
+    expect(assistant?.content).toContain("Reads completed: 1.");
+    if (stream) expect(response.body()).toContain("event: done");
+    else expect(result).toMatchObject({ status: 200 });
+  },
+);
+
 function send(
   f: ReturnType<typeof fixture>,
   clientTurnId: string,
@@ -583,10 +636,20 @@ async function approveReadForWrite(f: ReturnType<typeof fixture>): Promise<void>
   );
 }
 
+// Pin (#4175 relocates the former fixed ten-round cap): the loop is bounded by the accepted
+// Authority Envelope's tool-call budget, dispatches nothing past it, and the turn that reaches it
+// answers from its own transcript instead of failing with every completed read discarded.
+const TEN_CALL_BUDGET = {
+  maxRuntimeMs: 300_000,
+  maxToolCalls: 10,
+  maxPromptTokens: 100_000,
+  maxPatchBytes: 0,
+} as const;
 it.each([false, true])(
-  "stops the actual Jira Chat loop after ten productive rounds (stream=%s)",
+  "stops the actual Jira Chat loop at its envelope tool-call budget and answers from the transcript (stream=%s)",
   async (stream) => {
     const f = fixture(false, undefined, true, true);
+    Object.assign(f.deps, { chatToolTurnBudget: TEN_CALL_BUDGET });
     const response = mockResponse({ captureBody: true });
     const ctx = { ...sendContext(f, "ten-jira-rounds"), res: response.res };
     const pending = stream
@@ -598,19 +661,43 @@ it.each([false, true])(
     expect(f.calls).toHaveLength(10);
     expect(f.requests()).toBe(10);
     expect(f.writes()).toBe(0);
-    const message = f.deps.store.listMessages(f.chatId)[0];
-    expect(message?.turnState).toBe("failed");
-    expect(message?.toolTranscript?.exchanges).toHaveLength(10);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.toolTranscript?.exchanges).toHaveLength(10);
     expect(
-      message?.toolTranscript?.exchanges.every(
-        (exchange) => exchange.result?.status === "completed",
-      ),
+      user?.toolTranscript?.exchanges.every((exchange) => exchange.result?.status === "completed"),
     ).toBe(true);
     expect(f.calls.at(-1)?.messages.filter((message) => message.role === "tool")).toHaveLength(9);
-    if (stream) {
-      expect(response.body()).toContain("event: error");
-      expect(response.body()).not.toContain("event: done");
-    } else expect(result).toMatchObject({ status: 403, body: { error: { code: "FORBIDDEN" } } });
+    expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
+    expect(assistant?.content).toContain("Reads completed: 10.");
+    if (stream) expect(response.body()).toContain("event: done");
+    else expect(result).toMatchObject({ status: 200 });
+  },
+);
+
+it.each([false, true])(
+  "answers an exhausted turn with exactly the write Jira acknowledged (stream=%s, #4175)",
+  async (stream) => {
+    const f = fixture(true, undefined, true, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxToolCalls: 1 } });
+    f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `exhausted-write-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    const result = await pending;
+    expect(f.writes()).toBe(1);
+    expect(f.calls).toHaveLength(1);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.toolTranscript?.exchanges.map((exchange) => exchange.mutationOutcome)).toEqual([
+      "succeeded",
+    ]);
+    expect(assistant?.content).toMatch(/Completed in this turn:\n- \S+ KEIKO-1\n/u);
+    expect(assistant?.content).not.toContain("not confirmed");
+    if (stream) expect(response.body()).toContain("event: done");
+    else expect(result).toMatchObject({ status: 200 });
   },
 );
 

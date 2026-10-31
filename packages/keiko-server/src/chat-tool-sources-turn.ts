@@ -87,6 +87,7 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
       correlationId,
       managed,
       context: sourceContext(sourceOptions),
+      budget: jira.authority.envelope.budget,
       bind: (context, budgetPort) =>
         bindChatToolCatalog<ChatSourcesConsumer>({
           deps,

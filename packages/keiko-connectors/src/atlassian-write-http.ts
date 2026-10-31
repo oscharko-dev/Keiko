@@ -21,12 +21,16 @@
 
 import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-contracts";
 import {
+  sanitizeJiraMutationFailureDetail,
+  type JiraMutationFailureDetail,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyResult,
 } from "./atlassian-http-port.js";
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
-import { parseJsonArray, parseJsonRecord } from "./atlassian-sync-classify.js";
+import { asRecord, parseJsonArray, parseJsonRecord } from "./atlassian-sync-classify.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
 export const ATLASSIAN_WRITE_ACTION_TIMEOUT_MS = 30_000;
@@ -74,9 +78,23 @@ export type AtlassianWriteHttpOutcome =
       readonly ok: false;
       readonly reason: AtlassianConnectorWriteFailureReason;
       readonly httpStatus?: number | undefined;
+      /** Jira's own bounded explanation of a client error (#4176); never logged. */
+      readonly remote?: JiraMutationFailureDetail;
     };
 
 const UTF8_ENCODER = new TextEncoder();
+
+/** Jira's `{ errorMessages, errors }` client-error body, bounded and control-free. */
+function jiraRemoteErrors(bodyText: string): JiraMutationFailureDetail | undefined {
+  const body = parseJsonRecord(bodyText);
+  if (body === undefined) return undefined;
+  const errors = asRecord(body.errors);
+  const fieldErrors =
+    errors === undefined
+      ? []
+      : Object.entries(errors).map(([fieldId, message]) => ({ fieldId, message }));
+  return sanitizeJiraMutationFailureDetail({ fieldErrors, messages: body.errorMessages });
+}
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -110,17 +128,26 @@ function classifyTransport(
     : { ok: false, reason: "unavailable" };
 }
 
+function classifyFailure(
+  result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
+): AtlassianWriteHttpOutcome {
+  const remote =
+    result.status >= 400 && result.status < 500 && !result.truncated
+      ? jiraRemoteErrors(result.bodyText)
+      : undefined;
+  return {
+    ok: false,
+    reason: failureReasonForWriteStatus(result.status),
+    httpStatus: result.status,
+    ...(remote === undefined ? {} : { remote }),
+  };
+}
+
 function classifyResponse(
   result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
   expect: AtlassianWriteHttpRequest["expect"],
 ): AtlassianWriteHttpOutcome {
-  if (result.status < 200 || result.status >= 300) {
-    return {
-      ok: false,
-      reason: failureReasonForWriteStatus(result.status),
-      httpStatus: result.status,
-    };
-  }
+  if (result.status < 200 || result.status >= 300) return classifyFailure(result);
   if (expect === "none") return { ok: true, status: result.status, body: undefined };
   if (result.truncated) {
     return { ok: false, reason: "malformed-payload", httpStatus: result.status };

@@ -78,6 +78,13 @@ were inspected again. All 25 source hashes and four harness hashes match the rev
 The unchanged freshness gate, 23 updater/editor evidence contract tests and both Linux Editor
 bundle gates pass; no baseline or numerical ceiling changed. This remains updater fixture evidence.
 
+The Jira backlog-draft review (#4178, PR #4182) adds draft-tree strings to both optional message
+catalogs, so the unchanged freshness gate rejected their previous digests. The complete original
+nine-case producer ran again on 2026-10-31 (UTC) on macOS arm64 with Node 24.22.0 and passed in
+1.1 minutes, including real BFF stop/restart. All 14 captures were rewritten by this host's
+renderer; the three records again bind every declared source and harness digest. No updater
+behavior, baseline or numerical ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
