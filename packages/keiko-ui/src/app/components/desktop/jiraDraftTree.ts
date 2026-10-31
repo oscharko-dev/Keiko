@@ -14,7 +14,12 @@ export interface JiraDraftTreeLink {
 /** A field value as the human reads it: text, or a list of values. */
 export type JiraDraftValue =
   | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "list"; readonly items: readonly JiraDraftValue[] };
+  | { readonly kind: "list"; readonly items: readonly JiraDraftListEntry[] };
+/** A list entry keeps its 1-based place in the request, which is also its stable key. */
+export interface JiraDraftListEntry {
+  readonly position: number;
+  readonly value: JiraDraftValue;
+}
 export interface JiraDraftField {
   readonly id: string;
   readonly value: JiraDraftValue;
@@ -84,20 +89,31 @@ function parentOf(value: unknown): Parent | undefined {
 
 // An object with one identifying member reads as that member (a user or option); anything else
 // stays exact as compact JSON, so no member is hidden.
-const IDENTIFYING_MEMBERS = ["displayName", "name", "value", "key", "accountId", "id"];
+const IDENTIFYING_MEMBERS: ReadonlySet<string> = new Set([
+  "displayName",
+  "name",
+  "value",
+  "key",
+  "accountId",
+  "id",
+]);
 function identifying(value: unknown): string | undefined {
   const entries = Object.entries(record(value) ?? {});
   const [only] = entries;
   return entries.length === 1 &&
     only !== undefined &&
-    IDENTIFYING_MEMBERS.includes(only[0]) &&
+    IDENTIFYING_MEMBERS.has(only[0]) &&
     typeof only[1] === "string"
     ? only[1]
     : undefined;
 }
 function valueOf(value: unknown): JiraDraftValue {
   if (typeof value === "string") return { kind: "text", text: value };
-  if (Array.isArray(value) && value.length > 0) return { kind: "list", items: value.map(valueOf) };
+  if (Array.isArray(value) && value.length > 0)
+    return {
+      kind: "list",
+      items: value.map((entry, index) => ({ position: index + 1, value: valueOf(entry) })),
+    };
   return { kind: "text", text: identifying(value) ?? JSON.stringify(value) };
 }
 function fieldsOf(fields: Raw): readonly JiraDraftField[] {

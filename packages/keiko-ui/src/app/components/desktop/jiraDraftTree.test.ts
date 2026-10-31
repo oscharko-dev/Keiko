@@ -94,8 +94,8 @@ describe("field values of a draft item (#4178)", () => {
         value: {
           kind: "list",
           items: [
-            { kind: "text", text: "a" },
-            { kind: "text", text: "b" },
+            { position: 1, value: { kind: "text", text: "a" } },
+            { position: 2, value: { kind: "text", text: "b" } },
           ],
         },
       },

@@ -44,10 +44,9 @@ function DraftValue({ value }: { readonly value: JiraDraftValue }): ReactNode {
   if (value.kind === "text") return <CollapsibleText text={value.text} />;
   return (
     <ul className={styles.cmpDraftList}>
-      {value.items.map((entry, index) => (
-        // The request's own order is the identity of a list entry.
-        <li key={index}>
-          <DraftValue value={entry} />
+      {value.items.map((entry) => (
+        <li key={entry.position}>
+          <DraftValue value={entry.value} />
         </li>
       ))}
     </ul>
