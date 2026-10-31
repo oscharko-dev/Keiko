@@ -342,10 +342,11 @@ describe("wb-ui.mjs: the gates of a run in the Workbench", () => {
 describe("wb-ui.mjs: choosing an option of a Workbench select", () => {
   // A KeikoSelect option renders its label and its description in separate elements; the accessible
   // name joins them, so a prefix match on the name could choose a longer near-match.
-  function selectPage(labels, { offeredFrom = 0 } = {}) {
+  function selectPage(labels, { offeredFrom = 0, emptyReads = 0 } = {}) {
     const clicked = [];
     const escapes = [];
     let opened = 0;
+    let reads = 0;
     const option = (label) => ({
       locator: () => ({ allTextContents: async () => [label] }),
       click: async () => {
@@ -354,16 +355,23 @@ describe("wb-ui.mjs: choosing an option of a Workbench select", () => {
     });
     // The requested labels are offered only from the `offeredFrom`-th opening on (0 = at once), as
     // a model returns to the select after its readiness re-probe.
+    // The first `emptyReads` counts after each opening see the list the picker empties while it
+    // re-reads the catalog.
     const offered = () => (opened > offeredFrom ? labels : labels.slice(0, 1));
+    const counted = () => {
+      reads += 1;
+      return reads <= emptyReads ? 0 : offered().length;
+    };
     const page = {
       getByRole: (role) =>
         role === "combobox"
           ? {
               click: async () => {
                 opened += 1;
+                reads = 0;
               },
             }
-          : { count: async () => offered().length, nth: (index) => option(offered()[index]) },
+          : { count: async () => counted(), nth: (index) => option(offered()[index]) },
       keyboard: {
         press: async (key) => {
           escapes.push(key);
@@ -396,6 +404,20 @@ describe("wb-ui.mjs: choosing an option of a Workbench select", () => {
     await chooseOption(page, "Coding model", "gemma-4-31b-it", { waitMs: 60_000, retryMs: 0 });
     expect(clicked).toEqual(["gemma-4-31b-it"]);
     expect(escapes).toEqual(["Escape", "Escape"]);
+  });
+
+  it("reads the model select only once its re-read catalog has landed", async () => {
+    const { page, clicked, escapes, opened } = selectPage(["Model: none", "gemma-4-31b-it"], {
+      emptyReads: 2,
+    });
+    await chooseOption(page, "Coding model", "gemma-4-31b-it", {
+      waitMs: 60_000,
+      retryMs: 0,
+      pollMs: 1,
+    });
+    expect(clicked).toEqual(["gemma-4-31b-it"]);
+    expect(escapes).toEqual([]);
+    expect(opened()).toBe(1);
   });
 
   it("refuses the model once the readiness wait has run out", async () => {

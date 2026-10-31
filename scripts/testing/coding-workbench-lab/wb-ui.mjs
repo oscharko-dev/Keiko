@@ -129,16 +129,14 @@ async function reopenWorkbench(page) {
 // five. Every other select (authority, Jira Pod) has nothing to wait for and refuses at once.
 export const MODEL_READINESS_WAIT_MS = 300_000;
 
-export async function chooseOption(
-  page,
-  comboName,
-  optionLabel,
-  { waitMs = 0, retryMs = 3000, now = Date.now } = {},
-) {
+const CHOOSE_DEFAULTS = { waitMs: 0, retryMs: 3000, now: Date.now, settleMs: 2000, pollMs: 100 };
+
+export async function chooseOption(page, comboName, optionLabel, options = {}) {
+  const { waitMs, retryMs, now, ...settle } = { ...CHOOSE_DEFAULTS, ...options };
   const deadline = now() + waitMs;
   for (;;) {
     try {
-      await chooseOptionOnce(page, comboName, optionLabel);
+      await chooseOptionOnce(page, comboName, optionLabel, settle);
       return;
     } catch (error) {
       if (now() >= deadline || !String(error?.message).includes("no option is labelled"))
@@ -149,14 +147,30 @@ export async function chooseOption(
   }
 }
 
-async function chooseOptionOnce(page, comboName, optionLabel) {
+// Opening the model select re-reads the gateway catalog, and the picker is deliberately empty until
+// that read lands (useChatSession `clearSessionModelsForPendingRefresh`, pinned by #3625/#3642), so
+// a human sees the list a moment after the menu opens. The driver reads it once it holds options and
+// two reads `pollMs` apart agree (AC3 lab 2026-10-31, T17: reading 10 ms after every opening saw the
+// empty list 79 times in a row while the catalog listed Gemma).
+async function settledOptionCount(options, { settleMs, pollMs }) {
+  const deadline = Date.now() + settleMs;
+  let previous = -1;
+  for (;;) {
+    const count = await options.count();
+    if ((count > 0 && count === previous) || Date.now() >= deadline) return count;
+    previous = count;
+    await sleep(pollMs);
+  }
+}
+
+async function chooseOptionOnce(page, comboName, optionLabel, settle) {
   await page.getByRole("combobox", { name: comboName }).click();
   // An option's accessible name is its label followed directly by its description, so the label
   // element is compared on its own and only an exact label is chosen: an offered near-match (a
   // longer Jira Pod name) never stands in for the requested one, and the run is not started.
   const options = page.getByRole("option");
   const labels = await Promise.all(
-    Array.from({ length: await options.count() }, (_, index) =>
+    Array.from({ length: await settledOptionCount(options, settle) }, (_, index) =>
       options.nth(index).locator(".ksel-option-label").allTextContents(),
     ),
   );
