@@ -4,16 +4,8 @@
 // Provider URLs, headers, keys, and raw provider errors never cross this surface.
 
 import type { IncomingMessage } from "node:http";
-import {
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   listConfiguredCapabilities,
   findConfiguredCapability,
@@ -33,7 +25,13 @@ import type {
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { currentGateway, currentGatewayConfig } from "../deps.js";
-import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import {
+  locateOwnedDocument,
+  publishOwnedJsonDocument,
+  readOwnedJsonDocument,
+  type OwnedDocumentLocation,
+} from "../modelRolePolicy/documentStore.js";
+import { preflightRoles } from "../modelRolePolicy/preflight.js";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "../bounded-request-body.js";
 import { createRequestCancellation } from "../request-cancellation.js";
 import {
@@ -80,17 +78,6 @@ export function resolveQiPolicyPath(evidenceDir: string): string {
   return join(dirname(evidenceDir), QI_POLICY_DIR, QI_POLICY_FILE);
 }
 
-function sameNativePath(a: string, b: string): boolean {
-  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
-
-function pathIsContained(realRoot: string, candidate: string): boolean {
-  const root = resolve(realRoot);
-  const target = resolve(candidate);
-  const rel = relative(root, target);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
-
 function policyStorageError(): QiModelPolicyError {
   return new QiModelPolicyError(
     "QI_MODEL_POLICY_STORAGE_UNSAFE",
@@ -101,7 +88,7 @@ function policyStorageError(): QiModelPolicyError {
 function resolveQiPolicyLocation(
   evidenceDir: string,
   options: { readonly create: boolean },
-): { readonly dir: string; readonly target: string } | undefined {
+): OwnedDocumentLocation | undefined {
   let evidenceRoot: string;
   try {
     evidenceRoot = realpathSync(evidenceDir);
@@ -109,30 +96,15 @@ function resolveQiPolicyLocation(
     if (!options.create) return undefined;
     throw policyStorageError();
   }
-  const parent = dirname(evidenceRoot);
-  const dir = join(parent, QI_POLICY_DIR);
-  if (options.create) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  const dirStats = lstatSync(dir, { throwIfNoEntry: false });
-  if (dirStats === undefined) return undefined;
-  if (dirStats.isSymbolicLink() || !dirStats.isDirectory()) {
-    throw policyStorageError();
-  }
-  const realDir = realpathSync(dir);
-  if (!sameNativePath(dir, realDir) || !pathIsContained(parent, realDir)) {
-    throw policyStorageError();
-  }
-  return { dir: realDir, target: join(realDir, QI_POLICY_FILE) };
-}
-
-function storedPolicyFileExists(target: string): boolean {
-  const stats = lstatSync(target, { throwIfNoEntry: false });
-  if (stats === undefined) return false;
-  if (stats.isSymbolicLink() || !stats.isFile()) {
-    throw policyStorageError();
-  }
-  return true;
+  return locateOwnedDocument(
+    {
+      parent: dirname(evidenceRoot),
+      dirName: QI_POLICY_DIR,
+      fileName: QI_POLICY_FILE,
+      unsafe: policyStorageError,
+    },
+    options,
+  );
 }
 
 function errorResult(status: number, code: string, message: string): RouteResult {
@@ -196,9 +168,9 @@ function loadStoredPolicy(
   if (evidenceDir === undefined) return undefined;
   try {
     const location = resolveQiPolicyLocation(evidenceDir, { create: false });
-    if (location === undefined || !storedPolicyFileExists(location.target)) return undefined;
-    const raw = readFileSync(location.target, "utf8");
-    return parsePolicyValue(JSON.parse(raw));
+    if (location === undefined) return undefined;
+    const raw = readOwnedJsonDocument(location, policyStorageError);
+    return raw === undefined ? undefined : parsePolicyValue(raw);
   } catch (error) {
     if (error instanceof QiModelPolicyError) throw error;
     return undefined;
@@ -208,18 +180,7 @@ function loadStoredPolicy(
 function savePolicy(evidenceDir: string, policy: QualityIntelligenceModelPolicy): void {
   const location = resolveQiPolicyLocation(evidenceDir, { create: true });
   if (location === undefined) throw policyStorageError();
-  const temp = `${location.target}.${process.pid.toString()}.${Date.now().toString()}.tmp`;
-  try {
-    writeFileSync(temp, `${JSON.stringify(policy, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
-    const tempStats = lstatSync(temp);
-    if (tempStats.isSymbolicLink() || !tempStats.isFile()) {
-      throw policyStorageError();
-    }
-    atomicPublishRename(temp, location.target, { rename: renameSync });
-  } catch (error) {
-    rmSync(temp, { force: true });
-    throw error;
-  }
+  publishOwnedJsonDocument(location, policy, policyStorageError);
 }
 
 export function getQiModelPolicyResponse(
@@ -435,28 +396,19 @@ export async function buildQiModelRouting(
       "The selected Quality Intelligence model policy is invalid.",
     );
   }
-  const generation = await preflightStage(
-    deps,
-    "generate",
-    resolution.resolved.testDesignModelId,
-    correlationId,
-    signal,
+  const models = {
+    generate: resolution.resolved.testDesignModelId,
+    judge: resolution.resolved.judgeModelId,
+  } as const;
+  const results = await preflightRoles(["generate", "judge"] as const, (stage) =>
+    preflightStage(deps, stage, models[stage], correlationId, signal),
   );
-  const judge =
-    resolution.resolved.judgeModelId === undefined
-      ? await preflightStage(deps, "judge", undefined, correlationId, signal)
-      : await preflightStage(
-          deps,
-          "judge",
-          resolution.resolved.judgeModelId,
-          correlationId,
-          signal,
-        );
+  const generation = results.get("generate") ?? unavailablePreflightResult("generate");
   return {
     policyVersion: 1,
     requested,
     resolved: resolution.resolved,
-    preflight: summarizePreflight(generation, judge),
+    preflight: summarizePreflight(generation, results.get("judge")),
   };
 }
 

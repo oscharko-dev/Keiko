@@ -21,9 +21,8 @@ import { correlationIdOrUnknown } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { optionsWithDefaults, resolveRepository } from "../gitRoutes.js";
 import { errorBody } from "../route-error.js";
-import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
-import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
-import { sseBackpressureReporter, writeSseFrame } from "../sse-write.js";
+import type { HandlerOutcome, RouteContext, RouteResult } from "../routes.js";
+import { reviewCancelResult, serveReviewEventStream } from "./eventStream.js";
 import type { ReviewRunService } from "./service/service.js";
 
 const START_BODY_MAX_BYTES = 16 * 1024;
@@ -197,36 +196,30 @@ export function handleReviewRunCancel(ctx: RouteContext, deps: UiHandlerDeps): R
   const service = deps.reviewRunService;
   if (service === undefined) return unavailable(ctx);
   const runId = runIdParam(ctx);
-  const outcome = runId === undefined ? "not-found" : service.cancel(runId);
-  if (outcome === "not-found") return failure(ctx, 404, "NOT_FOUND", "No such review run.");
-  if (outcome === "settled") {
-    return failure(ctx, 409, "REVIEW_SETTLED", "The review run has already settled.");
-  }
-  return { status: 202, body: { schemaVersion: REVIEW_CONTRACT_VERSION, status: "cancelling" } };
-}
-
-function frame(event: ReviewRunEvent): string {
-  return `event: review\ndata: ${JSON.stringify(event)}\n\n`;
+  return reviewCancelResult(ctx, runId === undefined ? "not-found" : service.cancel(runId), {
+    notFoundMessage: "No such review run.",
+    settledCode: "REVIEW_SETTLED",
+    settledMessage: "The review run has already settled.",
+  });
 }
 
 /** A run that is not in flight is settled (or settles right now): one `settled` frame. */
-async function announceSettled(
+async function settledEvent(
   service: ReviewRunService,
   runId: string,
   correlationId: string | undefined,
-  write: (event: ReviewRunEvent) => void,
-): Promise<void> {
+): Promise<ReviewRunEvent | undefined> {
   const settled = await service.get(runId, correlationId);
   const settlement = settled?.settlement ?? null;
-  if (settlement === null) return;
-  write({
+  if (settlement === null) return undefined;
+  return {
     kind: "settled",
     runId,
     settlement,
     presentedCount: settled?.presentedFindings.length ?? 0,
     elapsedMs: 0,
     counts: { filesPackaged: 0, candidates: settled?.candidateCount ?? 0, counterChecked: 0 },
-  });
+  };
 }
 
 /** `GET /api/git-review/runs/{runId}/events`: progress until the one `settled` event. */
@@ -241,33 +234,10 @@ export async function handleReviewRunEvents(
   if (runId === undefined || view === undefined) {
     return failure(ctx, 404, "NOT_FOUND", "No such review run.");
   }
-  const res = ctx.res;
-  const controller = new AbortController();
-  const correlationId = correlationIdOrUnknown(ctx.correlationId);
-  const reporter = sseBackpressureReporter(deps, "review.run.events", correlationId);
-  const write = (event: ReviewRunEvent): void => {
-    writeSseFrame(res, frame(event), controller, reporter, correlationId);
-  };
-  res.writeHead(200, SSE_HEADERS);
-  const stopHeartbeat = startSseHeartbeat(res, undefined, undefined, {
-    controller,
-    onBackpressure: reporter,
-    correlationId,
+  return serveReviewEventStream<ReviewRunEvent>(ctx, deps, {
+    stream: "review.run.events",
+    eventName: "review",
+    subscribe: (listener) => service.subscribe(runId, listener),
+    settled: () => settledEvent(service, runId, ctx.correlationId),
   });
-  const close = (): void => {
-    stopHeartbeat();
-    if (!res.writableEnded) res.end();
-  };
-  const unsubscribe = service.subscribe(runId, { onEvent: write, onClose: close });
-  if (unsubscribe === undefined) {
-    await announceSettled(service, runId, ctx.correlationId, write);
-    close();
-    return STREAMING;
-  }
-  res.on("close", () => {
-    unsubscribe();
-    stopHeartbeat();
-    controller.abort();
-  });
-  return STREAMING;
 }

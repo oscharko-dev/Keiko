@@ -22,7 +22,11 @@ export type ReviewDiagnosticOperation =
   | "review.worktree.remove"
   | "review.run.execute"
   | "review.run.persist"
-  | "review.run.diff";
+  | "review.run.diff"
+  | "review.settings.read"
+  | "review.settings.write"
+  | "review.pair-qualification.execute"
+  | "review.pair-qualification.cleanup";
 
 export function reportReviewFailure(
   operation: ReviewDiagnosticOperation,

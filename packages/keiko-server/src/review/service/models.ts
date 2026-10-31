@@ -12,7 +12,7 @@ import type {
 import { evaluateReviewRoleEligibility } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-rules";
 
 /** The context each role needs: the Reviewer's 64 KiB task and tools, a counter-check session. */
-const REVIEW_ROLE_BUDGETS: Readonly<Record<ReviewModelRole, ReviewRoleBudget>> = {
+export const REVIEW_ROLE_BUDGETS: Readonly<Record<ReviewModelRole, ReviewRoleBudget>> = {
   reviewer: { minContextWindowTokens: 32_768 },
   "counter-checker": { minContextWindowTokens: 16_384 },
 };
@@ -22,6 +22,11 @@ export interface ReviewModelPort {
   capability(modelId: string): ModelCapability | undefined;
   /** The gateway configuration generation the run is admitted under, when known. */
   generation?(): number | undefined;
+  /**
+   * The operator and user policy in front of eligibility (Issue #4137): `false` refuses the pair
+   * as `policy-invalid`; the policy records its own closed reason under `correlationId`.
+   */
+  admit?(models: ReviewRoleModels, correlationId: string | undefined): boolean;
 }
 
 export interface ReviewRoleModels {
@@ -38,7 +43,9 @@ export function validateReviewRoleModels(
   port: ReviewModelPort,
   models: ReviewRoleModels,
   nowMs: number,
+  correlationId?: string,
 ): ReviewModelValidation {
+  if (port.admit?.(models, correlationId) === false) return { ok: false, reason: "policy-invalid" };
   const verdicts = [
     evaluateReviewRoleEligibility(
       port.capability(models.reviewerModelId),

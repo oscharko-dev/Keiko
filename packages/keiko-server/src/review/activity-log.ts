@@ -21,7 +21,7 @@ export type ReviewWorktreeRemovalTrigger = "settled" | "abandoned" | "shutdown" 
 export type ReviewRefSweepTrigger = "startup" | "daily";
 
 // The registration every review operation shares; each operation adds its identity and fields.
-const REVIEW_OPERATION = {
+export const REVIEW_OPERATION = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   category: "process",
@@ -36,8 +36,8 @@ const REVIEW_FAILURE_OPERATION = {
   analyzerProjection: "failure-cluster",
 } as const;
 
-const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
-const DIGEST_FIELD = {
+export const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+export const DIGEST_FIELD = {
   type: "string",
   dataClass: "digest",
   required: true,
@@ -220,7 +220,7 @@ const REVIEW_WORKTREE_REFS_SWEPT = defineActivityLogOperation({
 
 /** A domain-separated digest of an object id or run id: joinable, never the raw value. */
 export function reviewEvidenceDigest(
-  kind: "sha" | "run" | "fingerprint" | "model",
+  kind: "sha" | "run" | "fingerprint" | "model" | "qualification",
   value: string,
 ): string {
   return sha256Hex(`keiko-review/${kind}\u0000${value}`);

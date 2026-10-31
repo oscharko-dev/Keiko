@@ -317,6 +317,49 @@ LiteLLM gateway; together they need about 69 GB. On a 64 GB machine this deliver
 together: the faster model takes the tool-call-heavy Reviewer role and a model of a different
 family checks it. Results belong to the exact pair measured. Proven by Issue #4137.
 
+As implemented (#4137): policy resolution is strictest first. (1) The operator's `review` section of
+`keiko.config.json` (`enabled`, `reviewerModelId`, `counterCheckerModelId`, `allowedReviewModelIds`,
+`lockModelPolicy`, `rulesFilePath`, `repositories.<repositoryId>.rulesFilePath`), parsed by the gateway
+configuration loader (`parseReviewOperatorConfig`) with the `KEIKO_REVIEW_*` environment overrides;
+it never fails the gateway load. Every invalid explicit value (a wrong type, an unsafe id or path, a
+default outside the allowlist, an unknown key) is a closed issue: the policy then refuses every role
+with `invalid-operator-value`, never substitutes another model, and reports each issue at startup by
+key and source (`review.model-policy.refused`, stage `startup`). Gateway setup keeps the section
+verbatim, invalid values included. (2) The user's per-repository selection in a versioned settings
+document (`<stateDir>/review-settings/<repositoryId>.json`, revision + 1 per saved change, published
+with `atomicPublishRename`), only inside the allowlist and never while locked. (3) The recommendation:
+the eligible model with the largest verified window for the Reviewer, then a different eligible model
+for the Counter-checker, else the same model with `singleModel: true`. A lock makes the operator
+defaults (or the recommendation) the only admissible pair; the resolved policy stays readable.
+Quality Intelligence and review share one role-policy helper (`modelRolePolicy/`: the "different
+second model" pick, the role preflight and the atomic document store); Quality Intelligence behaves
+as before. The same policy check runs in front of child 6's eligibility at every run start and dry
+run (`ReviewModelPort.admit`; a refused dry run answers 422 and a refused run settles `skipped/policy-invalid`), at every pair qualification
+and before every settings write, which also preflights both resulting roles. A busy model stays
+eligible; the gateway keeps no separate busy flag today, so no `busy` hint is shown yet.
+
+`GET /api/git-review/model-policy?repositoryId=…` is a read view (roles with their sources, lock and
+allowlist state, every configured chat model with its capability summary, the pair status);
+`GET`/`PUT /api/git-review/settings?repositoryId=…` read and write the settings document, whose
+`rulesFilePath` (default `.keiko/review-rules.md`, portable, repository-relative, no `.`/`..`
+segment) child 5's rules reader reads through its settings port; while locked, the operator preset
+wins. Checking a pair without saving is the run start's `dryRun`. The operator's `enabled` switch
+(default `false` until Issue #4142) guards the whole `/api/git-review/*` route group: every route
+except `model-policy` answers 404 `REVIEW_DISABLED`, and `model-policy` answers `enabled: false`.
+
+The pair status is in-process state bound to the exact Reviewer model, Counter-checker model and
+gateway configuration generation it was recorded under; a different model in either role, a
+configuration change that advances the generation, or a server restart reads `unmeasured` until that
+pair is qualified again. `POST /api/git-review/pair-qualifications` runs the shipped synthetic corpus
+(Issue #4132) through the real review run service: each case becomes a two-commit Git repository
+under `<stateDir>/review-qualification/<id>/` (hardened review runner, repository-local identity),
+reviewed as a `local-range` target under the qualification's correlation and removed afterwards;
+the results are scored with `scoreReviewSeedRun`. `seed-qualified` needs every required seed found;
+one missed required seed is `seed-failed` with the missed seed classes; a cancellation, the
+three-hour deadline or an unscored case ends `cancelled` or `incomplete` and records no status. One
+qualification runs at a time; progress streams over the shared SSE helper; leftovers are swept at
+start.
+
 ### D9 — Measurement gates
 
 - **Offline gate (Issue #4138).** On a chronological holdout of historical Keiko pull requests, the

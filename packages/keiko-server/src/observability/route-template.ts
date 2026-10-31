@@ -211,6 +211,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "orphans",
   "packs",
   "pair",
+  "pair-qualifications",
   "patch-apply",
   "pause",
   "pin",

@@ -2236,6 +2236,19 @@ counter-check session has its own correlation id and points at its run through
 and cause chain), so the analyzer joins the sessions to the run's timeline. A start refused without
 a run writes `review.run.refused` under the request's correlation. Model ids appear only as digests.
 
+The review model policy (#4137) records a model-policy read on `review.model-policy.resolved` (the
+`enabled` switch, each role's source, state, closed refusal reason and model digest, lock,
+allowlist, single-model and pair status, option counts), a saved settings change on
+`review.model-policy.updated` (revision and what changed) and every refusal on
+`review.model-policy.refused` (closed reason, role, stage `startup`, `settings-update`, `run-start` or
+`qualification`, and for an invalid operator value its closed key and source). A pair qualification
+is one correlation: `review.pair-qualification.started`, one `review.pair-qualification.case-scored`
+per seed case (seed kind, class, closed result, presented count, run digest), then
+`review.pair-qualification.completed` (outcome, the seed score, missed class count, tokens per role,
+duration) or `review.pair-qualification.failed` (closed reason; frames and cause chain for an
+unexpected failure). Every seed case's review run is started under the same correlation, so its
+`review.run.*` lines join that timeline. No rules path, model name or model output is recorded.
+
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract

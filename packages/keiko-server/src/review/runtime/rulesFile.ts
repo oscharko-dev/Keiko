@@ -12,8 +12,7 @@ import {
   REVIEW_RULES_FILE_MAX_BYTES,
   type ReviewRulesFileOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
-import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import { hasControlCharacter } from "@oscharko-dev/keiko-contracts/text-safety";
+import { isReviewRulesFilePath } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 import {
   readGitReviewBlob,
   readGitReviewPathObject,
@@ -22,7 +21,10 @@ import {
 
 const RULES_READ_TIMEOUT_MS = 10_000;
 
-/** Supplies the repository's configured rules path (child 7 persists it; absent is the default). */
+/**
+ * Supplies the repository's configured rules path: Issue #4137's per-repository review settings
+ * and operator presets (`review/policy/policy.ts`); absent is the default.
+ */
 export interface ReviewRulesSettingsPort {
   rulesPath(repositoryRoot: string): string | undefined;
 }
@@ -56,9 +58,7 @@ export class ReviewRulesReadError extends Error {
  */
 export function resolveReviewRulesPath(path: string | undefined): string | undefined {
   const candidate = path ?? REVIEW_RULES_FILE_DEFAULT_PATH;
-  return isPortableWorkspaceRelativePath(candidate) && !hasControlCharacter(candidate)
-    ? candidate
-    : undefined;
+  return isReviewRulesFilePath(candidate) ? candidate : undefined;
 }
 
 /** A decoded rules text Keiko admits: no replacement character (invalid UTF-8) and no NUL. */

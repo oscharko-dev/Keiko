@@ -49,6 +49,11 @@ same confinement (ADR-0043 D15) — are covered in the dedicated
 [macOS Coding Sidecar Seatbelt Confinement Troubleshooting](macos-coding-sidecar-seatbelt-confinement-failure.md)
 entries.
 
+Keiko for Quality review model refusals — a refused Reviewer or Counter-checker selection, review
+start or pair qualification, an invalid operator `review` value, or the `REVIEW_DISABLED` switch —
+are covered in the dedicated [Review Model Policy Troubleshooting](review-model-policy-refused.md)
+entry.
+
 LiteLLM production-gateway issues are covered in the dedicated
 [LiteLLM Production Gateway](litellm-production-gateway.md) entry. Use that page for
 `x-litellm-key` authentication, `PROXY_BLOCKED_BY_POLICY` on a local proxy, `max_tokens`

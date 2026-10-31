@@ -28,6 +28,7 @@ Architecture background:
 - [Governed GitHub pull request command center](governed-github-pull-request.md)
 - [Governed merge](governed-merge.md)
 - [Git client repository state, history, remotes, and sync API](git-client-repository-api.md)
+- [Keiko for Quality review models, settings and pair qualification](pull-request-review-model-policy.md)
 
 Executable closure check:
 

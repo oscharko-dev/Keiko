@@ -378,6 +378,23 @@ describe("parseGatewayConfig", () => {
     ).toThrow(/branding must be an object/);
   });
 
+  // #4137 (ADR-0182 D8): the operator's review section never fails the gateway load. An invalid
+  // value is a closed issue the review policy fails closed on, and the block is kept verbatim.
+  it("parses the review section with its overrides and keeps an invalid block verbatim", () => {
+    const raw = validRaw() as Record<string, unknown>;
+    expect(parseGatewayConfig(raw).review).toBeUndefined();
+    const section = { enabled: true, reviewerModelId: "", lockModelPolicy: true };
+    const parsed = parseGatewayConfig({ ...raw, review: section });
+    expect(parsed.providers.length).toBeGreaterThan(0);
+    expect(parsed.review?.section).toEqual(section);
+    expect(parsed.review?.operator.enabled).toBe(true);
+    expect(parsed.review?.operator.issues).toEqual([{ key: "reviewerModelId", source: "file" }]);
+    const overridden = parseGatewayConfig(raw, { KEIKO_REVIEW_ENABLED: "true" });
+    expect(overridden.review).toEqual({
+      operator: { enabled: true, lockModelPolicy: false, repositories: {}, issues: [] },
+    });
+  });
+
   // PR #3678 (ADR-0144): the operator's policy for Keiko's own assessment in grounded answers.
   it("parses the grounded-answer policy and leaves it absent by default", () => {
     const raw = validRaw() as Record<string, unknown>;

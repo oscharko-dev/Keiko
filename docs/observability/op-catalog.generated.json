@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b746bee1b9a4010d782a5b12a51e01ed9e5d3e987238bbb97a92ef4490be3c62",
+    "catalogDigest": "c9a6ab63d8b276db8638a5b4e4924fe29911967aad17afd98cc8774f43733be5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22763,8 +22763,8 @@
         "failureClasses": ["gateway-setup-target"],
         "proofIds": ["gateway.setup.target.accepted.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:7295",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7322"]
+        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:7303",
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7330"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23373,7 +23373,7 @@
         "proofIds": ["gateway.tool-calling.verification.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gateway-setup.ts:174",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9089"]
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9097"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23806,7 +23806,7 @@
         "proofIds": ["gateway.voice.setup.resolved.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/gateway-setup.ts:204",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9111"]
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9119"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34002,6 +34002,726 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:180",
         "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:343"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "process",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "failureClasses": ["review-model-policy"],
+        "op": "review.model-policy.refused",
+        "emitter": "review/policy/activity-log.logReviewModelPolicyRefused",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "not-configured",
+              "not-tool-capable",
+              "tool-verification-stale",
+              "window-unknown",
+              "window-too-small",
+              "not-coding-safe",
+              "outside-allowlist",
+              "policy-locked",
+              "invalid-operator-value",
+              "rules-path-invalid",
+              "revision-conflict",
+              "request-invalid"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["reviewer", "counter-checker", "none"]
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["startup", "settings-update", "run-start", "qualification"]
+          },
+          "operatorKey": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "review",
+              "enabled",
+              "reviewerModelId",
+              "counterCheckerModelId",
+              "allowedReviewModelIds",
+              "lockModelPolicy",
+              "rulesFilePath",
+              "repositories"
+            ]
+          },
+          "operatorKeySource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["file", "environment"]
+          }
+        },
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "proofIds": ["review.model-policy.refused.line"],
+        "registrationSite": "packages/keiko-server/src/review/policy/activity-log.ts:150",
+        "emitterSites": ["packages/keiko-server/src/review/policy/activity-log.ts:307"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "process",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "failureClasses": ["review-model-policy"],
+        "op": "review.model-policy.resolved",
+        "emitter": "review/policy/activity-log.logReviewModelPolicyResolved",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "enabled": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "reviewerSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["operator", "user", "recommendation", "none"]
+          },
+          "reviewerState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["eligible", "busy", "temporarily-unavailable", "refused"]
+          },
+          "reviewerReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "not-configured",
+              "not-tool-capable",
+              "tool-verification-stale",
+              "window-unknown",
+              "window-too-small",
+              "not-coding-safe",
+              "outside-allowlist",
+              "policy-locked",
+              "invalid-operator-value",
+              "rules-path-invalid",
+              "revision-conflict",
+              "request-invalid"
+            ]
+          },
+          "reviewerModelDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "counterCheckerSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["operator", "user", "recommendation", "none"]
+          },
+          "counterCheckerState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["eligible", "busy", "temporarily-unavailable", "refused"]
+          },
+          "counterCheckerReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "not-configured",
+              "not-tool-capable",
+              "tool-verification-stale",
+              "window-unknown",
+              "window-too-small",
+              "not-coding-safe",
+              "outside-allowlist",
+              "policy-locked",
+              "invalid-operator-value",
+              "rules-path-invalid",
+              "revision-conflict",
+              "request-invalid"
+            ]
+          },
+          "counterCheckerModelDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "locked": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "allowlistActive": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "singleModel": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "pairStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "unmeasured",
+              "seed-qualified",
+              "seed-failed",
+              "collecting",
+              "measured-passed",
+              "measured-failed"
+            ]
+          },
+          "optionCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "eligibleReviewerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "eligibleCounterCheckerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "invalidOperatorKeyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "proofIds": ["review.model-policy.resolved.line"],
+        "registrationSite": "packages/keiko-server/src/review/policy/activity-log.ts:108",
+        "emitterSites": [
+          "packages/keiko-server/src/review/policy/activity-log.ts:227",
+          "packages/keiko-server/src/review/policy/activity-log.ts:236"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "process",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "failureClasses": ["review-model-policy"],
+        "op": "review.model-policy.updated",
+        "emitter": "review/policy/activity-log.logReviewModelPolicyUpdated",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reviewerSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["operator", "user", "recommendation", "none"]
+          },
+          "reviewerState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["eligible", "busy", "temporarily-unavailable", "refused"]
+          },
+          "reviewerReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "not-configured",
+              "not-tool-capable",
+              "tool-verification-stale",
+              "window-unknown",
+              "window-too-small",
+              "not-coding-safe",
+              "outside-allowlist",
+              "policy-locked",
+              "invalid-operator-value",
+              "rules-path-invalid",
+              "revision-conflict",
+              "request-invalid"
+            ]
+          },
+          "reviewerModelDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "counterCheckerSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["operator", "user", "recommendation", "none"]
+          },
+          "counterCheckerState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["eligible", "busy", "temporarily-unavailable", "refused"]
+          },
+          "counterCheckerReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "not-configured",
+              "not-tool-capable",
+              "tool-verification-stale",
+              "window-unknown",
+              "window-too-small",
+              "not-coding-safe",
+              "outside-allowlist",
+              "policy-locked",
+              "invalid-operator-value",
+              "rules-path-invalid",
+              "revision-conflict",
+              "request-invalid"
+            ]
+          },
+          "counterCheckerModelDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "modelsChanged": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "rulesPathChanged": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "rulesPathSet": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "proofIds": ["review.model-policy.updated.line"],
+        "registrationSite": "packages/keiko-server/src/review/policy/activity-log.ts:134",
+        "emitterSites": ["packages/keiko-server/src/review/policy/activity-log.ts:269"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "process",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "failureClasses": ["review-pair-qualification"],
+        "op": "review.pair-qualification.case-scored",
+        "emitter": "review/qualification/activity-log.logPairQualificationCaseScored",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "qualificationDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "caseIndex": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "seedKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "removed-authorization-guard",
+              "swallowed-error",
+              "missing-await",
+              "off-by-one-boundary",
+              "nullish-dereference-after-optional",
+              "path-traversal-in-file-read",
+              "unchecked-input-to-sensitive-sink",
+              "resource-not-released-on-error-path",
+              "inverted-condition",
+              "clean-control"
+            ]
+          },
+          "seedClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "correctness",
+              "security",
+              "reliability",
+              "performance",
+              "concurrency",
+              "data-integrity",
+              "test-gap",
+              "maintainability"
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "seedResult": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["found", "missed", "stale", "clean", "false-alarm", "not-scored"]
+          },
+          "presentedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "runDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          }
+        },
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "proofIds": ["review.pair-qualification.case-scored.line"],
+        "registrationSite": "packages/keiko-server/src/review/qualification/activity-log.ts:117",
+        "emitterSites": ["packages/keiko-server/src/review/qualification/activity-log.ts:255"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "process",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "failureClasses": ["review-pair-qualification"],
+        "op": "review.pair-qualification.completed",
+        "emitter": "review/qualification/activity-log.logPairQualificationCompleted",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "qualificationDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["seed-qualified", "seed-failed"]
+          },
+          "defectCaseCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "cleanControlCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "found": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "missed": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "stale": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "falseAlarms": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "requiredCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "requiredFound": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unmatchedResults": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "missedSeedClassCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reviewerPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reviewerCompletionTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "counterCheckPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "counterCheckCompletionTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "proofIds": ["review.pair-qualification.completed.line"],
+        "registrationSite": "packages/keiko-server/src/review/qualification/activity-log.ts:151",
+        "emitterSites": ["packages/keiko-server/src/review/qualification/activity-log.ts:292"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "process",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "failureClasses": ["review-pair-qualification"],
+        "op": "review.pair-qualification.failed",
+        "emitter": "review/qualification/activity-log.logPairQualificationFailed",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "qualificationDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "cancelled",
+              "incomplete",
+              "deadline-exceeded",
+              "active-qualification",
+              "unavailable",
+              "failed"
+            ]
+          },
+          "scoredCases": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unscoredCases": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "reviewerPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "counterCheckPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
+          }
+        },
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "proofIds": ["review.pair-qualification.failed.line"],
+        "registrationSite": "packages/keiko-server/src/review/qualification/activity-log.ts:173",
+        "emitterSites": ["packages/keiko-server/src/review/qualification/activity-log.ts:351"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "process",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "releaseImpact": "patch",
+        "failureClasses": ["review-pair-qualification"],
+        "op": "review.pair-qualification.started",
+        "emitter": "review/qualification/activity-log.logPairQualificationStarted",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "qualificationDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "reviewerModelDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "counterCheckerModelDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "caseCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "defectCaseCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "cleanControlCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "deadlineMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "lifecycle": "start",
+        "analyzerProjection": "timeline",
+        "proofIds": ["review.pair-qualification.started.line"],
+        "registrationSite": "packages/keiko-server/src/review/qualification/activity-log.ts:99",
+        "emitterSites": ["packages/keiko-server/src/review/qualification/activity-log.ts:224"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -56022,13 +56742,95 @@
         ],
         "requiredFrameOperations": ["review.counter-check.failed"],
         "requiredCauseOperations": ["review.counter-check.failed"]
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "review-model-policy",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["review.model-policy.resolved"],
+          "end": ["review.model-policy.updated"],
+          "failure": ["review.model-policy.refused"],
+          "loss": []
+        },
+        "requiredCausalOperations": [
+          "review.model-policy.refused",
+          "review.model-policy.resolved",
+          "review.model-policy.updated"
+        ],
+        "requiredLossOperations": [],
+        "requiredProofOperations": [
+          "review.model-policy.refused",
+          "review.model-policy.resolved",
+          "review.model-policy.updated"
+        ],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [
+          "review.model-policy.resolved",
+          "review.model-policy.updated"
+        ],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "digest",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "review-pair-qualification",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": ["review.pair-qualification.started"],
+          "state": ["review.pair-qualification.case-scored"],
+          "end": ["review.pair-qualification.completed"],
+          "failure": ["review.pair-qualification.failed"],
+          "loss": []
+        },
+        "requiredCausalOperations": [
+          "review.pair-qualification.case-scored",
+          "review.pair-qualification.completed",
+          "review.pair-qualification.failed",
+          "review.pair-qualification.started"
+        ],
+        "requiredLossOperations": [],
+        "requiredProofOperations": [
+          "review.pair-qualification.case-scored",
+          "review.pair-qualification.completed",
+          "review.pair-qualification.failed",
+          "review.pair-qualification.started"
+        ],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [
+          "review.pair-qualification.case-scored",
+          "review.pair-qualification.completed",
+          "review.pair-qualification.started"
+        ],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "digest",
+          "duration",
+          "error-kind",
+          "loss-state",
+          "opaque-id"
+        ],
+        "requiredFrameOperations": ["review.pair-qualification.failed"],
+        "requiredCauseOperations": ["review.pair-qualification.failed"]
       }
     ],
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 396,
-      "completeClassCount": 396,
+      "supportedClassCount": 398,
+      "completeClassCount": 398,
       "completeness": "complete",
       "classes": [
         {
@@ -95886,6 +96688,698 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "review-model-policy",
+          "requirementContract": "review-model-policy",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end", "failure", "state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["review.model-policy.resolved"],
+            "end": ["review.model-policy.updated"],
+            "failure": ["review.model-policy.refused"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "review.model-policy.refused",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.model-policy.resolved",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.model-policy.updated",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["review.model-policy.resolved", "review.model-policy.updated"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "review.model-policy.refused",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "operatorKey",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "operatorKeySource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "role",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.model-policy.refused.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.model-policy.resolved",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "allowlistActive",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "counterCheckerModelDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "counterCheckerReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "counterCheckerSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "counterCheckerState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "eligibleCounterCheckerCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "eligibleReviewerCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "enabled",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "invalidOperatorKeyCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "locked",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "optionCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "pairStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "reviewerModelDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "reviewerReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "reviewerSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "reviewerState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "singleModel",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.model-policy.resolved.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.model-policy.updated",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "counterCheckerModelDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "counterCheckerReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "counterCheckerSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "counterCheckerState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "modelsChanged",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reviewerModelDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "reviewerReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "reviewerSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "reviewerState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "revision",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "rulesPathChanged",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "rulesPathSet",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.model-policy.updated.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "review-pair-qualification",
+          "requirementContract": "review-pair-qualification",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end", "failure", "start", "state"],
+          "lifecycleOperations": {
+            "start": ["review.pair-qualification.started"],
+            "state": ["review.pair-qualification.case-scored"],
+            "end": ["review.pair-qualification.completed"],
+            "failure": ["review.pair-qualification.failed"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "review.pair-qualification.case-scored",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.pair-qualification.completed",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.pair-qualification.failed",
+              "mode": "correlation"
+            },
+            {
+              "op": "review.pair-qualification.started",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [
+            "review.pair-qualification.case-scored",
+            "review.pair-qualification.completed",
+            "review.pair-qualification.started"
+          ],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "review.pair-qualification.case-scored",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "caseIndex",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "presentedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "qualificationDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "required",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "runDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "seedClass",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "seedKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "seedResult",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.pair-qualification.case-scored.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.pair-qualification.completed",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "cleanControlCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "counterCheckCompletionTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "counterCheckPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "defectCaseCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "falseAlarms",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "found",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "missed",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "missedSeedClassCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "qualificationDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "requiredCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "requiredFound",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reviewerCompletionTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reviewerPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "stale",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "unmatchedResults",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.pair-qualification.completed.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.pair-qualification.failed",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "counterCheckPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "qualificationDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reviewerPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "scoredCases",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "unscoredCases",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "duration",
+                "error-kind",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": true,
+                "causeChain": true
+              },
+              "proofIds": ["review.pair-qualification.failed.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "review.pair-qualification.started",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "start",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "caseCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "cleanControlCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "counterCheckerModelDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "deadlineMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "defectCaseCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "qualificationDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "reviewerModelDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "completeness-state",
+                "count",
+                "digest",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["review.pair-qualification.started.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "review-private-ref-retention",
           "requirementContract": "review-private-ref-retention",
           "productSurfaces": ["keiko-server"],
@@ -105658,7 +107152,7 @@
   },
   "legacyDiscovery": {
     "dynamicCount": 100,
-    "unknownCategoryCount": 75,
+    "unknownCategoryCount": 82,
     "authoritative": false
   },
   "entries": [
@@ -107826,7 +109320,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/review/diagnostics.ts:35",
+      "site": "packages/keiko-server/src/review/diagnostics.ts:39",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107889,56 +109383,56 @@
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6001",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6009",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7002",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7010",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7242",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7250",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7271",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7279",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7556",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7564",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7581",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7589",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7862",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7870",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:8005",
+      "site": "packages/keiko-server/src/gateway-setup.ts:8013",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109772,7 +111266,7 @@
     {
       "op": "gateway.capability",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:8976",
+      "site": "packages/keiko-server/src/gateway-setup.ts:8984",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109785,7 +111279,7 @@
     {
       "op": "gateway.context-window",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:9033",
+      "site": "packages/keiko-server/src/gateway-setup.ts:9041",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109846,7 +111340,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1666",
+      "site": "packages/keiko-server/src/deps.ts:1682",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109970,7 +111464,7 @@
     {
       "op": "gateway.setup.target.accepted",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7298",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7306",
       "package": "keiko-server"
     },
     {
@@ -110655,7 +112149,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2433",
+      "site": "packages/keiko-server/src/deps.ts:2449",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111013,6 +112507,55 @@
       "package": "keiko-server"
     },
     {
+      "op": "review.model-policy.refused",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/review/policy/activity-log.ts:152",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.model-policy.resolved",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/review/policy/activity-log.ts:110",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.model-policy.updated",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/review/policy/activity-log.ts:136",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.pair-qualification.case-scored",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/review/qualification/activity-log.ts:119",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.pair-qualification.completed",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/review/qualification/activity-log.ts:153",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.pair-qualification.failed",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/review/qualification/activity-log.ts:175",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.pair-qualification.started",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/review/qualification/activity-log.ts:101",
+      "package": "keiko-server"
+    },
+    {
+      "op": "review.pair-qualification.startup-sweep",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:5287",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "review.run.action-refused",
       "category": "security",
       "site": "packages/keiko-server/src/review/runtime/activity-log.ts:135",
@@ -111069,14 +112612,14 @@
     {
       "op": "review.runtime.compose",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5262",
+      "site": "packages/keiko-server/src/deps.ts:5343",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "review.services.compose",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5100",
+      "site": "packages/keiko-server/src/deps.ts:5135",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111138,7 +112681,7 @@
     {
       "op": "review.worktree.startup-sweep",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5129",
+      "site": "packages/keiko-server/src/deps.ts:5164",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111320,7 +112863,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4732",
+      "site": "packages/keiko-server/src/deps.ts:4748",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111480,7 +113023,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3309",
+      "site": "packages/keiko-server/src/deps.ts:3325",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112552,6 +114095,14 @@
     "review.counter-check.completed",
     "review.counter-check.failed",
     "review.finding.reported",
+    "review.model-policy.refused",
+    "review.model-policy.resolved",
+    "review.model-policy.updated",
+    "review.pair-qualification.case-scored",
+    "review.pair-qualification.completed",
+    "review.pair-qualification.failed",
+    "review.pair-qualification.started",
+    "review.pair-qualification.startup-sweep",
     "review.run.action-refused",
     "review.run.phase",
     "review.run.profile-refused",

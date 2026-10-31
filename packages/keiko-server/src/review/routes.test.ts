@@ -4,7 +4,6 @@
 // content, and closes after the one `settled` event. The run is reconstructed from its own
 // persisted lines with the support analyzer's `analyzeLogText` by its correlation id.
 
-import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ReviewRunEvent } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
@@ -15,6 +14,7 @@ import { formatActivityLogProofLine } from "../../../../tests/support/activity-l
 import { STREAMING } from "../routes.js";
 import { counterCheckCandidate } from "./counter-check/counterCheck.js";
 import { handleReviewRunEvents, handleReviewRunStart } from "./routes.js";
+import { FakeSseResponse, sseEvents } from "./sseResponse.test-support.js";
 import {
   counterCheckBy,
   createReviewRunHarness,
@@ -25,38 +25,6 @@ import {
   type RuntimeScript,
 } from "./service/reviewRunHarness.test-support.js";
 
-class FakeResponse extends EventEmitter {
-  public destroyed = false;
-  public writableEnded = false;
-  public writableFinished = false;
-  public writableNeedDrain = false;
-  public accept = true;
-  public readonly frames: string[] = [];
-
-  public writeHead(): this {
-    return this;
-  }
-
-  public write(chunk: string): boolean {
-    this.frames.push(chunk);
-    return this.accept;
-  }
-
-  public end(): this {
-    this.writableEnded = true;
-    this.writableFinished = true;
-    this.emit("finish");
-    this.emit("close");
-    return this;
-  }
-
-  public destroy(): this {
-    this.destroyed = true;
-    this.emit("close");
-    return this;
-  }
-}
-
 let harness: ReviewRunHarness | undefined;
 
 afterEach(async () => {
@@ -64,10 +32,8 @@ afterEach(async () => {
   harness = undefined;
 });
 
-function events(response: FakeResponse): ReviewRunEvent[] {
-  return response.frames
-    .filter((frame) => frame.startsWith("event: review\n"))
-    .map((frame) => JSON.parse(frame.slice(frame.indexOf("data: ") + 6)) as ReviewRunEvent);
+function events(response: FakeSseResponse): ReviewRunEvent[] {
+  return sseEvents<ReviewRunEvent>(response, "review");
 }
 
 describe("GET /api/git-review/runs/{runId}/events (AC6)", () => {
@@ -89,7 +55,7 @@ describe("GET /api/git-review/runs/{runId}/events (AC6)", () => {
       h.deps(),
     );
     const runId = (started.body as { run: { runId: string } }).run.runId;
-    const response = new FakeResponse();
+    const response = new FakeSseResponse();
     // Node buffers every frame above its high-water mark; the stream must keep going regardless.
     response.accept = false;
     const outcome = await handleReviewRunEvents(
@@ -118,7 +84,7 @@ describe("GET /api/git-review/runs/{runId}/events (AC6)", () => {
     expect(response.writableEnded).toBe(true);
     expect(response.destroyed).toBe(false);
 
-    const replay = new FakeResponse();
+    const replay = new FakeSseResponse();
     await handleReviewRunEvents(
       h.ctx(`/api/git-review/runs/${runId}/events`, {
         params: { runId },

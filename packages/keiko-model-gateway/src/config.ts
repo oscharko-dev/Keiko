@@ -31,6 +31,8 @@ import {
   OWN_ASSESSMENT_POLICIES,
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { REVIEW_OPERATOR_ENV_VARIABLES } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import { parseReviewOperatorConfig } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
 import { validatedPrDescriptionLogoUrl } from "./prDescription/render.js";
@@ -40,6 +42,7 @@ import type {
   CostClass,
   FigmaConnectorConfig,
   GatewayBrandingConfig,
+  GatewayReviewConfig,
   GatewayConfig,
   GatewayFeatureSwitch,
   GroundedAnswersConfig,
@@ -2309,6 +2312,24 @@ function codingSwitches(
   };
 }
 
+// #4137: the review section never fails the gateway load. Its parser lists every invalid value as a
+// closed issue and the review policy fails closed on it, so a typo cannot take the models away.
+function parseGatewayReviewConfig(
+  raw: Record<string, unknown>,
+  env: EnvSource,
+): GatewayReviewConfig | undefined {
+  const declared = Object.hasOwn(raw, "review");
+  const overridden = Object.values(REVIEW_OPERATOR_ENV_VARIABLES).some(
+    (name) => (env[name]?.trim() ?? "") !== "",
+  );
+  if (!declared && !overridden) return undefined;
+  const section: unknown = raw.review;
+  return {
+    operator: parseReviewOperatorConfig(section, env),
+    ...(declared ? { section: structuredClone(section) } : {}),
+  };
+}
+
 function buildGatewayConfig(
   raw: Record<string, unknown>,
   providersRaw: readonly unknown[],
@@ -2327,9 +2348,6 @@ function buildGatewayConfig(
   const grounding = parseGroundingLimits(raw);
   const reranker = parseRerankerConfig(raw, env, egress, options);
   const figma = parseFigmaConnectorConfig(raw);
-  const branding = parseGatewayBrandingConfig(raw);
-  const groundedAnswers = parseGroundedAnswersConfig(raw);
-  const atlassian = parseAtlassianNetworkConfig(raw.atlassian);
   const codingOutageWindowMs = parseCodingOutageWindow(raw.codingOutageWindowMs);
   return {
     providers,
@@ -2341,9 +2359,25 @@ function buildGatewayConfig(
     ...(reranker !== undefined ? { reranker } : {}),
     ...(egress !== undefined ? { egress } : {}),
     ...(figma !== undefined ? { figma } : {}),
+    ...operatorSections(raw, env),
+  };
+}
+
+// The operator-owned top-level sections: PR branding, the grounded-answer policy, the Atlassian
+// network targets and (#4137) the Keiko for Quality review section.
+function operatorSections(
+  raw: Record<string, unknown>,
+  env: EnvSource,
+): Pick<GatewayConfig, "branding" | "groundedAnswers" | "atlassian" | "review"> {
+  const branding = parseGatewayBrandingConfig(raw);
+  const groundedAnswers = parseGroundedAnswersConfig(raw);
+  const atlassian = parseAtlassianNetworkConfig(raw.atlassian);
+  const review = parseGatewayReviewConfig(raw, env);
+  return {
     ...(branding !== undefined ? { branding } : {}),
     ...(groundedAnswers !== undefined ? { groundedAnswers } : {}),
     ...(atlassian === undefined ? {} : { atlassian }),
+    ...(review === undefined ? {} : { review }),
   };
 }
 
