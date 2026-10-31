@@ -99,7 +99,7 @@ evaluates. [native-policy-test][native-policy-test] pins these classifications; 
 | plan-directory read or edit (the plan agent's notes)                                                                                                         | planning                                               | allowed | allowed    | allowed |
 | `external_directory` outside the plan directory, a path outside the workspace                                                                                | hard denial (`workspace-escape`)                       | refused | refused    | refused |
 | `.env`, keys and other credential-named paths                                                                                                                | hard denial (`sensitive-path`)                         | refused | refused    | refused |
-| Git delivery or `gh pr`, `repo`, `release`, `api` through the shell                                                                                          | hard denial (`delivery-reserved`)                      | refused | refused    | refused |
+| Git delivery, ref or configuration writes (`update-ref`, `config`, …) or `gh pr`, `repo`, `release`, `api` through the shell                                 | hard denial (`delivery-reserved`)                      | refused | refused    | refused |
 | A Code Mode `opencode_session_move` of another session or out of the workspace, a `opencode_worktree_create` without one plain name; any unclassified action | hard denial (`unsupported-action`, `workspace-escape`) | refused | refused    | refused |
 
 Internet below Full is refused at once, with an explanation, because the kernel profile has no route

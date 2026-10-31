@@ -325,6 +325,8 @@ export type CodingToolResult =
       readonly verifiedCommit: VerifiedCommitResult;
       /** Fresh bound approval-store disposition; the recorded commit receipt remains immutable. */
       readonly approvalDisposition?: "ready" | undefined;
+      /** The fixed recovery instruction for a commit blocked on a protected branch; absent otherwise. */
+      readonly guidance?: string | undefined;
     }
   | {
       readonly status: "completed";
