@@ -623,11 +623,11 @@ int wmain(int argc, wchar_t **argv) {
   write_u32(proof + 4, active_processes);
   result = send_response(RESPONSE_REAPED, proof, sizeof(proof)) ? 0 : 1;
 cleanup:
-  keiko_gateway_disconnect(&gateway);
   if (result != 0 && job != NULL) TerminateJobObject(job, 137);
   if (process.hProcess != NULL) CloseHandle(process.hProcess);
   if (completion_port != NULL) CloseHandle(completion_port);
   if (job != NULL) CloseHandle(job);
+  keiko_gateway_disconnect(&gateway);
   clear_request(&request);
   return result;
 }

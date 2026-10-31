@@ -6,6 +6,7 @@ struct keiko_gateway_connection {
   HANDLE pipe;
   HANDLE server;
   PSID sid;
+  wchar_t profile[48];
   BYTE nonce[KEIKO_GATEWAY_CHALLENGE_BYTES];
 };
 

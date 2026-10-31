@@ -37,17 +37,17 @@ static BOOL transfer(HANDLE pipe, void *data, DWORD size, BOOL write, HANDLE sto
   return ok && count == size;
 }
 
-static BOOL tree_sid(const BYTE *nonce, PSID *sid) {
+static void tree_name(const BYTE *nonce, wchar_t name[48]) {
   static const wchar_t hex[] = L"0123456789abcdef";
   /* The AppContainer moniker is limited to 64 characters. 128 bits of the
    * service-generated nonce identify the package; the full challenge binds the ACK. */
-  wchar_t name[48] = L"Keiko.Gateway.";
+  wcscpy_s(name, 48, L"Keiko.Gateway.");
   size_t offset = wcslen(name);
   for (size_t i = 0; i < 16; i++) {
     name[offset++] = hex[nonce[i] >> 4];
     name[offset++] = hex[nonce[i] & 15];
   }
-  return SUCCEEDED(DeriveAppContainerSidFromAppContainerName(name, sid));
+  name[offset] = 0;
 }
 
 /* Trust the system's running service PID, never an identity asserted by the pipe. Hold
@@ -87,7 +87,13 @@ int keiko_gateway_connect(struct keiko_gateway_connection *c) {
       !transfer(c->pipe, c->nonce, CHALLENGE_SIZE, FALSE, NULL)) {
     fputs("gateway peer challenge unavailable\n", stderr); return 0;
   }
-  if (!tree_sid(c->nonce, &c->sid)) { fputs("gateway package SID unavailable\n", stderr); return 0; }
+  tree_name(c->nonce, c->profile);
+  HRESULT result = CreateAppContainerProfile(c->profile, c->profile, L"Keiko supervised runtime",
+                                            NULL, 0, &c->sid);
+  if (FAILED(result)) {
+    fprintf(stderr, "gateway profile creation failed: %08lx\n", (unsigned long)result);
+    return 0;
+  }
   return 1;
 }
 
@@ -106,7 +112,11 @@ int keiko_gateway_confirm(struct keiko_gateway_connection *c, HANDLE job, BYTE *
 void keiko_gateway_disconnect(struct keiko_gateway_connection *c) {
   if (c->pipe && c->pipe != INVALID_HANDLE_VALUE) CloseHandle(c->pipe);
   if (c->server) CloseHandle(c->server);
-  if (c->sid) FreeSid(c->sid);
+  if (c->sid) {
+    HRESULT deleted = DeleteAppContainerProfile(c->profile);
+    if (FAILED(deleted)) fprintf(stderr, "gateway profile cleanup failed: %08lx\n", (unsigned long)deleted);
+    FreeSid(c->sid);
+  }
   SecureZeroMemory(c, sizeof(*c));
 }
 
@@ -141,16 +151,18 @@ static DWORD serve(HANDLE pipe, HANDLE image) {
   struct keiko_gateway_filters filters = {0};
   HANDLE source = NULL, job = NULL;
   PSID sid = NULL;
+  wchar_t name[48];
   BOOL owned = FALSE;
   DWORD cleanup = ERROR_SUCCESS;
   if (!transfer(pipe, hello, sizeof(hello), FALSE, stopping) || memcmp(hello, "KGH1", 4) ||
       keiko_gateway_peer_authenticate(pipe, image, &peer) != ERROR_SUCCESS ||
       keiko_gateway_challenge_issue(&challenge) != ERROR_SUCCESS) goto done;
   memcpy(nonce, challenge.nonce, sizeof(nonce));
+  tree_name(nonce, name);
   if (!transfer(pipe, nonce, sizeof(nonce), TRUE, stopping) ||
       !transfer(pipe, frame, sizeof(frame), FALSE, stopping) ||
       keiko_gateway_request_admit(&challenge, frame, sizeof(frame), &request) != ERROR_SUCCESS ||
-      !tree_sid(nonce, &sid)) goto done;
+      FAILED(DeriveAppContainerSidFromAppContainerName(name, &sid))) goto done;
   source = OpenProcess(PROCESS_DUP_HANDLE, FALSE, peer.pid);
   HANDLE remote_job = (HANDLE)(ULONG_PTR)request.job_handle;
   if (!source || !remote_job || !DuplicateHandle(source, remote_job,
