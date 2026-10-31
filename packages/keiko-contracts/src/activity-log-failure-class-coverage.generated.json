@@ -15548,6 +15548,12 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "toolCallTextMessageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": ["completeness-state", "count", "loss-state", "opaque-id"],

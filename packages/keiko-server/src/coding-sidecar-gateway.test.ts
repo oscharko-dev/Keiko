@@ -1167,6 +1167,8 @@ describe("coding-sidecar gateway", () => {
       ["keiko_changeset_edit", "e22472d477c4bafd0e04282d09baee185286dad3d984394740c681c7f8477a4e"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
+      // #3907: the governed task branch, whose only argument is the new branch's name.
+      ["keiko_git_branch", "798fbc8729f917eeaa10ce6a7a84ddd73033d3521b66ce6e5209ae929114fd79"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
       ["keiko_git_diff", "0d3a0f35cca521a4883ce70ad847f2585425483ae0d9c58d8ff6cea14119c079"],
       // #3902 AC2: `unstage` joined the redeemable kinds and the proposal-id prefixes.
@@ -6349,10 +6351,10 @@ describe("coding sidecar gateway rejection activity log", () => {
       extra: {
         reason: "tool-contract-drift",
         runId: "run-1",
-        expectedToolCount: 19,
+        expectedToolCount: 20,
         receivedToolCount: 2,
         unexpectedToolCount: 0,
-        missingToolCount: 17,
+        missingToolCount: 18,
         completeness: "complete",
         loss: "none",
       },
@@ -6384,7 +6386,7 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(result).toMatchObject({ status: 403 });
     expect(sink.events[0]?.extra).toMatchObject({
       unexpectedToolCount: 1,
-      missingToolCount: 19,
+      missingToolCount: 20,
       completeness: "complete",
       loss: "none",
     });
@@ -8624,6 +8626,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
     expect(validated?.extra).toMatchObject({
       inputMessageCount: 6,
       droppedReasoningMessageCount: 2,
+      toolCallTextMessageCount: 1,
       offeredToolCount: OPENCODE_MODEL_VISIBLE_TOOL_NAMES.length,
     });
     expect(
@@ -8631,7 +8634,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
         "coding-sidecar.gateway.request-validated.line",
         formatActivityLogProofLine(validated ?? {}),
       ),
-    ).toMatchObject({ droppedReasoningMessageCount: 2 });
+    ).toMatchObject({ droppedReasoningMessageCount: 2, toolCallTextMessageCount: 1 });
     expect(JSON.stringify(sink.events)).not.toContain("private");
   });
 
@@ -9828,7 +9831,7 @@ describe("inactive Code Mode readiness selection", () => {
     expect(readiness.isVerified("run-1")).toBe(false);
   });
 
-  it("advertises two outer tools and retains the eighteen canonical inner bindings", async () => {
+  it("advertises two outer tools and retains the nineteen canonical inner bindings", async () => {
     const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
     const chat = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
@@ -9853,8 +9856,8 @@ describe("inactive Code Mode readiness selection", () => {
       "execute",
       "question",
     ]);
-    expect(catalog?.projection.tools).toHaveLength(18);
-    expect(catalog?.offered.toolRefs).toHaveLength(18);
+    expect(catalog?.projection.tools).toHaveLength(19);
+    expect(catalog?.offered.toolRefs).toHaveLength(19);
     expect(catalog?.projection.profile).toEqual({
       id: "opencode-code-mode",
       version: 1,

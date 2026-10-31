@@ -191,3 +191,45 @@ describe("resolveVerifiedCommitContext correlation id (#3384 B3-16)", () => {
     expect(context?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
   });
 });
+
+// #3907 (owner decision 2026-10-31): the one seam commit, push, pull request and CI read the run's
+// branches from. A run Keiko moved onto a task branch delivers from that branch, against the base
+// it started from, while the immutable envelope still names the branch it started on.
+describe("resolveVerifiedCommitContext after a governed task branch (#3907)", () => {
+  const runId = "run-00002";
+  const moved = {
+    runId,
+    taskBranch: "feature/x",
+    baseBranch: "dev",
+    headSha: "1".repeat(40),
+    workspaceDigest: digest,
+  };
+
+  it("takes the run's branches from the envelope when Keiko moved none", () => {
+    const context = resolveVerifiedCommitContext(deps(runId), binding(runId));
+    expect(context).toMatchObject({ headRef: "codex/task", baseRef: "dev" });
+    const unrelated = resolveVerifiedCommitContext(
+      { ...deps(runId), governedTaskBranch: () => undefined },
+      binding(runId),
+    );
+    expect(unrelated).toMatchObject({ headRef: "codex/task", baseRef: "dev" });
+  });
+
+  it("takes both branches from the record Keiko made for this run", () => {
+    const asked: string[] = [];
+    const context = resolveVerifiedCommitContext(
+      {
+        ...deps(runId),
+        governedTaskBranch: (id) => {
+          asked.push(id);
+          return moved;
+        },
+      },
+      binding(runId),
+    );
+    expect(asked).toEqual([runId]);
+    expect(context).toMatchObject({ headRef: "feature/x", baseRef: "dev" });
+    // Nothing else about the run's identity moves with the branch.
+    expect(context).toMatchObject({ runId, envelopeDigest: digest, repositoryDigest: digest });
+  });
+});

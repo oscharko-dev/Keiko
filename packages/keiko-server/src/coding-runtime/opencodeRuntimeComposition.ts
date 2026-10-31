@@ -1803,6 +1803,13 @@ function lifecycleAdapter(
             dispose();
           };
     },
+    // A stop revokes the runtime and reaps it seconds later; the operator revert client closes
+    // first, so a revert-state read in between is unavailable instead of failing on the dying
+    // runtime (#3907). Disposal closes it again.
+    beginStop: (runId): void => {
+      const run = runs.get(runId);
+      if (run !== undefined) run.revertReady = false;
+    },
     dispose: (runId, signal, settlement): Promise<boolean> =>
       disposeRun(input, bridge, runs, runId, signal, settlement),
   };

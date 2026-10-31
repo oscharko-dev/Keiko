@@ -170,6 +170,52 @@ describe("coding tool IPC governed fetch and pull", () => {
   });
 });
 
+// #3907: keiko_git_branch's wire shape -- one bounded name and an optional redeemed approval.
+describe("coding tool IPC governed task branch", () => {
+  const proof = { approvalId: "call-1", approvalDigest: "d".repeat(64) };
+  const request = {
+    action: "git",
+    operation: "branch",
+    branchName: "feature/x",
+    actionId: "call-1",
+    idempotencyKey: "call-1",
+  };
+
+  it("admits a branch name with and without its approval proof", () => {
+    expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+    const approved = { ...request, approvalProof: proof };
+    expect(parseCodingToolRequest(JSON.stringify(approved), 262_144)).toEqual(approved);
+  });
+
+  it("requires the local ref write the Git kernel's branch-create requires, nothing more", () => {
+    expect(codingToolRequiredActionClasses(request as never)).toEqual(["workspace-write"]);
+  });
+
+  it("leaves the decision on a bad name to the Git service by bounding it only", () => {
+    // These are names Keiko refuses with a closed reason the model can read; they must reach it.
+    for (const branchName of ["-D", "a b", "x..y", "main", "a".repeat(255)])
+      expect(
+        parseCodingToolRequest(JSON.stringify({ ...request, branchName }), 262_144),
+      ).toMatchObject({ operation: "branch", branchName });
+  });
+
+  it.each([
+    ["no name", { branchName: undefined }],
+    ["an empty name", { branchName: "" }],
+    ["an oversized name", { branchName: "a".repeat(256) }],
+    ["a non-string name", { branchName: ["feature/x"] }],
+    ["the tool's own argument name", { branchName: undefined, name: "feature/x" }],
+    ["a start point", { startPoint: "HEAD~3" }],
+    ["a base branch", { baseBranch: "main" }],
+    ["a force flag", { force: true }],
+    ["an invalid proof", { approvalProof: { ...proof, approvalDigest: "not-a-digest" } }],
+  ])("refuses a branch request carrying %s", (_label, extra) => {
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...request, ...extra }), 262_144),
+    ).toBeUndefined();
+  });
+});
+
 describe("coding tool IPC read windows (#2473)", () => {
   const read = {
     action: "read",

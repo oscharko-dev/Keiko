@@ -4,6 +4,7 @@ import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitT
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import {
+  isRuntimeGitBranchName,
   isRuntimeGitSyncOperation,
   parseRuntimeGitRequest,
   type RuntimeGitRequest,
@@ -285,6 +286,9 @@ export function codingToolRequiredActionClasses(
   // #3902 AC2: the Git sync owner's own requirement for the operation (gitOperationRequirements.ts).
   if (isRuntimeGitSyncOperation(request.operation))
     return Object.freeze([...gitOperationRequirement(request.operation).actionClasses]);
+  // #3907: a task branch is the Git kernel's own branch-create (and its switch), a local ref write.
+  if (request.operation === "branch")
+    return Object.freeze([...gitOperationRequirement("branch-create").actionClasses]);
   const effect =
     request.operation === "write" ||
     request.operation === "stage" ||
@@ -325,6 +329,8 @@ export type CodingToolResult =
       readonly verifiedCommit: VerifiedCommitResult;
       /** Fresh bound approval-store disposition; the recorded commit receipt remains immutable. */
       readonly approvalDisposition?: "ready" | undefined;
+      /** The fixed recovery instruction for a commit blocked on a protected branch; absent otherwise. */
+      readonly guidance?: string | undefined;
     }
   | {
       readonly status: "completed";
@@ -935,6 +941,7 @@ function gitRequest(value: Record<string, unknown>): CodingToolActionRequest | u
   if (value.operation === "ci") return ciRequest(value, identity);
   if (isRuntimeGitSyncOperation(value.operation))
     return syncRequest(value, identity, value.operation);
+  if (value.operation === "branch") return branchRequest(value, identity);
   const operation = value.operation;
   const simple = operation === "read" || operation === "write";
   if (!simple) return parseRuntimeGitRequest(value, identity);
@@ -960,6 +967,36 @@ function syncRequest(
     ...identity,
     action: "git",
     operation,
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
+  };
+}
+
+// #3907: a task branch carries its one name and, below Full access, the operator's approval of
+// this exact call. The name is only bounded here; whether Keiko will create it is the Git
+// service's closed decision.
+function branchRequest(
+  value: Record<string, unknown>,
+  identity: CodingToolRequestIdentity,
+): CodingToolActionRequest | undefined {
+  const approvalProof = optionalApprovalProof(value);
+  if (
+    approvalProof.kind === "invalid" ||
+    !isRuntimeGitBranchName(value.branchName) ||
+    !hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "operation",
+      "branchName",
+      "approvalProof",
+    ])
+  )
+    return undefined;
+  return {
+    ...identity,
+    action: "git",
+    operation: "branch",
+    branchName: value.branchName,
     ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
   };
 }

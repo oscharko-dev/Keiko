@@ -150,6 +150,7 @@ export type CodingWorkbenchSupervisedActionKind =
   | "git-unstage"
   | "git-fetch"
   | "git-pull"
+  | "git-branch"
   | "verification-command"
   | "ci-observe"
   | "connector-read"
@@ -169,6 +170,7 @@ export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchS
     "git-unstage",
     "git-fetch",
     "git-pull",
+    "git-branch",
     "verification-command",
     "ci-observe",
     "connector-read",
@@ -925,6 +927,7 @@ const COMMAND_EXECUTION_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActio
   "connector-read",
   "git-fetch",
   "git-pull",
+  "git-branch",
 ]);
 
 export function permissionKindForSupervisedCodingAction(
@@ -939,6 +942,8 @@ export function permissionKindForSupervisedCodingAction(
   // these two actions and would leave Approve permanently unbound. They also must never map to
   // "connector-access": that permission kind is hard-denied at every mode by
   // unavailableRuntimeActionEvent (codingRuntimeManager.ts), which would make them unreachable.
+  // git-branch (#3907, owner decision 2026-10-31) is one bounded local ref write on the same ask
+  // lane, so its approval is not an edit review either.
   // git-fetch and git-pull (#3902 AC2) are the same single, fixed-argv Git command on the same ask
   // lane; their delivery-scope decision is the Git sync owner's (runBoundAuthority.ts), and
   // "delivery-substrate" here would be hard-denied by that same function before anyone could answer.

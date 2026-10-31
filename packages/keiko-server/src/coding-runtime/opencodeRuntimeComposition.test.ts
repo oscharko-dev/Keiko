@@ -8468,6 +8468,32 @@ describe("turn revert on the run port (B3, S04)", () => {
     }
   });
 
+  // Coding Workbench Jira lab, 2026-10-30: a revert-state read between the stop's revocation and
+  // the runtime's reaping hit the dying runtime and logged `revert.refused`. Once a stop began, the
+  // read is unavailable without reaching the runtime (#3907).
+  it("closes the revert-state read as soon as a stop begins", async () => {
+    const { control, revert, activityLog } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      revert.messages = TURN;
+      await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+      await expect(fixture.runtime.manager.hold?.(FIXTURE_RUN_ID)).resolves.toMatchObject({
+        status: "held",
+      });
+      await expect(port.revertState?.(FIXTURE_RUN_ID)).resolves.toMatchObject({ fileCount: 1 });
+      revert.requests.length = 0;
+
+      const stopping = fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+      await expect(port.revertState?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+      expect(revert.requests).toEqual([]);
+      await stopping;
+      expect(JSON.stringify(activityLog.events)).not.toContain("coding-runtime.revert.refused");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("stages an undo at the newest turn, blocks the next turn until it is restored, then runs it", async () => {
     const { control, revert, promptBodies, activityLog } = revertControl();
     const fixture = await startBridgeFixture(revertFacade, undefined, control);

@@ -371,6 +371,8 @@ export interface OpenCodeLifecycleAdapter {
     request: OpenCodeLifecycleHandshakeRequest,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>;
   monitor?: ((request: OpenCodeLifecycleMonitorRequest) => (() => void) | undefined) | undefined;
+  /** A stop began: called before anything is revoked, so reads the stop would break close first. */
+  beginStop?: ((runId: string) => void) | undefined;
   dispose?:
     | ((
         runId: string,
@@ -917,6 +919,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   private async stopActive(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
     active.stopRequested = true;
     active.status = "stopping";
+    active.openCodeLifecycleAdapter?.beginStop?.(active.context.runId);
     const receipt = await this.revokeAndTerminate(active);
     if (receipt === undefined) {
       await this.enterRecoveryRequired(active);
@@ -3582,7 +3585,7 @@ function supervisedMutationEvent(
  * through this gate the way "ci-observe"/"connector-read" previously did.
  */
 const TOOL_APPROVAL_BRIDGE_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> = new Set(
-  ["verification-command", "ci-observe", "connector-read", "git-fetch", "git-pull"],
+  ["verification-command", "ci-observe", "connector-read", "git-fetch", "git-pull", "git-branch"],
 );
 
 // Duplicates codingToolApprovalBridge.ts's private CI_OBSERVATION_TARGET_ID: that file is owned by
@@ -3593,7 +3596,12 @@ const CODING_TOOL_CI_OBSERVATION_TARGET_ID = "ci";
 function toolApprovalBridgeAction(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): "verification" | "git" | "connector" {
-  if (actionKind === "ci-observe" || actionKind === "git-fetch" || actionKind === "git-pull")
+  if (
+    actionKind === "ci-observe" ||
+    actionKind === "git-fetch" ||
+    actionKind === "git-pull" ||
+    actionKind === "git-branch"
+  )
     return "git";
   if (actionKind === "connector-read") return "connector";
   return "verification";
@@ -3608,6 +3616,9 @@ function toolApprovalTargetId(
   // #3902 AC2: a governed fetch or pull is approved as its operation (codingToolApprovalBridge.ts).
   if (actionKind === "git-fetch") return "fetch";
   if (actionKind === "git-pull") return "pull";
+  // #3907: a governed task branch is approved as the digest of its name (the plugin's targetPathHash).
+  if (actionKind === "git-branch")
+    return targetPathHash === undefined ? undefined : `branch:${targetPathHash}`;
   if (actionKind === "verification-command" && commandLabel !== undefined) {
     return codingToolVerificationApprovalTargetId(commandLabel, targetPathHash);
   }

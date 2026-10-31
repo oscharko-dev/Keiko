@@ -195,6 +195,7 @@ describe("coding-workbench constants", () => {
       "git-unstage",
       "git-fetch",
       "git-pull",
+      "git-branch",
       "verification-command",
       "ci-observe",
       "connector-read",
@@ -720,6 +721,9 @@ describe("supervised coding action authority", () => {
     expect(permissionKindForSupervisedCodingAction("connector-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("external-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("commit")).toBe("delivery-substrate");
+    // #3907: a task branch is one bounded ref write on the sync ask lane, never an edit review.
+    expect(permissionKindForSupervisedCodingAction("git-branch")).toBe("command-execution");
+    expect(supervisedCodingActionRequiresApproval("git-branch")).toBe(true);
   });
 
   it("validates prompt metadata without accepting raw scope or policy strings", () => {
