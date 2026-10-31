@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5b90c45342bd1f8d1c624b677cff2aa927e3d367b9cf42161ac1029cb128fc8f",
+    "catalogDigest": "baa9129297f8bbbb3c50feb5fd4aa89211b2491608272e7fe393ed24d7375725",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2867,7 +2867,7 @@
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:82",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:481"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:469"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2910,8 +2910,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.context-fitted.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:212",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:246"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:227",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:261"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2998,8 +2998,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.ended.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:145",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:188"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:160",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:203"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -105610,13 +105610,13 @@
     {
       "op": "chat.tool-turn.context-fitted",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:215",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:230",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.ended",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:148",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:163",
       "package": "keiko-server"
     },
     {
