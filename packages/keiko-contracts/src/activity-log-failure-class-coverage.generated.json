@@ -2193,8 +2193,10 @@
       "lifecycleOperations": {
         "start": [],
         "state": [
+          "chat.compaction.summary.work",
           "chat.context.management",
           "chat.continuity.capture",
+          "chat.continuity.checkpoint",
           "chat.continuity.degraded",
           "chat.continuity.rehydration"
         ],
@@ -2203,6 +2205,10 @@
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "chat.compaction.summary.work",
+          "mode": "correlation"
+        },
         {
           "op": "chat.context.failed",
           "mode": "correlation"
@@ -2216,6 +2222,10 @@
           "mode": "correlation"
         },
         {
+          "op": "chat.continuity.checkpoint",
+          "mode": "correlation"
+        },
+        {
           "op": "chat.continuity.degraded",
           "mode": "correlation"
         },
@@ -2226,13 +2236,63 @@
       ],
       "lossSignals": [],
       "resourceSignals": [
+        "chat.compaction.summary.work",
         "chat.context.management",
         "chat.continuity.capture",
+        "chat.continuity.checkpoint",
         "chat.continuity.degraded",
         "chat.continuity.rehydration"
       ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "chat.compaction.summary.work",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "elapsedMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "modelPortCalled",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "promptCodeUnitsPlanned",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "timeoutMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.compaction.summary.work.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "chat.context.failed",
           "owner": "keiko-server",
@@ -2516,6 +2576,42 @@
           "missingObligations": []
         },
         {
+          "op": "chat.continuity.checkpoint",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "generation",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "operation",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.continuity.checkpoint.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
           "op": "chat.continuity.degraded",
           "owner": "keiko-server",
           "category": "gateway",
@@ -2560,16 +2656,64 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "budgetDroppedExcerpts",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "candidateCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
             },
             {
+              "name": "discoveryPolicy",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "excerptCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "identifierTermCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "indexLimitReached",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "indexedCandidateRows",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "indexedUnitsVisited",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "matchingPolicy",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "queryTermCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "rehydratedTokens",
@@ -2588,6 +2732,18 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "tokenBudget",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "tokenCounterSource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "unitsVisited",

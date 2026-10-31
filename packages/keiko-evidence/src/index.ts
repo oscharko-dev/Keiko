@@ -36,6 +36,7 @@ export {
 } from "./connected-context-evidence.js";
 export {
   persistCompactionEvidence,
+  projectContextCompactionRecord,
   type CompactionEvidenceContext,
   type CompactionEvidenceInput,
   type CompactionEvidencePersistResult,
