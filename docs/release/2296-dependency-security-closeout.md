@@ -145,31 +145,6 @@ zero unwaived findings, and all 74 existing Composer/parser controls pass. Exist
 expiry dates and reachability limits remain unchanged. Earlier qualification records retain their
 original dependency inputs; current release qualification is repeated for the patched resolution.
 
-On 2026-10-30 at 23:09 UTC GitHub published
-[GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (minimatch before
-11.0.1) and [GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4) (glob 9.0.0
-through 14.0.1), and the required OSV scan matched three lockfile entries: the shipped
-`minimatch` 10.2.6 (via `@sigstore/tuf`), the dev-only `glob` 13.0.6 (via `cacache`) and the
-dev-only `minimatch` 3.1.5 under `eslint-config-next`. The flat root override `minimatch` 11.0.3
-now resolves every 10.x consumer (ESLint, `@eslint/config-array`, `typescript-estree`,
-`eslint-plugin-sonarjs`, Stryker and `@tufjs/models`) to 11.0.3. It is flat and exact because the
-publish staging projects only that form into the distributed package: there `@sigstore/tuf`,
-`tuf-js` and `@tufjs/models` are vendored and the package's own runtime dependency becomes
-`minimatch` 11.0.3, which the installable-package smoke exercises. A range-scoped `minimatch@10` key
-fixed the repository lockfile but not that projection, and the macOS customer-shape qualification
-failed closed on it. `minimatch@3` entries nested under the three ESLint plugins named below keep
-their own 3.x edges on 3.1.5 without reaching their `eslint` peer. `glob@13` resolves to 14.0.3,
-which requires minimatch ^11 and brings `path-scurry` 3.0.0. Those consumers use only the
-`minimatch()`, `Minimatch#match` and `hasMagic` APIs that 11.x retains. minimatch 11 itself
-requires `brace-expansion` ^5.0.12, so the former nested `brace-expansion` 5.0.12 pin under
-`minimatch@10.2.6` is now enforced by that range and was removed; the 1.1.21 pin under
-`minimatch@3.1.5` is unchanged. The 3.1.5 instance cannot follow: the latest releases of
-`eslint-plugin-import`, `eslint-plugin-jsx-a11y` and `eslint-plugin-react` require minimatch
-^3.1.2 and call its default export or `makeRe`, both of which 11.x removed. `osv-scanner.toml`
-records it as a time-boxed, id-bound build-time waiver until 2026-11-30, and
-`check:osv-waiver-scope` confirms no shipped package carries the waived id. The exact OSV Scanner
-2.7.0 action image then reports no issues.
-
 ### How this queue must be queried — and the trap in it
 
 The count above is 2, not 1, and reproducing it requires the exact query

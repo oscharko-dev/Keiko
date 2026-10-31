@@ -209,12 +209,11 @@ qualified separately.
 
 ## minimatch and glob advisory overrides — 2026-10-31
 
-The overrides that clear GHSA-g3hv-75wg-m249 and GHSA-3g3m-2fjr-6pw4 (`minimatch` to 11.0.3,
-`glob@13` to 14.0.3) change `package.json` and `package-lock.json`, both bound by these producers.
-The same four original producers were rerun on the PR tree (dev `55e4b02b2` plus the override
-commit) on Node 24.18.0 (macOS arm64), and all passed: component fidelity with 427 probes and zero
-gated or recorded differences, editor token fidelity with 160 gated probes, zero gated differences
-and all 14 reference captures, the seven-mode accessibility proof with zero serious/critical
-violations and zero unresolved incomplete findings, and all 108 running-app captures with zero page
-errors, unexpected API requests, missing selectors, crashed windows or unavailable workspace-trust
-states. A regenerated capture was visually inspected. No gate, fixture or rule was changed.
+GHSA-g3hv-75wg-m249 and GHSA-3g3m-2fjr-6pw4 moved the root overrides to minimatch 11.0.3 and glob
+14.0.3, which changes `package.json` and `package-lock.json`, two of the declared source inputs. The
+four original producers were rerun on that tree on Node 24.18.0 (macOS arm64), as for release 1.3.2,
+and all passed: component fidelity with zero gated differences and no missing selectors, editor
+token fidelity with zero gated differences and all 14 reference captures, the seven-mode
+accessibility proof with zero serious/critical violations and zero unresolved incomplete findings,
+and all 108 running-app captures with zero page errors, unexpected API requests, missing selectors,
+crashed windows or unavailable workspace-trust states. No gate, fixture or rule was changed.

@@ -69,7 +69,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "aa417cff3fb77c72f511a61d0d9aec93f25c4ea466049e73e06c098db563bfb0"
+      "sha256": "fdf6ff8df9b0dff327faa8324416f71785ed4ce8506e94414aee021c14f89863"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -132,8 +132,8 @@
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-10-31T01:16:10.359Z",
-    "repoHeadSha": "1ae05a48e24deee31e8cf3e0b8caceb5c3058e77"
+    "generatedAt": "2026-10-31T00:21:52.911Z",
+    "repoHeadSha": "03310922459fa3ca7dce4070d2434506161ecf6c"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {

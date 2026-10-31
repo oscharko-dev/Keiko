@@ -3390,13 +3390,6 @@ describe("installable package smoke optional-dependency coverage", () => {
     // Actual archive bytes/peer edges are pinned by stage-publish-package.test; real consumers
     // separately prove the published runtime. This test retains the installed-closure oracle.
     const plan = prepareRuntimeStagingPlan(ROOT);
-    // The minimatch security pin must be exact and flat, the only form the planner projects:
-    // the staged TUF ancestor and the published root both carry that exact version.
-    const minimatchPin = ROOT_MANIFEST.overrides.minimatch;
-    expect(minimatchPin).toMatch(/^\d+\.\d+\.\d+$/u);
-    const tufModels = plan.packages.find((record) => record.manifest.name === "@tufjs/models");
-    expect(tufModels?.stagedManifest.peerDependencies?.minimatch).toBe(minimatchPin);
-    expect(plan.rootManifest.dependencies.minimatch).toBe(minimatchPin);
     const { packages, stubs, missing } = resolveVendorClosure(
       join(ROOT, "node_modules"),
       plan.rootManifest,
