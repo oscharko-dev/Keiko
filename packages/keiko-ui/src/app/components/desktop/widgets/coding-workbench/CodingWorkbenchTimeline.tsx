@@ -67,6 +67,7 @@ const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>>
   keiko_pull_request: "codingWorkbench.timeline.tool.pull_request",
   keiko_git_execute: "codingWorkbench.timeline.tool.git_execute",
   keiko_git_sync: "codingWorkbench.timeline.tool.git_sync",
+  keiko_git_branch: "codingWorkbench.timeline.tool.git_branch",
   keiko_ci_status: "codingWorkbench.timeline.tool.ci_status",
   read: "codingWorkbench.timeline.tool.read",
   glob: "codingWorkbench.timeline.tool.glob",

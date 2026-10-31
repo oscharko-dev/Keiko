@@ -458,7 +458,10 @@ and refused an issue-free run with `issue-binding-required`; that was corrected 
   description application are keyed to the accepted issue (their records, readiness snapshot and
   repair budget bind its digests). A pull request opened without an issue is delivered and shown,
   but those observations are not offered for it: `keiko_ci_status` answers the existing closed
-  `draft-unavailable` and the observation reconcile answers `issue-binding-required`. A later push
+  `draft-unavailable` and the observation reconcile answers `issue-binding-required`. With no repair
+  budget to bind, the run's later model prompts and tools are not charged against one, so the run
+  keeps working after its pull request opens, for example to comment on the tracker (#3907 AC3; it
+  was refused every prompt as `invalid-binding` before). A later push
   keeps the record and the pull request identity but does not refresh the body's Checks section.
 - **Refusals.** A run whose `origin` is not a verified github.com repository has no pull request
   provider. `keiko_pull_request` is refused with the closed reason `github-origin-required` (a

@@ -392,6 +392,7 @@ const CODING_RUNTIME_APPROVAL_WAITING_OPERATION = defineActivityLogOperation({
         "git-unstage",
         "git-fetch",
         "git-pull",
+        "git-branch",
         "verification-command",
         "ci-observe",
         "connector-read",

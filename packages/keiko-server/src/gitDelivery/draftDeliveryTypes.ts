@@ -122,6 +122,9 @@ export interface DraftDeliveryDependencies {
   readonly bodyAdapter?: (
     context: DraftDeliveryRunContext,
   ) => GitPullRequestBodyAdapter | undefined;
+  /** See VerifiedCommitServiceOptions.policyAllowsWithoutApproval. */
+  readonly policyAllowsWithoutApproval?:
+    ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;
 }
 
 export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {
@@ -131,9 +134,6 @@ export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {
    * Activity Log still carries the run and its correlation.
    */
   readonly runId?: string;
-  /** See VerifiedCommitServiceOptions.policyAllowsWithoutApproval. */
-  readonly policyAllowsWithoutApproval?:
-    ((action: CodingWorkbenchCodeTaskDeliveryAction) => boolean) | undefined;
   /** Existing runtime event ingestion refreshes the public snapshot after every durable phase. */
   readonly onChanged: (record: DraftDeliveryRecord) => void;
 }

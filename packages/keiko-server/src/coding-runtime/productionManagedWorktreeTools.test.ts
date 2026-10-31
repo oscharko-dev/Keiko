@@ -2709,6 +2709,54 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  // #3907 AC3 (lab lane T6, 2026-10-31): Gemma ran typecheck, lint and test as three parallel
+  // calls. Each one's ticket voided the others' (a new ticket invalidates every older one), so all
+  // three answered candidate-not-staged on a fully staged tree and the commit never got its proof.
+  it("runs parallel verification calls one after the other, so no ticket voids another", async () => {
+    let open = 0;
+    let maxOpen = 0;
+    const facade = verificationFacade({
+      log: [],
+      runToReport: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        return verificationReport("passed");
+      },
+      records: [],
+      verifiedCommitService: {
+        ...verificationService(),
+        beginVerification: () => {
+          open += 1;
+          maxOpen = Math.max(maxOpen, open);
+          return Promise.resolve({ kind: "ticket", ticket: {} });
+        },
+        completeVerification: () => {
+          open -= 1;
+          return Promise.resolve(true);
+        },
+      },
+    });
+
+    const results = await Promise.all(
+      ["typecheck", "lint", "test"].map((verifierId) =>
+        facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "verification",
+            actionId: `verification-${verifierId}`,
+            idempotencyKey: `verification-${verifierId}-key`,
+            verifierId,
+          }),
+        }),
+      ),
+    );
+    expect(maxOpen).toBe(1);
+    for (const result of results)
+      expect(result).toMatchObject({
+        status: "completed",
+        verification: { status: "passed", commit: { commitProof: "recorded" } },
+      });
+  });
+
   // #3907 AC3 (lab lane T17): in Full access a staged candidate beside untracked files is admitted,
   // never proven; the model reads the paths that stay outside the commit instead of "verify again".
   it("reports a Full-access commit admitted beside untracked files", async () => {

@@ -123,14 +123,54 @@ async function reopenWorkbench(page) {
   return waitForWorkbench(page);
 }
 
-export async function chooseOption(page, comboName, optionLabel) {
+// A model under a background readiness re-probe is briefly not offered; a human waits for it to
+// return. Readiness re-probes a stale observation on a cadence of about two minutes (AC3 lab,
+// 2026-10-31: T2, T31 and the Jira run missed it by seconds), so the model select waits up to
+// five. Every other select (authority, Jira Pod) has nothing to wait for and refuses at once.
+export const MODEL_READINESS_WAIT_MS = 300_000;
+
+const CHOOSE_DEFAULTS = { waitMs: 0, retryMs: 3000, now: Date.now, settleMs: 2000, pollMs: 100 };
+
+export async function chooseOption(page, comboName, optionLabel, options = {}) {
+  const { waitMs, retryMs, now, ...settle } = { ...CHOOSE_DEFAULTS, ...options };
+  const deadline = now() + waitMs;
+  for (;;) {
+    try {
+      await chooseOptionOnce(page, comboName, optionLabel, settle);
+      return;
+    } catch (error) {
+      if (now() >= deadline || !String(error?.message).includes("no option is labelled"))
+        throw error;
+      await page.keyboard.press("Escape");
+      await sleep(retryMs);
+    }
+  }
+}
+
+// Opening the model select re-reads the gateway catalog, and the picker is deliberately empty until
+// that read lands (useChatSession `clearSessionModelsForPendingRefresh`, pinned by #3625/#3642), so
+// a human sees the list a moment after the menu opens. The driver reads it once it holds options and
+// two reads `pollMs` apart agree (AC3 lab 2026-10-31, T17: reading 10 ms after every opening saw the
+// empty list 79 times in a row while the catalog listed Gemma).
+async function settledOptionCount(options, { settleMs, pollMs }) {
+  const deadline = Date.now() + settleMs;
+  let previous = -1;
+  for (;;) {
+    const count = await options.count();
+    if ((count > 0 && count === previous) || Date.now() >= deadline) return count;
+    previous = count;
+    await sleep(pollMs);
+  }
+}
+
+async function chooseOptionOnce(page, comboName, optionLabel, settle) {
   await page.getByRole("combobox", { name: comboName }).click();
   // An option's accessible name is its label followed directly by its description, so the label
   // element is compared on its own and only an exact label is chosen: an offered near-match (a
   // longer Jira Pod name) never stands in for the requested one, and the run is not started.
   const options = page.getByRole("option");
   const labels = await Promise.all(
-    Array.from({ length: await options.count() }, (_, index) =>
+    Array.from({ length: await settledOptionCount(options, settle) }, (_, index) =>
       options.nth(index).locator(".ksel-option-label").allTextContents(),
     ),
   );
@@ -145,7 +185,7 @@ async function startRun(page, workbench, { model, mode, text, jiraPod }) {
     await newTask.click();
     await sleep(1000);
   }
-  await chooseOption(page, "Coding model", model);
+  await chooseOption(page, "Coding model", model, { waitMs: MODEL_READINESS_WAIT_MS });
   await chooseOption(page, "Run authority", mode.label);
   if (jiraPod !== undefined) await chooseOption(page, "Jira Pod for this run", `Jira: ${jiraPod}`);
   const composer = workbench.locator("textarea").first();
@@ -245,6 +285,9 @@ export async function answerGates(page, runId, snapshot, { approve, decided }) {
 async function declineQuestion(page) {
   const section = page.getByRole("region", { name: "Runtime questions" });
   const reject = section.getByRole("button", { name: "Reject question", exact: true }).first();
+  // isVisible answers at once; isEnabled waits for a missing button up to the action timeout,
+  // which delayed every approval of a run without a question by ~20 s.
+  if (!(await reject.isVisible().catch(() => false))) return;
   if (!(await reject.isEnabled().catch(() => false))) return;
   log("question asked via UI; its text follows, then the driver declines it");
   console.log(

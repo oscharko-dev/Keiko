@@ -279,6 +279,16 @@ is:
    (`governedSyncHeads.ts`), and `trustedHeadMatches` accepts it only for that run, that
    workspace and that exact head. A head anyone else wrote still revokes the run.
 
+   **The coding runtime's governed task branch (#3907, owner decision 2026-10-31).** One tool,
+   `keiko_git_branch`, creates a local branch at the run's current commit and switches the run to
+   it through the Git kernel, for a Local checkout standing on its own base branch (ADR-0137,
+   "A run on its base branch makes its own task branch"). It is a local ref write, not a delivery:
+   Full access creates it inside the validated envelope without an ask; Supervised workspace and
+   Ask for approval ask the operator about the exact branch name on the governed ask lane (action
+   `git-branch`, a one-use proof bound to the digest of the name). The shell's `git checkout -b`,
+   `switch` and `branch` stay reserved in every mode. The hard denials are unchanged and the
+   immutable envelope is not widened: only the server-owned per-run branch record moves.
+
 Every existing policy consumer named above must be enumerated and regression-tested in the
 implementing child (#2385) before merge; no surface may keep a local copy of the old matrix or
 introduce a Code-local parallel matrix.

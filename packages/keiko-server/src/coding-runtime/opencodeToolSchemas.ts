@@ -457,6 +457,25 @@ const GIT_SYNC_SCHEMA = {
   required: ["pull"],
 } as const;
 
+// #3907 (owner decision 2026-10-31): the one governed way a run gets a task branch. Keiko's Git
+// kernel creates the branch at the run's current commit and switches the run to it; the model's
+// shell keeps refusing `git checkout -b`. Only the name is the model's to choose; whether it is a
+// name Keiko will create is Keiko's closed decision, so a bad name is explained, not malformed.
+const GIT_BRANCH_SCHEMA = {
+  type: "object",
+  properties: {
+    name: {
+      type: "string",
+      minLength: 1,
+      maxLength: 255,
+      description:
+        "The new task branch's name, such as feature/short-description. It must be a valid Git " +
+        "branch name, not a protected one (main, dev) and not an existing branch.",
+    },
+  },
+  required: ["name"],
+} as const;
+
 const GIT_CI_STATUS_SCHEMA = {
   type: "object",
   properties: {
@@ -511,6 +530,7 @@ export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_pull_request", parameters: GIT_PULL_REQUEST_SCHEMA },
   { name: "keiko_git_execute", parameters: GIT_EXECUTE_SCHEMA },
   { name: "keiko_git_sync", parameters: GIT_SYNC_SCHEMA },
+  { name: "keiko_git_branch", parameters: GIT_BRANCH_SCHEMA },
   { name: "keiko_ci_status", parameters: GIT_CI_STATUS_SCHEMA },
 ] as const;
 
@@ -619,6 +639,11 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     name: "keiko_git_sync",
     action: "git-sync",
     arguments: { pull: GIT_SYNC_SCHEMA.properties.pull },
+  },
+  {
+    name: "keiko_git_branch",
+    action: "git-branch",
+    arguments: { name: GIT_BRANCH_SCHEMA.properties.name },
   },
   {
     name: "keiko_ci_status",

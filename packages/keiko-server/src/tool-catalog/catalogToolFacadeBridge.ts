@@ -302,6 +302,15 @@ function gitCatalogAction(
   // #3902 AC2: one governed fetch or fast-forward pull.
   if (request.operation === "fetch" || request.operation === "pull")
     return { toolId: "keiko.git.sync", arguments: { pull: request.operation === "pull" } };
+  return gitIndexOrBranchCatalogAction(request);
+}
+
+// Staging and its inverse, their shared redemption (#3902 AC2) and the governed task branch (#3907).
+function gitIndexOrBranchCatalogAction(
+  request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
+): CatalogAction | undefined {
+  if (request.operation === "branch")
+    return { toolId: "keiko.git.branch", arguments: { name: request.branchName } };
   if (request.operation !== "stage" && request.operation !== "unstage") return undefined;
   // Unstaging is staging's inverse under the same proposal and redemption (#3902 AC2).
   return request.phase === "propose"
@@ -405,6 +414,8 @@ function deliveryRepresentative(
   if (canonicalId === "keiko.git.execute")
     return { ...base, action: "git", operation: "stage", phase: "execute", proposalId: "stage-1" };
   if (canonicalId === "keiko.git.sync") return { ...base, action: "git", operation: "pull" };
+  if (canonicalId === "keiko.git.branch")
+    return { ...base, action: "git", operation: "branch", branchName: "feature/x" };
   return { ...base, action: "git", operation: "ci", forceFresh: false };
 }
 
