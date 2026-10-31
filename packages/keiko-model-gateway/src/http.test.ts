@@ -183,6 +183,97 @@ function pipeBounded(
 // gatewayFetch — success path with injected fetchImpl
 // ---------------------------------------------------------------------------
 
+interface TrackedServer {
+  readonly server: ReturnType<typeof createHttpsServer>;
+  readonly port: number;
+  readonly sockets: Set<Socket>;
+}
+
+/** A loopback TLS origin serving `handler` that tracks its open sockets. */
+async function startTrackedTlsOrigin(
+  handler: Parameters<typeof createHttpsServer>[1],
+): Promise<TrackedServer> {
+  const sockets = new Set<Socket>();
+  const server = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, handler);
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  return { server, port: await listen(server), sockets };
+}
+
+/** A loopback TLS origin answering each request with its path and the running request count. */
+async function startCountingTlsOrigin(): Promise<TrackedServer> {
+  let requests = 0;
+  return startTrackedTlsOrigin((req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+    res.end(JSON.stringify({ path: req.url, count: requests }));
+  });
+}
+
+/** A temporary directory holding the test CA certificate as `ca.pem`. */
+function writeTestCaBundle(prefix: string): {
+  readonly dir: string;
+  readonly caBundlePath: string;
+} {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const caBundlePath = join(dir, "ca.pem");
+  writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+  return { dir, caBundlePath };
+}
+
+interface BodyRecordingOrigin extends TrackedServer {
+  /** The complete body of the last request the origin finished reading. */
+  readonly received: () => Buffer | undefined;
+}
+
+/** A loopback TLS origin that records each request body and answers `{ ok: true }`. */
+async function startBodyRecordingTlsOrigin(): Promise<BodyRecordingOrigin> {
+  let received: Buffer | undefined;
+  const origin = await startTrackedTlsOrigin((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      received = Buffer.concat(chunks);
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  return { ...origin, received: () => received };
+}
+
+interface TunnellingProxy {
+  readonly server: ReturnType<typeof createHttpServer>;
+  readonly port: number;
+  readonly sockets: Set<Socket>;
+  /** How many CONNECT requests the proxy has received so far. */
+  readonly connects: () => number;
+}
+
+/** A loopback HTTP proxy that tunnels every CONNECT to its target and tracks its sockets. */
+async function startTunnellingProxy(): Promise<TunnellingProxy> {
+  const sockets = new Set<Socket>();
+  let connects = 0;
+  const server = createHttpServer();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  server.on("connect", (req, clientSocket, head) => {
+    connects += 1;
+    const [host, portText] = (req.url ?? "").split(":");
+    const upstream = netConnect(Number(portText), host, () => {
+      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length > 0) upstream.write(head);
+      pipeBounded(upstream, clientSocket);
+      pipeBounded(clientSocket, upstream);
+    });
+    upstream.on("error", () => clientSocket.destroy());
+  });
+  return { server, port: await listen(server), sockets, connects: () => connects };
+}
+
 describe("gatewayFetch", () => {
   it("returns the injected fetchImpl response on success", async () => {
     const body = JSON.stringify({ ok: true });
@@ -326,25 +417,9 @@ describe("gatewayFetch", () => {
     // fetchWithCaBundle is entered when the direct HTTPS fetch hits a recoverable TLS-trust error and
     // a CA bundle is configured. Prove the multipart body survives that path byte-for-byte.
     const payload = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255, 13, 10, 65, 66, 67]);
-    const dir = mkdtempSync(join(tmpdir(), "keiko-stt-ca-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
-    let received: Buffer | undefined;
-    const originSockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", () => {
-        received = Buffer.concat(chunks);
-        res.writeHead(200, { "content-type": "application/json", connection: "close" });
-        res.end(JSON.stringify({ ok: true }));
-      });
-    });
-    origin.on("connection", (s) => {
-      originSockets.add(s);
-      s.once("close", () => originSockets.delete(s));
-    });
-    const originPort = await listen(origin);
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-stt-ca-");
+    const recording = await startBodyRecordingTlsOrigin();
+    const { server: origin, sockets: originSockets, port: originPort } = recording;
     try {
       const response = await gatewayFetch(
         `https://127.0.0.1:${String(originPort)}/audio/transcriptions`,
@@ -360,7 +435,7 @@ describe("gatewayFetch", () => {
         },
       );
       expect(await response.json()).toEqual({ ok: true });
-      expect(received !== undefined && Array.from(received)).toEqual(Array.from(payload));
+      expect(Array.from(recording.received() ?? [])).toEqual(Array.from(payload));
     } finally {
       for (const s of originSockets) s.destroy();
       await close(origin);
@@ -373,9 +448,7 @@ describe("gatewayFetch", () => {
     // to happily is indistinguishable from an outage in the product UI. requestOpenAIEmbedding
     // runs over the REAL gatewayFetch here (no fetchImpl), so the recoverable-TLS fallback with
     // the configured bundle must carry it end to end.
-    const dir = mkdtempSync(join(tmpdir(), "keiko-embed-ca-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-embed-ca-");
     const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(JSON.stringify({ data: [{ embedding: [0.6, 0.8] }], model: "probe-model" }));
@@ -399,42 +472,11 @@ describe("gatewayFetch", () => {
 
   it("forwards a binary request body intact through an HTTPS CONNECT proxy (#494 STT multipart)", async () => {
     const payload = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255, 13, 10, 65, 66, 67]);
-    const dir = mkdtempSync(join(tmpdir(), "keiko-stt-connect-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
-    let received: Buffer | undefined;
-    const originSockets = new Set<Socket>();
-    const proxySockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", () => {
-        received = Buffer.concat(chunks);
-        res.writeHead(200, { "content-type": "application/json", connection: "close" });
-        res.end(JSON.stringify({ ok: true }));
-      });
-    });
-    origin.on("connection", (s) => {
-      originSockets.add(s);
-      s.once("close", () => originSockets.delete(s));
-    });
-    const originPort = await listen(origin);
-    const proxy = createHttpServer();
-    proxy.on("connection", (s) => {
-      proxySockets.add(s);
-      s.once("close", () => proxySockets.delete(s));
-    });
-    proxy.on("connect", (req, clientSocket, head) => {
-      const [host, portText] = (req.url ?? "").split(":");
-      const upstream = netConnect(Number(portText), host, () => {
-        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length > 0) upstream.write(head);
-        pipeBounded(upstream, clientSocket);
-        pipeBounded(clientSocket, upstream);
-      });
-      upstream.on("error", () => clientSocket.destroy());
-    });
-    const proxyPort = await listen(proxy);
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-stt-connect-");
+    const recording = await startBodyRecordingTlsOrigin();
+    const { server: origin, sockets: originSockets, port: originPort } = recording;
+    const tunnel = await startTunnellingProxy();
+    const { server: proxy, sockets: proxySockets, port: proxyPort } = tunnel;
     try {
       const response = await gatewayFetch(
         `https://127.0.0.1:${String(originPort)}/audio/transcriptions`,
@@ -449,7 +491,7 @@ describe("gatewayFetch", () => {
         },
       );
       expect(await response.json()).toEqual({ ok: true });
-      expect(received !== undefined && Array.from(received)).toEqual(Array.from(payload));
+      expect(Array.from(recording.received() ?? [])).toEqual(Array.from(payload));
     } finally {
       for (const s of proxySockets) s.destroy();
       for (const s of originSockets) s.destroy();
@@ -460,14 +502,13 @@ describe("gatewayFetch", () => {
   });
 
   it("reuses a keep-alive HTTPS CONNECT tunnel for sequential requests", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-keepalive-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
-    let proxyConnects = 0;
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-connect-keepalive-");
     let originRequests = 0;
-    const originSockets = new Set<Socket>();
-    const proxySockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+    const {
+      server: origin,
+      sockets: originSockets,
+      port: originPort,
+    } = await startTrackedTlsOrigin((req, res) => {
       originRequests += 1;
       if (req.url === "/empty") {
         res.writeHead(204, { connection: "keep-alive" });
@@ -477,28 +518,8 @@ describe("gatewayFetch", () => {
       res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
       res.end(JSON.stringify({ path: req.url, count: originRequests }));
     });
-    origin.on("connection", (s) => {
-      originSockets.add(s);
-      s.once("close", () => originSockets.delete(s));
-    });
-    const originPort = await listen(origin);
-    const proxy = createHttpServer();
-    proxy.on("connection", (s) => {
-      proxySockets.add(s);
-      s.once("close", () => proxySockets.delete(s));
-    });
-    proxy.on("connect", (req, clientSocket, head) => {
-      proxyConnects += 1;
-      const [host, portText] = (req.url ?? "").split(":");
-      const upstream = netConnect(Number(portText), host, () => {
-        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length > 0) upstream.write(head);
-        pipeBounded(upstream, clientSocket);
-        pipeBounded(clientSocket, upstream);
-      });
-      upstream.on("error", () => clientSocket.destroy());
-    });
-    const proxyPort = await listen(proxy);
+    const tunnel = await startTunnellingProxy();
+    const { server: proxy, sockets: proxySockets, port: proxyPort } = tunnel;
     const egress = { httpsProxy: `http://127.0.0.1:${String(proxyPort)}`, caBundlePath };
     try {
       const first = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/first`, {
@@ -518,7 +539,7 @@ describe("gatewayFetch", () => {
         egress,
       });
       expect(await second.json()).toEqual({ path: "/second", count: 3 });
-      expect(proxyConnects).toBe(1);
+      expect(tunnel.connects()).toBe(1);
     } finally {
       _resetWarnedCaBundlePaths();
       for (const s of proxySockets) s.destroy();
@@ -585,42 +606,19 @@ describe("gatewayFetch", () => {
   });
 
   it("routes HTTPS through CONNECT and trusts the configured CA bundle", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-egress-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-egress-");
     let originHits = 0;
-    let proxyConnects = 0;
-    const originSockets = new Set<Socket>();
-    const proxySockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+    const {
+      server: origin,
+      sockets: originSockets,
+      port: originPort,
+    } = await startTrackedTlsOrigin((_req, res) => {
       originHits += 1;
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(JSON.stringify({ secure: true }));
     });
-    origin.on("connection", (socket) => {
-      originSockets.add(socket);
-      socket.once("close", () => originSockets.delete(socket));
-    });
-    const originPort = await listen(origin);
-    const proxy = createHttpServer();
-    proxy.on("connection", (socket) => {
-      proxySockets.add(socket);
-      socket.once("close", () => proxySockets.delete(socket));
-    });
-    proxy.on("connect", (req, clientSocket, head) => {
-      proxyConnects += 1;
-      const [host, portText] = (req.url ?? "").split(":");
-      const upstream = netConnect(Number(portText), host, () => {
-        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length > 0) upstream.write(head);
-        pipeBounded(upstream, clientSocket);
-        pipeBounded(clientSocket, upstream);
-      });
-      upstream.on("error", () => {
-        clientSocket.destroy();
-      });
-    });
-    const proxyPort = await listen(proxy);
+    const tunnel = await startTunnellingProxy();
+    const { server: proxy, sockets: proxySockets, port: proxyPort } = tunnel;
     try {
       const response = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/secure`, {
         egress: {
@@ -629,7 +627,7 @@ describe("gatewayFetch", () => {
         },
       });
       expect(await response.json()).toEqual({ secure: true });
-      expect(proxyConnects).toBe(1);
+      expect(tunnel.connects()).toBe(1);
       expect(originHits).toBe(1);
     } finally {
       for (const socket of proxySockets) socket.destroy();
@@ -641,16 +639,14 @@ describe("gatewayFetch", () => {
   });
 
   it("classifies direct TLS trust failures as TLS_CA_FAILURE when no custom CA can verify the target", async () => {
-    const originSockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+    const {
+      server: origin,
+      sockets: originSockets,
+      port: originPort,
+    } = await startTrackedTlsOrigin((_req, res) => {
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(JSON.stringify({ secure: true }));
     });
-    origin.on("connection", (socket) => {
-      originSockets.add(socket);
-      socket.once("close", () => originSockets.delete(socket));
-    });
-    const originPort = await listen(origin);
     const events: ModelGatewayLogTransport[] = [];
     try {
       await expect(
@@ -1187,9 +1183,7 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     // authority the CONNECT line carries, which this asserts DIRECTLY off the wire rather than
     // inferring it from whether the connection happened to succeed. See the plain-HTTP test above
     // for the genuine "defeats a hostname that cannot resolve on its own" proof.
-    const dir = mkdtempSync(join(tmpdir(), "keiko-proxy-pin-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-proxy-pin-");
     const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(JSON.stringify({ secure: true }));
@@ -1260,40 +1254,14 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     // re-imported module instance (a single vi.doMock + import, no resetModules between them) so
     // they see the SAME idleHttpsProxyTunnels pool -- using two separate module instances would
     // give each an empty pool of its own and prove nothing.
-    const dir = mkdtempSync(join(tmpdir(), "keiko-pool-identity-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
-    let proxyConnects = 0;
-    let originRequests = 0;
-    const originSockets = new Set<Socket>();
-    const proxySockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
-      originRequests += 1;
-      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
-      res.end(JSON.stringify({ path: req.url, count: originRequests }));
-    });
-    origin.on("connection", (socket) => {
-      originSockets.add(socket);
-      socket.once("close", () => originSockets.delete(socket));
-    });
-    const originPort = await listen(origin);
-    const proxy = createHttpServer();
-    proxy.on("connection", (socket) => {
-      proxySockets.add(socket);
-      socket.once("close", () => proxySockets.delete(socket));
-    });
-    proxy.on("connect", (req, clientSocket, head) => {
-      proxyConnects += 1;
-      const [host, portText] = (req.url ?? "").split(":");
-      const upstream = netConnect(Number(portText), host, () => {
-        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length > 0) upstream.write(head);
-        pipeBounded(upstream, clientSocket);
-        pipeBounded(clientSocket, upstream);
-      });
-      upstream.on("error", () => clientSocket.destroy());
-    });
-    const proxyPort = await listen(proxy);
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-pool-identity-");
+    const {
+      server: origin,
+      sockets: originSockets,
+      port: originPort,
+    } = await startCountingTlsOrigin();
+    const tunnel = await startTunnellingProxy();
+    const { server: proxy, sockets: proxySockets, port: proxyPort } = tunnel;
     const egress = { httpsProxy: `http://127.0.0.1:${String(proxyPort)}`, caBundlePath };
     try {
       vi.resetModules();
@@ -1309,7 +1277,7 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
         egress,
       });
       expect(await first.json()).toEqual({ path: "/first", count: 1 });
-      expect(proxyConnects).toBe(1);
+      expect(tunnel.connects()).toBe(1);
 
       // Second: a PINNED fetch to the IDENTICAL (proxy, target, ca) triple, inside the idle
       // window (immediately after, no sleep needed -- HTTPS_PROXY_TUNNEL_IDLE_TTL_MS is 30s).
@@ -1321,7 +1289,7 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
       // request rather than reusing tunnel #1 from the pool. Before the fix this stayed at 1 --
       // the pooled, unpinned tunnel silently served the pinned request, and resolveGatewayDns's
       // vetting for that request never touched the peer it actually rode.
-      expect(proxyConnects).toBe(2);
+      expect(tunnel.connects()).toBe(2);
     } finally {
       vi.doUnmock("node:dns/promises");
       vi.resetModules();
@@ -1361,37 +1329,13 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     const caBundlePathB = join(dir, "ca-b.pem");
     writeFileSync(caBundlePathA, caBundleA, "utf8");
     writeFileSync(caBundlePathB, caBundleB, "utf8");
-    let proxyConnects = 0;
-    let originRequests = 0;
-    const originSockets = new Set<Socket>();
-    const proxySockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
-      originRequests += 1;
-      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
-      res.end(JSON.stringify({ path: req.url, count: originRequests }));
-    });
-    origin.on("connection", (socket) => {
-      originSockets.add(socket);
-      socket.once("close", () => originSockets.delete(socket));
-    });
-    const originPort = await listen(origin);
-    const proxy = createHttpServer();
-    proxy.on("connection", (socket) => {
-      proxySockets.add(socket);
-      socket.once("close", () => proxySockets.delete(socket));
-    });
-    proxy.on("connect", (req, clientSocket, head) => {
-      proxyConnects += 1;
-      const [host, portText] = (req.url ?? "").split(":");
-      const upstream = netConnect(Number(portText), host, () => {
-        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length > 0) upstream.write(head);
-        pipeBounded(upstream, clientSocket);
-        pipeBounded(clientSocket, upstream);
-      });
-      upstream.on("error", () => clientSocket.destroy());
-    });
-    const proxyPort = await listen(proxy);
+    const {
+      server: origin,
+      sockets: originSockets,
+      port: originPort,
+    } = await startCountingTlsOrigin();
+    const tunnel = await startTunnellingProxy();
+    const { server: proxy, sockets: proxySockets, port: proxyPort } = tunnel;
     const httpsProxy = `http://127.0.0.1:${String(proxyPort)}`;
     try {
       // First: a valid bundle (caBundleA === TEST_TLS_CERT, which validates the origin's own
@@ -1400,7 +1344,7 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
         egress: { httpsProxy, caBundlePath: caBundlePathA },
       });
       expect(await first.json()).toEqual({ path: "/first", count: 1 });
-      expect(proxyConnects).toBe(1);
+      expect(tunnel.connects()).toBe(1);
 
       // Second: the colliding-summary, genuinely different bundle, same proxy/target, inside the
       // idle window. Tolerate either outcome from the TLS handshake itself -- caBundleB is garbage
@@ -1414,7 +1358,7 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
       // differently-CA'd second call rather than reusing tunnel #1 from the pool. Before the fix
       // this stayed at 1 -- the length+prefix summary collided, so the pool served caBundleB's
       // call the tunnel that was only ever authenticated under caBundleA's trust set.
-      expect(proxyConnects).toBe(2);
+      expect(tunnel.connects()).toBe(2);
     } finally {
       for (const socket of proxySockets) socket.destroy();
       for (const socket of originSockets) socket.destroy();
@@ -2213,9 +2157,7 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
 
 describe("proxy CONNECT response status codes", () => {
   async function connectWithStatus(status: number): Promise<void> {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-connect-");
     const proxySockets = new Set<Socket>();
     const proxy = createHttpServer();
     proxy.on("connection", (s) => {
@@ -2258,9 +2200,7 @@ describe("proxy CONNECT response status codes", () => {
   });
 
   it("assembles a CONNECT response header that arrives split across chunks", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-split-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-connect-split-");
     const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end('{"split":true}');
@@ -2308,9 +2248,7 @@ describe("proxy CONNECT response status codes", () => {
   });
 
   it("rejects a CONNECT response that floods without a header terminator (bounded read)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-flood-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-connect-flood-");
     const proxySockets = new Set<Socket>();
     const proxy = createHttpServer();
     proxy.on("connection", (s) => {
@@ -2366,9 +2304,7 @@ describe("connectResponseHeaderExceedsLimit", () => {
 
 describe("gatewayFetch timeoutMs", () => {
   it("aborts a stalled proxy CONNECT and rejects with PROXY_UNREACHABLE", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-timeout-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-timeout-");
     const proxySockets = new Set<Socket>();
     // Stall proxy: accepts the connection, never sends CONNECT response
     const proxy = createHttpServer();
@@ -2414,20 +2350,16 @@ describe("gatewayFetch maxResponseBytes override", () => {
     // Simulate a TLS-trust-error trigger to exercise the CA-bundle path, using a
     // local HTTPS server. We inject the CA bundle so the request succeeds and the
     // response is streamed rather than triggering a fallback-not-available error.
-    const dir = mkdtempSync(join(tmpdir(), "keiko-maxbytes-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-maxbytes-");
     const payload = "x".repeat(200);
-    const originSockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+    const {
+      server: origin,
+      sockets: originSockets,
+      port: originPort,
+    } = await startTrackedTlsOrigin((_req, res) => {
       res.writeHead(200, { "content-type": "text/plain", connection: "close" });
       res.end(payload);
     });
-    origin.on("connection", (s) => {
-      originSockets.add(s);
-      s.once("close", () => originSockets.delete(s));
-    });
-    const originPort = await listen(origin);
     try {
       // Without override the default cap is 10MB — well above 200 bytes, so
       // a small cap of 100 should be overridable to 300.
@@ -2447,20 +2379,16 @@ describe("gatewayFetch maxResponseBytes override", () => {
   });
 
   it("respects a reduced maxResponseBytes cap on the CA-bundle path", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-maxbytes-low-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-maxbytes-low-");
     const payload = "x".repeat(200);
-    const originSockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+    const {
+      server: origin,
+      sockets: originSockets,
+      port: originPort,
+    } = await startTrackedTlsOrigin((_req, res) => {
       res.writeHead(200, { "content-type": "text/plain", connection: "close" });
       res.end(payload);
     });
-    origin.on("connection", (s) => {
-      originSockets.add(s);
-      s.once("close", () => originSockets.delete(s));
-    });
-    const originPort = await listen(origin);
     try {
       const res = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/`, {
         useCaFallback: true,
@@ -2506,9 +2434,7 @@ describe("extraCaCertificates warn on unreadable path", () => {
   });
 
   it("does not warn when the path yields a valid certificate", () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-caok-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-caok-");
     const warn = vi.spyOn(console, "warn").mockImplementation(noop);
     try {
       gatewayTrustedCaCertificates(caBundlePath);
@@ -2525,40 +2451,21 @@ describe("extraCaCertificates warn on unreadable path", () => {
 
 describe("Host header via proxy (no default port)", () => {
   it("sends Host without :443 for https default port (HTTPS via CONNECT)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-host-"));
-    const caBundlePath = join(dir, "ca.pem");
-    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const { dir, caBundlePath } = writeTestCaBundle("keiko-host-");
     let capturedHost: string | undefined;
     let originHits = 0;
-    const originSockets = new Set<Socket>();
-    const proxySockets = new Set<Socket>();
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+    const {
+      server: origin,
+      sockets: originSockets,
+      port: originPort,
+    } = await startTrackedTlsOrigin((req, res) => {
       originHits += 1;
       capturedHost = req.headers.host;
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(JSON.stringify({ ok: true }));
     });
-    origin.on("connection", (s) => {
-      originSockets.add(s);
-      s.once("close", () => originSockets.delete(s));
-    });
-    const originPort = await listen(origin);
-    const proxy = createHttpServer();
-    proxy.on("connection", (s) => {
-      proxySockets.add(s);
-      s.once("close", () => proxySockets.delete(s));
-    });
-    proxy.on("connect", (req, clientSocket, head) => {
-      const [host, portText] = (req.url ?? "").split(":");
-      const upstream = netConnect(Number(portText), host, () => {
-        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length > 0) upstream.write(head);
-        pipeBounded(upstream, clientSocket);
-        pipeBounded(clientSocket, upstream);
-      });
-      upstream.on("error", () => clientSocket.destroy());
-    });
-    const proxyPort = await listen(proxy);
+    const tunnel = await startTunnellingProxy();
+    const { server: proxy, sockets: proxySockets, port: proxyPort } = tunnel;
     // Use the standard https port so the host header should omit the port
     try {
       await gatewayFetch(`https://127.0.0.1:${String(originPort)}/`, {
