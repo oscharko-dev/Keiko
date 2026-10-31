@@ -437,7 +437,8 @@ function verificationSpec(): OpenCodeToolSpec {
       "Only when the accepted task requests a commit, stage the intended changes and rerun " +
       'verification until verification.commit.commitProof is "recorded", or, in Full access ' +
       "only, until its checks ran and failed: that also admits the commit, recorded as " +
-      "failing. For that workflow, " +
+      'failing. In Full access, commitProof "admitted" admits the staged commit while the ' +
+      "untracked paths under commit.blocking stay outside it. For that workflow, " +
       "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
       "the intended paths or ignore generated output deliberately before verifying again.",
     inputSchema: managedObjectSchema(
@@ -635,8 +636,8 @@ function gitCommitSpec(): OpenCodeToolSpec {
       "Create a commit proposal over the staged changes. This call does not " +
       "create a commit. First complete staging, then verify until it reports " +
       'verification: { status: "passed", commit: { commitProof: "recorded" } }, or, in Full ' +
-      "access only, until its checks ran and failed: that also admits the commit, recorded " +
-      "as failing." +
+      "access only, until its checks ran and failed or it reports commitProof " +
+      '"admitted": that also admits the commit, recorded as failing or unproven.' +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       { message: { type: "string", minLength: 1, maxLength: 8_192 } },

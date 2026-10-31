@@ -7,7 +7,48 @@ import {
   readSuppressedIds,
   shippedAdvisoryIds,
   shippedPackages,
+  validateLegacyMinimatchTriage,
 } from "../check-osv-waiver-scope.mjs";
+
+describe("legacy minimatch advisory triage", () => {
+  const ids = ["GHSA-g3hv-75wg-m249"];
+  const legacyPath = "node_modules/eslint-config-next/node_modules/minimatch";
+  const legacy = { version: "3.1.5", dev: true };
+  const graph = (entries) => JSON.stringify({ packages: entries });
+
+  it("permits only the audited dev-only legacy copy beside the patched modern API", () => {
+    expect(() =>
+      validateLegacyMinimatchTriage(
+        ids,
+        graph({
+          [legacyPath]: legacy,
+          "node_modules/minimatch": { version: "11.0.1" },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    { [legacyPath]: { version: "3.1.5" } },
+    { [legacyPath]: { version: "3.1.4", dev: true } },
+    { [legacyPath]: legacy, "node_modules/minimatch": { version: "10.2.6", dev: true } },
+    { "node_modules/minimatch": legacy },
+  ])("rejects an expanded or shipped vulnerable graph: %j", (entries) => {
+    expect(() => validateLegacyMinimatchTriage(ids, graph(entries))).toThrow("does not cover");
+  });
+
+  it("requires retiring the triage when its legacy dependency disappears", () => {
+    expect(() => validateLegacyMinimatchTriage(ids, graph({}))).toThrow("obsolete");
+  });
+
+  it("fails closed on an invalid inventory", () => {
+    expect(() => validateLegacyMinimatchTriage(ids, "{}")).toThrow("packages map");
+  });
+
+  it("does not impose an advisory-specific inventory without that triage entry", () => {
+    expect(() => validateLegacyMinimatchTriage([], "{}")).not.toThrow();
+  });
+});
 
 const TOML = `# comment
 [[IgnoredVulns]]
@@ -438,5 +479,21 @@ describe("the waiver-scope gate decision", () => {
         },
       }),
     ).rejects.toThrow("HTTP 503");
+  });
+
+  it("rejects vulnerable modern dev tooling before querying the shipped graph", async () => {
+    const queryOsv = vi.fn();
+    await expect(
+      run({
+        ...clean,
+        readConfig: () => '[[IgnoredVulns]]\nid = "GHSA-g3hv-75wg-m249"\n',
+        readLockfile: () =>
+          lockfile({
+            "node_modules/minimatch": { version: "10.2.6", dev: true },
+          }),
+        queryOsv,
+      }),
+    ).rejects.toThrow("does not cover");
+    expect(queryOsv).not.toHaveBeenCalled();
   });
 });

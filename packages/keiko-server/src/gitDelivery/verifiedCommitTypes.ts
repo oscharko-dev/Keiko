@@ -118,6 +118,11 @@ export interface VerifiedCommitService {
    * staged) in the run's verification history, for the pull request's check list (F57).
    */
   observeVerification(report: VerificationReport): void;
+  /**
+   * In Full access, the untracked paths the latest verification ran beside: the staged candidate
+   * may be committed without them, and the verification is recorded as not proving it (#3907).
+   */
+  unprovenAdmission?(): VerifiedCommitBlockingPaths | undefined;
   propose(message: string): Promise<VerifiedCommitResult | undefined>;
   approve(proposalId: string): Promise<GitDeliveryApprovalClaim | undefined>;
   /** Synchronous human-decision surface; execution still rechecks every live candidate fact. */
