@@ -1,4 +1,5 @@
 import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
+import { JIRA_TOOL_GUIDANCE } from "./atlassian/jiraToolGuidance.js";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -88,6 +89,7 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
       managed,
       context: sourceContext(sourceOptions),
       budget: jira.authority.envelope.budget,
+      guidance: JIRA_TOOL_GUIDANCE,
       bind: (context, budgetPort) =>
         bindChatToolCatalog<ChatSourcesConsumer>({
           deps,

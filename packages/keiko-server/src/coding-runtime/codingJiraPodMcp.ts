@@ -1,4 +1,5 @@
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 import {
   createJiraReportStore,
   type AtlassianCredentialMetadata,
@@ -433,6 +434,7 @@ class CodingJiraPodService implements CodingJiraPods {
   ): ExternalMcpConnection {
     return {
       signal,
+      instructions: JIRA_TOOL_GUIDANCE,
       tools: host.catalog().map(({ name, descriptor }) => ({
         name,
         description: descriptor.description,

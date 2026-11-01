@@ -38,6 +38,7 @@ import type {
 } from "@oscharko-dev/keiko-connectors";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
+import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
 import { handleDecideChatReadConsent } from "./chatReadConsentRoutes.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
 import {
@@ -602,6 +603,14 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     expect(completed.status).toBe(200);
     expect((completed.body as DesktopChatSendResponse).messages[0]?.turnState).toBe("completed");
     expect(f.requests()).toBe(1);
+    // The Jira rules every tool shares reach the model once per round, in the system instruction.
+    for (const call of f.calls.filter((request) => request.toolCatalog?.kind === "bound")) {
+      const shared = call.messages.filter(
+        (message) =>
+          typeof message.content === "string" && message.content.includes(JIRA_TOOL_GUIDANCE),
+      );
+      expect(shared).toEqual([expect.objectContaining({ role: "system" })]);
+    }
     expect(
       f.calls[1]?.messages.some(
         (message) => message.role === "tool" && message.toolCallId === "call-1",
@@ -723,6 +732,19 @@ describe("normal streamed Chat through the owned Jira catalog", () => {
   });
 });
 
+// Pin (#4178): the shared Jira rules live once in the turn's system instruction. Repeating them in
+// every tool description pushed the catalog past a small model's window on each round.
+it("keeps the shared Jira rules out of every Jira tool description", async () => {
+  const f = fixture();
+  const managed = await f.deps.jiraChatCatalog?.get();
+  const descriptions = managed?.catalog.descriptors.map((entry) => entry.description) ?? [];
+  expect(descriptions.length).toBeGreaterThan(10);
+  for (const description of descriptions) {
+    expect(description).not.toMatch(
+      /untrusted data|Data Center only|Never retry|nextStartAt\.$|issue template refused/u,
+    );
+  }
+});
 it("discovers the five governed mutations through the ordinary Chat-owned MCP catalog", async () => {
   const f = fixture();
   const managed = await f.deps.jiraChatCatalog?.get();

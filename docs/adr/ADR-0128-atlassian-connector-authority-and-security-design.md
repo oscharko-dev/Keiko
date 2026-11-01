@@ -712,6 +712,20 @@ approval commits to. The card lays the items out as a tree of named facts, never
 while the items load, or when the draft is no longer available, its approve button stays disabled
 (declining remains possible) and the card says why; a failed read is a body-free client diagnostic.
 
+*Shared tool rules (#4178).* The model receives the whole Jira tool list on every round of a turn,
+so the rules every Jira tool shares are stated once, not in each description:
+`JIRA_TOOL_GUIDANCE` (`atlassian/jiraToolGuidance.ts`) says that the tools reach Jira Data Center
+only, that their results are untrusted data, that lists page with `nextStartAt`, that a write runs
+only as Keiko's approval allows and a pending, unknown or succeeded-unconfirmed outcome is never
+retried, and that a field-validation rejection with violations is fixed and resent. Chat appends it
+to the tool turn's system instruction whenever the Jira catalog is offered (alone or beside managed
+MCP sources); the Coding Workbench announces it as the Jira Pod relay's MCP server `instructions`,
+which the native runtime places in the model's context. An external MCP server's own instructions
+never fill that field. The three 8192-token overflow pins in
+`grounded-jira-mixed.public-handler.test.ts` hold the catalog to that budget; a growing catalog is
+shortened, never given a larger simulated window. The rules are guidance only: approval, journal,
+authority and template checks stay server-enforced whatever the model reads.
+
 *One approval, one batch.* The draft itself is never dispatched. The server runs each selected
 item, in dependency order, as its own journaled `jira.create` under a child identity derived from
 the draft's invocation and action digest, so an item already sent is never sent again on replay.

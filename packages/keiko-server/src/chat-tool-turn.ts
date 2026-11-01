@@ -58,11 +58,9 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 
-const TOOL_TURN_INSTRUCTION: GatewayMessage = {
-  role: "system",
-  content:
-    "When the user requests an operation supported by an offered tool, invoke the matching tool to request Keiko's required read consent or action approval. Keiko presents the actual consent or approval control and waits for any required decision before the effect. Asking for permission in prose does not open or replace those controls. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, consent, approval and budget checks remain binding.",
-};
+const TOOL_TURN_RULES =
+  "When the user requests an operation supported by an offered tool, invoke the matching tool to request Keiko's required read consent or action approval. Keiko presents the actual consent or approval control and waits for any required decision before the effect. Asking for permission in prose does not open or replace those controls. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, consent, approval and budget checks remain binding.";
+const TOOL_TURN_INSTRUCTION: GatewayMessage = { role: "system", content: TOOL_TURN_RULES };
 
 // Local estimates are not provider counts; the margin keeps the gateway's exact admission and its
 // one context-window retry as the authority.
@@ -76,6 +74,8 @@ export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly correlationId: string;
   /** The accepted Authority Envelope budget; it is the turn's only duration and call bound. */
   readonly budget: ChatToolAuthorityEnvelope["budget"];
+  /** Rules shared by every offered tool of a source, said once instead of in each description. */
+  readonly guidance?: string;
   readonly bind: (
     context: Context,
     budget: ReturnType<typeof createHarnessCatalogBudget>["port"],
@@ -128,7 +128,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private readonly limits: HarnessLimits;
   private elidedResults = 0;
   private reservedTranscriptBytes = CHAT_TOOL_TRANSCRIPT_BASE_BYTES;
+  private readonly instruction: GatewayMessage;
   protected constructor(private readonly options: ChatToolTurnOptions<Context>) {
+    this.instruction =
+      options.guidance === undefined
+        ? TOOL_TURN_INSTRUCTION
+        : { role: "system", content: `${TOOL_TURN_RULES} ${options.guidance}` };
     this.context = {
       ...options.context,
       signal: AbortSignal.any([options.context.signal, this.abortController.signal]),
@@ -543,7 +548,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return {
       ...request,
       stream: false,
-      messages: [TOOL_TURN_INSTRUCTION, ...request.messages, ...this.fittedContinuation(request)],
+      messages: [this.instruction, ...request.messages, ...this.fittedContinuation(request)],
       toolCatalog: {
         kind: "bound",
         catalog: managed.catalog,
@@ -560,7 +565,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     if (capability?.kind !== "chat") return this.continuation;
     const output = request.maxOutputTokens ?? capability.maxOutputTokens;
     const fixed =
-      estimateGatewayMessageTokens([TOOL_TURN_INSTRUCTION, ...request.messages]) +
+      estimateGatewayMessageTokens([this.instruction, ...request.messages]) +
       estimateTokens(JSON.stringify(this.options.managed.projection));
     const budget = Math.floor((capability.contextWindow - output) * CONTINUATION_WINDOW_SHARE);
     const fitted = fitToolContinuation(this.continuation, this.settledExchanges, budget - fixed);

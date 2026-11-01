@@ -31,6 +31,7 @@ import {
 import { buildUiStoreOverDatabase } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { CODING_JIRA_TOOL_RISKS, type CodingJiraPodBinding } from "./codingJiraPodBinding.js";
+import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const PRINCIPAL = "operator-principal";
@@ -211,10 +212,13 @@ interface RpcResult {
   readonly content?: readonly { readonly text?: string }[];
   readonly structuredContent?: Readonly<Record<string, unknown>>;
   readonly isError?: boolean;
-  readonly tools?: readonly { readonly name: string }[];
+  readonly tools?: readonly { readonly name: string; readonly description?: string }[];
+  readonly instructions?: string;
 }
 interface Client {
+  readonly initialize: () => Promise<RpcResult>;
   readonly list: () => Promise<readonly string[]>;
+  readonly descriptions: () => Promise<readonly string[]>;
   readonly call: (name: string, args: Record<string, unknown>) => Promise<RpcResult>;
 }
 
@@ -247,7 +251,15 @@ function connect(h: Harness, connections: CodingJiraConnections): Client {
     return parsed.result;
   };
   return {
+    initialize: () =>
+      rpc("initialize", {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "coding-jira-test", version: "1" },
+      }),
     list: async () => (await rpc("tools/list", {})).tools?.map((tool) => tool.name) ?? [],
+    descriptions: async () =>
+      (await rpc("tools/list", {})).tools?.map((tool) => tool.description ?? "") ?? [],
     call: (name, args) => rpc("tools/call", { name, arguments: args }),
   };
 }
@@ -337,6 +349,18 @@ describe("serving the bound Pod through the relay", () => {
     await expect(
       connections.serve("wiki", new Request("https://x.invalid/mcp"), h.context),
     ).rejects.toBeInstanceOf(ManagedMcpError);
+  });
+
+  // Pin (#4178): the rules every Jira tool shares reach the runtime once, as the server's MCP
+  // instructions, instead of in each tool description of the list it receives on every round.
+  it("gives the shared Jira rules once as server instructions, not in each tool", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    expect((await client.initialize()).instructions).toBe(JIRA_TOOL_GUIDANCE);
+    const descriptions = await client.descriptions();
+    expect(descriptions).toHaveLength(Object.keys(CODING_JIRA_TOOL_RISKS).length);
+    for (const description of descriptions)
+      expect(description).not.toMatch(/untrusted data|Data Center only|Never retry/u);
   });
 
   it("offers exactly the Jira tools, reads and writes, with their declared risks", async () => {

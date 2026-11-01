@@ -205,6 +205,9 @@ the credential the human chose; a replaced token, re-verification, deletion, unf
 work or another owner ends the binding (the relay capability is revoked, later calls perform no
 request). Writes pass the relay's existing durable mutation permit before dispatch; a write that
 does not complete is an uncertain mutation, and the run enters the existing recovery.
+The relayed connection may carry server-owned `instructions`, which the relay announces on
+`initialize`; the Jira Pod connection uses it for the shared Jira tool rules (ADR-0128 D4, #4178).
+An external server's own instructions are untrusted metadata and never fill that field.
 
 Evidence is `coding-runtime.jira-pod` under the run's correlation: the binding decision at start
 (`bound` or `refused` with the closed reason) and one line per call or refusal with the closed Jira

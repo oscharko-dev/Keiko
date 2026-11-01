@@ -1,4 +1,5 @@
 import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
+import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ChatMessage } from "../store/index.js";
@@ -88,6 +89,7 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       context,
       correlationId,
       budget: authority.envelope.budget,
+      guidance: JIRA_TOOL_GUIDANCE,
       bind: (current, budgetPort) =>
         bindChatToolCatalog<JiraChatCatalogConsumer>({
           deps,

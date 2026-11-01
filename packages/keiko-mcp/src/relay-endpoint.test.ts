@@ -23,7 +23,7 @@ interface Fixture {
   readonly revoke: () => void;
   readonly recover: Mock<() => void>;
 }
-function fixture(risk: "read" | "write" = "read"): Fixture {
+function fixture(risk: "read" | "write" = "read", instructions?: string): Fixture {
   let allowed = true;
   const recover = vi.fn(() => {
     allowed = false;
@@ -47,6 +47,7 @@ function fixture(risk: "read" | "write" = "read"): Fixture {
   );
   const connection: ExternalMcpConnection = {
     signal: new AbortController().signal,
+    ...(instructions === undefined ? {} : { instructions }),
     tools: [
       { name: "echo", inputSchema },
       { name: "unadmitted", inputSchema },
@@ -86,7 +87,10 @@ async function legacy(
   method: string,
   params: unknown,
   context = f.context,
-): Promise<{ result?: { content?: { text?: string }[]; isError?: boolean }; error?: unknown }> {
+): Promise<{
+  result?: { content?: { text?: string }[]; isError?: boolean; instructions?: string };
+  error?: unknown;
+}> {
   const response = await f.endpoint.fetch(
     new Request("https://relay.example.test/mcp", {
       method: "POST",
@@ -107,7 +111,7 @@ async function legacy(
         .find((line) => line.startsWith("data: "))
         ?.slice(6);
   return JSON.parse(json ?? "null") as {
-    result?: { content?: { text?: string }[]; isError?: boolean };
+    result?: { content?: { text?: string }[]; isError?: boolean; instructions?: string };
     error?: unknown;
   };
 }
@@ -121,6 +125,22 @@ it("exposes only admitted tools to the real SDK and preserves MCP results and pr
   });
   expect(f.call).toHaveBeenCalledOnce();
   expect(f.call.mock.calls[0]?.[2].invocationId).toBe("private-invocation");
+});
+it("announces server-owned instructions on initialize and none when the connection has none", async () => {
+  const initialize = {
+    protocolVersion: "2025-03-26",
+    capabilities: {},
+    clientInfo: { name: "relay-test", version: "1" },
+  };
+  const guided = await legacy(
+    fixture("read", "Synthetic shared tool rules."),
+    "initialize",
+    initialize,
+  );
+  expect(guided.result?.instructions).toBe("Synthetic shared tool rules.");
+  const plain = await legacy(fixture(), "initialize", initialize);
+  expect(plain.result).toBeDefined();
+  expect(plain.result?.instructions).toBeUndefined();
 });
 it("serves native legacy JSON-RPC and ignores caller-supplied invocation metadata", async () => {
   const f = fixture();
