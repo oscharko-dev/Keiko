@@ -4,8 +4,10 @@
 // own template violations. Journeys that write the work project therefore run one at a time across
 // lanes. S13 comments on the shared RPT-1 and counts the new comments there, so it is serialized as
 // well. Journeys that write no shared issue (they read RPT or answer from the lane's own Pod and
-// templates) stay parallel.
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// templates) stay parallel. Waiting lanes are served first come, first served: a lane that releases
+// the lock and asks again for its next journey queues behind a lane already waiting (2026-11-01: the
+// Gemma lane took the lock nine times in a row while the Qwen lane polled, which waited 50 minutes).
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -16,6 +18,17 @@ const OUTSIDE_WORK_PROJECT = new Set(["S13"]);
 
 const LOCK = "work-project.lock";
 const OWNER = "owner.json";
+const QUEUE = "work-project.queue";
+let ticketSequence = 0;
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
 
 function ownerAlive(lock) {
   let owner;
@@ -25,13 +38,28 @@ function ownerAlive(lock) {
     // Between mkdir and the owner write the holder is alive by construction.
     return true;
   }
-  if (!Number.isInteger(owner?.pid)) return false;
-  try {
-    process.kill(owner.pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
+  return Number.isInteger(owner?.pid) && processAlive(owner.pid);
+}
+
+/** A ticket name sorts by arrival: zero-padded time, then the process and its own sequence. */
+function enqueue(queue) {
+  mkdirSync(queue, { recursive: true, mode: 0o700 });
+  ticketSequence += 1;
+  const time = String(Date.now()).padStart(15, "0");
+  const ticket = `${time}-${String(process.pid).padStart(10, "0")}-${String(ticketSequence).padStart(9, "0")}`;
+  writeFileSync(join(queue, ticket), "", { mode: 0o600 });
+  return ticket;
+}
+
+/** True when no live lane queued before `ticket`; tickets of lanes that died are dropped. */
+function servedNext(queue, ticket) {
+  for (const name of readdirSync(queue).sort()) {
+    if (name === ticket) return true;
+    const pid = Number(name.split("-")[1]);
+    if (processAlive(pid)) return false;
+    rmSync(join(queue, name), { force: true });
   }
+  return false;
 }
 
 function tryAcquire(lock, id) {
@@ -68,7 +96,7 @@ export async function withWorkProjectLock(
 ) {
   if (LANE_LOCAL_JOURNEYS.has(id)) return run();
   const lock = join(directory, LOCK);
-  await acquire(lock, id, { pollMs, log, onWait });
+  await acquire(lock, join(directory, QUEUE), id, { pollMs, log, onWait });
   try {
     if (!OUTSIDE_WORK_PROJECT.has(id)) await prepare?.();
     return await run();
@@ -78,9 +106,18 @@ export async function withWorkProjectLock(
 }
 
 /** Polls until this lane holds the lock, keeping the waiting lane's session alive meanwhile. */
-async function acquire(lock, id, { pollMs, log, onWait }) {
+async function acquire(lock, queue, id, { pollMs, log, onWait }) {
+  const ticket = enqueue(queue);
+  try {
+    await waitForTurn(lock, queue, ticket, id, { pollMs, log, onWait });
+  } finally {
+    rmSync(join(queue, ticket), { force: true });
+  }
+}
+
+async function waitForTurn(lock, queue, ticket, id, { pollMs, log, onWait }) {
   let waitedMs = 0;
-  while (!tryAcquire(lock, id)) {
+  while (!(servedNext(queue, ticket) && tryAcquire(lock, id))) {
     if (waitedMs === 0) log?.({ operation: "requirements-work-lock", id, state: "waiting" });
     await delay(pollMs); // NOSONAR typescript:S9382 -- polling another process's lock is sequential by nature
     waitedMs += pollMs;

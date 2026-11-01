@@ -69,6 +69,46 @@ describe("withWorkProjectLock", () => {
     expect(lines.map((line) => line.state)).toEqual(["waiting", "keepalive-failed", "acquired"]);
   });
 
+  it("serves waiting lanes first come, first served, so a busy lane cannot starve another", async () => {
+    // 2026-11-01: the Gemma lane released the lock and took it again for its next journey before
+    // the Qwen lane's next poll, nine times in a row; Qwen waited 50 minutes for its first journey.
+    const dir = directory();
+    const order = [];
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const busyLane = (async () => {
+      await withWorkProjectLock(dir, "S05", async () => {
+        order.push("busy-S05");
+        await gate;
+      });
+      await withWorkProjectLock(
+        dir,
+        "S06",
+        () => {
+          order.push("busy-S06");
+          return Promise.resolve();
+        },
+        { pollMs: 5 },
+      );
+    })();
+    const waitingLane = withWorkProjectLock(
+      dir,
+      "S07",
+      () => {
+        order.push("waiting-S07");
+        return Promise.resolve();
+      },
+      { pollMs: 40 },
+    );
+    await delay(20);
+    release();
+    await Promise.all([busyLane, waitingLane]);
+    expect(order).toEqual(["busy-S05", "waiting-S07", "busy-S06"]);
+    expect(existsSync(join(dir, "work-project.lock"))).toBe(false);
+  });
+
   it("releases the lock when the journey throws", async () => {
     const dir = directory();
     await expect(
