@@ -10,6 +10,11 @@
 //   ctx.deselectSkill(chat)  -> the Chat keeps no selected skill, so only a template can teach it
 //   ctx.comments(key)        -> every comment of a Jira issue as { id, body } (admin read)
 //   ctx.exportReport(chat, reportId, format) -> the local export file of a finished report
+//   ctx.freshChat(toolMode)  -> another Chat bound to the same Pods in the given Chat tool mode
+//   ctx.useSpecificationFormat(format) -> the Pod holds the specification as that office format only
+//   ctx.replaceSpecification(version) -> the Pod holds the Markdown specification of that version
+// ctx.turn(chat, content, { observeBeforeApproval }) calls the observer while a write approval is
+// pending, before it is decided; approvals.records lists { approval, call, observed } per approval.
 // A check names the catalog obligations it verifies in `covers`; the scorecard credits them only
 // when the check is green, so a check that covers part of a scenario never turns it green.
 import { STRUCTURE_RULES, buildCorpus, corpusChange } from "./corpus.mjs";
@@ -26,11 +31,14 @@ import {
   gradeDeviationReport,
   gradeQualityFindings,
   gradeRequirementListing,
-  draftIdentity,
   sectionsPresent,
   structuredDeviations,
   turnIssues,
 } from "./oracles.mjs";
+import { everyFormatUsable } from "./formats.mjs";
+import { bugWithRelationAndLink, subtasksUnderTask } from "./hierarchy.mjs";
+import { modesAndReadableApproval } from "./modes.mjs";
+import { rerunCreatesNoDuplicates } from "./rerun.mjs";
 import { gradeProgress, progressTruth } from "./progress-report.mjs";
 import {
   computedCommentTexts,
@@ -39,6 +47,7 @@ import {
   gradeMarkdownExport,
   gradeReportComment,
 } from "./report-export.mjs";
+import { countsOf, NO_TURN, result, snapshotBefore } from "./journey-support.mjs";
 import {
   epicTemplateConforms,
   epicTemplateMarkdown,
@@ -53,32 +62,6 @@ import {
   withTemplate,
   withTemplates,
 } from "./templates.mjs";
-
-const result = (status, turn, detail, covers) => ({
-  status,
-  covers,
-  detail: `${detail}; ${Math.round(turn.durationMs / 1000)} s, ${turn.toolCalls} tool calls${turn.requirementReads ? ` (${turn.requirementReads} requirement reads)` : ""}${turn.failure ? `, failed: ${turn.failure}` : ""}`,
-});
-
-/**
- * The issues a query matches before a turn: their keys, which the oracle compares against, and the
- * draft identity labels they already carry, which a duplicate would repeat.
- */
-async function snapshotBefore(ctx, query) {
-  const issues = await ctx.search(query, "summary,labels");
-  return {
-    keys: new Set(issues.map((issue) => issue.key)),
-    identities: new Set(issues.map(draftIdentity).filter((identity) => identity !== undefined)),
-  };
-}
-
-/** "3 epics created, 2 reconciled, 1 duplicates" - a run that only reconciled reads as such. */
-const countsOf = (turn, label) =>
-  `${turn.created.length} ${label} created, ${turn.reconciled.length} reconciled` +
-  (turn.duplicates.length === 0 ? "" : `, ${turn.duplicates.length} duplicates`);
-
-/** A journey that never sent a Chat turn reports no duration or tool calls. */
-const NO_TURN = Object.freeze({ durationMs: 0, toolCalls: 0 });
 
 const EPIC_QUERY = "project = REQ AND issuetype = Epic";
 const EPIC_TEMPLATE = "REQ/Epic";
@@ -382,6 +365,7 @@ async function complianceReport(ctx, chat) {
 export const JOURNEYS = {
   S01: (ctx, chat) => templateDefinedAndApplied(ctx, chat),
   S02: (ctx, chat) => proposalReviewedBeforeActivation(ctx, chat),
+  S03: (ctx) => everyFormatUsable(ctx),
   async S04(ctx, chat) {
     const truth = buildCorpus(1).truth;
     const turn = await ctx.turn(
@@ -460,6 +444,8 @@ export const JOURNEYS = {
       ["tasks-created", "required-fields", "parent-relation"],
     );
   },
+  S08: (ctx, chat) => bugWithRelationAndLink(ctx, chat),
+  S09: (ctx, chat) => subtasksUnderTask(ctx, chat),
   S10: (ctx, chat) => projectProgress(ctx, chat),
   S11: (ctx, chat) =>
     // AC1 before AC3: the lead's templates for RPT are the structure the compliance check applies.
@@ -560,6 +546,8 @@ export const JOURNEYS = {
       ["epic-per-must-requirement", "answer-lists-created-keys", "no-generation-refusal"],
     );
   },
+  S18: (ctx) => modesAndReadableApproval(ctx),
+  S19: (ctx, chat) => rerunCreatesNoDuplicates(ctx, chat),
 };
 
 export const JOURNEY_IDS = Object.freeze(Object.keys(JOURNEYS));

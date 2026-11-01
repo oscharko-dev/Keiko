@@ -3,13 +3,25 @@
 // approves what the product asks for, and is graded only by an independent Jira or truth oracle.
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
 import { basicAuth, labRequest } from "../lab-client.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
+import { writeCorpusDocuments } from "./corpus-documents.mjs";
+import { FORMATS } from "./formats.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
 
 const TURN_LIMIT_MS = 1_800_000;
@@ -33,12 +45,38 @@ function rulesMarkdown() {
 
 const SPECIFICATION_FILE = "Lastenheft-Schadenmeldung.md";
 
+const specificationDirectory = (ctx) => join(ctx.projectPath, "projektunterlagen");
+
+/** Removes the office renderings of the specification (S03) from the Pod's folder. */
+function clearOfficeDocuments(directory) {
+  for (const name of readdirSync(directory)) {
+    if (FORMATS.some(({ extension }) => name.toLowerCase().endsWith(extension))) {
+      rmSync(join(directory, name), { force: true });
+    }
+  }
+}
+
 /** Writes the specification of one version under a fixed name, so its document identity persists. */
 function writeSpecification(ctx, version) {
-  const directory = join(ctx.projectPath, "projektunterlagen");
+  const directory = specificationDirectory(ctx);
   mkdirSync(directory, { recursive: true });
+  clearOfficeDocuments(directory);
   writeFileSync(join(directory, SPECIFICATION_FILE), buildCorpus(version).markdown);
   return directory;
+}
+
+/** Replaces the Markdown specification by its rendering in one office format (S03). */
+function writeSpecificationAs(ctx, format) {
+  const directory = specificationDirectory(ctx);
+  clearOfficeDocuments(directory);
+  rmSync(join(directory, SPECIFICATION_FILE), { force: true });
+  const scratch = mkdtempSync(join(tmpdir(), "keiko-lab-formats-"));
+  try {
+    const rendered = writeCorpusDocuments(scratch, 1).find((path) => path.endsWith(`.${format}`));
+    copyFileSync(rendered, join(directory, basename(rendered)));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 async function prepareDataPod(ctx) {
@@ -106,24 +144,34 @@ async function approveReadGrant(ctx, grant, decisions) {
   );
 }
 
-async function approveWrite(ctx, approval, decisions) {
+/**
+ * Approves one pending write. `observe` runs after the approval is read and before it is decided:
+ * the moment at which the product has asked a human and the effect has not happened (S18). The
+ * approval and the call it covers are kept for the journey; an observer that fails is recorded as
+ * an unobserved approval, never as a reason to leave the approval pending.
+ */
+async function approveWrite(ctx, exchange, decisions, observe) {
+  const approval = exchange.approval;
   if (approval?.state !== "pending" || decisions.ids.has(approval.approvalId)) return;
   decisions.ids.add(approval.approvalId);
   decisions.writes += 1;
   const id = encodeURIComponent(approval.approvalId);
   const path = `/api/atlassian-connectors/action-approvals/${id}/chat-write-approval`;
   const current = await api(ctx, "write-observe", path, undefined, "GET");
+  const observed = await Promise.resolve(observe?.()).catch(() => undefined);
+  decisions.records.push({ approval: current.approval, call: exchange.call, observed });
   await api(ctx, "write-approve", path, {
     decision: "approve",
     actionDigest: current.approval.actionDigest,
   });
 }
 
-async function approvePending(ctx, transcript, decisions) {
+async function approvePending(ctx, transcript, decisions, observe) {
   await approveReadGrant(ctx, transcript?.readGrant, decisions);
-  for (const exchange of transcript?.exchanges ?? []) {
-    await approveWrite(ctx, exchange.approval, decisions);
-  }
+  await (transcript?.exchanges ?? []).reduce(
+    (previous, exchange) => previous.then(() => approveWrite(ctx, exchange, decisions, observe)),
+    Promise.resolve(),
+  );
 }
 
 function messagesPath(ctx, chat) {
@@ -140,13 +188,13 @@ async function messageIds(ctx, chat) {
  * Approves what the product asks for until the request settles or the lab limit passes, and
  * returns how many read grants and write approvals it decided (S05 expects exactly one write).
  */
-async function superviseTurn(ctx, chat, prior, isSettled) {
-  const decisions = { ids: new Set(), reads: 0, writes: 0 };
+async function superviseTurn(ctx, chat, prior, isSettled, observe) {
+  const decisions = { ids: new Set(), reads: 0, writes: 0, records: [] };
   const started = Date.now();
   while (!isSettled() && Date.now() - started < TURN_LIMIT_MS) {
     const observed = await api(ctx, "observe", messagesPath(ctx, chat), undefined, "GET");
     const user = observed.messages.find((m) => m.role === "user" && !prior.has(m.id));
-    await approvePending(ctx, user?.toolTranscript, decisions);
+    await approvePending(ctx, user?.toolTranscript, decisions, observe);
     await delay(500);
   }
   return decisions;
@@ -168,8 +216,11 @@ async function settledTurn(ctx, chat, prior) {
   };
 }
 
-/** Sends one Chat request and returns the settled answer, tool exchanges and failure, if any. */
-async function chatTurn(ctx, chat, content) {
+/**
+ * Sends one Chat request and returns the settled answer, tool exchanges and failure, if any.
+ * `options.observeBeforeApproval` is called while a write approval is pending (see approveWrite).
+ */
+async function chatTurn(ctx, chat, content, options = {}) {
   const prior = await messageIds(ctx, chat);
   const started = Date.now();
   let settled = false;
@@ -195,17 +246,17 @@ async function chatTurn(ctx, chat, content) {
     .catch((error) => (failure = String(error?.message ?? error).slice(0, 300)))
     .finally(() => (settled = true));
   try {
-    decisions = await superviseTurn(ctx, chat, prior, () => settled);
+    decisions = await superviseTurn(ctx, chat, prior, () => settled, options.observeBeforeApproval);
   } finally {
     // A turn that outlives supervision is cancelled, so it cannot write into the next journey.
     if (!settled) send.abort();
     await pending;
   }
-  const { reads, writes } = decisions;
+  const { reads, writes, records } = decisions;
   return {
     durationMs: Date.now() - started,
     failure,
-    approvals: { reads, writes },
+    approvals: { reads, writes, records },
     ...(await settledTurn(ctx, chat, prior)),
   };
 }
@@ -300,7 +351,7 @@ function journeyContext(live, session, truth) {
   const ctx = {
     ...live,
     truth,
-    turn: (chat, content) => chatTurn(ctx, chat, content),
+    turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
     search: (query, fields) => jql(session, query, fields),
     http: (name, path, body, method = "POST") => api(ctx, name, path, body, method),
     deselectSkill: (chat) => deselectSkill(ctx, chat),
@@ -328,6 +379,13 @@ export async function runJourneys({ session, modelId, embeddingModelId, truth, i
         writeSpecification(ctx, version);
         await indexPod(ctx, capsuleId);
       };
+      // S03 puts the specification into the Pod as one office format; S18 and S19 need further Chats.
+      ctx.useSpecificationFormat = async (format) => {
+        writeSpecificationAs(ctx, format);
+        await indexPod(ctx, capsuleId);
+      };
+      ctx.freshChat = async (toolMode) =>
+        (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
       const ordered = [...ids.filter((id) => id !== "S14"), ...ids.filter((id) => id === "S14")];
       for (const id of ordered) {
         const started = Date.now();

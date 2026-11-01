@@ -147,7 +147,7 @@ export function epicConforms(issue, requirementId) {
 }
 
 /** Requirement id an epic summary claims (`[LH-001] ...`), or undefined. */
-const claimedRequirement = (issue) => /^\[(LH-\d{3})\]/.exec(issue.fields.summary)?.[1];
+export const claimedRequirement = (issue) => /^\[(LH-\d{3})\]/.exec(issue.fields.summary)?.[1];
 
 /**
  * Grades a long backlog request: the epics created in this turn map one to one onto the requested
