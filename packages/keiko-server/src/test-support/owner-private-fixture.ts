@@ -10,14 +10,14 @@
 
 import { spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";
-import { win32 } from "node:path";
+import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
 
 const WINDOWS_HOST = process.platform === "win32";
 const EVERYONE = "S-1-1-0";
 
+// System binaries come from the identity-validated System32, never from a raw SystemRoot read.
 function icacls(path: string, args: readonly string[]): void {
-  const root = process.env.SystemRoot ?? String.raw`C:\Windows`;
-  const result = spawnSync(win32.join(root, "System32", "icacls.exe"), [path, ...args], {
+  const result = spawnSync(resolveWindowsSystemBinary("icacls.exe"), [path, ...args], {
     encoding: "utf8",
     shell: false,
     windowsHide: true,
@@ -33,11 +33,14 @@ function currentUserSid(): string {
 }
 
 function queryUserSid(): string {
-  const root = process.env.SystemRoot ?? String.raw`C:\Windows`;
   const result = spawnSync(
-    win32.join(root, "System32", "whoami.exe"),
+    resolveWindowsSystemBinary("whoami.exe"),
     ["/user", "/fo", "csv", "/nh"],
-    { encoding: "utf8", shell: false, windowsHide: true },
+    {
+      encoding: "utf8",
+      shell: false,
+      windowsHide: true,
+    },
   );
   const sid = /"(S-1-[\d-]+)"\s*$/u.exec(result.stdout.trim())?.[1];
   if (result.status !== 0 || sid === undefined) throw new Error("current user SID unavailable");
