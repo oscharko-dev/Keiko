@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenCodeLaunchProfile,
@@ -227,7 +228,7 @@ describe("OpenCode launch profile", () => {
     // fail-closed property lives in readiness (an inactive policy plugin never becomes ready).
     expect(config).not.toHaveProperty("agents");
     expect(profile.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
-    expect(profile.env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
+    expect(profile.env.OPENCODE_CONFIG_DIR).toBe(join("/private/run", "config", "opencode"));
     // The one definition of the directory: the kernel boundary protects exactly what OpenCode loads.
     expect(openCodeConfigDirectory("/private/run")).toBe(profile.env.OPENCODE_CONFIG_DIR);
     expect(profile.env.npm_config_offline).toBe("true");
@@ -265,7 +266,7 @@ describe("OpenCode launch profile", () => {
       expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
       // Only the private discovery directory feeds plugins and agents; no second file layer.
       expect(env).not.toHaveProperty("OPENCODE_CONFIG");
-      expect(env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
+      expect(env.OPENCODE_CONFIG_DIR).toBe(join("/private/run", "config", "opencode"));
     });
 
     it("re-asserts the server-owned binding on the highest layer", () => {
@@ -358,7 +359,7 @@ describe("OpenCode launch profile", () => {
         .instructions;
       expect(instructions).toEqual([]);
       expect(openCodeRepositoryInstructionsPath("/private/run")).toBe(
-        `${openCodeConfigDirectory("/private/run")}/AGENTS.md`,
+        join(openCodeConfigDirectory("/private/run"), "AGENTS.md"),
       );
     });
 
@@ -750,10 +751,10 @@ describe("OpenCode launch profile", () => {
       expect(profile.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0"]);
       expect(profile.env.OPENCODE_SERVER_PASSWORD).toHaveLength(43);
       expect(profile.env.PATH).toBeUndefined();
-      expect(profile.env.HOME).toContain("/private/run");
+      expect(profile.env.HOME).toContain(join("/private/run"));
       expect(profile.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
       expect(profile.env.npm_config_offline).toBe("true");
-      expect(profile.env.OPENCODE_CONFIG_DIR).toBe("/private/run/config/opencode");
+      expect(profile.env.OPENCODE_CONFIG_DIR).toBe(join("/private/run", "config", "opencode"));
       expect(profile.env.OPENCODE_CONFIG).toBeUndefined();
       const config = JSON.parse(profile.config) as {
         readonly permissions: readonly { readonly action: string; readonly effect: string }[];
@@ -994,7 +995,9 @@ describe("plan agent directory (#3897)", () => {
         effect: "allow",
       },
     ]);
-    expect(openCodePlanDirectory("/state/run-1")).toBe("/state/run-1/home/.opencode/plan");
+    expect(openCodePlanDirectory("/state/run-1")).toBe(
+      join("/state/run-1", "home", ".opencode", "plan"),
+    );
     expect(fixed(CONTEXT_GEOMETRY, undefined, "native").permissions).toHaveLength(1);
   });
 });
