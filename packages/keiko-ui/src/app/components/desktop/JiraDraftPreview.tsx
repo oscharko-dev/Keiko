@@ -1,7 +1,12 @@
 "use client";
 import { useId, useState, type ReactNode } from "react";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
-import type { JiraDraftTree, JiraDraftTreeItem, JiraDraftValue } from "./jiraDraftTree";
+import type {
+  JiraDraftField,
+  JiraDraftTree,
+  JiraDraftTreeItem,
+  JiraDraftValue,
+} from "./jiraDraftTree";
 import styles from "./JiraChatTools.module.css";
 
 // Longer text is collapsed to this many characters until the human expands it in place.
@@ -20,7 +25,11 @@ function CollapsibleText({ text }: { readonly text: string }): ReactNode {
   const [open, setOpen] = useState(false);
   const characters = Array.from(text);
   if (characters.length <= COLLAPSE_AT)
-    return <span className={styles.cmpDraftValue}>{text === "" ? '""' : text}</span>;
+    return (
+      <span className={styles.cmpDraftValue}>
+        {text === "" ? t("chat.jira.draft.empty") : text}
+      </span>
+    );
   return (
     <>
       <span className={styles.cmpDraftValue}>
@@ -41,22 +50,40 @@ function CollapsibleText({ text }: { readonly text: string }): ReactNode {
 }
 
 function DraftValue({ value }: { readonly value: JiraDraftValue }): ReactNode {
-  if (value.kind === "text") return <CollapsibleText text={value.text} />;
-  return (
-    <ul className={styles.cmpDraftList}>
-      {value.items.map((entry) => (
-        <li key={entry.position}>
-          <DraftValue value={entry.value} />
-        </li>
-      ))}
-    </ul>
-  );
+  const t = useTranslate();
+  switch (value.kind) {
+    case "text":
+      return <CollapsibleText text={value.text} />;
+    case "cleared":
+      return <span className={styles.cmpDraftNote}>{t("chat.jira.draft.cleared")}</span>;
+    case "empty":
+      return <span className={styles.cmpDraftNote}>{t("chat.jira.draft.empty")}</span>;
+    case "hidden":
+      return <span className={styles.cmpDraftNote}>{t("chat.jira.draft.valueNotShown")}</span>;
+    case "group":
+      return (
+        <DraftFields
+          fields={value.members.map((member) => ({ id: member.name, value: member.value }))}
+        />
+      );
+    case "list":
+      return (
+        <ul className={styles.cmpDraftList}>
+          {value.items.map((entry) => (
+            <li key={entry.position}>
+              <DraftValue value={entry.value} />
+            </li>
+          ))}
+        </ul>
+      );
+  }
 }
 
-function ItemFields({ item }: { readonly item: JiraDraftTreeItem }): ReactNode {
-  return item.fields.length === 0 ? null : (
+/** Named values as a definition list: a field id (or argument name) and what it is set to. */
+export function DraftFields({ fields }: { readonly fields: readonly JiraDraftField[] }): ReactNode {
+  return fields.length === 0 ? null : (
     <dl className={styles.cmpDraftFields}>
-      {item.fields.map((field) => (
+      {fields.map((field) => (
         <div key={field.id}>
           <dt>{field.id}</dt>
           <dd>
@@ -72,6 +99,9 @@ function ItemRelations({ item }: { readonly item: JiraDraftTreeItem }): ReactNod
   const t = useTranslate();
   const parent = item.parentRef ?? item.parentIssueKey;
   const notes = [
+    ...(item.requirementIds.length === 0
+      ? []
+      : [t("chat.jira.draft.requirements", { ids: item.requirementIds.join(", ") })]),
     ...(item.parentFieldId === undefined || parent === undefined
       ? []
       : [t("chat.jira.draft.parent", { fieldId: item.parentFieldId, target: parent })]),
@@ -122,7 +152,7 @@ function DraftItem({ item, deselected, excluded, editable, toggle }: ItemProps):
             <span className={styles.cmpDraftNote}>{t("chat.jira.draft.dependent")}</span>
           ) : null}
           <ItemRelations item={item} />
-          <ItemFields item={item} />
+          <DraftFields fields={item.fields} />
         </div>
       </div>
       {item.children.length === 0 ? null : (

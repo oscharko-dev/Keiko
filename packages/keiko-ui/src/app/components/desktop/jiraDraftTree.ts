@@ -11,16 +11,29 @@ interface JiraDraftTreeLink {
   readonly target: string;
   readonly existing: boolean;
 }
-/** A field value as the human reads it: text, or a list of values. */
+/**
+ * A field value as the human reads it, never as JSON: text, a list, a named group of members (every
+ * member stays visible), an explicit clearing, an empty collection, or - only past the nesting
+ * bound - a value the page cannot lay out, which is named as not shown instead of dumped.
+ */
 export type JiraDraftValue =
   | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "list"; readonly items: readonly JiraDraftListEntry[] };
+  | { readonly kind: "list"; readonly items: readonly JiraDraftListEntry[] }
+  | { readonly kind: "group"; readonly members: readonly JiraDraftMember[] }
+  | { readonly kind: "cleared" }
+  | { readonly kind: "empty" }
+  | { readonly kind: "hidden" };
+/** A named member of a group value, in request order. */
+interface JiraDraftMember {
+  readonly name: string;
+  readonly value: JiraDraftValue;
+}
 /** A list entry keeps its 1-based place in the request, which is also its stable key. */
 interface JiraDraftListEntry {
   readonly position: number;
   readonly value: JiraDraftValue;
 }
-interface JiraDraftField {
+export interface JiraDraftField {
   readonly id: string;
   readonly value: JiraDraftValue;
 }
@@ -35,6 +48,8 @@ export interface JiraDraftTreeItem {
   readonly parentRef?: string;
   readonly parentIssueKey?: string;
   readonly links: readonly JiraDraftTreeLink[];
+  /** Requirement references the item carries into its trace footer, as the model named them. */
+  readonly requirementIds: readonly string[];
   readonly children: readonly JiraDraftTreeItem[];
 }
 export interface JiraDraftTree {
@@ -64,6 +79,12 @@ function linkOf(value: unknown): JiraDraftTreeLink | undefined {
 interface FlatItem extends Omit<JiraDraftTreeItem, "children"> {
   readonly linkRefs: readonly string[];
 }
+function requirementIdsOf(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return [];
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? (value as readonly string[])
+    : undefined;
+}
 function linksOf(value: unknown): readonly JiraDraftTreeLink[] | undefined {
   if (value === undefined) return [];
   if (!Array.isArray(value)) return undefined;
@@ -87,8 +108,8 @@ function parentOf(value: unknown): Parent | undefined {
   };
 }
 
-// An object with one identifying member reads as that member (a user or option); anything else
-// stays exact as compact JSON, so no member is hidden.
+// An object with one identifying member reads as that member (a user or option); any other object
+// is a group that names every member, so no member is hidden.
 const IDENTIFYING_MEMBERS: ReadonlySet<string> = new Set([
   "displayName",
   "name",
@@ -97,6 +118,8 @@ const IDENTIFYING_MEMBERS: ReadonlySet<string> = new Set([
   "accountId",
   "id",
 ]);
+// Deeper than any Jira field value; the bound only protects the page from a hostile request.
+const VALUE_DEPTH_MAX = 6;
 function identifying(value: unknown): string | undefined {
   const entries = Object.entries(record(value) ?? {});
   const [only] = entries;
@@ -107,19 +130,42 @@ function identifying(value: unknown): string | undefined {
     ? only[1]
     : undefined;
 }
-function valueOf(value: unknown): JiraDraftValue {
+function collectionOf(value: unknown, depth: number): JiraDraftValue {
+  if (Array.isArray(value))
+    return value.length === 0
+      ? { kind: "empty" }
+      : {
+          kind: "list",
+          items: value.map((entry, index) => ({
+            position: index + 1,
+            value: valueAt(entry, depth + 1),
+          })),
+        };
+  const members = Object.entries(record(value) ?? {});
+  return members.length === 0
+    ? { kind: "empty" }
+    : {
+        kind: "group",
+        members: members.map(([name, member]) => ({ name, value: valueAt(member, depth + 1) })),
+      };
+}
+function valueAt(value: unknown, depth: number): JiraDraftValue {
   if (typeof value === "string") return { kind: "text", text: value };
-  if (Array.isArray(value) && value.length > 0)
-    return {
-      kind: "list",
-      items: value.map((entry, index) => ({ position: index + 1, value: valueOf(entry) })),
-    };
-  return { kind: "text", text: identifying(value) ?? JSON.stringify(value) };
+  if (value === null || value === undefined) return { kind: "cleared" };
+  if (typeof value === "number" || typeof value === "boolean")
+    return { kind: "text", text: String(value) };
+  if (typeof value !== "object" || depth > VALUE_DEPTH_MAX) return { kind: "hidden" };
+  const name = identifying(value);
+  return name === undefined ? collectionOf(value, depth) : { kind: "text", text: name };
+}
+/** A request value as the human reads it; shared by every Jira approval rendering. */
+export function jiraDraftValueOf(value: unknown): JiraDraftValue {
+  return valueAt(value, 0);
 }
 function fieldsOf(fields: Raw): readonly JiraDraftField[] {
   return Object.entries(fields)
     .filter(([id]) => id !== "summary")
-    .map(([id, value]) => ({ id, value: valueOf(value) }));
+    .map(([id, value]) => ({ id, value: jiraDraftValueOf(value) }));
 }
 type Identity = Pick<JiraDraftTreeItem, "ref" | "summary" | "projectId" | "issueTypeId">;
 function identityOf(raw: Raw | undefined, fields: Raw | undefined): Identity | undefined {
@@ -140,12 +186,20 @@ function itemOf(value: unknown): FlatItem | undefined {
   const identity = identityOf(raw, fields);
   const links = linksOf(raw?.links);
   const parent = parentOf(raw?.parent);
-  if (identity === undefined || fields === undefined || links === undefined || parent === undefined)
+  const requirementIds = requirementIdsOf(raw?.requirementIds);
+  if (
+    identity === undefined ||
+    fields === undefined ||
+    links === undefined ||
+    parent === undefined ||
+    requirementIds === undefined
+  )
     return undefined;
   return {
     ...identity,
     fields: fieldsOf(fields),
     links,
+    requirementIds,
     linkRefs: links.filter((link) => !link.existing).map((link) => link.target),
     ...parent,
   };

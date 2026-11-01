@@ -14,7 +14,8 @@ import {
 import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
 import { JiraAttachmentReview } from "./JiraAttachmentReview";
 import { JiraDecisionActions } from "./JiraDecisionActions";
-import { JiraDraftPreview } from "./JiraDraftPreview";
+import { DraftFields, JiraDraftPreview } from "./JiraDraftPreview";
+import { jiraActionFacts } from "./jiraActionFacts";
 import { jiraDraftExcluded, jiraDraftTree } from "./jiraDraftTree";
 import { useJiraDecision } from "./useJiraDecision";
 import styles from "./JiraChatTools.module.css";
@@ -73,29 +74,28 @@ function WriteApprovalActions({
     </>
   );
 }
-function ExactPreview({
+/**
+ * What the human approves, read from the exact request as named facts - never as JSON. A readable
+ * backlog draft is shown by its tree alone; a draft that cannot be laid out as a tree is shown
+ * field by field under a note, so the approval still names everything it covers.
+ */
+function ActionDetails({
   call,
-  collapsed,
+  managed,
+  note,
 }: {
   readonly call: ChatToolExchange["call"];
-  readonly collapsed: boolean;
+  readonly managed: boolean;
+  readonly note?: WidgetMessageKey;
 }): ReactNode {
   const t = useTranslate();
-  const preview = (
-    <textarea
-      className={`${styles.cmpResult} ${styles.cmpPreview}`}
-      readOnly
-      rows={8}
-      aria-label={t("chat.jira.writeApproval.preview")}
-      value={JSON.stringify(call.arguments, null, 2)}
-    />
-  );
-  if (!collapsed) return preview;
+  // Not memoized: the translator keeps its identity while a late-loading catalog refreshes it.
+  const facts = jiraActionFacts(call.arguments, managed, t);
   return (
-    <details>
-      <summary>{t("chat.jira.writeApproval.preview")}</summary>
-      {preview}
-    </details>
+    <div role="group" aria-label={t("chat.jira.writeApproval.preview")}>
+      {note === undefined ? null : <p className={styles.cmpDraftNote}>{t(note)}</p>}
+      <DraftFields fields={facts} />
+    </div>
   );
 }
 
@@ -153,6 +153,39 @@ function ApprovalHeader({ approval }: { readonly approval: ChatToolWriteApproval
   );
 }
 
+/** The draft's tree when it is readable as one, otherwise the request's facts. */
+function ApprovalContent({
+  approval,
+  call,
+  draft,
+  editable,
+  toggle,
+}: {
+  readonly approval: ChatToolWriteApprovalView;
+  readonly call: ChatToolExchange["call"];
+  readonly draft: ReturnType<typeof useDraftSelection>;
+  readonly editable: boolean;
+  readonly toggle: (ref: string) => void;
+}): ReactNode {
+  if (draft.tree !== undefined)
+    return (
+      <JiraDraftPreview
+        tree={draft.tree}
+        deselected={draft.deselected}
+        excluded={draft.excluded}
+        editable={editable}
+        toggle={toggle}
+      />
+    );
+  return (
+    <ActionDetails
+      call={call}
+      managed={approval.kind === "jira-chat-write"}
+      {...(isDraft(approval) ? { note: "chat.jira.draft.unreadable" as const } : {})}
+    />
+  );
+}
+
 export function JiraWriteApproval({
   approval,
   call,
@@ -181,16 +214,13 @@ export function JiraWriteApproval({
   return (
     <section className={styles.cmpCard} aria-label={t(title)}>
       <ApprovalHeader approval={approval} />
-      {draft.tree === undefined ? null : (
-        <JiraDraftPreview
-          tree={draft.tree}
-          deselected={draft.deselected}
-          excluded={draft.excluded}
-          editable={state.view.state === "pending" && turnState === "pending" && !state.busy}
-          toggle={toggle}
-        />
-      )}
-      <ExactPreview call={call} collapsed={draft.tree !== undefined} />
+      <ApprovalContent
+        approval={approval}
+        call={call}
+        draft={draft}
+        editable={state.view.state === "pending" && turnState === "pending" && !state.busy}
+        toggle={toggle}
+      />
       <JiraAttachmentReview approval={approval} />
       <output aria-live="polite">
         {t(state.busy ? "chat.jira.writeApproval.working" : status)}
