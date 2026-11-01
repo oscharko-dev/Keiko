@@ -1166,17 +1166,16 @@
     },
     "packages/keiko-contracts/src/bff-wire.test.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
-      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 4,
       "anti-slop/no-unknown-parameters": 2,
       "anti-slop/require-safety-comment-for-type-assertion": 10
     },
     "packages/keiko-contracts/src/bff-wire.ts": {
       "anti-slop/no-conditional-empty-object-spread": 9,
-      "anti-slop/no-runtime-typeof": 22,
+      "anti-slop/no-runtime-typeof": 19,
       "anti-slop/no-unknown-parameters": 7,
-      "anti-slop/no-unsafe-dictionary-type": 8,
-      "anti-slop/require-safety-comment-for-type-assertion": 8
+      "anti-slop/no-unsafe-dictionary-type": 6
     },
     "packages/keiko-contracts/src/boundary.test.ts": {
       "anti-slop/no-runtime-typeof": 2,
@@ -1520,8 +1519,9 @@
       "anti-slop/no-unsafe-dictionary-type": 6
     },
     "packages/keiko-contracts/src/contract-validation-primitives.ts": {
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unsafe-dictionary-type": 2
+      "anti-slop/no-runtime-typeof": 3,
+      "anti-slop/no-unknown-parameters": 5,
+      "anti-slop/no-unsafe-dictionary-type": 4
     },
     "packages/keiko-contracts/src/dap-debug.test.ts": {
       "anti-slop/no-known-value-widening": 2,
@@ -1815,12 +1815,9 @@
     },
     "packages/keiko-contracts/src/external-json-schema.ts": {
       "anti-slop/no-known-value-widening": 3,
-      "anti-slop/no-object-parameters": 4,
-      "anti-slop/no-runtime-typeof": 15,
-      "anti-slop/no-unknown-parameters": 7,
-      "anti-slop/no-unknown-returns": 1,
-      "anti-slop/no-unsafe-dictionary-type": 4,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-runtime-typeof": 16,
+      "anti-slop/no-unknown-parameters": 6,
+      "anti-slop/no-unsafe-dictionary-type": 9
     },
     "packages/keiko-contracts/src/gateway-setup-audit.test.ts": {
       "anti-slop/no-known-value-widening": 1,
@@ -2578,19 +2575,22 @@
       "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-contracts/src/support-incident.ts": {
-      "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 11,
-      "anti-slop/no-unknown-parameters": 8,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 8
+      "anti-slop/no-unknown-parameters": 9,
+      "anti-slop/no-unsafe-dictionary-type": 1
+    },
+    "packages/keiko-contracts/src/support-report-json.test.ts": {
+      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-unknown-parameters": 1,
+      "anti-slop/no-unknown-returns": 3
     },
     "packages/keiko-contracts/src/support-report-json.ts": {
       "anti-slop/no-runtime-typeof": 6,
-      "anti-slop/no-unknown-parameters": 4,
-      "anti-slop/no-unknown-returns": 2,
-      "anti-slop/no-unsafe-dictionary-type": 3
+      "anti-slop/no-unknown-parameters": 3,
+      "anti-slop/no-unknown-returns": 1,
+      "anti-slop/no-unsafe-dictionary-type": 2
     },
     "packages/keiko-contracts/src/support-report-producer.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
@@ -2739,10 +2739,16 @@
       "anti-slop/no-unsafe-dictionary-type": 6,
       "anti-slop/require-safety-comment-for-type-assertion": 3
     },
+    "packages/keiko-contracts/src/workspace-contract-primitives.test.ts": {
+      "anti-slop-effect/prefer-effect-match": 1,
+      "anti-slop/no-reflect-get": 1,
+      "anti-slop/no-runtime-typeof": 1,
+      "anti-slop/no-unknown-parameters": 3,
+      "anti-slop/no-unknown-returns": 1
+    },
     "packages/keiko-contracts/src/workspace-contract-primitives.ts": {
-      "anti-slop/no-runtime-typeof": 7,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/no-runtime-typeof": 8,
+      "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-contracts/src/workspace-descriptors.test.ts": {
       "anti-slop/require-safety-comment-for-type-assertion": 8

@@ -18,6 +18,54 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-contracts/src/bff-wire.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 5,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 2,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/external-json-schema.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 15,
+      "to": 16,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/external-json-schema.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 9,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-contracts/src/observability.test.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 2,
@@ -94,6 +142,86 @@
       "rule": "anti-slop/no-unknown-parameters",
       "from": 9,
       "to": 20,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/support-incident.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 8,
+      "to": 9,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 7,
+      "to": 8,
       "reason": "pending-boundary-migration",
       "issue": 3918
     },
