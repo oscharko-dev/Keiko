@@ -177,9 +177,12 @@ function readDeadlineSignal(): AbortSignal {
 
 async function readSidecarGatewayProfile(
   correlationId?: string,
+  modelId?: string,
 ): Promise<CodingWorkbenchSidecarGatewayResult> {
   return bffFetchJson(
-    "/api/coding-sidecar/gateway/profile",
+    modelId === undefined
+      ? "/api/coding-sidecar/gateway/profile"
+      : `/api/coding-sidecar/gateway/profile?modelId=${encodeURIComponent(modelId)}`,
     { cache: "no-store", signal: readDeadlineSignal() },
     {
       ...(correlationId === undefined ? {} : { correlationId }),
@@ -192,10 +195,12 @@ async function readSidecarGatewayProfile(
 
 export async function fetchCodingWorkbenchSidecarGatewayProfile(
   correlationId?: string,
+  modelId?: string,
 ): Promise<CodingWorkbenchSidecarGatewayResult> {
   // The client starts no probe. The server verifies what the Workbench needs on this read itself
-  // (an expired tool-call proof, an unproven context window), bounded and logged (ADR-0173).
-  return readSidecarGatewayProfile(correlationId);
+  // (an expired tool-call proof, an unproven context window), bounded and logged (ADR-0173), for
+  // the model chosen in the picker; without one it judges the default the server elects.
+  return readSidecarGatewayProfile(correlationId, modelId);
 }
 
 export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {

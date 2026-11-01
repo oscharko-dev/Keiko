@@ -47,6 +47,7 @@ import type {
   CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchSidecarGatewayResult,
   CodingWorkbenchSidecarGatewayUnavailableReason,
+  GatewayVerificationState,
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
@@ -68,7 +69,6 @@ import {
 import {
   currentGateway,
   currentGatewayConfig,
-  currentGatewayVerification,
   currentConversationReadinessObservation,
   type RuntimeGatewayConfig,
   type UiHandlerDeps,
@@ -1859,19 +1859,21 @@ function resolveGatewayProfile(
   const config = currentGatewayConfig(deps);
   const gateway = config === undefined ? undefined : currentGateway(deps);
   const modelSource = currentModelSource(deps);
-  const result = resolveCodingSafeSidecarGatewayProfile(config, {
-    deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
-    modelSource,
-    // F-01: the projection this route publishes must carry the last live-probe outcome, not just
-    // the stored config. The admission decision below is deliberately unchanged: a stale negative
-    // probe must not lock out a gateway that answers now — a request that cannot be served fails on
-    // its own live error, while the projection is what a surface is allowed to CLAIM.
-    gatewayVerification: currentGatewayVerification(deps),
-    ...(selectedModelId === undefined ? {} : { modelId: selectedModelId }),
-    // An admitted run's calls judge the tool-calling proof as of its admission (F73); the profile
-    // projection and every new run judge it now.
-    ...(verificationAtMs === undefined ? {} : { verificationAtMs }),
-  });
+  // F-01: the projection carries the selected model's own last live-probe outcome, not just the
+  // stored config. The admission decision is deliberately unchanged: a stale negative probe must not
+  // lock out a gateway that answers now — a request that cannot be served fails on its own live
+  // error, while the projection is what a surface is allowed to CLAIM.
+  const result = withModelVerification(
+    deps,
+    resolveCodingSafeSidecarGatewayProfile(config, {
+      deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
+      modelSource,
+      ...(selectedModelId === undefined ? {} : { modelId: selectedModelId }),
+      // An admitted run's calls judge the tool-calling proof as of its admission (F73); the profile
+      // projection and every new run judge it now.
+      ...(verificationAtMs === undefined ? {} : { verificationAtMs }),
+    }),
+  );
   return { config, gateway, modelSource, result };
 }
 
@@ -4530,12 +4532,45 @@ function resolveFreshCodingProfile(
   };
 }
 
-function passiveCodingProfile(deps: UiHandlerDeps): CodingWorkbenchSidecarGatewayResult {
-  return resolveFreshCodingProfile(currentGatewayConfig(deps), deps.gatewayConfig, {
-    deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
-    modelSource: currentModelSource(deps),
-    gatewayVerification: currentGatewayVerification(deps),
-  });
+function passiveCodingProfile(
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+): CodingWorkbenchSidecarGatewayResult {
+  return withModelVerification(
+    deps,
+    resolveFreshCodingProfile(currentGatewayConfig(deps), deps.gatewayConfig, {
+      deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
+      modelSource: currentModelSource(deps),
+      ...(modelId === undefined ? {} : { modelId }),
+    }),
+  );
+}
+
+// The Workbench's source is one model, so its readiness is that model's own current chat
+// observation. The gateway-wide word is whatever the last probe of ANY model wrote: on a gateway
+// with one overloaded model, every failed probe of it demoted a ready coding model, and the
+// Workbench showed "Keiko is still checking the model source" until a manual check (customer,
+// 1.3.4).
+function withModelVerification(
+  deps: UiHandlerDeps,
+  result: CodingWorkbenchSidecarGatewayResult,
+): CodingWorkbenchSidecarGatewayResult {
+  if (result.status !== "available") return result;
+  const ready = currentConversationReadinessObservation(deps, result.modelAlias);
+  const verification: GatewayVerificationState =
+    ready === undefined ? "unverified" : ready ? "verified" : "failed";
+  return { ...result, verification };
+}
+
+// The Workbench reads the profile of the model its picker selected; a read that names none, or a
+// model the gateway does not configure, judges the elected default.
+function profileModelId(ctx: RouteContext, deps: UiHandlerDeps): string | undefined {
+  const modelId = ctx.url.searchParams.get("modelId");
+  if (modelId === null) return undefined;
+  return currentGatewayConfig(deps)?.providers.some((provider) => provider.modelId === modelId) ===
+    true
+    ? modelId
+    : undefined;
 }
 
 function conversationShortfall(
@@ -4560,8 +4595,9 @@ function conversationShortfall(
 function gatewayReadinessProjection(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  modelId: string | undefined,
 ): CodingWorkbenchSidecarGatewayResult {
-  const result = passiveCodingProfile(deps);
+  const result = passiveCodingProfile(deps, modelId);
   if (codingContextFits(result)) return result;
   const conversation = conversationShortfall(result);
   if (conversation !== undefined) {
@@ -4743,7 +4779,8 @@ export async function handleCodingSidecarGatewayProfile(
 ): Promise<RouteResult> {
   // What Keiko can determine itself it determines itself: a model whose gateway declared no token
   // limits gets its context window proven here, before the projection judges it.
-  const elected = resolveGatewayProfile(deps).result;
+  const modelId = profileModelId(ctx, deps);
+  const elected = resolveGatewayProfile(deps, modelId).result;
   // Only while the gateway is the usable source: a subscription source, a disabled policy or a
   // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
   // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
@@ -4765,7 +4802,7 @@ export async function handleCodingSidecarGatewayProfile(
       boundedProfileWait(),
     ]);
   }
-  return { status: 200, body: gatewayReadinessProjection(ctx, deps) };
+  return { status: 200, body: gatewayReadinessProjection(ctx, deps, modelId) };
 }
 
 // #3907 AC3: a model nobody used for a while lets its chat success expire, and the Workbench then

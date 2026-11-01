@@ -177,6 +177,7 @@ async function refreshManagedGatewaySource(
   dispatch: RuntimeDispatch,
   scheduleReread: (sequence: number) => void,
   catalogAlreadyCurrent: boolean,
+  modelId: string | null,
   parentCorrelationId?: string,
 ): Promise<void> {
   const correlationId = newClientCorrelationId();
@@ -184,7 +185,10 @@ async function refreshManagedGatewaySource(
   reportGatewayProfileRefresh(correlationId, parentCorrelationId);
   dispatch({ kind: "profile-empty" });
   try {
-    const profile = await fetchCodingWorkbenchSidecarGatewayProfile(correlationId);
+    const profile = await fetchCodingWorkbenchSidecarGatewayProfile(
+      correlationId,
+      modelId ?? undefined,
+    );
     if (sequenceRef.current !== sequence) {
       settleGatewayProfileRefresh(
         correlationId,
@@ -277,6 +281,7 @@ function useSourceRefresh(
             dispatch,
             scheduleReread,
             catalogAlreadyCurrent,
+            stateRef.current.selectedModelId,
             parentCorrelationId,
           );
           return;

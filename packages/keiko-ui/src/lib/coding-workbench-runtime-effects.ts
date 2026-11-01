@@ -59,9 +59,11 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useEffect(() => {
     void refreshRuntime();
   }, [state.requestedMode, refreshRuntime]);
+  // A model chosen in the picker is the model the source describes: choosing one reads its profile,
+  // and the server checks exactly that model when it holds no fresh answer for it (customer 1.3.4).
   useEffect(() => {
     void refreshSource();
-  }, [state.runtimePreference, refreshSource]);
+  }, [state.runtimePreference, state.selectedModelId, refreshSource]);
   // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
   // and records readiness verdicts without this window knowing: the source stayed "unavailable"
   // after the operator had just verified tool calling, until a reload (workbench end-to-end run,
