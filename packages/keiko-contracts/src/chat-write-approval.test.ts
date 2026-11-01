@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { JIRA_DRAFT_ITEMS_MAX } from "./jira-tool-execution.js";
 import {
   CHAT_TOOL_WRITE_APPROVAL_STATES,
   validateChatToolWriteApprovalDecision,
@@ -73,7 +74,10 @@ describe("backlog draft deselection (#4178)", () => {
     ["not an array", "task"],
     ["an invalid reference", ["1task"]],
     ["a duplicate", ["a", "a"]],
-    ["too many", Array.from({ length: 33 }, (_, index) => `r${String(index)}`)],
+    [
+      "too many",
+      Array.from({ length: JIRA_DRAFT_ITEMS_MAX + 1 }, (_, index) => `r${String(index)}`),
+    ],
   ])("refuses a deselection that is %s", (_name, excludedItemRefs) => {
     expect(validateChatToolWriteApprovalView({ ...draft, excludedItemRefs }).ok).toBe(false);
     expect(

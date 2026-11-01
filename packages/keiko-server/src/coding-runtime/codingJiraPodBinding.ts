@@ -222,6 +222,7 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
         "jira.transitions",
         "jira.assignable-users",
         "jira.report",
+        "jira.draft-stage",
         "jira.create",
         "jira.edit",
         "jira.assign",

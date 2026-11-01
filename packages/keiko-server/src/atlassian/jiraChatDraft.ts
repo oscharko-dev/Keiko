@@ -93,6 +93,9 @@ export function jiraDraftChildIntent(
     operation: "jira.create",
     invocationId: sha256Hex(canonicalise({ draft: parent.invocationId, ref })),
     actionDigest: sha256Hex(canonicalise({ draft: parent.actionDigest, ref })),
+    // The approved draft authorizes exactly its own items: the batch, not the per-turn bound on
+    // single writes, limits them (#4178).
+    batchDigest: parent.actionDigest,
   };
 }
 

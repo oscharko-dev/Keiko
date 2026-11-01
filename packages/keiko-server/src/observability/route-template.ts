@@ -180,6 +180,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "inline-completion",
   "instrumentation",
   "issue",
+  "jira-drafts",
   "jira-reports",
   "jira-templates",
   "jobs",

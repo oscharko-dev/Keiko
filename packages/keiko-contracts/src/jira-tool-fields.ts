@@ -32,6 +32,8 @@ export const JIRA_MANAGED_READ_TOOLS = [
   "jira.transitions",
   "jira.assignable-users",
   "jira.report",
+  /** Appends a page of items to a server-held backlog draft; it changes nothing in Jira. */
+  "jira.draft-stage",
 ] as const;
 export type JiraManagedReadToolName = (typeof JIRA_MANAGED_READ_TOOLS)[number];
 export type JiraFieldOperation = "set" | "add" | "remove";

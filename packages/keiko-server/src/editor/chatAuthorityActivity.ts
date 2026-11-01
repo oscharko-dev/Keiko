@@ -109,6 +109,7 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
         "jira.transitions",
         "jira.assignable-users",
         "jira.report",
+        "jira.draft-stage",
         "assign-issue",
       ],
     },

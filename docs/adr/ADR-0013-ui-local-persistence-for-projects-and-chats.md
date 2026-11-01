@@ -356,9 +356,13 @@ possible dispatch before the caller may send HTTP. Nested transactions are refus
 released savepoint is not a durable commit. A synchronous final guard may redeem existing approval
 state in the same transaction; a denied guard rolls its changes back. One action digest per canonical
 turn prevents a new model call ID from repeating that action. Writes within a turn are serialized,
-with at most 32 retained intents. Unknown effects and acknowledged-but-unconfirmed outcomes block
-further writes in that turn, including already prepared actions. A new explicitly admitted user turn
-has its own scope.
+with at most 32 retained single-write intents. The items of one approved backlog draft (ADR-0128,
+#4178) are not single writes: schema 58 adds a nullable `batch_digest` (the digest of the approved
+draft action) to the intent, and a batch is bounded by its own 500-item resource ceiling, so an
+approved draft of any size within it is never cut by the per-turn bound, and the batch does not
+use the single writes' allowance up. Unknown effects and acknowledged-but-unconfirmed outcomes
+block further writes in that turn — batch items included — and so do in-flight writes, including
+already prepared actions. A new explicitly admitted user turn has its own scope.
 
 Response acknowledgement is stored separately from body parsing and later confirmation. Known
 local rejection before dispatch, success, success without confirmation, unknown effect and no

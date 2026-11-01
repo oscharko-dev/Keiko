@@ -42,6 +42,8 @@ import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian
 import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import { createJiraDraftStore } from "./jira-draft-store.js";
+import { executeJiraDraftStageTool, type JiraDraftToolDeps } from "./jira-draft-stage-tool.js";
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool, type JiraReportToolDeps } from "./jira-report-tool.js";
 import type { JiraTraceRequest } from "./jira-requirement-trace.js";
@@ -59,6 +61,8 @@ export interface JiraManagedProviderDeps<Context extends ManagedMcpInvocationCon
   readonly executeMutation?: JiraManagedMutationExecutor<Context>;
   /** Owner binding, store, checker and log for `jira.report`; defaults to a private in-memory store. */
   readonly report?: JiraReportToolDeps<Context>;
+  /** Owner binding, store and log for `jira.draft-stage`; defaults to a private in-memory store. */
+  readonly draft?: JiraDraftToolDeps<Context>;
 }
 /** The server owns durable intent, current authority and the final credential-bearing transport. */
 export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationContext> = (
@@ -286,7 +290,14 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
   connection: JiraManagedProviderDeps<Context>["connection"],
   executeMutation: JiraManagedMutationExecutor<Context> | undefined,
   report: JiraReportToolDeps<Context>,
+  draft: JiraDraftToolDeps<Context>,
 ): ManagedMcpTool<Context> {
+  if (declaration.name === "jira.draft-stage" && declaration.risk === "read")
+    return Object.freeze({
+      ...declaration,
+      execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
+        executeJiraDraftStageTool(args, context, await connection(context), draft),
+    });
   if (declaration.name === "jira.report" && declaration.risk === "read")
     return Object.freeze({
       ...declaration,
@@ -333,9 +344,13 @@ export function createJiraManagedProvider<Context extends ManagedMcpInvocationCo
     store: createJiraReportStore(),
     owner: () => "provider",
   };
+  const draft: JiraDraftToolDeps<Context> = deps.draft ?? {
+    store: createJiraDraftStore(),
+    owner: () => "provider",
+  };
   const tools: readonly ManagedMcpTool<Context>[] = Object.freeze(
     deps.declarations.map((declaration) =>
-      managedTool(declaration, connection, executeMutation, report),
+      managedTool(declaration, connection, executeMutation, report, draft),
     ),
   );
   return Object.freeze({ id: "jira", tools: (): readonly ManagedMcpTool<Context>[] => tools });

@@ -62,6 +62,13 @@ export function mutationIntentError(intent: ChatToolMutationIntent): UiStoreErro
     return invalidRequest("Invalid mutation turn reference.");
   if (!DIGEST.test(intent.actionDigest) || !DIGEST.test(intent.authorityDigest))
     return invalidRequest("Invalid mutation digest.");
+  if (
+    intent.batchDigest !== undefined &&
+    (!DIGEST.test(intent.batchDigest) ||
+      intent.sourceKind === "configured-mcp" ||
+      intent.operation !== "jira.create")
+  )
+    return invalidRequest("Invalid mutation batch.");
   return mutationSourceError(intent);
 }
 function isJiraSource(value: unknown): boolean {
@@ -111,6 +118,7 @@ export function sameMutationIdentity(
     record.credentialGeneration === intent.credentialGeneration &&
     record.authorityDigest === intent.authorityDigest &&
     record.actionDigest === intent.actionDigest &&
+    record.batchDigest === intent.batchDigest &&
     record.operation === intent.operation
   );
 }

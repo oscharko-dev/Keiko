@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+  createJiraDraftStore,
   createJiraReportStore,
   parseRequirementIds,
   type AtlassianHttpBodyPort,
+  type JiraDraftStore,
+  type JiraDraftToolDeps,
   type JiraManagedConnection,
   type JiraManagedMutationExecutor,
   type JiraReportStore,
@@ -47,6 +50,8 @@ import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
 import { recordJiraReportActivity } from "./jiraReportActivity.js";
+import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
+import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
 import {
   attachmentReviewFor,
   jiraChatAttachmentSource,
@@ -137,15 +142,21 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
       userMessageId: context.userMessageId,
       correlationId: context.correlationId,
     };
-    if (operation === "jira.draft")
+    if (operation === "jira.draft") {
+      // The draft runs on exactly the item list the approval covered: a draft that changed or
+      // vanished since is refused here, before any item is journaled.
+      const draft = readableChatDraft(deps.jiraDraftStore, context.chatId, args);
+      if (!draft.ok)
+        return Promise.resolve({ data: draftRefusalData(draft.reason), isError: true });
       return executeJiraChatDraft({
         ...shared,
-        arguments: args,
+        arguments: draft.arguments,
         deselected: approvedDeselection(deps, current.envelope.subject, context, intent),
         context,
         connection: jiraChatDraftConnection(deps, current.credential),
         openTrace: () => openTraceSession(deps, turn),
       });
+    }
     return executeTracedMutation(deps, turn, operation, args, (trace) =>
       executeJiraChatMutation({
         ...shared,
@@ -302,10 +313,25 @@ function reportTool(
   };
 }
 
+/** A staged draft belongs to the Chat that started it; approval and the run check the same binding. */
+function draftTool(
+  deps: UiHandlerDeps,
+  store: JiraDraftStore,
+): JiraDraftToolDeps<CatalogHandlerContext<JiraChatCatalogConsumer>> {
+  return {
+    store,
+    owner: (context) => context.chatId,
+    activity: (activity, context): void => {
+      recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
+    },
+  };
+}
+
 function initializeCatalog(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
   store: JiraReportStore,
+  draftStore: JiraDraftStore,
 ): Promise<ChatCatalog> {
   return createManagedProviderCatalog<JiraChatCatalogConsumer>({
     providers: [
@@ -314,6 +340,7 @@ function initializeCatalog(
         JIRA_CHAT_TOOLS,
         mutationExecutor(deps),
         reportTool(deps, store),
+        draftTool(deps, draftStore),
       ),
       createKnowledgeRequirementsProvider(deps),
     ],
@@ -330,6 +357,7 @@ export function createJiraChatCatalogRuntime(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
   store: JiraReportStore = createJiraReportStore(),
+  draftStore: JiraDraftStore = createJiraDraftStore(),
 ): JiraChatCatalogRuntime {
   let catalog: Promise<CatalogInitialization> | undefined;
   let closing: Promise<void> | undefined;
@@ -338,7 +366,12 @@ export function createJiraChatCatalogRuntime(
     if (closed) throw new CatalogDispatchFault("failed", "handler-unavailable");
   };
   const initialize = (): Promise<CatalogInitialization> => {
-    const pending: Promise<CatalogInitialization> = initializeCatalog(deps, log, store).then(
+    const pending: Promise<CatalogInitialization> = initializeCatalog(
+      deps,
+      log,
+      store,
+      draftStore,
+    ).then(
       (value) => ({ ok: true, value }),
       (error: unknown) => {
         // The managed initializer logs and disposes this failed host. Preserve the error for
@@ -374,11 +407,13 @@ export function installJiraChatCatalogRuntime(
   log: CatalogLifecycleLogPort,
 ): UiHandlerDeps {
   const store = createJiraReportStore();
-  const runtime = createJiraChatCatalogRuntime(deps, log, store);
+  const draftStore = createJiraDraftStore();
+  const runtime = createJiraChatCatalogRuntime(deps, log, store, draftStore);
   const previousDispose = deps.dispose;
   return Object.assign(deps, {
     jiraChatCatalog: runtime,
     jiraReportStore: store,
+    jiraDraftStore: draftStore,
     dispose: async (): Promise<void> => {
       try {
         await runtime.close();

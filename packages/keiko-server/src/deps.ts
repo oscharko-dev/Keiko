@@ -12,7 +12,11 @@ import {
   createConfiguredMcpConnections,
   type ConfiguredMcpConnections,
 } from "./mcp/mcpConfiguredConnections.js";
-import type { JiraReportComplianceChecker, JiraReportStore } from "@oscharko-dev/keiko-connectors";
+import type {
+  JiraDraftStore,
+  JiraReportComplianceChecker,
+  JiraReportStore,
+} from "@oscharko-dev/keiko-connectors";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
@@ -1001,6 +1005,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
   /** In-memory Jira reports (#4181): the tool resumes them and the export route reads them. */
   readonly jiraReportStore?: JiraReportStore;
+  /** In-memory staged backlog drafts (#4178): the staging tool appends, approval and runs read. */
+  readonly jiraDraftStore?: JiraDraftStore;
   /** The shared template checker (#4177); absent until a template set is active. */
   readonly jiraReportChecker?: JiraReportComplianceChecker;
   /** Accepted Chat turn scope reused by grounded preparation, tools and answer repair. */
