@@ -35,12 +35,31 @@ describe("createCodingRuntimeRunEffortRegistry", () => {
       modelDurationMs: 8_000,
       // The second settlement kept the reserved estimate: it is not a provider count.
       promptTokensTotal: 1_180,
+      completionTokensTotal: 0,
       toolInvocationCount: 0,
       workspaceReadCount: 0,
       editCount: 0,
       editRefusedCount: 0,
     });
     expect(registry.read("run-b")).toBeUndefined();
+  });
+
+  it("adds the provider-reported completion tokens of a tracked run only (#4138)", () => {
+    const registry = createCodingRuntimeRunEffortRegistry({ nowMs: fakeClock().now });
+    const call = registry.modelCallReserved("run-a", 1_000);
+    registry.modelCallSettled("run-a", call, 1_180);
+    registry.modelOutputSettled("run-a", 240);
+    registry.modelOutputSettled("run-a", 60);
+    // Not counts: a fraction, a negative value, and a run this registry never tracked.
+    registry.modelOutputSettled("run-a", 1.5);
+    registry.modelOutputSettled("run-a", -10);
+    registry.modelOutputSettled("run-unknown", 500);
+
+    expect(registry.read("run-a")).toMatchObject({
+      promptTokensTotal: 1_180,
+      completionTokensTotal: 300,
+    });
+    expect(registry.read("run-unknown")).toBeUndefined();
   });
 
   it("keeps the summed duration exact for overlapping calls of one size", () => {
@@ -194,6 +213,7 @@ describe("CodingRuntimeRunEffortLedger", () => {
         modelTurnCount: 2,
         modelDurationMs: 8_000,
         promptTokensTotal: 1_180,
+        completionTokensTotal: 240,
         toolInvocationCount: 2,
         workspaceReadCount: 1,
         editCount: 1,
@@ -204,6 +224,7 @@ describe("CodingRuntimeRunEffortLedger", () => {
       modelTurnCount: 2,
       modelDurationMs: 8_000,
       promptTokensTotal: 1_180,
+      completionTokensTotal: 240,
       toolInvocationCount: 2,
       workspaceReadCount: 1,
       editCount: 1,

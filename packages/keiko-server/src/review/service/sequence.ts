@@ -270,15 +270,16 @@ export async function prepareReviewRun(
 }
 
 /**
- * The Reviewer's totals: prompt tokens as the review runtime host accounted them; completion
- * tokens are not reported by the runtime and stay zero.
+ * The Reviewer's totals: the prompt and completion tokens the provider reported, as the review
+ * runtime host accounted them (#4138).
  */
 function reviewerTotals(
   result: Awaited<ReturnType<ReviewRuntimeService["run"]>>,
   durationMs: number,
 ): ReviewRoleTotals {
   const promptTokens = result.ok ? (result.effort?.promptTokens ?? 0) : 0;
-  return { promptTokens, completionTokens: 0, durationMs };
+  const completionTokens = result.ok ? (result.effort?.completionTokens ?? 0) : 0;
+  return { promptTokens, completionTokens, durationMs };
 }
 
 /** The `reviewing` phase: one Reviewer run; collects its accepted candidates. */

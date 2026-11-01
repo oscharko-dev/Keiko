@@ -13066,6 +13066,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      completionTokensTotal: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       toolInvocationCount: {
         type: "integer",
         dataClass: "count",

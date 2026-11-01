@@ -189,6 +189,7 @@
     "portable:approve-runtimes": "node scripts/update-portable-runtime-approvals.mjs",
     "portable:verify-signing": "node scripts/verify-portable-runtime-signing.mjs",
     "portable:manual-review": "npm run build:packages && npm run build:ui && node --disable-warning=ExperimentalWarning scripts/portable-manual-review.mjs",
+    "review:quality-gate": "npm run build:packages && node scripts/stage-dev-coding-runtime.mjs && node node_modules/@typescript/native/bin/tsc -p tests/review-quality/tsconfig.json && node tests/review-quality/dist/tests/review-quality/gate.js",
     "smoke:portable-launch-setup": "npm run build:packages && node --disable-warning=ExperimentalWarning scripts/portable-launch-setup-smoke.mjs",
     "smoke:portable-secure-read": "node scripts/portable-secure-read-smoke.mjs",
     "smoke:install": "node scripts/installable-package-smoke.mjs",

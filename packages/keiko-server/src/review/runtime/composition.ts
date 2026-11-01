@@ -127,7 +127,7 @@ export interface ReviewRuntimeComposition {
   readonly facadePurpose: CodingRuntimePurpose | undefined;
   /** The deps the shared sidecar handlers read, with this instance's runtime capabilities. */
   readonly sidecarDeps: (base: UiHandlerDeps) => UiHandlerDeps;
-  /** A run's model effort (prompt tokens, model turns) as the runtime host accounted it (#4136). */
+  /** A run's model effort (prompt and completion tokens, model turns), host-accounted (#4136, #4138). */
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
   readonly close: () => void;
 }

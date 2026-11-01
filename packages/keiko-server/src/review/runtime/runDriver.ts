@@ -25,8 +25,17 @@ export interface ReviewRunDriveOutcome {
   readonly outcome: "completed" | "failed" | "cancelled" | "refused";
   readonly runId?: string | undefined;
   readonly failureCode?: string | undefined;
-  /** The Reviewer's prompt tokens and model turns as the runtime host accounted them (#4136). */
-  readonly effort?: { readonly promptTokens: number; readonly modelTurns: number } | undefined;
+  /**
+   * The Reviewer's prompt and completion tokens and model turns as the runtime host accounted them
+   * (#4136, #4138). Both token counts are provider-reported; an estimate is never counted.
+   */
+  readonly effort?:
+    | {
+        readonly promptTokens: number;
+        readonly completionTokens: number;
+        readonly modelTurns: number;
+      }
+    | undefined;
   /** Whether the runtime's end was proven; absent when the orchestrator never started the run. */
   readonly runtimeCleanup?: ReviewRuntimeCleanup | undefined;
 }
@@ -144,6 +153,12 @@ export async function driveReviewRun(
     runId,
     ...(effort === undefined
       ? {}
-      : { effort: { promptTokens: effort.promptTokensTotal, modelTurns: effort.modelTurnCount } }),
+      : {
+          effort: {
+            promptTokens: effort.promptTokensTotal,
+            completionTokens: effort.completionTokensTotal,
+            modelTurns: effort.modelTurnCount,
+          },
+        }),
   };
 }

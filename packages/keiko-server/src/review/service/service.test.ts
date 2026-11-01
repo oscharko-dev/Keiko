@@ -145,6 +145,7 @@ describe("review run service: complete runs and presentation (AC2)", () => {
       stored.filter((finding) => !finding.presented).map((finding) => finding.verdict?.verdict),
     ).toEqual(expect.arrayContaining(["confirmed", "refuted"]));
     expect(view.totals.reviewer.promptTokens).toBe(4_321);
+    expect(view.totals.reviewer.completionTokens).toBe(612);
     expect(view.totals.counterChecker.promptTokens).toBe(2_500);
     expect(view.coverageEntries.map((entry) => entry.path).sort()).toEqual([
       "src/total.ts",

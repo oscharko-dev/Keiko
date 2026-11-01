@@ -6887,6 +6887,37 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     },
   );
 
+  it("adds only provider-reported completion tokens to the run's effort (#4138)", async () => {
+    const recorded: { runId: string; completionTokens: number }[] = [];
+    const authenticator = {
+      authenticate: (): unknown => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+      reservePromptTokens: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      settlePromptTokens: (): unknown => ({ ok: true, runId: "run-gateway-test" }),
+      recordCompletionTokens: (runId: string, completionTokens: number): void => {
+        recorded.push({ runId, completionTokens });
+      },
+    };
+    const reported = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), {
+      ...depsValue(configValue(provider(), capability()), () => reported),
+      runtimeCapabilityAuthenticator: authenticator,
+    });
+    // A provider that reports no completion count: the usage line carries an estimate, which the
+    // run's effort never counts as provider output.
+    const unreported = vi.fn(() => {
+      const response = assistantResponse("azure-coding-model");
+      return Promise.resolve({ ...response, usage: { ...response.usage, completionTokens: 0 } });
+    });
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), {
+      ...depsValue(configValue(provider(), capability()), () => unreported),
+      runtimeCapabilityAuthenticator: authenticator,
+    });
+
+    expect(reported).toHaveBeenCalledTimes(1);
+    expect(unreported).toHaveBeenCalledTimes(1);
+    expect(recorded).toEqual([{ runId: "run-gateway-test", completionTokens: 8 }]);
+  });
+
   it("settles conservatively (the full reserved estimate) when the provider call fails before usage is observed", async () => {
     const chat = vi.fn(() => Promise.reject(new Error("provider unavailable")));
     const settlements: { reservedPromptTokens: number; actualPromptTokens: number }[] = [];

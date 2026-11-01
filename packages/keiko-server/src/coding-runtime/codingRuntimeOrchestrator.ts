@@ -748,14 +748,15 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
     diagnosticTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
     // The run's effort roll-up (#3873), counted in process where each fact was observed
     // (codingRuntimeRunEffort.ts): the wall time from creation to this line; the sidecar gateway's
-    // admitted-and-settled model calls, their summed duration and the prompt tokens the provider
-    // reported for them; the governed tool calls the run's facade answered; the verification
+    // admitted-and-settled model calls, their summed duration and the prompt and completion tokens
+    // the provider reported for them; the governed tool calls the run's facade answered; the verification
     // summaries and human decisions this orchestrator settled, and the time the run waited on a
     // human. A run this process did not start carries its wall time alone.
     wallDurationMs: { type: "integer", dataClass: "duration", required: false },
     modelTurnCount: { type: "integer", dataClass: "count", required: false },
     modelDurationMs: { type: "integer", dataClass: "duration", required: false },
     promptTokensTotal: { type: "integer", dataClass: "count", required: false },
+    completionTokensTotal: { type: "integer", dataClass: "count", required: false },
     toolInvocationCount: { type: "integer", dataClass: "count", required: false },
     workspaceReadCount: { type: "integer", dataClass: "count", required: false },
     editCount: { type: "integer", dataClass: "count", required: false },

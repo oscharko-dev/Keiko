@@ -1360,6 +1360,8 @@ describe("production coding runtime resolver", () => {
     expect(
       ledger.settlePromptTokens(capability, 1_000, 1_240, modelCallIdOf(reserved)),
     ).toMatchObject({ ok: true });
+    // #4138: the gateway passes the provider-reported completion tokens of the answered call.
+    ledger.recordCompletionTokens(request.runId, 310);
     // A reservation the run's allowance refused is no model call: nothing was dispatched.
     expect(ledger.reservePromptTokens?.(capability, 10_000_000)).toMatchObject({ ok: false });
     // A malformed edit the run's facade refused is still a refused edit.
@@ -1379,6 +1381,7 @@ describe("production coding runtime resolver", () => {
       modelTurnCount: 1,
       modelDurationMs: 4_000,
       promptTokensTotal: 1_240,
+      completionTokensTotal: 310,
       toolInvocationCount: 1,
       workspaceReadCount: 0,
       editCount: 0,
@@ -1441,6 +1444,7 @@ interface PromptSettlementPort {
     actualPromptTokens: number,
     modelCallId?: number,
   ) => unknown;
+  readonly recordCompletionTokens: (runId: string, completionTokens: number) => void;
 }
 
 // The identity an admitted reservation answers beside its run, as the gateway reads it.
@@ -1454,7 +1458,12 @@ function modelCallIdOf(reservation: unknown): number | undefined {
 // the shared host interface (see `runtimeCapabilityAuthenticatorFor`); the gateway reads it the same
 // way.
 function hasPromptSettlement<T extends object>(value: T): value is T & PromptSettlementPort {
-  return "settlePromptTokens" in value && typeof value.settlePromptTokens === "function";
+  return (
+    "settlePromptTokens" in value &&
+    typeof value.settlePromptTokens === "function" &&
+    "recordCompletionTokens" in value &&
+    typeof value.recordCompletionTokens === "function"
+  );
 }
 
 function researchUnavailable(

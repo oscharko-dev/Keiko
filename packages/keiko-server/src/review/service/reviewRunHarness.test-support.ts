@@ -140,7 +140,7 @@ export function reviewerFiling(
       ok: true,
       outcome,
       ...(failureCode === undefined ? {} : { failureCode }),
-      effort: { promptTokens: 4_321, modelTurns: 3 },
+      effort: { promptTokens: 4_321, completionTokens: 612, modelTurns: 3 },
       rules: "absent",
       candidates: intake.candidates(),
       rejections: intake.rejections(),

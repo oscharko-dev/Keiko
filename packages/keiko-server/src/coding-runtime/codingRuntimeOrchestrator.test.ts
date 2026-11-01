@@ -7787,15 +7787,17 @@ describe("run effort roll-up (#3873)", () => {
     await f.orchestrator.start(start);
 
     // Two model turns at the run's model-gateway capability, 3 s and 5 s, each settled with the
-    // provider's own prompt count; between them the facade answers a read, after them an edit and
+    // provider's own prompt and completion counts; between them the facade answers a read, after them an edit and
     // the verification whose summary the run then reports.
     const firstTurn = host.modelCallReserved("run-1", 1_000);
     clock.advance(3_000);
     host.modelCallSettled("run-1", firstTurn, 1_180);
+    host.modelOutputSettled("run-1", 320);
     host.toolSettled("run-1", "read", "completed");
     const secondTurn = host.modelCallReserved("run-1", 1_400);
     clock.advance(5_000);
     host.modelCallSettled("run-1", secondTurn, 1_520);
+    host.modelOutputSettled("run-1", 410);
     host.toolSettled("run-1", "edit", "completed");
     host.toolSettled("run-1", "verification", "completed");
     await f.orchestrator.ingest(passedVerification());
@@ -7812,6 +7814,7 @@ describe("run effort roll-up (#3873)", () => {
       modelTurnCount: 2,
       modelDurationMs: 8_000,
       promptTokensTotal: 2_700,
+      completionTokensTotal: 730,
       toolInvocationCount: 3,
       workspaceReadCount: 1,
       editCount: 1,

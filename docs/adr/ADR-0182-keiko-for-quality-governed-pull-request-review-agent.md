@@ -402,6 +402,22 @@ pull request #3066, fixed by Issue #4132 from the recorded baseline
 (`docs/qa/review-agent-baseline-2026-10-30.md`); the replay refuses a run that tunes on the holdout.
 Definitions and labeling rules are in `docs/qa/review-agent-measurement.md`.
 
+The offline gate runs through the root-level evaluation composition `tests/review-quality/`
+(`npm run review:quality-gate`), because the server may not import `keiko-evaluations` and
+`keiko-evaluations` may not import the server. It starts the real server composition the way the
+dev BFF does (`buildUiHandlerDeps` and `createUiServer` on loopback, with the operator's gateway
+configuration) and supplies the evaluation family's replay and seed ports, which run one review at
+a time through the composed review service. The measurement switches reach that service only
+through the `reviewEvaluationSwitches` option of `buildUiHandlerDeps`, which only this composition
+passes: no CLI flag, environment variable or configuration key sets it, so a product server always
+composes `createReviewRunService`. Each run records its configuration digest over the committed
+review code, the counter-check and presentation limits, the variant and the pair, and refuses to
+start on uncommitted review code. Cost per role comes from each review's own record: the
+counter-checker's tokens from its model calls, the Reviewer's prompt and completion tokens from the
+review runtime's effort roll-up, which counts provider-reported counts only (an estimated output size
+is never counted). The holdout run needs an explicit confirmation flag. Results and the iteration
+log are in `docs/qa/review-agent-offline-gate-<date>.md`.
+
 ### D10 — Publication boundary
 
 Nothing leaves Keiko without an explicit human action. Publication arrives only in phase 3, after
