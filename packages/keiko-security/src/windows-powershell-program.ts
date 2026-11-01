@@ -13,7 +13,7 @@ const ASSEMBLY_NAME = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
  */
 export function kernel32PInvokePrelude(assemblyName: string): string {
   if (!ASSEMBLY_NAME.test(assemblyName)) throw new TypeError("assembly name must be an identifier");
-  return String.raw`  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('${assemblyName}'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
+  return `  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('${assemblyName}'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
   $module = $assembly.DefineDynamicModule('${assemblyName}')
   $type = $module.DefineType('${assemblyName}Api', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
   $attributes = [Reflection.MethodAttributes]'Public, Static, PinvokeImpl'

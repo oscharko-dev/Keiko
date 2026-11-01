@@ -182,7 +182,7 @@ function unsigned(value: string | undefined): bigint {
     throw new Error("windows-owner-private-output-invalid");
   }
   const parsed = BigInt(value);
-  if (parsed > 0xffff_ffffn) throw new Error("windows-owner-private-output-invalid");
+  if (parsed > 0xffffffffn) throw new Error("windows-owner-private-output-invalid");
   return parsed;
 }
 

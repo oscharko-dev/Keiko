@@ -1797,7 +1797,9 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     }
     return acquireWindowsSlot(input, deps, capacity)
       .then((reservation) => startRun(input, deps, target, cwd, reservation))
-      .catch((error: unknown) => Promise.reject(asError(error, "command execution failed")));
+      .catch((error: unknown) => {
+        throw asError(error, "command execution failed");
+      });
   } catch (error) {
     return Promise.reject(asError(error, "command execution failed"));
   }

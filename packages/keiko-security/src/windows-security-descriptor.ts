@@ -33,17 +33,17 @@ export interface WindowsDescriptorPrincipal {
   readonly tokenOwnerSid: string;
 }
 
-const FILE_WRITE_DATA = 0x0000_0002; // also FILE_ADD_FILE
-const FILE_APPEND_DATA = 0x0000_0004; // also FILE_ADD_SUBDIRECTORY
-const FILE_WRITE_EA = 0x0000_0010;
-const FILE_DELETE_CHILD = 0x0000_0040;
-const FILE_WRITE_ATTRIBUTES = 0x0000_0100;
-const DELETE = 0x0001_0000;
-const WRITE_DAC = 0x0004_0000;
-const WRITE_OWNER = 0x0008_0000;
-const MAXIMUM_ALLOWED = 0x0200_0000;
-const GENERIC_ALL = 0x1000_0000;
-const GENERIC_WRITE = 0x4000_0000;
+const FILE_WRITE_DATA = 0x00000002; // also FILE_ADD_FILE
+const FILE_APPEND_DATA = 0x00000004; // also FILE_ADD_SUBDIRECTORY
+const FILE_WRITE_EA = 0x00000010;
+const FILE_DELETE_CHILD = 0x00000040;
+const FILE_WRITE_ATTRIBUTES = 0x00000100;
+const DELETE = 0x00010000;
+const WRITE_DAC = 0x00040000;
+const WRITE_OWNER = 0x00080000;
+const MAXIMUM_ALLOWED = 0x02000000;
+const GENERIC_ALL = 0x10000000;
+const GENERIC_WRITE = 0x40000000;
 
 /**
  * Every access right that lets a principal change the object's data, attributes, name, DACL, or
@@ -78,7 +78,7 @@ const SE_SELF_RELATIVE = 0x8000;
 const SID_REVISION = 1;
 const SID_MAX_SUB_AUTHORITIES = 15;
 const SID_FIXED_LENGTH = 8;
-const SID_AUTHORITY_DECIMAL_LIMIT = 0x1_0000_0000;
+const SID_AUTHORITY_DECIMAL_LIMIT = 0x100000000;
 
 const ACL_HEADER_LENGTH = 8;
 const ACL_REVISIONS: ReadonlySet<number> = new Set([2, 4]);
