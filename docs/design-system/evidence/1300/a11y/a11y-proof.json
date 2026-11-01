@@ -122,8 +122,8 @@
   ],
   "postCssSha256": "ec4cf7c88ede7534c4ee76c0dfcc81be9fdbc40a5139d97d8baf9c14de4ec7f4",
   "run": {
-    "generatedAt": "2026-11-01T10:31:04.601Z",
-    "repoHeadSha": "5c0a2e049c1d6e7ee53f81dc53de9ecbc9f62c73"
+    "generatedAt": "2026-11-01T20:20:24.890Z",
+    "repoHeadSha": "cc91d1e1a69833b359d3c5ddff1f24db61833776"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",

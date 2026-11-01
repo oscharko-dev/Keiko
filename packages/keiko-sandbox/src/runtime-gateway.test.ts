@@ -51,6 +51,31 @@ function buildRuntimeGatewaySeatbeltCommand(
 }
 
 describe("long-lived gateway network confinement", () => {
+  it("keeps Windows broker vectors bound to the canonical policy producer", () => {
+    const vectors = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../native/runtime-supervisor/windows/gateway_request_vectors.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as RuntimeGatewayConfinement[];
+    expect(vectors).toHaveLength(2);
+    expect(vectors.map((vector) => vector.addressFamily)).toEqual(["ipv4", "ipv6"]);
+    for (const vector of vectors) {
+      const host = vector.addressFamily === "ipv4" ? "127.0.0.1" : "[::1]";
+      const produced = createRuntimeGatewayConfinement({
+        gatewayUrl: `http://${host}:${String(vector.port)}/`,
+        runId: vector.runId,
+        treeBindingId: vector.treeBindingId,
+        envelopeDigest: vector.envelopeDigest,
+        runtimeArtifactDigest: vector.runtimeArtifactDigest,
+        modelProfileDigest: vector.modelProfileDigest,
+      });
+      expect(produced).toEqual(vector);
+    }
+  });
   it.each(["object", "array"])("refuses a revoked %s filesystem", (kind) => {
     const revoked = Proxy.revocable(kind === "object" ? {} : [], {});
     revoked.revoke();

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const binaryExtensions = new Set([
   "7z",
@@ -382,11 +383,12 @@ export function coverageDisposition(input, nativeSources = new Set()) {
   return "static-analysis";
 }
 
-export function systemGitExecutable(platform = process.platform) {
+export function systemGitExecutable(
+  platform = process.platform,
+  resolveExecutable = resolveHostExecutable,
+) {
   if (platform !== "win32") return "/usr/bin/git";
-  const programFiles = process.env.ProgramFiles ?? "C:/Program Files";
-  const separator = programFiles.endsWith("/") || programFiles.endsWith("\\") ? "" : "/";
-  return `${programFiles}${separator}Git/cmd/git.exe`;
+  return resolveExecutable("git", { platform });
 }
 
 export function optionValue(argv, name) {

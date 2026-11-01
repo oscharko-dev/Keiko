@@ -37,6 +37,10 @@ jobs:
       - name: Compile, analyze, validate and prove dynamic filter cleanup
         run: node scripts/testing/test-windows-gateway-filters.mjs --filter-lifecycle
       - name: Prove durable-deny guard cleanup after gateway permit revocation
+        id: guard-proof
         run: node scripts/testing/test-windows-gateway-filters.mjs --guarded-lifecycle
       - name: Prove real AppContainer gateway access and hostile loopback denial
         run: node scripts/testing/test-windows-gateway-filters.mjs --socket-proof
+      - name: Investigate scoped inbound control and independent deny coexistence
+        if: ${{ !cancelled() && steps.guard-proof.outcome == 'success' }}
+        run: node scripts/testing/test-windows-gateway-filters.mjs --inbound-control-proof

@@ -231,6 +231,36 @@ export function evaluateWaiverScope(suppressedIds, shippedIds) {
   return suppressedIds.filter((id) => shippedIds.has(id));
 }
 
+// The advisory's <11.0.1 range also matches the legacy callable API, which has no
+// optimizationLevel/firstPhasePreProcess path. Do not let that narrow triage hide
+// a vulnerable modern matcher, even when that matcher is only a dev dependency.
+function isAuditedLegacyMatcher(path, entry) {
+  return (
+    path === "node_modules/eslint-config-next/node_modules/minimatch" &&
+    entry.version === "3.1.5" &&
+    entry.dev === true
+  );
+}
+
+export function validateLegacyMinimatchTriage(suppressedIds, lockfileJson) {
+  if (!suppressedIds.includes("GHSA-g3hv-75wg-m249")) return;
+  const packages = JSON.parse(lockfileJson).packages;
+  if (typeof packages !== "object" || packages === null || Array.isArray(packages)) {
+    throw new TypeError("minimatch triage requires a lockfile packages map");
+  }
+  let legacyCount = 0;
+  for (const [path, entry] of Object.entries(packages)) {
+    if (!path.endsWith("node_modules/minimatch")) continue;
+    if (entry.version === "11.0.3") continue;
+    if (isAuditedLegacyMatcher(path, entry)) {
+      legacyCount += 1;
+      continue;
+    }
+    throw new Error(`minimatch triage does not cover ${path}; remove the waiver or fix the graph`);
+  }
+  if (legacyCount !== 1) throw new Error("remove the obsolete legacy minimatch triage entry");
+}
+
 function runAudit() {
   try {
     return execFileSync(resolveHostExecutable("npm"), ["audit", "--json", "--omit=dev"], {
@@ -267,6 +297,8 @@ export async function main(deps = {}) {
     console.log("osv-waiver-scope: PASS — no suppressions recorded.");
     return;
   }
+  const readLockfile = deps.readLockfile ?? (() => readFileSync(lockfilePath, "utf8"));
+  validateLegacyMinimatchTriage(suppressed, readLockfile());
   const violations = evaluateWaiverScope(suppressed, await shippedIds(deps));
   if (violations.length > 0) {
     for (const id of violations) {

@@ -242,3 +242,16 @@ references and 108 running-app captures completed without errors. The seven-mode
 proof has zero serious/critical violations and zero unresolved incomplete findings. No producer
 assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
 fixtures; they do not qualify model behavior.
+
+## Windows gateway merge with dev — 2026-11-01
+
+Merging `dev` (release 1.3.5) into the Windows gateway branch changes the root manifests and
+lockfile, which are declared producer inputs. All four original producers were rerun on that merged
+tree on Windows x64, Node 24.18.0, as for the earlier dependency alignment on this branch. Component
+fidelity passed 427 probes with zero gated differences and no missing selectors; editor fidelity had
+zero gated differences and all 14 reference captures, with the existing non-gated accent differences
+still recorded. The seven-mode accessibility proof has zero serious/critical violations and zero
+unresolved incomplete findings, and all 108 running-app captures completed with zero page errors,
+unexpected API requests, missing selectors, crashed windows or unavailable workspace-trust states. No
+producer assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
+fixtures; they do not qualify model behavior.
