@@ -6,7 +6,6 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +21,7 @@ import {
 import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../symlinkFixture.test-support.js";
 import {
   NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   NPM_LANE_RUNTIME_APPROVALS,
@@ -346,18 +346,28 @@ describe("npm-lane OpenCode discovery", () => {
       });
     });
 
-    it.each([
+    // `redirected` is the directory form of the link: a junction on Windows (no privilege needed),
+    // a directory symlink elsewhere.
+    it.for([
       ["tampered", "digest-mismatch"],
       ["linked", "not-regular-file"],
+      ["redirected", "not-regular-file"],
     ] as const)(
       "keeps the engine active and degrades search for a %s ripgrep (%s)",
-      (kind, reason) => {
+      ([kind, reason], context) => {
         const install = globalInstall({ ripgrep: kind === "tampered" ? "other bytes" : RG });
+        const executable = join(install.runtimeRoot, "native", "rg");
         if (kind === "linked") {
           const elsewhere = join(dirname(install.runtimeRoot), "real-rg");
           write(elsewhere, RG, 0o755);
-          rmSync(join(install.runtimeRoot, "native", "rg"));
-          symlinkSync(elsewhere, join(install.runtimeRoot, "native", "rg"));
+          rmSync(executable);
+          plantSymlinkOrSkip(context, elsewhere, executable);
+        }
+        if (kind === "redirected") {
+          const elsewhere = join(dirname(install.runtimeRoot), "real-rg-directory");
+          write(join(elsewhere, "rg"), RG, 0o755);
+          rmSync(executable);
+          plantDirectoryRedirect(elsewhere, executable);
         }
         const discovery = discover(install);
         expect(discovery.outcome).toBe("activated");

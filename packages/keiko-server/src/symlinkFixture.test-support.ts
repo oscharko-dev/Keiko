@@ -40,6 +40,19 @@ export function plantSymlinkOrSkip(
 }
 
 /**
+ * The macOS seatbelt filesystem policy is defined over POSIX roots; a Windows host's temporary
+ * directories cannot express them, so the policy is refused before any launch. That refusal is the
+ * correct product behavior and is not a Windows qualification of the macOS path.
+ */
+export function skipSeatbeltRootsOnWindowsHost(context: TestContext): void {
+  if (WINDOWS_HOST) {
+    context.skip(
+      "macOS seatbelt filesystem roots are POSIX paths; not expressible on a Windows host",
+    );
+  }
+}
+
+/**
  * A directory redirection every host can create: a junction on Windows (absolute target, no
  * privilege) and a directory symlink elsewhere.
  */

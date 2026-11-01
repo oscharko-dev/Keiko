@@ -19,6 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { plantSymlinkOrSkip, WINDOWS_HOST } from "../symlinkFixture.test-support.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -221,6 +222,10 @@ function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+// A Windows host reports synthesized permission bits (0o666 for every writable file, whatever
+// `chmod` was asked), so the owner-private modes are asserted where POSIX modes exist (#4068).
+const itWithPosixModes = it.skipIf(WINDOWS_HOST);
+
 describe("retaining a settled run's session state", () => {
   it("keeps a compacted, audited copy bound to the task and reports counts only", () => {
     const f = fixture();
@@ -245,6 +250,12 @@ describe("retaining a settled run's session state", () => {
     // Nothing of the conversation, the workspace path or an id outside the manifest is in it.
     expect(JSON.stringify(manifest)).not.toContain("SECRET-CONVERSATION");
     expect(JSON.stringify(manifest)).not.toContain(WORKSPACE);
+  });
+
+  itWithPosixModes("keeps the retained entry owner-private", () => {
+    const f = fixture();
+
+    expect(retain(f)).toMatchObject({ ok: true });
     expect(statSync(entryDirectory(f)).mode & 0o077).toBe(0);
     expect(statSync(join(entryDirectory(f), "opencode.db")).mode & 0o077).toBe(0);
   });
@@ -512,10 +523,10 @@ describe("retaining a settled run's session state", () => {
     expect(existsSync(f.storeRoot)).toBe(false);
   });
 
-  it("refuses a store root that is a symbolic link", () => {
+  it("refuses a store root that is a symbolic link", (context) => {
     const f = fixture();
     mkdirSync(join(f.root, "elsewhere"));
-    symlinkSync(join(f.root, "elsewhere"), f.storeRoot);
+    plantSymlinkOrSkip(context, join(f.root, "elsewhere"), f.storeRoot, "dir");
 
     // A store that cannot be trusted is a failure for the caller to record, not a refusal.
     expect(() => retain(f)).toThrow("retained-root-invalid");
@@ -566,7 +577,9 @@ describe("retaining a settled run's session state", () => {
         binding: binding(),
         sessionId: SESSION_ID,
         directory: WORKSPACE,
-        sourceDatabase: join(f.root, "x".repeat(5000)),
+        // Past every host's name limit: POSIX refuses a component over 255 bytes, while Windows
+        // answers ENOENT up to its 32,767-character path limit and ENAMETOOLONG only beyond it.
+        sourceDatabase: join(f.root, "x".repeat(40_000)),
       }),
     ).toThrow(/ENAMETOOLONG/u);
     expect(existsSync(f.storeRoot) ? entryNames(f) : []).toEqual([]);
@@ -673,9 +686,18 @@ describe("checking a retained entry out for a resuming run", () => {
       ageMs: 5_000,
     });
     expect(sha256(destination)).toBe(sha256(join(entryDirectory(f), "opencode.db")));
-    expect(statSync(destination).mode & 0o077).toBe(0);
     // The entry is untouched: another run of the task, or a fork, can take it again.
     expect(checkout(f).result).toMatchObject({ ok: true });
+  });
+
+  itWithPosixModes("places the checked-out copy owner-private", () => {
+    const f = fixture();
+    retain(f);
+
+    const { destination, result } = checkout(f);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(statSync(destination).mode & 0o077).toBe(0);
   });
 
   it("admits a window at least as large as the one the history was built under", () => {

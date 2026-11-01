@@ -8,6 +8,8 @@ import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { skipSeatbeltRootsOnWindowsHost } from "../symlinkFixture.test-support.js";
 import {
   createRuntimeGatewayConfinement,
   buildRuntimeGatewaySeatbeltCommand,
@@ -250,7 +252,8 @@ describe("dev-lane runtime process backend", () => {
   // admin-writable /Applications, refused every native run at Git attestation. The native profile
   // has no exec allowlist, so it attests no Git and keeps the launcher's PATH; the gateway profile
   // still sees the attested Git alone and fails closed without one.
-  it("starts a native-profile child with the launcher's PATH and no Git attestation", () => {
+  it("starts a native-profile child with the launcher's PATH and no Git attestation", (context) => {
+    skipSeatbeltRootsOnWindowsHost(context);
     const fixture = stageFixture();
     const privateStateRoot = join(dirname(fixture.cwd), "state", "run-2475");
     mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });

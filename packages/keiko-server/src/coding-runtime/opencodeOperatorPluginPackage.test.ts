@@ -5,12 +5,12 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../symlinkFixture.test-support.js";
 import { readPluginPackage, writePluginPackage } from "./opencodeOperatorPluginPackage.js";
 
 const roots: string[] = [];
@@ -33,21 +33,29 @@ function packageTree(): string {
     'import { x } from "dep";\nexport default { id: "acme.pkg", async setup() { void x; } };\n',
   );
   writeFileSync(join(root, "package.json"), "{}");
-  symlinkSync("../sub/entry.js", join(root, "node_modules", "link.js"));
   return root;
 }
 
+const TREE_FILES = ["node_modules/dep/index.js", "package.json", "sub/entry.js"];
+
 describe("an npm plugin package the operator installed (#3903 AC2)", () => {
-  it("hashes the regular files exactly as the documented shasum listing does", () => {
-    const read = readPluginPackage(packageTree(), "sub/entry.js");
+  it("hashes the regular files exactly as the documented shasum listing does", (context) => {
+    const root = packageTree();
+    plantSymlinkOrSkip(context, "../sub/entry.js", join(root, "node_modules", "link.js"));
+    const read = readPluginPackage(root, "sub/entry.js");
     expect(read).toMatchObject({ ok: true, sha256: TREE_SHA256 });
     if (!read.ok) throw new Error("unreadable fixture");
     // The link is neither hashed nor copied, as `find -type f` skips it.
-    expect(read.files.map((file) => file.path).sort()).toEqual([
-      "node_modules/dep/index.js",
-      "package.json",
-      "sub/entry.js",
-    ]);
+    expect(read.files.map((file) => file.path).sort()).toEqual(TREE_FILES);
+  });
+
+  it("neither hashes nor walks through a directory link (a junction on Windows)", () => {
+    const root = packageTree();
+    plantDirectoryRedirect(join(root, "sub"), join(root, "node_modules", "linked-sub"));
+    const read = readPluginPackage(root, "sub/entry.js");
+    expect(read).toMatchObject({ ok: true, sha256: TREE_SHA256 });
+    if (!read.ok) throw new Error("unreadable fixture");
+    expect(read.files.map((file) => file.path).sort()).toEqual(TREE_FILES);
   });
 
   it("changes its digest when any file of the tree changes", () => {

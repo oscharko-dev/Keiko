@@ -5,7 +5,6 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { plantDirectoryRedirect } from "../symlinkFixture.test-support.js";
 import { sweepOrphanedOpenCodeRunState } from "./opencodeRunStateSweep.js";
 
 const roots: string[] = [];
@@ -98,7 +98,7 @@ describe("orphaned OpenCode run state sweep", () => {
     writeFileSync(join(outside, "sentinel.txt"), "KEEP");
     const base = join(scratch(), "opencode");
     mkdirSync(base, { recursive: true, mode: 0o700 });
-    symlinkSync(outside, join(base, "run-linked"), "dir");
+    plantDirectoryRedirect(outside, join(base, "run-linked"));
     writeFileSync(join(base, "run-file"), "not a directory");
     mkdirSync(join(base, "not a run id"));
 
@@ -115,7 +115,7 @@ describe("orphaned OpenCode run state sweep", () => {
     const real = scratch();
     const orphan = runDirectory(real, "run-1");
     const link = join(scratch(), "opencode");
-    symlinkSync(real, link, "dir");
+    plantDirectoryRedirect(real, link);
 
     const result = sweepOrphanedOpenCodeRunState({ stateBaseRoot: link, isRetained: () => false });
 

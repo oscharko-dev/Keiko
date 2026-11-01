@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { plantDirectoryRedirect } from "../symlinkFixture.test-support.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import {
   recordNativeGitMetadataResolution,
@@ -146,7 +147,8 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
     const { repository } = repositoryWithWorktree("linked");
     const workspace = join(root, "link-workspace");
     mkdirSync(workspace);
-    symlinkSync(join(repository, ".git"), join(workspace, ".git"));
+    // A junction on Windows (no privilege needed), a directory symlink elsewhere.
+    plantDirectoryRedirect(join(repository, ".git"), join(workspace, ".git"));
     expect(resolveNativeGitMetadata(workspace, undefined).layout).toBe("unproven");
   });
 
