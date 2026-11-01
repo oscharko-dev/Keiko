@@ -22,6 +22,12 @@ import {
   resolveWindowsSystemBinary,
 } from "./windows-system-directory.js";
 import type { WindowsLocalVolumeRunner } from "./windows-local-volume.js";
+import {
+  commandOutputText,
+  encodePowerShellProgram,
+  kernel32PInvokePrelude,
+  trustedPowerShellEnvironment,
+} from "./windows-powershell-program.js";
 
 export const WINDOWS_OWNER_PRIVATE_TIMEOUT_MS = 20_000;
 export const WINDOWS_OWNER_PRIVATE_MAX_FILES = 4_096;
@@ -104,16 +110,7 @@ export interface WindowsOwnerPrivateProtectOptions {
 // program. Failures are reported as a bare "E|<index>": no exception text leaves the program.
 const QUERY = String.raw`
 try {
-  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('KeikoOwnerPrivate'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
-  $module = $assembly.DefineDynamicModule('KeikoOwnerPrivate')
-  $type = $module.DefineType('KeikoOwnerPrivateApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
-  $attributes = [Reflection.MethodAttributes]'Public, Static, PinvokeImpl'
-  function pinvoke($name, $returnType, $parameters) {
-    $method = $type.DefinePInvokeMethod($name, 'kernel32.dll', $name, $attributes, [Reflection.CallingConventions]::Standard, $returnType, [type[]]$parameters, [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
-    $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
-    return $method
-  }
-  $null = pinvoke 'CreateFileW' ([Microsoft.Win32.SafeHandles.SafeFileHandle]) @([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr])
+${kernel32PInvokePrelude("KeikoOwnerPrivate")}  $null = pinvoke 'CreateFileW' ([Microsoft.Win32.SafeHandles.SafeFileHandle]) @([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr])
   $null = pinvoke 'GetFileInformationByHandle' ([bool]) @([Microsoft.Win32.SafeHandles.SafeFileHandle], [IntPtr])
   $api = $type.CreateType()
   $create = $api.GetMethod('CreateFileW')
@@ -148,26 +145,10 @@ while ($true) {
   $index += 1
 }`;
 
-function encodedQuery(): string {
-  return Buffer.from(QUERY, "utf16le").toString("base64");
-}
-
-function trustedEnvironment(executable: string): NodeJS.ProcessEnv {
-  const root = win32Path.dirname(
-    win32Path.dirname(win32Path.dirname(win32Path.dirname(executable))),
-  );
-  return { SystemRoot: root, WINDIR: root, SystemDrive: root.slice(0, 2) };
-}
-
 // `<SystemRoot>\System32\<name>.exe`, as resolveWindowsSystemBinary returns it.
 function systemBinaryEnvironment(executable: string): NodeJS.ProcessEnv {
   const root = win32Path.dirname(win32Path.dirname(executable));
   return { SystemRoot: root, WINDIR: root, SystemDrive: root.slice(0, 2) };
-}
-
-function text(value: string | Buffer | null): string {
-  if (value === null) return "";
-  return Buffer.isBuffer(value) ? value.toString("utf8") : value;
 }
 
 // Only local drive paths are inspected; UNC shares and device namespaces stay refused here, as in
@@ -245,10 +226,10 @@ function runQuery(
   const input = paths.map((path) => `${Buffer.from(path, "utf8").toString("base64")}\n`).join("");
   const result = runner(
     executable,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedQuery()],
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellProgram(QUERY)],
     {
       encoding: "utf8",
-      env: trustedEnvironment(executable),
+      env: trustedPowerShellEnvironment(executable),
       input: `${input}\n`,
       maxBuffer: MAX_LINE_BYTES * (paths.length + 1),
       shell: false,
@@ -256,9 +237,13 @@ function runQuery(
       windowsHide: true,
     },
   );
-  const failed = [result.error !== undefined, result.status !== 0, text(result.stderr) !== ""];
+  const failed = [
+    result.error !== undefined,
+    result.status !== 0,
+    commandOutputText(result.stderr) !== "",
+  ];
   if (failed.some(Boolean)) throw new Error("windows-owner-private-unavailable");
-  return text(result.stdout);
+  return commandOutputText(result.stdout);
 }
 
 /**
@@ -308,7 +293,7 @@ function runSystemBinary(
   if (result.error !== undefined || result.status !== 0) {
     throw new Error("windows-owner-private-protect-failed");
   }
-  return text(result.stdout);
+  return commandOutputText(result.stdout);
 }
 
 // whoami's CSV row ends with the SID, which is never localized; the account name is ignored.
