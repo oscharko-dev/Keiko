@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { requestGatewayReadinessChatCompletion } from "./readiness-probe.js";
 import { GatewayResponseBodyValidationError } from "./http.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
@@ -363,7 +363,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
   // would cost a second paid request and misstate the cause in the log.
   it("does not switch output-token fields when the rejection names another cause", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const errorEvidence = vi.fn(() => ({ frames: [], causeChain: [] }));
     const fetchImpl: typeof fetch = (_url, init) => {
       bodies.push(probeBody(init));
@@ -452,7 +452,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
     "does not switch output-token fields when the rejection is $name",
     async ({ body, expectRead }) => {
       const bodies: Record<string, unknown>[] = [];
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const readErrors: unknown[] = [];
       const evidence = {
         frames: ["packages/keiko-model-gateway/dist/readiness-probe.js:280:12"],
@@ -500,7 +500,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
           },
         },
       ]);
-      expect(skipped[0]?.errorKind).toBeDefined();
+      expect(normalFixtureEvent(skipped[0])?.errorKind).toBeDefined();
       expectActivityLogProof(
         "gateway.readiness.compatibility-retry.skipped.line",
         formatActivityLogProofLine(skipped[0] ?? {}),
@@ -512,7 +512,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
   // over the cap cancelled only the clone's tee branch, whose cancellation waits for the untouched
   // original — the probe never settled.
   it("settles a rejection whose body exceeds the read cap instead of stalling", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl: typeof fetch = () =>
       Promise.resolve(new Response("x".repeat(70 * 1024), { status: 400 }));
 
@@ -538,7 +538,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
   // PR #3625 review: the probe's attempts and its compatibility retry are recorded under the probe's
   // correlation id, and the retry line says which field was rejected and how the retry answered.
   it("records an output-token field retry under the probe's correlation id", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl: typeof fetch = (_url, init) =>
       Promise.resolve(
         "max_tokens" in probeBody(init)
@@ -584,7 +584,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
   // PR #3625 review: the retry is recorded before it is sent, so a retry that then throws still says
   // which field it left out, and its failure is a structured line of its own.
   it("records a compatibility retry that throws with its field and error kind", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let call = 0;
     const fetchImpl: typeof fetch = () => {
       call += 1;
@@ -625,7 +625,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
       correlationId: "probe-corr-0003",
       extra: { omittedField: "max_tokens" },
     });
-    expect(failed.errorKind).toBeDefined();
+    expect(normalFixtureEvent(failed).errorKind).toBeDefined();
     expect(events.indexOf(attempt)).toBeLessThan(events.indexOf(failed));
     expectActivityLogProof(
       "gateway.readiness.compatibility-retry.failed.line",
@@ -634,7 +634,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
   });
 
   it("records a compatibility retry the gateway rejects again as a failure", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl: typeof fetch = (_url, init) =>
       Promise.resolve(
         unsupportedField("max_tokens" in probeBody(init) ? "max_tokens" : "max_completion_tokens"),
@@ -668,7 +668,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
   });
 
   it("records a stream-options retry of a streamed probe", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl: typeof fetch = (_url, init) =>
       Promise.resolve(
         "stream_options" in probeBody(init)
@@ -833,3 +833,15 @@ it("keeps caller cancellation on a native readiness compatibility retry", async 
   await rejected;
   expect(signals).toHaveLength(2);
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

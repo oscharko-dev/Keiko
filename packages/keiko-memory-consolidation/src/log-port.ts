@@ -23,12 +23,11 @@
 // never reach a field on this event.
 
 import { createHash } from "node:crypto";
+import { securityErrorKind, writeActivityLogPortEvent } from "@oscharko-dev/keiko-security";
 
 import {
   activityLogEvent,
-  classifyErrorKind,
   defineActivityLogOperation,
-  recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type ConsolidationLogLevel = "debug" | "info" | "warn" | "error";
@@ -61,33 +60,21 @@ export function nullConsolidationLogSink(): ConsolidationLogSink {
   return NULL_SINK;
 }
 
-// The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
-// `keiko-contracts` rather than declared here, so this reducer and its siblings in
-// `keiko-local-knowledge/src/knowledge-log.ts`, `keiko-activity-log/src/server-log.ts`
-// and `keiko-model-gateway/src/observability.ts` cannot drift into accepting different things: an
-// identifier, a taxonomy code, a constructor name — never a sentence.
+// Security's `securityErrorKind` (ADR-0173 D11) owns the guarded `code`/`name` reads and
+// canonical Contracts shape gate shared by Knowledge, Consolidation, Vault and Gateway:
+// an identifier, a taxonomy code, a constructor name — never a sentence.
 //
 // READING the property is itself a call into foreign code: an accessor, a Proxy `get` trap, or a
 // `Object.defineProperty(error, "code", { get() { throw … } })` runs OUR stack frame while we are
 // already mid-recovery from the failure being classified. An unreadable property degrades to the
 // next candidate, exactly like a property whose value fails the shape gate.
-function errorKindProperty(error: object, key: string): string | undefined {
-  let value: unknown;
-  try {
-    value = (error as Record<string, unknown>)[key];
-  } catch {
-    return undefined;
-  }
-  return classifyErrorKind(value);
-}
 
 // Classification only: the coded `code`, else the constructor `name`, else "unknown". The
 // message is NEVER read — a thrown error's message routinely carries a fragment of the content
 // that failed to parse — and neither `code` nor `name` is trusted to be a code just because it is
 // called one: both must pass `classifyErrorKind`'s shape gate first.
 export function consolidationErrorKind(error: unknown): string {
-  if (typeof error !== "object" || error === null) return "unknown";
-  return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
+  return securityErrorKind(error);
 }
 
 // ─── Writing a line must never become the failure it describes ────────────────
@@ -126,19 +113,9 @@ export function emitConsolidationLogEvent(
   sink: ConsolidationLogSink | undefined,
   event: ConsolidationLogEvent,
 ): void {
-  if (sink === undefined) {
-    // An unwired port loses the event it was handed; the loss is counted like any other (#3532).
-    recordActivityLogLoss("port-unwired");
-    return;
-  }
-  try {
-    sink.write(event);
-  } catch (cause) {
-    // Every failure is a lost line and is counted in the process loss ledger; only the stderr
-    // notice below is limited to once per sink.
-    recordActivityLogLoss("port-sink-failed");
-    reportFailedConsolidationLogSink(sink, event.op, cause);
-  }
+  writeActivityLogPortEvent(sink, event, (failedSink, failedEvent, cause): void => {
+    reportFailedConsolidationLogSink(failedSink, failedEvent.op, cause);
+  });
 }
 
 function reportFailedConsolidationLogSink(

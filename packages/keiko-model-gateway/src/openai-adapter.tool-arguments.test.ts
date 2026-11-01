@@ -149,7 +149,13 @@ function adapter(
     now: (): number => NOW,
     requestId: "tool-arguments-fixture",
     costClass: "medium",
-    log: { write: (event): void => void events.push(event) },
+    log: {
+      write: (event): void => {
+        if (event.category === "diagnostic")
+          throw new TypeError("Expected normal fixture evidence");
+        events.push(event);
+      },
+    },
     logContext: { correlationId },
   });
 }

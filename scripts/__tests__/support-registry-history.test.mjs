@@ -1,10 +1,12 @@
 import { Buffer } from "node:buffer";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { inflateSync } from "node:zlib";
 import { format } from "prettier";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 import {
   captureSupportRegistries,
   FIRST_SUPPORTED_RELEASE,
@@ -58,7 +60,122 @@ function catalog(catalogDigest) {
   });
 }
 
+// Large deterministic registry data exposes declaration serialization limits without network I/O.
+function largeHistoryCatalog() {
+  const value = JSON.parse(catalog("e".repeat(64)));
+  value.typedRegistry.operations = Array.from({ length: 4096 }, (_, index) => ({
+    op: `fixture.${String(index)}`,
+    proofIds: [createHash("sha256").update(String(index)).digest("hex")],
+  }));
+  return JSON.stringify(value);
+}
+
+function expectReadonlySnapshotType(program, history) {
+  const checker = program.getTypeChecker();
+  const source = program.getSourceFile(history);
+  const statement = source.statements.find(
+    (node) =>
+      ts.isVariableStatement(node) &&
+      node.declarationList.declarations.some(
+        (entry) => entry.name.getText(source) === "SUPPORT_RELEASE_REGISTRY_SNAPSHOTS",
+      ),
+  );
+  const declaration = statement.declarationList.declarations[0];
+  const list = checker.getTypeAtLocation(declaration.name);
+  expect(checker.getPropertyOfType(list, "push")).toBeUndefined();
+  const element = checker.getIndexTypeOfType(list, ts.IndexKind.Number);
+  const properties = checker.getPropertiesOfType(element);
+  expect(properties.map(({ name }) => name).sort()).toEqual([
+    "catalogDigest",
+    "payload",
+    "registryVersion",
+    "release",
+    "schemaDigest",
+    "sourceCommit",
+  ]);
+  for (const property of properties) {
+    expect(property.flags & ts.SymbolFlags.Optional).toBe(0);
+    expect(checker.typeToString(checker.getTypeOfSymbolAtLocation(property, declaration))).toBe(
+      property.name === "registryVersion" ? "number" : "string",
+    );
+    expect(
+      property.declarations.every((entry) =>
+        entry.modifiers?.some(({ kind }) => kind === ts.SyntaxKind.ReadonlyKeyword),
+      ),
+    ).toBe(true);
+  }
+}
+
+function historyDeclaration(history, directory) {
+  const configPath = resolve("packages/keiko-activity-log/tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  expect(config.error).toBeUndefined();
+  const parsed = ts.parseJsonConfigFileContent(
+    config.config,
+    ts.sys,
+    dirname(configPath),
+    undefined,
+    configPath,
+  );
+  expect(parsed.errors).toEqual([]);
+  const options = {
+    ...parsed.options,
+    rootDir: directory,
+    outDir: join(directory, "dist"),
+    tsBuildInfoFile: join(directory, "history.tsbuildinfo"),
+    emitDeclarationOnly: true,
+  };
+  const program = ts.createProgram([history], options);
+  expect(ts.getPreEmitDiagnostics(program).map(({ code }) => code)).toEqual([]);
+  expectReadonlySnapshotType(program, history);
+  const declarations = [];
+  const result = program.emit(undefined, (path, text) => {
+    if (path.endsWith(".d.ts")) declarations.push(text);
+  });
+  expect(result.emitSkipped).toBe(false);
+  expect(result.diagnostics.map(({ code }) => code)).toEqual([]);
+  expect(declarations).toHaveLength(1);
+  return declarations[0];
+}
+
 describe("trusted support registry history", () => {
+  it("emits bounded readonly declarations for large generated registry payloads", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-history-declaration-"));
+    try {
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ type: "module" }));
+      const history = join(directory, "history.ts");
+      const tags = Array.from({ length: 12 }, (_, index) => `v1.1.${String(index + 9)}`);
+      const commits = Object.fromEntries(
+        tags.map((tag, index) => [tag, String(index + 1).padStart(40, "0")]),
+      );
+      const catalogs = Object.fromEntries(
+        tags.map((tag) => {
+          const value = JSON.parse(largeHistoryCatalog());
+          value.typedRegistry.catalogDigest = createHash("sha256").update(tag).digest("hex");
+          return [commits[tag], JSON.stringify(value)];
+        }),
+      );
+      const execute = fakeGit({ tags, commits, catalogs });
+      const snapshots = await generateSupportRegistryHistory({
+        version: "1.1.20",
+        destination: history,
+        execute,
+      });
+      expect(snapshots[0].payload.length).toBeGreaterThan(100_000);
+      const declaration = historyDeclaration(history, directory);
+      expect(declaration).toContain(
+        "SUPPORT_RELEASE_REGISTRY_SNAPSHOTS: readonly EncodedSupportRegistrySnapshot[]",
+      );
+      for (const field of ["release", "sourceCommit", "schemaDigest", "catalogDigest", "payload"]) {
+        expect(declaration).toContain(`readonly ${field}: string;`);
+      }
+      expect(declaration).toContain("readonly registryVersion: number;");
+      expect(declaration.length).toBeLessThan(2000);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("ships exactly the immutable registry of every supported release older than this version", () => {
     // Discovery: every stable release tag the analyzer of this version must keep validating.
     const allowed = captureSupportRegistries(supportedReleases(VERSION));
@@ -132,7 +249,11 @@ describe("trusted support registry history", () => {
   it("stops a prerelease history strictly below the release it precedes", () => {
     const execute = fakeGit({
       tags: ["v1.1.9", "v1.1.10", "v1.2.0"],
-      commits: { "v1.1.9": "9".repeat(40), "v1.1.10": "a".repeat(40), "v1.2.0": "b".repeat(40) },
+      commits: {
+        "v1.1.9": "9".repeat(40),
+        "v1.1.10": "a".repeat(40),
+        "v1.2.0": "b".repeat(40),
+      },
       catalogs: {},
     });
     expect(supportedReleases("1.2.0-rc.1", execute)).toEqual([
@@ -200,11 +321,17 @@ describe("trusted support registry history", () => {
         },
       });
       const generate = () =>
-        generateSupportRegistryHistory({ version: "1.1.10", destination: output, execute });
+        generateSupportRegistryHistory({
+          version: "1.1.10",
+          destination: output,
+          execute,
+        });
       expect(await main(generate, { write: (text) => writes.push(text) })).toBe(2);
       const rendered = readFileSync(output, "utf8");
       expect(rendered).toContain("Supported releases 1.1.9–1.1.10.");
-      expect(rendered).toContain("export const SUPPORT_RELEASE_REGISTRY_SNAPSHOTS = [");
+      expect(rendered).toContain(
+        "export const SUPPORT_RELEASE_REGISTRY_SNAPSHOTS: readonly EncodedSupportRegistrySnapshot[] = [",
+      );
       expect(writes.join("")).toContain("captured 2 release registries (1.1.9–1.1.10)");
       expect(await format(rendered, { parser: "typescript", printWidth: 100 })).toBe(rendered);
     } finally {

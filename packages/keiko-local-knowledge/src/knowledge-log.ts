@@ -23,10 +23,13 @@
 
 import { createHash } from "node:crypto";
 import {
+  reportActivityLogPortFailure,
+  securityErrorKind,
+  writeActivityLogPortEvent,
+} from "@oscharko-dev/keiko-security";
+import {
   activityLogEvent,
-  classifyErrorKind,
   defineActivityLogOperation,
-  recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type KnowledgeLogLevel = "debug" | "info" | "warn" | "error";
@@ -78,11 +81,9 @@ export function knowledgeLogCorrelationId(value: string): string {
     : createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
-// The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
-// `keiko-contracts` rather than declared here, so this reducer and the ones in
-// `keiko-activity-log/src/server-log.ts` and `keiko-model-gateway/src/observability.ts`
-// cannot drift into accepting different things: an identifier, a taxonomy code, a constructor
-// name — never a sentence.
+// Security's `securityErrorKind` (ADR-0173 D11) owns the guarded `code`/`name` reads and
+// canonical Contracts shape gate shared by Knowledge, Consolidation, Vault and Gateway:
+// an identifier, a taxonomy code, a constructor name — never a sentence.
 //
 // Reading `code`/`name` instead of `message` is only HALF the guard, and this reducer used to ship
 // with the other half missing. Neither property is reserved by the language: a provider client is
@@ -100,15 +101,6 @@ export function knowledgeLogCorrelationId(value: string): string {
 // so a throw here escapes ahead of any sink guard and replaces a diagnosable store or indexing
 // failure with an accessor failure. An unreadable property is simply an unclassifiable one: it
 // degrades to the next candidate, exactly like a property whose value fails the shape gate.
-function errorKindProperty(error: object, key: string): string | undefined {
-  let value: unknown;
-  try {
-    value = (error as Record<string, unknown>)[key];
-  } catch {
-    return undefined;
-  }
-  return classifyErrorKind(value);
-}
 
 // Classification only: the coded `code`, else the constructor `name`, else "unknown". The
 // message is NEVER read — a thrown error's message routinely carries a path, an endpoint, or a
@@ -117,8 +109,7 @@ function errorKindProperty(error: object, key: string): string | undefined {
 // `code` that fails the shape falls through to `name`, and a failing `name` falls through to
 // "unknown", so a prose-carrying property degrades to a classification instead of leaking.
 export function knowledgeErrorKind(error: unknown): string {
-  if (typeof error !== "object" || error === null) return "unknown";
-  return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
+  return securityErrorKind(error);
 }
 
 // ─── Writing a line must never become the failure it describes ────────────────
@@ -173,62 +164,29 @@ const KNOWLEDGE_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function operationDigest(op: string): string {
-  return createHash("sha256").update(op).digest("hex").slice(0, 16);
-}
-
 export function emitKnowledgeLogEvent(
   sink: KnowledgeLogSink | undefined,
   event: KnowledgeLogEvent,
 ): void {
-  if (sink === undefined) {
-    // An unwired port loses the event it was handed; the loss is counted like any other (#3532).
-    recordActivityLogLoss("port-unwired");
-    return;
-  }
-  try {
-    sink.write(event);
-  } catch (cause) {
-    // Every failure is a lost line and is counted in the process loss ledger; only the stderr
-    // notice below is limited to once per sink.
-    recordActivityLogLoss("port-sink-failed");
-    reportFailedKnowledgeLogSink(sink, event.op, cause);
-  }
-}
-
-function reportFailedKnowledgeLogSink(
-  sink: KnowledgeLogSink,
-  droppedOp: string,
-  cause: unknown,
-): void {
-  if (REPORTED_FAILED_SINKS.has(sink)) return;
-  REPORTED_FAILED_SINKS.add(sink);
-  const errorKind = knowledgeErrorKind(cause);
-  const droppedOpDigest = operationDigest(droppedOp);
-  try {
-    sink.write(
-      activityLogEvent(
-        KNOWLEDGE_LOG_SINK_FAILED_OPERATION,
-        { level: "error", errorKind: "unavailable" },
-        { droppedOpDigest, failureKind: errorKind },
-      ),
+  writeActivityLogPortEvent(sink, event, (failedSink, failedEvent, cause): void => {
+    reportActivityLogPortFailure(
+      failedSink,
+      failedEvent.op,
+      cause,
+      REPORTED_FAILED_SINKS,
+      reportFailedKnowledgeLogSink,
     );
-    return;
-  } catch {
-    // The transport refuses this shape too, so it is the transport that is down — fall through to
-    // the only channel left.
-  }
-  warnFailedKnowledgeLogSink(droppedOpDigest, errorKind);
+  });
 }
 
-function warnFailedKnowledgeLogSink(droppedOpDigest: string, errorKind: string): void {
-  try {
-    process.emitWarning("Keiko activity log sink is failing; log lines are being dropped.", {
-      type: "KeikoActivityLog",
-      code: "KEIKO_LOG_SINK_FAILED",
-      detail: `opDigest=${droppedOpDigest} errorKind=${errorKind}`,
-    });
-  } catch {
-    // The process warning channel is the last one there is; a report beyond it does not exist.
-  }
+// Builds this package's registered notice; Security owns its delivery and warning fallback.
+function reportFailedKnowledgeLogSink(
+  droppedOpDigest: string,
+  errorKind: string,
+): KnowledgeLogEvent {
+  return activityLogEvent(
+    KNOWLEDGE_LOG_SINK_FAILED_OPERATION,
+    { level: "error", errorKind: "unavailable" },
+    { droppedOpDigest, failureKind: errorKind },
+  );
 }

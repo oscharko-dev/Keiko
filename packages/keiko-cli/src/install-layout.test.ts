@@ -10,7 +10,7 @@ import {
   writeInstallLayoutOverrideEvidence,
   writeInstallLayoutOverrideEvidenceWithFactory,
   type AuthoritativeInstallLayout,
-  type InstallLayoutNormalizedActivityLogEvent,
+  type InstallLayoutActivityLogTransport,
 } from "./install-layout.js";
 
 const LAYOUT: AuthoritativeInstallLayout = {
@@ -62,7 +62,7 @@ describe("authoritative install layout", () => {
 
   it("writes one correlated, body-free normalization event", () => {
     const env: NodeJS.ProcessEnv = { KEIKO_CLI_BIN_PATH: "/stale/cli.js" };
-    const events: InstallLayoutNormalizedActivityLogEvent[] = [];
+    const events: InstallLayoutActivityLogTransport[] = [];
     applyAuthoritativeInstallLayout(env, LAYOUT);
     const evidence = installLayoutOverrideEvidence(env);
 

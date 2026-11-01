@@ -26,7 +26,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
 import { Gateway } from "../gateway.js";
 import { createDefaultChatCapability } from "../capabilities.js";
-import type { ModelGatewayLogEvent } from "../observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "../observability.js";
 import { systemClock } from "../resilience.js";
 import type { Clock, GatewayConfig, ProviderAdapter } from "../types.js";
 import { generatePrDescription } from "./generate.js";
@@ -213,11 +213,11 @@ function fixture(
 ): {
   readonly deps: PrDescriptionDeps;
   readonly calls: GatewayRequest[];
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
   readonly source: PrDescriptionResolvedSnapshot;
 } {
   const source = resolved(options.count);
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const calls: GatewayRequest[] = [];
   const adapter: ProviderAdapter = {
     async call(request): Promise<NormalizedResponse> {
@@ -229,7 +229,7 @@ function fixture(
   const gatewayConfig = config(options.flags);
   const gatewayLog =
     options.includeGatewayLog === true
-      ? { write: (event: ModelGatewayLogEvent): void => void events.push(event) }
+      ? { write: (event: ModelGatewayLogTransport): void => void events.push(event) }
       : undefined;
   const deps: PrDescriptionDeps = {
     gateway: new Gateway(gatewayConfig, { adapter, clock: FIXTURE_CLOCK, log: gatewayLog }),
@@ -249,7 +249,7 @@ function fixture(
 // Activity Log proofs assert on a real captured event, never a hand-built one; when the operation
 // truly never fired this deliberately hands the proof helper an empty object so it fails loudly on
 // the missing/invalid evidence rather than on a TypeScript narrowing error here.
-function firstEventFor(events: readonly ModelGatewayLogEvent[], op: string): object {
+function firstEventFor(events: readonly ModelGatewayLogTransport[], op: string): object {
   return events.find((event) => event.op === op) ?? {};
 }
 
@@ -571,7 +571,12 @@ describe("bounded PR narrative lifecycle", () => {
     const unavailableEvents = setup.events.filter(
       (event) => event.op === "pr-description.generation.unavailable",
     );
-    expect(unavailableEvents.map((event) => [event.extra?.reason, event.errorKind])).toEqual([
+    expect(
+      unavailableEvents.map((event) => [
+        normalFixtureEvent(event).extra?.reason,
+        normalFixtureEvent(event).errorKind,
+      ]),
+    ).toEqual([
       ["invalid-request", "invalid-request"],
       ["budget-exhausted", "unavailable"],
       ["cancelled", "cancelled"],
@@ -759,7 +764,7 @@ describe("bounded PR narrative lifecycle", () => {
     const authorityFailed = setup.events.find(
       (event) => event.op === "pr-description.authority.revalidation.failed",
     );
-    expect(authorityFailed?.errorKind).toBe("internal");
+    expect(normalFixtureEvent(authorityFailed)?.errorKind).toBe("internal");
     expect(JSON.stringify(setup.events)).not.toContain("private authority failure");
     const authorityFailedPersisted = expectActivityLogProof(
       "pr-description.authority.revalidation.failed.emitted-line",
@@ -856,9 +861,9 @@ describe("bounded PR narrative lifecycle", () => {
     });
     expect(result.status === "generated" && result.artifact.reason).toBe("provider-failed");
     const modelFailed = setup.events.find((event) => event.op === "pr-description.model.failed");
-    expect(modelFailed?.errorKind).toBeDefined();
+    expect(normalFixtureEvent(modelFailed)?.errorKind).toBeDefined();
     expect(JSON.stringify(setup.events)).not.toContain("private provider body");
-    expect(modelFailed?.extra?.frames).toEqual([
+    expect(normalFixtureEvent(modelFailed)?.extra?.frames).toEqual([
       "keiko-model-gateway/dist/prDescription/generate.js:1:1",
     ]);
     const modelFailedPersisted = expectActivityLogProof(
@@ -895,7 +900,7 @@ describe("bounded PR narrative lifecycle", () => {
     const modelFailed = setup.events
       .filter((event) => event.op === "pr-description.model.failed")
       .at(-1);
-    expect(modelFailed?.errorKind).toBeDefined();
+    expect(normalFixtureEvent(modelFailed)?.errorKind).toBeDefined();
     expect(JSON.stringify(setup.events)).not.toContain("circuit open for model");
     const circuitRejected = setup.events
       .filter((event) => event.op === "gateway.circuit.rejected")
@@ -973,3 +978,15 @@ describe("trusted PR branding", () => {
     ).toBeUndefined();
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

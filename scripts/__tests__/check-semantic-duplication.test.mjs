@@ -14,7 +14,7 @@ const group = (...files) => ({
   instances: files.map((file) => ({ file, start_line: 1, end_line: 12 })),
 });
 
-describe("semantic duplication gate (#3898)", () => {
+describe("historical duplication reporting utilities (#3898)", () => {
   it("owns every new group for a whole-project run", () => {
     const groups = [group("a.ts", "b.ts"), group("c.ts", "d.ts")];
     expect(ownedGroups(groups, undefined)).toEqual(groups);
@@ -26,13 +26,13 @@ describe("semantic duplication gate (#3898)", () => {
     expect(ownedGroups([touching, elsewhere], new Set(["src/changed.ts"]))).toEqual([touching]);
   });
 
-  it("counts stale baseline entries, so the baseline only shrinks", () => {
+  it("reads legacy staleness counts without making them an audit verdict", () => {
     expect(staleEntries({ stale_entries: 3 })).toBe(3);
     expect(staleEntries({ stale_entries: 0 })).toBe(0);
     expect(staleEntries(undefined)).toBe(0);
   });
 
-  it("analyzes the whole project with the reviewed settings and a committed baseline", () => {
+  it("retains the historical baseline without treating it as strict-ruler evidence", () => {
     expect(FALLOW_DUPES_ARGS).toEqual([
       "dupes",
       "--mode",
@@ -52,7 +52,13 @@ describe("semantic duplication gate (#3898)", () => {
     );
     expect(baseline.kind).toBe("dupes");
     expect(baseline.clone_groups.length).toBeGreaterThan(0);
-    // Generated files are excluded by `.fallowrc.json`, never frozen into the baseline.
+    // This historical artifact excluded generated owners; the mandatory audit does not.
+    expect(Object.keys(baseline).sort()).toEqual([
+      "clone_fingerprints",
+      "clone_groups",
+      "kind",
+      "normalized_clone_fingerprints",
+    ]);
     expect(baseline.clone_groups.some((key) => key.includes(".generated."))).toBe(false);
   });
 });

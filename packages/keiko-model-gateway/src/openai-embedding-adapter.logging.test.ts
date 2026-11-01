@@ -14,6 +14,7 @@ import {
 } from "./openai-embedding-adapter.js";
 import {
   logModelId,
+  type ModelGatewayLogTransport,
   type ModelGatewayLogEvent,
   type ModelGatewayLogSink,
 } from "./observability.js";
@@ -25,30 +26,33 @@ import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "./resilience.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
 }
 
 function recorder(): Recorder {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     sink: {
-      write(event: ModelGatewayLogEvent): void {
+      write(event: ModelGatewayLogTransport): void {
         events.push(event);
       },
     },
   };
 }
 
-function ops(events: readonly ModelGatewayLogEvent[]): readonly string[] {
+function ops(events: readonly ModelGatewayLogTransport[]): readonly string[] {
   return events.map((event) => event.op);
 }
 
-function embeddingOps(events: readonly ModelGatewayLogEvent[]): readonly string[] {
+function embeddingOps(events: readonly ModelGatewayLogTransport[]): readonly string[] {
   return events.filter((event) => event.category === "embedding").map((event) => event.op);
 }
 
-function eventFor(events: readonly ModelGatewayLogEvent[], op: string): ModelGatewayLogEvent {
+function eventFor(
+  events: readonly ModelGatewayLogTransport[],
+  op: string,
+): ModelGatewayLogTransport {
   const found = events.find((event) => event.op === op);
   if (found === undefined) {
     throw new Error(`expected an event with op '${op}', saw: ${ops(events).join(", ")}`);
@@ -174,9 +178,9 @@ describe("scalar embedding — activity log", () => {
     ]);
     const retry = eventFor(log.events, "embedding.request.minimal-shape-retry");
     expect(retry.level).toBe("warn");
-    expect(retry.status).toBe(400);
+    expect(normalFixtureEvent(retry).status).toBe(400);
     expect(retry.extra).toMatchObject({ reason: "strict-gateway-rejection" });
-    expect(retry.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(normalFixtureEvent(retry).extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(retry)).not.toContain(new URL(endpoint).host);
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
     const persistedRetry = expectActivityLogProof(
@@ -205,8 +209,8 @@ describe("scalar embedding — activity log", () => {
     });
     expect(outcome.ok).toBe(false);
     const failed = eventFor(log.events, "embedding.request.failed");
-    expect(failed.status).toBe(401);
-    expect(failed.errorKind).toBe("validation-failed");
+    expect(normalFixtureEvent(failed).status).toBe(401);
+    expect(normalFixtureEvent(failed).errorKind).toBe("validation-failed");
     expect(failed.extra).toMatchObject({ minimalShape: false });
     const persisted = expectActivityLogProof(
       "embedding.request.failed.emitted-line",
@@ -246,9 +250,9 @@ describe("scalar embedding — activity log", () => {
       timeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
       minimalShape: false,
     });
-    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(normalFixtureEvent(dispatch).extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(dispatch.extra).not.toHaveProperty("endpoint");
-    expect(typeof dispatch.extra?.bodyBytes).toBe("number");
+    expect(typeof normalFixtureEvent(dispatch).extra?.bodyBytes).toBe("number");
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
     const persisted = expectActivityLogProof(
       "embedding.request.dispatch.emitted-line",
@@ -279,9 +283,9 @@ describe("scalar embedding — activity log", () => {
     ).resolves.toMatchObject({ ok: true });
 
     expect(transport.calls()).toBe(1);
-    expect(eventFor(log.events, "embedding.request.dispatch").extra?.modelId).toBe(
-      logModelId(modelId),
-    );
+    expect(
+      normalFixtureEvent(eventFor(log.events, "embedding.request.dispatch")).extra?.modelId,
+    ).toBe(logModelId(modelId));
     expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
@@ -341,8 +345,8 @@ describe("scalar embedding — activity log", () => {
     expect(outcome.ok).toBe(false);
     const failed = eventFor(log.events, "embedding.request.minimal-shape-failed");
     expect(failed.level).toBe("warn");
-    expect(failed.status).toBe(503);
-    expect(failed.errorKind).toBe("unavailable");
+    expect(normalFixtureEvent(failed).status).toBe(503);
+    expect(normalFixtureEvent(failed).errorKind).toBe("unavailable");
     const persisted = expectActivityLogProof(
       "embedding.request.minimal-shape-failed.emitted-line",
       formatActivityLogProofLine(failed),
@@ -376,8 +380,8 @@ describe("batch embedding — activity log", () => {
 
     const degrading = eventFor(log.events, "embedding.batch.degrading-to-scalar");
     expect(degrading.level).toBe("warn");
-    expect(degrading.status).toBe(500);
-    expect(degrading.errorKind).toBe("unavailable");
+    expect(normalFixtureEvent(degrading).status).toBe(500);
+    expect(normalFixtureEvent(degrading).errorKind).toBe("unavailable");
     expect(degrading.extra).toMatchObject({ inputCount: 2 });
     const persistedDegrading = expectActivityLogProof(
       "embedding.batch.degrading-to-scalar.emitted-line",
@@ -455,7 +459,7 @@ describe("batch embedding — activity log", () => {
       log: log.sink,
     });
     const degraded = eventFor(log.events, "embedding.batch.degraded-to-scalar");
-    expect(degraded.errorKind).toBe("rate-limited");
+    expect(normalFixtureEvent(degraded).errorKind).toBe("rate-limited");
     expect(degraded.extra).toMatchObject({ memoized: false });
   });
 
@@ -472,7 +476,7 @@ describe("batch embedding — activity log", () => {
     expect(outcome.ok).toBe(false);
     const skipped = eventFor(log.events, "embedding.batch.degrade-skipped");
     expect(skipped.level).toBe("warn");
-    expect(skipped.status).toBe(500);
+    expect(normalFixtureEvent(skipped).status).toBe(500);
     expect(skipped.extra).toMatchObject({ reason: "single-item-batch", inputCount: 1 });
     expect(embeddingOps(log.events)).not.toContain("embedding.batch.degrading-to-scalar");
     const persisted = expectActivityLogProof(
@@ -605,7 +609,7 @@ describe("batch embedding — activity log", () => {
     });
 
     expect(fromMemo.level).toBe(fromRetry.level);
-    expect(fromMemo.status).toBe(fromRetry.status);
+    expect(normalFixtureEvent(fromMemo).status).toBe(normalFixtureEvent(fromRetry).status);
     expect(Object.keys(fromMemo.extra ?? {}).sort()).toEqual(
       Object.keys(fromRetry.extra ?? {}).sort(),
     );
@@ -613,9 +617,11 @@ describe("batch embedding — activity log", () => {
       ...fromRetry.extra,
       endpointDigest: undefined,
     });
-    expect(fromMemo.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(fromRetry.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(fromMemo.extra?.endpointDigest).not.toBe(fromRetry.extra?.endpointDigest);
+    expect(normalFixtureEvent(fromMemo).extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(normalFixtureEvent(fromRetry).extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(normalFixtureEvent(fromMemo).extra?.endpointDigest).not.toBe(
+      normalFixtureEvent(fromRetry).extra?.endpointDigest,
+    );
   });
 
   it("names which structural check rejected a malformed body", async () => {
@@ -692,7 +698,7 @@ describe("batch embedding — activity log", () => {
       // the EFFECTIVE deadline the request actually ran under.
       timeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
     });
-    expect(typeof dispatch.extra?.bodyBytes).toBe("number");
+    expect(typeof normalFixtureEvent(dispatch).extra?.bodyBytes).toBe("number");
     const persisted = expectActivityLogProof(
       "embedding.batch.dispatch.emitted-line",
       formatActivityLogProofLine(dispatch),
@@ -722,9 +728,9 @@ describe("batch embedding — activity log", () => {
     ).resolves.toMatchObject({ ok: true });
 
     expect(transport.calls()).toBe(1);
-    expect(eventFor(log.events, "embedding.batch.dispatch").extra?.modelId).toBe(
-      logModelId(modelId),
-    );
+    expect(
+      normalFixtureEvent(eventFor(log.events, "embedding.batch.dispatch")).extra?.modelId,
+    ).toBe(logModelId(modelId));
     expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
@@ -773,14 +779,14 @@ describe("batch embedding — activity log", () => {
     );
     expect(items).toHaveLength(3);
     expect(items.map((event) => event.level)).toEqual(["info", "info", "info"]);
-    expect(items.map((event) => event.extra?.index)).toEqual([0, 1, 2]);
+    expect(items.map((event) => normalFixtureEvent(event).extra?.index)).toEqual([0, 1, 2]);
     // The size is a COUNT of characters — never the item's text.
-    expect(items.map((event) => event.extra?.inputChars)).toEqual([3, 6, 1]);
-    expect(items.map((event) => event.extra?.sentChars)).toEqual([3, 6, 1]);
-    expect(items.map((event) => event.extra?.total)).toEqual([3, 3, 3]);
+    expect(items.map((event) => normalFixtureEvent(event).extra?.inputChars)).toEqual([3, 6, 1]);
+    expect(items.map((event) => normalFixtureEvent(event).extra?.sentChars)).toEqual([3, 6, 1]);
+    expect(items.map((event) => normalFixtureEvent(event).extra?.total)).toEqual([3, 3, 3]);
     for (const item of items) {
-      expect(typeof item.durationMs).toBe("number");
-      expect(item.durationMs).toBeGreaterThanOrEqual(0);
+      expect(typeof normalFixtureEvent(item).durationMs).toBe("number");
+      expect(normalFixtureEvent(item).durationMs).toBeGreaterThanOrEqual(0);
     }
     expect(JSON.stringify(log.events)).not.toContain("bbbbbb");
     const first = eventFor(log.events, "embedding.scalar-ladder.item-completed");
@@ -827,8 +833,12 @@ describe("batch embedding — activity log", () => {
     const items = log.events.filter(
       (event) => event.op === "embedding.scalar-ladder.item-completed",
     );
-    expect(items.map((event) => event.extra?.inputChars)).toEqual([3_000, 3_000, 1]);
-    expect(items.map((event) => event.extra?.sentChars)).toEqual([1_500, 1_500, 1]);
+    expect(items.map((event) => normalFixtureEvent(event).extra?.inputChars)).toEqual([
+      3_000, 3_000, 1,
+    ]);
+    expect(items.map((event) => normalFixtureEvent(event).extra?.sentChars)).toEqual([
+      1_500, 1_500, 1,
+    ]);
   });
 
   // The stall case the progress lines exist for: the ladder is mid-flight on item 2 and has
@@ -852,7 +862,7 @@ describe("batch embedding — activity log", () => {
     await wedge.entered;
     const reported = log.events
       .filter((event) => event.op === "embedding.scalar-ladder.item-completed")
-      .map((event) => event.extra?.index);
+      .map((event) => normalFixtureEvent(event).extra?.index);
     expect(reported).toEqual([0, 1]);
     expect(embeddingOps(log.events)).not.toContain("embedding.scalar-ladder.completed");
     wedge.answer(jsonResponse(scalarBody()));
@@ -862,7 +872,7 @@ describe("batch embedding — activity log", () => {
   // The gate from the port's side: a sink that declines `debug` must never be handed one, and
   // must still receive every `info` attempt line and `warn` degradation.
   it("skips below-threshold events entirely for a level-gated sink", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const gated: ModelGatewayLogSink = {
       write: (event): void => {
         events.push(event);
@@ -1006,7 +1016,7 @@ describe("batch embedding — activity log", () => {
       }
       const deadline = eventFor(log.events, "embedding.scalar-ladder.deadline-expired");
       expect(deadline.level).toBe("warn");
-      expect(deadline.errorKind).toBe("timeout");
+      expect(normalFixtureEvent(deadline).errorKind).toBe("timeout");
       expect(deadline.extra).toMatchObject({ completed: 2, total: 3 });
       const persisted = expectActivityLogProof(
         "embedding.scalar-ladder.deadline-expired.emitted-line",
@@ -1033,3 +1043,15 @@ describe("batch embedding — activity log", () => {
     expect(outcome.ok).toBe(true);
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

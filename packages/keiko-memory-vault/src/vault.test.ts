@@ -34,7 +34,7 @@ import {
   type MemoryEvent,
   type MemoryVaultStore,
 } from "./index.js";
-import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import type { MemoryVaultLogTransport, MemoryVaultLogSink } from "./vault-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -1292,8 +1292,8 @@ describe("replaceAllEmbeddings concurrent-write detection", () => {
 // key-resolution tier an operator needs to tell "opened via KEIKO_MEMORY_KEY" from "fell through
 // to the weaker keyfile tier" was computed and then thrown away.
 describe("activity-log seam: memory-vault.store.opened retains the key-resolution tier", () => {
-  function recordingSink(): { sink: MemoryVaultLogSink; events: MemoryVaultLogEvent[] } {
-    const events: MemoryVaultLogEvent[] = [];
+  function recordingSink(): { sink: MemoryVaultLogSink; events: MemoryVaultLogTransport[] } {
+    const events: MemoryVaultLogTransport[] = [];
     return {
       sink: {
         write: (event): void => {
@@ -1325,7 +1325,7 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
       keySource: "env",
       loss: "none",
     });
-    expect(typeof opened[0]?.durationMs).toBe("number");
+    expect(opened[0]).toHaveProperty("durationMs", expect.any(Number));
     const persisted = expectActivityLogProof(
       "memory-vault.store.opened.key-source",
       formatActivityLogProofLine(opened[0] ?? {}),

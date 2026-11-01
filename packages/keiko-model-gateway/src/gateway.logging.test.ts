@@ -3,11 +3,16 @@
 // adapter. Every case injects an adapter and a Clock — no network, no timers, no global state.
 
 import { describe, expect, it } from "vitest";
+import {
+  createRecordingSink,
+  recordingOps as ops,
+  recordingEventFor as eventFor,
+} from "../../../tests/support/recording-log-sink.js";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { Gateway } from "./gateway.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type { ModelGatewayLogEvent, ModelGatewayLogTransport } from "./observability.js";
 import { GATEWAY_BUFFERED_BUDGET_FLOOR_MS, providerRequestBudgetMs } from "./resilience.js";
 import type {
   Clock,
@@ -22,34 +27,8 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 
-interface Recorder {
-  readonly sink: ModelGatewayLogSink;
-  readonly events: ModelGatewayLogEvent[];
-}
-
-function recorder(): Recorder {
-  const events: ModelGatewayLogEvent[] = [];
-  return {
-    events,
-    sink: {
-      write(event: ModelGatewayLogEvent): void {
-        events.push(event);
-      },
-    },
-  };
-}
-
-function ops(events: readonly ModelGatewayLogEvent[]): readonly string[] {
-  return events.map((event) => event.op);
-}
-
-function eventFor(events: readonly ModelGatewayLogEvent[], op: string): ModelGatewayLogEvent {
-  const found = events.find((event) => event.op === op);
-  if (found === undefined) {
-    throw new Error(`expected an event with op '${op}', saw: ${ops(events).join(", ")}`);
-  }
-  return found;
-}
+const recorder = createRecordingSink<ModelGatewayLogTransport>;
+type Recorder = ReturnType<typeof recorder>;
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -139,8 +118,8 @@ describe("Gateway construction — activity log", () => {
     const resolved = eventFor(log.events, "gateway.config.resolved");
     expect(resolved.level).toBe("info");
     expect(resolved.category).toBe("gateway");
-    expect(resolved.extra?.providerCount).toBe(2);
-    expect(resolved.extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(normalFixtureEvent(resolved).extra?.providerCount).toBe(2);
+    expect(normalFixtureEvent(resolved).extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
     const persisted = expectActivityLogProof(
       "gateway.config.resolved.emitted-line",
       formatActivityLogProofLine(resolved),
@@ -158,8 +137,8 @@ describe("Gateway construction — activity log", () => {
     });
     new Gateway(config([leaky]), { clock: stubClock(), log: log.sink });
     const resolved = eventFor(log.events, "gateway.config.resolved");
-    expect(resolved.extra?.providerCount).toBe(1);
-    expect(resolved.extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(normalFixtureEvent(resolved).extra?.providerCount).toBe(1);
+    expect(normalFixtureEvent(resolved).extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
     const serialized = JSON.stringify(resolved);
     expect(serialized).not.toContain("sk-embedded-secret-9876543210");
     expect(serialized).not.toContain("secret-path");
@@ -190,7 +169,7 @@ describe("Gateway routing — activity log", () => {
     const rejected = eventFor(log.events, "gateway.route.rejected");
     expect(rejected.level).toBe("warn");
     expect(rejected.category).toBe("gateway");
-    expect(rejected.errorKind).toBe("unavailable");
+    expect(normalFixtureEvent(rejected).errorKind).toBe("unavailable");
     expect(rejected.extra).toMatchObject({
       modelId: "not-configured",
       reason: "no-provider-configured",
@@ -216,7 +195,7 @@ describe("Gateway routing — activity log", () => {
     });
     await expect(gateway.chat({ ...REQUEST, modelId: "text-embedding-3-small" })).rejects.toThrow();
     const rejected = eventFor(log.events, "gateway.route.rejected");
-    expect(rejected.errorKind).toBe("validation-failed");
+    expect(normalFixtureEvent(rejected).errorKind).toBe("validation-failed");
     expect(rejected.extra).toMatchObject({
       modelId: "text-embedding-3-small",
       reason: "wrong-model-kind",
@@ -247,8 +226,12 @@ describe("Gateway.chat — activity log", () => {
 
       const loggedModelId = `model-${sha256Hex(modelId)}`;
       expect(routedModelId).toBe(modelId);
-      expect(eventFor(log.events, "gateway.chat.started").extra?.modelId).toBe(loggedModelId);
-      expect(eventFor(log.events, "gateway.chat.completed").extra?.modelId).toBe(loggedModelId);
+      expect(normalFixtureEvent(eventFor(log.events, "gateway.chat.started")).extra?.modelId).toBe(
+        loggedModelId,
+      );
+      expect(
+        normalFixtureEvent(eventFor(log.events, "gateway.chat.completed")).extra?.modelId,
+      ).toBe(loggedModelId);
       expect(JSON.stringify(log.events)).not.toContain(modelId);
     },
   );
@@ -352,7 +335,7 @@ describe("Gateway.chat — activity log", () => {
   });
 
   it("skips the attempt line for a sink that declines info, without touching the call", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const gateway = new Gateway(config([provider()]), {
       adapter: {
         call: (): Promise<NormalizedResponse> => Promise.resolve(okResponse("example-chat-model")),
@@ -387,7 +370,7 @@ describe("Gateway.chat — activity log", () => {
       completionTokens: 1,
       streaming: false,
     });
-    expect(typeof completed.durationMs).toBe("number");
+    expect(typeof normalFixtureEvent(completed).durationMs).toBe("number");
     const persisted = expectActivityLogProof(
       "gateway.chat.completed.emitted-line",
       formatActivityLogProofLine(completed),
@@ -404,7 +387,7 @@ describe("Gateway.chat — activity log", () => {
     await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
     const failed = eventFor(log.events, "gateway.chat.failed");
     expect(failed.level).toBe("warn");
-    expect(failed.errorKind).toBe("internal");
+    expect(normalFixtureEvent(failed).errorKind).toBe("internal");
     expect(JSON.stringify(failed)).not.toContain("sk-leak-me");
     expect(ops(log.events)).not.toContain("gateway.chat.completed");
     const persisted = expectActivityLogProof(
@@ -455,7 +438,7 @@ describe("Gateway.chatStream — activity log", () => {
     });
     // The synthesised fallback delta carries the WHOLE answer, so the caller's first (and only)
     // content arrives on it — the timing is captured, not silently skipped.
-    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
+    expect(typeof normalFixtureEvent(streamCompleted).extra?.firstTokenMs).toBe("number");
   });
 
   it("writes no fallback line when the adapter streams natively", async () => {
@@ -475,7 +458,7 @@ describe("Gateway.chatStream — activity log", () => {
       promptTokens: 1,
       completionTokens: 1,
     });
-    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
+    expect(typeof normalFixtureEvent(streamCompleted).extra?.firstTokenMs).toBe("number");
     const persisted = expectActivityLogProof(
       "gateway.stream.completed.emitted-line",
       formatActivityLogProofLine(streamCompleted),
@@ -498,7 +481,7 @@ describe("Gateway.chatStream — activity log", () => {
     await drainStream(gatewayWith(adapter, log).chatStream(REQUEST));
     const streamCompleted = eventFor(log.events, "gateway.stream.completed");
     expect(streamCompleted.extra).toMatchObject({ chunkCount: 2 });
-    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
+    expect(typeof normalFixtureEvent(streamCompleted).extra?.firstTokenMs).toBe("number");
   });
 
   it("records how far a mid-stream failure got before it broke", async () => {
@@ -515,7 +498,7 @@ describe("Gateway.chatStream — activity log", () => {
       TransportError,
     );
     const failed = eventFor(log.events, "gateway.stream.failed");
-    expect(failed.errorKind).toBe("internal");
+    expect(normalFixtureEvent(failed).errorKind).toBe("internal");
     expect(failed.extra).toMatchObject({ chunkCount: 1, afterFirstChunk: true, streaming: true });
     expect(ops(log.events)).not.toContain("gateway.stream.completed");
     const persisted = expectActivityLogProof(
@@ -550,7 +533,7 @@ describe("Gateway.chatStream — activity log", () => {
       streaming: true,
       reason: "consumer-stopped-iterating",
     });
-    expect(typeof abandoned.durationMs).toBe("number");
+    expect(typeof normalFixtureEvent(abandoned).durationMs).toBe("number");
     // Exactly one outcome per started stream: the abandoned line replaces the other two, and
     // appears once rather than once per remaining chunk.
     expect(ops(log.events).filter((op) => op === "gateway.stream.abandoned")).toHaveLength(1);
@@ -609,7 +592,7 @@ describe("Gateway.chatStream — activity log", () => {
     // fact — printing it would claim "this call cost nothing", which nobody measured.
     expect(streamCompleted.extra).not.toHaveProperty("promptTokens");
     expect(streamCompleted.extra).not.toHaveProperty("completionTokens");
-    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
+    expect(typeof normalFixtureEvent(streamCompleted).extra?.firstTokenMs).toBe("number");
   });
 
   it("writes no abandoned line when the stream fails mid-flight", async () => {
@@ -785,3 +768,15 @@ describe("Gateway — caller correlation", () => {
     expect(eventFor(log.events, "gateway.retry.scheduled").correlationId).toBe("run-0081");
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

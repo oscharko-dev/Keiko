@@ -9,6 +9,8 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFailingRecordingSink } from "../../../tests/support/recording-log-sink.js";
+import { defineClassifierObservationContract } from "../../../tests/support/log-classifier-observations.js";
 import {
   activityLogEvent,
   activityLogEventRegistration,
@@ -55,6 +57,21 @@ const CORRELATION_WRAPPER_FIXTURE = defineActivityLogOperation({
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/** One failure callback received exactly these inputs, after one counted sink-failure loss. */
+function expectOneSinkFailureLoss(
+  callbackInputs: readonly (readonly unknown[])[],
+  lossSnapshots: readonly number[],
+  expected: readonly [unknown, unknown, unknown],
+): void {
+  expect(callbackInputs).toHaveLength(1);
+  expect(callbackInputs[0]?.[0]).toBe(expected[0]);
+  expect(callbackInputs[0]?.[1]).toBe(expected[1]);
+  expect(callbackInputs[0]?.[2]).toBe(expected[2]);
+  expect(lossSnapshots).toEqual([1]);
+  expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+  expect(activityLogLossCounters()["port-unwired"]).toBe(0);
+}
 
 describe("nullSecurityLogSink", () => {
   it("accepts an event without throwing and returns a shared instance", () => {
@@ -185,16 +202,7 @@ describe("emitSecurityLogEvent", () => {
     sink: SecurityLogSink;
     events: SecurityLogEvent[];
   } {
-    const events: SecurityLogEvent[] = [];
-    return {
-      sink: {
-        write: (event): void => {
-          if (failingOps.includes(event.op)) throw failure();
-          events.push(event);
-        },
-      },
-      events,
-    };
+    return createFailingRecordingSink<SecurityLogEvent>(failingOps, failure);
   }
 
   it("does nothing at all when no sink is wired", () => {
@@ -393,4 +401,246 @@ describe("emitSecurityLogEvent loss accounting", () => {
       resetActivityLogLossCountersForTests();
     }
   });
+});
+
+import { writeActivityLogPortEvent as sourceWriteActivityLogPortEvent } from "./log-port-delivery.js";
+import { writeActivityLogPortEvent as publicWriteActivityLogPortEvent } from "@oscharko-dev/keiko-security";
+
+describe("#3918 actual source and public synchronous primary delivery", (): void => {
+  for (const [surface, deliver] of [
+    ["source", sourceWriteActivityLogPortEvent],
+    ["public", publicWriteActivityLogPortEvent],
+  ] as const) {
+    it(`${surface}: counts an unwired delivery without observing event fields`, (): void => {
+      resetActivityLogLossCountersForTests();
+      try {
+        let reads = 0;
+        let callbacks = 0;
+        const event = new Proxy(
+          {},
+          {
+            get(): never {
+              reads += 1;
+              throw new TypeError("unwired event must remain unread");
+            },
+          },
+        );
+        deliver(undefined, event, (): void => {
+          callbacks += 1;
+        });
+        expect(reads).toBe(0);
+        expect(callbacks).toBe(0);
+        expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+        expect(activityLogLossCounters()["port-sink-failed"]).toBe(0);
+      } finally {
+        resetActivityLogLossCountersForTests();
+      }
+    });
+
+    it(`${surface}: looks up write once and preserves its receiver and event`, (): void => {
+      resetActivityLogLossCountersForTests();
+      try {
+        const event = Object.freeze({ marker: "synthetic primary event" });
+        const trace: string[] = [];
+        const receivers: unknown[] = [];
+        const receivedEvents: unknown[] = [];
+        let callbacks = 0;
+        const before = activityLogLossCounters();
+        const sink = {
+          get write(): (received: typeof event) => void {
+            trace.push("write-get");
+            receivers.push(this);
+            return function (this: unknown, received: typeof event): void {
+              trace.push("write-call");
+              receivers.push(this);
+              receivedEvents.push(received);
+            };
+          },
+        };
+        deliver(sink, event, (): void => {
+          callbacks += 1;
+        });
+        expect(trace).toEqual(["write-get", "write-call"]);
+        expect(receivers[0]).toBe(sink);
+        expect(receivers[1]).toBe(sink);
+        expect(receivedEvents).toHaveLength(1);
+        expect(receivedEvents[0]).toBe(event);
+        expect(callbacks).toBe(0);
+        expect(activityLogLossCounters()).toEqual(before);
+      } finally {
+        resetActivityLogLossCountersForTests();
+      }
+    });
+
+    it(`${surface}: counts a write getter failure before the owning callback`, (): void => {
+      resetActivityLogLossCountersForTests();
+      try {
+        const event = Object.freeze({ marker: "synthetic getter event" });
+        const failure: Error = Object.freeze(new TypeError("synthetic write getter refusal"));
+        const trace: string[] = [];
+        const getterReceivers: unknown[] = [];
+        const callbackInputs: unknown[][] = [];
+        const lossSnapshots: number[] = [];
+        const sink = {
+          get write(): (received: typeof event) => void {
+            getterReceivers.push(this);
+            trace.push("write-get");
+            throw failure;
+          },
+        };
+        deliver(sink, event, (failedSink, failedEvent, cause): void => {
+          trace.push("callback");
+          callbackInputs.push([failedSink, failedEvent, cause]);
+          lossSnapshots.push(activityLogLossCounters()["port-sink-failed"]);
+        });
+        expect(trace).toEqual(["write-get", "callback"]);
+        expect(getterReceivers).toHaveLength(1);
+        expect(getterReceivers[0]).toBe(sink);
+        expectOneSinkFailureLoss(callbackInputs, lossSnapshots, [sink, event, failure]);
+      } finally {
+        resetActivityLogLossCountersForTests();
+      }
+    });
+
+    it(`${surface}: counts every method refusal before each callback`, (): void => {
+      resetActivityLogLossCountersForTests();
+      try {
+        const event = Object.freeze({ marker: "synthetic repeated event" });
+        const failure: Error = Object.freeze(new TypeError("synthetic write method refusal"));
+        const trace: string[] = [];
+        const receivers: unknown[] = [];
+        const receivedEvents: unknown[] = [];
+        const callbackInputs: unknown[][] = [];
+        const lossSnapshots: number[] = [];
+        const sink = {
+          write(this: unknown, received: typeof event): never {
+            trace.push("write");
+            receivers.push(this);
+            receivedEvents.push(received);
+            throw failure;
+          },
+        };
+        const onFailure = (
+          failedSink: typeof sink,
+          failedEvent: typeof event,
+          cause: unknown,
+        ): void => {
+          trace.push("callback");
+          callbackInputs.push([failedSink, failedEvent, cause]);
+          lossSnapshots.push(activityLogLossCounters()["port-sink-failed"]);
+        };
+        deliver(sink, event, onFailure);
+        deliver(sink, event, onFailure);
+        expect(trace).toEqual(["write", "callback", "write", "callback"]);
+        expect(receivers[0]).toBe(sink);
+        expect(receivers[1]).toBe(sink);
+        expect(receivedEvents[0]).toBe(event);
+        expect(receivedEvents[1]).toBe(event);
+        expect(callbackInputs).toHaveLength(2);
+        for (const [failedSink, failedEvent, cause] of callbackInputs) {
+          expect(failedSink).toBe(sink);
+          expect(failedEvent).toBe(event);
+          expect(cause).toBe(failure);
+        }
+        expect(lossSnapshots).toEqual([1, 2]);
+        expect(activityLogLossCounters()["port-sink-failed"]).toBe(2);
+        expect(activityLogLossCounters()["port-unwired"]).toBe(0);
+      } finally {
+        resetActivityLogLossCountersForTests();
+      }
+    });
+
+    it(`${surface}: propagates the owning callback error without catching it again`, (): void => {
+      resetActivityLogLossCountersForTests();
+      try {
+        const event = Object.freeze({ marker: "synthetic callback event" });
+        const writeFailure: Error = Object.freeze(new TypeError("synthetic primary refusal"));
+        const callbackFailure: Error = Object.freeze(new TypeError("synthetic callback refusal"));
+        const trace: string[] = [];
+        const callbackInputs: unknown[][] = [];
+        const lossSnapshots: number[] = [];
+        const sink = {
+          write(): never {
+            trace.push("write");
+            throw writeFailure;
+          },
+        };
+        let caught: unknown;
+        try {
+          deliver(sink, event, (failedSink, failedEvent, cause): never => {
+            trace.push("callback");
+            callbackInputs.push([failedSink, failedEvent, cause]);
+            lossSnapshots.push(activityLogLossCounters()["port-sink-failed"]);
+            throw callbackFailure;
+          });
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBe(callbackFailure);
+        expect(trace).toEqual(["write", "callback"]);
+        expectOneSinkFailureLoss(callbackInputs, lossSnapshots, [sink, event, writeFailure]);
+      } finally {
+        resetActivityLogLossCountersForTests();
+      }
+    });
+
+    it(`${surface}: forwards an actual registered Security failure event intact`, (): void => {
+      resetActivityLogLossCountersForTests();
+      try {
+        const produced: SecurityLogEvent[] = [];
+        const flaky: SecurityLogSink = {
+          write(event): void {
+            if (event.op !== "security.log.sink-failed") {
+              throw new TypeError("synthetic-private-producer-canary");
+            }
+            produced.push(event);
+          },
+        };
+        emitSecurityLogEvent(flaky, {
+          category: "security",
+          op: "security.vault.shard-unreadable",
+        });
+        expect(produced).toHaveLength(1);
+        const notice = produced[0];
+        if (notice === undefined) throw new TypeError("missing actual producer notice");
+        const registration = activityLogEventRegistration(notice);
+        const beforeForwarding = activityLogLossCounters();
+        const forwarded: SecurityLogEvent[] = [];
+        let callbacks = 0;
+        const sink: SecurityLogSink = {
+          write(event): void {
+            forwarded.push(event);
+          },
+        };
+        deliver(sink, notice, (): void => {
+          callbacks += 1;
+        });
+        expect(forwarded).toHaveLength(1);
+        expect(forwarded[0]).toBe(notice);
+        expect(registration).toBeDefined();
+        expect(activityLogEventRegistration(forwarded[0] ?? {})).toBe(registration);
+        const line = formatActivityLogProofLine(forwarded[0] ?? {});
+        expectActivityLogProof("security.log.sink-failed.body-free", line);
+        expect(line).not.toContain("synthetic-private-producer-canary");
+        expect(callbacks).toBe(0);
+        expect(beforeForwarding["port-sink-failed"]).toBe(1);
+        expect(activityLogLossCounters()).toEqual(beforeForwarding);
+      } finally {
+        resetActivityLogLossCountersForTests();
+      }
+    });
+  }
+});
+
+import { securityErrorKind as publicSecurityErrorKind } from "@oscharko-dev/keiko-security";
+
+describe("#3918 source and public Security classifier observation contract", (): void => {
+  for (const [surface, classify] of [
+    ["source", securityErrorKind],
+    ["public", publicSecurityErrorKind],
+  ] as const) {
+    describe(surface, (): void => {
+      defineClassifierObservationContract(classify);
+    });
+  }
 });

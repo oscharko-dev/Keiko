@@ -1,15 +1,15 @@
 {
-  "$schema": "./node_modules/fallow/schema.json",
   "duplicates": {
-    "ignore": [
-      "**/*.generated.ts",
-      "**/*.generated.js",
-      "**/*.generated.mjs",
-      "packages/keiko-ui/src/lib/i18n-messages*.ts",
-      "packages/keiko-ui/src/**/*-i18n.en.ts",
-      "packages/keiko-ui/src/**/*-i18n.de.ts",
-      "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
-      "scripts/lib/activity-log-failure-surfaces.mjs"
-    ]
+    "mode": "semantic",
+    "minTokens": 100,
+    "minLines": 10,
+    "minOccurrences": 2,
+    "ignoreImports": true,
+    "normalization": {
+      "ignoreStringValues": false
+    },
+    "ignoreDefaults": false,
+    "ignore": [],
+    "ignoredClones": []
   }
 }

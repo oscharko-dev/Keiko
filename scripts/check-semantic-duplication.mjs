@@ -1,30 +1,33 @@
 #!/usr/bin/env node
-// Semantic duplication gate (#3898, owner decision of 2026-10-24).
-//
-// fallow 3.34 and later fail `dupes --fail-on-issues` on every clone group, which the 3.9 line never
-// did, and the repository holds about a thousand groups that predate the gate. The owner's decision:
-// generated files are excluded (`.fallowrc.json`), the rest is frozen in a shrink-only baseline
-// (`docs/qa/fallow/dupes-baseline.json`), and a change fails on the clone groups it introduces.
-//
-//   node scripts/check-semantic-duplication.mjs                       # whole project
-//   node scripts/check-semantic-duplication.mjs --changed-since <ref> # groups touching changed files
-//   node scripts/check-semantic-duplication.mjs --save-baseline       # after removing duplicates
-//
-// fallow forms clone groups over the whole project, so the analysis always runs over the whole
-// project against the baseline (a group seen from the changed files alone has a different identity
-// and would never match it); `--changed-since` only narrows which new groups this change owns. A
-// baseline entry whose clone is gone fails too, so the baseline is pruned in the change that removes
-// the duplicate and can only shrink; `--save-baseline` refuses to record more groups than it holds.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
-import { resolveGitExecutable } from "./check-dependency-hygiene.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveQualityRange } from "./resolve-quality-range.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const SHA = /^[0-9a-f]{40}$/u;
+const ACCEPTED_AUDIT_VERDICTS = new Set(["pass", "warn"]);
+export const SEMANTIC_DUPLICATION_CONFIG = {
+  duplicates: {
+    mode: "semantic",
+    minTokens: 100,
+    minLines: 10,
+    minOccurrences: 2,
+    ignoreImports: true,
+    ignoreDefaults: false,
+    ignore: [],
+    ignoredClones: [],
+    normalization: { ignoreStringValues: false },
+  },
+};
+
+// This artifact predates the strict string-preserving, full-source configuration. It is
+// historical reporting input, never a suppression source or a veto for the mandatory audit.
 export const DUPES_BASELINE = "docs/qa/fallow/dupes-baseline.json";
 export const FALLOW_DUPES_ARGS = Object.freeze([
   "dupes",
@@ -37,136 +40,215 @@ export const FALLOW_DUPES_ARGS = Object.freeze([
   "--ignore-imports",
   "--no-package-baselines",
 ]);
-const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
 
-// The pinned package's own entry, resolved as a dependency (run with this Node, never a PATH lookup).
-// knip cannot see a spawned entry, so `fallow` is listed in its `ignoreDependencies`.
-function fallowBinary() {
-  const manifest = createRequire(import.meta.url).resolve("fallow/package.json");
-  return join(dirname(manifest), "bin", "fallow");
-}
-
-function runFallow(args) {
-  const result = spawnSync(process.execPath, [fallowBinary(), ...FALLOW_DUPES_ARGS, ...args], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    maxBuffer: MAX_OUTPUT_BYTES,
-  });
-  if (result.error !== undefined) throw result.error;
-  return result;
-}
-
-function report(args) {
-  const result = runFallow([...args, "--format", "json"]);
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`fallow produced no JSON report (exit ${String(result.status)})`);
-  }
-}
-
-function changedFiles(ref) {
-  const git = (args) => {
-    const result = spawnSync(resolveGitExecutable(), args, { cwd: REPO_ROOT, encoding: "utf8" });
-    if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed`);
-    return result.stdout.split("\n").filter((line) => line.length > 0);
-  };
-  return new Set([
-    ...git(["diff", "--name-only", "--diff-filter=ACMR", ref]),
-    ...git(["ls-files", "--others", "--exclude-standard"]),
-  ]);
-}
-
-/** The new clone groups this change owns: every group, or those with an instance in a changed file. */
+/** Select report groups for a diagnostic view without narrowing the mandatory audit. */
 export function ownedGroups(groups, changed) {
   if (changed === undefined) return groups;
   return groups.filter((group) => group.instances.some((instance) => changed.has(instance.file)));
 }
 
+/** Read a legacy diagnostic count; absence is not evidence that a baseline check passed. */
 export function staleEntries(staleness) {
-  return typeof staleness?.stale_entries === "number" ? staleness.stale_entries : 0;
+  return Number.isFinite(staleness?.stale_entries) ? staleness.stale_entries : 0;
 }
 
-function describe(group) {
-  return group.instances
-    .map(
-      (instance) => `${instance.file}:${String(instance.start_line)}-${String(instance.end_line)}`,
-    )
-    .join(" | ");
+function requireCondition(condition, message) {
+  if (!condition) throw new Error(message);
 }
 
-function baselineEntryCount() {
-  const path = join(REPO_ROOT, DUPES_BASELINE);
-  if (!existsSync(path)) return 0;
-  const baseline = JSON.parse(readFileSync(path, "utf8"));
-  return Array.isArray(baseline.clone_groups) ? baseline.clone_groups.length : 0;
+export function validateSemanticDuplicationConfig(value) {
+  return isDeepStrictEqual(value, SEMANTIC_DUPLICATION_CONFIG);
 }
 
-function saveBaseline() {
-  const current = report([]);
-  const held = baselineEntryCount();
-  const found = current.clone_groups.length;
-  if (held > 0 && found > held) {
-    console.error(
-      `semantic-duplication: FAIL — the baseline only shrinks: ${String(found)} clone group(s) ` +
-        `found, ${String(held)} held. Remove the new duplicates instead of recording them.`,
-    );
-    return 1;
-  }
-  const saved = runFallow(["--save-baseline", DUPES_BASELINE, "--format", "compact"]);
-  if (saved.status !== 0) {
-    console.error(`semantic-duplication: FAIL — fallow could not save the baseline.`);
-    return 1;
-  }
-  console.log(`semantic-duplication: baseline saved with ${String(found)} clone group(s).`);
-  return 0;
+function count(value) {
+  requireCondition(Number.isSafeInteger(value) && value >= 0, "invalid analysis count");
+  return value;
 }
 
-function reportFailures(owned, stale) {
-  for (const group of owned) console.error(`  new clone group: ${describe(group)}`);
-  if (owned.length > 0) {
-    console.error(
-      `semantic-duplication: FAIL — ${String(owned.length)} clone group(s) introduced. ` +
-        "Extract the shared code instead of copying it.",
-    );
-  }
-  if (stale > 0) {
-    const entries = stale === 1 ? "entry is" : "entries are";
-    console.error(
-      `semantic-duplication: FAIL — ${String(stale)} baseline ${entries} no longer duplicated. ` +
-        "Prune the baseline: node scripts/check-semantic-duplication.mjs --save-baseline",
-    );
-  }
-}
-
-function check(ref) {
-  const current = report(["--baseline", DUPES_BASELINE]);
-  const owned = ownedGroups(
-    current.clone_groups,
-    ref === undefined ? undefined : changedFiles(ref),
+function validateHeader(report, base, head) {
+  requireCondition(
+    report?.kind === "audit" && report.command === "audit",
+    "invalid audit envelope",
   );
-  const stale = staleEntries(current.baseline_staleness);
-  if (owned.length > 0 || stale > 0) {
-    reportFailures(owned, stale);
-    return 1;
-  }
-  const scope = ref === undefined ? "" : ` since ${ref}`;
-  const held = String(current.baseline_staleness?.baseline_entries ?? 0);
-  console.log(`semantic-duplication: PASS — no new clone group${scope}; ${held} baselined.`);
-  return 0;
+  requireCondition(
+    report.schema_version === 13 && report.version === "3.35.0",
+    "unsupported audit protocol",
+  );
+  requireCondition(report.base_ref === base, "audit base mismatch");
+  requireCondition(
+    typeof report.head_sha === "string" &&
+      /^[0-9a-f]{7,40}$/u.test(report.head_sha) &&
+      head.startsWith(report.head_sha),
+    "audit head mismatch",
+  );
+  requireCondition(ACCEPTED_AUDIT_VERDICTS.has(report.verdict), "audit analysis failed");
+  requireCondition(
+    report.base_snapshot_skipped === undefined ||
+      report.base_snapshot_skipped === true ||
+      report.base_snapshot_skipped === false,
+    "invalid base snapshot state",
+  );
 }
 
-function main(argv) {
-  if (argv.includes("--save-baseline")) return saveBaseline();
-  const index = argv.indexOf("--changed-since");
-  const ref = index === -1 ? undefined : argv[index + 1];
-  if (index !== -1 && (ref === undefined || ref.length === 0)) {
-    console.error("semantic-duplication: FAIL — --changed-since needs a ref.");
-    return 1;
-  }
-  return check(ref);
+function validateSelection(summary) {
+  requireCondition(
+    summary?.dead_code_skipped === true &&
+      summary.complexity_skipped === true &&
+      (summary.duplication_skipped === undefined || summary.duplication_skipped === false),
+    "invalid analysis selection",
+  );
+  return count(summary.duplication_clone_groups);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  process.exitCode = main(process.argv.slice(2));
+function validateGroups(groups, total, introduced, inherited) {
+  let actualIntroduced = 0;
+  for (const group of groups) {
+    requireCondition(typeof group?.introduced === "boolean", "missing clone attribution");
+    requireCondition(
+      count(group.token_count) >= 100 &&
+        count(group.line_count) >= 10 &&
+        Array.isArray(group.instances) &&
+        group.instances.length >= 2,
+      "invalid clone group",
+    );
+    if (group.introduced) actualIntroduced += 1;
+  }
+  requireCondition(
+    groups.length === total &&
+      introduced > 0 === actualIntroduced > 0 &&
+      inherited > 0 === groups.length > actualIntroduced,
+    "incomplete clone attribution",
+  );
+}
+
+export function validateSemanticDuplicationReport(report, base, head) {
+  validateHeader(report, base, head);
+  const changed = count(report.changed_files_count);
+  const total = validateSelection(report.summary);
+  const attribution = report.attribution;
+  requireCondition(attribution?.gate === "new-only", "invalid attribution gate");
+  const introduced = count(attribution.duplication_introduced);
+  const inherited = count(attribution.duplication_inherited);
+  requireCondition(
+    introduced <= total &&
+      inherited <= total &&
+      Number.isSafeInteger(introduced + inherited) &&
+      introduced + inherited <= total,
+    "inconsistent attribution counts",
+  );
+  const groups = report.duplication?.clone_groups;
+  requireCondition(
+    Array.isArray(groups) || (changed === 0 && total === 0 && report.duplication === undefined),
+    "missing duplication analysis",
+  );
+  validateGroups(groups ?? [], total, introduced, inherited);
+  return introduced;
+}
+
+function run(command, args, cwd, env) {
+  const result = spawnSync(command, args, {
+    cwd,
+    env,
+    encoding: "utf8",
+    timeout: 180_000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  requireCondition(
+    result.error === undefined && result.signal === null && result.status === 0,
+    "analysis command failed",
+  );
+  return result.stdout.trim();
+}
+
+export function semanticDuplicationEnvironment(env = process.env) {
+  return {
+    ...Object.fromEntries(Object.entries(env).filter(([key]) => !/^(?:FALLOW|GIT)_/iu.test(key))),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_ALLOW_PROTOCOL: "",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "cat",
+    PAGER: "cat",
+    LC_ALL: "C",
+  };
+}
+
+function immutableRange(args, git) {
+  requireCondition(
+    args.length === 2 &&
+      args[0] === "--changed-since" &&
+      typeof args[1] === "string" &&
+      args[1].length > 0,
+    "expected --changed-since with a Git revision",
+  );
+  const candidate = git(["rev-parse", "--verify", "--end-of-options", `${args[1]}^{commit}`]);
+  requireCondition(SHA.test(candidate) && candidate !== "0".repeat(40), "invalid resolved base");
+  const head = git(["rev-parse", "--verify", "HEAD"]);
+  return resolveQualityRange({ base: candidate, head, eventName: "pull_request" }, git);
+}
+
+function analyze(repoRoot, base, head, execute, env) {
+  const configPath = join(repoRoot, ".fallowrc.json");
+  const config = readFileSync(configPath, "utf8");
+  requireCondition(
+    validateSemanticDuplicationConfig(JSON.parse(config)),
+    "invalid duplication configuration",
+  );
+  const output = execute(
+    process.execPath,
+    [
+      join(repoRoot, "node_modules/fallow/bin/fallow"),
+      "audit",
+      "--only",
+      "dupes",
+      "--gate",
+      "new-only",
+      "--format",
+      "json",
+      "--config",
+      configPath,
+      "--base",
+      base,
+    ],
+    repoRoot,
+    env,
+  );
+  const introduced = validateSemanticDuplicationReport(JSON.parse(output), base, head);
+  requireCondition(
+    readFileSync(configPath, "utf8") === config,
+    "duplication configuration changed",
+  );
+  return introduced;
+}
+
+export function main(args = process.argv.slice(2), options = {}) {
+  const {
+    repoRoot = REPO_ROOT,
+    execute = run,
+    env: sourceEnv = process.env,
+    log = console.log,
+    error = console.error,
+  } = options;
+  try {
+    const env = semanticDuplicationEnvironment(sourceEnv);
+    const git = (gitArgs) => execute(resolveHostExecutable("git"), gitArgs, repoRoot, env);
+    const { base, head } = immutableRange(args, git);
+    const introduced = analyze(repoRoot, base, head, execute, env);
+    requireCondition(git(["rev-parse", "--verify", "HEAD"]) === head, "repository head changed");
+    if (introduced > 0) {
+      error(`semantic-duplication: FAIL — ${introduced} introduced clone groups`);
+      return 1;
+    }
+    log("semantic-duplication: PASS — zero introduced clone groups");
+    return 0;
+  } catch {
+    error("semantic-duplication: FAIL — invalid range, configuration, or analysis evidence");
+    return 1;
+  }
+}
+
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = main();
 }
