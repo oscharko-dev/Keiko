@@ -764,13 +764,9 @@ describe("S19 no duplicates on re-run", () => {
 
   it("grades without Jira", () => {
     const epics = [epic("REQ-1", one), epic("REQ-2", two)];
-    const second = { created: [], reconciled: epics, duplicates: [] };
-    const input = {
-      requested: RERUN_REQUIREMENTS,
-      afterFirst: epics,
-      afterSecond: epics,
-      second,
-    };
+    const first = { credited: epics, created: epics, reconciled: [], duplicates: [] };
+    const second = { credited: epics, created: [], reconciled: epics, duplicates: [] };
+    const input = { requested: RERUN_REQUIREMENTS, first, afterSecond: epics, second };
     expect(gradeRerun(input).status).toBe("green");
     expect(gradeRerun({ ...input, second: { ...second, reconciled: [] } }).status).toBe(
       "unverified",
@@ -778,8 +774,62 @@ describe("S19 no duplicates on re-run", () => {
     expect(gradeRerun({ ...input, second: { ...second, duplicates: ["REQ-9"] } }).status).toBe(
       "red",
     );
-    expect(gradeRerun({ ...input, afterSecond: [...epics, epic("REQ-3", two)] }).status).toBe(
-      "red",
-    );
+    const repeat = epic("REQ-3", two);
+    const createdAgain = { ...second, credited: [...epics, repeat], created: [repeat] };
+    expect(
+      gradeRerun({ ...input, afterSecond: [...epics, repeat], second: createdAgain }).status,
+    ).toBe("red");
+    // An epic neither run touched is another run's leftover, not this scenario's duplicate.
+    expect(gradeRerun({ ...input, afterSecond: [...epics, repeat] }).status).toBe("green");
+  });
+
+  // The lab Jira keeps what earlier runs created: a leftover epic for a requirement must neither
+  // make the scenario red nor stand in for the first run's own epic (S19 of epic #4173).
+  it("ignores epics that earlier runs left behind", async () => {
+    const leftover = epic("REQ-7", one);
+    const issues = [leftover];
+    const ctx = context({
+      issues,
+      act: ({ index }) => {
+        if (index === 1) {
+          issues.push(epic("REQ-1", one), epic("REQ-2", two));
+          return { toolExchanges: [draftExchange(["REQ-1", "REQ-2"])] };
+        }
+        return reconciles();
+      },
+    });
+    const check = await JOURNEYS.S19(ctx, CHAT);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain("requirements with several epics: none");
+  });
+
+  it("credits a first run that reconciled onto epics an earlier run of the scenario created", async () => {
+    const issues = [epic("REQ-1", one), epic("REQ-2", two)];
+    const ctx = context({ issues, act: reconciles });
+    expect((await JOURNEYS.S19(ctx, CHAT)).status).toBe("green");
+  });
+
+  it("is red when the second run creates the epics again with single creates", async () => {
+    const ctx = setup((issues) => {
+      issues.push(epic("REQ-8", one), epic("REQ-9", two));
+      const create = (key) => ({
+        call: { id: `call-${key}`, name: "jira_create", arguments: {} },
+        result: {
+          toolRef: { canonicalId: "keiko.jira.create", contractVersion: 3 },
+          status: "completed",
+          data: { outcome: "succeeded", issueKey: key },
+        },
+      });
+      return {
+        toolExchanges: [
+          draftExchange(["REQ-1", "REQ-2"], "existing"),
+          create("REQ-8"),
+          create("REQ-9"),
+        ],
+      };
+    });
+    const check = await JOURNEYS.S19(ctx, CHAT);
+    expect(check.status).toBe("red");
+    expect(check.detail).toContain(`requirements with several epics: ${one}, ${two}`);
   });
 });

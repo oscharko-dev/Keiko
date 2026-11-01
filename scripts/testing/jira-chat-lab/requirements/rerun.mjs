@@ -11,21 +11,25 @@ const EPIC_QUERY = "project = REQ AND issuetype = Epic";
 export const RERUN_REQUIREMENTS = Object.freeze(["LH-019", "LH-024"]);
 
 /**
- * Grades the second run against the epics Jira holds after each run.
- *  - red: a requirement has more than one epic after the second run, or the second run created a
- *    new epic or a second issue under an existing draft identity;
- *  - unverified: the first run created no epic for a requirement, or the second run's own draft did
+ * Grades the second run against the epics this scenario's two runs touched: what each run created
+ * or reconciled onto. Epics that earlier runs on the same lab left behind are not this scenario's,
+ * so an unrelated leftover cannot make it red, and only an epic a run touched can make it green.
+ *  - red: a requirement has more than one touched epic after the second run, or the second run
+ *    created a new epic or a second issue under an existing draft identity;
+ *  - unverified: the first run touched no epic for a requirement, or the second run's own draft did
  *    not report the existing epic of every requested requirement as reconciled (no write, a refused
  *    or failed write, or a write about something else), so the product's reconciliation was never
  *    shown to recognise the duplicate;
- *  - green: exactly one epic per requirement after both runs, no new issue from the second, and the
- *    second run reconciled onto each requirement's existing epic.
+ *  - green: exactly one touched epic per requirement after both runs, no new issue from the second,
+ *    and the second run reconciled onto each requirement's existing epic.
  */
-export function gradeRerun({ requested, afterFirst, afterSecond, second }) {
+export function gradeRerun({ requested, first, afterSecond, second }) {
+  const touched = new Set([...first.credited, ...second.credited].map((issue) => issue.key));
+  const scoped = afterSecond.filter((issue) => touched.has(issue.key));
   const countOf = (issues, id) => issues.filter((issue) => claimedRequirement(issue) === id).length;
-  const repeated = requested.filter((id) => countOf(afterSecond, id) > 1);
-  const absentFirst = requested.filter((id) => countOf(afterFirst, id) === 0);
-  const absentSecond = requested.filter((id) => countOf(afterSecond, id) === 0);
+  const repeated = requested.filter((id) => countOf(scoped, id) > 1);
+  const absentFirst = requested.filter((id) => countOf(first.credited, id) === 0);
+  const absentSecond = requested.filter((id) => countOf(scoped, id) === 0);
   const unreconciled = requested.filter(
     (id) => !second.reconciled.some((issue) => claimedRequirement(issue) === id),
   );
@@ -48,23 +52,24 @@ function rerunDetail(grade, second) {
 }
 
 export async function rerunCreatesNoDuplicates(ctx, chat) {
-  const first = await ctx.turn(chat, RERUN_PROMPT);
-  // The same request from a Chat that remembers nothing: only the product can recognise the epics.
+  const earlier = await snapshotBefore(ctx, EPIC_QUERY);
+  const firstTurn = await ctx.turn(chat, RERUN_PROMPT);
   const afterFirst = await ctx.search(EPIC_QUERY, "summary,labels");
+  const first = turnIssues({
+    before: earlier,
+    issues: afterFirst,
+    exchanges: firstTurn.toolExchanges,
+  });
+  // The same request from a Chat that remembers nothing: only the product can recognise the epics.
   const before = await snapshotBefore(ctx, EPIC_QUERY);
   const again = await ctx.freshChat("autonomous-delivery");
   const turn = await ctx.turn(again, RERUN_PROMPT);
   const afterSecond = await ctx.search(EPIC_QUERY, "summary,labels");
   const second = turnIssues({ before, issues: afterSecond, exchanges: turn.toolExchanges });
-  const grade = gradeRerun({
-    requested: RERUN_REQUIREMENTS,
-    afterFirst,
-    afterSecond,
-    second,
-  });
+  const grade = gradeRerun({ requested: RERUN_REQUIREMENTS, first, afterSecond, second });
   return result(
     grade.status,
-    sumTurns([first, turn]),
+    sumTurns([firstTurn, turn]),
     rerunDetail(grade, second),
     grade.status === "unverified" ? [] : ["rerun-creates-no-duplicates"],
   );
