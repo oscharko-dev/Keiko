@@ -790,7 +790,11 @@ is the identity; links and order of occurrence are invisible to that search, so 
 that share project, issue type, summary and parent are refused as a `conflict` before any request
 instead of being merged into one issue. The search reads every candidate page (50 per page, at most 10 pages): one match is
 reconciled without a write, several are refused as a conflict, and a candidate set that cannot be
-read completely is refused as `bounds-exceeded` instead of creating a possible duplicate. Absence
+read completely is refused as `bounds-exceeded` instead of creating a possible duplicate. A draft
+whose items all exist (or were deselected, at least one existing) writes nothing and reports
+`not-dispatched`; its result then carries `JIRA_DRAFT_EXISTING_GUIDANCE`, which tells the model that
+nothing is missing and not to create the issues again with `jira.create` — the lab's S19 rerun showed
+a model reading the bare outcome as a failure and creating duplicates one by one. Absence
 requires consistent evidence: every page must state the `startAt` that was requested and a page size
 and total that are counts, may not hold more issues than its page size or the total, may not be
 empty while the total is not reached, and every candidate must carry a safe key and a numeric id.

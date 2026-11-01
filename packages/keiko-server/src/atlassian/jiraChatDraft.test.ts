@@ -27,6 +27,7 @@ import type { TraceSession } from "../requirement-trace.js";
 import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
+  JIRA_DRAFT_EXISTING_GUIDANCE,
   JIRA_DRAFT_PENDING_GUIDANCE,
   jiraDraftOutcome,
   observedJiraDraftOutcome,
@@ -417,10 +418,16 @@ describe("executeJiraChatDraft (#4178)", () => {
     expect(jira.posts()).toHaveLength(4);
     const rerun = await executeJiraChatDraft(execution(jira));
     expect(rerun.isError).toBeUndefined();
-    expect(rerun.data).toMatchObject({ outcome: "not-dispatched", existingCount: 4 });
+    // S19 (#4178): the model is told plainly that nothing is missing, so it does not create again.
+    expect(rerun.data).toMatchObject({
+      outcome: "not-dispatched",
+      existingCount: 4,
+      guidance: JIRA_DRAFT_EXISTING_GUIDANCE,
+    });
     const none = await executeJiraChatDraft(execution(syntheticJira(), BACKLOG, ["epic", "loose"]));
     expect(none.isError).toBeUndefined();
     expect(none.data).toMatchObject({ outcome: "not-dispatched", excludedCount: 4 });
+    expect(none.data).not.toHaveProperty("guidance");
     expect(jira.posts()).toHaveLength(4);
   });
 

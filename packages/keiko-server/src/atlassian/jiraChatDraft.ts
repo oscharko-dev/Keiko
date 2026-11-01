@@ -448,6 +448,13 @@ export const JIRA_DRAFT_PENDING_GUIDANCE =
   "Tell the user in plain language how many issues were created and that the rest are not created yet. " +
   "Offer to continue: call jira.draft again with the same draftId and draftDigest; " +
   "issues that already exist are recognised, so nothing is created twice. Do not show this message.";
+/**
+ * A rerun that finds every issue already in Jira writes nothing (`not-dispatched`); without this the
+ * model read that outcome as a failure and created the issues again one by one (S19, #4178).
+ */
+export const JIRA_DRAFT_EXISTING_GUIDANCE =
+  "Every item already exists in Jira and was recognised, so nothing was created and nothing is missing. " +
+  "Report the existing keys as the result. Do not create these issues again with jira.create. Do not show this message.";
 /** An uncertain item outranks a refused one: the model must stop and tell the user first. */
 function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
   if (items.some((item) => item.state === "uncertain")) return JIRA_UNCERTAIN_GUIDANCE;
@@ -457,7 +464,11 @@ function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
     )
   )
     return JIRA_REJECTED_GUIDANCE;
-  return items.some((item) => item.state === "pending") ? JIRA_DRAFT_PENDING_GUIDANCE : undefined;
+  if (items.some((item) => item.state === "pending")) return JIRA_DRAFT_PENDING_GUIDANCE;
+  const reconciledOnly =
+    items.some((item) => item.state === "existing") &&
+    items.every((item) => item.state === "existing" || item.state === "excluded");
+  return reconciledOnly ? JIRA_DRAFT_EXISTING_GUIDANCE : undefined;
 }
 
 // The tool result is bounded by the catalog (256 KiB, 1,000 rows). A draft whose item rows fit is
