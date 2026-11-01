@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e2635b96857b3d612d17a9190c83b3f5d26b609ea5e8dd667dceb348365dabc3",
+    "catalogDigest": "2923fba6b025549ca601cab78edfde45a658e653bc9eb2fa695d3f88669b7776",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11215,8 +11215,8 @@
         "failureClasses": ["coding-runtime-operator-plugins"],
         "proofIds": ["coding-runtime.operator-plugins.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:427",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:492"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:432",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:497"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37590,8 +37590,8 @@
         "failureClasses": ["windows-local-volume"],
         "proofIds": ["security.windows-local-volume.refused.phase"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/windows-local-volume.ts:18",
-        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:196"]
+        "registrationSite": "packages/keiko-security/src/windows-local-volume.ts:23",
+        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:178"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37630,10 +37630,10 @@
         "failureClasses": ["windows-owner-private"],
         "proofIds": ["security.windows-owner-private.refused.phase"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/windows-owner-private.ts:35",
+        "registrationSite": "packages/keiko-security/src/windows-owner-private.ts:41",
         "emitterSites": [
-          "packages/keiko-security/src/windows-owner-private.ts:284",
-          "packages/keiko-security/src/windows-owner-private.ts:354"
+          "packages/keiko-security/src/windows-owner-private.ts:269",
+          "packages/keiko-security/src/windows-owner-private.ts:341"
         ]
       },
       {
@@ -104861,13 +104861,13 @@
     {
       "op": "security.windows-local-volume.refused",
       "category": "security",
-      "site": "packages/keiko-security/src/windows-local-volume.ts:21",
+      "site": "packages/keiko-security/src/windows-local-volume.ts:26",
       "package": "keiko-security"
     },
     {
       "op": "security.windows-owner-private.refused",
       "category": "security",
-      "site": "packages/keiko-security/src/windows-owner-private.ts:38",
+      "site": "packages/keiko-security/src/windows-owner-private.ts:44",
       "package": "keiko-security"
     },
     {
@@ -106371,7 +106371,7 @@
     {
       "op": "coding-runtime.operator-plugins.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:430",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:435",
       "package": "keiko-server"
     },
     {
