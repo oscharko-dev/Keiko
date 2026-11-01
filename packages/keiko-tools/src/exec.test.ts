@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
 import {
   createWindowsTerminationCapacity,
   createWindowsTaskkillBudget,
@@ -1077,10 +1078,10 @@ describe("runCommand — allowlist guard (before spawn)", () => {
     expect(spawn.calls()).toHaveLength(0);
   });
 
-  it("rejects a workspace PATH symlink to an outside executable without spawning", async () => {
+  it("rejects a workspace PATH symlink to an outside executable without spawning", async (context) => {
     const bin = join(root, "bin");
     mkdirSync(bin, { recursive: true });
-    symlinkSync(process.execPath, join(bin, "node"));
+    plantSymlinkOrSkip(context, process.execPath, join(bin, "node"), "file");
     const spawn = recordingSpawn();
     await expect(
       runCommand(

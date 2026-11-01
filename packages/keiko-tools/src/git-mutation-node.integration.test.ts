@@ -179,7 +179,12 @@ describe("node git mutation adapter — successful local mutations", () => {
     expect(git(["diff", "--cached", "--name-only"]).trim()).toBe("");
   });
 
-  it("treats pathspec-magic-looking filenames as literal files (#1575)", async () => {
+  it("treats pathspec-magic-looking filenames as literal files (#1575)", async (context) => {
+    if (process.platform === "win32") {
+      context.skip(
+        "NTFS forbids ':' and '*' in file names; the literal ':(top)*' file cannot exist",
+      );
+    }
     writeFileSync(join(root, "base.txt"), "base\n", "utf8");
     git(["add", "base.txt"]);
     git(["commit", "-m", "base"]);
@@ -466,6 +471,12 @@ function writeGlobalGitConfig(body: string): void {
   writeFileSync(join(identityHome, ".gitconfig"), body, "utf8");
 }
 
+// A git-config value treats `\` as an escape, so a Windows path written verbatim (`C:\Users\…`) is
+// a malformed config line. Escaping the backslash keeps the exact path; POSIX paths are unchanged.
+function gitConfigPathValue(path: string): string {
+  return path.replaceAll("\\", "\\\\");
+}
+
 function globalSshSigningConfig(email: string): string {
   const keyPath = join(identityHome, "global-ssh-signing-key");
   execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
@@ -475,9 +486,9 @@ function globalSshSigningConfig(email: string): string {
   const allowedSigners = join(identityHome, "global-allowed-signers");
   writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
   return (
-    `[user]\n\tname = Global Dev\n\temail = ${email}\n\tsigningkey = ${keyPath}.pub\n` +
+    `[user]\n\tname = Global Dev\n\temail = ${email}\n\tsigningkey = ${gitConfigPathValue(`${keyPath}.pub`)}\n` +
     `[commit]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n` +
-    `[gpg "ssh"]\n\tallowedSignersFile = ${allowedSigners}\n`
+    `[gpg "ssh"]\n\tallowedSignersFile = ${gitConfigPathValue(allowedSigners)}\n`
   );
 }
 
@@ -511,9 +522,8 @@ describe("node git mutation adapter — global identity and signing policy", () 
 
   it("FAILS the commit when signing is required and the signing key cannot sign", async () => {
     writeGlobalGitConfig(
-      `[user]\n\tname = Global Dev\n\temail = global@example.com\n\tsigningkey = ${join(
-        identityHome,
-        "missing-key.pub",
+      `[user]\n\tname = Global Dev\n\temail = global@example.com\n\tsigningkey = ${gitConfigPathValue(
+        join(identityHome, "missing-key.pub"),
       )}\n[commit]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n`,
     );
     const ad = identityAdapter();
