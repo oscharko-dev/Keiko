@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EditorAgentSessionSnapshot, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { createNodeEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { plantDirectoryRedirect } from "../symlinkFixture.test-support.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryUiStore } from "../store/index.js";
@@ -181,7 +182,8 @@ describe("production verified commit dependencies", () => {
 
   it("does not treat aliases or unproven dirty roots as unrelated", () => {
     const alias = join(root, "alias");
-    symlinkSync(root, alias, "dir");
+    // A junction on Windows (no symlink privilege), a directory symlink elsewhere.
+    plantDirectoryRedirect(root, alias);
     editorAgentRegistry.registerSnapshot(dirtySnapshot(alias));
     expect(verifiedCommitBuffersClean(deps, root, "run-3")).toBe(false);
     editorAgentRegistry.registerSnapshot({

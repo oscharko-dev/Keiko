@@ -2,7 +2,7 @@ import type { GovernedSyncHead } from "./governedSyncHeads.js";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts";
 import { CODING_RUNTIME_PATCH_BUDGET_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local authority fixtures are contextually typed. */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/k
 import { probeVerifiedGatewayConfig } from "../_support.js";
 import { admitCodingRunModel } from "../coding-sidecar-gateway.js";
 import { CONVERSATION_READINESS_MAX_AGE_MS } from "../deps.js";
+import { plantDirectoryRedirect } from "../symlinkFixture.test-support.js";
 
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
@@ -487,7 +488,8 @@ describe("production runtime workspace authority", () => {
     mkdirSync(workspace, { recursive: true });
     mkdirSync(other, { recursive: true });
     const alias = join(managed, "workspace-alias");
-    symlinkSync(workspace, alias);
+    // A junction on Windows (no symlink privilege), a directory symlink elsewhere.
+    plantDirectoryRedirect(workspace, alias);
     let activeRoot = workspace;
     let managedWorktreePath = workspace;
     const instance = {

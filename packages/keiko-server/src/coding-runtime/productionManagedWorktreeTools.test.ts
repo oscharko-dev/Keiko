@@ -133,6 +133,10 @@ import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
+import { WINDOWS_HOST } from "../symlinkFixture.test-support.js";
+
+const WINDOWS_PRE_EPOCH_MTIME_SKIP =
+  "Windows utimes cannot plant a pre-epoch mtime on this host; the case runs on POSIX hosts";
 
 const DIGEST = "a".repeat(64);
 // #3873: through the production facade an edit is the replacement form with every member present;
@@ -5535,7 +5539,7 @@ describe("inactive private native text snapshot admission", () => {
     },
   );
 
-  it("settles the actual same-FD pre-epoch timestamp snapshot without rewriting metadata", async () => {
+  it("settles the actual same-FD pre-epoch timestamp snapshot without rewriting metadata", async (testContext) => {
     const f = fixture("Pre-epoch file content");
     const path = join(f.runtime.root, "fixture.ts");
     const timestamp = new Date("1969-12-31T23:59:58.000Z");
@@ -5548,6 +5552,9 @@ describe("inactive private native text snapshot admission", () => {
       closeSync(fd);
     }
     expect(Number.isFinite(mtimeMs)).toBe(true);
+    // Windows' utimes wraps a pre-epoch time to an unsigned 32-bit second count, so this host
+    // cannot plant the fixture the case is about; every other host must.
+    if (WINDOWS_HOST && mtimeMs >= 0) testContext.skip(WINDOWS_PRE_EPOCH_MTIME_SKIP);
     expect(mtimeMs).toBeLessThan(0);
     const result = await f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f));
     expect(result).toMatchObject({ ok: true, info: { type: "file", mtimeMs } });

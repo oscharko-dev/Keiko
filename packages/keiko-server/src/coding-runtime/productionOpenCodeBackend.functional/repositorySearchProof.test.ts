@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 import { scriptedResponse, type ScriptState } from "./_support.js";
 import {
@@ -39,6 +41,7 @@ describe("real-binary H1 model response boundary", () => {
 
   it("derives the next bounded read from the correlated result rather than a fixture path", () => {
     const evidence: RepositorySearchConsumptionProof[] = [];
+    // The handoff is workspace-relative in the host's own separators, as the next read expects.
     expect(
       repositorySearchReadHandoff(
         transcript(searchResult(`${USEFUL}\n`)),
@@ -47,7 +50,7 @@ describe("real-binary H1 model response boundary", () => {
           evidence.push(proof);
         },
       ),
-    ).toEqual({ path: "src/actual-result.ts", offset: 7, limit: 1 });
+    ).toEqual({ path: join("src", "actual-result.ts"), offset: 7, limit: 1 });
     expect(evidence).toEqual([
       expect.objectContaining({
         hitCount: 1,
