@@ -18,10 +18,10 @@ export function JiraAttachmentReview({
   if (approval.kind !== "jira-chat-write" || approval.attachment === undefined) return null;
   const { name, sizeBytes, sha256 } = approval.attachment;
   return (
-    <ul className={styles.facts} aria-label={t("chat.jira.writeApproval.preview")}>
+    <ul className={styles.cmpFacts} aria-label={t("chat.jira.writeApproval.preview")}>
       <li>{name}</li>
       <li>{`${new Intl.NumberFormat().format(sizeBytes)} B`}</li>
-      <li className={styles.digest}>{`sha256 ${sha256}`}</li>
+      <li className={styles.cmpDigest}>{`sha256 ${sha256}`}</li>
     </ul>
   );
 }

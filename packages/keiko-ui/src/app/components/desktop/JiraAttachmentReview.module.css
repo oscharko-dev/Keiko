@@ -1,4 +1,4 @@
-.facts {
+.cmpFacts {
   display: grid;
   gap: 4px;
   margin: 0;
@@ -11,7 +11,7 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.digest {
+.cmpDigest {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.85em;
 }
