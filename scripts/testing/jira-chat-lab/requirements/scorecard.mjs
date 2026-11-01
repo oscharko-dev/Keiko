@@ -19,6 +19,7 @@ import { parseArgs } from "node:util";
 import { loadSession } from "../lab-client.mjs";
 import { SCENARIOS } from "./catalog.mjs";
 import { ensureLicenseWindow } from "./license-window.mjs";
+import { registerLane } from "./lab-lanes.mjs";
 import { scenarioVerdict } from "./coverage.mjs";
 import { JOURNEY_IDS, runJourneys } from "./journeys.mjs";
 import { PROBES } from "./probes.mjs";
@@ -77,6 +78,7 @@ function markdown(report) {
   ].join("\n");
 }
 
+registerLane(directory);
 await ensureLicenseWindow(session, directory, Number(values["min-license"]));
 const report = {
   startedAt: new Date().toISOString(),

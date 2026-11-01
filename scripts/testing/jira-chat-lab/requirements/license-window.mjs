@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { basicAuth, labRequest } from "../lab-client.mjs";
+import { withExclusiveRestart } from "./lab-lanes.mjs";
 
 const LICENSE_PATH = "/rest/plugins/applications/1.0/installed/jira-software/license";
 const LICENSE_MEDIA = "application/vnd.atl.plugins+json";
@@ -61,11 +62,23 @@ export async function ensureLicenseWindow(session, directory, minimumSeconds) {
     );
     return remaining;
   }
-  runSession("stop", directory);
-  runSession("start", directory);
-  const renewed = await waitForLicense(session, minimumSeconds);
+  // Another lane may be mid-turn on this Jira: restart only as the sole live lane, under the lock.
+  const restarted = await withExclusiveRestart(
+    directory,
+    async () => (await licenseRemainingSeconds(session)) < minimumSeconds,
+    async () => {
+      runSession("stop", directory);
+      runSession("start", directory);
+      return waitForLicense(session, minimumSeconds);
+    },
+  );
+  const renewed = restarted ?? (await licenseRemainingSeconds(session));
   console.log(
-    JSON.stringify({ operation: "jira-lab-license-window", restarted: true, remaining: renewed }),
+    JSON.stringify({
+      operation: "jira-lab-license-window",
+      restarted: restarted !== undefined,
+      remaining: renewed,
+    }),
   );
   return renewed;
 }
