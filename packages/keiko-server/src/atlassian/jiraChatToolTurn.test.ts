@@ -425,6 +425,33 @@ it.each([false, true])(
   },
 );
 
+// #4175 acceptance: "A stopped or exhausted turn lists exactly the issue keys Jira shows as created."
+// A backlog draft runs, then the turn reaches its deadline before the model answers: the answer is
+// written from the transcript and names every key the synthetic Jira holds, and no other.
+it.each([false, true])(
+  "names exactly the keys Jira created when the turn reaches its deadline after a draft (stream=%s)",
+  async (stream) => {
+    const f = fixture(true, undefined, true, false, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 } });
+    stallAfterFirstRound(f);
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `deadline-draft-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve");
+    await pending;
+    const inJira = f.jira.issues.map((issue) => issue.key).sort();
+    expect(inJira.length).toBeGreaterThan(0);
+    const [, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(assistant?.content).toContain("this turn reached its time limit");
+    const named = [...new Set(assistant?.content.match(/SYN-\d+/gu) ?? [])].sort();
+    expect(named).toEqual(inJira);
+  },
+);
+
 function replyFor(
   mutation: Mutation,
   request: Parameters<AtlassianHttpBodyPort>[0],
