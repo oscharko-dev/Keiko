@@ -424,6 +424,25 @@ async function prepareAndRun(
   return withRulesDigest(result, rules);
 }
 
+/** The startup self-check; a refusal is logged and answered with its run refusal reason. */
+function selfCheckRefusal(
+  context: ServiceContext,
+  live: LiveInstance,
+  request: ReviewRuntimeRunRequest,
+): ReviewRuntimeRefusalReason | undefined {
+  const check = checkReviewRuntimeLayers(context.deps.layersFor(live.composition, request.modelId));
+  if (check.ok) return undefined;
+  logReviewProfileRefused(
+    context.deps.activityLog,
+    request.correlationId,
+    check.reason,
+    check.layer,
+    check.authorityRefusal,
+  );
+  // #4138: an unavailable model is no policy failure; the review is skipped as unavailable.
+  return check.authorityRefusal === "model-unavailable" ? "runtime-unavailable" : check.reason;
+}
+
 async function runOnInstance(
   context: ServiceContext,
   live: LiveInstance,
@@ -435,22 +454,8 @@ async function runOnInstance(
   const workspace = live.composition.workspace;
   try {
     if (!workspace.bind(request)) return { ok: false, reason: "busy", rules: prepared.rules };
-    const check = checkReviewRuntimeLayers(
-      context.deps.layersFor(live.composition, request.modelId),
-    );
-    if (!check.ok) {
-      logReviewProfileRefused(
-        context.deps.activityLog,
-        request.correlationId,
-        check.reason,
-        check.layer,
-        check.authorityRefusal,
-      );
-      // #4138: an unavailable model is no policy failure; the review is skipped as unavailable.
-      const reason =
-        check.authorityRefusal === "model-unavailable" ? "runtime-unavailable" : check.reason;
-      return { ok: false, reason, rules: prepared.rules };
-    }
+    const refusal = selfCheckRefusal(context, live, request);
+    if (refusal !== undefined) return { ok: false, reason: refusal, rules: prepared.rules };
     live.slot.pending = {
       create: (runId): ReviewFindingIntake =>
         createReviewFindingIntake({
