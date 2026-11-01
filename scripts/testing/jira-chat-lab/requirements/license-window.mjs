@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { basicAuth, labRequest } from "../lab-client.mjs";
-import { withExclusiveRestart } from "./lab-lanes.mjs";
+import { enterActive, withExclusiveRestart } from "./lab-lanes.mjs";
 
 const LICENSE_PATH = "/rest/plugins/applications/1.0/installed/jira-software/license";
 const LICENSE_MEDIA = "application/vnd.atl.plugins+json";
@@ -53,8 +53,17 @@ async function waitForLicense(session, minimumSeconds) {
   throw new TypeError("Jira did not report a valid license after restart");
 }
 
-/** Restarts the laboratory when less than `minimumSeconds` of license time remain. */
+/**
+ * Restarts the laboratory when less than `minimumSeconds` of license time remain, then marks this
+ * lane as using Jira.
+ */
 export async function ensureLicenseWindow(session, directory, minimumSeconds) {
+  const remaining = await renewedLicense(session, directory, minimumSeconds);
+  await enterActive(directory);
+  return remaining;
+}
+
+async function renewedLicense(session, directory, minimumSeconds) {
   const remaining = await licenseRemainingSeconds(session);
   if (remaining >= minimumSeconds) {
     console.log(
@@ -62,7 +71,7 @@ export async function ensureLicenseWindow(session, directory, minimumSeconds) {
     );
     return remaining;
   }
-  // Another lane may be mid-turn on this Jira: restart only as the sole live lane, under the lock.
+  // Another lane may be mid-turn on this Jira: restart only when no other lane is active.
   const restarted = await withExclusiveRestart(
     directory,
     async () => (await licenseRemainingSeconds(session)) < minimumSeconds,
