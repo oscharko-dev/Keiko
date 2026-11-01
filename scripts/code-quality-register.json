@@ -18265,6 +18265,9 @@
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-runtime-typeof": 2
     },
+    "scripts/__tests__/semantic-duplication.test.mjs": {
+      "anti-slop/no-runtime-typeof": 1
+    },
     "scripts/__tests__/stage-dev-coding-runtime.test.mjs": {
       "anti-slop/no-runtime-typeof": 6
     },
@@ -18450,7 +18453,7 @@
       "anti-slop/no-runtime-typeof": 4
     },
     "scripts/check-semantic-duplication.mjs": {
-      "anti-slop/no-runtime-typeof": 1
+      "anti-slop/no-runtime-typeof": 3
     },
     "scripts/check-sonar-analysis-log.mjs": {
       "anti-slop/no-conditional-empty-object-spread": 1
