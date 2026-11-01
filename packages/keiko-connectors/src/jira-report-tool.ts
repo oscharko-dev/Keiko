@@ -23,7 +23,11 @@ import {
   jiraReportSummary,
 } from "./jira-report-result.js";
 import { advanceJiraReportSession } from "./jira-report-read.js";
-import type { JiraReportReadDeps, JiraReportSession } from "./jira-report-session.js";
+import {
+  jiraReportHierarchyOf,
+  type JiraReportReadDeps,
+  type JiraReportSession,
+} from "./jira-report-session.js";
 import { JIRA_REPORT_STORE_MAX_BYTES, type JiraReportStore } from "./jira-report-store.js";
 import { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
 import type { JiraReport, JiraReportCheckerPort } from "./jira-report-types.js";
@@ -100,16 +104,7 @@ function optionalActivity(session: JiraReportSession): Partial<JiraReportActivit
 }
 function hierarchyActivity(session: JiraReportSession): Pick<JiraReportActivity, "hierarchy"> {
   if (session.report !== undefined) return { hierarchy: session.report.hierarchy };
-  const { hierarchy, plan } = session;
-  return hierarchy === undefined
-    ? {}
-    : {
-        hierarchy: {
-          discovery: hierarchy.discovery,
-          fieldCount: plan?.parentFieldIds.length ?? 0,
-          observedFieldCount: plan?.parentFieldsSeen.size ?? 0,
-        },
-      };
+  return session.hierarchy === undefined ? {} : { hierarchy: jiraReportHierarchyOf(session) };
 }
 function sessionActivity(
   session: JiraReportSession,

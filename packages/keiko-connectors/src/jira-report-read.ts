@@ -5,7 +5,12 @@ import type {
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { buildJiraReport, type JiraReportInput } from "./jira-report-aggregate.js";
 import { createJiraReportHttp, type JiraReportHttp } from "./jira-report-http.js";
-import { parseJiraReportIssue, type JiraReportFieldPlan } from "./jira-report-issue.js";
+import {
+  parseJiraReportIssue,
+  rejectNonParentFields,
+  type JiraReportFieldPlan,
+} from "./jira-report-issue.js";
+import { fetchJiraReportPage } from "./jira-report-page.js";
 import {
   discoverHierarchyFields,
   loadRequiredFields,
@@ -20,6 +25,7 @@ import type {
   JiraReportFieldCatalogEntry,
 } from "./jira-report-types.js";
 import {
+  jiraReportHierarchyOf,
   jiraReportIssueCost,
   type JiraReportReadDeps,
   type JiraReportSession,
@@ -28,18 +34,6 @@ import {
 const GROWTH_STREAK = 4;
 const TRANSIENT_FAILURE_LIMIT = 3;
 const INIT_FAILURE_LIMIT = 2;
-const FIELD_LIST_MAX_CHARS = 6000;
-const BASE_FIELDS = [
-  "summary",
-  "status",
-  "issuetype",
-  "project",
-  "parent",
-  "issuelinks",
-  "labels",
-  "assignee",
-  "duedate",
-];
 const TRANSIENT: ReadonlySet<string> = new Set(["timeout", "unavailable", "rate-limited"]);
 
 /** The closed word for a Jira failure; a 400 on the search is the caller's query. */
@@ -73,22 +67,16 @@ function fieldPlan(
 ): JiraReportFieldPlan {
   return {
     parentFieldIds: [...new Set([...hierarchy.parentFieldIds, ...session.request.parentFieldIds])],
+    namedParentFieldIds: new Set(session.request.parentFieldIds),
     parentFieldsSeen: new Set(),
+    parentFieldsNonKey: new Set(),
+    parentFieldsRejected: new Set(),
     estimateFieldId: session.request.estimateFieldId ?? "timeoriginalestimate",
     requirementIds: new Set(session.request.requirementIds),
     requiredByType: required.byType,
     checker,
     includeDescription: session.request.requirementIds.length > 0,
   };
-}
-function fieldListOf(plan: JiraReportFieldPlan): string {
-  const ids = new Set<string>(BASE_FIELDS);
-  ids.add(plan.estimateFieldId);
-  for (const id of plan.parentFieldIds) ids.add(id);
-  for (const fields of plan.requiredByType.values()) for (const id of fields) ids.add(id);
-  for (const id of plan.checker?.fieldIds ?? []) ids.add(id);
-  if (plan.includeDescription) ids.add("description");
-  return [...ids].join(",");
 }
 
 function completenessOf(
@@ -114,11 +102,7 @@ function reportInput(
     issues: [...session.issues.values()],
     scope: session.scope,
     completeness: completenessOf(session, reason),
-    hierarchy: {
-      discovery: session.hierarchy?.discovery ?? "unavailable",
-      fieldCount: session.plan?.parentFieldIds.length ?? 0,
-      observedFieldCount: session.plan?.parentFieldsSeen.size ?? 0,
-    },
+    hierarchy: jiraReportHierarchyOf(session),
     requiredFieldRules:
       request.projectKey === undefined
         ? "not-requested"
@@ -206,13 +190,7 @@ async function initialize(
     required,
     typeof checker === "string" ? undefined : checker,
   );
-  session.fieldList = fieldListOf(session.plan);
   session.failure = undefined;
-  if (session.fieldList.length > FIELD_LIST_MAX_CHARS) {
-    session.failure = "bounds-exceeded";
-    finish(session, deps, "read-failed");
-    return;
-  }
   session.phase = "reading";
 }
 
@@ -309,6 +287,7 @@ function onPageRead(
     return;
   }
   const ingested = ingestPage(session, fresh, plan, deps.memoryBudgetBytes);
+  rejectNonParentFields(plan);
   session.pageCount += 1;
   session.transientFailures = 0;
   session.failure = undefined;
@@ -332,17 +311,24 @@ async function readNextPage(
   deps: JiraReportReadDeps,
   http: JiraReportHttp,
 ): Promise<void> {
+  if (session.plan === undefined) {
+    finish(session, deps, "read-failed");
+    return;
+  }
   const overlap = session.pageSize > 1 && session.lastKey !== undefined ? 1 : 0;
-  const query = new URLSearchParams({
+  const fetched = await fetchJiraReportPage(http, session.plan, {
     jql: session.jql,
-    startAt: String(session.startAt - overlap),
-    maxResults: String(session.pageSize),
-    fields: session.fieldList,
+    startAt: session.startAt - overlap,
+    maxResults: session.pageSize,
   });
-  const outcome = await http.getRecord(`search?${query.toString()}`);
-  const page = outcome.ok ? readPage(outcome.body) : undefined;
+  if (fetched.kind === "moved") {
+    finish(session, deps, "scope-changed");
+    return;
+  }
+  const page = fetched.kind === "page" ? readPage(fetched.body) : undefined;
   if (page !== undefined) onPageRead(session, deps, page, overlap);
-  else onPageFailure(session, deps, outcome.ok ? "malformed-payload" : outcome.reason);
+  else
+    onPageFailure(session, deps, fetched.kind === "failed" ? fetched.reason : "malformed-payload");
 }
 
 async function pump(

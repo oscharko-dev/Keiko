@@ -13,8 +13,6 @@ import type { JiraReportFieldCatalogEntry } from "./jira-report-types.js";
  * the field's id and the key of its field type are the instance's own and are never named here.
  */
 const OPAQUE_SCHEMA_TYPE = "any";
-/** More candidates than this are not read blindly: the caller names the parent fields instead. */
-const PARENT_CANDIDATES_MAX = 24;
 const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
 /** Always present and never an author's omission, so never a required-field deviation. */
 const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["project", "issuetype", "reporter"]);
@@ -72,8 +70,6 @@ export async function discoverHierarchyFields(
   const candidates = outcome.items
     .flatMap((item) => parentCandidateId(item) ?? [])
     .sort(compareCodePoints);
-  if (candidates.length > PARENT_CANDIDATES_MAX)
-    return { discovery: "unavailable", reason: "bounds-exceeded", catalog, parentFieldIds: [] };
   return { discovery: "complete", catalog, parentFieldIds: candidates };
 }
 

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { harness, idOf, record, reportOf } from "./jira-report.harness.js";
+import { harness, record, reportOf } from "./jira-report.harness.js";
 import { DECOY_BLOB, DECOY_RANK, EPIC_LINK, syntheticProject } from "./jira-report.fixture.js";
 import type { JiraReportHttp } from "./jira-report-http.js";
 import { discoverHierarchyFields } from "./jira-report-metadata.js";
+import { JIRA_REPORT_FIELD_CHUNK_CHARS } from "./jira-report-page.js";
 
 function listing(items: readonly unknown[]): JiraReportHttp {
   return {
@@ -22,6 +23,7 @@ describe("hierarchy discovery depends on the schema shape, never on an app's fie
       discovery: "complete",
       fieldCount: 3,
       observedFieldCount: 1,
+      rejectedFieldCount: 2,
     });
     expect(foreign.epics).toEqual(known.epics);
     expect(foreign.coverage).toEqual(known.coverage);
@@ -37,28 +39,55 @@ describe("hierarchy discovery depends on the schema shape, never on an app's fie
     expect(record(record(reportOf(result).coverage).uncoveredEpics).items).toEqual(["REP-4"]);
   });
 
-  it("does not guess when an instance has more candidates than it can read, and says so", async () => {
-    const issues = syntheticProject(40);
-    const h = harness({ issues, extraOpaqueFields: 40 });
-    const first = await h.run({ projectKey: "REP" });
-    const second = await h.run({ reportId: idOf(first) });
-    expect(second.data.status).toBe("incomplete");
-    expect(record(reportOf(second).completeness)).toMatchObject({
-      reason: "read-failed",
-      failure: "bounds-exceeded",
-    });
-    const named = reportOf(
-      await harness({ issues, extraOpaqueFields: 40 }).run({
-        projectKey: "REP",
-        parentFieldIds: [EPIC_LINK],
-      }),
+  it("reads every candidate of an instance with many app fields and yields the identical report", async () => {
+    const issues = syntheticProject(120);
+    const known = reportOf(await harness({ issues }).run({ projectKey: "REP" }));
+    const crowded = reportOf(
+      await harness({ issues, extraOpaqueFields: 60 }).run({ projectKey: "REP" }),
     );
-    expect(record(named.hierarchy)).toEqual({
-      discovery: "unavailable",
-      fieldCount: 1,
+    expect(record(crowded.completeness).complete).toBe(true);
+    expect(record(crowded.hierarchy)).toEqual({
+      discovery: "complete",
+      fieldCount: 63,
       observedFieldCount: 1,
+      // The two decoys and the thirty extra fields holding free text, shown by value.
+      rejectedFieldCount: 32,
     });
-    expect(record(named.completeness).complete).toBe(true);
+    for (const section of ["progress", "epics", "coverage", "compliance"] as const)
+      expect(crowded[section]).toEqual(known[section]);
+  });
+
+  it("splits a field list too long for one request across requests instead of refusing it", async () => {
+    const issues = syntheticProject(60);
+    const known = reportOf(await harness({ issues }).run({ projectKey: "REP" }));
+    const h = harness({ issues, extraOpaqueFields: 400 });
+    const crowded = reportOf(await h.run({ projectKey: "REP" }));
+    const searches = h.fixture.requests.filter((request) => request.includes(" search?"));
+    const lists = searches.map(
+      (request) =>
+        new URL(`https://x/${request.split(" ")[1] ?? ""}`).searchParams.get("fields") ?? "",
+    );
+    expect(lists.length).toBeGreaterThan(1);
+    for (const list of lists)
+      expect(list.length).toBeLessThanOrEqual(JIRA_REPORT_FIELD_CHUNK_CHARS);
+    expect(record(crowded.completeness).complete).toBe(true);
+    expect(crowded.epics).toEqual(known.epics);
+    expect(crowded.coverage).toEqual(known.coverage);
+  });
+
+  it("stops asking for a candidate once a value shows it holds no parent, never for a named one", async () => {
+    const h = harness({ issues: syntheticProject(300), pageClamp: 100 });
+    await h.run({ projectKey: "REP", parentFieldIds: [DECOY_BLOB] });
+    const lists = h.fixture.requests
+      .filter((request) => request.includes(" search?"))
+      .map((request) =>
+        new URL(`https://x/${request.split(" ")[1] ?? ""}`).searchParams.get("fields"),
+      );
+    expect(lists.length).toBeGreaterThan(1);
+    expect(lists[0]).toContain(DECOY_RANK);
+    expect(lists.at(-1)).not.toContain(DECOY_RANK);
+    expect(lists.at(-1)).toContain(DECOY_BLOB);
+    expect(lists.at(-1)).toContain(EPIC_LINK);
   });
 
   it("selects only app-defined fields of an opaque value shape", async () => {

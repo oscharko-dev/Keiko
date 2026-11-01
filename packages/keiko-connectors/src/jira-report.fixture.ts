@@ -8,6 +8,7 @@ export const POINTS = "customfield_10200";
 /** Opaque app fields that never hold a parent: a rank string and an object without an issue key. */
 export const DECOY_RANK = "customfield_10300";
 export const DECOY_BLOB = "customfield_10301";
+const EXTRA_FIELD_BASE = 20000;
 
 export type FixtureCategory = "new" | "indeterminate" | "done";
 export interface FixtureIssue {
@@ -157,8 +158,16 @@ function typedFields(issue: FixtureIssue): Record<string, unknown> {
     fixVersions: [],
   };
 }
-function rawIssue(issue: FixtureIssue, requested: ReadonlySet<string>): unknown {
-  const all = { ...plainFields(issue), ...typedFields(issue) };
+/** Every even extra opaque field holds free text; the odd ones stay empty on every issue. */
+function extraFields(count: number): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (let index = 0; index < count; index += 1)
+    fields[`customfield_${String(EXTRA_FIELD_BASE + index)}`] =
+      index % 2 === 0 ? "free text" : null;
+  return fields;
+}
+function rawIssue(issue: FixtureIssue, requested: ReadonlySet<string>, extra: number): unknown {
+  const all = { ...plainFields(issue), ...typedFields(issue), ...extraFields(extra) };
   const fields: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(all))
     if (requested.has(id) && value !== undefined) fields[id] = value;
@@ -201,7 +210,7 @@ export interface FixtureOptions {
    * keys; Jira still reports the same schema shape for them.
    */
   readonly foreignFieldTypeKeys?: boolean;
-  /** This many further opaque app fields on the instance, beyond the ones the report knows. */
+  /** This many further opaque app fields; every even one holds free text, the others are empty. */
   readonly extraOpaqueFields?: number;
 }
 export interface FixtureJira {
@@ -268,7 +277,7 @@ function fieldList(options: FixtureOptions): AtlassianHttpBodyResult {
       };
   const app = foreign ? "example.vendor.hierarchy" : "com.example.apps";
   const extra = Array.from({ length: options.extraOpaqueFields ?? 0 }, (_, index) => ({
-    id: `customfield_${String(20000 + index)}`,
+    id: `customfield_${String(EXTRA_FIELD_BASE + index)}`,
     ...custom("any", `${app}:opaque-${String(index)}`),
   }));
   return response([
@@ -318,7 +327,7 @@ export function fixtureJira(options: FixtureOptions): FixtureJira {
     const all = select(jql, searchCall);
     const page = all
       .slice(startAt, startAt + maxResults)
-      .map((issue) => rawIssue(issue, requested));
+      .map((issue) => rawIssue(issue, requested, options.extraOpaqueFields ?? 0));
     const total = options.totalFor?.(searchCall, all.length) ?? all.length;
     const heavy =
       options.truncateAbove !== undefined && page.length * requested.size > options.truncateAbove;

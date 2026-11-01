@@ -344,6 +344,7 @@ describe("incomplete reads are never reported as complete", () => {
       discovery: "unavailable",
       fieldCount: 1,
       observedFieldCount: 1,
+      rejectedFieldCount: 0,
     });
   });
 });
@@ -532,7 +533,12 @@ describe("activity", () => {
       issuesRead: 100,
       requirementCount: 1,
       ruleIds: ["required-field-empty"],
-      hierarchy: { discovery: "complete", fieldCount: 3, observedFieldCount: 1 },
+      hierarchy: {
+        discovery: "complete",
+        fieldCount: 3,
+        observedFieldCount: 1,
+        rejectedFieldCount: 2,
+      },
     });
     expect(JSON.stringify(line)).not.toMatch(/REP-|jira\.example|Story|customfield/u);
   });

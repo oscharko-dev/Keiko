@@ -16,8 +16,14 @@ import type {
 export interface JiraReportFieldPlan {
   /** Custom fields that may name the issue's parent: discovered by schema shape or caller-named. */
   readonly parentFieldIds: readonly string[];
+  /** The ones the caller named; they are never narrowed away. */
+  readonly namedParentFieldIds: ReadonlySet<string>;
   /** Collects the parent fields that held a parent key on an issue; the report states the count. */
   readonly parentFieldsSeen: Set<string>;
+  /** Collects discovered fields that held a value which is no issue key. */
+  readonly parentFieldsNonKey: Set<string>;
+  /** Discovered fields shown not to hold a parent: later pages no longer request them. */
+  readonly parentFieldsRejected: Set<string>;
   readonly estimateFieldId: string;
   readonly requirementIds: ReadonlySet<string>;
   readonly requiredByType: ReadonlyMap<string, readonly string[]>;
@@ -61,13 +67,25 @@ function parentKeyOf(
 ): string | undefined {
   const system = issueKeyOf(fields.parent);
   if (system !== undefined) return system;
+  let found: string | undefined;
   for (const id of plan.parentFieldIds) {
     const key = parentFieldKeyOf(fields[id]);
-    if (key === undefined) continue;
-    plan.parentFieldsSeen.add(id);
-    return key;
+    if (key !== undefined) {
+      plan.parentFieldsSeen.add(id);
+      found ??= key;
+    } else if (!plan.namedParentFieldIds.has(id) && !isEmptyJiraValue(fields[id])) {
+      plan.parentFieldsNonKey.add(id);
+    }
   }
-  return undefined;
+  return found;
+}
+/**
+ * A discovered field whose values are issue keys everywhere or nowhere is settled by value: one that
+ * held something else and never a key is no parent field, so later pages stop asking for it.
+ */
+export function rejectNonParentFields(plan: JiraReportFieldPlan): void {
+  for (const id of plan.parentFieldsNonKey)
+    if (!plan.parentFieldsSeen.has(id)) plan.parentFieldsRejected.add(id);
 }
 function linkedKeysOf(fields: Record<string, unknown>): readonly string[] {
   const keys = new Set<string>();

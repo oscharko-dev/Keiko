@@ -111,6 +111,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
     },
     hierarchyFieldCount: { type: "integer", dataClass: "count", required: false },
     hierarchyObservedFieldCount: { type: "integer", dataClass: "count", required: false },
+    hierarchyRejectedFieldCount: { type: "integer", dataClass: "count", required: false },
     byteCount: { type: "integer", dataClass: "count", required: false },
     invalidArgumentCount: { type: "integer", dataClass: "count", required: false },
     ruleIds: {
@@ -183,6 +184,7 @@ interface JiraReportLine {
   readonly hierarchyDiscovery?: "complete" | "unavailable";
   readonly hierarchyFieldCount?: number;
   readonly hierarchyObservedFieldCount?: number;
+  readonly hierarchyRejectedFieldCount?: number;
   readonly byteCount?: number;
   readonly invalidArgumentCount?: number;
   readonly ruleIds?: readonly string[];
@@ -193,7 +195,10 @@ function hierarchyOf(
   input: JiraReportActivity,
 ): Pick<
   JiraReportLine,
-  "hierarchyDiscovery" | "hierarchyFieldCount" | "hierarchyObservedFieldCount"
+  | "hierarchyDiscovery"
+  | "hierarchyFieldCount"
+  | "hierarchyObservedFieldCount"
+  | "hierarchyRejectedFieldCount"
 > {
   const { hierarchy } = input;
   return hierarchy === undefined
@@ -202,6 +207,7 @@ function hierarchyOf(
         hierarchyDiscovery: hierarchy.discovery,
         hierarchyFieldCount: hierarchy.fieldCount,
         hierarchyObservedFieldCount: hierarchy.observedFieldCount,
+        hierarchyRejectedFieldCount: hierarchy.rejectedFieldCount,
       };
 }
 

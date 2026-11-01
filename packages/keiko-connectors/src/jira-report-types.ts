@@ -173,6 +173,8 @@ export interface JiraReport {
     readonly fieldCount: number;
     /** How many of them held a parent key on at least one issue read. */
     readonly observedFieldCount: number;
+    /** Discovered fields shown not to hold a parent, so later pages stopped asking for them. */
+    readonly rejectedFieldCount: number;
   };
   readonly progress: {
     readonly project: JiraReportProgress;

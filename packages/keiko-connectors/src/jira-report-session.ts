@@ -45,7 +45,6 @@ export interface JiraReportSession {
   plan: JiraReportFieldPlan | undefined;
   /** How the compliance checker was bound at the start; `unavailable` ends the report incomplete. */
   checker: JiraReport["compliance"]["checker"];
-  fieldList: string;
   hierarchy: JiraReportHierarchyFields | undefined;
   required: JiraReportRequiredFields | undefined;
   issues: Map<string, JiraReportIssue>;
@@ -63,6 +62,17 @@ export interface JiraReportSession {
   incomplete: JiraReportIncompleteReason | undefined;
   failure: JiraReportFailureReason | undefined;
   report: JiraReport | undefined;
+}
+
+/** How the parent relation was found so far: counts and one closed word, never a field id. */
+export function jiraReportHierarchyOf(session: JiraReportSession): JiraReport["hierarchy"] {
+  const plan = session.plan;
+  return {
+    discovery: session.hierarchy?.discovery ?? "unavailable",
+    fieldCount: plan?.parentFieldIds.length ?? 0,
+    observedFieldCount: plan?.parentFieldsSeen.size ?? 0,
+    rejectedFieldCount: plan?.parentFieldsRejected.size ?? 0,
+  };
 }
 
 export interface JiraReportReadDeps extends JiraReportHttpDeps {
@@ -134,7 +144,6 @@ export function createJiraReportSession(input: {
     lastUsedAt: input.now,
     plan: undefined,
     checker: "none",
-    fieldList: "",
     hierarchy: undefined,
     required: undefined,
     issues: new Map(),

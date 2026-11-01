@@ -1685,6 +1685,12 @@
               "required": false
             },
             {
+              "name": "hierarchyRejectedFieldCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "invalidArgumentCount",
               "type": "integer",
               "dataClass": "count",

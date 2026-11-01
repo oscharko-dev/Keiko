@@ -37,7 +37,12 @@ function seeded(): JiraReportStore {
       timeZone: "UTC",
     },
     completeness: { complete: true, issuesRead: 1, issuesTotal: 1, pageCount: 1 },
-    hierarchy: { discovery: "complete", fieldCount: 1, observedFieldCount: 1 },
+    hierarchy: {
+      discovery: "complete",
+      fieldCount: 1,
+      observedFieldCount: 1,
+      rejectedFieldCount: 0,
+    },
     progress: {
       project: {
         total: 1,
@@ -219,13 +224,19 @@ describe("Jira report activity", () => {
       deviationCount: 0,
       ruleIds: [],
       requirementCount: 0,
-      hierarchy: { discovery: "complete", fieldCount: 3, observedFieldCount: 1 },
+      hierarchy: {
+        discovery: "complete",
+        fieldCount: 3,
+        observedFieldCount: 1,
+        rejectedFieldCount: 2,
+      },
       durationMs: 2,
     });
     expect(expectActivityLogProof("atlassian.jira-report.line", onlyLine(logs))).toMatchObject({
       hierarchyDiscovery: "complete",
       hierarchyFieldCount: 3,
       hierarchyObservedFieldCount: 1,
+      hierarchyRejectedFieldCount: 2,
     });
   });
 

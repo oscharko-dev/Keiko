@@ -333,7 +333,6 @@ describe("S13 report export and Jira comment", () => {
         assigned: false,
         dueDate: undefined,
         estimate: undefined,
-        epicMarker: false,
         deviations: [],
         requirementIds: [],
       },

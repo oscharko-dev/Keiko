@@ -217,7 +217,6 @@ function rowsOf(issues: readonly ReportedIssue[]): JiraReport["rows"] {
       assigned: false,
       dueDate: undefined,
       estimate: undefined,
-      epicMarker: true,
       deviations: [],
       requirementIds: [],
       labels: issue.labels,
@@ -264,7 +263,12 @@ function reportOf(issues: readonly ReportedIssue[], complete: boolean): JiraRepo
       issuesTotal: complete ? issues.length : issues.length + 5,
       pageCount: 1,
     },
-    hierarchy: { discovery: "complete", fieldCount: 1, observedFieldCount: 1 },
+    hierarchy: {
+      discovery: "complete",
+      fieldCount: 1,
+      observedFieldCount: 1,
+      rejectedFieldCount: 0,
+    },
     progress: progressOf(issues.length),
     epics: [],
     compliance: {

@@ -145,6 +145,7 @@
     "keiko-connectors/jira-report-jql",
     "keiko-connectors/jira-report-metadata",
     "keiko-connectors/jira-report-order",
+    "keiko-connectors/jira-report-page",
     "keiko-connectors/jira-report-read",
     "keiko-connectors/jira-report-result",
     "keiko-connectors/jira-report-session",

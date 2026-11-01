@@ -789,8 +789,11 @@ container (an epic, or any root issue holding non-sub-task work; hierarchy comes
 from app-defined fields the instance lists with an opaque value shape — schema type `any`, a custom
 type, no Jira system role — whose values are issue keys on the issues read, or from caller-named
 `parentFieldIds`; no field id, app or plugin type key is ever named in code, so an instance whose
-hierarchy app uses other type keys reads identically, and more candidates than 24 fail closed as
-`bounds-exceeded` until the caller names the fields), epics without members (a container is an
+hierarchy app uses other type keys reads identically. Every candidate is read: there is no cap on
+their number, and a field list too long for one request is split across requests of at most 4000
+characters of field ids, merged by issue key. After a page, a discovered field whose values were
+free text or objects and never an issue key is no longer requested, so a crowded instance converges
+to its few real parent fields; a field that stayed empty, and every caller-named one, is kept), epics without members (a container is an
 issue of a type that holds work for another issue and is never held itself, so an empty epic is
 found without reading an Epic Name field), issues without an
 epic or parent (orphans; an issue link rescues an issue only when it reaches a container), the
@@ -851,7 +854,8 @@ renders the stored report (the model's prose is never the source) for the browse
 CSV neutralizes spreadsheet formulas. Evidence is `atlassian.jira-report` (phase, status, closed
 reason, scope kind, counts including `invalidArgumentCount` on a refusal, how the parent relation
 was found — `hierarchyDiscovery` `complete|unavailable`, `hierarchyFieldCount` candidates and
-`hierarchyObservedFieldCount` fields that held a parent — and rule ids; never scope text, keys, summaries or report content) beside
+`hierarchyObservedFieldCount` fields that held a parent, `hierarchyRejectedFieldCount` fields shown
+to hold none — and rule ids; never scope text, keys, summaries or report content) beside
 the existing `atlassian.action.outcome` line for the call.
 
 **Complete, traceable requirement derivation (#4179, 2026-10-31).** Grounded Q&A keeps its ranked
