@@ -423,6 +423,29 @@ it("keeps legacy metadata paging distinct from issue paging", async () => {
     ).data,
   ).toMatchObject({ startAt: 1, nextStartAt: 2, items: [{ id: "summary", required: true }] });
 });
+it("points create fields at jira.draft for several issues, and only create fields", async () => {
+  // S05 of epic #4173: a model read create fields, then created three epics one by one and the
+  // human approved three times where one draft asks once.
+  const created = await fixture({ ...REMOTE_PAGE, values: [META] }).run("jira.create-fields", {
+    projectKey: "SYN",
+    issueTypeId: "1",
+  });
+  expect(created.data.draft).toEqual({
+    tool: "jira.draft",
+    use: "To create several issues, put them all in one jira.draft: the human approves the whole draft once. jira.create asks once per issue.",
+  });
+  const types = await fixture({
+    ...REMOTE_PAGE,
+    values: [{ id: "1", name: "Task", subtask: false }],
+  }).run("jira.issue-types", { projectKey: "SYN" });
+  expect(types.data).not.toHaveProperty("draft");
+  const refused = await fixture({ ...REMOTE_PAGE, values: [{}] }).run("jira.create-fields", {
+    projectKey: "SYN",
+    issueTypeId: "1",
+  });
+  expect(refused.data).toMatchObject({ outcome: "failed" });
+  expect(refused.data).not.toHaveProperty("draft");
+});
 it("retains transition metadata availability and safely omits malformed targets", async () => {
   const f = fixture({
     transitions: [

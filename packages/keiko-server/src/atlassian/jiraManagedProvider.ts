@@ -235,6 +235,7 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
         fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
         messages: JIRA_FAILURE_MESSAGES_SCHEMA,
         browseUrl: text(4096),
+        draft: object({ tool: text(16), use: text(256) }, ["tool", "use"]),
         items: { type: "array", maxItems: 100, items: definition.item },
         startAt: PAGE_NUMBER,
         total: PAGE_NUMBER,

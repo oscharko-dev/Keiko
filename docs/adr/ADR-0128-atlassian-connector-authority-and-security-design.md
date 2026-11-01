@@ -708,6 +708,13 @@ several drafts (for example one per epic), each approved on its own. A count lim
 under another name. The earlier ceilings of 32 items (the journal's per-turn bound on single
 writes) and of 500 items are superseded.
 
+*Draft pointer (2026-11-01).* A model reads `jira.create-fields` right before it creates, so every
+successful page of it carries `draft: { tool: "jira.draft", use }`, one fixed sentence saying that
+several issues go into one `jira.draft`, approved once, while `jira.create` asks once per issue (lab
+S05: Qwen read the epic fields, then created three epics one by one and the human approved three
+times). The pointer sits in the result the model reads; the tool description does not grow, and a
+refused read carries no pointer.
+
 *Paged drafts.* One model call cannot carry hundreds of items, and the model's output is bounded,
 so a large draft is written in pages through `jira.draft-stage`, a read-class tool (row 21: it
 changes nothing in Jira, so it needs the Chat's read grant, not a write approval). Each call

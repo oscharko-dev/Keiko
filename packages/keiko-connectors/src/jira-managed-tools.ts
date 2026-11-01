@@ -219,9 +219,20 @@ function metadataResult(
       ? failure("malformed-payload")
       : localJiraPage(items, startAt, maxResults);
   }
-  const items =
-    name === "jira.issue-types" ? issueTypeItems(body.values) : metadataItems(body.values);
-  return remoteJiraPage(body, items, startAt, maxResults);
+  if (name === "jira.issue-types")
+    return remoteJiraPage(body, issueTypeItems(body.values), startAt, maxResults);
+  return withDraftPointer(remoteJiraPage(body, metadataItems(body.values), startAt, maxResults));
+}
+// A model reads create fields right before it creates. Several issues created one by one ask the
+// human once each; one jira.draft asks once (S05 of epic #4173: three epics, three approvals).
+const DRAFT_POINTER = Object.freeze({
+  tool: "jira.draft",
+  use: "To create several issues, put them all in one jira.draft: the human approves the whole draft once. jira.create asks once per issue.",
+});
+function withDraftPointer(result: ManagedMcpToolResult): ManagedMcpToolResult {
+  return result.data.outcome === "succeeded"
+    ? { ...result, data: { ...result.data, draft: { ...DRAFT_POINTER } } }
+    : result;
 }
 function arrayResult(
   name: JiraManagedReadToolName,
