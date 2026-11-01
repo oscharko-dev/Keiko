@@ -264,3 +264,13 @@ references and 108 running-app captures completed without errors. The seven-mode
 proof has zero serious/critical violations and zero unresolved incomplete findings. No producer
 assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
 fixtures; they do not qualify model behavior.
+
+## Anti-slop ratchet on the 1.3.5 tree (#4145), 2026-11-01
+
+After `dev` `7bbca2e34` (release 1.3.5) was merged into PR #4165, its `package.json` and
+`package-lock.json` again differ from `dev`'s by the `oxlint` devDependencies and the sharded
+script-coverage commands. The four original producers were rerun on that merged tree on Node
+24.18.0 (macOS arm64), and all passed: component fidelity with zero gated differences and no
+missing selectors, editor token fidelity with zero gated differences and all 14 reference captures,
+the seven-mode accessibility proof with zero serious/critical violations and zero unresolved
+incomplete findings, and all 108 running-app captures. No gate, fixture or rule was changed.
