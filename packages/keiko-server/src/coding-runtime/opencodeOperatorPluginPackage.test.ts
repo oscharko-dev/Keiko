@@ -14,7 +14,10 @@ import {
   grantOthersWrite,
   makeOwnerPrivateDirectory,
 } from "../test-support/owner-private-fixture.js";
-import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../../../../tests/support/symlink-fixture.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../../tests/support/symlink-fixture.js";
 import { readPluginPackage, writePluginPackage } from "./opencodeOperatorPluginPackage.js";
 
 const roots: string[] = [];

@@ -7,7 +7,10 @@ import { nodeWorkspaceFs, type WorkspaceDirEntry } from "@oscharko-dev/keiko-wor
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { afterEach, describe, expect, it, type TestContext } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
-import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../../../../tests/support/symlink-fixture.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../../tests/support/symlink-fixture.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
 import {

@@ -3,7 +3,10 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSqliteStatePath, SqliteStatePathError } from "./fs-hardening.js";
-import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../tests/support/symlink-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
