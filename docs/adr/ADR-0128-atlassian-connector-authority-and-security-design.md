@@ -336,7 +336,10 @@ block the turn, so the model corrects the refused fields and retries in the same
 the Activity Log carries the closed `rejection: jira-error-document`, never the document. A 4xx
 without a parsable Jira error document, 408/409/429, every 5xx, a lost answer and a 2xx without a
 parsable body stay `unknown` and fail closed (#2953: no automatic replay), as does a crash between
-the response and the settlement. A known local rejection before dispatch is unchanged.
+the response and the settlement. A known local rejection before dispatch is unchanged; its settled
+line carries Keiko's own closed `refusalReason` (the connector write-failure vocabulary) and, for a
+field refusal, the closed `fieldValidation` class, never the field or its value (#4173). Neither
+field appears once Jira answered, so a local refusal and Jira's own rejection stay distinguishable.
 The shared HTTP transport and existing action Activity Log remain the
 owners of per-request and terminal evidence. The managed catalog envelope retains its own
 cancellation/denial and settlement status; a matching journal outcome is projected separately as

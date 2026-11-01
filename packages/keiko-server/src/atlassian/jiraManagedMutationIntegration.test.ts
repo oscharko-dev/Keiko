@@ -589,6 +589,64 @@ it("requires explicit clearing and rejects ambiguous assignment through the SDK 
   expect(f.writes()).toBe(1);
 });
 
+/** The registered settled line of the one mutation a fixture ran. */
+function settledMutationLine(
+  logs: ReturnType<typeof createBufferedServerLogSink>,
+): Record<string, unknown> {
+  const settled = logs.events.filter(
+    (event) => event.op === "chat.tool-mutation" && event.extra?.event === "settled",
+  );
+  expect(settled).toHaveLength(1);
+  return expectRegisteredActivityLogLine(
+    "chat.tool-mutation",
+    formatActivityLogProofLine(settled[0] ?? {}),
+  );
+}
+// #4173: a write Keiko refuses before dispatch settles `rejected` with no HTTP status. Its settled
+// line must name Keiko's closed reason, or the log cannot say why the model's write failed.
+it("names Keiko's closed reason on the settled line of a write refused before dispatch", async () => {
+  const f = await fixture();
+
+  await f.invoke("jira.assign", {
+    issueKey: "SYN-1",
+    assigneeName: "synthetic-user",
+    clearAssignee: true,
+  });
+
+  expect(f.writes()).toBe(0);
+  const line = settledMutationLine(f.logs);
+  expect(line).toMatchObject({ outcome: "rejected", refusalReason: "field-validation" });
+  expect(line).not.toHaveProperty("fieldValidation");
+  expect(line).not.toHaveProperty("rejection");
+  expect(f.logs.lines().join()).not.toMatch(/synthetic-user|SYN-1/u);
+});
+it("names the closed field-validation class of a field Keiko refused before dispatch", async () => {
+  const f = await fixture();
+
+  await f.invoke("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Changed", customfield_99999: "synthetic-value" },
+  });
+
+  expect(f.writes()).toBe(0);
+  expect(settledMutationLine(f.logs)).toMatchObject({
+    outcome: "rejected",
+    refusalReason: "field-validation",
+    fieldValidation: "invalid-field",
+  });
+  expect(f.logs.lines().join()).not.toMatch(/customfield_99999|synthetic-value/u);
+});
+it("records no local refusal reason once Jira itself answered the write", async () => {
+  const f = await fixture("jira-error-document");
+
+  await f.invoke("jira.create", create(REJECTED_VALUE));
+
+  const line = settledMutationLine(f.logs);
+  expect(line).toMatchObject({ outcome: "rejected", rejection: "jira-error-document" });
+  expect(line).not.toHaveProperty("refusalReason");
+  expect(line).not.toHaveProperty("fieldValidation");
+});
 it("runs a backlog draft through the real gateway/binder/SDK as journaled item creates (#4178)", async () => {
   const f = await fixture();
   expect(await f.invoke("jira.draft")).toMatchObject({

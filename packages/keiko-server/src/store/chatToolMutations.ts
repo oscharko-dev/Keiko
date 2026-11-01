@@ -18,6 +18,7 @@ import type {
   ChatToolMutationLinkCounts,
   ChatToolMutationRecord,
   ChatToolMutationPreparation,
+  ChatToolMutationLocalRefusal,
   ChatToolMutationSettleEvidence,
   ChatToolMutationStore,
 } from "./chatToolMutationTypes.js";
@@ -445,6 +446,7 @@ class MutationStore implements ChatToolMutationStore {
     outcome: JiraMutationOutcome,
     links?: ChatToolMutationLinkCounts,
     evidence?: ChatToolMutationSettleEvidence,
+    refusal?: ChatToolMutationLocalRefusal,
   ): ChatToolMutationRecord {
     const change = durableWrite(this.db, (): MutationChange => {
       const current = this.requireRecord(invocationId);
@@ -457,11 +459,13 @@ class MutationStore implements ChatToolMutationStore {
         .run(outcome, timestamp(this.now, current.updatedAt), invocationId);
       return { record: this.requireRecord(invocationId), event: "settled" };
     });
+    const settled = change.event === "settled";
     recordChatToolMutation(
       this.log,
       change.record,
       change.event,
-      change.event === "settled" ? links : undefined,
+      settled ? links : undefined,
+      settled ? refusal : undefined,
     );
     return change.record;
   }

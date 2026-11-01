@@ -7,8 +7,31 @@ import {
 import type { ServerLogSink } from "../observability/index.js";
 import type {
   ChatToolMutationLinkCounts,
+  ChatToolMutationLocalRefusal,
   ChatToolMutationRecord,
 } from "./chatToolMutationTypes.js";
+// Keiko's closed write-failure and field-validation vocabularies. `localRefusal` assigns the
+// contract types to them, so a reason the contracts add fails the type check until it is listed.
+const REFUSAL_REASONS = [
+  "auth-failed",
+  "permission-denied",
+  "not-found",
+  "rate-limited",
+  "timeout",
+  "unavailable",
+  "malformed-payload",
+  "bounds-exceeded",
+  "conflict",
+  "invalid-transition",
+  "field-validation",
+] as const;
+const FIELD_VALIDATIONS = [
+  "required-field",
+  "unsupported-field",
+  "invalid-field",
+  "invalid-operation",
+  "bounds-exceeded",
+] as const;
 const MUTATION_STATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -53,6 +76,20 @@ const MUTATION_STATE = defineActivityLogOperation({
       required: false,
       values: ["jira-error-document"],
     },
+    // Set on a settled line only: Keiko refused the write before dispatch, with its own closed
+    // reason and, for a field refusal, the closed validation class (#4173). Never a field value.
+    refusalReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: REFUSAL_REASONS,
+    },
+    fieldValidation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: FIELD_VALIDATIONS,
+    },
     // Issue links one write asked for, on its `settled` line only (#4176): counts, never keys.
     linkRequestedCount: { type: "integer", dataClass: "count", required: false },
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
@@ -68,6 +105,21 @@ const MUTATION_STATE = defineActivityLogOperation({
   proofIds: ["chat.tool-mutation.emitted-line"],
   releaseImpact: "patch",
 });
+/** Keiko's own reason for a local refusal; absent once Jira answered. */
+function localRefusal(
+  record: ChatToolMutationRecord,
+  refusal: ChatToolMutationLocalRefusal | undefined,
+): {
+  readonly refusalReason?: (typeof REFUSAL_REASONS)[number];
+  readonly fieldValidation?: (typeof FIELD_VALIDATIONS)[number];
+} {
+  if (refusal === undefined || record.outcome !== "rejected" || record.httpStatus !== null)
+    return {};
+  return {
+    refusalReason: refusal.reason,
+    ...(refusal.validation === undefined ? {} : { fieldValidation: refusal.validation }),
+  };
+}
 /** A settled rejection that followed a response is Jira's own refusal; a local one has no status. */
 function remoteRejection(
   event: string,
@@ -82,6 +134,7 @@ export function recordChatToolMutation(
   record: ChatToolMutationRecord,
   event: "prepared" | "replayed" | "dispatched" | "response" | "settled",
   links?: ChatToolMutationLinkCounts,
+  refusal?: ChatToolMutationLocalRefusal,
 ): void {
   try {
     log.write(
@@ -99,6 +152,7 @@ export function recordChatToolMutation(
           phase: record.phase,
           outcome: record.outcome ?? "none",
           ...remoteRejection(event, record),
+          ...localRefusal(record, refusal),
           ...(links === undefined
             ? {}
             : {

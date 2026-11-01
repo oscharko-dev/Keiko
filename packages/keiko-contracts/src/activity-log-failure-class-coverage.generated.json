@@ -3419,6 +3419,12 @@
               "required": true
             },
             {
+              "name": "fieldValidation",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "invocationId",
               "type": "string",
               "dataClass": "opaque-id",
@@ -3453,6 +3459,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "refusalReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "rejection",

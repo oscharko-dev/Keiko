@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7be113a8c4872fec63ab486f5cc007f1d432101cfd14ea0c8bda255148b8915d",
+    "catalogDigest": "c3595134c8858222f8dc448590206ade5cbf9108f03429d616243bf698ba7b67",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3208,6 +3208,36 @@
             "required": false,
             "values": ["jira-error-document"]
           },
+          "refusalReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "auth-failed",
+              "permission-denied",
+              "not-found",
+              "rate-limited",
+              "timeout",
+              "unavailable",
+              "malformed-payload",
+              "bounds-exceeded",
+              "conflict",
+              "invalid-transition",
+              "field-validation"
+            ]
+          },
+          "fieldValidation": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "required-field",
+              "unsupported-field",
+              "invalid-field",
+              "invalid-operation",
+              "bounds-exceeded"
+            ]
+          },
           "linkRequestedCount": {
             "type": "integer",
             "dataClass": "count",
@@ -3236,8 +3266,8 @@
         "failureClasses": ["chat-tool-mutation"],
         "proofIds": ["chat.tool-mutation.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:12",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:88"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:35",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:141"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -58939,6 +58969,12 @@
                   "required": true
                 },
                 {
+                  "name": "fieldValidation",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "invocationId",
                   "type": "string",
                   "dataClass": "opaque-id",
@@ -58973,6 +59009,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "refusalReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "rejection",
@@ -106543,28 +106585,28 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:118",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:119",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:162",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:170",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:188",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:196",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:194",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:202",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107270,7 +107312,7 @@
     {
       "op": "chat.tool-mutation",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:15",
+      "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:38",
       "package": "keiko-server"
     },
     {
@@ -109685,7 +109727,7 @@
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:51",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:52",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

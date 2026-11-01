@@ -1,4 +1,6 @@
 import type {
+  AtlassianConnectorWriteFailureReason,
+  JiraFieldValidationFailure,
   JiraMutationOperation,
   JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -82,6 +84,14 @@ export interface ChatToolMutationLinkCounts {
 export interface ChatToolMutationSettleEvidence {
   readonly jiraErrorDocument: true;
 }
+/**
+ * Keiko's own closed reason for a write it refused before dispatch, so the settled line explains a
+ * local refusal without its arguments. Activity Log only; never persisted.
+ */
+export interface ChatToolMutationLocalRefusal {
+  readonly reason: AtlassianConnectorWriteFailureReason;
+  readonly validation?: JiraFieldValidationFailure | undefined;
+}
 /** Persistence only. The composing consumer still owns authority, approvals and HTTP dispatch. */
 export interface ChatToolMutationStore {
   readonly find: (invocationId: string) => ChatToolMutationRecord | undefined;
@@ -94,6 +104,7 @@ export interface ChatToolMutationStore {
     outcome: JiraMutationOutcome,
     links?: ChatToolMutationLinkCounts,
     evidence?: ChatToolMutationSettleEvidence,
+    refusal?: ChatToolMutationLocalRefusal,
   ) => ChatToolMutationRecord;
   /** Finds one admitted call; an ambiguous dispatch is refused, never guessed. */
   readonly preparedNative?: (input: {

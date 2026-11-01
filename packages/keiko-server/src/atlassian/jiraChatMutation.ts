@@ -13,6 +13,7 @@ import type {
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type {
   JiraChatToolMutationIntent as ChatToolMutationIntent,
+  ChatToolMutationLocalRefusal,
   ChatToolMutationRecord,
   ChatToolMutationStore,
 } from "../store/chatToolMutationTypes.js";
@@ -144,6 +145,12 @@ function settlement(
     return { outcome: "succeeded", errorDocument: false };
   return { outcome: observedOutcome(current), errorDocument: false };
 }
+/** Keiko's closed reason for a write that failed; the store records it only for a local refusal. */
+function localRefusal(attempt: JiraMutationAttempt): ChatToolMutationLocalRefusal | undefined {
+  if (attempt.ok) return undefined;
+  const validation = attempt.detail?.validation;
+  return { reason: attempt.reason, ...(validation === undefined ? {} : { validation }) };
+}
 function finish(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
@@ -157,6 +164,7 @@ function finish(
       outcome,
       jiraLinkCounts(attempt),
       errorDocument ? { jiraErrorDocument: true } : undefined,
+      localRefusal(attempt),
     );
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
