@@ -473,8 +473,8 @@ describe("a cut summary list says how to read on (#4181)", () => {
 
   it("names the section and offset of a list it cut, and the section continues there", async () => {
     const { result } = await runOf(source);
-    const deviations = (result.data.report as { compliance: { deviations: Listed } }).compliance
-      .deviations;
+    const deviations = (result.data.report as unknown as { compliance: { deviations: Listed } })
+      .compliance.deviations;
     expect(deviations.total).toBeGreaterThan(deviations.items.length);
     expect(deviations).toMatchObject({
       section: "deviations",
@@ -495,7 +495,7 @@ describe("a cut summary list says how to read on (#4181)", () => {
 
   it("carries nothing on a list it shows whole", async () => {
     const { result } = await runOf(source);
-    const epics = (result.data.report as { epics: Listed }).epics;
+    const epics = (result.data.report as unknown as { epics: Listed }).epics;
     expect(epics.total).toBe(epics.items.length);
     expect(epics).not.toHaveProperty("nextStartAt");
     expect(epics).not.toHaveProperty("section");
