@@ -184,6 +184,33 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.citations.map((citation) => citation.index)).toEqual([1]);
   });
 
+  it("keeps the completed answer when the generator has no call left for a repair (#4179)", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-no-repair-slot" });
+    const calls: AnswerGeneratorInput[] = [];
+    const generator: AnswerGenerator = {
+      generate: (input) => {
+        calls.push(input);
+        return calls.length === 1
+          ? Promise.resolve("Every requirement, read with a tool, without a marker.")
+          : Promise.reject(new Error("synthesis attempt grant is exhausted"));
+      },
+      repairAvailable: () => false,
+    };
+
+    const result = await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+      },
+      { conversationId: "conv-no-repair-slot", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(result.answer).toBe("Every requirement, read with a tool, without a marker.");
+    expect(result.citations).toHaveLength(0);
+  });
+
   it("retries once with citationRepair when the model omits markers", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair" });

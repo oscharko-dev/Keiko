@@ -3752,6 +3752,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "excerptRequirementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "phase",
               "type": "string",
               "dataClass": "closed-enum",
@@ -3762,6 +3768,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "requirementUnitCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "toolCallCount",

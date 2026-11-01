@@ -669,6 +669,8 @@ const CHAT_GROUNDED_TOOL_ROUND_OPERATION = defineActivityLogOperation({
     },
     toolCallCount: { type: "integer", dataClass: "count", required: true },
     remainingSynthesisCalls: { type: "integer", dataClass: "count", required: true },
+    requirementUnitCount: { type: "integer", dataClass: "count", required: false },
+    excerptRequirementCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -682,6 +684,7 @@ export function logGroundedToolRound(
   correlationId: string | undefined,
   toolCallCount: number,
   remainingSynthesisCalls: number,
+  coverage?: { readonly unitCount: number; readonly shownCount: number },
 ): void {
   getServerLogger().info(
     activityLogEvent(
@@ -691,6 +694,12 @@ export function logGroundedToolRound(
         phase: toolCallCount > 0 ? "orchestration" : "synthesis",
         toolCallCount,
         remainingSynthesisCalls,
+        ...(coverage === undefined
+          ? {}
+          : {
+              requirementUnitCount: coverage.unitCount,
+              excerptRequirementCount: coverage.shownCount,
+            }),
       },
     ),
   );

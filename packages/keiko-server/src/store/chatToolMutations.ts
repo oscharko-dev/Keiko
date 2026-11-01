@@ -191,6 +191,18 @@ function hasInflightBarrier(
       (row.phase === "acknowledged" && !observedWithinNativeCall(row, intent)),
   );
 }
+/**
+ * Whether a record may have reached the provider. The turn bound limits writes, so a record that
+ * settled as a local refusal before dispatch (an existing draft item, a value refused before
+ * sending) does not use it up (#4175, #4178). The settlement rules admit those two outcomes only
+ * without a provider response; every other record counts.
+ */
+function heldWrite(row: ChatToolMutationRecord): boolean {
+  return !(
+    row.phase === "settled" &&
+    (row.outcome === "not-dispatched" || row.outcome === "rejected")
+  );
+}
 function blockedTurn(
   db: DatabaseSync,
   intent: ChatToolMutationIntent,
@@ -199,7 +211,8 @@ function blockedTurn(
   if (rows.some((row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed"))
     return { kind: "blocked", reason: "unknown-effect" };
   if (hasInflightBarrier(rows, intent)) return { kind: "blocked", reason: "in-flight" };
-  if (rows.length >= MAX_MUTATIONS_PER_TURN) return { kind: "blocked", reason: "capacity" };
+  if (rows.filter((row) => heldWrite(row)).length >= MAX_MUTATIONS_PER_TURN)
+    return { kind: "blocked", reason: "capacity" };
   return undefined;
 }
 function retryableAttachment(

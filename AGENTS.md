@@ -872,7 +872,7 @@ system that exists, never beside it:
   Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
   fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
   the model retains context-overflow handling. Best-effort citation repair keeps the completed
-  answer when its remaining input allowance cannot fund the repair.
+  answer when its remaining input allowance or synthesis attempt slots cannot fund the repair.
   Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
   optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity

@@ -265,6 +265,39 @@ describe("durable mutation admission", () => {
     f.store.deleteChat(f.intent.chatId);
     expect(f.journal.find(f.intent.invocationId)).toBeUndefined();
   });
+  it("does not count records that settled before anything was sent (#4175)", () => {
+    const f = fixture();
+    const prepare = (index: number): string => {
+      const invocationId = `invocation-${String(index)}`;
+      expect(
+        f.journal.prepare({
+          ...f.intent,
+          invocationId,
+          actionDigest: index.toString(16).padStart(64, "0"),
+        }).kind,
+      ).toBe("prepared");
+      return invocationId;
+    };
+    for (let index = 0; index < 40; index++)
+      f.journal.settle(prepare(index), index % 2 === 0 ? "not-dispatched" : "rejected");
+    for (let index = 40; index < 72; index++) prepare(index);
+    expect(f.journal.prepare(f.intent)).toEqual({ kind: "blocked", reason: "capacity" });
+  });
+  it("keeps counting writes the provider answered", () => {
+    const f = fixture();
+    for (let index = 0; index < 32; index++) {
+      const invocationId = `invocation-${String(index)}`;
+      f.journal.prepare({
+        ...f.intent,
+        invocationId,
+        actionDigest: index.toString(16).padStart(64, "0"),
+      });
+      f.journal.beginDispatch(invocationId, () => true);
+      f.journal.acknowledge(invocationId, 201);
+      f.journal.settle(invocationId, "succeeded");
+    }
+    expect(f.journal.prepare(f.intent)).toEqual({ kind: "blocked", reason: "capacity" });
+  });
   it("bounds intent growth within a canonical turn", () => {
     const f = fixture();
     for (let index = 0; index < 32; index++)

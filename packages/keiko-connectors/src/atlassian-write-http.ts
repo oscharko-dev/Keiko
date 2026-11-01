@@ -226,7 +226,40 @@ function reasonToStopRetrying(
   return undefined;
 }
 
-async function driveRetryLoop(
+interface RetryLoop {
+  readonly deps: AtlassianWriteHttpDeps;
+  readonly request: AtlassianWriteHttpRequest;
+  readonly deadlineAt: number;
+  readonly now: () => number;
+  readonly isAborted: () => boolean;
+  readonly sleep: (ms: number) => Promise<void>;
+}
+
+/** One retry step: attempts run one after another as a tail call, never in parallel. */
+async function retryFrom(
+  loop: RetryLoop,
+  result: AtlassianHttpBodyResult,
+  attempt: number,
+): Promise<AtlassianHttpBodyResult> {
+  const { deps, request, deadlineAt, now, isAborted, sleep } = loop;
+  if (attempt >= ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS || !isRetryable(request.method, result))
+    return result;
+  const retryAfterMs = result.kind === "response" ? result.retryAfterMs : undefined;
+  const delay = retryDelayMs(attempt, retryAfterMs);
+  if (reasonToStopRetrying(now, isAborted, deadlineAt, delay, "before-sleep") !== undefined)
+    return result;
+  await sleep(delay);
+  if (reasonToStopRetrying(now, isAborted, deadlineAt, delay, "after-sleep") !== undefined)
+    return result;
+  const next = await issueOnce(
+    deps,
+    request,
+    clampedPerRequestTimeoutMs(deadlineAt, now, requestTimeoutCeilingMs(request)),
+  );
+  return retryFrom(loop, next, attempt + 1);
+}
+
+function driveRetryLoop(
   deps: AtlassianWriteHttpDeps,
   request: AtlassianWriteHttpRequest,
   initial: AtlassianHttpBodyResult,
@@ -235,25 +268,7 @@ async function driveRetryLoop(
   isAborted: () => boolean,
   sleep: (ms: number) => Promise<void>,
 ): Promise<AtlassianHttpBodyResult> {
-  let result = initial;
-  for (let attempt = 1; attempt < ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS; attempt += 1) {
-    if (!isRetryable(request.method, result)) break;
-    const retryAfterMs = result.kind === "response" ? result.retryAfterMs : undefined;
-    const delay = retryDelayMs(attempt, retryAfterMs);
-    if (reasonToStopRetrying(now, isAborted, deadlineAt, delay, "before-sleep") !== undefined) {
-      break;
-    }
-    await sleep(delay);
-    if (reasonToStopRetrying(now, isAborted, deadlineAt, delay, "after-sleep") !== undefined) {
-      break;
-    }
-    result = await issueOnce(
-      deps,
-      request,
-      clampedPerRequestTimeoutMs(deadlineAt, now, requestTimeoutCeilingMs(request)),
-    );
-  }
-  return result;
+  return retryFrom({ deps, request, deadlineAt, now, isAborted, sleep }, initial, 1);
 }
 
 // A body over its byte ceiling, or a body shape the method cannot carry, never reaches the port.

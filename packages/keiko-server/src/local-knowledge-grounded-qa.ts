@@ -144,6 +144,7 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
+import { requirementCoverage } from "./requirement-coverage-note.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
 export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
@@ -730,6 +731,7 @@ function buildLocalKnowledgeMessages(
 }
 
 interface AnswerGeneratorContext {
+  readonly chatId?: string | undefined;
   readonly userMessageId?: string | undefined;
   readonly deps: UiHandlerDeps;
   readonly correlationId: string | undefined;
@@ -792,6 +794,11 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   /** The references the last prompt carried; a window-fitted prompt may carry fewer. */
   public promptReferences(): readonly RetrievalReference[] {
     return this.sentReferences;
+  }
+
+  /** An optional citation repair needs a free synthesis attempt slot (#4179). */
+  public repairAvailable(): boolean {
+    return this.synthesis.remaining() > 0;
   }
 
   /** Counts of the last request this generator sent; undefined before the first call. */
@@ -870,6 +877,14 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       model: this.model,
       deps: this.context.deps,
       evidenceCount: this.sentReferences.length,
+      coverage: requirementCoverage({
+        deps: this.context.deps,
+        store: this.store,
+        chatId: this.context.chatId,
+        userMessageId: this.context.userMessageId,
+        correlationId: this.context.correlationId,
+        sentText: promptText(request.messages),
+      }),
       signal,
       budget: this.synthesis,
       accounting: limits.tokenAccounting,
@@ -885,6 +900,12 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       },
     });
   }
+}
+
+function promptText(messages: GatewayCallRequest["messages"]): string {
+  return messages
+    .map((message) => (typeof message.content === "string" ? message.content : ""))
+    .join("\n");
 }
 
 function queryTransformSignal(signal: AbortSignal | undefined): AbortSignal {
@@ -2687,7 +2708,7 @@ function createScopedAnswerGenerator(
   limits: ReturnType<typeof currentGroundingLimits>,
   context: AnswerGeneratorContext,
 ): StoreBackedAnswerGenerator {
-  const { deps, correlationId, userMessageId } = context;
+  const { deps, userMessageId } = context;
   return new StoreBackedAnswerGenerator(
     withMarkdownSkillAdmission(
       model,
@@ -2700,7 +2721,7 @@ function createScopedAnswerGenerator(
     createSqliteAuditSink(env.store),
     (value: string): string => redactText(deps, value),
     limits,
-    { deps, correlationId, userMessageId },
+    context,
   );
 }
 
@@ -2734,6 +2755,15 @@ function scopedCitationFaithfulness(
   };
 }
 
+function generatorContext(
+  chat: Chat,
+  input: AskInput,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): AnswerGeneratorContext {
+  return { deps, correlationId, chatId: chat.id, userMessageId: input.userMessage?.id };
+}
+
 async function runScopedGroundedAnswer(
   chat: Chat,
   input: AskInput,
@@ -2749,7 +2779,7 @@ async function runScopedGroundedAnswer(
   const model = resolveModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
   const limits = currentGroundingLimits(deps);
-  const generation = { deps, correlationId, userMessageId: input.userMessage?.id };
+  const generation = generatorContext(chat, input, deps, correlationId);
   const generator = createScopedAnswerGenerator(model, modelId, env, limits, generation);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(

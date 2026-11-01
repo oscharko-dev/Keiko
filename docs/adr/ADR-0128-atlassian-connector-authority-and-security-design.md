@@ -659,7 +659,11 @@ the page keeps its prefix bound and `nextStartAt` continuation.
 
 **Backlog drafts (#4178, 2026-10-31).** `jira.draft` maps to `create-issue` (high): it proposes
 up to 32 related issues — the Chat journal's existing per-turn write bound, which a draft never
-widens — that reference each other by a local `ref` and are approved once. The draft itself is
+widens — that reference each other by a local `ref` and are approved once. The bound counts
+records that may have reached Jira; a record settled as a local refusal before dispatch
+(`not-dispatched`, such as a reconciled existing item, or `rejected` before sending) leaves no
+remote effect and does not use it up, so a corrected retry of refused items in the same turn is
+not blocked by its own refusals. The draft itself is
 never dispatched. The server runs each selected item, in dependency order, as its own journaled
 `jira.create` under a child identity derived from the draft's invocation and action digest, so an
 item already sent is never sent again on replay. The draft's one approval is claimed once at the
@@ -845,7 +849,18 @@ through a deterministic read tool, `knowledge.requirements`, hosted by the exist
 tool catalog (the `jira-chat` profile) next to the Jira reads. The tool reuses the catalog's schema
 admission, call budget, cancellation, transcript reservation and continuation fitting; it adds no
 retrieval, citation or tool subsystem. Because the catalog is the Jira catalog, the tool is offered
-to a Chat that has a Jira binding; Knowledge-only, folder and hybrid Chats are unchanged.
+to a Chat that has a Jira binding; Knowledge-only, folder and hybrid Chats are unchanged. The
+model learns that it needs the tool from two facts, never from a keyword rule on the question. The
+grounded tool-turn guidance states that the supplied evidence is ranked excerpts and that a task
+covering every item of a document reads them all with an offered tool. When the Chat's Pods hold
+more detected requirements than the sent excerpts mention, one more sentence names both counts and
+the tool; the per-turn inventory read is the one the tool reuses. The live lab showed why: with the
+guidance alone, a model still listed 13 of 41 requirements from the excerpts; with the counts it
+paged the tool and listed 41 of 41. `chat.grounded-tool-round.completed` records both counts
+(`requirementUnitCount`, `excerptRequirementCount`). The guidance replaces redundant wording, so the
+mixed Jira/Data overflow pin keeps its budget. An answer built from tool results carries no excerpt
+markers; the optional citation repair runs only while a synthesis attempt slot is free and otherwise
+keeps the completed answer instead of failing the turn.
 
 - _Authority._ The tool is a read: the current Chat authority admits it, exactly as it admits a
   grounded answer over an attached Knowledge Pod. No Jira read grant or consent is involved, and

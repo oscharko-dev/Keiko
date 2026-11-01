@@ -1636,7 +1636,7 @@ unknown output consumption; genuine context-window refusals retain `GATEWAY_CONT
 Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
 fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
 the model retains context-overflow handling. Best-effort citation repair keeps the completed
-answer when its remaining input allowance cannot fund the repair. Early
+answer when its remaining input allowance or synthesis attempt slots cannot fund the repair. Early
 iterator close and aborted reads without terminal usage retain uncertain output exposure.
 An acquired caller reservation is also settled when local cap validation or HTTP preparation fails
 before fetch; that failure does not claim a provider dispatch or token consumption. Canonical token

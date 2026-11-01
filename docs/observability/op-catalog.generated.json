@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c9a767896793584b0aa340a514c53086c29db762f5f03d914cd6e9da6712a336",
+    "catalogDigest": "10cc2ae93f2bd3b5dbbbcf2ba93bbb8a2b43f0bba20b618be2df4d26f5918fd8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2269,6 +2269,16 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "requirementUnitCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "excerptRequirementCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -2278,7 +2288,7 @@
         "proofIds": ["chat.grounded-tool-round.completed.schedule"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:656",
-        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:687"]
+        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:690"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -59123,6 +59133,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "excerptRequirementCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "phase",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -59133,6 +59149,12 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "requirementUnitCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "toolCallCount",
@@ -109393,6 +109415,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "knowledge.requirement-coverage",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/requirement-coverage-note.ts:56",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "knowledge.requirement-trace",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/requirement-trace.ts:131",
@@ -109806,7 +109835,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2297",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2318",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111156,6 +111185,7 @@
     "jira.template.admission",
     "jump",
     "knowledge.log.sink-failed",
+    "knowledge.requirement-coverage",
     "knowledge.requirement-trace",
     "knowledge.requirement-trace.applied",
     "knowledge.requirements-read",

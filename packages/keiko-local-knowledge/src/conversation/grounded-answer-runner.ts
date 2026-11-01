@@ -192,6 +192,7 @@ async function generateGroundedAnswerText(
   if (deps.signal?.aborted === true || !shouldRepairMissingCitations(generated, sent)) {
     return generated;
   }
+  if (deps.answerGenerator.repairAvailable?.() === false) return generated;
   const repairedText = await deps.answerGenerator.generate({
     ...answerInput,
     citationRepair: true,
