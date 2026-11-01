@@ -1159,6 +1159,7 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     const held = capacity.reserve(windowsEnv);
     expect(held).toBeDefined();
 
+    // The command waits for a slot, unspawned and without HOME, and is refused once the bound ends.
     await expect(
       runCommand(
         {
@@ -1173,6 +1174,27 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
           home: home.provider,
           platform: "win32",
           windowsTerminationCapacity: capacity,
+          windowsSlotWaitMs: 5,
+        },
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toEqual([]);
+    expect(home.made()).toEqual([]);
+    // A capacity that cannot queue keeps the immediate pre-spawn decision.
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn, windowsEnv),
+          home: home.provider,
+          platform: "win32",
+          windowsTerminationCapacity: { reserve: capacity.reserve },
         },
       ),
     ).rejects.toBeInstanceOf(CommandDeniedError);
@@ -1197,6 +1219,107 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     );
     spawn.child.emit("close", 0, null);
     await expect(admitted).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it("starts a waiting Windows command only after a slot is released", async () => {
+    const spawn = recordingSpawn();
+    const home = recordingHome();
+    const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
+    const windowsEnv: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH ?? "",
+      SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows`,
+    };
+    const held = capacity.reserve(windowsEnv);
+    const waiting = runCommand(
+      {
+        command: "node",
+        args: ["-e", "ok"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      {
+        ...fakeDeps(spawn.fn, windowsEnv),
+        home: home.provider,
+        platform: "win32",
+        windowsTerminationCapacity: capacity,
+        windowsSlotWaitMs: 60_000,
+      },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn.calls()).toEqual([]);
+    expect(home.made()).toEqual([]);
+
+    held?.release();
+    await vi.waitFor(() => {
+      expect(spawn.calls()).toHaveLength(1);
+    });
+    spawn.child.emit("close", 0, null);
+    await expect(waiting).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it("admits waiters in arrival order and never lets reserve overtake them", async () => {
+    const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
+    const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:\Windows` };
+    const held = capacity.reserve(env);
+    const order: string[] = [];
+    const first = capacity.acquire?.(env, controller().signal, 60_000).then((r) => {
+      order.push("first");
+      return r;
+    });
+    const second = capacity.acquire?.(env, controller().signal, 60_000).then((r) => {
+      order.push("second");
+      return r;
+    });
+
+    held?.release();
+    expect(capacity.reserve(env)).toBeUndefined();
+    const admitted = await first;
+    expect(admitted).toBeDefined();
+    expect(order).toEqual(["first"]);
+
+    admitted?.release();
+    expect(await second).toBeDefined();
+    expect(order).toEqual(["first", "second"]);
+  });
+
+  it("drops an aborted waiter without admitting it and serves the next one", async () => {
+    const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
+    const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:\Windows` };
+    const held = capacity.reserve(env);
+    const abort = new AbortController();
+    const cancelled = capacity.acquire?.(env, abort.signal, 60_000);
+    const next = capacity.acquire?.(env, controller().signal, 60_000);
+
+    abort.abort();
+    expect(await cancelled).toBeUndefined();
+    held?.release();
+    expect(await next).toBeDefined();
+  });
+
+  it("denies a waiter whose freed slot the stall budget cannot fund", async () => {
+    const real = createWindowsTaskkillBudget();
+    let funded = true;
+    const budget: typeof real = {
+      ...real,
+      reserve: (slots) => (funded ? real.reserve(slots) : undefined),
+    };
+    const capacity = createWindowsTerminationCapacity(
+      1,
+      () => "succeeded",
+      undefined,
+      undefined,
+      budget,
+    );
+    const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:\Windows` };
+    const held = capacity.reserve(env);
+    const waiting = capacity.acquire?.(env, controller().signal, 60_000);
+
+    funded = false;
+    held?.release();
+    expect(await waiting).toBeUndefined();
+    funded = true;
+    expect(capacity.reserve(env)).toBeDefined();
   });
 
   it("refuses a Windows spawn when authoritative taskkill is unavailable", async () => {
