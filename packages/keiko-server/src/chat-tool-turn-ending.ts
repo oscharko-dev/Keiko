@@ -295,9 +295,10 @@ const CORRECTED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["tool-schema", "report-omission"],
+      values: ["tool-schema", "report-omission", "unsupported-issue-key"],
     },
     omittedFindingCount: { type: "integer", dataClass: "count", required: false },
+    unsupportedKeyCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -312,7 +313,9 @@ const CORRECTED = defineActivityLogOperation({
 /**
  * Recorded when a turn gets one further round carrying a correction instead of ending: a tool call
  * the gateway rejected again after its own schema correction (`tool-schema`), or an answer that left
- * out findings the turn's report pages list (`report-omission`, with their count; never the keys).
+ * out findings the turn's report pages list (`report-omission`, with their count; never the keys),
+ * or an answer that named issue keys no tool result showed (`unsupported-issue-key`, with their
+ * count; never the keys).
  */
 export function recordChatToolTurnCorrected(
   log: ServerLogSink,
@@ -320,8 +323,9 @@ export function recordChatToolTurnCorrected(
     readonly correlationId: string;
     readonly messageId: string;
     readonly settledExchangeCount: number;
-    readonly correctionKind: "tool-schema" | "report-omission";
+    readonly correctionKind: "tool-schema" | "report-omission" | "unsupported-issue-key";
     readonly omittedFindingCount?: number;
+    readonly unsupportedKeyCount?: number;
   },
 ): void {
   try {
@@ -336,6 +340,9 @@ export function recordChatToolTurnCorrected(
           ...(input.omittedFindingCount === undefined
             ? {}
             : { omittedFindingCount: input.omittedFindingCount }),
+          ...(input.unsupportedKeyCount === undefined
+            ? {}
+            : { unsupportedKeyCount: input.unsupportedKeyCount }),
           completeness: "complete",
           loss: "none",
         },

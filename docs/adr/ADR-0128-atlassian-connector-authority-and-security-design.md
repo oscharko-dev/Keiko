@@ -908,6 +908,16 @@ once per turn: a second incomplete answer stands, and a round that fails falls b
 answer rather than to the transcript; a human stop is not replaced. Figure sections are not checked.
 The round is recorded with `correctionKind` `report-omission` and `omittedFindingCount`, never the
 keys.
+The same single correction round covers an answer that names issue keys no tool result shows
+(2026-11-02, S01 of epic #4173: after three creates the template gate refused, Qwen answered that
+the epic was "successfully created" under a key Jira never issued). The check is deterministic.
+It considers only keys of the turn's Jira projects, which the turn learns from key fields of its
+Jira calls and results and from compact draft ranges, never from free text, so requirement ids and
+other `ABC-1` shapes are not judged. A key counts as shown when a tool call or result of the turn,
+an earlier message or a compact draft range (`SYN-1..SYN-1200`) contains it. The correction names
+the unshown keys in one fixed sentence. The rest is unchanged: once per turn, with the report
+omission checked first, and the same fallbacks. It is recorded as `unsupported-issue-key` with
+`unsupportedKeyCount`, never the keys.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically

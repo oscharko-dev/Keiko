@@ -46,14 +46,18 @@ import {
   syntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
-import { omittedReportFindingKeys } from "../chat-tool-report-coverage.js";
+import { omittedReportFindingKeys, unsupportedIssueKeys } from "../chat-tool-report-coverage.js";
 import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
 
 // Pass-through spies: the turn's completeness check and its log line run as in production unless a
 // test scripts the detection (the detection itself is proven in chat-tool-report-coverage.test.ts).
 vi.mock("../chat-tool-report-coverage.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat-tool-report-coverage.js")>();
-  return { ...actual, omittedReportFindingKeys: vi.fn(actual.omittedReportFindingKeys) };
+  return {
+    ...actual,
+    omittedReportFindingKeys: vi.fn(actual.omittedReportFindingKeys),
+    unsupportedIssueKeys: vi.fn(actual.unsupportedIssueKeys),
+  };
 });
 vi.mock("../chat-tool-turn-ending.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat-tool-turn-ending.js")>();
@@ -1018,6 +1022,60 @@ describe.each([false, true])(
       await approveReadForWrite(f);
       await pending;
       expect(f.calls).toHaveLength(2);
+      expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
+    });
+  },
+);
+
+// S01 of epic #4173: after three refused creates Qwen answered "successfully created … REQ-42". An
+// answer naming issue keys no tool result shows gets ONE further round naming them; the model
+// writes the final answer, and the keys never reach the Activity Log.
+describe.each([false, true])(
+  "an answer that names keys no tool result shows (stream=%s)",
+  (stream) => {
+    it("gets one round naming the unsupported keys, then the model's new answer stands", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      vi.mocked(unsupportedIssueKeys).mockReturnValueOnce(["SYN-42"]);
+      const f = fixture();
+      const ctx = sendContext(f, `unsupported-key-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+
+      expect(f.calls).toHaveLength(4);
+      const correction = (request: GatewayCallRequest | undefined): string =>
+        JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+      expect(correction(f.calls[2])).toContain("names 1 issue key(s)");
+      expect(correction(f.calls[2])).toContain("SYN-42");
+      expect(correction(f.calls[3])).not.toContain("issue key(s)");
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+        correctionKind: "unsupported-issue-key",
+        unsupportedKeyCount: 1,
+      });
+      expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toContain(
+        "SYN-42",
+      );
+    });
+
+    it("checks the real answer against the turn's own results and asks nothing more", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      const f = fixture();
+      const ctx = sendContext(f, `supported-keys-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+      expect(f.calls).toHaveLength(2);
+      expect(vi.mocked(unsupportedIssueKeys)).toHaveBeenCalled();
       expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
     });
   },

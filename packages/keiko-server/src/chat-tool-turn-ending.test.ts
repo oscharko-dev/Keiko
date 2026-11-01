@@ -280,4 +280,29 @@ describe("recordChatToolTurnCorrected", () => {
     expectActivityLogProof("chat.tool-turn.corrected.line", line);
     expect(line).not.toMatch(/message-private-id|RPT-/u);
   });
+
+  it("counts the issue keys an answer named without a tool result, never naming them", () => {
+    const logs = createBufferedServerLogSink();
+    recordChatToolTurnCorrected(logs, {
+      correlationId: "turn-unsupported-key-proof",
+      messageId: "message-private-id",
+      settledExchangeCount: 7,
+      correctionKind: "unsupported-issue-key",
+      unsupportedKeyCount: 1,
+    });
+    const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+    expect(event).toMatchObject({
+      correlationId: "turn-unsupported-key-proof",
+      level: "warn",
+      extra: {
+        correctionKind: "unsupported-issue-key",
+        unsupportedKeyCount: 1,
+        settledExchangeCount: 7,
+      },
+    });
+    expect(event?.extra).not.toHaveProperty("omittedFindingCount");
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-turn.corrected.line", line);
+    expect(line).not.toMatch(/message-private-id|REQ-|SYN-/u);
+  });
 });

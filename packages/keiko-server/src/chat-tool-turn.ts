@@ -37,7 +37,12 @@ import {
   recordChatToolTurnEnded,
 } from "./chat-tool-turn-ending.js";
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
-import { omittedReportFindingKeys, reportFindingCorrection } from "./chat-tool-report-coverage.js";
+import {
+  omittedReportFindingKeys,
+  reportFindingCorrection,
+  unsupportedIssueKeyCorrection,
+  unsupportedIssueKeys,
+} from "./chat-tool-report-coverage.js";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   findConfiguredCapability,
@@ -64,6 +69,10 @@ import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 const TOOL_TURN_RULES =
   "When the user requests an operation supported by an offered tool, invoke the matching tool to request Keiko's required read consent or action approval. Keiko presents the actual consent or approval control and waits for any required decision before the effect. Asking for permission in prose does not open or replace those controls. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, consent, approval and budget checks remain binding.";
 const TOOL_TURN_INSTRUCTION: GatewayMessage = { role: "system", content: TOOL_TURN_RULES };
+
+type AnswerCorrectionLog =
+  | { readonly correctionKind: "report-omission"; readonly omittedFindingCount: number }
+  | { readonly correctionKind: "unsupported-issue-key"; readonly unsupportedKeyCount: number };
 
 // Local estimates are not provider counts; the margin keeps the gateway's exact admission and its
 // one context-window retry as the authority.
@@ -647,7 +656,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
             completionTokens: this.completionTokens,
           },
         };
-        if (!this.correctOmittedFindings(answer)) return answer;
+        if (!this.correctAnswer(answer, request)) return answer;
         continue;
       }
       requireDispatch(
@@ -670,27 +679,47 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   }
 
   /**
-   * An answer that leaves out issues the turn's `jira.report` finding pages list gets ONE further
-   * round carrying the omitted keys (S11 of epic #4173). The model writes the answer; Keiko only
-   * checks it against its own report. The round stays inside the Authority Envelope; a second
-   * incomplete answer stands, and a failed round falls back to the first answer.
+   * An answer Keiko can check against its own tool results gets ONE further round carrying a fixed
+   * correction: an answer that leaves out issues the turn's `jira.report` finding pages list (S11 of
+   * epic #4173), or one that names issue keys of the turn's Jira projects no tool result and no
+   * message shows (S01: an answer claimed a key after three refused creates). The model writes the
+   * answer; Keiko only checks it. The round stays inside the Authority Envelope; a second answer
+   * stands, and a failed round falls back to the first answer.
    */
-  private correctOmittedFindings(answer: NormalizedResponse): boolean {
+  private correctAnswer(answer: NormalizedResponse, request: GatewayCallRequest): boolean {
     if (this.uncorrectedAnswer !== undefined) return false;
     if (this.counters.iterations >= this.limits.maxIterations) return false;
-    const omitted = omittedReportFindingKeys(this.settledExchanges, answer.content);
-    if (omitted.length === 0) return false;
+    const correction = this.answerCorrection(answer, request);
+    if (correction === undefined) return false;
     this.uncorrectedAnswer = answer;
     this.continuation.push({ role: "assistant", content: answer.content });
-    this.correction = { role: "system", content: reportFindingCorrection(omitted) };
+    this.correction = { role: "system", content: correction.content };
     recordChatToolTurnCorrected(processServerLogSink(), {
       correlationId: this.options.correlationId,
       messageId: this.options.message.id,
       settledExchangeCount: this.settledExchanges.length,
-      correctionKind: "report-omission",
-      omittedFindingCount: omitted.length,
+      ...correction.log,
     });
     return true;
+  }
+
+  private answerCorrection(
+    answer: NormalizedResponse,
+    request: GatewayCallRequest,
+  ): { readonly content: string; readonly log: AnswerCorrectionLog } | undefined {
+    const omitted = omittedReportFindingKeys(this.settledExchanges, answer.content);
+    if (omitted.length > 0)
+      return {
+        content: reportFindingCorrection(omitted),
+        log: { correctionKind: "report-omission", omittedFindingCount: omitted.length },
+      };
+    const context = [...request.messages, ...this.continuation].map((message) => message.content);
+    const unsupported = unsupportedIssueKeys(this.settledExchanges, context, answer.content);
+    if (unsupported.length === 0) return undefined;
+    return {
+      content: unsupportedIssueKeyCorrection(unsupported),
+      log: { correctionKind: "unsupported-issue-key", unsupportedKeyCount: unsupported.length },
+    };
   }
 
   /**
