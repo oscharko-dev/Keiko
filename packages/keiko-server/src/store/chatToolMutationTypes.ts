@@ -23,6 +23,11 @@ interface ChatToolMutationIdentity {
   readonly authorityDigest: string;
   readonly actionDigest: string;
   readonly correlationId: string;
+  /**
+   * Set on the items of one approved backlog draft (#4178): the digest of the approved draft
+   * action. The items are bounded by their batch, not by the per-turn bound on single writes.
+   */
+  readonly batchDigest?: string;
 }
 export interface JiraChatToolMutationIntent extends ChatToolMutationIdentity {
   readonly sourceKind?: "jira";

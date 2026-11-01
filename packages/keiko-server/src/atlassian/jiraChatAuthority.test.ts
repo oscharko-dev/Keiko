@@ -917,7 +917,7 @@ describe("ordinary Chat catalog read admission", () => {
       store.updateChat(chat.id, { toolMode: mode });
       registerCurrentAuthority();
       const f = await catalogFixture();
-      expect(f.binder.offer().toolRefs).toHaveLength(10);
+      expect(f.binder.offer().toolRefs).toHaveLength(11);
       expect(notifications).toBe(0);
       expect(await dispatch(f, "first")).toMatchObject({
         kind: "settled",
@@ -982,8 +982,8 @@ describe("ordinary Chat catalog read admission", () => {
     registerCurrentAuthority();
     const f = await catalogFixture(3, undefined, true);
 
-    // The ten Jira reads plus knowledge.requirements.
-    expect(f.binder.offer().toolRefs).toHaveLength(11);
+    // The eleven Jira reads plus knowledge.requirements.
+    expect(f.binder.offer().toolRefs).toHaveLength(12);
     const result = await dispatch(f, "knowledge", {}, "keiko.knowledge.requirements");
 
     // The Chat has no Knowledge Pod: the handler is entered and answers with a closed reason.

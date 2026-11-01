@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_DRAFT_ITEMS_MAX,
+  type JiraMutationOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   expectActivityLogProof,
@@ -12,7 +15,7 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import { createNodeUiStore, buildUiStoreOverDatabase, type UiStore } from "./index.js";
 import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 import { runMigrations } from "./schema.js";
-import { createChatToolMutationStore } from "./chatToolMutations.js";
+import { createChatToolMutationStore, readChatToolMutationTurn } from "./chatToolMutations.js";
 import { observedChatToolMutationOutcome } from "./chatToolMutationState.js";
 import type {
   JiraChatToolMutationIntent as ChatToolMutationIntent,
@@ -298,6 +301,60 @@ describe("durable mutation admission", () => {
       f.journal.settle(invocationId, "succeeded");
     }
     expect(f.journal.prepare(f.intent)).toEqual({ kind: "blocked", reason: "capacity" });
+  });
+  it("admits the items of one approved draft as their own bounded batch (#4178)", () => {
+    const f = fixture();
+    const batch = "d".repeat(64);
+    const item = (index: number): ChatToolMutationIntent => ({
+      ...f.intent,
+      invocationId: `item-${String(index)}`,
+      actionDigest: (index + 1).toString(16).padStart(64, "0"),
+      batchDigest: batch,
+    });
+    // Far past the 32 single writes a turn admits: the approved draft authorizes its own items.
+    for (let index = 0; index < 100; index++)
+      expect(f.journal.prepare(item(index)).kind).toBe("prepared");
+    expect(f.journal.find("item-0")).toMatchObject({ batchDigest: batch });
+    // Single writes of the turn are still counted on their own.
+    for (let index = 0; index < 32; index++)
+      expect(
+        f.journal.prepare({
+          ...f.intent,
+          invocationId: `single-${String(index)}`,
+          actionDigest: `f${index.toString(16)}`.padStart(64, "0"),
+        }).kind,
+      ).toBe("prepared");
+    expect(f.journal.prepare(f.intent)).toEqual({ kind: "blocked", reason: "capacity" });
+  });
+  it("refuses an item past the batch's resource bound and a replay under another batch", () => {
+    const f = fixture();
+    const batch = "e".repeat(64);
+    const item = (index: number): ChatToolMutationIntent => ({
+      ...f.intent,
+      invocationId: `item-${String(index)}`,
+      actionDigest: (index + 1).toString(16).padStart(64, "0"),
+      batchDigest: batch,
+    });
+    for (let index = 0; index < JIRA_DRAFT_ITEMS_MAX; index++) f.journal.prepare(item(index));
+    expect(f.journal.prepare(item(JIRA_DRAFT_ITEMS_MAX))).toEqual({
+      kind: "blocked",
+      reason: "capacity",
+    });
+    expect(() => f.journal.prepare({ ...item(0), batchDigest: "f".repeat(64) })).toThrow();
+    expect(() => f.journal.prepare({ ...item(0), batchDigest: "not-a-digest" })).toThrow();
+  });
+  it("keeps batch items out of the history projection's single-write window", () => {
+    const f = fixture();
+    const batch = "c".repeat(64);
+    for (let index = 0; index < 40; index++)
+      f.journal.prepare({
+        ...f.intent,
+        invocationId: `item-${String(index)}`,
+        actionDigest: (index + 1).toString(16).padStart(64, "0"),
+        batchDigest: batch,
+      });
+    const turn = readChatToolMutationTurn(f.db, f.intent.chatId, f.intent.turnRef);
+    expect(turn).toHaveLength(0);
   });
   it("bounds intent growth within a canonical turn", () => {
     const f = fixture();

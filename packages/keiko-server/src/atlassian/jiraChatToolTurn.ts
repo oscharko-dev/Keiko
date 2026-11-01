@@ -7,7 +7,8 @@ import {
   type JiraAttachmentPreview,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { parseJiraAttachmentArguments } from "@oscharko-dev/keiko-connectors";
+import { parseJiraAttachmentArguments, parseJiraDraft } from "@oscharko-dev/keiko-connectors";
+import { chatDraftArguments } from "./jiraChatDraftArguments.js";
 import {
   jiraChatAttachmentLimit,
   previewJiraChatAttachment,
@@ -53,6 +54,8 @@ type TurnDeps = JiraChatAuthorityDeps &
     | "atlassianActionApprovalRegistry"
     | "diagnostics"
     | "atlassianConnectorCredentials"
+    | "jiraDraftStore"
+    | "activityLog"
   >;
 type Accepted = Extract<ReturnType<typeof mintAcceptedJiraChatAuthority>, { ok: true }>;
 export interface JiraChatTurnOptions {
@@ -123,6 +126,18 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       : undefined;
   }
 
+  /** Refs of the draft the human reviews: the staged draft the call names, or its own items. */
+  protected override draftItemRefs(action: {
+    readonly actionId: string;
+    readonly argumentsDigest: string;
+  }): readonly string[] | undefined {
+    const exchange = this.writeExchange(action.actionId);
+    if (exchange === undefined || !this.reviewableWrite(action)) return undefined;
+    const { deps, message } = this.jiraOptions;
+    const draft = chatDraftArguments(deps.jiraDraftStore, message.chatId, exchange.call.arguments);
+    return draft.ok ? parseJiraDraft(draft.arguments)?.items.map((item) => item.ref) : undefined;
+  }
+
   /** The file the model proposes to attach, read now for the human's review (#4176). */
   private async reviewedAttachment(action: {
     readonly actionId: string;
@@ -183,11 +198,10 @@ export function observeJiraChatMutation(
   );
   if (operation === "jira.draft") {
     // A draft is never dispatched itself; its items' journal records are its outcome (#4178).
-    const observed = observedJiraDraftOutcome(
-      deps.store.chatToolMutations,
-      expected,
-      call.arguments,
-    );
+    const draft = chatDraftArguments(deps.jiraDraftStore, message.chatId, call.arguments);
+    const observed = draft.ok
+      ? observedJiraDraftOutcome(deps.store.chatToolMutations, expected, draft.arguments)
+      : undefined;
     return observed ?? (result.effectStarted ? undefined : "not-dispatched");
   }
   return jiraChatMutationOutcome({

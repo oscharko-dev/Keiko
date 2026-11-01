@@ -326,6 +326,18 @@ const D4_TABLE: readonly D4Row[] = [
     },
   },
   {
+    action: "jira.draft-stage",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
     action: "assign-issue",
     provider: "jira",
     actionClass: "connector-write",
@@ -1345,6 +1357,7 @@ it.each([
   "jira.transitions",
   "jira.assignable-users",
   "jira.report",
+  "jira.draft-stage",
   "assign-issue",
 ])("recognizes governed Jira capability %s in the shared policy vocabulary", (action) => {
   expect(isAtlassianConnectorActionType(action)).toBe(true);

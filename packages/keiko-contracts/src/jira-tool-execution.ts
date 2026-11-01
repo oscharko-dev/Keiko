@@ -17,9 +17,25 @@ export type JiraMutationOperation = (typeof JIRA_MUTATION_OPERATIONS)[number];
 /**
  * A backlog draft (#4178): related issues proposed together, approved once, created in dependency
  * order. Each item runs as its own journaled `jira.create`; the draft itself is never dispatched.
+ * A large draft is assembled in pages in a server-held draft session (`jira.draft-stage`) and
+ * approved once as a whole.
  */
-// Every item is one journaled write, and the Chat journal admits at most 32 writes per turn.
-export const JIRA_DRAFT_ITEMS_MAX = 32;
+// A resource bound, not a product limit: one approved draft authorizes exactly its own items as one
+// bounded batch, so the per-turn bound on single writes does not cut it. Above it the draft fails
+// closed (it is never truncated). It is sized for a few hundred items whose sequential creates
+// still finish within one tool call.
+export const JIRA_DRAFT_ITEMS_MAX = 500;
+/** The retained size of one staged draft's items, measured as canonical JSON bytes. */
+export const JIRA_DRAFT_STAGE_BYTES_MAX = 2 * 1024 * 1024;
+/** Items one `jira.draft-stage` call appends; larger drafts arrive in several pages. */
+export const JIRA_DRAFT_PAGE_ITEMS_MAX = 50;
+/** A staged draft is addressed by an opaque server-minted id and committed to by its digest. */
+export const JIRA_DRAFT_ID_PATTERN =
+  "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+export const JIRA_DRAFT_DIGEST_PATTERN = "^[0-9a-f]{64}$";
+/** Why a `jira.draft` call that names a staged draft is refused before anyone is asked. */
+export const JIRA_DRAFT_REFUSALS = ["draft-not-found", "draft-changed", "draft-invalid"] as const;
+export type JiraDraftRefusalReason = (typeof JIRA_DRAFT_REFUSALS)[number];
 /** A model-chosen local reference that relations between draft items use before keys exist. */
 export const JIRA_DRAFT_REF_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,31}$";
 const DRAFT_REF = new RegExp(JIRA_DRAFT_REF_PATTERN, "u");

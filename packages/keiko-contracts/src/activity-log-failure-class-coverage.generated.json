@@ -1535,7 +1535,7 @@
       "lifecycleTransitions": ["end", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["atlassian.jira-report", "jira.attachment.source"],
+        "state": ["atlassian.jira-draft", "atlassian.jira-report", "jira.attachment.source"],
         "end": ["atlassian.action.outcome"],
         "failure": [],
         "loss": []
@@ -1543,6 +1543,10 @@
       "causalEdges": [
         {
           "op": "atlassian.action.outcome",
+          "mode": "correlation"
+        },
+        {
+          "op": "atlassian.jira-draft",
           "mode": "correlation"
         },
         {
@@ -1557,6 +1561,7 @@
       "lossSignals": [],
       "resourceSignals": [
         "atlassian.action.outcome",
+        "atlassian.jira-draft",
         "atlassian.jira-report",
         "jira.attachment.source"
       ],
@@ -1619,6 +1624,90 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.action.outcome.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "atlassian.jira-draft",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "byteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "itemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "newDraft",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "pageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "pageItemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "unresolvedRefCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "violationCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["atlassian.jira-draft.line"],
           "replayReferences": [],
           "missingObligations": []
         },

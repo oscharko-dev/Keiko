@@ -3,7 +3,11 @@ import type {
   ChatToolWriteApprovalState,
   ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
-import { parseJiraDraft } from "@oscharko-dev/keiko-connectors";
+import { parseJiraDraft, parseJiraDraftReference } from "@oscharko-dev/keiko-connectors";
+import {
+  isJiraDraftRef,
+  JIRA_DRAFT_ITEMS_MAX,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 
 const APPROVAL_STATES: Readonly<
@@ -32,6 +36,15 @@ function exclusionsOf(view: ChatToolWriteApprovalView): readonly string[] {
 
 /** The deselection is a unique, non-empty subset of the refs of the draft that was reviewed. */
 function validDeselection(excluded: readonly string[], call: ChatToolExchange["call"]): boolean {
+  // A call that names a staged draft carries no items here: the registry compared the deselection
+  // with the refs of the draft it digest-bound at the request, so only its form is checked.
+  if (parseJiraDraftReference(call.arguments) !== undefined)
+    return (
+      excluded.length > 0 &&
+      excluded.length <= JIRA_DRAFT_ITEMS_MAX &&
+      new Set(excluded).size === excluded.length &&
+      excluded.every(isJiraDraftRef)
+    );
   const draft = parseJiraDraft(call.arguments);
   if (draft === undefined || excluded.length === 0) return false;
   const refs = new Set(draft.items.map((item) => item.ref));

@@ -595,12 +595,13 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 | 15–17 | `jira.search`, `jira.issue`, `jira.comments` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 18–19 | `jira.transitions`, `jira.assignable-users` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 20 | `jira.report` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
-| 21 | `assign-issue` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | review-required | allowed |
+| 21 | `jira.draft-stage` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 22 | `assign-issue` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | review-required | allowed |
 
-The shared action vocabulary and registered outcome event include all twenty-one rows. The managed
+The shared action vocabulary and registered outcome event include all twenty-two rows. The managed
 tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → `update-issue-fields`,
 `jira.assign` → `assign-issue`, `jira.comment` → `add-issue-comment`, and `jira.transition` →
-`transition-issue`, and `jira.attach` → `update-issue-fields`. The ten read tools retain their
+`transition-issue`, and `jira.attach` → `update-issue-fields`. The eleven read tools retain their
 names. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
 
@@ -676,28 +677,64 @@ id the instance does not describe reads as `unavailable`, an empty value as `emp
 kind Keiko does not project as `unsupported`. Each result's field values are bounded to 16 KiB and
 the page keeps its prefix bound and `nextStartAt` continuation.
 
-**Backlog drafts (#4178, 2026-10-31).** `jira.draft` maps to `create-issue` (high): it proposes
-up to 32 related issues — the Chat journal's existing per-turn write bound, which a draft never
-widens — that reference each other by a local `ref` and are approved once. The bound counts
-records that may have reached Jira; a record settled as a local refusal before dispatch
-(`not-dispatched`, such as a reconciled existing item, or `rejected` before sending) leaves no
-remote effect and does not use it up, so a corrected retry of refused items in the same turn is
-not blocked by its own refusals. The draft itself is
-never dispatched. The server runs each selected item, in dependency order, as its own journaled
-`jira.create` under a child identity derived from the draft's invocation and action digest, so an
-item already sent is never sent again on replay. The draft's one approval is claimed once at the
-first item's dispatch and covers its remaining items. The approving human may deselect items; the
-deselection is bound into the approval proof and extends to every item that depends on a deselected
-one. The stored approval view carries it as `excludedItemRefs`, and the transcript store admits
-exactly one change besides the state: the pending-to-approved transition of a `jira.draft` may add
-a non-empty, unique subset of the reviewed draft's own item refs. Every other difference still
-conflicts: another operation, a deselection added at any other transition or on a first save, and
-a deselection that is dropped or changed after it was recorded. The approval registry enforces the
-same subset rule before any state changes, against the draft's item refs recorded privately on the
-pending entry, so a decision naming unknown or repeated refs is refused (409, logged as an invalid
-write-approval) and the registry and transcript stay pending together. The action digest and subject
+**Backlog drafts (#4178, 2026-10-31; paged drafts 2026-11-01).** `jira.draft` maps to
+`create-issue` (high): it proposes related issues that reference each other by a local `ref` and
+are approved once, whatever their number. A draft is bounded by a resource ceiling, not a product
+limit: at most 500 items (`JIRA_DRAFT_ITEMS_MAX`) and 2 MiB of canonical item JSON
+(`JIRA_DRAFT_STAGE_BYTES_MAX`); above either the draft fails closed — it is refused whole, never
+truncated, with a body-free `atlassian.jira-draft` line. The earlier ceiling of 32 items was the
+journal's per-turn bound on single writes and is superseded (below).
+
+*Paged drafts.* One model call cannot carry hundreds of items, and the model's output is bounded,
+so a large draft is written in pages through `jira.draft-stage`, a read-class tool (row 21: it
+changes nothing in Jira, so it needs the Chat's read grant, not a write approval). Each call
+appends at most 50 validated items to a server-held draft session — in memory only, bound to the
+Chat that started it, expiring when idle, and bounded per Chat and in total, exactly like a
+`jira.report` session — and returns its `draftId`, the `draftDigest` of the exact item list, the
+item count and the `unresolvedRefs` still to be written. Every appended item first passes the
+customer-template dry run of a create (#4177); a violating page is refused whole with the violations
+and nothing of it is staged. When the draft is complete the model calls `jira.draft` once with only
+`{draftId, draftDigest}` (a call may instead carry up to 500 `items` itself). The call's arguments
+are those two members, so the action digest the approval is bound to commits to the digest of the
+whole item list: a draft extended after its digest was read resolves to nothing (`draft-changed`),
+an unknown or foreign draft to `draft-not-found`, and one that cannot run (an unknown relation, a
+cycle) to `draft-invalid` — each a structured refusal the model corrects, returned before a human
+is asked. The approval card reads the staged items through
+`GET /api/atlassian-connectors/jira-drafts/:draftId?chatId=…&digest=…`, served only to the owning
+Chat and only for the digest the call carries, so the person reviews exactly the items the
+approval commits to. The card lays the items out as a tree of named facts, never as JSON, and
+while the items load, or when the draft is no longer available, its approve button stays disabled
+(declining remains possible) and the card says why; a failed read is a body-free client diagnostic.
+
+*One approval, one batch.* The draft itself is never dispatched. The server runs each selected
+item, in dependency order, as its own journaled `jira.create` under a child identity derived from
+the draft's invocation and action digest, so an item already sent is never sent again on replay.
+The draft's one approval is claimed once at the first item's dispatch and covers its remaining
+items; Full access admits the draft under its envelope exactly as it admits a single create. The
+journal's bound of 32 single writes per turn counts records that may have reached Jira and does not
+count the items of an approved draft: each child record carries the digest of the approved draft
+action as `batch_digest` (schema 58), and a batch is bounded by its own 500-item ceiling. A record
+settled as a local refusal before dispatch (`not-dispatched`, such as a reconciled existing item, or
+`rejected` before sending) uses neither bound up. Barriers are unchanged: an `unknown` or
+`succeeded-unconfirmed` record or an in-flight write blocks every further write of the turn, batch
+or not, so an uncertain item still stops the draft (#2953).
+
+*Deselection.* The approving human may deselect items; the deselection is bound into the approval
+proof and extends to every item that depends on a deselected one. The stored approval view carries
+it as `excludedItemRefs` (up to the draft ceiling), and the transcript store admits exactly one
+change besides the state: the pending-to-approved transition of a `jira.draft` may add a non-empty,
+unique subset of the reviewed draft's own item refs. Every other difference still conflicts:
+another operation, a deselection added at any other transition or on a first save, and a
+deselection that is dropped or changed after it was recorded. The approval registry enforces the
+subset rule before any state changes, against the draft's item refs recorded privately on the
+pending entry (resolved from the staged draft the call names), so a decision naming unknown or
+repeated refs is refused (409, logged as an invalid write-approval) and the registry and transcript
+stay pending together. A transcript whose call names a staged draft carries no items, so its
+store-level check is the form of the deselection (unique, valid refs within the ceiling); the
+registry's subset rule is what binds it to the reviewed items. The action digest and subject
 identity checks are unchanged. Draft results report one row per item, so the tool's
-`maxResultCount` is the item ceiling (32), not 1. Before creating an item the connector searches by a deterministic identity label
+`maxResultCount` is the item ceiling. Before creating an item the connector searches by a
+deterministic identity label
 (`keiko-draft-<20 hex>` from project, issue type, normalized summary and the item's relation
 scope — its parent field and target, and its links, each resolved to the existing issue's key or to
 the target draft item's own identity, never to the draft-local `ref`; items identical in all of that
@@ -721,6 +758,13 @@ reports the truthful `not-dispatched` outcome. An item whose parent or linked it
 skipped; an item whose outcome is uncertain stops the draft, because the journal admits no further
 write in that turn, while an item Jira refused with its own error document is `failed` with the
 field errors and the independent items go on. Coding runs do not offer `jira.draft`.
+
+*Evidence.* `atlassian.jira-draft` records, body-free, each staged page (`phase=staged`: page item
+count, item count, page count, canonical bytes, unresolved relation count), each submission to
+approval (`phase=submitted`) and each refusal with its closed reason (`invalid-input`,
+`draft-not-found`, `connection-changed`, `duplicate-ref`, `too-many-items`, `too-large`,
+`template-violation`, `draft-changed`, `draft-invalid`) at warn. It never carries an item, a
+summary, a ref, a key or the draft id.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
@@ -781,8 +825,9 @@ the approval.
   added. (2) In Ask-for-approval and Supervised modes Chat additionally runs the same pipeline as a
   dry run (`checkJiraManagedMutationTemplates`) after read consent and before the write approval
   is created, so a human is never asked to approve a draft that would be refused. A failed dry run
-  is recorded and falls through to the gate. The backlog draft has no dry run; its items are
-  refused individually at the gate and report their violations per item.
+  is recorded and falls through to the gate. The backlog draft is dry-run per item when each item
+  is staged (`jira.draft-stage`); an inline draft has no dry run, and every item is also refused
+  individually at the gate and reports its violations per item.
 - **Settings surface.** `GET /api/skills/jira-templates` lists templates; `POST
   /api/skills/jira-templates/validate` validates a template against the live instance through a
   Pod the caller owns (unknown project, issue type, field, ambiguous field name, link type or
@@ -954,7 +999,7 @@ keeps the completed answer instead of failing the turn.
   them only where the create screen offers the fields; on edit it reads the issue, replaces
   `keiko-rev-*` and rewrites the footer in place. What the instance dropped is returned in the tool
   result as `trace {labelsApplied, footerApplied, droppedLabels}` and counted on the log. The item
-  identity, the journal and the approval are unaffected; `jira.draft` stays bounded to 32 items.
+  identity, the journal and the approval are unaffected; `jira.draft` keeps its resource ceiling (500 items).
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
   template that governs `description` or `labels` sees the final values, not the model's draft; the
   pre-approval dry run of a create or edit judges the values as the model wrote them.

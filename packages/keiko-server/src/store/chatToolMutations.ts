@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_DRAFT_ITEMS_MAX,
+  type JiraMutationOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UiStoreError } from "./errors.js";
@@ -29,7 +32,8 @@ const COLUMNS = `invocation_id AS invocationId, chat_id AS chatId, user_message_
   tool_name AS toolName, protocol_outcome AS protocolOutcome,
   consumer_kind AS consumerKind, coding_run_id AS codingRunId, native_session_id AS nativeSessionId,
   native_message_id AS nativeMessageId, native_call_id AS nativeCallId, native_arguments_digest AS nativeArgumentsDigest,
-  native_mcp_action_digest AS nativeMcpActionDigest`;
+  native_mcp_action_digest AS nativeMcpActionDigest, batch_digest AS batchDigest`;
+// Single writes of one turn. The items of an approved draft are bounded by their own batch instead.
 const MAX_MUTATIONS_PER_TURN = 32;
 function consumerColumns(intent: ChatToolMutationIntent): readonly (string | null)[] {
   const consumer = intent.consumer;
@@ -76,10 +80,12 @@ function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
     nativeCallId,
     nativeArgumentsDigest,
     nativeMcpActionDigest,
+    batchDigest,
     ...fields
   } = value as Record<string, unknown>;
   const row = {
     ...fields,
+    ...(batchDigest === null ? {} : { batchDigest }),
     ...(consumerKind === "coding"
       ? {
           consumer: {
@@ -113,7 +119,7 @@ export function readChatToolMutationTurn(
 ): readonly ChatToolMutationRecord[] {
   return db
     .prepare(
-      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND consumer_kind = 'chat' LIMIT 33`,
+      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND consumer_kind = 'chat' AND batch_digest IS NULL LIMIT 33`,
     )
     .all(chatId, turnRef)
     .map((row) => rowRecord(row))
@@ -212,8 +218,9 @@ function blockedTurn(
   if (rows.some((row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed"))
     return { kind: "blocked", reason: "unknown-effect" };
   if (hasInflightBarrier(rows, intent)) return { kind: "blocked", reason: "in-flight" };
-  if (rows.filter((row) => heldWrite(row)).length >= MAX_MUTATIONS_PER_TURN)
-    return { kind: "blocked", reason: "capacity" };
+  const held = rows.filter((row) => heldWrite(row) && row.batchDigest === intent.batchDigest);
+  const limit = intent.batchDigest === undefined ? MAX_MUTATIONS_PER_TURN : JIRA_DRAFT_ITEMS_MAX;
+  if (held.length >= limit) return { kind: "blocked", reason: "capacity" };
   return undefined;
 }
 function retryableAttachment(
@@ -320,7 +327,7 @@ class MutationStore implements ChatToolMutationStore {
   private insertPrepared(intent: ChatToolMutationIntent, createdAt: number): void {
     this.db
       .prepare(
-        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name, consumer_kind, coding_run_id, native_session_id, native_message_id, native_call_id, native_arguments_digest, native_mcp_action_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name, consumer_kind, coding_run_id, native_session_id, native_message_id, native_call_id, native_arguments_digest, native_mcp_action_digest, batch_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         intent.invocationId,
@@ -342,6 +349,7 @@ class MutationStore implements ChatToolMutationStore {
         intent.sourceKind === "configured-mcp" ? intent.serverName : null,
         intent.sourceKind === "configured-mcp" ? intent.toolName : null,
         ...consumerColumns(intent),
+        intent.batchDigest ?? null,
       );
   }
   beginDispatch(invocationId: string, guard: () => boolean): boolean {

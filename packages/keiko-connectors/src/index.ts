@@ -265,6 +265,19 @@ export {
 } from "./jira-issue-template-instance.js";
 export { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
 export { createJiraReportStore, type JiraReportStore } from "./jira-report-store.js";
+export {
+  createJiraDraftStore,
+  type JiraDraftStore,
+  type StagedJiraDraft,
+} from "./jira-draft-store.js";
+export {
+  parseJiraDraftReference,
+  resolveJiraDraftArguments,
+  type JiraDraftActivity,
+  type JiraDraftRefusal,
+  type JiraDraftResolution,
+  type JiraDraftToolDeps,
+} from "./jira-draft-stage-tool.js";
 export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
 export type { JiraReportActivity, JiraReportToolDeps } from "./jira-report-tool.js";
 export type {

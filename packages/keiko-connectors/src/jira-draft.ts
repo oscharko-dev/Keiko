@@ -188,6 +188,17 @@ function parseItem(value: unknown): ParsedJiraDraftItem | undefined {
   };
 }
 
+/** Whether one value is a well-formed draft item; relations to other items are judged later. */
+export function isJiraDraftItem(value: unknown): boolean {
+  return parseItem(value) !== undefined;
+}
+/** Refs that staged items name as parent or link target but no staged item carries yet. */
+export function unresolvedJiraDraftRefs(items: readonly unknown[]): readonly string[] {
+  const parsed = items.map(parseItem).filter((item) => item !== undefined);
+  const known = new Set(parsed.map((item) => item.ref));
+  const wanted = parsed.flatMap((item) => jiraDraftDependencies(item));
+  return [...new Set(wanted.filter((ref) => !known.has(ref)))].sort(compareByCodeUnit);
+}
 /** The draft items this item cannot be created before. */
 export function jiraDraftDependencies(
   item: Pick<ParsedJiraDraftItem, "parent" | "links">,

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "cf41de9f39f2ec510da5ba82c584ea0c61c5d819e13ea36c3157698aae13a3bb" as const;
+  "0c8d3f3af652c3c2341b04fb9afea1fd084eeaa5766700d697ea7c7844eebd60" as const;
 export const ACTIVITY_LOG_FAILURE_SURFACES = [
   "ui",
   "bff",

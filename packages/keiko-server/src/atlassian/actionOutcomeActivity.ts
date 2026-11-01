@@ -53,6 +53,7 @@ const ACTION_OUTCOME = defineActivityLogOperation({
         "jira.transitions",
         "jira.assignable-users",
         "jira.report",
+        "jira.draft-stage",
         "assign-issue",
       ],
     },

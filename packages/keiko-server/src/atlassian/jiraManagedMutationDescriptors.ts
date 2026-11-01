@@ -2,9 +2,13 @@ import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_ATTACHMENT_NAME_MAX_BYTES,
   JIRA_ATTACHMENT_SOURCE_KINDS,
+  JIRA_DRAFT_DIGEST_PATTERN,
+  JIRA_DRAFT_ID_PATTERN,
   JIRA_DRAFT_ITEMS_MAX,
   JIRA_DRAFT_ITEM_STATES,
+  JIRA_DRAFT_PAGE_ITEMS_MAX,
   JIRA_DRAFT_REF_PATTERN,
+  JIRA_DRAFT_REFUSALS,
   JIRA_FIELD_ID_PATTERN,
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_DETAIL_LIMITS,
@@ -107,7 +111,7 @@ const DRAFT_LINKS = {
     ["type", "direction"],
   ),
 };
-const DRAFT_ITEM = object(
+export const JIRA_DRAFT_ITEM_SCHEMA = object(
   {
     ref: DRAFT_REF,
     projectId: NUMERIC_ID,
@@ -177,7 +181,7 @@ const LINK_RESULT = {
 // Up to 20 missing links, each with a link type name of up to 255 characters, beside the usual result.
 const LINKED_RESULT_BOUNDS = { maxResultBytes: 16384, maxDurationMs: 90000, maxResultCount: 1 };
 
-const VIOLATIONS = {
+export const JIRA_VIOLATIONS_SCHEMA = {
   type: "array",
   maxItems: JIRA_TEMPLATE_VIOLATIONS_MAX,
   items: object(
@@ -210,7 +214,7 @@ const DRAFT_RESULT_SCHEMA = object(
           fieldErrors: FIELD_ERRORS,
           messages: MESSAGES,
           ...LINK_RESULT,
-          violations: VIOLATIONS,
+          violations: JIRA_VIOLATIONS_SCHEMA,
           trace: TRACE_RESULT,
         },
         ["ref", "state"],
@@ -218,6 +222,7 @@ const DRAFT_RESULT_SCHEMA = object(
     },
     requirementRefusal: REQUIREMENT_REFUSAL,
     requirementProblems: REQUIREMENT_PROBLEMS,
+    draftRefusal: { type: "string", enum: JIRA_DRAFT_REFUSALS },
     createdCount: DRAFT_COUNT,
     existingCount: DRAFT_COUNT,
     failedCount: DRAFT_COUNT,
@@ -243,7 +248,7 @@ const RESULT_FIELDS = {
   fieldErrors: FIELD_ERRORS,
   messages: MESSAGES,
   ...LINK_RESULT,
-  violations: VIOLATIONS,
+  violations: JIRA_VIOLATIONS_SCHEMA,
 };
 const RESULT_SCHEMA = object(RESULT_FIELDS, ["outcome"]);
 /** Only a create or an edit can carry requirement references, so only they declare their result. */
@@ -347,21 +352,31 @@ const DEFINITIONS: Readonly<
   },
   "jira.draft": {
     description:
-      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped, and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created.",
+      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped, and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created. A draft of up to " +
+      String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
+      " items can be sent here as items. A larger draft (up to " +
+      String(JIRA_DRAFT_ITEMS_MAX) +
+      " items) is written first, in pages, with jira.draft-stage; then call jira.draft once with only the draftId and the draftDigest of the last staging result, so the whole draft is approved once. Never split one backlog into several approvals.",
     input: object(
       {
         items: {
           type: "array",
           minItems: 1,
           maxItems: JIRA_DRAFT_ITEMS_MAX,
-          items: DRAFT_ITEM,
+          items: JIRA_DRAFT_ITEM_SCHEMA,
         },
+        draftId: { ...text(36), pattern: JIRA_DRAFT_ID_PATTERN },
+        draftDigest: { ...text(64), pattern: JIRA_DRAFT_DIGEST_PATTERN },
       },
-      ["items"],
+      [],
     ),
     result: DRAFT_RESULT_SCHEMA,
     // One result per item: the draft's own item bound, not a single issue (#4178).
-    bounds: { maxResultBytes: 131072, maxDurationMs: 900000, maxResultCount: JIRA_DRAFT_ITEMS_MAX },
+    bounds: {
+      maxResultBytes: 262144,
+      maxDurationMs: 3000000,
+      maxResultCount: JIRA_DRAFT_ITEMS_MAX,
+    },
   },
 };
 /** Only a write that sets issue fields can be refused by an issue template. */

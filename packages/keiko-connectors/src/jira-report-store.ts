@@ -4,6 +4,7 @@ import {
   type JiraReportRequest,
   type JiraReportSession,
 } from "./jira-report-session.js";
+import { trimOwnedBytes } from "./jira-store-bounds.js";
 
 /**
  * Reports live in memory only: a report in progress resumes in the next tool call, and a finished
@@ -55,23 +56,8 @@ function trimOwner(sessions: Sessions, owner: string, limit: number): void {
     held -= 1;
   }
 }
-function largestOwner(sessions: Sessions): string | undefined {
-  const held = new Map<string, number>();
-  for (const session of sessions.values())
-    held.set(session.owner, (held.get(session.owner) ?? 0) + session.bytes);
-  return [...held.entries()].sort(([, left], [, right]) => right - left)[0]?.[0];
-}
 function trimBytes(sessions: Sessions, limit: number): void {
-  let total = 0;
-  for (const session of sessions.values()) total += session.bytes;
-  while (total > limit) {
-    // The owner that holds the most pays first, whoever asked last.
-    const owner = largestOwner(sessions);
-    const victim = owner === undefined ? undefined : evictable(sessions, owner)[0];
-    if (victim === undefined) return;
-    sessions.delete(victim.id);
-    total -= victim.bytes;
-  }
+  trimOwnedBytes(sessions, limit, (owner) => evictable(sessions, owner)[0]);
 }
 
 export function createJiraReportStore(options: JiraReportStoreOptions = {}): JiraReportStore {

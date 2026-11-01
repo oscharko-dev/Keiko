@@ -11,7 +11,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 57;
+export const SCHEMA_VERSION = 58;
 
 interface Migration {
   readonly version: number;
@@ -1949,6 +1949,14 @@ export const MIGRATIONS: readonly Migration[] = [
       WHERE phase = 'dispatched' OR (phase = 'acknowledged' AND consumer_kind = 'chat');
     CREATE INDEX chat_tool_mutations_native_dispatch ON chat_tool_mutations(coding_run_id, native_session_id, server_name, tool_name, native_arguments_digest)
       WHERE consumer_kind = 'coding' AND phase = 'prepared';`,
+  },
+  {
+    version: 58,
+    // An approved backlog draft authorizes exactly its own items as one bounded batch (#4178): the
+    // items of one draft share the digest of the approved draft action, and the per-turn bound on
+    // single writes does not count them.
+    sql: `ALTER TABLE chat_tool_mutations ADD COLUMN batch_digest TEXT
+      CHECK (batch_digest IS NULL OR (length(batch_digest) = 64 AND batch_digest NOT GLOB '*[^0-9a-f]*'));`,
   },
 ];
 

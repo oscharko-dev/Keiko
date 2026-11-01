@@ -418,6 +418,69 @@ describe("executeJiraChatDraft (#4178)", () => {
     expect(jira.posts()).toHaveLength(4);
   });
 
+  it("creates all 70 items of one approved draft although a turn admits only 32 single writes", async () => {
+    // Epic #4173 AC "A draft of any size is approved once": the journal's bound on single writes
+    // per turn (32) must not cut an approved draft; the draft is its own bounded batch.
+    const jira = syntheticJira();
+    const epics = Array.from({ length: 7 }, (_, index) => item(`epic${String(index)}`));
+    const stories = Array.from({ length: 63 }, (_, index) =>
+      item(`story${String(index)}`, {
+        parent: { fieldId: "parent", ref: `epic${String(index % 7)}` },
+      }),
+    );
+    const args = { items: [...epics, ...stories] } as unknown as CatalogJsonObject;
+    const input = execution(jira, args);
+    const result = await executeJiraChatDraft(input);
+    expect(result.isError).toBeUndefined();
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      createdCount: 70,
+      failedCount: 0,
+      skippedCount: 0,
+    });
+    expect(jira.issues).toHaveLength(70);
+    expect(jira.posts().length).toBeGreaterThanOrEqual(70);
+    expect(observedJiraDraftOutcome(input.journal, input.intent, args)).toBe("succeeded");
+  });
+
+  it("creates no new issue when an executed 70-item draft is run again", async () => {
+    // Epic #4173 AC "Re-running an executed draft creates zero new issues": a fresh journal replays
+    // nothing, so only the items' deterministic identities can tell Jira already holds them.
+    const jira = syntheticJira();
+    const epics = Array.from({ length: 7 }, (_, index) => item(`epic${String(index)}`));
+    const stories = Array.from({ length: 63 }, (_, index) =>
+      item(`story${String(index)}`, {
+        parent: { fieldId: "parent", ref: `epic${String(index % 7)}` },
+      }),
+    );
+    const args = { items: [...epics, ...stories] } as unknown as CatalogJsonObject;
+    await executeJiraChatDraft(execution(jira, args));
+    expect(jira.issues).toHaveLength(70);
+    const postsAfterFirstRun = jira.posts().length;
+    const rerun = await executeJiraChatDraft(execution(jira, args));
+    expect(rerun.isError).toBeUndefined();
+    expect(rerun.data).toMatchObject({ outcome: "not-dispatched", existingCount: 70 });
+    expect(rerun.data).toMatchObject({ createdCount: 0, failedCount: 0 });
+    expect(jira.issues).toHaveLength(70);
+    expect(jira.posts()).toHaveLength(postsAfterFirstRun);
+  });
+
+  it("keeps the per-turn bound for single writes after a large draft ran in the same turn", async () => {
+    const jira = syntheticJira();
+    const items = Array.from({ length: 40 }, (_, index) => item(`bulk${String(index)}`));
+    const input = execution(jira, { items } as unknown as CatalogJsonObject);
+    await executeJiraChatDraft(input);
+    expect(jira.issues).toHaveLength(40);
+    // Single writes of the same turn are counted on their own, not together with the draft's items.
+    const single = input.journal?.prepare({
+      ...input.intent,
+      operation: "jira.create",
+      invocationId: "single-write",
+      actionDigest: "c".repeat(64),
+    });
+    expect(single?.kind).toBe("prepared");
+  });
+
   it("refuses a malformed draft before any request", async () => {
     const jira = syntheticJira();
     const result = await executeJiraChatDraft(

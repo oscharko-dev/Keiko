@@ -58,6 +58,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.draft.requirements": "Requirements: {ids}",
   "chat.jira.draft.unreadable":
     "This draft cannot be laid out as a list of issues, so its details are shown field by field.",
+  "chat.jira.draft.loading": "Loading the draft so you can review every issue before approving…",
+  "chat.jira.draft.unavailable":
+    "This draft is no longer available, so it cannot be approved. Ask Keiko to prepare it again.",
   "chat.jira.fact.issue": "Issue",
   "chat.jira.fact.project": "Project",
   "chat.jira.fact.issueType": "Issue type",
@@ -2869,6 +2872,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.transitions": "Read Jira transitions",
   "atlassianConnectors.action.jira.assignable-users": "Find assignable Jira users",
   "atlassianConnectors.action.jira.report": "Compute Jira progress, compliance and coverage report",
+  "atlassianConnectors.action.jira.draft-stage": "Stage part of a Jira backlog draft",
   "chat.jira.report.title": "Jira report",
   "chat.jira.report.figures":
     "Figures are computed by Keiko from the Jira data read, not by the model.",

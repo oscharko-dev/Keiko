@@ -45,6 +45,9 @@ export function mutationIntentError(intent: ChatToolMutationIntent): UiStoreErro
     (intent.sourceKind !== "configured-mcp" || !validConsumer(intent.consumer))
   )
     return invalidRequest("Invalid coding mutation identity.");
+  return mutationIdentityError(intent) ?? mutationBatchError(intent) ?? mutationSourceError(intent);
+}
+function mutationIdentityError(intent: ChatToolMutationIntent): UiStoreError | undefined {
   const identifiers = [
     intent.invocationId,
     intent.chatId,
@@ -60,9 +63,18 @@ export function mutationIntentError(intent: ChatToolMutationIntent): UiStoreErro
     intent.turnRef.length > 256
   )
     return invalidRequest("Invalid mutation turn reference.");
-  if (!DIGEST.test(intent.actionDigest) || !DIGEST.test(intent.authorityDigest))
-    return invalidRequest("Invalid mutation digest.");
-  return mutationSourceError(intent);
+  return !DIGEST.test(intent.actionDigest) || !DIGEST.test(intent.authorityDigest)
+    ? invalidRequest("Invalid mutation digest.")
+    : undefined;
+}
+/** Only the child create of an approved Jira draft belongs to a batch (#4178). */
+function mutationBatchError(intent: ChatToolMutationIntent): UiStoreError | undefined {
+  if (intent.batchDigest === undefined) return undefined;
+  const valid =
+    DIGEST.test(intent.batchDigest) &&
+    intent.sourceKind !== "configured-mcp" &&
+    intent.operation === "jira.create";
+  return valid ? undefined : invalidRequest("Invalid mutation batch.");
 }
 function isJiraSource(value: unknown): boolean {
   return value === undefined || value === "jira";
@@ -109,8 +121,17 @@ export function sameMutationIdentity(
     record.podId === intent.podId &&
     record.bindingGeneration === intent.bindingGeneration &&
     record.credentialGeneration === intent.credentialGeneration &&
+    sameMutationAction(record, intent)
+  );
+}
+function sameMutationAction(
+  record: ChatToolMutationRecord,
+  intent: ChatToolMutationIntent,
+): boolean {
+  return (
     record.authorityDigest === intent.authorityDigest &&
     record.actionDigest === intent.actionDigest &&
+    record.batchDigest === intent.batchDigest &&
     record.operation === intent.operation
   );
 }

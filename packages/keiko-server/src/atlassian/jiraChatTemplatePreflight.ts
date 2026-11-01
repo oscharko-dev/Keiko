@@ -9,6 +9,8 @@ import type {
   JiraChatCatalogContext,
 } from "./jiraChatCatalogConsumer.js";
 import { jiraMutationToolResult } from "./jiraMutationResult.js";
+import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
+import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import { jiraIssueTemplateSource, recordJiraTemplateRefusal } from "./jiraTemplateLog.js";
 
@@ -19,7 +21,7 @@ function fieldOperation(tool: string): JiraMutationOperation | undefined {
 }
 
 type PreflightDeps = JiraChatAdmissionOptions["deps"] &
-  Pick<UiHandlerDeps, "store" | "atlassianConnectorCredentials">;
+  Pick<UiHandlerDeps, "store" | "atlassianConnectorCredentials" | "jiraDraftStore" | "activityLog">;
 
 export interface JiraChatTemplatePreflightPorts {
   readonly deps: PreflightDeps;
@@ -27,6 +29,49 @@ export interface JiraChatTemplatePreflightPorts {
   readonly writeArguments: (action: JiraChatCatalogAction) => CatalogJsonObject | undefined;
   /** The read grant the dry run's GET requests depend on is still current. */
   readonly readAllowed: (action: JiraChatCatalogAction) => boolean;
+}
+
+/**
+ * A draft is judged before any human is asked: the staged draft it names must exist unchanged and
+ * be runnable (every relation known, no cycle, within the resource bound). The refusal is the
+ * structured result the model corrects. Per-item template checks ran when each item was staged.
+ */
+function draftPreflight(
+  ports: JiraChatTemplatePreflightPorts,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+): CatalogJsonObject | undefined {
+  const args = ports.writeArguments(action);
+  if (args === undefined) return undefined;
+  const startedAt = Date.now();
+  const { jiraDraftStore, activityLog } = ports.deps;
+  const draft = readableChatDraft(jiraDraftStore, context.chatId, args);
+  recordJiraDraftActivity(activityLog, context.correlationId, {
+    phase: draft.ok ? "submitted" : "refused",
+    ...(draft.ok ? {} : { refusal: draft.reason }),
+    newDraft: false,
+    pageItemCount: 0,
+    ...draftSizes(jiraDraftStore, context.chatId, args, draft),
+    unresolvedRefCount: 0,
+    violationCount: 0,
+    durationMs: Date.now() - startedAt,
+  });
+  return draft.ok ? undefined : draftRefusalData(draft.reason);
+}
+/** The counts of the staged draft a call names (zero for an inline or unavailable draft). */
+function draftSizes(
+  store: PreflightDeps["jiraDraftStore"],
+  chatId: string,
+  args: Readonly<Record<string, unknown>>,
+  draft: ReturnType<typeof readableChatDraft>,
+): { readonly itemCount: number; readonly pageCount: number; readonly byteCount: number } {
+  const items = draft.ok ? draft.arguments.items : undefined;
+  const staged = typeof args.draftId === "string" ? store?.peek(args.draftId, chatId) : undefined;
+  return {
+    itemCount: Array.isArray(items) ? items.length : 0,
+    pageCount: staged?.pageCount ?? 0,
+    byteCount: staged?.bytes ?? 0,
+  };
 }
 
 type Credential = Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>;
@@ -89,6 +134,7 @@ export function createJiraChatTemplatePreflight(
   ports: JiraChatTemplatePreflightPorts,
 ): NonNullable<JiraChatAdmissionOptions["preflightWrite"]> {
   return async (action, context) => {
+    if (action.tool === "jira.draft") return draftPreflight(ports, action, context);
     const { deps } = ports;
     const operation = fieldOperation(action.tool);
     const args = ports.writeArguments(action);

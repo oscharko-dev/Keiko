@@ -60,6 +60,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.draft.requirements": "Anforderungen: {ids}",
   "chat.jira.draft.unreadable":
     "Dieser Entwurf lässt sich nicht als Vorgangsliste darstellen; seine Details werden Feld für Feld angezeigt.",
+  "chat.jira.draft.loading":
+    "Der Entwurf wird geladen, damit du jeden Vorgang vor der Freigabe prüfen kannst…",
+  "chat.jira.draft.unavailable":
+    "Dieser Entwurf ist nicht mehr verfügbar und kann deshalb nicht freigegeben werden. Bitte Keiko, ihn erneut vorzubereiten.",
   "chat.jira.fact.issue": "Vorgang",
   "chat.jira.fact.project": "Projekt",
   "chat.jira.fact.issueType": "Vorgangstyp",
@@ -2971,6 +2975,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.action.jira.assignable-users": "Zuweisbare Jira-Benutzer suchen",
   "atlassianConnectors.action.jira.report":
     "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
+  "atlassianConnectors.action.jira.draft-stage": "Teil eines Jira-Backlog-Entwurfs vorbereiten",
   "chat.jira.report.title": "Jira-Bericht",
   "chat.jira.report.figures":
     "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",

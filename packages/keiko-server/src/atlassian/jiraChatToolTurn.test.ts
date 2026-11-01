@@ -148,7 +148,9 @@ const DRAFT_ARGUMENTS = {
 };
 /** An attachment call names a connected file; `beforeCall` connects the folder as the model calls. */
 type Mutation = boolean | { readonly attach: string; beforeCall?: () => void };
-function offeredTool(mutation: Mutation, draft: boolean): string {
+/** A backlog draft call: the fixed three-item draft, or arguments produced when the model calls. */
+type DraftCall = boolean | (() => Record<string, unknown>);
+function offeredTool(mutation: Mutation, draft: DraftCall): string {
   if (draft) return "keiko.jira.draft";
   if (typeof mutation === "object") return "keiko.jira.attach";
   return mutation ? "keiko.jira.comment" : "keiko.jira.projects";
@@ -160,10 +162,10 @@ interface CorrectionScript {
 }
 function toolArguments(
   mutation: Mutation,
-  draft: boolean,
+  draft: DraftCall,
   body = "Synthetic approved comment",
 ): Record<string, unknown> {
-  if (draft) return DRAFT_ARGUMENTS;
+  if (draft) return typeof draft === "function" ? draft() : DRAFT_ARGUMENTS;
   if (typeof mutation === "object")
     return { issueKey: "KEIKO-1", source: { kind: "connected-file", path: mutation.attach } };
   return mutation ? { issueKey: "KEIKO-1", body } : {};
@@ -177,7 +179,7 @@ function syntheticModel(
   calls: GatewayCallRequest[],
   mutation: Mutation,
   repeatTools: boolean | number,
-  draft: boolean,
+  draft: DraftCall,
   bodies?: readonly string[],
 ): ModelPort {
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
@@ -235,7 +237,7 @@ function fixture(
   writeResponse?: Promise<void>,
   acknowledgeWrite = true,
   repeatTools: boolean | number = false,
-  draft = false,
+  draft: DraftCall = false,
   script?: CorrectionScript,
 ): {
   deps: UiHandlerDeps;
@@ -1073,6 +1075,103 @@ it("executes only the selected backlog items and persists the deselection throug
   expect(exchange.result?.status).toBe("completed");
   expect(exchange.mutationOutcome).toBe("succeeded");
   expect(JSON.stringify(exchange.result?.data)).toContain('"excludedCount":2');
+});
+
+// #4178 / Epic #4173 AC "A draft of any size is approved once": a backlog written in pages is staged
+// server-side, approved as a whole once, and every item runs although a turn admits only 32 single
+// writes and a deselection may name far more than 32 refs.
+describe("a staged backlog draft of any size is approved once (#4178)", () => {
+  const EPICS = 5;
+  const STORIES = 65;
+  function backlog(): Record<string, unknown>[] {
+    const item = (ref: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+      ref,
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: `Synthetic ${ref}` },
+      ...extra,
+    });
+    return [
+      ...Array.from({ length: EPICS }, (_, index) => item(`e${String(index)}`)),
+      ...Array.from({ length: STORIES }, (_, index) =>
+        item(`s${String(index)}`, {
+          parent: { fieldId: "parent", ref: `e${String(index % EPICS)}` },
+        }),
+      ),
+    ];
+  }
+  function staged(f: ReturnType<typeof fixture>): Record<string, unknown> {
+    const store = f.deps.jiraDraftStore;
+    if (store === undefined) throw new Error("Missing draft store");
+    const items = backlog();
+    let draftId: string | undefined;
+    for (let from = 0; from < items.length; from += 50) {
+      const appended = store.append(f.chatId, draftId, "fingerprint", items.slice(from, from + 50));
+      if (!appended.ok) throw new Error("Expected the page to stage");
+      draftId = appended.draft.id;
+    }
+    const draft = draftId === undefined ? undefined : store.peek(draftId, f.chatId);
+    if (draft === undefined) throw new Error("Expected a staged draft");
+    return { draftId: draft.id, draftDigest: draft.digest };
+  }
+  function stagedFixture(): { f: ReturnType<typeof fixture>; reference: Record<string, unknown> } {
+    const holder: { reference: Record<string, unknown> } = { reference: {} };
+    const f = fixture(true, undefined, true, false, () => holder.reference);
+    holder.reference = staged(f);
+    return { f, reference: holder.reference };
+  }
+
+  it("creates all 70 items behind one approval", async () => {
+    const { f } = stagedFixture();
+    const approvals: string[] = [];
+    const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
+    vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
+      (id, change, correlationId) => {
+        if (change.kind === "write-approval") approvals.push(change.approval.state);
+        update(id, change, correlationId);
+      },
+    );
+    const pending = handleSendDesktopChat(sendContext(f, "staged-draft"), f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    expect(f.jira.issues).toHaveLength(EPICS + STORIES);
+    expect(approvals).toEqual(["pending", "approved", "claimed"]);
+    const exchange = firstToolExchange(f);
+    expect(exchange.mutationOutcome).toBe("succeeded");
+    expect(exchange.approval).toMatchObject({ operation: "jira.draft", state: "claimed" });
+    expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":70');
+  });
+
+  it("carries a deselection of more than 32 items and leaves them out", async () => {
+    const { f } = stagedFixture();
+    const left = Array.from({ length: 40 }, (_, index) => `s${String(index)}`);
+    const pending = handleSendDesktopChat(sendContext(f, "staged-deselection"), f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve", left);
+    expect((await pending).status).toBe(200);
+    expect(f.jira.issues).toHaveLength(EPICS + STORIES - left.length);
+    expect(firstToolExchange(f).approval).toMatchObject({ excludedItemRefs: left });
+    expect(JSON.stringify(firstToolExchange(f).result?.data)).toContain('"excludedCount":40');
+  });
+
+  it("refuses a draft extended after its digest was read before anyone is asked", async () => {
+    const { f, reference } = stagedFixture();
+    const store = f.deps.jiraDraftStore;
+    const draftId = typeof reference.draftId === "string" ? reference.draftId : "";
+    store?.append(f.chatId, draftId, "fingerprint", [
+      { ref: "late", projectId: "10000", issueTypeId: "10001", fields: { summary: "Late" } },
+    ]);
+    const pending = handleSendDesktopChat(sendContext(f, "stale-draft"), f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    expect(f.jira.posts()).toHaveLength(0);
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(JSON.stringify(firstToolExchange(f).result?.data)).toContain("draft-changed");
+  });
 });
 
 // #4178: a hostile client names refs the reviewed draft does not contain. The decision route
