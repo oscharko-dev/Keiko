@@ -19,6 +19,10 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import {
+  grantOthersWrite,
+  makeOwnerPrivateDirectory,
+} from "../ownerPrivateFixture.test-support.js";
 import { OwnerPrivateFileRefused } from "../ownerPrivateStateFile.js";
 import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
 import {
@@ -38,8 +42,13 @@ const roots: string[] = [];
 function tempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-operator-plugins-"));
   roots.push(root);
+  makeOwnerPrivateDirectory(root);
   return root;
 }
+
+// A Windows host reports synthesized permission bits (0o666 for every writable file, whatever
+// `chmod` was asked), so the owner-private modes are asserted where POSIX modes exist (#4068).
+const itWithPosixModes = it.skipIf(process.platform === "win32");
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -216,10 +225,17 @@ describe("the operator plugin registry (#3903 AC2)", () => {
     const file = join(stateDir, OPENCODE_PLUGIN_REGISTRY_FILE);
     writeFileSync(file, "{", { mode: 0o600 });
     expect(() => loadOperatorPluginRegistry(stateDir)).toThrow(SyntaxError);
-    writeFileSync(file, JSON.stringify({ schemaVersion: 1, plugins: [entry] }));
-    chmodSync(file, 0o620);
+    const trusted = JSON.stringify({ schemaVersion: 1, plugins: [entry] });
+    writeFileSync(file, trusted);
+    if (process.platform === "win32") grantOthersWrite(file);
+    else chmodSync(file, 0o620);
     expect(() => loadOperatorPluginRegistry(stateDir)).toThrow(OwnerPrivateFileRefused);
-    chmodSync(file, 0o600);
+    if (process.platform === "win32") {
+      // `/grant:r` leaves the explicit Everyone entry in place; a fresh file inherits the
+      // owner-private descriptor of the state directory again (#4068).
+      rmSync(file);
+      writeFileSync(file, trusted);
+    } else chmodSync(file, 0o600);
     expect(loadOperatorPluginRegistry(stateDir)).toMatchObject({ state: "loaded" });
     writeFileSync(file, JSON.stringify({ schemaVersion: 2, plugins: [] }));
     expect(loadOperatorPluginRegistry(stateDir)).toEqual({
@@ -257,8 +273,6 @@ describe("admitting the operator's plugins for a run (#3903 AC2)", () => {
     const copy = join(root, "operator-plugins", "audit.ts");
     expect(readFileSync(copy, "utf8")).toBe(PLUGIN);
     expect(readFileSync(wrapper, "utf8")).toBe(operatorPluginWrapperSource("audit.ts"));
-    expect(statSync(copy).mode & 0o777).toBe(0o600);
-    expect(statSync(wrapper).mode & 0o777).toBe(0o600);
     const line = lineOf(records);
     expect(line).toMatchObject({
       state: "admitted",
@@ -268,6 +282,18 @@ describe("admitting the operator's plugins for a run (#3903 AC2)", () => {
     });
     expect(line.admittedSha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(JSON.stringify(records)).not.toContain("audit");
+  });
+
+  itWithPosixModes("writes the admitted copy and its wrapper owner-private", async () => {
+    const root = discoveryRoot();
+    const records: ServerLogEvent[] = [];
+    await port(loaded(operatorFile()), records).admitForRun({
+      runId: "run-plugins-1",
+      discoveryRoot: root,
+      mode: "autonomous-delivery",
+    });
+    expect(statSync(join(root, "operator-plugins", "audit.ts")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(root, "plugins", "admitted-audit.ts")).mode & 0o777).toBe(0o600);
   });
 
   it("admits nothing of a plugin whose bytes no longer match and clears what an earlier prepare admitted", async () => {

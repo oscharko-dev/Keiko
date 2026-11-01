@@ -340,6 +340,8 @@ export function protectWindowsOwnerPrivateFile(
     phase = "protect";
     const runner = options.runner ?? spawnSync;
     const sid = currentUserSid(runner, whoami);
+    // /reset first drops explicit entries, which /grant:r alone would keep for other principals.
+    runSystemBinary(runner, icacls, [path, "/reset"]);
     runSystemBinary(runner, icacls, [
       path,
       "/inheritance:r",

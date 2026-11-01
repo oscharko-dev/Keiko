@@ -14,6 +14,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createMcpServerSecretStore } from "./mcpOAuthCredentialStore.js";
+import { makeOwnerPrivateDirectory } from "../ownerPrivateFixture.test-support.js";
 import * as privateJson from "../private-json.js";
 import { createMcpSettingsStore } from "./mcpSettingsStore.js";
 
@@ -32,6 +33,7 @@ function fixture(): {
 } {
   const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-settings-")));
   roots.push(stateDir);
+  makeOwnerPrivateDirectory(stateDir);
   const events: ServerLogEvent[] = [];
   const input = {
     stateDir,
@@ -224,10 +226,25 @@ describe("shared MCP settings custody", () => {
     expect(reopened.read("settings-test")).toEqual(result.snapshot);
     expect(reopened.secret(reference, f.server)).toBe(token);
     const registryPath = join(f.input.stateDir, "mcp-servers.json");
-    expect(statSync(registryPath).mode & 0o777).toBe(0o600);
     expect(readFileSync(registryPath, "utf8")).not.toContain(token);
     expect(JSON.stringify(result)).not.toContain(token);
     expect(JSON.stringify(f.events)).not.toContain(token);
+  });
+  // A Windows host reports synthesized permission bits (0o666 for every writable file, whatever
+  // `chmod` was asked), so the registry's owner-private mode is asserted where POSIX modes exist
+  // (#4068).
+  it.skipIf(process.platform === "win32")("persists the registry owner-private", () => {
+    const f = fixture();
+    const result = f.store.update(
+      {
+        expectedRevision: f.store.read("settings-test").revision,
+        servers: [f.server],
+        secrets: { [reference]: { server: f.server.name, value: token } },
+      },
+      "settings-test",
+    );
+    expect(result.ok).toBe(true);
+    expect(statSync(join(f.input.stateDir, "mcp-servers.json")).mode & 0o777).toBe(0o600);
   });
   it("rejects a stale writer before persisting its credentials", () => {
     const f = fixture();

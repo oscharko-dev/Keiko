@@ -15,6 +15,10 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import {
+  grantOthersWrite,
+  makeOwnerPrivateDirectory,
+} from "../ownerPrivateFixture.test-support.js";
 import { OwnerPrivateFileRefused } from "../ownerPrivateStateFile.js";
 import {
   OPENCODE_SKILL_SOURCES_FILE,
@@ -36,6 +40,7 @@ afterEach(() => {
 function discoveryRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-remote-skills-"));
   roots.push(root);
+  makeOwnerPrivateDirectory(root);
   return root;
 }
 
@@ -137,7 +142,8 @@ describe("the operator's remote skill sources (#3903 AC3)", () => {
       mode: 0o600,
     });
     expect(loadSkillSourceRegistry(stateDir)).toEqual({ state: "loaded", sources: [SOURCE] });
-    chmodSync(file, 0o622);
+    if (process.platform === "win32") grantOthersWrite(file);
+    else chmodSync(file, 0o622);
     expect(() => loadSkillSourceRegistry(stateDir)).toThrow(OwnerPrivateFileRefused);
   });
 

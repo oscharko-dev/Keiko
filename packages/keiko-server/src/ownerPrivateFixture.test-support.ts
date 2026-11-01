@@ -49,6 +49,8 @@ export function makeOwnerPrivate(path: string): void {
     chmodSync(path, 0o600);
     return;
   }
+  // /reset drops explicit entries (such as a grant from grantOthersWrite) before the protected DACL.
+  icacls(path, ["/reset"]);
   icacls(path, [
     "/inheritance:r",
     "/grant:r",

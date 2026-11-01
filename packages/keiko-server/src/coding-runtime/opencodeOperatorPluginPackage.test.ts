@@ -10,6 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  grantOthersWrite,
+  makeOwnerPrivateDirectory,
+} from "../ownerPrivateFixture.test-support.js";
 import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../symlinkFixture.test-support.js";
 import { readPluginPackage, writePluginPackage } from "./opencodeOperatorPluginPackage.js";
 
@@ -25,6 +29,7 @@ const TREE_SHA256 = "a449f5c0ad257fd10b4933780e74c9845732041b1f7476784df40e6add6
 function packageTree(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plugin-package-")));
   roots.push(root);
+  makeOwnerPrivateDirectory(root);
   mkdirSync(join(root, "node_modules", "dep"), { recursive: true });
   mkdirSync(join(root, "sub"));
   writeFileSync(join(root, "node_modules", "dep", "index.js"), "export const x = 1;\n");
@@ -71,7 +76,8 @@ describe("an npm plugin package the operator installed (#3903 AC2)", () => {
       ok: false,
       reason: "entry-missing",
     });
-    chmodSync(join(root, "package.json"), 0o666);
+    if (process.platform === "win32") grantOthersWrite(join(root, "package.json"));
+    else chmodSync(join(root, "package.json"), 0o666);
     expect(readPluginPackage(root, "sub/entry.js")).toEqual({ ok: false, reason: "unreadable" });
   });
 

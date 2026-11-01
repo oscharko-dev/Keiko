@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,11 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import {
+  grantOthersWrite,
+  makeOwnerPrivateDirectory,
+} from "../ownerPrivateFixture.test-support.js";
+import { plantSymlinkOrSkip } from "../symlinkFixture.test-support.js";
 import { loadMcpServerRegistry, MCP_SERVER_REGISTRY_FILE } from "./mcpServerRegistry.js";
 
 const RUN_ID = "run-mcp-registry";
@@ -37,6 +42,7 @@ afterEach(() => {
 function stateDir(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-mcp-registry-"));
   roots.push(root);
+  makeOwnerPrivateDirectory(root);
   return root;
 }
 
@@ -62,6 +68,8 @@ function writeRegistry(dir: string, content: string, mode = 0o600): string {
   const path = join(dir, MCP_SERVER_REGISTRY_FILE);
   writeFileSync(path, content);
   chmodSync(path, mode);
+  // A Windows host has no group/other mode bits; its descriptor expresses the same grant (#4068).
+  if (process.platform === "win32" && (mode & 0o022) !== 0) grantOthersWrite(path);
   return path;
 }
 
@@ -122,11 +130,11 @@ describe("the operator's MCP server registry file (#3903)", () => {
     expect(load(dir)).toMatchObject({ servers: 0, line: { state: "refused", reason } });
   });
 
-  it("never follows a link to a registry elsewhere", () => {
+  it("never follows a link to a registry elsewhere", (context) => {
     const dir = stateDir();
     const elsewhere = stateDir();
     const target = writeRegistry(elsewhere, JSON.stringify(REGISTRY));
-    symlinkSync(target, join(dir, MCP_SERVER_REGISTRY_FILE));
+    plantSymlinkOrSkip(context, target, join(dir, MCP_SERVER_REGISTRY_FILE));
     expect(load(dir)).toMatchObject({
       servers: 0,
       line: { state: "refused", reason: "not-regular-file" },
