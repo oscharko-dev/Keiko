@@ -16,7 +16,15 @@ export default defineConfig({
       "packages/keiko-editor/src/**/*.test.tsx",
       "scripts/__tests__/**/*.test.mjs",
     ],
-    exclude: ["**/node_modules/**", "tests/fixtures/**", "packages/keiko-ui/**"],
+    // #4145: the anti-slop engine suites test only scripts/lib/code-quality-*.mjs, which the scripts
+    // coverage run measures. This run measures packages, src and the gate scripts, so the suites
+    // added no coverage here and about 50 minutes of runtime to the 30-minute package shards.
+    exclude: [
+      "**/node_modules/**",
+      "tests/fixtures/**",
+      "packages/keiko-ui/**",
+      "scripts/__tests__/code-quality-*.test.mjs",
+    ],
     // #3532: explicit Activity Log test-writer injection, identical to the root suite.
     setupFiles: [
       fileURLToPath(new URL("./tests/support/activity-log-test-writer.ts", import.meta.url)),
