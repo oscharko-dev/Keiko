@@ -11,7 +11,7 @@ import { turnIssues } from "./oracles.mjs";
 import { toolExchangeOf } from "./tool-exchanges.mjs";
 
 const JSW_SPRINT = "com.pyxis.greenhopper.jira:gh-sprint";
-export const LAB_SPRINT_NAME = "REQ Lab Sprint";
+const LAB_SPRINT_NAME = "REQ Lab Sprint";
 const WRITE_OPERATIONS = ["jira.create", "jira.draft", "jira.edit"];
 const TASK_SUMMARY = "Sprint-Zuordnung der Schadenmeldung prüfen";
 
@@ -84,7 +84,7 @@ export function gradeFieldCorrection({ tasks, exchanges, sprintField, sprintId }
 }
 
 /** The lab sprint on the work project's board, created once and reused (lab setup, not product). */
-export async function ensureLabSprint(session, projectKey) {
+async function ensureLabSprint(session, projectKey) {
   const auth = basicAuth(session, "admin");
   const get = async (path) => {
     const response = await labRequest(session, "GET", path, auth);
