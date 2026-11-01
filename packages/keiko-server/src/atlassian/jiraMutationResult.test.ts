@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
+  JIRA_REJECTED_GUIDANCE,
+  JIRA_UNCERTAIN_GUIDANCE,
   jiraAttemptToolResult,
   jiraLinkCounts,
   jiraLinkCountsOfResult,
+  jiraMutationToolResult,
   validJiraMutationAttempt,
 } from "./jiraMutationResult.js";
 
@@ -74,6 +77,7 @@ describe("a partial link effect (#4176)", () => {
         linksRequested: 3,
         linksCreated: 2,
         linksMissing: [MISSING],
+        guidance: JIRA_UNCERTAIN_GUIDANCE,
       },
     });
   });
@@ -129,6 +133,7 @@ describe("Jira's own field errors (#4176)", () => {
           { fieldId: "components", message: "Component 'Nope' does not exist." },
         ],
         messages: ["Issue could not be created."],
+        guidance: JIRA_REJECTED_GUIDANCE,
       },
     });
   });
@@ -152,5 +157,48 @@ describe("Jira's own field errors (#4176)", () => {
     const data = jiraAttemptToolResult("rejected", { ok: false, reason: "field-validation" }).data;
 
     expect(data).not.toHaveProperty("fieldErrors");
+  });
+});
+
+describe("what the model is told to do next (#4176)", () => {
+  it.each([
+    ["unknown", undefined],
+    ["succeeded-unconfirmed", undefined],
+    ["not-dispatched", "conflict"],
+  ] as const)(
+    "tells the model to stop and inform the user in plain language after %s (%s)",
+    (outcome, reason) => {
+      const data = jiraMutationToolResult(outcome, reason).data;
+
+      expect(data.guidance).toBe(JIRA_UNCERTAIN_GUIDANCE);
+      expect(JIRA_UNCERTAIN_GUIDANCE).toMatch(/Do not repeat it/u);
+      expect(JIRA_UNCERTAIN_GUIDANCE).toMatch(/tell the user in plain language/iu);
+    },
+  );
+
+  it("adds nothing to a success, to a refusal Jira did not explain, or to another conflict-free outcome", () => {
+    expect(jiraMutationToolResult("succeeded").data).not.toHaveProperty("guidance");
+    expect(jiraMutationToolResult("rejected", "field-validation").data).not.toHaveProperty(
+      "guidance",
+    );
+    expect(jiraMutationToolResult("not-dispatched", "permission-denied").data).not.toHaveProperty(
+      "guidance",
+    );
+  });
+
+  it("names the field's display name beside its id when Jira's error carries one", () => {
+    const data = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "field-validation",
+      detail: {
+        fieldErrors: [
+          { fieldId: "customfield_10000", fieldName: "Risk class", message: "Invalid." },
+        ],
+      },
+    }).data;
+
+    expect(data.fieldErrors).toEqual([
+      { fieldId: "customfield_10000", fieldName: "Risk class", message: "Invalid." },
+    ]);
   });
 });

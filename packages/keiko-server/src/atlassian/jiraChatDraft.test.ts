@@ -17,6 +17,7 @@ import {
   type SyntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
 import { jiraChatDraftConnection } from "./jiraChatCatalogRuntime.js";
 import type { TraceSession } from "../requirement-trace.js";
 import {
@@ -268,26 +269,57 @@ describe("executeJiraChatDraft (#4178)", () => {
     expect(jira.posts()).toHaveLength(1);
   });
 
-  it("stops after an item Jira refused once sent, and returns Jira's own field error", async () => {
+  it("returns Jira's own field error for an item it refused with an error document and continues with the rest (#4176)", async () => {
     const jira = syntheticJira();
     jira.refuse.add("Item epic");
     const result = await executeJiraChatDraft(execution(jira));
     expect(itemsOf(result)).toEqual([
       expect.objectContaining({
         ref: "epic",
-        state: "uncertain",
-        fieldErrors: [{ fieldId: "summary", message: "Synthetic refusal" }],
+        state: "failed",
+        fieldErrors: [{ fieldId: "summary", fieldName: "summary", message: "Synthetic refusal" }],
       }),
       { ref: "story", state: "skipped" },
       { ref: "task", state: "skipped" },
-      { ref: "loose", state: "skipped" },
+      expect.objectContaining({ ref: "loose", state: "created" }),
     ]);
     expect(result).toMatchObject({
       isError: true,
-      data: { outcome: "unknown", uncertainCount: 1 },
+      data: {
+        outcome: "succeeded",
+        failedCount: 1,
+        skippedCount: 2,
+        createdCount: 1,
+        guidance: JIRA_REJECTED_GUIDANCE,
+      },
     });
-    expect(jira.posts()).toHaveLength(1);
+    expect(jira.posts()).toHaveLength(2);
   });
+
+  it.each([
+    ["a 400 that is no Jira error document", 400, "<html>Bad request</html>"],
+    ["a 500", 500, JSON.stringify({ errorMessages: ["Internal error"], errors: {} })],
+    ["a 409", 409, JSON.stringify({ errorMessages: ["Conflict"], errors: {} })],
+    ["a 429", 429, JSON.stringify({ errorMessages: ["Slow down"], errors: {} })],
+  ])(
+    "stops after an item Jira refused with %s: the effect is uncertain",
+    async (_name, status, body) => {
+      const jira = syntheticJira();
+      jira.refuseRaw.set("Item epic", { status, body });
+      const result = await executeJiraChatDraft(execution(jira));
+      expect(itemsOf(result)).toEqual([
+        expect.objectContaining({ ref: "epic", state: "uncertain" }),
+        { ref: "story", state: "skipped" },
+        { ref: "task", state: "skipped" },
+        { ref: "loose", state: "skipped" },
+      ]);
+      expect(result).toMatchObject({
+        isError: true,
+        data: { outcome: "unknown", uncertainCount: 1, guidance: JIRA_UNCERTAIN_GUIDANCE },
+      });
+      expect(jira.posts()).toHaveLength(1);
+    },
+  );
 
   it("reconciles an item whose issue already exists instead of creating it twice", async () => {
     const parsed = parseJiraDraft(BACKLOG);

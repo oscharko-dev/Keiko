@@ -33,6 +33,8 @@ export interface SyntheticJira {
   readonly posts: () => readonly Record<string, unknown>[];
   /** Summaries Jira refuses on create, with its own field error. */
   readonly refuse: Set<string>;
+  /** Summaries answered with a raw status and body that is no Jira error document (a proxy, a 5xx). */
+  readonly refuseRaw: Map<string, { readonly status: number; readonly body: string }>;
   /** Issue keys Jira cannot link (answered as missing). */
   readonly refuseLinks: Set<string>;
 }
@@ -68,8 +70,11 @@ function linkIssues(
 function createIssue(
   issues: StoredIssue[],
   refuse: ReadonlySet<string>,
+  refuseRaw: ReadonlyMap<string, { readonly status: number; readonly body: string }>,
   body: { fields: Record<string, unknown> },
 ): Response {
+  const raw = refuseRaw.get(String(body.fields.summary));
+  if (raw !== undefined) return new Response(raw.body, { status: raw.status });
   if (refuse.has(String(body.fields.summary)))
     return json({ errors: { summary: "Synthetic refusal" } }, 400);
   // Data Center and Cloud take ONE issuelinks operation per request (JRASERVER-66329).
@@ -94,6 +99,7 @@ function createIssue(
 export function syntheticJira(existing: StoredIssue[] = []): SyntheticJira {
   const issues = [...existing];
   const refuse = new Set<string>();
+  const refuseRaw = new Map<string, { readonly status: number; readonly body: string }>();
   const refuseLinks = new Set<string>();
   const posted: Record<string, unknown>[] = [];
   const read = (url: URL): Response => {
@@ -127,7 +133,7 @@ export function syntheticJira(existing: StoredIssue[] = []): SyntheticJira {
     posted.push(body);
     if (url.pathname.endsWith("/issueLink"))
       return Promise.resolve(linkIssues(issues, body, refuseLinks));
-    return Promise.resolve(createIssue(issues, refuse, body));
+    return Promise.resolve(createIssue(issues, refuse, refuseRaw, body));
   });
-  return { fetch: fetchImpl, issues, posts: () => posted, refuse, refuseLinks };
+  return { fetch: fetchImpl, issues, posts: () => posted, refuse, refuseRaw, refuseLinks };
 }

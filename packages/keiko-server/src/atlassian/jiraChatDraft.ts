@@ -34,6 +34,7 @@ import type {
 } from "../store/chatToolMutationTypes.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
 import {
   logTrace,
   newTally,
@@ -321,6 +322,15 @@ function projectItem(baseUrl: string, item: DraftItemResult): CatalogJsonObject 
     ...item.detail,
   };
 }
+/** An uncertain item outranks a refused one: the model must stop and tell the user first. */
+function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
+  if (items.some((item) => item.state === "uncertain")) return JIRA_UNCERTAIN_GUIDANCE;
+  return items.some(
+    (item) => item.state === "failed" && (item.detail?.fieldErrors ?? item.detail?.messages),
+  )
+    ? JIRA_REJECTED_GUIDANCE
+    : undefined;
+}
 function draftResult(baseUrl: string, items: readonly DraftItemResult[]): ManagedMcpToolResult {
   const counts: Record<string, number> = Object.fromEntries(
     Object.values(STATE_COUNTS).map((name) => [name, 0]),
@@ -334,8 +344,14 @@ function draftResult(baseUrl: string, items: readonly DraftItemResult[]): Manage
   // already existing or deselected — so a rerun that finds everything in place writes nothing and
   // is still no error. An item that did not land (failed, uncertain, skipped) makes it one.
   const complete = items.every((item) => SETTLED_STATES.has(item.state));
+  const guidance = draftGuidance(items);
   return {
-    data: { outcome, items: items.map((item) => projectItem(baseUrl, item)), ...counts },
+    data: {
+      outcome,
+      ...(guidance === undefined ? {} : { guidance }),
+      items: items.map((item) => projectItem(baseUrl, item)),
+      ...counts,
+    },
     ...(complete ? {} : { isError: true }),
   };
 }

@@ -109,9 +109,8 @@ const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
 function database(): {
   journal: ReturnType<typeof createChatToolMutationStore>;
   chatId: string;
-  /** The turn the next mutation belongs to; `nextTurn` admits a new human message. */
-  turn: () => { userMessageId: string; turnRef: string };
-  nextTurn: (requestId: string) => void;
+  userMessageId: string;
+  turnRef: string;
   logs: ReturnType<typeof createBufferedServerLogSink>;
 } {
   const db = new DatabaseSync(":memory:");
@@ -122,46 +121,57 @@ function database(): {
     store.close();
   });
   const chat = store.createChat(store.createProject(process.cwd()).path, "Synthetic", "model");
-  const admit = (requestId: string): { userMessageId: string; turnRef: string } => {
-    const turn = store.admitChatTurn(requestId, {
-      chatId: chat.id,
-      role: "user",
-      content: "synthetic",
-      timestamp: 1000,
-      runId: undefined,
-      workflowId: undefined,
-      workflowStatus: undefined,
-      shortResult: undefined,
-      taskType: undefined,
-    });
-    if (turn.kind !== "admitted" || turn.userMessage.canonicalTurnRef === undefined)
-      throw new Error("Expected admitted synthetic turn");
-    return { userMessageId: turn.userMessage.id, turnRef: turn.userMessage.canonicalTurnRef };
-  };
-  let current = admit("synthetic-sdk-turn");
+  const turn = store.admitChatTurn("synthetic-sdk-turn", {
+    chatId: chat.id,
+    role: "user",
+    content: "synthetic",
+    timestamp: 1000,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (turn.kind !== "admitted" || turn.userMessage.canonicalTurnRef === undefined)
+    throw new Error("Expected admitted synthetic turn");
   const logs = createBufferedServerLogSink();
   return {
     journal: createChatToolMutationStore(db, () => 1000, logs),
     chatId: chat.id,
-    turn: () => current,
-    nextTurn: (requestId): void => {
-      current = admit(requestId);
-    },
+    userMessageId: turn.userMessage.id,
+    turnRef: turn.userMessage.canonicalTurnRef,
     logs,
   };
 }
-type RemoteMode = "confirmed" | "readback-denied" | "lost-response" | "rejects-bad-option";
-/** The value this synthetic Jira refuses with a field error, as Data Center does for a bad option. */
+type RemoteMode =
+  | "confirmed"
+  | "readback-denied"
+  | "lost-response"
+  | "jira-error-document"
+  | "html-error-page"
+  | "server-error";
+/** The value this synthetic Jira refuses, as Data Center does for a bad option. */
 const REJECTED_VALUE = "Rot";
 const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
-/** Data Center answers a bad option value with 400 and a field error in `errors`. */
-async function fieldRejection(mode: RemoteMode, request: Request): Promise<Response | undefined> {
-  if (mode !== "rejects-bad-option" || !(await request.clone().text()).includes(REJECTED_VALUE))
+const JIRA_ERROR_DOCUMENT = JSON.stringify({
+  errorMessages: [],
+  errors: { customfield_10000: JIRA_FIELD_ERROR },
+});
+const REFUSALS: Readonly<Record<string, { readonly status: number; readonly body: string }>> = {
+  // Jira validated the whole request and said why (#4176): nothing was applied.
+  "jira-error-document": { status: 400, body: JIRA_ERROR_DOCUMENT },
+  // A proxy's page is no Jira error document: whether the write was applied is unknown.
+  "html-error-page": { status: 400, body: "<html><body>Bad Request</body></html>" },
+  "server-error": { status: 503, body: JIRA_ERROR_DOCUMENT },
+};
+async function scriptedRefusal(mode: RemoteMode, request: Request): Promise<Response | undefined> {
+  const refusal = REFUSALS[mode];
+  if (refusal === undefined || !(await request.clone().text()).includes(REJECTED_VALUE))
     return undefined;
-  return new Response(
-    JSON.stringify({ errorMessages: [], errors: { customfield_10000: JIRA_FIELD_ERROR } }),
-    { status: 400, headers: { "content-type": "application/json" } },
-  );
+  return new Response(refusal.body, {
+    status: refusal.status,
+    headers: { "content-type": "application/json" },
+  });
 }
 function remote(
   mode: RemoteMode,
@@ -192,8 +202,8 @@ function remote(
         beforeWrite();
         writes += 1;
       }
-      const rejected = await fieldRejection(mode, request);
-      if (rejected !== undefined) return rejected;
+      const refusal = await scriptedRefusal(mode, request);
+      if (refusal !== undefined) return refusal;
       const result =
         request.method === "GET"
           ? mode === "readback-denied" && writes > 0
@@ -261,8 +271,6 @@ async function fixture(
     args?: CatalogJsonObject,
   ) => Promise<CatalogToolDispatchOutcome>;
   intent: () => ChatToolMutationIntent;
-  /** The human sends another message: the next mutation belongs to a new turn. */
-  nextTurn: (requestId: string) => void;
   journal: ReturnType<typeof createChatToolMutationStore>;
   writes: () => number;
   state: SyntheticJira;
@@ -284,8 +292,8 @@ async function fixture(
     activeIntent = Object.freeze({
       invocationId: context.invocationId,
       chatId: context.chatId,
-      userMessageId: db.turn().userMessageId,
-      turnRef: db.turn().turnRef,
+      userMessageId: db.userMessageId,
+      turnRef: db.turnRef,
       actorId: context.actorId,
       podId: "synthetic-pod",
       bindingGeneration: context.binding.generation,
@@ -395,7 +403,6 @@ async function fixture(
       return activeIntent;
     },
     journal: db.journal,
-    nextTurn: db.nextTurn,
     writes: jira.writes,
     state: jira.state,
     logs: db.logs,
@@ -499,24 +506,26 @@ it.each(SINGLE_MUTATIONS)(
     expect(f.state).toMatchObject(REMOTE_STATE[operation]);
   },
 );
-it("returns Jira's field error to the model and lets the corrected retry succeed (#4176)", async () => {
-  const f = await fixture("rejects-bad-option");
-  const create = (value: string): CatalogJsonObject => ({
+function create(value: string): CatalogJsonObject {
+  return {
     projectId: "10000",
     issueTypeId: "10001",
     fields: { summary: "Changed", customfield_10000: value },
-  });
+  };
+}
+it("returns Jira's field error and lets the corrected retry succeed in the same turn (#4176)", async () => {
+  const f = await fixture("jira-error-document");
 
   const refused = await f.invoke("jira.create", create(REJECTED_VALUE));
 
-  // The journal cannot prove a 4xx caused no effect (a proxy can rewrite a response after commit),
-  // so the outcome stays unknown; Jira's field id and message still reach the model.
+  // Data Center validates a whole request before applying anything: its error document is a
+  // definitive rejection, so the outcome is `rejected` and Jira's field id and message reach the model.
   expect(refused).toMatchObject({
     kind: "settled",
     result: {
       status: "failed",
       data: {
-        outcome: "unknown",
+        outcome: "rejected",
         reason: "field-validation",
         fieldErrors: [{ fieldId: "customfield_10000", message: JIRA_FIELD_ERROR }],
       },
@@ -524,8 +533,12 @@ it("returns Jira's field error to the model and lets the corrected retry succeed
   });
   expect(f.writes()).toBe(1);
   expect(f.state.fields).not.toMatchObject({ customfield_10000: REJECTED_VALUE });
+  expect(f.journal.find(f.intent().invocationId)).toMatchObject({
+    phase: "settled",
+    outcome: "rejected",
+    httpStatus: 400,
+  });
 
-  f.nextTurn("synthetic-corrected-turn");
   const corrected = await f.invoke("jira.create", create("Required"));
 
   expect(corrected).toMatchObject({
@@ -536,6 +549,24 @@ it("returns Jira's field error to the model and lets the corrected retry succeed
   expect(f.state).toMatchObject(REMOTE_STATE["jira.create"]);
   expect(f.logs.lines().join()).not.toContain(JIRA_FIELD_ERROR);
 });
+it.each(["html-error-page", "server-error"] as const)(
+  "keeps the turn blocked after %s: the write may have been applied (#2953)",
+  async (mode) => {
+    const f = await fixture(mode);
+
+    const refused = await f.invoke("jira.create", create(REJECTED_VALUE));
+
+    expect(refused).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "unknown" } },
+    });
+    expect(await f.invoke("jira.create", create("Required"))).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "not-dispatched", reason: "conflict" } },
+    });
+    expect(f.writes()).toBe(1);
+  },
+);
 
 it("requires explicit clearing and rejects ambiguous assignment through the SDK path", async () => {
   const f = await fixture();

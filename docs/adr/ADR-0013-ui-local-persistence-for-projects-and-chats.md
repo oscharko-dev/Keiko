@@ -362,8 +362,12 @@ has its own scope.
 
 Response acknowledgement is stored separately from body parsing and later confirmation. Known
 local rejection before dispatch, success, success without confirmation, unknown effect and no
-dispatch are distinct. Every non-2xx response after possible dispatch remains unknown: a status code
-alone cannot prove that no mutation occurred, including 400/401/403/429 and proxy-generated replies.
+dispatch are distinct. A non-2xx response after possible dispatch remains unknown: a status code
+alone cannot prove that no mutation occurred, including proxy-generated replies. The one exception
+(amended 2026-11-01, #4176) is a Jira client error other than 408, 409 and 429 that carries Jira's
+own parsable error document: the composing caller proves it when settling, the write is `rejected`
+and does not block the turn so the model can correct and retry (ADR-0128). 429, every 5xx and any
+4xx without that document stay unknown.
 The transport's diagnostic reason (such as permission denied or rate limited) remains separate
 from this effect classification. Schema 48 repairs the earlier journal's retained post-dispatch
 rejections to unknown before work resumes. An observed 2xx cannot be downgraded to unknown/rejected;

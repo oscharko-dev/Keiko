@@ -156,6 +156,37 @@ function linkData(links: JiraMutationLinkAccount | undefined): Record<string, un
   };
 }
 
+/**
+ * Fixed instructions to the model, never derived from remote text. Keiko's users are knowledge
+ * workers, not developers: a refused or uncertain change must end the turn with an answer they can
+ * act on, never with a stall or a raw error.
+ */
+export const JIRA_REJECTED_GUIDANCE =
+  "Jira refused this change and nothing was changed. Correct the fields named in fieldErrors (fieldId, fieldName, message) or messages, then send the corrected change once. If Jira refuses it again, tell the user in plain language which field is the problem and what Jira said.";
+export const JIRA_UNCERTAIN_GUIDANCE =
+  "Whether this change reached Jira is uncertain. Do not repeat it and make no further change in this turn. Tell the user in plain language that the change may or may not have been applied and ask them to check the issue in Jira before deciding whether to try again.";
+
+/** The instruction a result carries, or undefined when the outcome needs none. */
+export function jiraResultGuidance(
+  outcome: JiraMutationResultState,
+  reason: AtlassianConnectorWriteFailureReason | undefined,
+  detail: JiraMutationFailureDetail | undefined,
+): string | undefined {
+  if (uncertainOutcome(outcome, reason)) return JIRA_UNCERTAIN_GUIDANCE;
+  return outcome === "rejected" && jiraExplained(detail) ? JIRA_REJECTED_GUIDANCE : undefined;
+}
+function uncertainOutcome(
+  outcome: JiraMutationResultState,
+  reason: AtlassianConnectorWriteFailureReason | undefined,
+): boolean {
+  if (outcome === "unknown" || outcome === "succeeded-unconfirmed") return true;
+  // A write blocked behind an uncertain one of the same turn is answered like it.
+  return outcome === "not-dispatched" && reason === "conflict";
+}
+function jiraExplained(detail: JiraMutationFailureDetail | undefined): boolean {
+  return (detail?.fieldErrors?.length ?? 0) > 0 || (detail?.messages?.length ?? 0) > 0;
+}
+
 function detailData(detail: JiraMutationFailureDetail | undefined): Record<string, unknown> {
   if (detail === undefined) return {};
   return {
@@ -176,10 +207,12 @@ export function jiraMutationToolResult(
   links?: JiraMutationLinkAccount,
   violations?: readonly JiraTemplateViolation[],
 ): ManagedMcpToolResult {
+  const guidance = jiraResultGuidance(outcome, reason, detail);
   return {
     data: {
       ...receipt,
       outcome,
+      ...(guidance === undefined ? {} : { guidance }),
       ...(reason === undefined ? {} : { reason }),
       ...(replayed ? { replayed: true } : {}),
       ...detailData(detail),

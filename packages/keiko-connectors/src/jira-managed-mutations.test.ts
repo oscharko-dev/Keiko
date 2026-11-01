@@ -820,7 +820,12 @@ it("forwards an opaque plugin value and returns Jira's field error when it refus
   ).toEqual({
     ok: false,
     reason: "field-validation",
-    detail: { fieldErrors: [{ fieldId: "customfield_10105", message: "Sprint id" }] },
+    // The request's metadata names the field a person would recognise.
+    detail: {
+      fieldErrors: [
+        { fieldId: "customfield_10105", fieldName: "customfield_10105", message: "Sprint id" },
+      ],
+    },
   });
   const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
   expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({

@@ -154,39 +154,66 @@ export function mutationHasResponse(record: ChatToolMutationRecord): boolean {
 export function acknowledgedStatus(status: number | null): boolean {
   return status !== null && status >= 200 && status < 300;
 }
-// Only a local refusal before dispatch proves that this invocation caused no remote effect.
+// A local refusal before dispatch proves that this invocation caused no remote effect, and so does
+// a Jira client error that carries Jira's own error document (see `definitiveRejectionStatus`).
 const UNSTARTED: ReadonlySet<JiraMutationOutcome> = new Set(["not-dispatched", "rejected"]);
 const ACKNOWLEDGED: ReadonlySet<JiraMutationOutcome> = new Set([
   "succeeded",
   "succeeded-unconfirmed",
 ]);
 const UNKNOWN: ReadonlySet<JiraMutationOutcome> = new Set(["unknown"]);
-function allowedOutcomes(record: ChatToolMutationRecord): ReadonlySet<JiraMutationOutcome> {
+const UNKNOWN_OR_REJECTED: ReadonlySet<JiraMutationOutcome> = new Set(["unknown", "rejected"]);
+// A timeout, a conflict and a rate limit say nothing about whether the request was applied.
+const AMBIGUOUS_CLIENT_STATUSES: ReadonlySet<number> = new Set([408, 409, 429]);
+/**
+ * Whether a Jira answer can be a definitive rejection (#4176). Data Center validates a whole request
+ * before it applies anything, so a client error with Jira's own error document applied nothing and
+ * the model may correct and retry in the same turn. The status is necessary, not sufficient: the
+ * caller must also hold a parsable error document (`errors` or `errorMessages`). A 4xx without one,
+ * the ambiguous 4xx above, a 5xx and every lost answer stay uncertain (#2953: no automatic replay).
+ */
+export function definitiveRejectionStatus(status: number | null): boolean {
+  return status !== null && status >= 400 && status < 500 && !AMBIGUOUS_CLIENT_STATUSES.has(status);
+}
+function jiraRejectionPossible(record: ChatToolMutationRecord): boolean {
+  return record.sourceKind !== "configured-mcp" && definitiveRejectionStatus(record.httpStatus);
+}
+function allowedOutcomes(
+  record: ChatToolMutationRecord,
+  errorDocument: boolean,
+): ReadonlySet<JiraMutationOutcome> {
   if (record.phase === "prepared") return UNSTARTED;
   if (mutationAcknowledged(record)) return ACKNOWLEDGED;
-  // Status alone cannot prove absence of effects: a proxy can replace a response after commit.
-  return UNKNOWN;
+  // Status alone cannot prove absence of effects: a proxy can replace a response after commit. Only
+  // the composing caller, holding Jira's parsable error document, may claim a definitive rejection.
+  return errorDocument && jiraRejectionPossible(record) ? UNKNOWN_OR_REJECTED : UNKNOWN;
 }
 export function validateMutationSettlement(
   record: ChatToolMutationRecord,
   outcome: JiraMutationOutcome,
+  errorDocument = false,
 ): void {
   if (!OUTCOMES.has(outcome)) throw invalidRequest("Invalid mutation outcome.");
   if (record.phase === "settled") {
     if (record.outcome !== outcome) throw journalConflict();
     return;
   }
-  if (!allowedOutcomes(record).has(outcome)) throw journalConflict();
+  if (!allowedOutcomes(record, errorDocument).has(outcome)) throw journalConflict();
 }
 
+/** A rejection needs no response, or a response that can be Jira's definitive refusal. */
+function rejectionSettled(record: ChatToolMutationRecord): boolean {
+  return !mutationHasResponse(record) || jiraRejectionPossible(record);
+}
 function settledOutcome(record: ChatToolMutationRecord): JiraMutationOutcome | undefined {
   switch (record.outcome) {
     case "succeeded":
     case "succeeded-unconfirmed":
       return mutationAcknowledged(record) ? record.outcome : undefined;
     case "not-dispatched":
-    case "rejected":
       return !mutationHasResponse(record) ? record.outcome : undefined;
+    case "rejected":
+      return rejectionSettled(record) ? record.outcome : undefined;
     case "unknown":
       return mutationAcknowledged(record) ? undefined : record.outcome;
     default:
