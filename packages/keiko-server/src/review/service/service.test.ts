@@ -183,6 +183,25 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
     ).toEqual({ kind: "skipped", reason: "model-unavailable" });
   });
 
+  // #4138: a review started more than the readiness lifetime after the model last answered was
+  // refused for a stale observation; the run now checks each role model again before admission.
+  it("checks each role model again before it admits the run", async () => {
+    const lapsed = capability("reviewer-model", { conversationReady: false });
+    const capabilities: Record<string, typeof lapsed | undefined> = { "reviewer-model": lapsed };
+    const checked: string[] = [];
+    const settlement = await settlementOf({
+      capabilities,
+      ensureReady: (modelId) => {
+        checked.push(modelId);
+        capabilities[modelId] = capability(modelId);
+        return Promise.resolve();
+      },
+    });
+
+    expect(checked).toEqual(["reviewer-model", "checker-model"]);
+    expect(settlement).toEqual({ kind: "complete" });
+  });
+
   it("skips with target-changed, no-reviewable-changes and worktree-failed", async () => {
     const missing = startBody({
       target: { kind: "local-range", baseRef: "main", headRef: "gone" },

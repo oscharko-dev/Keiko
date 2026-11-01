@@ -221,6 +221,8 @@ export interface HarnessOptions {
   readonly db?: DatabaseSync | undefined;
   /** Issue #4137: the operator and user policy in front of eligibility (default: none). */
   readonly admit?: ReviewRunServiceDeps["models"]["admit"];
+  /** Issue #4138: the readiness re-check before admission (default: none). */
+  readonly ensureReady?: ReviewRunServiceDeps["models"]["ensureReady"];
 }
 
 export interface ReviewRunHarness {
@@ -301,6 +303,7 @@ function serviceDeps(
       },
       generation: () => 7,
       ...(options.admit === undefined ? {} : { admit: options.admit }),
+      ...(options.ensureReady === undefined ? {} : { ensureReady: options.ensureReady }),
     },
     activityLog: harness.log.sink,
   };

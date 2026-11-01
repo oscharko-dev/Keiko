@@ -33449,6 +33449,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "workspace-instance",
           "root-not-absolute",
           "canonical-root",
+          "model-unavailable",
           "launch-rejected",
           "filesystem-error",
           "unexpected-error",

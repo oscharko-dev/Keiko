@@ -44,7 +44,11 @@ import {
   targetRefusalSettlement,
   worktreeRefusalSettlement,
 } from "./mapping.js";
-import { validateReviewRoleModels, type ReviewModelPort } from "./models.js";
+import {
+  ensureReviewRoleModelsReady,
+  validateReviewRoleModels,
+  type ReviewModelPort,
+} from "./models.js";
 import { counterCheckOrder } from "./presentation.js";
 import type { ReviewerSettlementFact } from "./settlement.js";
 import type { ReviewRunStore } from "./store.js";
@@ -253,6 +257,7 @@ export async function prepareReviewRun(
   ctx: ReviewRunContext,
   state: ReviewRunState,
 ): Promise<ReviewDiffPackage | undefined> {
+  await ensureReviewRoleModelsReady(deps.models, ctx, ctx.correlationId);
   const models = validateReviewRoleModels(deps.models, ctx, deps.now(), ctx.correlationId);
   if (!models.ok) {
     stopWith(state, { kind: "skipped", reason: models.reason });

@@ -357,6 +357,30 @@ describe("createReviewRuntimeService", () => {
     expect(refused?.extra).toMatchObject({ reason: "native-profile" });
   });
 
+  // #4138: on the offline gate, a review started more than five minutes after the Reviewer last
+  // answered found the model's readiness lapsed; the probe's refusal settled policy-invalid.
+  it("answers runtime-unavailable when the authority probe finds the model unavailable", async () => {
+    const { repo, base, head } = headRepository();
+    const { subject, log, observed } = service(
+      { reports: [] },
+      {
+        layers: { ...reviewLayers(), authority: undefined, authorityRefusal: "model-unavailable" },
+      },
+    );
+
+    await expect(subject.run(request(repo, base, head))).resolves.toEqual({
+      ok: false,
+      reason: "runtime-unavailable",
+      rules: "absent",
+    });
+    expect(observed.starts).toEqual([]);
+    const refused = log.events.find((event) => event.op === "review.run.profile-refused");
+    expect(refused?.extra).toMatchObject({
+      reason: "authority-missing",
+      authorityRefusal: "model-unavailable",
+    });
+  });
+
   it("answers runtime-unavailable when no runtime can be composed", async () => {
     const { repo, base, head } = headRepository();
     const { subject } = service({ reports: [] }, { compose: false });

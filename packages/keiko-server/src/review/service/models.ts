@@ -27,6 +27,24 @@ export interface ReviewModelPort {
    * as `policy-invalid`; the policy records its own closed reason under `correlationId`.
    */
   admit?(models: ReviewRoleModels, correlationId: string | undefined): boolean;
+  /**
+   * Verifies a model again whose conversation readiness lapsed, as a conversation request does
+   * (#4138): a review started more than the readiness lifetime after the model last answered must
+   * not be refused for a stale observation. Resolves when the check settled, whatever its result.
+   */
+  ensureReady?(modelId: string, correlationId: string | undefined): Promise<void>;
+}
+
+/** Re-verifies each distinct role model before the run is admitted (#4138). */
+export async function ensureReviewRoleModelsReady(
+  port: ReviewModelPort,
+  models: ReviewRoleModels,
+  correlationId: string | undefined,
+): Promise<void> {
+  if (port.ensureReady === undefined) return;
+  for (const modelId of new Set([models.reviewerModelId, models.counterCheckerModelId])) {
+    await port.ensureReady(modelId, correlationId);
+  }
 }
 
 export interface ReviewRoleModels {

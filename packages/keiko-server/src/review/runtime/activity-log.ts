@@ -98,6 +98,7 @@ export const REVIEW_AUTHORITY_REFUSALS = [
   "workspace-instance",
   "root-not-absolute",
   "canonical-root",
+  "model-unavailable",
   "launch-rejected",
   "filesystem-error",
   "unexpected-error",

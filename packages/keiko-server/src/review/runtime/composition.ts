@@ -57,7 +57,7 @@ import type { ServerLogSink } from "../../observability/index.js";
 import { runMigrations } from "../../store/schema.js";
 import type { WorkspaceRootAccess } from "../../task-workspace/workspace-root-access.js";
 import type { UiHandlerDeps } from "../../deps.js";
-import { REVIEW_AUTHORITY_REFUSALS, type ReviewAuthorityRefusal } from "./activity-log.js";
+import type { ReviewAuthorityRefusal } from "./activity-log.js";
 import {
   createReviewWorkspaceLifecycle,
   type ReviewWorkspaceLifecycle,
@@ -145,13 +145,25 @@ export type ReviewRuntimeAuthorityProbe =
   | { readonly ok: true; readonly facts: ReviewRuntimeAuthorityFacts }
   | { readonly ok: false; readonly refusal: ReviewAuthorityRefusal };
 
+// The workspace authority's own closed refusals, as `invalidWorkspace` names them.
+const WORKSPACE_REFUSALS = [
+  "active-workspace",
+  "verified-head",
+  "issue-binding",
+  "workspace-instance",
+  "root-not-absolute",
+  "canonical-root",
+] as const satisfies readonly ReviewAuthorityRefusal[];
+
 function workspaceRefusal(reason: string | undefined): ReviewAuthorityRefusal | undefined {
-  return REVIEW_AUTHORITY_REFUSALS.find((refusal) => refusal === reason);
+  return WORKSPACE_REFUSALS.find((refusal) => refusal === reason);
 }
 
 /** The closed reason of a failed probe: the workspace authority's own, or the failure's class. */
 function authorityRefusalOf(error: Error): ReviewAuthorityRefusal {
   if (error instanceof CodingRuntimeLaunchRejectedError) {
+    // The model's readiness lapsed or it was replaced: no authority can be minted for it now.
+    if (error.failureCode === "model-unavailable") return "model-unavailable";
     return workspaceRefusal(error.reason) ?? "launch-rejected";
   }
   const code = (error as { readonly code?: unknown }).code;

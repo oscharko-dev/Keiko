@@ -446,7 +446,10 @@ async function runOnInstance(
         check.layer,
         check.authorityRefusal,
       );
-      return { ok: false, reason: check.reason, rules: prepared.rules };
+      // #4138: an unavailable model is no policy failure; the review is skipped as unavailable.
+      const reason =
+        check.authorityRefusal === "model-unavailable" ? "runtime-unavailable" : check.reason;
+      return { ok: false, reason, rules: prepared.rules };
     }
     live.slot.pending = {
       create: (runId): ReviewFindingIntake =>

@@ -34,7 +34,10 @@ import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
-import { stopConfiguredConversationReadiness } from "./gateway-readiness.js";
+import {
+  awaitInitializedConversationReadiness,
+  stopConfiguredConversationReadiness,
+} from "./gateway-readiness.js";
 import { createGatewayStartupChecks } from "./gateway-startup.js";
 import {
   adoptReportedContextWindow,
@@ -5264,6 +5267,9 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
       generation: () => deps.gatewayConfig?.generation(),
       // Issue #4137: the operator and user policy in front of eligibility at every run start.
       admit: reviewRunAdmission(() => reviewPolicyDeps(args), activityLog),
+      // Issue #4138: a lapsed readiness observation is checked again, as for a conversation.
+      ensureReady: (modelId, correlationId) =>
+        awaitInitializedConversationReadiness(deps, modelId, correlationId),
     },
     activityLog,
     reviewerPromptBudget: configuredReviewRunBudget(
