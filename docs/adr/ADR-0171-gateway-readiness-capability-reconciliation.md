@@ -147,6 +147,14 @@ cannot, even when the model promise resolves or the stream emits `done`. A strea
 requires full iterator exhaustion. Failed or unfinished streams create no witness. This does not
 update the shared observation ledger, admit another turn, extend a deadline or grant attempts or
 tokens. The existing caller's original bounds still govern every continuation.
+When neither the observation nor a witness is fresh because the turn's calls merely outlasted the
+interval (for example a Chat tool turn whose rejected calls served nothing), the grounded answer
+wrappers check the model once more through the same conversation-request check a new request uses
+and then decide again. Only `expired` is checked again; a failed probe, a cleared or malformed
+observation, a replaced model or configuration and cancellation still refuse at once, and the call
+proceeds only on a fresh positive observation of the admitted generation, so no provider work runs
+on unconfirmed readiness. Refusing instead ended a working Jira turn while the very next check of the
+same model answered ready (2026-11-01, #4173).
 `gateway.conversation.admission` records the closed decision and admitted/current generations under
 the request correlation. A known refusal before the model port is invoked incurs no physical
 synthesis attempt or uncertain output reservation.

@@ -1968,6 +1968,7 @@ function resolveGroundedAnswerModel(
     modelId,
     readinessAdmission,
     deps,
+    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 
@@ -2731,6 +2732,7 @@ function resolveMultiSourceSeam(
     modelId,
     readinessAdmission,
     deps,
+    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),

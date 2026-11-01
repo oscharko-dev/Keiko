@@ -144,6 +144,7 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
+import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import { requirementCoverage } from "./requirement-coverage-note.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
@@ -1537,6 +1538,7 @@ function resolveModel(
     modelId,
     readinessAdmission,
     deps,
+    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 

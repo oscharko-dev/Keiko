@@ -155,7 +155,9 @@ while another mutation is pending. Closed values and one duration only.
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
-responses cannot establish that continuation. Refusals distinguish model or
+responses cannot establish that continuation. A turn call whose admission merely expired is checked
+once more like a new request and proceeds only on a fresh positive observation (a second admission
+line records that decision). Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative

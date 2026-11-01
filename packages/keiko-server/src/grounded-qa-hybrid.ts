@@ -226,6 +226,7 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
+import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 
 // ─── Canonical connector reader ───────────────────────────────────────────────
 
@@ -2332,6 +2333,7 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     ctx.modelId,
     readinessAdmission,
     ctx.deps,
+    (id, correlationId) => awaitInitializedConversationReadiness(ctx.deps, id, correlationId),
   );
   return {
     answer: createHybridAnswerer(
