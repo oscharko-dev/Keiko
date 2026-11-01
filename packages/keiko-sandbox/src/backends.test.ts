@@ -354,6 +354,31 @@ describe("buildWrappedCommand", () => {
     ]);
   });
 
+  // #4068: a Windows host runs the container fallback in a Linux engine (Docker Desktop, podman
+  // machine). Mirroring `C:\work\root` as the container path gave `C:\work\root:C:\work\root:rw`,
+  // which the engine rejects before the step starts ("too many colons", exit 125), so every
+  // enforced verification step on Windows failed. A host path that is not POSIX-absolute is mounted
+  // at the sandbox's own execution-root path instead, and the step runs from there.
+  it("container backends mount a Windows execution root at a POSIX container path", () => {
+    for (const cwd of ["C:\\work\\root", "\\\\?\\C:\\work\\root", "\\\\server\\share\\root"]) {
+      for (const filesystem of ["inherit", "execution-root"] as const) {
+        const wrapped = expectWrapped(
+          buildWrappedCommand("container-docker", { ...plan, cwd, filesystem }),
+        );
+        const volume = wrapped.args.indexOf("--volume");
+        const workdir = wrapped.args.indexOf("--workdir");
+        expect(wrapped.args[volume + 1]).toBe(`${cwd}:${EXECUTION_ROOT_MOUNT}:rw`);
+        expect(wrapped.args[workdir + 1]).toBe(EXECUTION_ROOT_MOUNT);
+        expect(wrapped.args.slice(-4)).toEqual([
+          DEFAULT_CONTAINER_IMAGE,
+          "node",
+          "-e",
+          "process.exit(0)",
+        ]);
+      }
+    }
+  });
+
   it("returns undefined for the 'none' backend (no enforcing wrapper)", () => {
     expect(buildWrappedCommand("none", plan)).toBeUndefined();
   });
