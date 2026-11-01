@@ -817,7 +817,9 @@ export const REVIEW_RUN_DIFF_CONTEXT_MAX = 64;
 
 /** Counter-check bounds per candidate finding (ADR-0182 D5); operators may configure them. */
 export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
-export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 120_000;
+// #4138: 300 s, tuned on the development set: at 120 s a local Gemma 4 31B 4-bit counter-checker
+// ended candidates undecided after 1 to 5 tool calls, before it reached a verdict.
+export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 300_000;
 /** Prompt tokens one counter-check may spend, and all counter-checks of one run together. */
 export const REVIEW_COUNTER_CHECK_DEFAULT_PROMPT_TOKENS = 200_000;
 export const REVIEW_COUNTER_CHECK_DEFAULT_RUN_PROMPT_TOKENS = 1_200_000;

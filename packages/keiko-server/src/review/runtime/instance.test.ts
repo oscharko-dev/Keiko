@@ -183,6 +183,19 @@ describe("createReviewRuntimeService", () => {
       failureCode: "recovery-required",
       runtimeCleanup: "unproven",
     });
+    // #4138: a failed turn's own cause names the failure, not the recovery state.
+    await expect(
+      run({
+        reports: [],
+        terminal: "recovery-required",
+        turnFailureCode: "prompt-allowance-exhausted",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      outcome: "failed",
+      failureCode: "prompt-allowance-exhausted",
+      runtimeCleanup: "unproven",
+    });
     await expect(run({ reports: [], terminal: "failed" })).resolves.toMatchObject({
       ok: true,
       outcome: "failed",

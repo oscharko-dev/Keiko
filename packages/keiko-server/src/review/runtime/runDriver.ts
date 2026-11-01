@@ -58,9 +58,18 @@ function settledRun(
 ): SettledRun {
   const failure = failureCode === undefined ? {} : { failureCode };
   if (state === "recovery-required") {
-    return composition.controlPlane.orchestrator.succeededTurnReapUnproven(runId)
-      ? { outcome: "completed", runtimeCleanup: "unproven" }
-      : { outcome: "failed", ...failure, runtimeCleanup: "unproven" };
+    const orchestrator = composition.controlPlane.orchestrator;
+    if (orchestrator.succeededTurnReapUnproven(runId)) {
+      return { outcome: "completed", runtimeCleanup: "unproven" };
+    }
+    // #4138: the failed turn's own cause (an exhausted prompt allowance, a deadline), not the
+    // recovery state, names why the Reviewer failed.
+    const turnFailureCode = orchestrator.unprovenTurnFailureCode(runId) ?? failureCode;
+    return {
+      outcome: "failed",
+      ...(turnFailureCode === undefined ? {} : { failureCode: turnFailureCode }),
+      runtimeCleanup: "unproven",
+    };
   }
   if (state === "succeeded") return { outcome: "completed", runtimeCleanup: "proven" };
   if (state === "cancelled" || state === "taken-over") {

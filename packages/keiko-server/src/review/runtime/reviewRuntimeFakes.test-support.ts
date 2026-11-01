@@ -26,6 +26,8 @@ export interface ScriptedReviewRun {
    * settlement stop's process-tree reap was unproven (a macOS gateway-profile run, #4136).
    */
   readonly reapUnproven?: boolean | undefined;
+  /** The failed turn's own failure code beside an unproven reap (#4138). */
+  readonly turnFailureCode?: string | undefined;
 }
 
 export interface ReviewRuntimeObservations {
@@ -93,6 +95,8 @@ function scriptedOrchestrator(
     getSnapshot: () => settledSnapshot(state),
     succeededTurnReapUnproven: (): boolean =>
       state === "recovery-required" && script.reapUnproven === true,
+    unprovenTurnFailureCode: (): string | undefined =>
+      state === "recovery-required" ? script.turnFailureCode : undefined,
     // A recovery-required run never reaches a terminal state: the orchestrator keeps it live.
     hasLiveRun: (): boolean => state === "recovery-required",
     stop: (): Promise<unknown> => Promise.resolve({ ok: true }),

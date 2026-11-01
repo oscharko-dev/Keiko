@@ -7419,6 +7419,29 @@ describe("terminal run cause (F9, #3873)", () => {
     );
   }
 
+  it("keeps a failed turn's own cause beside an unproven reap, for the review (#4138)", async () => {
+    const unproven = { ok: false, failureCode: "runtime-reap-unproven", retryable: false } as const;
+    const { f } = settledWith("failed", terminalFacts("turn-rejected", true));
+    f.manager.stop.mockResolvedValueOnce(unproven);
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("recovery-required");
+    });
+
+    expect(f.orchestrator.unprovenTurnFailureCode(RUN_ID)).toBe("prompt-allowance-exhausted");
+    expect(f.orchestrator.unprovenTurnFailureCode("run-other")).toBeUndefined();
+    expect(f.orchestrator.succeededTurnReapUnproven(RUN_ID)).toBe(false);
+
+    // A failed turn whose layers named no cause leaves nothing to report.
+    const uncaused = settledWith("failed", undefined);
+    uncaused.f.manager.stop.mockResolvedValueOnce(unproven);
+    await uncaused.f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(uncaused.f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("recovery-required");
+    });
+    expect(uncaused.f.orchestrator.unprovenTurnFailureCode(RUN_ID)).toBeUndefined();
+  });
+
   it("settles a run its prompt allowance refused as prompt-allowance-exhausted, never internal", async () => {
     const { f, records } = settledWith("failed", terminalFacts("turn-rejected", true));
     await f.orchestrator.start(start);

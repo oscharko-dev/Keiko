@@ -1986,6 +1986,11 @@ export class CodingRuntimeOrchestrator {
    * not prove the process tree's exit (#4136); see `succeededTurnReapUnproven`.
    */
   private succeededTurnReapUnprovenRunId: string | undefined;
+  /**
+   * The failed turn whose settlement stop could not prove the runtime's end (#4138), with the
+   * failure code its own terminal cause named; see `unprovenTurnFailureCode`.
+   */
+  private unprovenTurnFailure: { readonly runId: string; readonly failureCode: string } | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
@@ -2256,6 +2261,18 @@ export class CodingRuntimeOrchestrator {
       this.succeededTurnReapUnprovenRunId === runId &&
       this.deps.snapshots.get(runId)?.state === "recovery-required"
     );
+  }
+
+  /**
+   * The failure code a recovery-required run's turn named before its stop failed to prove the
+   * runtime's end (#4138): an exhausted prompt allowance, a deadline or a failed model call. It
+   * names why the turn failed; the run stays recovery-required and its runtime quarantined.
+   */
+  unprovenTurnFailureCode(runId: string): string | undefined {
+    const failure = this.unprovenTurnFailure;
+    return failure?.runId === runId && this.deps.snapshots.get(runId)?.state === "recovery-required"
+      ? failure.failureCode
+      : undefined;
   }
 
   submitFollowUp(
@@ -3496,7 +3513,7 @@ export class CodingRuntimeOrchestrator {
     verificationFailure?: VerificationFailureSettlement,
   ): void {
     if (!stopped || !this.runtimeAgrees(live.runId, outcome, cause)) {
-      this.noteSucceededTurnReapUnproven(live.runId, outcome, stopped);
+      this.noteUnprovenTurnSettlement(live.runId, outcome, stopped, cause);
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
@@ -3514,13 +3531,21 @@ export class CodingRuntimeOrchestrator {
     this.transition(live, target.state, target.failureCode, undefined, settledCause);
   }
 
-  /** Recorded before the recovery transition publishes, so its subscribers already see it. */
-  private noteSucceededTurnReapUnproven(
+  /**
+   * Recorded before the recovery transition publishes, so its subscribers already see it. Only a
+   * stop that did not succeed qualifies: a stopped runtime whose result disagrees names nothing.
+   */
+  private noteUnprovenTurnSettlement(
     runId: string,
     outcome: CodingRuntimeTaskOutcome,
     stopped: boolean,
+    cause: RunSettlementCause | undefined,
   ): void {
-    if (stopped || outcome !== "succeeded") return;
+    if (stopped) return;
+    if (outcome !== "succeeded") {
+      if (cause !== undefined) this.unprovenTurnFailure = { runId, failureCode: cause.failureCode };
+      return;
+    }
     if (this.deps.manager.succeededStopReapUnproven?.(runId) !== true) return;
     this.succeededTurnReapUnprovenRunId = runId;
   }
