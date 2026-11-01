@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "2efc5c5f2987edb8715182fe66e6219a293a649ac3b9995ccd93d8371ac9e8f1"
+      "sha256": "57004ea5f1039a6a00570c02a39412fd27590b891d33c58a645463bff4d62bf3"
     },
     {
       "path": "package.json",
-      "sha256": "58fa05f9b19f065d5df0a7615b9bf02e3c11ca2a0c90939f829985f84d7b5004"
+      "sha256": "3a7113228d12bbf4728a9253aced32f14e2de29db0b73cfec07cae8480e59974"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "16e432236a410ca1f099140c8fe86cc5fde22f67b20ccdae883f0c40d9218b9a"
+      "sha256": "e4d732dd905a33efee3bc5982f37356a608e95ba86166529fd23657455b37547"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
@@ -132,8 +132,8 @@
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-10-31T11:04:42.844Z",
-    "repoHeadSha": "07646a33554cdc63320f27e0505d818cc21691a6"
+    "generatedAt": "2026-10-31T20:16:16.650Z",
+    "repoHeadSha": "a367517b480168f9ed60522099634767bae9caeb"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {

@@ -41,6 +41,8 @@ import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { enrichChatCompactionWithModelSummary } from "./chat-compaction-model-summary.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import { stopChatCompactionWork } from "./chat-compaction-model-call.js";
+import { bindDepsRoot } from "./request-deps-root.js";
 
 const CHAT_ID = "chat-model-summary-1";
 const MODEL_ID = "summary-model";
@@ -311,6 +313,299 @@ afterEach(() => {
 });
 
 describe("enrichChatCompactionWithModelSummary", () => {
+  it("accepts a healthy buffered summary that takes longer than fifteen seconds", async () => {
+    vi.useFakeTimers();
+    const store = createInMemoryEvidenceStore();
+    const model: ModelPort = {
+      call: () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(response("", structuredSummaryOutput()));
+          }, 20_000);
+        }),
+    };
+    const enrichment = enrichChatCompactionWithModelSummary(
+      deps(store, model),
+      defaultEnrichmentInput(),
+    );
+    await vi.advanceTimersByTimeAsync(20_000);
+    await enrichment;
+    expect(requireModelSummary(store, 2).status).toBe("valid");
+  });
+
+  it("coalesces concurrent identical summary work without replaying the model request", async () => {
+    vi.useFakeTimers();
+    const store = createInMemoryEvidenceStore();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const call = vi.fn(
+      () =>
+        new Promise<NormalizedResponse>((resolve) => {
+          setTimeout(() => {
+            resolve(response("", structuredSummaryOutput()));
+          }, 100);
+        }),
+    );
+    const dependencies = deps(store, { call });
+    const first = enrichChatCompactionWithModelSummary(dependencies, defaultEnrichmentInput());
+    const second = enrichChatCompactionWithModelSummary(dependencies, defaultEnrichmentInput());
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.all([first, second]);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(requireModelSummary(store, 2).status).toBe("valid");
+    expect(
+      sink.events
+        .filter((entry) => entry.op === "chat.compaction.summary.work")
+        .map((entry) => entry.extra),
+    ).toEqual([
+      expect.objectContaining({ outcome: "coalesced", modelPortCalled: false }),
+      expect.objectContaining({ outcome: "accepted", modelPortCalled: true }),
+    ]);
+  });
+
+  it("separates changed runtime configuration within the same handler graph", async () => {
+    vi.useFakeTimers();
+    const evidence = createInMemoryEvidenceStore();
+    const call = vi.fn(
+      () =>
+        new Promise<NormalizedResponse>((resolve) => {
+          setTimeout(() => {
+            resolve(response("", structuredSummaryOutput()));
+          }, 100);
+        }),
+    );
+    const dependencies = deps(evidence, { call });
+    let active = gatewayConfig(true);
+    Object.defineProperty(dependencies, "config", { get: () => active });
+    const first = enrichChatCompactionWithModelSummary(dependencies, defaultEnrichmentInput());
+    active = gatewayConfig(true);
+    const second = enrichChatCompactionWithModelSummary(dependencies, defaultEnrichmentInput());
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.all([first, second]);
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces bound request copies through their composed graph", async () => {
+    vi.useFakeTimers();
+    const evidence = createInMemoryEvidenceStore();
+    const call = vi.fn(
+      () =>
+        new Promise<NormalizedResponse>((resolve) => {
+          setTimeout(() => {
+            resolve(response("", structuredSummaryOutput()));
+          }, 100);
+        }),
+    );
+    const dependencies = deps(evidence, { call });
+    const copy = bindDepsRoot({ ...dependencies }, dependencies);
+    const nested = bindDepsRoot({ ...copy }, copy);
+    const pending = [copy, dependencies, nested].map((view) =>
+      enrichChatCompactionWithModelSummary(view, defaultEnrichmentInput()),
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.all(pending);
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["evidence-store", "model-port", "conversation-store"])(
+    "keeps a bound %s override isolated",
+    async (changed) => {
+      vi.useFakeTimers();
+      const evidence = createInMemoryEvidenceStore();
+      const call = vi.fn(
+        () =>
+          new Promise<NormalizedResponse>((resolve) => {
+            setTimeout(() => {
+              resolve(response("", structuredSummaryOutput()));
+            }, 100);
+          }),
+      );
+      const dependencies = deps(evidence, { call });
+      const otherStore = changed === "conversation-store" ? createInMemoryUiStore() : undefined;
+      const view = bindDepsRoot(
+        {
+          ...dependencies,
+          ...(changed === "evidence-store" ? { evidenceStore: createInMemoryEvidenceStore() } : {}),
+          ...(changed === "model-port" ? { modelPortFactory: (): ModelPort => ({ call }) } : {}),
+          ...(otherStore === undefined ? {} : { store: otherStore }),
+        },
+        dependencies,
+      );
+      try {
+        const pending = [dependencies, view].map((candidate) =>
+          enrichChatCompactionWithModelSummary(candidate, defaultEnrichmentInput()),
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        await Promise.all(pending);
+        expect(call).toHaveBeenCalledTimes(2);
+      } finally {
+        otherStore?.close();
+      }
+    },
+  );
+
+  it.each(["chat", "model", "prompt", "source-reference", "configuration", "evidence-store"])(
+    "does not coalesce changed summary scope: %s",
+    async (changed) => {
+      vi.useFakeTimers();
+      const evidence = createInMemoryEvidenceStore();
+      const call = vi.fn(
+        () =>
+          new Promise<NormalizedResponse>((resolve) => {
+            setTimeout(() => {
+              resolve(response("", structuredSummaryOutput()));
+            }, 100);
+          }),
+      );
+      const dependencies = deps(evidence, { call });
+      const input = defaultEnrichmentInput();
+      const first = enrichChatCompactionWithModelSummary(dependencies, input);
+      const secondInput = {
+        ...input,
+        ...(changed === "chat" ? { chatId: "another-chat" } : {}),
+        ...(changed === "model" ? { modelId: "another-model" } : {}),
+        ...(changed === "prompt"
+          ? { historyPrefix: [message("user", "Different source.", 0)] }
+          : {}),
+        ...(changed === "source-reference"
+          ? {
+              compaction: { ...compactionRecord(), summaryRefHash: "changed-source-hash" },
+            }
+          : {}),
+      };
+      const secondDependencies =
+        changed === "configuration" || changed === "evidence-store"
+          ? {
+              ...dependencies,
+              ...(changed === "configuration" ? { config: gatewayConfig(true) } : {}),
+              ...(changed === "evidence-store"
+                ? { evidenceStore: createInMemoryEvidenceStore() }
+                : {}),
+            }
+          : dependencies;
+      const second = enrichChatCompactionWithModelSummary(secondDependencies, secondInput);
+      await vi.advanceTimersByTimeAsync(100);
+      await Promise.all([first, second]);
+      expect(call).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("releases failed coalescing work so an identical request can retry", async () => {
+    const evidence = createInMemoryEvidenceStore();
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce(response("", { content: 5 }))
+      .mockResolvedValueOnce(response("", structuredSummaryOutput()));
+    const dependencies = deps(evidence, { call });
+    await enrichChatCompactionWithModelSummary(dependencies, defaultEnrichmentInput());
+    expect(requireModelSummary(evidence, 2).status).toBe("invalid");
+    await enrichChatCompactionWithModelSummary(dependencies, defaultEnrichmentInput());
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(requireModelSummary(evidence, 2).status).toBe("valid");
+  });
+
+  it.each([
+    { providerTimeout: 30_000, expected: 601_000 },
+    { providerTimeout: 900_000, expected: 901_000 },
+    { providerTimeout: 2_147_483_647, expected: 2_147_483_647 },
+  ])(
+    "aborts a stalled port at its bounded buffered backstop: $providerTimeout",
+    async ({ providerTimeout, expected }) => {
+      vi.useFakeTimers();
+      const evidence = createInMemoryEvidenceStore();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let aborted = false;
+      const model: ModelPort = {
+        call: (_request, signal) => {
+          signal.addEventListener("abort", () => {
+            aborted = true;
+          });
+          return new Promise<NormalizedResponse>(() => undefined);
+        },
+      };
+      const config = gatewayConfig(true);
+      const enrichment = enrichChatCompactionWithModelSummary(
+        {
+          ...deps(evidence, model),
+          config: {
+            ...config,
+            providers: config.providers.map((provider) => ({
+              ...provider,
+              timeoutMs: providerTimeout,
+            })),
+          },
+        },
+        defaultEnrichmentInput(),
+      );
+      await vi.advanceTimersByTimeAsync(expected - 1);
+      expect(aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await enrichment;
+      expect(aborted).toBe(true);
+      const event = sink.events.find((item) => item.op === "chat.compaction.summary.work");
+      if (event === undefined) throw new Error("Missing summary work event");
+      expect(event.extra).toMatchObject({
+        outcome: "timed-out",
+        timeoutMs: expected,
+        modelPortCalled: true,
+      });
+      expectActivityLogProof(
+        "chat.compaction.summary.work.line",
+        formatActivityLogProofLine(event),
+      );
+      const output = sink.lines().join("\n");
+      expect(output).not.toContain(SECRET);
+      expect(output).not.toContain(ABS_PATH);
+      expect(output).not.toContain(CHAT_ID);
+    },
+  );
+
+  it("retains a short fallback bound when the model has no configured provider", async () => {
+    vi.useFakeTimers();
+    const evidence = createInMemoryEvidenceStore();
+    const dependencies = deps(evidence, neverResolvingModel());
+    const enrichment = enrichChatCompactionWithModelSummary(
+      {
+        ...dependencies,
+        config: { ...gatewayConfig(true), providers: [] },
+      },
+      defaultEnrichmentInput(),
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    await enrichment;
+    expect(requireModelSummary(evidence, 2).status).toBe("timed-out");
+  });
+
+  it.each(["stalled", "already-resolved", "request-copy"])(
+    "stops %s work before graph disposal can persist a late result",
+    async (kind) => {
+      const evidence = createInMemoryEvidenceStore();
+      let observed: AbortSignal | undefined;
+      const call = vi.fn<ModelPort["call"]>((_request, signal) => {
+        observed = signal;
+        return kind !== "already-resolved"
+          ? new Promise(() => undefined)
+          : Promise.resolve(response("", structuredSummaryOutput()));
+      });
+      const dependencies = deps(evidence, { call });
+      const view =
+        kind === "request-copy" ? bindDepsRoot({ ...dependencies }, dependencies) : dependencies;
+      const pending = enrichChatCompactionWithModelSummary(view, defaultEnrichmentInput());
+      try {
+        await stopChatCompactionWork(dependencies);
+        expect(observed?.aborted).toBe(true);
+        await pending;
+        expect(evidence.list()).toEqual([]);
+        await enrichChatCompactionWithModelSummary(view, defaultEnrichmentInput());
+        expect(call).toHaveBeenCalledTimes(1);
+      } finally {
+        await stopChatCompactionWork(view);
+        await pending;
+      }
+    },
+  );
+
   it.each(["unavailable", "invalid", "timed-out"] as const)(
     "preserves a valid running summary after a %s refresh and retries uncovered turns",
     async (failure) => {
@@ -328,16 +623,27 @@ describe("enrichChatCompactionWithModelSummary", () => {
         content: "The current owner is Mara and the corrected budget is 60000 euros.",
         coveredItems: 2,
       };
+      const source = history.createMessages(
+        Array.from({ length: 70 }, (_unused, index) => ({
+          ...message(
+            index % 2 === 0 ? "user" : "assistant",
+            index === 0 ? prior.content : `Refresh source ${String(index)}`,
+            index,
+          ),
+          chatId,
+        })),
+      );
       const input = {
         ...defaultEnrichmentInput(70),
         chatId,
+        historyPrefix: source,
         compaction: {
           ...compactionRecord(),
           itemsBefore: 70,
           modelSummary: prior,
           conversationCoverage: {
             version: 1 as const,
-            throughMessageId: "old-boundary",
+            throughMessageId: sourceBoundary(source),
             historyRevision: history.chatHistoryRevision(chatId),
             contextWindowTokens: 4096,
           },
@@ -356,7 +662,7 @@ describe("enrichChatCompactionWithModelSummary", () => {
       try {
         persistChatCompactionEvidence(dependencies, input);
         const enrichment = enrichChatCompactionWithModelSummary(dependencies, input);
-        await vi.advanceTimersByTimeAsync(15000);
+        await vi.runAllTimersAsync();
         await enrichment;
         const id = `chat-${sha256Hex(chatId).slice(0, 16)}-t70`;
         const record = loadEvidence(evidence, id)?.compaction?.[0];
@@ -610,7 +916,7 @@ describe("enrichChatCompactionWithModelSummary", () => {
       }),
       defaultEnrichmentInput(95),
     );
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.runAllTimersAsync();
     await enrichment;
     expect(requireModelSummary(store, 95).failureReason).toBe(reason);
     expect(events).toHaveLength(1);
@@ -756,7 +1062,7 @@ describe("enrichChatCompactionWithModelSummary", () => {
       defaultEnrichmentInput(6),
     );
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.runAllTimersAsync();
     await enrichment;
 
     const persisted = requireModelSummary(store, 6);
@@ -804,3 +1110,9 @@ describe("enrichChatCompactionWithModelSummary", () => {
     });
   });
 });
+
+function sourceBoundary(source: readonly ChatMessage[]): string {
+  const last = source.at(-1);
+  if (last === undefined) throw new TypeError("Missing source boundary");
+  return last.id;
+}

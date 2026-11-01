@@ -1,4 +1,4 @@
-# Public API surface — 1.3.3
+# Public API surface — 1.3.4
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -109,6 +109,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 `KEIKO_PRODUCT_VERSION`.
 
 ## Stability notes
+
+- 1.3.4: root exports and CLI entrypoints remain stable. Chat adds revision-bound private
+  continuity checkpoints and bounded archive discovery; original messages remain canonical,
+  and token-estimate provenance does not imply a model-independent memory-quality guarantee.
+  Local SQLite schema migrations 55/56 are automatic. Coding Workbench adds governed task
+  branch creation and issue-free draft PR delivery while preserving protected integration.
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
 - 1.3.3: root exports and CLI entrypoints remain stable. Authenticated MCP Settings routes add
