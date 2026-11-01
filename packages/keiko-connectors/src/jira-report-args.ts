@@ -17,15 +17,15 @@ export const JIRA_REPORT_SECTION_PAGE_DEFAULT = 25;
 export const JIRA_REPORT_SECTION_PAGE_MAX = 100;
 export const JIRA_REPORT_PARENT_FIELDS_MAX = 4;
 
+/** The view a call asks for; a new report may name it too, so one call can read and page. */
+export interface JiraReportPage {
+  readonly section: JiraReportSection;
+  readonly startAt: number;
+  readonly maxResults: number;
+}
 export type JiraReportArgs =
-  | { readonly kind: "new"; readonly request: JiraReportRequest }
-  | {
-      readonly kind: "continue";
-      readonly reportId: string;
-      readonly section: JiraReportSection;
-      readonly startAt: number;
-      readonly maxResults: number;
-    };
+  | ({ readonly kind: "new"; readonly request: JiraReportRequest } & JiraReportPage)
+  | ({ readonly kind: "continue"; readonly reportId: string } & JiraReportPage);
 
 const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
 const REPORT_ID = new RegExp(JIRA_REPORT_ID_PATTERN, "u");
@@ -41,7 +41,13 @@ const SCOPE_KEYS: ReadonlySet<string> = new Set([
   "parentFieldIds",
   "requirementIds",
 ]);
-const CONTINUE_KEYS = new Set(["reportId", "section", "startAt", "maxResults"]);
+const PAGE_KEYS = ["section", "startAt", "maxResults"] as const;
+const NEW_KEYS: ReadonlySet<string> = new Set([...SCOPE_KEYS, ...PAGE_KEYS]);
+const CONTINUE_KEYS: ReadonlySet<string> = new Set(["reportId", ...PAGE_KEYS]);
+/** Argument names echoed to the model; anything else is named by this placeholder. */
+const ARGUMENT_NAME = /^[A-Za-z][A-Za-z0-9_]{0,31}$/u;
+const UNNAMED_ARGUMENT = "(unnamed)";
+const INVALID_ARGUMENTS_MAX = 16;
 
 function stringList(value: unknown, max: number, pattern: RegExp): readonly string[] | undefined {
   if (value === undefined) return [];
@@ -89,8 +95,9 @@ function optionalDate(value: unknown): string | undefined | null {
   return Number.isFinite(time) && new Date(time).toISOString().startsWith(value) ? value : null;
 }
 function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
-  if (!Object.keys(args).every((key) => SCOPE_KEYS.has(key))) return undefined;
+  if (!Object.keys(args).every((key) => NEW_KEYS.has(key))) return undefined;
   const scope = scopeOf(args);
+  const view = pageOf(args);
   const estimate = optionalField(args.estimateFieldId);
   const asOf = optionalDate(args.asOf);
   const parents = stringList(args.parentFieldIds, JIRA_REPORT_PARENT_FIELDS_MAX, FIELD_ID);
@@ -101,6 +108,7 @@ function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
   );
   if (
     scope === undefined ||
+    view === undefined ||
     estimate === null ||
     asOf === null ||
     parents === undefined ||
@@ -116,6 +124,7 @@ function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
       parentFieldIds: parents,
       requirementIds: requirements,
     },
+    ...view,
   };
 }
 function page(value: unknown, fallback: number, min: number, max: number): number | undefined {
@@ -124,26 +133,66 @@ function page(value: unknown, fallback: number, min: number, max: number): numbe
     ? value
     : undefined;
 }
+function sectionOf(value: unknown): JiraReportSection | undefined {
+  return JIRA_REPORT_SECTIONS.find((item) => item === (value ?? "summary"));
+}
+function startOf(value: unknown): number | undefined {
+  return page(value, 0, 0, 10_000_000);
+}
+function maxResultsOf(value: unknown): number | undefined {
+  return page(value, JIRA_REPORT_SECTION_PAGE_DEFAULT, 1, JIRA_REPORT_SECTION_PAGE_MAX);
+}
+function pageOf(args: CatalogJsonObject): JiraReportPage | undefined {
+  const section = sectionOf(args.section);
+  const startAt = startOf(args.startAt);
+  const maxResults = maxResultsOf(args.maxResults);
+  if (section === undefined || startAt === undefined || maxResults === undefined) return undefined;
+  return { section, startAt, maxResults };
+}
 function continuation(args: CatalogJsonObject): JiraReportArgs | undefined {
-  const { reportId, section } = args;
-  const startAt = page(args.startAt, 0, 0, 10_000_000);
-  const maxResults = page(
-    args.maxResults,
-    JIRA_REPORT_SECTION_PAGE_DEFAULT,
-    1,
-    JIRA_REPORT_SECTION_PAGE_MAX,
-  );
-  const named = JIRA_REPORT_SECTIONS.find((item) => item === (section ?? "summary"));
+  const { reportId } = args;
+  const view = pageOf(args);
   if (
     !Object.keys(args).every((key) => CONTINUE_KEYS.has(key)) ||
     typeof reportId !== "string" ||
     !REPORT_ID.test(reportId) ||
-    named === undefined ||
-    startAt === undefined ||
-    maxResults === undefined
+    view === undefined
   )
     return undefined;
-  return { kind: "continue", reportId, section: named, startAt, maxResults };
+  return { kind: "continue", reportId, ...view };
+}
+
+const ARGUMENT_CHECKS: Readonly<Record<string, (value: unknown) => boolean>> = {
+  projectKey: (value) => optionalProject(value) !== null,
+  jql: (value) => optionalClause(value) !== null,
+  estimateFieldId: (value) => optionalField(value) !== null,
+  asOf: (value) => optionalDate(value) !== null,
+  parentFieldIds: (value) =>
+    stringList(value, JIRA_REPORT_PARENT_FIELDS_MAX, FIELD_ID) !== undefined,
+  requirementIds: (value) =>
+    stringList(value, JIRA_REPORT_REQUIREMENT_ID_MAX, REQUIREMENT_ID) !== undefined,
+  reportId: (value) => typeof value === "string" && REPORT_ID.test(value),
+  section: (value) => sectionOf(value) !== undefined,
+  startAt: (value) => startOf(value) !== undefined,
+  maxResults: (value) => maxResultsOf(value) !== undefined,
+};
+function argumentName(key: string): string {
+  return ARGUMENT_NAME.test(key) ? key : UNNAMED_ARGUMENT;
+}
+
+/**
+ * The argument names a refused call has to fix, so the model can correct the call instead of
+ * abandoning the report (#4181). Unknown or invalid names come first; a new report that names no
+ * scope is answered with the two scope arguments, one of which it needs.
+ */
+export function invalidJiraReportArguments(args: CatalogJsonObject): readonly string[] {
+  const allowed = args.reportId === undefined ? NEW_KEYS : CONTINUE_KEYS;
+  const named = Object.keys(args).filter(
+    (key) => !allowed.has(key) || ARGUMENT_CHECKS[key]?.(args[key]) === false,
+  );
+  const invalid = [...new Set(named.map((key) => argumentName(key)))].sort(compareCodePoints);
+  if (invalid.length > 0) return invalid.slice(0, INVALID_ARGUMENTS_MAX);
+  return args.reportId === undefined && scopeOf(args) === undefined ? ["jql", "projectKey"] : [];
 }
 
 /** A new report names a scope; a continuation names only the report it resumes or pages. */

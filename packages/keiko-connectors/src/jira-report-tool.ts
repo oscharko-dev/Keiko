@@ -9,7 +9,12 @@ import type {
   ManagedMcpInvocationContext,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { parseJiraReportArgs, type JiraReportArgs } from "./jira-report-args.js";
+import {
+  invalidJiraReportArguments,
+  parseJiraReportArgs,
+  type JiraReportArgs,
+  type JiraReportPage,
+} from "./jira-report-args.js";
 import {
   JIRA_REPORT_EXPORTS_VIEW,
   jiraReportProgressView,
@@ -49,6 +54,8 @@ export interface JiraReportActivity {
   readonly deviationCount: number;
   readonly ruleIds: readonly string[];
   readonly requirementCount: number;
+  /** How many arguments a refused call named wrongly; never their values. */
+  readonly invalidArgumentCount?: number;
   readonly durationMs: number;
 }
 
@@ -112,11 +119,13 @@ function refuse<Context extends ManagedMcpInvocationContext>(
   context: Context,
   refusal: JiraReportRefusal,
   startedAt: number,
+  invalidArguments?: readonly string[],
 ): ManagedMcpToolResult {
   deps.activity?.(
     {
       phase: "refused",
       refusal,
+      ...(invalidArguments === undefined ? {} : { invalidArgumentCount: invalidArguments.length }),
       scopeKind: "report",
       continued: false,
       issuesRead: 0,
@@ -129,7 +138,10 @@ function refuse<Context extends ManagedMcpInvocationContext>(
     },
     context,
   );
-  return jiraReadFailure(refusal);
+  const failure = jiraReadFailure(refusal);
+  return invalidArguments === undefined || invalidArguments.length === 0
+    ? failure
+    : { ...failure, data: { ...failure.data, invalidArguments: [...invalidArguments] } };
 }
 
 function readView(session: JiraReportSession, elapsedMs: number): ManagedMcpToolResult {
@@ -148,10 +160,7 @@ function readView(session: JiraReportSession, elapsedMs: number): ManagedMcpTool
   }
   return { data };
 }
-function sectionView(
-  session: JiraReportSession,
-  args: Extract<JiraReportArgs, { kind: "continue" }>,
-): ManagedMcpToolResult {
+function sectionView(session: JiraReportSession, args: JiraReportPage): ManagedMcpToolResult {
   const { report } = session;
   if (report === undefined) return readView(session, 0);
   const section = jiraReportSectionPage(report, args.section, args.startAt, args.maxResults);
@@ -208,8 +217,8 @@ async function runSession<Context extends ManagedMcpInvocationContext>(
   const now = deps.now ?? Date.now;
   const startedAt = now();
   await advance(session, context, connection, deps, now);
-  const section =
-    args.kind === "continue" && args.section !== "summary" && session.report !== undefined;
+  // A new report that names a section returns that page once it is complete in this call.
+  const section = args.section !== "summary" && session.report !== undefined;
   deps.activity?.(
     sessionActivity(session, {
       phase: section ? "section" : "read",
@@ -218,9 +227,7 @@ async function runSession<Context extends ManagedMcpInvocationContext>(
     }),
     context,
   );
-  return args.kind === "continue" && section
-    ? sectionView(session, args)
-    : readView(session, now() - session.startedAt);
+  return section ? sectionView(session, args) : readView(session, now() - session.startedAt);
 }
 
 /** `jira.report`: start a report, resume one that is still reading, or page a finished one. */
@@ -232,7 +239,8 @@ export async function executeJiraReportTool<Context extends ManagedMcpInvocation
 ): Promise<ManagedMcpToolResult> {
   const startedAt = (deps.now ?? Date.now)();
   const args = parseJiraReportArgs(rawArgs);
-  if (args === undefined) return refuse(deps, context, "invalid-input", startedAt);
+  if (args === undefined)
+    return refuse(deps, context, "invalid-input", startedAt, invalidJiraReportArguments(rawArgs));
   if (connection.deployment !== "data-center")
     return refuse(deps, context, "unsupported-deployment", startedAt);
   const owner = deps.owner(context);

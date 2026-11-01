@@ -16,7 +16,7 @@ import {
   syntheticProject,
   type FixtureIssue,
 } from "./jira-report.fixture.js";
-import { parseJiraReportArgs } from "./jira-report-args.js";
+import { invalidJiraReportArguments, parseJiraReportArgs } from "./jira-report-args.js";
 import { reportJql, stripJqlOrdering } from "./jira-report-session.js";
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool } from "./jira-report-tool.js";
@@ -143,6 +143,19 @@ describe("jira.report over a project of any size", () => {
       items.map((item) => [`${String(item.typeName)};${String(item.statusName)}`, item.total]),
     );
     expect(reported).toEqual(expected.byTypeStatus);
+  });
+
+  it("returns the named section of a new report once it completes in the same call (#4181)", async () => {
+    const h = harness({ issues });
+    const result = await h.run({ projectKey: "REP", section: "statuses", maxResults: 100 });
+    expect(result.isError).not.toBe(true);
+    expect(result.data.reportId).toBeTypeOf("string");
+    const items = record(result.data.section).items as readonly Record<string, unknown>[];
+    const reported = new Map(
+      items.map((item) => [`${String(item.typeName)};${String(item.statusName)}`, item.total]),
+    );
+    expect(reported).toEqual(expected.byTypeStatus);
+    expect(h.activity.at(-1)).toMatchObject({ phase: "section", continued: false });
   });
 
   it("computes progress per epic, uncovered epics and orphans from the hierarchy", async () => {
@@ -438,6 +451,35 @@ describe("arguments", () => {
     expect(result.data.reason).toBe("invalid-input");
     expect(h.fixture.requests).toEqual([]);
     expect(h.activity).toMatchObject([{ phase: "refused", refusal: "invalid-input" }]);
+  });
+
+  it("names the arguments a refused call has to fix, never their values (#4181)", async () => {
+    const h = harness({ issues: syntheticProject(10) });
+    const result = await h.run({ projectKey: "REP", section: "nope", model: "claims numbers" });
+    expect(result.data.invalidArguments).toEqual(["model", "section"]);
+    expect(JSON.stringify(result.data)).not.toContain("claims numbers");
+    expect(h.activity).toMatchObject([{ refusal: "invalid-input", invalidArgumentCount: 2 }]);
+  });
+
+  it.each([
+    [{}, ["jql", "projectKey"]],
+    [{ jql: "ORDER BY key" }, ["jql", "projectKey"]],
+    [{ projectKey: "bad key" }, ["projectKey"]],
+    [{ projectKey: "REP", asOf: "2026-02-30" }, ["asOf"]],
+    [{ projectKey: "REP", startAt: -1, maxResults: 101 }, ["maxResults", "startAt"]],
+    [{ projectKey: "REP", "bad key!": 1 }, ["(unnamed)"]],
+    [{ reportId: "00000000-0000-4000-8000-000000000000", projectKey: "REP" }, ["projectKey"]],
+    [{ reportId: "not-a-uuid" }, ["reportId"]],
+  ] as const)("names the invalid arguments of %j", (args, invalid) => {
+    expect(parseJiraReportArgs(args as CatalogJsonObject)).toBeUndefined();
+    expect(invalidJiraReportArguments(args as CatalogJsonObject)).toEqual(invalid);
+  });
+
+  it("accepts a section and paging on a new report", () => {
+    expect(
+      parseJiraReportArgs({ projectKey: "REP", section: "deviations", startAt: 25 }),
+    ).toMatchObject({ kind: "new", section: "deviations", startAt: 25, maxResults: 25 });
+    expect(invalidJiraReportArguments({ projectKey: "REP", section: "epics" })).toEqual([]);
   });
 
   it("refuses a Cloud connection", async () => {

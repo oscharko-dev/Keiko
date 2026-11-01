@@ -1244,6 +1244,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      invalidArgumentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       ruleIds: {
         type: "string-array",
         dataClass: "opaque-id",

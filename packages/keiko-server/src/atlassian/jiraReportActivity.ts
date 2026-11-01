@@ -104,6 +104,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
     deviationCount: { type: "integer", dataClass: "count", required: false },
     requirementCount: { type: "integer", dataClass: "count", required: false },
     byteCount: { type: "integer", dataClass: "count", required: false },
+    invalidArgumentCount: { type: "integer", dataClass: "count", required: false },
     ruleIds: {
       type: "string-array",
       dataClass: "opaque-id",
@@ -172,7 +173,14 @@ interface JiraReportLine {
   readonly deviationCount?: number;
   readonly requirementCount?: number;
   readonly byteCount?: number;
+  readonly invalidArgumentCount?: number;
   readonly ruleIds?: readonly string[];
+}
+
+function invalidArguments(input: JiraReportActivity): Pick<JiraReportLine, "invalidArgumentCount"> {
+  return input.invalidArgumentCount === undefined
+    ? {}
+    : { invalidArgumentCount: input.invalidArgumentCount };
 }
 
 function lineOf(input: JiraReportLogInput): JiraReportLine {
@@ -201,6 +209,7 @@ function lineOf(input: JiraReportLogInput): JiraReportLine {
     issuesWithDeviations: input.issuesWithDeviations,
     deviationCount: input.deviationCount,
     requirementCount: input.requirementCount,
+    ...invalidArguments(input),
     ruleIds: input.ruleIds,
   };
 }

@@ -36,14 +36,14 @@ const REPORT_INPUT = object({
 });
 
 const DESCRIPTION =
-  "Compute a deterministic Jira progress, compliance and coverage report for a project (projectKey), a JQL scope (jql) or both. " +
-  "Keiko reads every matching issue server-side and computes all numbers itself: status-category counts and estimates per project and epic, " +
+  "Deterministic Jira progress, compliance and coverage report for a project (projectKey), a JQL scope (jql) or both. " +
+  "Keiko reads every matching issue server-side and computes all numbers: counts per type and status, estimates per project and epic, " +
   "compliance deviations (fields required on create, the active template checker), epics without members, issues without an epic or parent, " +
-  "and coverage of declared requirementIds (covered when an issue names the identifier in summary, labels or description). " +
+  "coverage of declared requirementIds (an issue names the identifier in summary, labels or description). " +
   "Estimates are seconds of original estimate unless estimateFieldId names a numeric field; overdue is judged on asOf (UTC date, default today). " +
-  "Report the returned figures exactly; never recompute them. While status is reading, call again with only the reportId until it is complete or incomplete. " +
-  "A complete report returns a bounded summary; page full lists with reportId, a section (epics, deviations, orphans, uncovered, requirements) and nextStartAt; section comment returns the exact text for jira.comment. " +
-  "An incomplete report says why and describes only the issues read.";
+  "Report the figures exactly; never recompute them. While status is reading, call again with only the reportId. " +
+  "A complete report returns a summary; page lists with a section (statuses, epics, deviations, orphans, uncovered, requirements), also on the first call, and nextStartAt; section comment is the text for jira.comment. " +
+  "A refusal names invalidArguments to fix. An incomplete report says why and covers only the issues read.";
 
 export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
   name: "jira.report",
@@ -63,6 +63,7 @@ export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze(
         section: OPEN_OBJECT,
         exports: { type: "array", maxItems: 4, items: text(16) },
         lastFailure: text(64),
+        invalidArguments: { type: "array", maxItems: 16, items: text(64) },
         nextStartAt: { type: "integer", minimum: 0, maximum: 1000000000 },
       },
       ["outcome"],

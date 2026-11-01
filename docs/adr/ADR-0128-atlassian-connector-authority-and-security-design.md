@@ -836,10 +836,15 @@ text and collapses line breaks. The bounded result carries the summary
 (15 entries per list) and `reportId`; the full lists are paged through `section` (`statuses`,
 `epics`, `deviations`, `orphans`, `uncovered`, `requirements`) and `section: "comment"` returns the
 exact numbers-and-keys text for `jira.comment`, so posting the report stays a normal approved write.
+A new report may name the `section` (with `startAt`/`maxResults`) it wants; once the report
+completes in that call the page is returned with the `reportId`, otherwise the call reports
+`reading` as before. An `invalid-input` refusal lists `invalidArguments`: the argument names to fix
+(unknown or invalid ones, or `jql`/`projectKey` when a new report names no scope), never their
+values, so the model can correct the call instead of abandoning the report (lab S10/S11, #4181).
 `GET /api/atlassian-connectors/jira-reports/:reportId/export?chatId=…&format=markdown|csv`
 renders the stored report (the model's prose is never the source) for the browser's own download;
 CSV neutralizes spreadsheet formulas. Evidence is `atlassian.jira-report` (phase, status, closed
-reason, scope kind, counts and rule ids; never scope text, keys, summaries or report content) beside
+reason, scope kind, counts including `invalidArgumentCount` on a refusal, and rule ids; never scope text, keys, summaries or report content) beside
 the existing `atlassian.action.outcome` line for the call.
 
 **Complete, traceable requirement derivation (#4179, 2026-10-31).** Grounded Q&A keeps its ranked

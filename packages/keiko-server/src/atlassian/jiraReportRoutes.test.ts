@@ -205,4 +205,29 @@ describe("Jira report activity", () => {
     });
     expect(analyzeLogText(line).timelines).toHaveLength(1);
   });
+
+  it("records how many arguments a refused call named wrongly, never the names (#4181)", () => {
+    const logs = createBufferedServerLogSink();
+    recordJiraReportActivity(logs, "correlation-3", {
+      phase: "refused",
+      refusal: "invalid-input",
+      invalidArgumentCount: 2,
+      scopeKind: "report",
+      continued: false,
+      issuesRead: 0,
+      pageCount: 0,
+      issuesWithDeviations: 0,
+      deviationCount: 0,
+      ruleIds: [],
+      requirementCount: 0,
+      durationMs: 1,
+    });
+    const line = onlyLine(logs);
+    expect(expectActivityLogProof("atlassian.jira-report.line", line)).toMatchObject({
+      phase: "refused",
+      refusal: "invalid-input",
+      errorKind: "invalid-request",
+      invalidArgumentCount: 2,
+    });
+  });
 });

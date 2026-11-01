@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "10cc2ae93f2bd3b5dbbbcf2ba93bbb8a2b43f0bba20b618be2df4d26f5918fd8",
+    "catalogDigest": "02c162c4c5138555e69ae462ec4ec2b768655df4187fb6a564b419624da33a74",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1303,6 +1303,11 @@
             "dataClass": "count",
             "required": false
           },
+          "invalidArgumentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "ruleIds": {
             "type": "string-array",
             "dataClass": "opaque-id",
@@ -1323,7 +1328,7 @@
         "proofIds": ["atlassian.jira-report.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:25",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:217"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:226"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -57023,6 +57028,12 @@
                   "name": "format",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "invalidArgumentCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
