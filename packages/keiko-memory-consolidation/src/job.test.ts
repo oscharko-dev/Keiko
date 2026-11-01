@@ -71,7 +71,7 @@ describe("transitionJob - legal transitions", () => {
   ])("sets exactly the fields of %s", (_label, patch) => {
     const job: ConsolidationJob = { id: "j", state: "running", startedAt: FIXED_NOW_MS };
     const next = transitionJob(job, "failed", patch);
-    expect(next).toEqual({ id: "j", state: "failed", startedAt: FIXED_NOW_MS, ...patch });
+    expect(next).toStrictEqual({ id: "j", state: "failed", startedAt: FIXED_NOW_MS, ...patch });
     expect(next).not.toBe(job);
   });
 
