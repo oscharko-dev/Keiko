@@ -12,6 +12,7 @@ import type {
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { jiraReportCommentText } from "./jira-report-export.js";
+import { jiraReportFigures } from "./jira-report-figures.js";
 import type { JiraReport, JiraReportProgress } from "./jira-report-types.js";
 import type { JiraReportSession } from "./jira-report-session.js";
 
@@ -81,6 +82,7 @@ function deviationItems(report: JiraReport): readonly CatalogJsonObject[] {
     key: item.key,
     ruleIds: capped(item.ruleIds).items,
     fieldIds: capped(item.fieldIds).items,
+    details: capped(item.details).items,
   }));
 }
 function requirementItems(report: JiraReport): readonly CatalogJsonObject[] {
@@ -118,6 +120,7 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
   return {
     digest: report.digest,
     generatedAt: report.generatedAt,
+    figures: jiraReportFigures(report),
     scope: { ...report.scope },
     completeness: {
       complete: completeness.complete,

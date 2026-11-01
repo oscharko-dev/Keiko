@@ -142,6 +142,7 @@
     "keiko-connectors/jira-report-aggregate",
     "keiko-connectors/jira-report-args",
     "keiko-connectors/jira-report-export",
+    "keiko-connectors/jira-report-figures",
     "keiko-connectors/jira-report-http",
     "keiko-connectors/jira-report-issue",
     "keiko-connectors/jira-report-jql",

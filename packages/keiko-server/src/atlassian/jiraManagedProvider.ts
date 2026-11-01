@@ -139,7 +139,7 @@ const DEFINITIONS: Readonly<
     item: FIELD,
   },
   "jira.search": {
-    description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately.`,
+    description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately. For counts or checks across many issues use jira.report.`,
     arguments: {
       jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
       fields: FIELD_IDS,
@@ -155,7 +155,7 @@ const DEFINITIONS: Readonly<
   },
   "jira.issue": {
     description:
-      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation.",
+      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation. Never loop over a project: use jira.report.",
     arguments: { issueKey: text(128), fields: FIELD_IDS },
     required: ["issueKey"],
     paged: false,

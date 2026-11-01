@@ -231,11 +231,12 @@ function complianceSection(report: JiraReport): string {
     ),
     "### Deviations per issue\n",
     table(
-      ["Issue", "Rules", "Fields"],
+      ["Issue", "Rules", "Fields", "Details"],
       compliance.deviations.map((item) => [
         item.key,
         item.ruleIds.join(", "),
         item.fieldIds.join(", "),
+        item.details.join("; "),
       ]),
     ),
   ].join("\n");

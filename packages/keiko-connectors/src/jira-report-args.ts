@@ -24,7 +24,12 @@ export interface JiraReportPage {
   readonly maxResults: number;
 }
 export type JiraReportArgs =
-  | ({ readonly kind: "new"; readonly request: JiraReportRequest } & JiraReportPage)
+  | ({
+      readonly kind: "new";
+      readonly request: JiraReportRequest;
+      /** Keiko, not the model, lists the requirement ids of the Chat's Knowledge Pods. */
+      readonly requirementsFromPods: boolean;
+    } & JiraReportPage)
   | ({ readonly kind: "continue"; readonly reportId: string } & JiraReportPage);
 
 const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
@@ -33,6 +38,10 @@ const REQUIREMENT_ID = new RegExp(
   `^[A-Za-z0-9][A-Za-z0-9._-]{0,${String(JIRA_REPORT_REQUIREMENT_ID_CHARS_MAX - 1)}}$`,
   "u",
 );
+/** Whether `value` can name a requirement in a report. */
+export function isJiraReportRequirementId(value: string): boolean {
+  return REQUIREMENT_ID.test(value);
+}
 const SCOPE_KEYS: ReadonlySet<string> = new Set([
   "projectKey",
   "jql",
@@ -40,6 +49,7 @@ const SCOPE_KEYS: ReadonlySet<string> = new Set([
   "asOf",
   "parentFieldIds",
   "requirementIds",
+  "requirementsFromPods",
 ]);
 const PAGE_KEYS = ["section", "startAt", "maxResults"] as const;
 const NEW_KEYS: ReadonlySet<string> = new Set([...SCOPE_KEYS, ...PAGE_KEYS]);
@@ -100,6 +110,7 @@ function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
   const view = pageOf(args);
   const estimate = optionalField(args.estimateFieldId);
   const asOf = optionalDate(args.asOf);
+  const fromPods = optionalFlag(args.requirementsFromPods);
   const parents = stringList(args.parentFieldIds, JIRA_REPORT_PARENT_FIELDS_MAX, FIELD_ID);
   const requirements = stringList(
     args.requirementIds,
@@ -111,6 +122,7 @@ function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
     view === undefined ||
     estimate === null ||
     asOf === null ||
+    fromPods === null ||
     parents === undefined ||
     requirements === undefined
   )
@@ -124,8 +136,13 @@ function newReport(args: CatalogJsonObject): JiraReportArgs | undefined {
       parentFieldIds: parents,
       requirementIds: requirements,
     },
+    requirementsFromPods: fromPods,
     ...view,
   };
+}
+function optionalFlag(value: unknown): boolean | null {
+  if (value === undefined) return false;
+  return typeof value === "boolean" ? value : null;
 }
 function page(value: unknown, fallback: number, min: number, max: number): number | undefined {
   if (value === undefined) return fallback;
@@ -171,6 +188,7 @@ const ARGUMENT_CHECKS: Readonly<Record<string, (value: unknown) => boolean>> = {
     stringList(value, JIRA_REPORT_PARENT_FIELDS_MAX, FIELD_ID) !== undefined,
   requirementIds: (value) =>
     stringList(value, JIRA_REPORT_REQUIREMENT_ID_MAX, REQUIREMENT_ID) !== undefined,
+  requirementsFromPods: (value) => optionalFlag(value) !== null,
   reportId: (value) => typeof value === "string" && REPORT_ID.test(value),
   section: (value) => sectionOf(value) !== undefined,
   startAt: (value) => startOf(value) !== undefined,

@@ -5,10 +5,15 @@ import type {
   JiraReportStatusCategory,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
-/** One deviation from a rule. `ruleId` is a stable identifier; no value or text is carried. */
+/**
+ * One deviation from a rule. `ruleId` is a stable identifier. `subject` names the template element
+ * the rule concerns (a section, a field name, a label); it comes from the template, never from an
+ * issue's description or comments.
+ */
 export interface JiraReportDeviation {
   readonly ruleId: string;
   readonly fieldId?: string;
+  readonly subject?: string;
 }
 
 /** The compact, derived record kept per issue; raw Jira payloads are never retained. */
@@ -125,6 +130,8 @@ export interface JiraReportDeviationRecord {
   readonly key: string;
   readonly ruleIds: readonly string[];
   readonly fieldIds: readonly string[];
+  /** `ruleId: subject` per deviation, so a lead sees which section or field is missing. */
+  readonly details: readonly string[];
 }
 
 export interface JiraReportRequirementCoverage {

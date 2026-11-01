@@ -35,7 +35,10 @@ import {
 } from "./jiraChatCatalogConsumer.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { executeJiraChatDraft } from "./jiraChatDraft.js";
-import { createKnowledgeRequirementsProvider } from "../requirementsTool.js";
+import {
+  chatReportRequirementIds,
+  createKnowledgeRequirementsProvider,
+} from "../requirementsTool.js";
 import {
   logTrace,
   newTally,
@@ -310,6 +313,7 @@ function reportTool(
     store,
     owner: (context) => context.chatId,
     checker: deps.jiraReportChecker,
+    requirements: (context) => chatReportRequirementIds(deps, context),
     activity: (activity, context): void => {
       recordJiraReportActivity(deps.activityLog, context.correlationId, activity);
     },

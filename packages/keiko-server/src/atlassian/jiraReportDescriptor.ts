@@ -20,6 +20,7 @@ const REPORT_INPUT = object({
   estimateFieldId: FIELD_ID,
   asOf: { type: "string", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", maxLength: 10 },
   parentFieldIds: { type: "array", maxItems: 4, items: FIELD_ID },
+  requirementsFromPods: { type: "boolean" },
   requirementIds: {
     type: "array",
     maxItems: JIRA_REPORT_REQUIREMENT_ID_MAX,
@@ -36,14 +37,13 @@ const REPORT_INPUT = object({
 });
 
 const DESCRIPTION =
-  "Deterministic Jira progress, compliance and coverage report for a project (projectKey), a JQL scope (jql) or both. " +
-  "Keiko reads every matching issue server-side and computes all numbers: counts per type and status, estimates per project and epic, " +
-  "compliance deviations (fields required on create, the active template checker), epics without members, issues without an epic or parent, " +
-  "coverage of declared requirementIds (an issue names the identifier in summary, labels or description). " +
-  "Estimates are seconds of original estimate unless estimateFieldId names a numeric field; overdue is judged on asOf (UTC date, default today). " +
-  "Report the figures exactly; never recompute them. While status is reading, call again with only the reportId. " +
-  "A complete report returns a summary; page lists with a section (statuses, epics, deviations, orphans, uncovered, requirements), also on the first call, and nextStartAt; section comment is the text for jira.comment. " +
-  "A refusal names invalidArguments to fix. An incomplete report says why and covers only the issues read.";
+  "Deterministic Jira report; use it, not jira.search or jira.issue, for any question about a whole project or many issues: " +
+  "progress, estimates, template compliance, requirement coverage, epics without members, issues without an epic. " +
+  "Scope: projectKey and/or jql. Keiko computes every number: quote report.figures verbatim, never recompute. " +
+  "requirementsFromPods covers this Chat's Pod requirements. Estimate is seconds of original estimate unless estimateFieldId. " +
+  "While status is reading, call again with only the reportId. " +
+  "Name a section on the first call to page its list (deviations with details, requirements, statuses, epics, orphans, uncovered; maxResults up to 100, then nextStartAt); comment is the text for jira.comment. " +
+  "A refusal names invalidArguments or a message.";
 
 export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
   name: "jira.report",
@@ -64,6 +64,7 @@ export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze(
         exports: { type: "array", maxItems: 4, items: text(16) },
         lastFailure: text(64),
         invalidArguments: { type: "array", maxItems: 16, items: text(64) },
+        message: text(256),
         nextStartAt: { type: "integer", minimum: 0, maximum: 1000000000 },
       },
       ["outcome"],

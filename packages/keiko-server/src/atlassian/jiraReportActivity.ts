@@ -19,6 +19,7 @@ type JiraReportRefusalKind =
   | "report-not-found"
   | "report-busy"
   | "connection-changed"
+  | "requirements-unavailable"
   | "invalid-format"
   | "export-unavailable";
 
@@ -80,6 +81,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
         "report-not-found",
         "report-busy",
         "connection-changed",
+        "requirements-unavailable",
         "invalid-format",
         "export-unavailable",
       ],
@@ -149,6 +151,7 @@ const REFUSAL_KIND: Readonly<Record<JiraReportRefusalKind, ActivityLogErrorKind>
   "report-not-found": "invalid-request",
   "report-busy": "conflict",
   "connection-changed": "conflict",
+  "requirements-unavailable": "unavailable",
   "invalid-format": "invalid-request",
   "export-unavailable": "unavailable",
 };

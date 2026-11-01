@@ -33,6 +33,13 @@ export interface JiraReportFieldPlan {
 
 const ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
 const RULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
+const SUBJECT_CHARS_MAX = 120;
+/** A subject is one short line: control characters and line breaks become spaces. */
+const CONTROL_CHARACTERS = /\p{Cc}+/gu;
+function subjectOf(value: string | undefined): string | undefined {
+  const subject = value?.replaceAll(CONTROL_CHARACTERS, " ").trim().slice(0, SUBJECT_CHARS_MAX);
+  return subject === undefined || subject.length === 0 ? undefined : subject;
+}
 const TOKEN_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]*/gu;
 const SUMMARY_MAX = 255;
 export const JIRA_REPORT_LABELS_MAX = 64;
@@ -135,7 +142,12 @@ function checkerDeviations(
     if (!RULE_ID_PATTERN.test(item.ruleId)) continue;
     const fieldId =
       item.fieldId !== undefined && /^\w{1,64}$/u.test(item.fieldId) ? item.fieldId : undefined;
-    result.push(fieldId === undefined ? { ruleId: item.ruleId } : { ruleId: item.ruleId, fieldId });
+    const subject = subjectOf(item.subject);
+    result.push({
+      ruleId: item.ruleId,
+      ...(fieldId === undefined ? {} : { fieldId }),
+      ...(subject === undefined ? {} : { subject }),
+    });
   }
   return result;
 }
@@ -143,7 +155,7 @@ function dedupeDeviations(items: readonly JiraReportDeviation[]): readonly JiraR
   const seen = new Set<string>();
   const result: JiraReportDeviation[] = [];
   for (const item of items) {
-    const id = `${item.ruleId}\u0000${item.fieldId ?? ""}`;
+    const id = `${item.ruleId}\u0000${item.fieldId ?? ""}\u0000${item.subject ?? ""}`;
     if (seen.has(id)) continue;
     seen.add(id);
     result.push(item);
@@ -151,7 +163,8 @@ function dedupeDeviations(items: readonly JiraReportDeviation[]): readonly JiraR
   return result.sort(
     (left, right) =>
       compareCodePoints(left.ruleId, right.ruleId) ||
-      compareCodePoints(left.fieldId ?? "", right.fieldId ?? ""),
+      compareCodePoints(left.fieldId ?? "", right.fieldId ?? "") ||
+      compareCodePoints(left.subject ?? "", right.subject ?? ""),
   );
 }
 /** A trailing dot, dash or underscore ends a sentence, not an identifier. */

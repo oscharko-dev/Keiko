@@ -282,7 +282,11 @@ export {
   type JiraDraftToolDeps,
 } from "./jira-draft-stage-tool.js";
 export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
-export type { JiraReportActivity, JiraReportToolDeps } from "./jira-report-tool.js";
+export type {
+  JiraReportActivity,
+  JiraReportRequirementIds,
+  JiraReportToolDeps,
+} from "./jira-report-tool.js";
 export type {
   JiraReport,
   JiraReportCheckerBinder,

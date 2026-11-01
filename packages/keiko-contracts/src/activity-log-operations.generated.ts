@@ -1287,6 +1287,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "report-not-found",
           "report-busy",
           "connection-changed",
+          "requirements-unavailable",
           "invalid-format",
           "export-unavailable",
         ],

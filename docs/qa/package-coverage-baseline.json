@@ -30,7 +30,7 @@
       }
     },
     "keiko-connectors": {
-      "files": 63,
+      "files": 64,
       "uncoveredFiles": 0,
       "uncoveredLines": 32,
       "totalLines": 1485,

@@ -947,12 +947,27 @@ fields the instance requires on create per issue type from current create metada
 one is active (`UiHandlerDeps.jiraReportChecker`, #4177; the report asks for the checker's fields
 in the same reads and never interprets a template; the Jira connection's template source — the
 one the write gate reads — builds the checker, so the report and the gate cannot disagree. The
-report judges each issue as the state its next edit would leave, so the templates that govern
-edits apply; an unreadable library, or a name that cannot be resolved because the instance's
+report judges each issue as the state its next edit would leave. The templates that define an
+issue's structure apply, which are those activated on `create` or on `edit`: the template the
+product itself proposes is activated on create only, and a lead who evaluates existing issues
+against it expects the issues that predate it to be named (lab S11, 2026-11-01; this amends the
+earlier rule that only edit templates apply, so the report is a superset of the edit gate for a
+create-only template and names an existing violation without blocking any write). A template
+activated only on a transition is a definition of ready for that step and never applies to the
+report. Each deviation also carries the template element it concerns (`details`, `ruleId: subject`
+such as `section-missing: Abgrenzung`; a field is named by the instance's own field name), taken
+from the template and never from an issue's text; an unreadable library, or a name that cannot be resolved because the instance's
 field list was not read, makes the report incomplete with reason `template-unreadable` and
 compliance `checker: unavailable` instead of zero deviations), and coverage of declared `requirementIds`
 (a requirement is covered by an issue naming its identifier in summary, labels or description;
 items traced through the covering issue's descendants and, for a container, its linked issues).
+`requirementsFromPods: true` makes Keiko list the explicit requirement identifiers of the Chat's
+Knowledge Pods itself (the read `knowledge.requirements` serves; derived handles are left out because
+no issue can name them) and merge them with any `requirementIds` the model named, so a model with a
+small window never copies dozens of identifiers into a call. A Chat without a readable list, a Pod
+that is not ready, a cut list or more than 1000 identifiers is refused as
+`requirements-unavailable` with a plain-words `message` that names the fix (pass `requirementIds`
+yourself); no report is started.
 The model supplies scope and options only and narrates the result; the digest of the report
 excludes read timing so the same Jira data always yields the same digest.
 
@@ -986,7 +1001,11 @@ at a realistic per-issue cost that includes the build peak; beyond it the read e
 true total beside it; the exports carry everything. The CSV starts with a byte order mark so a
 spreadsheet reads it as UTF-8; the Markdown escapes every Markdown and HTML metacharacter in Jira
 text and collapses line breaks. The bounded result carries the summary
-(15 entries per list) and `reportId`; the full lists are paged through `section` (`statuses`,
+(15 entries per list), `reportId` and `figures`: every count per issue type and status, every
+container's issues and done issues, and the estimate totals (with hours beside the seconds of the
+default estimate) as plain `;`-separated lines derived from the computed report, so a model that
+quotes a line states exactly what the report holds instead of reshaping JSON (lab S10, #4181 AC2; a
+list beyond 300 lines says how many it left out); the full lists are paged through `section` (`statuses`,
 `epics`, `deviations`, `orphans`, `uncovered`, `requirements`) and `section: "comment"` returns the
 exact numbers-and-keys text for `jira.comment`, so posting the report stays a normal approved write.
 A new report may name the `section` (with `startAt`/`maxResults`) it wants; once the report
@@ -994,6 +1013,10 @@ completes in that call the page is returned with the `reportId`, otherwise the c
 `reading` as before. An `invalid-input` refusal lists `invalidArguments`: the argument names to fix
 (unknown or invalid ones, or `jql`/`projectKey` when a new report names no scope), never their
 values, so the model can correct the call instead of abandoning the report (lab S10/S11, #4181).
+Because a weaker model picks the wrong tool when its description is the only steering (lab S11/S12:
+45 `jira.issue` reads and no report), the tool description opens with the questions it answers, the
+descriptions of `jira.search` and `jira.issue` point to it, and the grounded tool-turn guidance names
+it for progress, template compliance and requirement coverage across a project.
 `GET /api/atlassian-connectors/jira-reports/:reportId/export?chatId=…&format=markdown|csv`
 renders the stored report (the model's prose is never the source) for the browser's own download;
 CSV neutralizes spreadsheet formulas. Evidence is `atlassian.jira-report` (phase, status, closed

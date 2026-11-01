@@ -4,10 +4,14 @@ import {
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import type {
+  ManagedMcpInvocationContext,
+  ManagedMcpToolResult,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import {
   EPIC_LINK,
+  POINTS,
   fixtureJira,
   syntheticProject,
   type FixtureIssue,
@@ -74,11 +78,11 @@ function project(): {
   };
 }
 
-async function reportOf(
+async function runOf(
   source: JiraIssueTemplateSource | undefined,
   options: Partial<FixtureOptions> = {},
   extraArgs: CatalogJsonObject = {},
-): Promise<JiraReport> {
+): Promise<{ readonly result: ManagedMcpToolResult; readonly report: JiraReport }> {
   const { issues } = project();
   // Create metadata that requires nothing: the instance's own required-field rule must not mix
   // into the template's, and the metadata stays readable so the report can complete.
@@ -98,7 +102,14 @@ async function reportOf(
   const id = result.data.reportId;
   const report = typeof id === "string" ? store.get(id, "chat-1")?.report : undefined;
   if (report === undefined) throw new Error("the report must be complete");
-  return report;
+  return { result, report };
+}
+async function reportOf(
+  source: JiraIssueTemplateSource | undefined,
+  options: Partial<FixtureOptions> = {},
+  extraArgs: CatalogJsonObject = {},
+): Promise<JiraReport> {
+  return (await runOf(source, options, extraArgs)).report;
 }
 
 /** The write gate for an edit of the same issue, with the same template source. */
@@ -178,15 +189,67 @@ describe("the report and the write gate share one template source", () => {
     for (const ruleId of gateRules) expect(deviationKeys(report, ruleId)).toContain(violating.key);
   });
 
-  it("ignores a template that governs only create or a transition, as the edit gate does", async () => {
+  it("judges existing issues against a template activated on create, the way the product proposes one", async () => {
+    // A lead imports the template the product proposes, which is activated on create only. The
+    // issues that predate it are exactly what an evaluation of compliance has to name (#4181).
     const createOnly = parseJiraIssueTemplate(
       "---\nkeiko: jira-issue-template\nversion: 1\nproject: REP\nissueType: Story\nactivateOn: [create]\n---\n## Acceptance criteria\n",
     );
     if (!createOnly.ok) throw new Error("fixture template must parse");
     const source: JiraIssueTemplateSource = () => SET(createOnly.template);
     const report = await reportOf(source);
+    const { violating, conforming } = project();
+    expect(report.compliance).toMatchObject({ checker: "applied" });
+    expect(deviationKeys(report, "section-missing")).toContain(violating.key);
+    expect(deviationKeys(report, "section-missing")).not.toContain(conforming.key);
+    // A create-only template does not govern an edit, so the gate stays open: the report names
+    // the existing violation without ever blocking the write the template was not written for.
+    expect(await gateOf(source, violating)).toEqual({ ok: true });
+  });
+
+  it("names what is missing, not only the rule", async () => {
+    const source: JiraIssueTemplateSource = () => SET(template("requiredLabels: [reviewed]"));
+    const report = await reportOf(source);
+    const { violating } = project();
+    const entry = report.compliance.deviations.find((item) => item.key === violating.key);
+    expect(entry?.details).toEqual(
+      expect.arrayContaining(["section-missing: Acceptance criteria", "label-missing: reviewed"]),
+    );
+  });
+
+  it("names a field by the instance's name when the template refers to it by id", async () => {
+    const source: JiraIssueTemplateSource = () => SET(template(`requiredFields: [${POINTS}]`));
+    const report = await reportOf(source);
+    const details = report.compliance.deviations.flatMap((item) => item.details);
+    expect(details).toContain("field-missing: Story Points");
+  });
+
+  it("hands the model what is wrong with each deviating issue in the summary and in the section", async () => {
+    const source: JiraIssueTemplateSource = () => SET(template());
+    const { violating } = project();
+    const { result } = await runOf(source, {}, { section: "deviations", maxResults: 100 });
+    const items = (result.data.section as { items: readonly Record<string, unknown>[] }).items;
+    expect(items.find((item) => item.key === violating.key)).toMatchObject({
+      ruleIds: ["section-missing"],
+      details: ["section-missing: Acceptance criteria"],
+    });
+    const summary = await runOf(source);
+    const listed = (
+      summary.result.data.report as {
+        compliance: { deviations: { items: readonly Record<string, unknown>[] } };
+      }
+    ).compliance.deviations.items;
+    expect(listed[0]).toHaveProperty("details", ["section-missing: Acceptance criteria"]);
+  });
+
+  it("ignores a template that governs only a transition", async () => {
+    const transitionOnly = parseJiraIssueTemplate(
+      "---\nkeiko: jira-issue-template\nversion: 1\nproject: REP\nissueType: Story\nactivateOn: [transition]\n---\n## Acceptance criteria\n",
+    );
+    if (!transitionOnly.ok) throw new Error("fixture template must parse");
+    const source: JiraIssueTemplateSource = () => SET(transitionOnly.template);
+    const report = await reportOf(source);
     expect(report.compliance).toMatchObject({ checker: "none", deviationCount: 0 });
-    expect(await gateOf(source, project().violating)).toEqual({ ok: true });
   });
 
   it("reports no template check when the connection has no source", async () => {

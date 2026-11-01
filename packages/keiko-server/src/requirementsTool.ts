@@ -7,7 +7,7 @@
 // the bounds that cut, and a cursor until the last page. It is hosted by the existing governed Chat
 // tool catalog like the Jira reads; it adds no tool system of its own.
 
-import type { JiraReportStore } from "@oscharko-dev/keiko-connectors";
+import type { JiraReportRequirementIds, JiraReportStore } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -607,6 +607,56 @@ function execute(
       disposition: "unavailable",
     });
     return unavailable(deps, context, error);
+  } finally {
+    session?.close();
+  }
+}
+
+const NO_POD_FOR_REPORT =
+  "This Chat has no Knowledge Pod with requirements. Attach the Pod with the requirement document, or pass requirementIds yourself.";
+const NO_IDS_FOR_REPORT =
+  "No requirement identifiers were detected in this Chat's Knowledge Pods. Pass requirementIds yourself.";
+const CUT_FOR_REPORT =
+  "The Chat's Knowledge Pods hold more requirements than Keiko can list at once. Pass requirementIds yourself.";
+
+/** The explicit identifiers of a collection, or the plain-words reason Keiko cannot list them. */
+function reportRequirementIds(collection: RequirementCollection): JiraReportRequirementIds {
+  const refusal = collection.refusals[0];
+  if (collection.units.length === 0 && refusal !== undefined)
+    return {
+      ok: false,
+      message: `Keiko cannot read this Chat's Knowledge Pods (${refusal}). Pass requirementIds yourself, or retry when the Pod is ready.`,
+    };
+  if (collection.cutReasons.length > 0 || collection.unitsOmitted > 0)
+    return { ok: false, message: CUT_FOR_REPORT };
+  // A derived identifier is Keiko's own handle; no issue can name it, so it can never be covered.
+  const ids = [
+    ...new Set(
+      collection.units
+        .filter((unit) => unit.entry.idOrigin === "explicit")
+        .map((unit) => unit.entry.id),
+    ),
+  ];
+  return ids.length === 0 ? { ok: false, message: NO_IDS_FOR_REPORT } : { ok: true, ids };
+}
+
+/**
+ * The requirement identifiers of the Chat's Knowledge Pods for `jira.report`
+ * (`requirementsFromPods`): Keiko lists them, so a model with a small window never has to copy
+ * dozens of identifiers into a call. The read is the one the requirements tool serves.
+ */
+export function chatReportRequirementIds(
+  deps: UiHandlerDeps,
+  context: RequirementsToolContext,
+): JiraReportRequirementIds {
+  const scopes = chatKnowledgeScopes(deps.store.findChatById(context.chatId));
+  if (scopes.length === 0) return { ok: false, message: NO_POD_FOR_REPORT };
+  let session: ReturnType<typeof openKnowledgeStoreForDeps> | undefined;
+  try {
+    session = openKnowledgeStoreForDeps(deps, { recover: false });
+    return reportRequirementIds(
+      collectForTurn(session.store, scopes, context.chatId, context.userMessageId),
+    );
   } finally {
     session?.close();
   }

@@ -286,7 +286,7 @@ function fieldList(options: FixtureOptions): AtlassianHttpBodyResult {
     { id: DECOY_RANK, ...custom("any", `${app}:ordering`) },
     { id: DECOY_BLOB, ...custom("any", `${app}:summary-blob`) },
     { id: ACCEPTANCE, ...custom("string", `${system}:textarea`) },
-    { id: POINTS, ...custom("number", `${system}:float`) },
+    { id: POINTS, name: "Story Points", ...custom("number", `${system}:float`) },
     { id: "summary", schema: { type: "string", system: "summary" } },
     ...extra,
   ]);

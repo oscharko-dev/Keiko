@@ -270,6 +270,13 @@ function complianceOf(
           issue.deviations.flatMap((item) => (item.fieldId === undefined ? [] : [item.fieldId])),
         ),
       ].sort(compareCodePoints),
+      details: [
+        ...new Set(
+          issue.deviations.map((item) =>
+            item.subject === undefined ? item.ruleId : `${item.ruleId}: ${item.subject}`,
+          ),
+        ),
+      ].sort(compareCodePoints),
     });
   }
   return {

@@ -1,5 +1,6 @@
 import {
   JIRA_REPORT_READ_SLICE_MS,
+  JIRA_REPORT_REQUIREMENT_ID_MAX,
   type JiraReportFailureReason,
   type JiraReportIncompleteReason,
   type JiraReportStatus,
@@ -11,6 +12,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   invalidJiraReportArguments,
+  isJiraReportRequirementId,
   parseJiraReportArgs,
   type JiraReportArgs,
   type JiraReportPage,
@@ -22,10 +24,12 @@ import {
   jiraReportState,
   jiraReportSummary,
 } from "./jira-report-result.js";
+import { compareCodePoints } from "./jira-report-order.js";
 import { advanceJiraReportSession } from "./jira-report-read.js";
 import {
   jiraReportHierarchyOf,
   type JiraReportReadDeps,
+  type JiraReportRequest,
   type JiraReportSession,
 } from "./jira-report-session.js";
 import { JIRA_REPORT_STORE_MAX_BYTES, type JiraReportStore } from "./jira-report-store.js";
@@ -40,7 +44,8 @@ export type JiraReportRefusal =
   | "unsupported-deployment"
   | "report-not-found"
   | "report-busy"
-  | "connection-changed";
+  | "connection-changed"
+  | "requirements-unavailable";
 
 /** Body-free facts about one call of the tool; the composing server maps them to its log. */
 export interface JiraReportActivity {
@@ -65,12 +70,22 @@ export interface JiraReportActivity {
   readonly durationMs: number;
 }
 
+/**
+ * The requirement identifiers of the Knowledge Pods attached to the Chat, listed by Keiko. A
+ * refusal carries a sentence in plain words that tells the model what to do instead.
+ */
+export type JiraReportRequirementIds =
+  | { readonly ok: true; readonly ids: readonly string[] }
+  | { readonly ok: false; readonly message: string };
+
 export interface JiraReportToolDeps<Context extends ManagedMcpInvocationContext> {
   readonly store: JiraReportStore;
   /** Binds a report to the Chat and authority that started it. */
   readonly owner: (context: Context) => string;
   /** An explicit checker wins; otherwise the connection's template source feeds the check. */
   readonly checker?: JiraReportCheckerPort | undefined;
+  /** Lists the Chat's requirement ids for `requirementsFromPods`; absent where no Pod can exist. */
+  readonly requirements?: ((context: Context) => JiraReportRequirementIds) | undefined;
   readonly activity?: ((activity: JiraReportActivity, context: Context) => void) | undefined;
   readonly now?: (() => number) | undefined;
   readonly sliceMs?: number | undefined;
@@ -131,6 +146,7 @@ function refuse<Context extends ManagedMcpInvocationContext>(
   refusal: JiraReportRefusal,
   startedAt: number,
   invalidArguments?: readonly string[],
+  message?: string,
 ): ManagedMcpToolResult {
   deps.activity?.(
     {
@@ -150,9 +166,16 @@ function refuse<Context extends ManagedMcpInvocationContext>(
     context,
   );
   const failure = jiraReadFailure(refusal);
-  return invalidArguments === undefined || invalidArguments.length === 0
-    ? failure
-    : { ...failure, data: { ...failure.data, invalidArguments: [...invalidArguments] } };
+  return {
+    ...failure,
+    data: {
+      ...failure.data,
+      ...(invalidArguments === undefined || invalidArguments.length === 0
+        ? {}
+        : { invalidArguments: [...invalidArguments] }),
+      ...(message === undefined ? {} : { message }),
+    },
+  };
 }
 
 function readView(session: JiraReportSession, elapsedMs: number): ManagedMcpToolResult {
@@ -241,6 +264,46 @@ async function runSession<Context extends ManagedMcpInvocationContext>(
   return section ? sectionView(session, args) : readView(session, now() - session.startedAt);
 }
 
+type NewArgs = Extract<JiraReportArgs, { readonly kind: "new" }>;
+const REQUIREMENTS_UNAVAILABLE =
+  "Keiko cannot list the requirements of this Chat. Pass requirementIds yourself.";
+
+/** The request with the Pods' requirement ids merged into the ones the model named. */
+function withPodRequirements<Context extends ManagedMcpInvocationContext>(
+  args: NewArgs,
+  context: Context,
+  deps: JiraReportToolDeps<Context>,
+):
+  | { readonly ok: true; readonly request: JiraReportRequest }
+  | { readonly ok: false; readonly message: string } {
+  if (!args.requirementsFromPods) return { ok: true, request: args.request };
+  const listed = deps.requirements?.(context) ?? { ok: false, message: REQUIREMENTS_UNAVAILABLE };
+  if (!listed.ok) return listed;
+  const valid = listed.ids.filter((id) => isJiraReportRequirementId(id));
+  const ids = [...new Set([...args.request.requirementIds, ...valid])].sort(compareCodePoints);
+  return ids.length <= JIRA_REPORT_REQUIREMENT_ID_MAX
+    ? { ok: true, request: { ...args.request, requirementIds: ids } }
+    : { ok: false, message: REQUIREMENTS_UNAVAILABLE };
+}
+
+function resumed(
+  args: JiraReportArgs,
+  store: JiraReportStore,
+  owner: string,
+): JiraReportSession | undefined {
+  return args.kind === "continue" ? store.get(args.reportId, owner) : undefined;
+}
+
+/** The session when this call may use it, otherwise the refusal that says why not. */
+function admission(
+  session: JiraReportSession | undefined,
+  fingerprint: string,
+): JiraReportSession | JiraReportRefusal {
+  if (session === undefined) return "report-not-found";
+  if (session.fingerprint !== fingerprint) return "connection-changed";
+  return session.busy ? "report-busy" : session;
+}
+
 /** `jira.report`: start a report, resume one that is still reading, or page a finished one. */
 export async function executeJiraReportTool<Context extends ManagedMcpInvocationContext>(
   rawArgs: CatalogJsonObject,
@@ -256,13 +319,15 @@ export async function executeJiraReportTool<Context extends ManagedMcpInvocation
     return refuse(deps, context, "unsupported-deployment", startedAt);
   const owner = deps.owner(context);
   const fingerprint = connectionFingerprint(connection);
-  const session =
-    args.kind === "new"
-      ? deps.store.start(owner, args.request, fingerprint)
-      : deps.store.get(args.reportId, owner);
-  if (session === undefined) return refuse(deps, context, "report-not-found", startedAt);
-  if (session.fingerprint !== fingerprint)
-    return refuse(deps, context, "connection-changed", startedAt);
-  if (session.busy) return refuse(deps, context, "report-busy", startedAt);
-  return runSession(session, args, context, connection, deps);
+  const request = args.kind === "new" ? withPodRequirements(args, context, deps) : undefined;
+  if (request?.ok === false)
+    return refuse(deps, context, "requirements-unavailable", startedAt, undefined, request.message);
+  const admitted = admission(
+    request === undefined
+      ? resumed(args, deps.store, owner)
+      : deps.store.start(owner, request.request, fingerprint),
+    fingerprint,
+  );
+  if (typeof admitted === "string") return refuse(deps, context, admitted, startedAt);
+  return runSession(admitted, args, context, connection, deps);
 }

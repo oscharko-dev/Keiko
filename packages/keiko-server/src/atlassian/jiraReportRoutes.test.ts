@@ -264,4 +264,27 @@ describe("Jira report activity", () => {
       invalidArgumentCount: 2,
     });
   });
+
+  it("records a refusal to list the Chat's requirements as unavailable, without any identifier (#4181)", () => {
+    const logs = createBufferedServerLogSink();
+    recordJiraReportActivity(logs, "correlation-4", {
+      phase: "refused",
+      refusal: "requirements-unavailable",
+      scopeKind: "report",
+      continued: false,
+      issuesRead: 0,
+      pageCount: 0,
+      issuesWithDeviations: 0,
+      deviationCount: 0,
+      ruleIds: [],
+      requirementCount: 0,
+      durationMs: 1,
+    });
+    expect(expectActivityLogProof("atlassian.jira-report.line", onlyLine(logs))).toMatchObject({
+      phase: "refused",
+      refusal: "requirements-unavailable",
+      errorKind: "unavailable",
+      level: "warn",
+    });
+  });
 });

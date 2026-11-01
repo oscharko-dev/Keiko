@@ -48,6 +48,12 @@ describe("grounded synthesis with offered tools (#4179)", () => {
     expect(GROUNDED_TOOL_TURN_GUIDANCE).toContain("read all with an offered tool");
   });
 
+  it("points progress, compliance and coverage questions at one jira.report call (#4181)", () => {
+    expect(GROUNDED_TOOL_TURN_GUIDANCE).toContain("call jira.report once");
+    expect(GROUNDED_TOOL_TURN_GUIDANCE).toContain("requirementsFromPods");
+    expect(GROUNDED_TOOL_TURN_GUIDANCE).toContain("never count issues yourself");
+  });
+
   it("adds no tool guidance when no tool is offered", async () => {
     const calls: GatewayCallRequest[] = [];
     const model = {
