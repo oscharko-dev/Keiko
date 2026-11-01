@@ -10,6 +10,7 @@ import {
   decodeXmlEntities as decodeXmlEntitiesShared,
   diagnostic,
   emptyResult,
+  encryptedOoxmlRefusal,
   objectLimitDiagnostic,
   oversizeDiagnostic,
   parserIdentity,
@@ -850,11 +851,11 @@ function docxAsyncParseError(
   ]);
 }
 
-async function asyncParse(
+function docxPreflightRefusal(
   capability: ParserCapability,
   input: ParserSelectionInput,
   options: ParserOptions,
-): Promise<ParserResult> {
+): ParserResult | undefined {
   if (input.bytes.byteLength > options.maxBytes) {
     return emptyResult(capability, input.documentId, options, [
       oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
@@ -863,6 +864,16 @@ async function asyncParse(
   if (options.signal?.aborted === true) {
     return cancelled(capability, input, options);
   }
+  return encryptedOoxmlRefusal(capability, input, options, "docx");
+}
+
+async function asyncParse(
+  capability: ParserCapability,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): Promise<ParserResult> {
+  const refusal = docxPreflightRefusal(capability, input, options);
+  if (refusal !== undefined) return refusal;
 
   const startedAt = options.now();
   try {

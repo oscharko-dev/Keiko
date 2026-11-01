@@ -33,6 +33,7 @@ import {
   PDF_TEXT_LAYER,
   PNG_MAGIC,
   XLSX_SIMPLE,
+  oleEncryptedPackage,
 } from "../parsers/parser-test-fixtures.js";
 import { buildPptx, paragraphXml, shapeXml, slidePartXml } from "../parsers/pptx-test-fixtures.js";
 
@@ -295,6 +296,30 @@ describe("extractDocument — parser failure", () => {
     );
     expect(count("documents")).toBe(1);
     expect(count("parser_diagnostics")).toBe(1);
+    expect(count("parsed_units")).toBe(0);
+  });
+
+  it("persists a password-protected deck as failed with the closed encrypted diagnostic and no text", async () => {
+    const content = oleEncryptedPackage();
+    const fs = memoryFs(ROOT, [{ relativePath: "locked.pptx", content }]);
+    const result = await extractDocument(
+      { fs, store, parserRegistry: createDefaultParserRegistry() },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "locked.pptx", sizeBytes: content.byteLength },
+      },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.document.parser.parserId).toBe("pptx");
+    expect(result.outcome.error.message).toBe(
+      "pptx is password-protected; remove the password and reindex",
+    );
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "ENCRYPTED_DOCUMENT", severity: "error" }),
+    ]);
     expect(count("parsed_units")).toBe(0);
   });
 });

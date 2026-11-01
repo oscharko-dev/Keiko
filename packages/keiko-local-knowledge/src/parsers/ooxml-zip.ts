@@ -37,6 +37,26 @@ export interface OoxmlZipReadPlan {
   readonly duplicateParts?: "reject" | "replace";
 }
 
+// A password-protected Office file is not an OOXML ZIP package: Office wraps the encrypted package
+// in a Compound File Binary (OLE2) container whose 8-byte signature is D0 CF 11 E0 A1 B1 1A E1.
+const OLE_COMPOUND_FILE_SIGNATURE: readonly number[] = [
+  0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1,
+];
+
+/**
+ * True when the bytes open with the OLE2 compound-file signature, which is how Office stores a
+ * password-protected docx, xlsx or pptx. Such a file has no readable ZIP directory, so callers
+ * name it as encrypted instead of reporting a generic malformed package. The signature alone
+ * cannot tell an encrypted package from a legacy binary file saved under an OOXML extension; both
+ * are unreadable here and both are refused.
+ */
+export function isEncryptedOoxmlContainer(bytes: Uint8Array): boolean {
+  return (
+    bytes.length >= OLE_COMPOUND_FILE_SIGNATURE.length &&
+    OLE_COMPOUND_FILE_SIGNATURE.every((byte, index) => bytes[index] === byte)
+  );
+}
+
 export type OoxmlZipFailure = "budget" | "cancelled" | "malformed";
 
 interface ScanLimits {

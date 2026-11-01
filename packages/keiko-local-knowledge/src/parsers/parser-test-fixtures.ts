@@ -249,3 +249,76 @@ export function zipTextEntries(entries: readonly ZipTextEntry[]): Uint8Array {
   end.writeUInt32LE(localOffset, 16);
   return Uint8Array.from(Buffer.concat([...localParts, ...centralParts, end]));
 }
+
+/**
+ * A password-protected Office file: the OLE2 compound-file header Office wraps around an
+ * encrypted package, followed by filler. The bytes are not a ZIP archive and hold no slide text.
+ */
+export function oleEncryptedPackage(): Uint8Array {
+  const bytes = new Uint8Array(512);
+  bytes.set([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  return bytes;
+}
+
+// ─── PDF builder ─────────────────────────────────────────────────────────────
+
+function pdfStringLiteral(text: string): string {
+  return text.replaceAll(/[\\()]/gu, (match) => `\\${match}`);
+}
+
+export interface TextPdfOptions {
+  /** Adds a standard-security-handler /Encrypt dictionary that no empty password opens. */
+  readonly encrypted?: boolean;
+}
+
+const FIRST_PAGE_OBJECT = 4;
+
+function pdfPageObjects(pages: readonly string[]): readonly string[] {
+  return pages.flatMap((text, index) => {
+    const content = `BT /F1 18 Tf 72 700 Td (${pdfStringLiteral(text)}) Tj ET`;
+    const contentNumber = FIRST_PAGE_OBJECT + index * 2 + 1;
+    return [
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${String(contentNumber)} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`,
+      `<< /Length ${String(content.length)} >>\nstream\n${content}\nendstream`,
+    ];
+  });
+}
+
+// Builds a valid text-layer PDF with one page per entry and a byte-exact cross-reference table, so
+// the fixture needs neither a recovery pass nor a canned blob. With `encrypted`, the trailer
+// references an /Encrypt dictionary whose owner and user entries do not authenticate the empty
+// password, which is how a document that requires a password reaches the parser.
+export function buildTextPdf(pages: readonly string[], options: TextPdfOptions = {}): Uint8Array {
+  const kids = pages.map((_, index) => `${String(FIRST_PAGE_OBJECT + index * 2)} 0 R`).join(" ");
+  const bodies: string[] = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${kids}] /Count ${String(pages.length)} >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ...pdfPageObjects(pages),
+  ];
+  const encryptEntries: readonly string[] =
+    options.encrypted === true
+      ? [
+          `/Encrypt ${String(bodies.length + 1)} 0 R`,
+          "/ID [<00112233445566778899aabbccddeeff> <00112233445566778899aabbccddeeff>]",
+        ]
+      : [];
+  if (options.encrypted === true) {
+    bodies.push(
+      `<< /Filter /Standard /V 1 /R 2 /P -4 /O <${"ab".repeat(32)}> /U <${"cd".repeat(32)}> >>`,
+    );
+  }
+  let document = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  for (const [index, body] of bodies.entries()) {
+    offsets.push(document.length);
+    document += `${String(index + 1)} 0 obj\n${body}\nendobj\n`;
+  }
+  const size = bodies.length + 1;
+  const entries = offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`);
+  const trailer = [`/Size ${String(size)}`, "/Root 1 0 R", ...encryptEntries].join(" ");
+  const xref = `xref\n0 ${String(size)}\n0000000000 65535 f \n${entries.join("")}`;
+  return encode(
+    `${document}${xref}trailer\n<< ${trailer} >>\nstartxref\n${String(document.length)}\n%%EOF\n`,
+  );
+}

@@ -18,6 +18,7 @@ import { LOCAL_KNOWLEDGE_PPTX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contra
 import {
   diagnostic,
   emptyResult,
+  encryptedOoxmlRefusal,
   objectLimitDiagnostic,
   oversizeDiagnostic,
   parserIdentity,
@@ -483,6 +484,8 @@ async function asyncParse(
       diagnostic("PARSER_CANCELLED", "caller aborted parser", input.documentId, "info"),
     ]);
   }
+  const encrypted = encryptedOoxmlRefusal(capability, input, options, "pptx");
+  if (encrypted !== undefined) return encrypted;
   const startedAt = options.now();
   try {
     const parts = await readOoxmlZipEntries(input.bytes, options, startedAt, zipPlan(options));

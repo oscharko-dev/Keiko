@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { isLegacyBinaryOfficeFormat } from "./large-document/index.js";
-import { selectionFromBytes, zipTextEntries, type ZipTextEntry } from "./parser-test-fixtures.js";
+import {
+  oleEncryptedPackage,
+  selectionFromBytes,
+  zipTextEntries,
+  type ZipTextEntry,
+} from "./parser-test-fixtures.js";
 import { pptxParser } from "./pptx-parser.js";
 import {
   PPTX_EXTENSION_INPUT,
@@ -321,6 +326,49 @@ describe("pptxParser", () => {
     ])("rejects %s", async (_label, xml) => {
       const bytes = buildPptx([{ file: "slide1.xml", relationshipId: "rId1", xml }]);
       const result = await parse(bytes);
+
+      expect(codes(result)).toEqual(["MALFORMED_INPUT"]);
+      expect(result.units).toEqual([]);
+    });
+
+    it("refuses a password-protected presentation with the closed encrypted code and no text", async () => {
+      const result = await parse(oleEncryptedPackage());
+
+      expect(result.diagnostics).toEqual([
+        {
+          code: "ENCRYPTED_DOCUMENT",
+          message: "pptx is password-protected; remove the password and reindex",
+          documentId: result.documentId,
+          severity: "error",
+        },
+      ]);
+      expect(result.sections).toEqual([]);
+      expect(result.units).toEqual([]);
+      expect(textOf(result)).toBe("");
+    });
+
+    it("names the encrypted container by its signature, not by the file extension", async () => {
+      const result = await pptxParser.parseAsync(
+        selectionFromBytes(oleEncryptedPackage(), {
+          extension: "",
+          mediaType: PPTX_EXTENSION_INPUT.mediaType,
+        }),
+        buildParserOptions({ now: () => 0 }),
+      );
+
+      expect(codes(result)).toEqual(["ENCRYPTED_DOCUMENT"]);
+    });
+
+    it("does not call a truncated signature or a plain zip encrypted", async () => {
+      const truncated = await parse(oleEncryptedPackage().subarray(0, 7));
+      const zipped = await parse(new Uint8Array([0x50, 0x4b, 0x03, 0x04]));
+
+      expect(codes(truncated)).toEqual(["MALFORMED_INPUT"]);
+      expect(codes(zipped)).toEqual(["MALFORMED_INPUT"]);
+    });
+
+    it("rejects an empty file as malformed", async () => {
+      const result = await parse(new Uint8Array());
 
       expect(codes(result)).toEqual(["MALFORMED_INPUT"]);
       expect(result.units).toEqual([]);

@@ -5,6 +5,7 @@ import {
   decodeXmlEntities,
   diagnostic,
   emptyResult,
+  encryptedOoxmlRefusal,
   objectLimitDiagnostic,
   oversizeDiagnostic,
   readAttribute,
@@ -722,6 +723,8 @@ export const xlsxParser: AsyncParserAdapter = Object.freeze({
     if (options.signal?.aborted === true) {
       return cancelled(xlsxParser.capability, input, options);
     }
+    const encrypted = encryptedOoxmlRefusal(xlsxParser.capability, input, options, "xlsx");
+    if (encrypted !== undefined) return encrypted;
     try {
       const entries = await readRelevantEntries(input.bytes, options);
       return parseWorkbook(entries, input, options);
