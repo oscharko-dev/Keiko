@@ -9,6 +9,7 @@ import {
   type JiraDraft,
   type JiraDraftItem,
   type JiraManagedConnection,
+  type JiraTraceOutcome,
 } from "@oscharko-dev/keiko-connectors";
 import type {
   JiraDraftItemState,
@@ -33,6 +34,18 @@ import type {
 } from "../store/chatToolMutationTypes.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import {
+  logTrace,
+  newTally,
+  tallyOutcome,
+  tallyRefusal,
+  traceOutcomeData,
+  traceRefusalData,
+  type ItemTrace,
+  type TraceResolution,
+  type TraceSession,
+  type TraceTally,
+} from "../requirement-trace.js";
 
 /**
  * Backlog drafts (#4178): the server runs every selected item as its own journaled `jira.create`
@@ -52,6 +65,13 @@ export interface JiraChatDraftExecution {
   readonly httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions) => AtlassianHttpBodyPort;
   readonly beforeEffect: () => boolean;
   readonly beforeMutation: () => boolean;
+  /**
+   * The trace of the Chat's Knowledge Pods for this draft (#4179). An item's explicit
+   * `requirementIds` are validated before any item is created; an unknown or ambiguous reference
+   * refuses the whole draft. Without it an item that names requirements cannot be traced and the
+   * draft is refused.
+   */
+  readonly openTrace?: (() => TraceSession) | undefined;
 }
 
 interface DraftItemResult {
@@ -59,6 +79,8 @@ interface DraftItemResult {
   readonly state: JiraDraftItemState;
   readonly issueKey?: string;
   readonly detail?: CatalogJsonObject;
+  /** What of the requested trace reached the created issue. */
+  readonly trace?: CatalogJsonObject;
 }
 
 /** The deterministic journal identity of one draft item. */
@@ -129,6 +151,34 @@ async function runItem(
   input: JiraChatDraftExecution,
   item: JiraDraftItem,
   keys: ReadonlyMap<string, string>,
+  trace: ItemTrace | undefined,
+  tally: TraceTally,
+): Promise<DraftItemResult> {
+  let traced: JiraTraceOutcome | undefined;
+  const settled = await runTracedItem(
+    input,
+    item,
+    keys,
+    trace === undefined
+      ? undefined
+      : {
+          ...trace,
+          report: (outcome): void => {
+            traced = outcome;
+          },
+        },
+  );
+  if (trace === undefined) return settled;
+  tallyOutcome(tally, traced);
+  const data = traceOutcomeData(traced);
+  return data === undefined ? settled : { ...settled, trace: data };
+}
+
+async function runTracedItem(
+  input: JiraChatDraftExecution,
+  item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
+  trace: Parameters<typeof executeJiraDraftItem>[4],
 ): Promise<DraftItemResult> {
   let attempt: JiraMutationAttempt | undefined;
   const result = await executeJiraChatMutation({
@@ -138,10 +188,13 @@ async function runItem(
     beforeEffect: input.beforeEffect,
     beforeMutation: input.beforeMutation,
     execute: async (http) => {
-      attempt = await executeJiraDraftItem(item, keys, input.context, {
-        ...input.connection,
-        http,
-      });
+      attempt = await executeJiraDraftItem(
+        item,
+        keys,
+        input.context,
+        { ...input.connection, http },
+        trace,
+      );
       return attempt;
     },
   });
@@ -206,6 +259,8 @@ function blockedState(
 async function runDraft(
   input: JiraChatDraftExecution,
   draft: JiraDraft,
+  traces: ReadonlyMap<string, ItemTrace>,
+  tally: TraceTally,
 ): Promise<readonly DraftItemResult[]> {
   const excluded = excludedJiraDraftRefs(draft, input.deselected);
   const keys = new Map<string, string>();
@@ -218,7 +273,7 @@ async function runDraft(
     // Each item needs the keys its earlier items received; the journal admits one effect at a time.
     const settled: DraftItemResult =
       blocked === undefined
-        ? await runItem(input, item, keys) // NOSONAR typescript:S9382 -- dependency order
+        ? await runItem(input, item, keys, traces.get(item.ref), tally) // NOSONAR typescript:S9382 -- dependency order
         : { ref: item.ref, state: blocked };
     if (settled.issueKey !== undefined) keys.set(item.ref, settled.issueKey);
     halted ||= settled.state === "uncertain";
@@ -262,6 +317,7 @@ function projectItem(baseUrl: string, item: DraftItemResult): CatalogJsonObject 
     state: item.state,
     ...(item.issueKey === undefined ? {} : { issueKey: item.issueKey }),
     ...(browseUrl === undefined ? {} : { browseUrl }),
+    ...(item.trace === undefined ? {} : { trace: item.trace }),
     ...item.detail,
   };
 }
@@ -284,6 +340,55 @@ function draftResult(baseUrl: string, items: readonly DraftItemResult[]): Manage
   };
 }
 
+interface ResolvedTraces {
+  readonly traces: ReadonlyMap<string, ItemTrace>;
+  readonly refused: ReadonlyMap<string, Extract<TraceResolution, { ok: false }>>;
+}
+
+/** Every item's explicit references, validated up front: nothing is created for a refused draft. */
+function resolveItemTraces(
+  session: TraceSession | undefined,
+  draft: JiraDraft,
+  tally: TraceTally,
+): ResolvedTraces {
+  const traces = new Map<string, ItemTrace>();
+  const refused = new Map<string, Extract<TraceResolution, { ok: false }>>();
+  for (const item of draft.items) {
+    if (item.requirementIds === undefined) continue;
+    const resolution: TraceResolution =
+      session === undefined
+        ? { ok: false, reason: "unavailable", problems: [] }
+        : session.resolve(item.requirementIds);
+    if (resolution.ok) traces.set(item.ref, resolution.trace);
+    else {
+      refused.set(item.ref, resolution);
+      tallyRefusal(tally, resolution);
+    }
+  }
+  return { traces, refused };
+}
+
+function refusedDraft(
+  refused: ReadonlyMap<string, Extract<TraceResolution, { ok: false }>>,
+): ManagedMcpToolResult {
+  const problems = [...refused].flatMap(
+    ([ref, resolution]) =>
+      (traceRefusalData(resolution, ref).requirementProblems as
+        CatalogJsonObject[] | undefined) ?? [{ ref, reference: "", reason: "malformed" }],
+  );
+  const first = [...refused.values()][0];
+  return {
+    data: {
+      outcome: "rejected",
+      reason: "field-validation",
+      requirementRefusal: first?.reason ?? "references",
+      requirementProblems: problems.slice(0, 32),
+      items: [],
+    },
+    isError: true,
+  };
+}
+
 export async function executeJiraChatDraft(
   input: JiraChatDraftExecution,
 ): Promise<ManagedMcpToolResult> {
@@ -293,7 +398,20 @@ export async function executeJiraChatDraft(
       data: { outcome: "rejected", reason: "field-validation", items: [] },
       isError: true,
     };
-  return draftResult(input.connection.baseUrl, await runDraft(input, draft));
+  const session = input.openTrace?.();
+  const tally = newTally();
+  try {
+    const resolved = resolveItemTraces(session, draft, tally);
+    if (resolved.refused.size > 0) {
+      logTrace(input.intent.correlationId, "draft", tally);
+      return refusedDraft(resolved.refused);
+    }
+    const items = await runDraft(input, draft, resolved.traces, tally);
+    logTrace(input.intent.correlationId, "draft", tally);
+    return draftResult(input.connection.baseUrl, items);
+  } finally {
+    session?.close();
+  }
 }
 
 /** The durable draft outcome, read from the journal records of its items (#4178). */

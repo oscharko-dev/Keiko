@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "804b466782664e19617e2c2368333e9750fdc807cd531facb3162f3ed904030c"
+    "catalogDigest": "c9a767896793584b0aa340a514c53086c29db762f5f03d914cd6e9da6712a336"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 624,
-    "proofCount": 647,
-    "resolvedProofCount": 647,
-    "failureClassCount": 386,
+    "operationCount": 626,
+    "proofCount": 649,
+    "resolvedProofCount": 649,
+    "failureClassCount": 387,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -547,6 +547,8 @@
         "indexing.start.accepted",
         "indexing.start.refused",
         "knowledge.log.sink-failed",
+        "knowledge.requirement-trace.applied",
+        "knowledge.requirements.read",
         "knowledge.store.encryption-rejected",
         "knowledge.store.quarantined",
         "memory-vault.log.sink-failed",
@@ -1076,6 +1078,7 @@
     "knowledge-prompt-window": ["memory-knowledge.dependency-failure"],
     "knowledge-citation-reconciliation": ["memory-knowledge.dependency-failure"],
     "grounded-entailment-verdict": ["memory-knowledge.dependency-failure"],
+    "requirement-inventory": ["memory-knowledge.dependency-failure"],
     "knowledge-store-corruption": ["memory-knowledge.dependency-failure"],
     "knowledge-store-encryption": ["memory-knowledge.rejection"],
     "knowledge-store-reopen": ["memory-knowledge.dependency-failure"],
@@ -2516,6 +2519,11 @@
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"
     ],
+    "knowledge.requirement-trace.applied.line": [
+      "packages/keiko-server/src/atlassian/jiraChatTracedMutation.test.ts",
+      "packages/keiko-server/src/requirement-trace.test.ts"
+    ],
+    "knowledge.requirements.read.line": ["packages/keiko-server/src/requirementsTool.test.ts"],
     "knowledge.store.encryption-rejected.mode": [
       "packages/keiko-local-knowledge/src/store.log-sink-safety.test.ts"
     ],

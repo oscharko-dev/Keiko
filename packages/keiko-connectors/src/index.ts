@@ -206,6 +206,8 @@ export {
 } from "./jira-attachments.js";
 export {
   JIRA_DRAFT_IDENTITY_PREFIX,
+  JIRA_REQUIREMENT_IDS_MAX,
+  parseRequirementIds,
   excludedJiraDraftRefs,
   jiraDraftDependencies,
   jiraDraftIdentity,
@@ -215,6 +217,11 @@ export {
   type JiraDraftLink,
   type JiraDraftParent,
 } from "./jira-draft.js";
+export {
+  descriptionWithFooter,
+  type JiraTraceOutcome,
+  type JiraTraceRequest,
+} from "./jira-requirement-trace.js";
 export {
   executeJiraDraftItem,
   findJiraDraftItem,

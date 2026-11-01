@@ -65,7 +65,10 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "log-unavailable" });
     const [first, second] = await Promise.all([f.runtime.get(), f.runtime.get()]);
     expect(second).toBe(first);
-    expect(first.catalog.descriptors).toHaveLength(Object.keys(JIRA_MANAGED_ACTION_TYPES).length);
+    // Every Jira action plus the one knowledge.requirements read (#4179).
+    expect(first.catalog.descriptors).toHaveLength(
+      Object.keys(JIRA_MANAGED_ACTION_TYPES).length + 1,
+    );
     expect(f.record).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.record.mock.calls)).not.toContain("synthetic-private-sink-failure");
     const records = f.lines.map((line) =>

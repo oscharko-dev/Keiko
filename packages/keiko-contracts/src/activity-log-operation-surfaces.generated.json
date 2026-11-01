@@ -437,6 +437,8 @@
   "jira.attachment.source": "bff",
   "jira.template.admission": "bff",
   "knowledge.log.sink-failed": "memory-knowledge",
+  "knowledge.requirement-trace.applied": "memory-knowledge",
+  "knowledge.requirements.read": "memory-knowledge",
   "knowledge.store.encryption-rejected": "memory-knowledge",
   "knowledge.store.quarantined": "memory-knowledge",
   "lsp.java.version-probe.completed": "editor-delivery",

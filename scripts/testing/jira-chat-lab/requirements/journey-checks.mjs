@@ -8,11 +8,14 @@
 //   ctx.truth                -> generated ground truth of the report project
 // A check names the catalog obligations it verifies in `covers`; the scorecard credits them only
 // when the check is green, so a check that covers part of a scenario never turns it green.
-import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
+import { STRUCTURE_RULES, buildCorpus, corpusChange } from "./corpus.mjs";
 import {
   epicConforms,
   gradeBacklog,
+  gradeChangeImpact,
+  gradeCriterionTestCases,
   gradeDeviationReport,
+  gradeQualityFindings,
   gradeRequirementListing,
   draftIdentity,
   sectionsPresent,
@@ -23,7 +26,7 @@ import {
 const result = (status, turn, detail, covers) => ({
   status,
   covers,
-  detail: `${detail}; ${Math.round(turn.durationMs / 1000)} s, ${turn.toolCalls} tool calls${turn.failure ? `, failed: ${turn.failure}` : ""}`,
+  detail: `${detail}; ${Math.round(turn.durationMs / 1000)} s, ${turn.toolCalls} tool calls${turn.requirementReads ? ` (${turn.requirementReads} requirement reads)` : ""}${turn.failure ? `, failed: ${turn.failure}` : ""}`,
 });
 
 /**
@@ -48,7 +51,7 @@ export const JOURNEYS = {
     const truth = buildCorpus(1).truth;
     const turn = await ctx.turn(
       chat,
-      "Liste ALLE Anforderungen aus dem Lastenheft im Wissens-Pod vollständig auf: je Zeile ID, Titel, Priorität und Kapitel. Nutze kein Jira-Werkzeug.",
+      "Liste ALLE Anforderungen aus dem Lastenheft im Wissens-Pod vollständig auf: je Zeile ID, Titel, Priorität und Kapitel.",
     );
     const grade = gradeRequirementListing(turn.answer, truth);
     const gaps = Object.entries(grade.incomplete)
@@ -173,6 +176,66 @@ export const JOURNEYS = {
       turn,
       `${grade.found}/${grade.expected} deviating issues found, ${grade.falseFindings.length} false findings, ${grade.undescribed.length} of ${grade.deviationCount} seeded deviations not described in the answer, ${grade.unreported.length} not reported by the tool`,
       ["deviating-issues", "deviation-detail"],
+    );
+  },
+  async S14(ctx, chat) {
+    const query = "project = REQ AND issuetype = Epic";
+    const change = corpusChange();
+    const traced = [...change.changed, ...change.removed];
+    const before = await snapshotBefore(ctx, query);
+    const first = await ctx.turn(
+      chat,
+      `Lege im Jira-Projekt REQ für die Anforderungen ${traced.join(", ")} aus dem Lastenheft je ein Epic nach der Strukturvorgabe an. Melde die Vorgangsschlüssel.`,
+    );
+    // Epics the draft reconciled from an earlier run count too: the traced keys are what matters.
+    const created = turnIssues({
+      before,
+      issues: await ctx.search(query, "summary,labels"),
+      exchanges: first.toolExchanges,
+    }).credited;
+    await ctx.replaceSpecification(2);
+    const turn = await ctx.turn(
+      chat,
+      "Das Lastenheft liegt jetzt in einer neuen Version vor. Vergleiche es mit den bereits angelegten Epics im Jira-Projekt REQ. Antworte in genau vier Zeilen: `GEÄNDERT:` mit den IDs der geänderten Anforderungen, `ENTFERNT:` mit den IDs der entfernten, `NEU:` mit den IDs der neuen und `BETROFFENE VORGÄNGE:` mit den Schlüsseln der Epics, die geänderte oder entfernte Anforderungen nachverfolgen.",
+    );
+    const grade = gradeChangeImpact(
+      turn.answer,
+      change,
+      created.map((issue) => issue.key),
+    );
+    return result(
+      !first.failure && created.length === traced.length && grade.ok ? "green" : "red",
+      turn,
+      `${created.length}/${traced.length} epics created beforehand; changed ${grade.changed}, removed ${grade.removed}, added ${grade.added}, affected issues ${grade.affected}`,
+      ["changes-detected", "affected-issues"],
+    );
+  },
+  async S15(ctx, chat) {
+    const truth = buildCorpus(1).truth;
+    const turn = await ctx.turn(
+      chat,
+      "Prüfe ALLE Anforderungen des Lastenhefts auf Qualitätsmängel. Antworte in genau zwei Zeilen: `UNKLAR:` mit den IDs der Anforderungen mit unklarer, nicht prüfbarer Formulierung und `OHNE ABNAHMEKRITERIEN:` mit den IDs der Anforderungen ohne Abnahmekriterien.",
+    );
+    const grade = gradeQualityFindings(turn.answer, truth);
+    return result(
+      grade.vagueOk && grade.missingOk ? "green" : "red",
+      turn,
+      `vague wording ${grade.vagueReported}/${grade.vague} (exact: ${grade.vagueOk}), missing acceptance criteria ${grade.missingReported}/${grade.missing} (exact: ${grade.missingOk})`,
+      ["vague-wording-findings", "missing-acceptance-findings"],
+    );
+  },
+  async S16(ctx, chat) {
+    const item = buildCorpus(1).truth.find((entry) => entry.id === "LH-002");
+    const turn = await ctx.turn(
+      chat,
+      "Entwirf für die Anforderung LH-002 aus dem Lastenheft zu jedem Abnahmekriterium genau einen Testfall. Nenne bei jedem Testfall die Kriterium-Referenz im Format LH-002/AC1, LH-002/AC2 usw. Lege nichts in Jira an.",
+    );
+    const grade = gradeCriterionTestCases(turn.answer, item);
+    return result(
+      grade.ok ? "green" : "red",
+      turn,
+      `${item.acceptanceCount - grade.missing.length}/${item.acceptanceCount} criteria covered, ${grade.invented.length} invented references`,
+      ["test-case-per-criterion", "traceability"],
     );
   },
   async S17(ctx, chat) {

@@ -7534,6 +7534,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "requirement-inventory",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: [
+      "knowledge.requirement-trace.applied",
+      "knowledge.requirements.read",
+    ],
+    requiredLossOperations: [],
+    requiredProofOperations: ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [
+      "knowledge.requirement-trace.applied",
+      "knowledge.requirements.read",
+    ],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "knowledge-store-corruption",
     requiredProductSurfaces: ["keiko-local-knowledge"],
     requiredLifecycleOperations: {

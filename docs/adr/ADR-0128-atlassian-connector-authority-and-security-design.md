@@ -838,6 +838,90 @@ CSV neutralizes spreadsheet formulas. Evidence is `atlassian.jira-report` (phase
 reason, scope kind, counts and rule ids; never scope text, keys, summaries or report content) beside
 the existing `atlassian.action.outcome` line for the call.
 
+**Complete, traceable requirement derivation (#4179, 2026-10-31).** Grounded Q&A keeps its ranked
+excerpts for ordinary questions, so a request for _all_ requirements of a specification would
+silently miss some. No keyword rule decides when that matters: the model asks for the full list
+through a deterministic read tool, `knowledge.requirements`, hosted by the existing governed Chat
+tool catalog (the `jira-chat` profile) next to the Jira reads. The tool reuses the catalog's schema
+admission, call budget, cancellation, transcript reservation and continuation fitting; it adds no
+retrieval, citation or tool subsystem. Because the catalog is the Jira catalog, the tool is offered
+to a Chat that has a Jira binding; Knowledge-only, folder and hybrid Chats are unchanged.
+
+- _Authority._ The tool is a read: the current Chat authority admits it, exactly as it admits a
+  grounded answer over an attached Knowledge Pod. No Jira read grant or consent is involved, and
+  the tool never reaches Jira. The scope is the Chat's attached Pods (plural scope list first);
+  indexing, stale, error, not-ready and policy-denied Pods are refused with a closed reason, as a
+  grounded answer would refuse them. Document text is redacted with the Chat content policy before
+  it reaches the model.
+- _Inventory._ `keiko-quality-intelligence` derives, deterministically and without a model, the
+  requirement units of each document in document order: identifier, title, priority, acceptance
+  criteria (`<id>/AC<n>`), section path, source span, closed quality findings and a content digest
+  of the normalized content only (no location, format or inventory version). An explicit identifier
+  follows `[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*-?\d+` (`LH-001`, `R-12`, `REQ-FUNC-001`, `REQ_003`);
+  technical tokens (`HTTP-2`, `AES-256`, `ISO-27001`, `UTF-8`, `SHA-256`, `TLS-1`, ...) are reserved
+  data, not requirements. Candidates are headings, strong lines (bracketed, separated), table rows
+  with an id/statement/priority column, and, in HTML and slides, recorded section headings; a
+  heading needs a body or a second identifier of its prefix. Priority, criteria, metadata keys and
+  modal verbs are data in several languages (DE, EN, FR, ES, IT) and extensible through the
+  vocabulary, never code branches. A definition with a body wins over a table-of-contents mention of
+  the same identifier; two different bodies under one identifier in one document are reported as
+  conflicting, never merged. Blocks end at the next heading or blank line, wrapped paragraphs are
+  merged, and an extractor-flattened HTML block is read from its inline keys. A statement with a
+  modal verb and no identifier gets `DRV-<8 letters>`, the SHA-256 of the document identity and the
+  normalized statement (plus an occurrence index for exact repeats), so it survives insertion and
+  renumbering and is not shared between documents. The same specification yields the same
+  identifiers, titles, priorities, criteria and digests from Markdown, plain text, HTML, Word and
+  PowerPoint extraction (`requirement-inventory-formats.integration`); PDF line wrapping is only as
+  stable as its extracted lines. Scanned documents (OCR) are not read. The result is a set of
+  _detected units_, never claimed to be complete: the detector can miss or over-read, and says so.
+- _Reading._ The tool takes `{ view?, documents?, query?, ids?, priorities?, cursor?, limit? }`.
+  Units are paged in document order under an item bound (25, at most 50) and a byte bound (24,000
+  bytes) that fit a 32k-token model; statements, criteria and findings are clipped, never silently
+  dropped. Every page states honest totals: detected and matched units, documents scanned,
+  documents not text-extracted, documents and units omitted by the collection bounds (64 documents,
+  4M characters per document, 16M in total, 5,000 units), the cut reasons and a cursor until the
+  last page. A cursor binds the selection and the document revisions it was issued for; a changed
+  selection or document answers `cursor-stale` instead of skipping or repeating units. The
+  `documents` view lists the documents read; `change-queries` returns label-only JQL batches. When a
+  tool result is later compacted, the receipt keeps each unit's scoped reference, title and
+  priority so the model can still list or reference units it has read.
+- _Identity and traceability._ A unit is referenced as `<documentScope>:<id>` (the first eight hex
+  digits of the SHA-256 of the document identity) or, when unique, by its plain identifier. An
+  identifier defined in several documents is reported as ambiguous and must be referenced with its
+  scope; the last definition never wins. `jira.create`, `jira.edit` and each `jira.draft` item take
+  an explicit `requirementIds` list (at most 8). The server validates every reference before
+  anything is sent; an unknown, ambiguous or malformed reference, or unreadable Pods, refuses the
+  call (the whole draft) with the closed reason and the offending references. Nothing is read from
+  summaries, labels or descriptions. A valid reference adds the labels `keiko-requirement`,
+  `keiko-doc-<scope>`, `keiko-req-<id>`, `keiko-rev-<12 hex of the content digest>` (and
+  `keiko-ac-<id>-AC<n>`) and a plain-text footer `----` / `Keiko traceability` with the source
+  location, the document and requirement digests and the closed finding codes. The footer passes the
+  Chat content redactor and is neutralized for Jira wiki markup. On create the connector applies
+  them only where the create screen offers the fields; on edit it reads the issue, replaces
+  `keiko-rev-*` and rewrites the footer in place. What the instance dropped is returned in the tool
+  result as `trace {labelsApplied, footerApplied, droppedLabels}` and counted on the log. The item
+  identity, the journal and the approval are unaffected; `jira.draft` stays bounded to 32 items.
+  The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
+  template that governs `description` or `labels` sees the final values, not the model's draft; the
+  pre-approval dry run of a create or edit judges the values as the model wrote them.
+- _Change check._ A new document version is compared with the backlog through the labels alone.
+  `change-queries` returns, per document, label-only JQL batches under the JQL length bound for
+  items whose revision label is outdated (`stale`), the traced set per document (`traced`) and, only
+  where it fits the bound, items whose requirement is gone (`removed`). Edits are proposed as a
+  backlog draft.
+- _Quality._ The existing requirement-quality checks run over every unit and add the closed code
+  `missing-acceptance-criteria`; the codes reach the tool result and the footer.
+- _Evidence on the log._ `knowledge.requirements.read` records each call (view, closed disposition
+  `served`/`refused`/`cursor-stale`/`unavailable`, whether a cursor was used, detected, matched and
+  returned counts, documents scanned, not extracted and omitted, units omitted, result bytes, next
+  page); `knowledge.requirement-trace.applied` records, per create, edit or draft, the traced,
+  refused and problem counts and the labels, footers and dropped labels applied. Counts and closed
+  words only.
+- _Limits stated openly._ The tool is available only in a Chat with a Jira binding. The `removed`
+  query is omitted when it would exceed the JQL bound. HTML flattening is a heuristic. PDF
+  inventories depend on the extracted line structure. The detector is evaluated on the lab corpus
+  and the unit tests, not proven complete.
+
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
 Additive, non-destructive writes with no lasting external side effect beyond their own content

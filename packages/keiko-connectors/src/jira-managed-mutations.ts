@@ -50,6 +50,11 @@ import {
   type JiraDraftItem,
 } from "./jira-draft.js";
 import {
+  traceCreateFields,
+  traceEditArguments,
+  type JiraTraceRequest,
+} from "./jira-requirement-trace.js";
+import {
   jiraCreateMutationMetadata,
   jiraEditMutationMetadata,
   jiraTransitionMutationMetadata,
@@ -186,7 +191,7 @@ function createArgumentsValid(
   links: readonly JiraIssueLinkRequest[] | undefined,
 ): boolean {
   return (
-    keysAllowed(args, ["projectId", "issueTypeId", "fields", "links"]) &&
+    keysAllowed(args, ["projectId", "issueTypeId", "fields", "links", "requirementIds"]) &&
     fields !== undefined &&
     links !== undefined &&
     !Object.keys(fields).some(isCreateRoutingField)
@@ -196,6 +201,7 @@ async function createIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
   policy: MutationPolicy,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
   const { projectId, issueTypeId } = args;
   const fields = fieldsInput(args.fields);
@@ -210,9 +216,10 @@ async function createIssue(
     return INVALID;
   const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
   if (!metadata.ok) return metadata;
+  const traced = trace === undefined ? fields : traceCreateFields(fields, metadata.fields, trace);
   return createWithMetadata(
     request,
-    { projectId, issueTypeId, fields, links },
+    { projectId, issueTypeId, fields: traced, links },
     metadata.fields,
     policy,
   );
@@ -394,30 +401,33 @@ async function fieldMutation(
     plan,
   );
 }
+function editArgumentsValid(args: CatalogJsonObject): boolean {
+  const fields = fieldsInput(args.fields ?? {});
+  const updates = asArray(args.updates ?? []);
+  const links = parseJiraIssueLinks(args.links);
+  return (
+    keysAllowed(args, ["issueKey", "fields", "updates", "links", "requirementIds"]) &&
+    fields !== undefined &&
+    updates !== undefined &&
+    links !== undefined &&
+    Object.keys(fields).length + updates.length + links.length > 0
+  );
+}
 async function editIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
   issueKey: string,
   policy: MutationPolicy,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
-  const fields = fieldsInput(args.fields ?? {});
-  const updates = asArray(args.updates ?? []);
-  const links = parseJiraIssueLinks(args.links);
-  if (
-    !keysAllowed(args, ["issueKey", "fields", "updates", "links"]) ||
-    fields === undefined ||
-    updates === undefined ||
-    links === undefined ||
-    Object.keys(fields).length + updates.length + links.length === 0
-  )
-    return INVALID;
-  return fieldMutation(
-    request,
-    await jiraEditMutationMetadata(request, issueKey),
-    args,
-    { purpose: "edit", issueKey },
-    policy,
-  );
+  if (!editArgumentsValid(args)) return INVALID;
+  const metadata = await jiraEditMutationMetadata(request, issueKey);
+  const target = { purpose: "edit", issueKey } as const;
+  if (trace === undefined || !metadata.ok)
+    return fieldMutation(request, metadata, args, target, policy);
+  const traced = await traceEditArguments(request, issueKey, args, metadata.fields, trace);
+  if (!traced.ok) return traced.attempt;
+  return fieldMutation(request, metadata, traced.args, target, policy);
 }
 async function transitionIssue(
   request: JiraMutationRequest,
@@ -600,6 +610,7 @@ export async function executeJiraDraftItem(
   keys: ReadonlyMap<string, string>,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
   if (connection.deployment !== "data-center") return { ok: false, reason: "unavailable" };
   const resolved = resolveJiraDraftItem(item, keys);
@@ -617,9 +628,11 @@ export async function executeJiraDraftItem(
   );
   if (found.kind !== "absent") return found.attempt;
   const identified = withJiraDraftIdentity(fields, metadata.fields, jiraDraftIdentity(item));
+  const traced =
+    trace === undefined ? identified : traceCreateFields(identified, metadata.fields, trace);
   return createWithMetadata(
     request,
-    { projectId: item.projectId, issueTypeId: item.issueTypeId, fields: identified, links },
+    { projectId: item.projectId, issueTypeId: item.issueTypeId, fields: traced, links },
     metadata.fields,
     { templates: connection.issueTemplates, check: false },
   );
@@ -654,13 +667,14 @@ function dispatchMutation(
   args: CatalogJsonObject,
   request: JiraMutationRequest,
   policy: MutationPolicy,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
-  if (operation === "jira.create") return createIssue(request, args, policy);
+  if (operation === "jira.create") return createIssue(request, args, policy, trace);
   const issueKey = args.issueKey;
   if (!isSafeAtlassianIdentifier(issueKey)) return Promise.resolve(INVALID);
   switch (operation) {
     case "jira.edit":
-      return editIssue(request, args, issueKey, policy);
+      return editIssue(request, args, issueKey, policy, trace);
     case "jira.assign":
       return assignIssue(request, args, issueKey);
     case "jira.comment":
@@ -678,16 +692,20 @@ export function executeJiraManagedMutation(
   source: CatalogJsonObject,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
+  trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
   if (connection.deployment !== "data-center")
     return Promise.resolve({ ok: false, reason: "unavailable" });
   // An attachment changes no field a template describes: it takes no template check.
   if (operation === "jira.attach")
     return attachFile(requestFor(connection, context), structuredClone(source), connection);
-  return dispatchMutation(operation, structuredClone(source), requestFor(connection, context), {
-    templates: connection.issueTemplates,
-    check: false,
-  });
+  return dispatchMutation(
+    operation,
+    structuredClone(source),
+    requestFor(connection, context),
+    { templates: connection.issueTemplates, check: false },
+    trace,
+  );
 }
 
 /**

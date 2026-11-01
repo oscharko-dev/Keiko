@@ -1,4 +1,5 @@
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { KNOWLEDGE_CHAT_TOOLS, type KnowledgeChatToolName } from "../requirementsToolName.js";
 import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
@@ -57,7 +58,7 @@ export interface JiraChatCatalogContext extends ToolConsumerContext {
   readonly userMessageId?: string;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
-  readonly tool: JiraManagedReadToolName | JiraMutationOperation;
+  readonly tool: JiraManagedReadToolName | JiraMutationOperation | KnowledgeChatToolName;
   readonly argumentsDigest: string;
 }
 export interface JiraChatCatalogConsumer extends CatalogConsumer {
@@ -70,14 +71,25 @@ export interface JiraChatCatalogConsumer extends CatalogConsumer {
     };
   };
 }
-const READ_TOOLS: ReadonlySet<string> = new Set(JIRA_MANAGED_READ_TOOLS);
+const READ_TOOLS: ReadonlySet<string> = new Set([
+  ...JIRA_MANAGED_READ_TOOLS,
+  ...KNOWLEDGE_CHAT_TOOLS,
+]);
 export const JIRA_CHAT_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
-const CHAT_TOOLS = new Set(JIRA_CHAT_TOOLS);
+/** Every tool the Chat catalog hosts: the Jira tools and the local Knowledge reads (#4179). */
+export const CHAT_CATALOG_TOOLS: readonly JiraChatCatalogAction["tool"][] = [
+  ...JIRA_CHAT_TOOLS,
+  ...KNOWLEDGE_CHAT_TOOLS,
+];
+const CHAT_TOOLS: ReadonlySet<string> = new Set(CHAT_CATALOG_TOOLS);
+function isKnowledgeTool(tool: string): tool is KnowledgeChatToolName {
+  return (KNOWLEDGE_CHAT_TOOLS as readonly string[]).includes(tool);
+}
 
 function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const action = value as CatalogJsonObject;
-  const tool = JIRA_CHAT_TOOLS.find((name) => name === action.tool);
+  const tool = CHAT_CATALOG_TOOLS.find((name) => name === action.tool);
   if (
     Object.keys(action).sort(compareStrings).join() !==
       "actionId,argumentsDigest,idempotencyKey,tool" ||
@@ -113,12 +125,16 @@ export const jiraChatCatalogConsumerPort: CatalogConsumerPort<JiraChatCatalogCon
 };
 
 /** Use with the application-owned managed catalog; this creates no MCP host or transport. */
+function hasNextPage(data: CatalogJsonObject): boolean {
+  return typeof data.nextStartAt === "number" || typeof data.nextCursor === "string";
+}
+
 export function jiraChatReadCatalogRoutes(): readonly ManagedCatalogRoute<JiraChatCatalogConsumer>[] {
   return jiraChatCatalogRoutes(JIRA_MANAGED_READ_TOOLS);
 }
 
 export function jiraChatCatalogRoutes(
-  tools: readonly JiraChatCatalogAction["tool"][] = JIRA_CHAT_TOOLS,
+  tools: readonly JiraChatCatalogAction["tool"][] = CHAT_CATALOG_TOOLS,
 ): readonly ManagedCatalogRoute<JiraChatCatalogConsumer>[] {
   return tools.map((tool) => ({
     name: tool,
@@ -139,8 +155,8 @@ export function jiraChatCatalogRoutes(
       return {
         data,
         page: {
-          truncated: typeof data.nextStartAt === "number",
-          reason: typeof data.nextStartAt === "number" ? "result-cap" : "none",
+          truncated: hasNextPage(data),
+          reason: hasNextPage(data) ? "result-cap" : "none",
           cursor: null,
         },
         resultCount: Array.isArray(data.items) ? data.items.length : 0,
@@ -206,6 +222,9 @@ function readPermission(
     context.authorityExpiresAt !== current.envelope.expiresAt
   )
     return DENIED;
+  // A Knowledge Pod the human attached to this Chat is read like a grounded answer reads it: the
+  // current Chat authority admits it, no Jira consent is involved (#4179).
+  if (isKnowledgeTool(action.tool)) return ALLOWED;
   const policy = decideAtlassianEnvelopeAction(
     JIRA_MANAGED_ACTION_TYPES[action.tool],
     current.envelope,

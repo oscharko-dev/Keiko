@@ -12,6 +12,7 @@ const CREATE_FIELDS = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
   field("summary", "string", true),
+  field("description", "string"),
   { ...field("parent", "issuelink"), schema: { type: "issuelink", system: "parent" } },
   {
     ...field("labels", "array"),
@@ -99,7 +100,13 @@ export function syntheticJira(existing: StoredIssue[] = []): SyntheticJira {
     if (url.pathname.endsWith("/project/10000")) return json({ key: "SYN" });
     if (url.pathname.endsWith("/issuetype/10001")) return json({ id: "10001", name: "Story" });
     if (url.pathname.includes("createmeta"))
-      return json({ values: CREATE_FIELDS, start: 0, size: 100, last: true, total: 6 });
+      return json({
+        values: CREATE_FIELDS,
+        start: 0,
+        size: 100,
+        last: true,
+        total: CREATE_FIELDS.length,
+      });
     if (url.pathname.endsWith("/search")) {
       const label = /labels = "([^"]+)"/u.exec(url.searchParams.get("jql") ?? "")?.[1];
       const found = issues.filter((issue) =>

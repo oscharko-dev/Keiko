@@ -3,7 +3,6 @@
   "ignoreDependencies": [
     "axe-core",
     "@oscharko-dev/keiko-memory-consolidation",
-    "@oscharko-dev/keiko-quality-intelligence",
     "@oscharko-dev/keiko-sandbox",
     "fallow",
     "ws"

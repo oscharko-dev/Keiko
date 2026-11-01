@@ -1,7 +1,11 @@
 import type { ChatMessage as GatewayMessage } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import { chatToolDraftReceipts, chatToolIssueKey } from "./chat-tool-receipts.js";
+import {
+  chatToolDraftReceipts,
+  chatToolIssueKey,
+  chatToolRequirementReceipts,
+} from "./chat-tool-receipts.js";
 
 /**
  * Keeps a long Chat tool turn inside the model window (#4175). The oldest settled tool results are
@@ -16,11 +20,14 @@ function closedString(value: unknown): string | undefined {
   return typeof value === "string" && /^[a-z][a-z0-9-]{0,63}$/u.test(value) ? value : undefined;
 }
 function receiptsOf(exchange: ChatToolExchange): object {
-  const issueKey = chatToolIssueKey(exchange.result?.data);
+  const data = exchange.result?.data;
+  const issueKey = chatToolIssueKey(data);
   const items = chatToolDraftReceipts(exchange);
+  const requirements = chatToolRequirementReceipts(data);
   return {
     ...(issueKey === undefined ? {} : { issueKey }),
     ...(items === undefined ? {} : { items }),
+    ...(requirements === undefined ? {} : { requirements }),
   };
 }
 /** Compacted from the stored, structured exchange — never re-parsed from the sent text. */

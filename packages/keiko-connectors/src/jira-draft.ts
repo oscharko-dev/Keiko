@@ -39,6 +39,8 @@ interface ParsedJiraDraftItem {
   readonly fields: Readonly<Record<string, unknown>>;
   readonly parent?: JiraDraftParent;
   readonly links: readonly JiraDraftLink[];
+  /** Explicit source requirements the item derives from; the server validates and traces them. */
+  readonly requirementIds?: readonly string[];
 }
 export interface JiraDraftItem extends ParsedJiraDraftItem {
   /** The deterministic label this item leaves on its issue; see `withIdentities`. */
@@ -54,6 +56,8 @@ export interface JiraDraft {
   readonly items: readonly JiraDraftItem[];
 }
 
+/** References per item; one item may derive from several requirements. */
+export const JIRA_REQUIREMENT_IDS_MAX = 8;
 const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
 const NUMERIC_ID = /^\d{1,32}$/u;
 const ITEM_KEYS: ReadonlySet<string> = new Set([
@@ -63,6 +67,7 @@ const ITEM_KEYS: ReadonlySet<string> = new Set([
   "fields",
   "parent",
   "links",
+  "requirementIds",
 ]);
 /** Jira's create screens carry `labels` by default; the identity label is Keiko's own. */
 export const JIRA_DRAFT_IDENTITY_PREFIX = "keiko-draft-";
@@ -127,23 +132,60 @@ function itemFields(
     ? undefined
     : fields;
 }
+const REQUIREMENT_ID_PATTERN = /^[A-Za-z0-9._:/-]{1,80}$/u;
+/** Up to {@link JIRA_REQUIREMENT_IDS_MAX} plain reference strings; `undefined` when malformed. */
+export function parseRequirementIds(value: unknown): readonly string[] | null | undefined {
+  if (value === undefined) return null;
+  const list = asArray(value);
+  if (
+    list === undefined ||
+    list.length === 0 ||
+    list.length > JIRA_REQUIREMENT_IDS_MAX ||
+    !list.every((entry) => typeof entry === "string" && REQUIREMENT_ID_PATTERN.test(entry))
+  )
+    return undefined;
+  return list as readonly string[];
+}
+
+interface ItemRelations {
+  readonly parent: JiraDraftParent | null;
+  readonly links: ParsedJiraDraftItem["links"];
+  readonly requirementIds: readonly string[] | null;
+}
+
+function parseRelations(raw: Record<string, unknown>): ItemRelations | undefined {
+  const parent = parseParent(raw.parent);
+  const links = parseLinks(raw.links);
+  const requirementIds = parseRequirementIds(raw.requirementIds);
+  return parent === undefined || links === undefined || requirementIds === undefined
+    ? undefined
+    : { parent, links, requirementIds };
+}
+
 function parseItem(value: unknown): ParsedJiraDraftItem | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !onlyKeys(raw, ITEM_KEYS)) return undefined;
   const { ref, projectId, issueTypeId } = raw;
-  const parent = parseParent(raw.parent);
-  const links = parseLinks(raw.links);
+  const relations = parseRelations(raw);
   if (
+    relations === undefined ||
     !isJiraDraftRef(ref) ||
     !numericId(projectId) ||
-    !numericId(issueTypeId) ||
-    parent === undefined ||
-    links === undefined
+    !numericId(issueTypeId)
   )
     return undefined;
+  const { parent, links, requirementIds } = relations;
   const fields = itemFields(raw.fields, parent);
   if (fields === undefined) return undefined;
-  return { ref, projectId, issueTypeId, fields, links, ...(parent === null ? {} : { parent }) };
+  return {
+    ref,
+    projectId,
+    issueTypeId,
+    fields,
+    links,
+    ...(parent === null ? {} : { parent }),
+    ...(requirementIds === null ? {} : { requirementIds }),
+  };
 }
 
 /** The draft items this item cannot be created before. */

@@ -29972,6 +29972,189 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "knowledge.requirement-trace.applied",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "requirement-inventory-activity.logRequirementTrace",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["create", "edit", "draft"],
+      },
+      tracedItemCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      refusedItemCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      referenceProblemCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      labelsAppliedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      footerAppliedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      droppedLabelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      unavailable: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["requirement-inventory"],
+    proofIds: ["knowledge.requirement-trace.applied.line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "unavailable",
+        values: [true],
+      },
+      {
+        field: "refusedItemCount",
+        positive: true,
+      },
+      {
+        field: "droppedLabelCount",
+        positive: true,
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "knowledge.requirements.read",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "requirement-inventory-activity.logRequirementRead",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      view: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["units", "documents", "change-queries"],
+      },
+      disposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["served", "refused", "cursor-stale", "unavailable"],
+      },
+      cursorUsed: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      detectedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      matchedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      returnedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      documentsScanned: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      documentsNotExtracted: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      documentsOmitted: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      unitsOmitted: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      resultBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      hasNextPage: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["requirement-inventory"],
+    proofIds: ["knowledge.requirements.read.line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "disposition",
+        values: ["unavailable", "cursor-stale"],
+      },
+      {
+        field: "unitsOmitted",
+        positive: true,
+      },
+      {
+        field: "documentsOmitted",
+        positive: true,
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "knowledge.store.encryption-rejected",
     category: "diagnostic",
     owner: "keiko-local-knowledge",

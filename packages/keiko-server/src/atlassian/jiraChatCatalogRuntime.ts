@@ -1,12 +1,17 @@
 import { randomUUID } from "node:crypto";
 import {
   createJiraReportStore,
+  parseRequirementIds,
   type AtlassianHttpBodyPort,
   type JiraManagedConnection,
   type JiraManagedMutationExecutor,
   type JiraReportStore,
   type JiraReportToolDeps,
+  type JiraTraceOutcome,
+  type JiraTraceRequest,
 } from "@oscharko-dev/keiko-connectors";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
@@ -27,6 +32,17 @@ import {
 } from "./jiraChatCatalogConsumer.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { executeJiraChatDraft } from "./jiraChatDraft.js";
+import { createKnowledgeRequirementsProvider } from "../requirementsTool.js";
+import {
+  logTrace,
+  newTally,
+  openTraceSession,
+  tallyOutcome,
+  tallyRefusal,
+  traceOutcomeData,
+  traceRefusalData,
+  type TraceTurn,
+} from "../requirement-trace.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
@@ -57,52 +73,130 @@ function turnMessage(
     : deps.store.findMessageById(context.userMessageId);
 }
 
+type CurrentAuthority = Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>;
+type MutationIntent = ReturnType<typeof createJiraChatMutationIntent>;
+type SharedMutation = Omit<Parameters<typeof executeJiraChatMutation>[0], "execute">;
+
+interface PreparedMutation {
+  readonly current: CurrentAuthority;
+  readonly intent: MutationIntent;
+  readonly shared: SharedMutation;
+}
+
+/** Authority, the bound write action and the journaled intent; every refusal precedes any effect. */
+function prepareMutation(
+  deps: UiHandlerDeps,
+  operation: string,
+  args: CatalogJsonObject,
+  context: CatalogHandlerContext<JiraChatCatalogConsumer>,
+): PreparedMutation {
+  const current = resolveCurrentJiraChatAuthority(
+    deps,
+    context.chatId,
+    context.authorityReference,
+    new Date().toISOString(),
+    context.correlationId,
+  );
+  const credentials = deps.atlassianConnectorCredentials;
+  const write = context.mutationGuard.write;
+  const message = turnMessage(deps, context);
+  requireDispatch(
+    current.ok && credentials !== undefined && write !== undefined && message !== undefined,
+    "denied",
+    "authority-invalid",
+  );
+  requireDispatch(
+    write.action.tool === operation &&
+      write.action.argumentsDigest === sha256Hex(canonicalise(args)),
+    "invalid",
+    "invalid-arguments",
+  );
+  const intent = createJiraChatMutationIntent(
+    message,
+    current.envelope.subject,
+    context.authorityReference,
+    write.action,
+    context.correlationId,
+  );
+  const shared = {
+    journal: deps.store.chatToolMutations,
+    intent,
+    httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpBodyPort =>
+      credentials.httpBodyPortFactory(current.credential, context.correlationId, lifecycle),
+    beforeEffect: context.beforeEffect,
+    beforeMutation: write.beforeMutation,
+  };
+  return { current, intent, shared };
+}
+
 function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
   return (operation, args, context, execute) => {
-    const current = resolveCurrentJiraChatAuthority(
-      deps,
-      context.chatId,
-      context.authorityReference,
-      new Date().toISOString(),
-      context.correlationId,
-    );
-    const credentials = deps.atlassianConnectorCredentials;
-    const write = context.mutationGuard.write;
-    const message = turnMessage(deps, context);
-    requireDispatch(
-      current.ok && credentials !== undefined && write !== undefined && message !== undefined,
-      "denied",
-      "authority-invalid",
-    );
-    requireDispatch(
-      write.action.tool === operation &&
-        write.action.argumentsDigest === sha256Hex(canonicalise(args)),
-      "invalid",
-      "invalid-arguments",
-    );
-    const intent = createJiraChatMutationIntent(
-      message,
-      current.envelope.subject,
-      context.authorityReference,
-      write.action,
-      context.correlationId,
-    );
-    const shared = {
-      journal: deps.store.chatToolMutations,
-      intent,
-      httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpBodyPort =>
-        credentials.httpBodyPortFactory(current.credential, context.correlationId, lifecycle),
-      beforeEffect: context.beforeEffect,
-      beforeMutation: write.beforeMutation,
+    const { current, intent, shared } = prepareMutation(deps, operation, args, context);
+    const turn = {
+      chatId: context.chatId,
+      userMessageId: context.userMessageId,
+      correlationId: context.correlationId,
     };
-    if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute });
-    return executeJiraChatDraft({
-      ...shared,
-      arguments: args,
-      deselected: approvedDeselection(deps, current.envelope.subject, context, intent),
-      context,
-      connection: jiraChatDraftConnection(deps, current.credential),
+    if (operation === "jira.draft")
+      return executeJiraChatDraft({
+        ...shared,
+        arguments: args,
+        deselected: approvedDeselection(deps, current.envelope.subject, context, intent),
+        context,
+        connection: jiraChatDraftConnection(deps, current.credential),
+        openTrace: () => openTraceSession(deps, turn),
+      });
+    return executeTracedMutation(deps, turn, operation, args, (trace) =>
+      executeJiraChatMutation({
+        ...shared,
+        execute: (http) => execute(http, trace),
+      }),
+    );
+  };
+}
+
+/** The explicit requirement references of a create or edit, validated before anything is sent. */
+export async function executeTracedMutation(
+  deps: UiHandlerDeps,
+  turn: TraceTurn,
+  operation: string,
+  args: CatalogJsonObject,
+  run: (trace: JiraTraceRequest | undefined) => Promise<ManagedMcpToolResult>,
+): Promise<ManagedMcpToolResult> {
+  const references = parseRequirementIds(args.requirementIds);
+  if (references === undefined) return malformedReferences();
+  if (references === null || (operation !== "jira.create" && operation !== "jira.edit"))
+    return run(undefined);
+  const session = openTraceSession(deps, turn);
+  const tally = newTally();
+  const logged = operation === "jira.create" ? "create" : "edit";
+  try {
+    const resolution = session.resolve(references);
+    if (!resolution.ok) {
+      tallyRefusal(tally, resolution);
+      logTrace(turn.correlationId, logged, tally);
+      return { data: { outcome: "rejected", ...traceRefusalData(resolution) }, isError: true };
+    }
+    let traced: JiraTraceOutcome | undefined;
+    const result = await run({
+      ...resolution.trace,
+      report: (outcome) => {
+        traced = outcome;
+      },
     });
+    tallyOutcome(tally, traced);
+    logTrace(turn.correlationId, logged, tally);
+    const data = traceOutcomeData(traced);
+    return data === undefined ? result : { ...result, data: { ...result.data, trace: data } };
+  } finally {
+    session.close();
+  }
+}
+
+function malformedReferences(): ManagedMcpToolResult {
+  return {
+    data: { outcome: "rejected", reason: "field-validation", requirementRefusal: "references" },
+    isError: true,
   };
 }
 
@@ -221,6 +315,7 @@ function initializeCatalog(
         mutationExecutor(deps),
         reportTool(deps, store),
       ),
+      createKnowledgeRequirementsProvider(deps),
     ],
     routes: jiraChatCatalogRoutes(),
     profile: { id: "jira-chat", version: 1 },

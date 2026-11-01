@@ -61,3 +61,41 @@ export function chatToolDraftReceipts(
     .filter((receipt): receipt is ChatToolDraftReceipt => receipt !== undefined);
   return receipts.length === 0 ? undefined : receipts;
 }
+
+const REQUIREMENT_REFERENCE = /^[0-9a-f]{8}:[A-Za-z0-9._-]{1,80}$/u;
+const REQUIREMENT_RECEIPTS_MAX = 50;
+const RECEIPT_TEXT_CHARS = 60;
+
+export interface ChatToolRequirementReceipt {
+  readonly reference: string;
+  readonly title: string;
+  readonly priority?: string;
+}
+
+function requirementReceipt(value: unknown): ChatToolRequirementReceipt | undefined {
+  const item = record(value);
+  const reference = item?.reference;
+  if (item === undefined || typeof reference !== "string" || !REQUIREMENT_REFERENCE.test(reference))
+    return undefined;
+  const title = typeof item.title === "string" ? item.title.slice(0, RECEIPT_TEXT_CHARS) : "";
+  const priority =
+    typeof item.priority === "string" ? item.priority.slice(0, RECEIPT_TEXT_CHARS) : undefined;
+  return { reference, title, ...(priority === undefined ? {} : { priority }) };
+}
+
+/**
+ * What a compacted page of the requirements read still tells the model: each unit's scoped
+ * reference, title and priority (#4179). The page's statements and criteria are elided, but the
+ * model keeps enough to list or reference every unit it has already read.
+ */
+export function chatToolRequirementReceipts(
+  data: unknown,
+): readonly ChatToolRequirementReceipt[] | undefined {
+  const body = record(data);
+  if (body?.view !== "units" || !Array.isArray(body.items)) return undefined;
+  const receipts = body.items
+    .slice(0, REQUIREMENT_RECEIPTS_MAX)
+    .map((entry) => requirementReceipt(entry))
+    .filter((receipt): receipt is ChatToolRequirementReceipt => receipt !== undefined);
+  return receipts.length === 0 ? undefined : receipts;
+}

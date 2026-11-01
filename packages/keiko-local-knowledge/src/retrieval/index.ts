@@ -3,7 +3,12 @@
 // subdirectory directly (ADR-0019 direction rule 3e + the trust-8 test-support naming
 // convention).
 
-export { runLocalKnowledgeRetrieval, type RetrievalDependencies } from "./retrieval-runner.js";
+export {
+  resolveEnumerationScope,
+  runLocalKnowledgeRetrieval,
+  type EnumerationScope,
+  type RetrievalDependencies,
+} from "./retrieval-runner.js";
 export { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
 export { scoreVector } from "./vector-scoring.js";
 

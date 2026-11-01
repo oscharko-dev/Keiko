@@ -13,9 +13,14 @@ import { createCatalogToolBinder } from "../tool-catalog/catalogToolDispatch.js"
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import { JIRA_MANAGED_READ_TOOLS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { UiHandlerDeps } from "../deps.js";
+import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
+import { createKnowledgeRequirementsProvider } from "../requirementsTool.js";
 import {
   createJiraChatCatalogAdmission,
   jiraChatCatalogConsumerPort,
+  jiraChatCatalogRoutes,
   jiraChatReadCatalogRoutes,
   type JiraChatCatalogConsumer,
   type JiraChatCatalogContext,
@@ -782,6 +787,7 @@ describe("ordinary Chat catalog read admission", () => {
   async function catalogFixture(
     maxToolCalls = 3,
     primary: import("@oscharko-dev/keiko-activity-log").ServerLogSink = createBufferedServerLogSink(),
+    withKnowledge = false,
   ): Promise<{
     binder: ReturnType<typeof createCatalogToolBinder>;
     budget: ReturnType<typeof createHarnessCatalogBudget>;
@@ -833,12 +839,16 @@ describe("ordinary Chat catalog read admission", () => {
       },
     );
     const managed = await createManagedProviderCatalog<JiraChatCatalogConsumer>({
-      providers: [provider],
+      providers: withKnowledge
+        ? [provider, createKnowledgeRequirementsProvider(deps as unknown as UiHandlerDeps)]
+        : [provider],
       profile: { id: "jira-chat", version: 1 },
       log,
       correlationId: current.correlationId,
       now: () => now,
-      routes: jiraChatReadCatalogRoutes(),
+      routes: withKnowledge
+        ? jiraChatCatalogRoutes([...JIRA_MANAGED_READ_TOOLS, ...KNOWLEDGE_CHAT_TOOLS])
+        : jiraChatReadCatalogRoutes(),
     });
     hosts.push(managed);
     const admission = createJiraChatCatalogAdmission({
@@ -880,10 +890,11 @@ describe("ordinary Chat catalog read admission", () => {
     f: Awaited<ReturnType<typeof catalogFixture>>,
     suffix: string,
     args: unknown = {},
+    tool = "keiko.jira.projects",
   ): Promise<Awaited<ReturnType<typeof f.binder.dispatch>>> {
     const offered = f.binder.offer();
     const descriptor = f.managed.catalog.descriptors.find(
-      (entry) => entry.toolRef.canonicalId === "keiko.jira.projects",
+      (entry) => entry.toolRef.canonicalId === tool,
     );
     if (descriptor === undefined) throw new Error("Expected project descriptor");
     const result = await f.binder.dispatch(
@@ -966,6 +977,36 @@ describe("ordinary Chat catalog read admission", () => {
       }
     },
   );
+
+  it("hosts the requirements read on the same catalog without a Jira read grant (#4179)", async () => {
+    registerCurrentAuthority();
+    const f = await catalogFixture(3, undefined, true);
+
+    // The ten Jira reads plus knowledge.requirements.
+    expect(f.binder.offer().toolRefs).toHaveLength(11);
+    const result = await dispatch(f, "knowledge", {}, "keiko.knowledge.requirements");
+
+    // The Chat has no Knowledge Pod: the handler is entered and answers with a closed reason.
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "failed", reason: "no-knowledge-pod" } },
+    });
+    expect(notifications).toBe(0);
+    expect(requests).toBe(0);
+    expect(f.handlers.filter((handler) => handler.execute.mock.calls.length > 0)).toHaveLength(1);
+  });
+
+  it("refuses the requirements read once the Chat's Jira binding is gone (#4179)", async () => {
+    registerCurrentAuthority();
+    const f = await catalogFixture(3, undefined, true);
+    store.updateChat(chat.id, { jiraPodId: null });
+
+    const result = await dispatch(f, "no-authority", {}, "keiko.knowledge.requirements");
+
+    expect(result).toMatchObject({ kind: "settled" });
+    expect(result).not.toMatchObject({ result: { status: "completed" } });
+    for (const handler of f.handlers) expect(handler.execute).not.toHaveBeenCalled();
+  });
 
   it("does not treat a completed notification as human consent", async () => {
     consent = (): void => undefined;

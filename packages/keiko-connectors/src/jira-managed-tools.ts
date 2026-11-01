@@ -44,6 +44,7 @@ import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool, type JiraReportToolDeps } from "./jira-report-tool.js";
+import type { JiraTraceRequest } from "./jira-requirement-trace.js";
 
 const ARRAY_READ_NAMES: ReadonlySet<string> = new Set(["jira.projects", "jira.assignable-users"]);
 const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
@@ -64,7 +65,7 @@ export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationCont
   operation: JiraMutationOperation,
   args: CatalogJsonObject,
   context: Context,
-  execute: (http: AtlassianHttpBodyPort) => Promise<JiraMutationAttempt>,
+  execute: (http: AtlassianHttpBodyPort, trace?: JiraTraceRequest) => Promise<JiraMutationAttempt>,
 ) => Promise<ManagedMcpToolResult>;
 
 interface Project extends CatalogJsonObject {
@@ -307,8 +308,12 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
     execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> => {
       const snapshot = structuredClone(args);
       const selected = Object.freeze({ ...(await connection(context)) });
-      const result = await executeMutation(operation, structuredClone(snapshot), context, (http) =>
-        executeJiraManagedMutation(operation, snapshot, context, { ...selected, http }),
+      const result = await executeMutation(
+        operation,
+        structuredClone(snapshot),
+        context,
+        (http, trace) =>
+          executeJiraManagedMutation(operation, snapshot, context, { ...selected, http }, trace),
       );
       return withIssueLink(
         result,

@@ -30,11 +30,18 @@ function rulesMarkdown() {
   return lines.join("\n");
 }
 
-async function prepareDataPod(ctx) {
+const SPECIFICATION_FILE = "Lastenheft-Schadenmeldung.md";
+
+/** Writes the specification of one version under a fixed name, so its document identity persists. */
+function writeSpecification(ctx, version) {
   const directory = join(ctx.projectPath, "projektunterlagen");
   mkdirSync(directory, { recursive: true });
-  const corpus = buildCorpus(1);
-  writeFileSync(join(directory, corpus.fileName), corpus.markdown);
+  writeFileSync(join(directory, SPECIFICATION_FILE), buildCorpus(version).markdown);
+  return directory;
+}
+
+async function prepareDataPod(ctx) {
+  const directory = writeSpecification(ctx, 1);
   writeFileSync(join(directory, "Jira-Strukturvorgabe.md"), rulesMarkdown());
   const created = await api(ctx, "pod-create", "/api/local-knowledge/capsules", {
     displayName: "Projekt Schadenmeldung Online",
@@ -44,11 +51,18 @@ async function prepareDataPod(ctx) {
     scope: { kind: "folder", rootPath: directory, recursive: true },
     displayName: "Projektunterlagen",
   });
+  await indexPod(ctx, created.capsule.id);
+  return created.capsule.id;
+}
+
+/** Indexes (or re-indexes) the Pod's folder and waits for the job to succeed. */
+async function indexPod(ctx, capsuleId) {
+  const path = `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`;
   const admitted = await api(ctx, "pod-index", `${path}/index`, { confirm: true });
   for (let waited = 0; waited < 600; waited += 1) {
     const detail = await api(ctx, "pod-observe", path, undefined, "GET");
     const job = detail.indexingJobs.find((entry) => entry.id === admitted.jobId);
-    if (job?.status === "succeeded") return created.capsule.id;
+    if (job?.status === "succeeded") return;
     if (job?.status === "failed" || job?.status === "cancelled") {
       throw new TypeError(`Knowledge Pod indexing ${job.status}`);
     }
@@ -147,6 +161,9 @@ async function settledTurn(ctx, chat, prior) {
     answer: assistant?.content ?? assistant?.groundedAnswer?.content ?? "",
     toolCalls: toolExchanges.length,
     toolExchanges,
+    requirementReads: toolExchanges.filter((entry) =>
+      /knowledge[._]requirements/.test(entry.call?.name ?? ""),
+    ).length,
   };
 }
 
@@ -265,7 +282,13 @@ export async function runJourneys({ session, modelId, embeddingModelId, truth, i
         refusals: () => logMatchCount(ctx.root, "generation-changed"),
       };
       const capsuleId = await prepareDataPod(ctx);
-      for (const id of ids) {
+      // S14 replaces the specification with its next version; it runs last and restores version 1.
+      ctx.replaceSpecification = async (version) => {
+        writeSpecification(ctx, version);
+        await indexPod(ctx, capsuleId);
+      };
+      const ordered = [...ids.filter((id) => id !== "S14"), ...ids.filter((id) => id === "S14")];
+      for (const id of ordered) {
         const started = Date.now();
         try {
           const mode = JOURNEY_MODES[id] ?? "autonomous-delivery";
@@ -273,6 +296,13 @@ export async function runJourneys({ session, modelId, embeddingModelId, truth, i
           checks[id] = await JOURNEYS[id](ctx, bound.chat);
         } catch (error) {
           checks[id] = { status: "red", detail: `lab error: ${error.message}` };
+        }
+        if (id === "S14") {
+          await ctx.replaceSpecification(1).catch((error) => {
+            console.log(
+              JSON.stringify({ operation: "requirements-restore", error: String(error.message) }),
+            );
+          });
         }
         checks[id].durationMs = Date.now() - started;
         console.log(

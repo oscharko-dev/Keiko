@@ -169,3 +169,72 @@ export function gradeBacklog({ requested, created, answer }) {
     unnamed: unnamed.length,
   };
 }
+
+// ---------- S14-S16: change impact, quality findings, test cases (#4179) ----------
+
+/** The line of the answer that starts with `label` (a regular expression source), if any. */
+function lineLabelled(answer, label) {
+  return answer
+    .split("\n")
+    .find((entry) => new RegExp(String.raw`^\W*(?:${label})\b`, "i").test(entry));
+}
+
+/** Requirement ids listed after the label on one line of the answer. */
+function listedAfter(answer, label) {
+  const line = lineLabelled(answer, label);
+  return new Set(line === undefined ? [] : line.slice(line.indexOf(":") + 1).match(REQUIREMENT_ID));
+}
+
+const sameSet = (left, right) => left.size === right.size && [...left].every((id) => right.has(id));
+
+/**
+ * S15: the answer names the requirements with vague wording after `UNKLAR:` and those without
+ * acceptance criteria after `OHNE ABNAHMEKRITERIEN:`; both sets must equal the seeded defects.
+ */
+export function gradeQualityFindings(answer, truth) {
+  const vague = new Set(truth.filter((item) => item.vague).map((item) => item.id));
+  const missing = new Set(
+    truth.filter((item) => item.acceptanceCount === 0).map((item) => item.id),
+  );
+  const reportedVague = listedAfter(answer, "UNKLAR");
+  const reportedMissing = listedAfter(answer, "OHNE ABNAHMEKRITERIEN");
+  return {
+    vagueOk: sameSet(vague, reportedVague),
+    missingOk: sameSet(missing, reportedMissing),
+    vague: vague.size,
+    missing: missing.size,
+    vagueReported: reportedVague.size,
+    missingReported: reportedMissing.size,
+  };
+}
+
+/**
+ * S16: one test case per acceptance criterion of the requirement, each carrying the criterion
+ * reference `<id>/AC<n>`; a reference beyond the criteria of the requirement is invented.
+ */
+export function gradeCriterionTestCases(answer, item) {
+  const escaped = escapeRegExp(item.id);
+  const referenced = new Set(
+    [...answer.matchAll(new RegExp(String.raw`${escaped}/AC(\d+)`, "g"))].map((m) => Number(m[1])),
+  );
+  const expected = Array.from({ length: item.acceptanceCount }, (_, index) => index + 1);
+  const missing = expected.filter((number) => !referenced.has(number));
+  const invented = [...referenced].filter((number) => number < 1 || number > item.acceptanceCount);
+  return { ok: missing.length === 0 && invented.length === 0, missing, invented };
+}
+
+/**
+ * S14: the answer names exactly the changed, removed and added requirements of the new version
+ * (`GEÄNDERT:`, `ENTFERNT:`, `NEU:`) and exactly the issues that trace the changed or removed ones
+ * (`BETROFFENE VORGÄNGE:`).
+ */
+export function gradeChangeImpact(answer, change, affectedKeys) {
+  const keys = new Set(
+    lineLabelled(answer, "BETROFFENE VORG[ÄA]NGE")?.match(/[A-Z][A-Z0-9]+-\d+/g),
+  );
+  const changed = sameSet(new Set(change.changed), listedAfter(answer, "GE[ÄA]NDERT"));
+  const removed = sameSet(new Set(change.removed), listedAfter(answer, "ENTFERNT"));
+  const added = sameSet(new Set(change.added), listedAfter(answer, "NEU"));
+  const affected = sameSet(new Set(affectedKeys), keys);
+  return { changed, removed, added, affected, ok: changed && removed && added && affected };
+}

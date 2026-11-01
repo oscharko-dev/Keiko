@@ -145,6 +145,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "knowledge-prompt-window", surface: "memory-knowledge" },
   {
     owner: "keiko-server",
+    emitterPrefix: "requirement-inventory-activity",
+    surface: "memory-knowledge",
+  },
+  {
+    owner: "keiko-server",
     emitterPrefix: "grounded-entailment-stage",
     surface: "memory-knowledge",
   },

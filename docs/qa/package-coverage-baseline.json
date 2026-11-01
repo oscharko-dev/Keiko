@@ -30,7 +30,7 @@
       }
     },
     "keiko-connectors": {
-      "files": 58,
+      "files": 59,
       "uncoveredFiles": 0,
       "uncoveredLines": 32,
       "totalLines": 1485,
@@ -114,7 +114,7 @@
       }
     },
     "keiko-local-knowledge": {
-      "files": 137,
+      "files": 138,
       "uncoveredFiles": 0,
       "uncoveredLines": 711,
       "totalLines": 9545,
@@ -210,7 +210,7 @@
       }
     },
     "keiko-quality-intelligence": {
-      "files": 68,
+      "files": 74,
       "uncoveredFiles": 0,
       "uncoveredLines": 114,
       "totalLines": 3180,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1003,
+      "files": 1009,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,

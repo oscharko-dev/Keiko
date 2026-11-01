@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { jiraDraftIdentity, parseJiraDraft } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { buildUiStoreOverDatabase } from "../store/index.js";
@@ -18,6 +18,7 @@ import {
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
 import { jiraChatDraftConnection } from "./jiraChatCatalogRuntime.js";
+import type { TraceSession } from "../requirement-trace.js";
 import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
@@ -403,6 +404,126 @@ describe("executeJiraChatDraft (#4178)", () => {
     const result = await executeJiraChatDraft(input);
     expect(jira.posts()).toHaveLength(0);
     expect(result.data.outcome).not.toBe("succeeded");
+  });
+});
+
+describe("source traceability of a draft (#4179)", () => {
+  const FOOTER = "----\nKeiko traceability\nRequirement: LH-001 · Anmeldung";
+  const TRACE = {
+    labels: ["keiko-requirement", "keiko-doc-aaaaaaaa", "keiko-req-LH-001"],
+    footer: FOOTER,
+    footerStart: "----\nKeiko traceability",
+    replaceLabelPrefixes: ["keiko-rev-"],
+  };
+  const TRACED = {
+    items: [
+      item("epic", {
+        fields: { summary: "[LH-001] Anmeldung", description: "Ziel" },
+        requirementIds: ["aaaaaaaa:LH-001"],
+      }),
+      item("other", {
+        fields: { summary: "Ohne Bezug", description: "Siehe LH-001 und keiko-req-LH-001." },
+      }),
+    ],
+  } as unknown as CatalogJsonObject;
+
+  function session(close: () => void): TraceSession {
+    return {
+      resolve: (references) =>
+        references.includes("aaaaaaaa:LH-001")
+          ? { ok: true, trace: TRACE }
+          : {
+              ok: false,
+              reason: "references",
+              problems: references.map((reference) => ({ reference, reason: "unknown" as const })),
+            },
+      close,
+    };
+  }
+
+  it("creates an item with its explicit references with the footer and labels, and says so", async () => {
+    const jira = syntheticJira();
+    const close = vi.fn();
+
+    const result = await executeJiraChatDraft({
+      ...execution(jira, TRACED),
+      openTrace: () => session(close),
+    });
+
+    expect(result.data, JSON.stringify(result.data)).toMatchObject({
+      outcome: "succeeded",
+      createdCount: 2,
+    });
+    const [traced, untraced] = jira.posts() as readonly { fields: Record<string, unknown> }[];
+    expect(traced?.fields.description).toBe(`Ziel\n\n${FOOTER}`);
+    expect(traced?.fields.labels).toEqual(
+      expect.arrayContaining([...TRACE.labels, expect.stringMatching(/^keiko-draft-/u)]),
+    );
+    expect(itemsOf(result)[0]).toMatchObject({
+      ref: "epic",
+      trace: { labelsApplied: true, footerApplied: true, droppedLabels: [] },
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+    // A mention of a requirement in prose is not a reference: nothing is scraped.
+    expect(untraced?.fields.description).toBe("Siehe LH-001 und keiko-req-LH-001.");
+    expect(untraced?.fields.labels).toEqual([expect.stringMatching(/^keiko-draft-/u)]);
+    expect(itemsOf(result)[1]).not.toHaveProperty("trace");
+  });
+
+  it("refuses the whole draft before anything is created when a reference does not resolve", async () => {
+    const jira = syntheticJira();
+    const close = vi.fn();
+    const bad = {
+      items: [
+        item("good", { requirementIds: ["aaaaaaaa:LH-001"] }),
+        item("bad", { requirementIds: ["LH-999"] }),
+      ],
+    } as unknown as CatalogJsonObject;
+
+    const result = await executeJiraChatDraft({
+      ...execution(jira, bad),
+      openTrace: () => session(close),
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.data).toMatchObject({
+      outcome: "rejected",
+      reason: "field-validation",
+      requirementProblems: [{ ref: "bad", reference: "LH-999", reason: "unknown" }],
+    });
+    expect(jira.posts()).toHaveLength(0);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an item with references when the Knowledge Pods cannot be read", async () => {
+    const jira = syntheticJira();
+
+    const result = await executeJiraChatDraft(execution(jira, TRACED));
+
+    expect(result.data).toMatchObject({ outcome: "rejected", requirementRefusal: "unavailable" });
+    expect(jira.posts()).toHaveLength(0);
+  });
+
+  it("leaves a draft without references untouched and never opens the Pods", async () => {
+    const jira = syntheticJira();
+    const open = vi.fn(() => session(vi.fn()));
+
+    await executeJiraChatDraft({ ...execution(jira), openTrace: open });
+
+    expect(jira.posts()).toHaveLength(4);
+    expect((jira.posts()[0] as { fields: Record<string, unknown> }).fields).not.toHaveProperty(
+      "description",
+    );
+  });
+
+  it("reconciles a re-run to the existing issue instead of tracing a second one", async () => {
+    const jira = syntheticJira();
+    const input = { ...execution(jira, TRACED), openTrace: (): TraceSession => session(vi.fn()) };
+
+    await executeJiraChatDraft(input);
+    await executeJiraChatDraft(input);
+
+    expect(jira.posts()).toHaveLength(2);
   });
 });
 
