@@ -254,9 +254,20 @@ and zero unresolved incomplete findings. The source-input regression passes all
 281 tests. No producer assertion, tolerance, budget or source stylesheet changed.
 These remain synthetic historical fixtures; they do not qualify model behavior.
 
-## Anti-slop ratchet on the 1.3.4 tree (#4145), 2026-11-01
+## Release 1.3.5 input refresh — 2026-11-01
 
-After `dev` `3a2979be1` (release 1.3.4) was merged into PR #4165, its `package.json` and
+The canonical version cut changes the root/workspace manifests and lockfile, which are declared
+producer inputs. All four
+original producers were rerun against the 1.3.5 source on macOS arm64, Node 24.18.0. Component
+and editor fidelity passed with zero gated differences and no missing selectors; all 14 editor
+references and 108 running-app captures completed without errors. The seven-mode accessibility
+proof has zero serious/critical violations and zero unresolved incomplete findings. No producer
+assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
+fixtures; they do not qualify model behavior.
+
+## Anti-slop ratchet on the 1.3.5 tree (#4145), 2026-11-01
+
+After `dev` `7bbca2e34` (release 1.3.5) was merged into PR #4165, its `package.json` and
 `package-lock.json` again differ from `dev`'s by the `oxlint` devDependencies and the sharded
 script-coverage commands. The four original producers were rerun on that merged tree on Node
 24.18.0 (macOS arm64), and all passed: component fidelity with zero gated differences and no

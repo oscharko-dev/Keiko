@@ -5,12 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import {
-  buildUiHandlerDeps,
-  CONVERSATION_READINESS_MAX_AGE_MS,
-  currentConversationReady,
-  type UiHandlerDeps,
-} from "./deps.js";
+import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
   CHAT_MODEL_WALK_BUDGET_MS,
   awaitAnyInitializedConversationReadyChatModel,
@@ -22,10 +17,6 @@ import { handleModels } from "./read-handlers.js";
 import type { RouteContext } from "./routes.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
-import {
-  expectActivityLogProof,
-  formatActivityLogProofLine,
-} from "../../../tests/support/activity-log-proof.js";
 
 const compositions: UiHandlerDeps[] = [];
 const directories: string[] = [];
@@ -220,58 +211,38 @@ it("disposal cancels recovery timers and ignores subsequent configuration change
   expect(fetch).toHaveBeenCalledTimes(calls);
 });
 
-it("bounds recovery traffic during a long outage and heals within five minutes", async () => {
+// Customer 1.3.4 (owner decision 2026-11-01): a model is checked once at startup. A long outage
+// adds no probe on a timer; the next request after the cooldown checks the model once and heals it.
+it("checks a failing model once at startup and leaves recovery to the next request", async () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
   const deps = composition();
   vi.useFakeTimers();
   let available = false;
-  const fetch = vi.fn().mockImplementation(() =>
-    Promise.resolve(
-      available
-        ? new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
-            headers: { "content-type": "application/json" },
-          })
-        : new Response("", { status: 503 }),
-    ),
-  );
+  const fetch = vi
+    .fn()
+    .mockImplementation(() =>
+      Promise.resolve(available ? chatProbeAnswer() : new Response("", { status: 503 })),
+    );
   vi.stubGlobal("fetch", fetch);
   configure(deps, "corr-prolonged-outage");
   await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalled();
+    expect(chatModelReady(deps)).toBe(false);
   });
-  await awaitInitializedConversationReadiness(deps, "chat-model");
-  expect(fetch).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS + 1);
-  expect(fetch).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(2 * NOT_READY_REPROBE_COOLDOWN_MS + 1);
-  expect(fetch).toHaveBeenCalledTimes(3);
-  await vi.advanceTimersByTimeAsync(4 * NOT_READY_REPROBE_COOLDOWN_MS + 1);
-  expect(fetch).toHaveBeenCalledTimes(4);
+  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-inside-cooldown");
+  expect(fetch).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(4 * 60 * 60_000);
-  expect(fetch.mock.calls.length).toBeGreaterThan(4);
-  expect(fetch.mock.calls.length).toBeLessThanOrEqual(60);
+  expect(fetch).toHaveBeenCalledOnce();
   available = true;
-  const callsBeforeRecovery = fetch.mock.calls.length;
-  await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
-  expect(fetch.mock.calls.length).toBeGreaterThan(callsBeforeRecovery);
-  expect(deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady).toBe(true);
-  const callsAfterRecovery = fetch.mock.calls.length;
-  await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
-  // #4103 (owner decision 2026-10-29): nobody used the healed model, so it is not renewed while
-  // idle (this bound was at most 61 renewals in these two hours); its next request verifies it.
-  expect(fetch).toHaveBeenCalledTimes(callsAfterRecovery);
+  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-after-outage");
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(chatModelReady(deps)).toBe(true);
   const started = sink.events.filter((event) => event.op === "gateway.readiness.automatic.started");
-  expect(
-    started.slice(0, callsBeforeRecovery + 1).map((event) => event.extra?.backgroundAttempt),
-  ).toEqual(Array.from({ length: callsBeforeRecovery + 1 }, (_, index) => index + 1));
-  expect(
-    started.slice(callsBeforeRecovery + 1).every((event) => event.extra?.backgroundAttempt === 1),
-  ).toBe(true);
-  expect(new Set(started.map((event) => event.correlationId)).size).toBe(started.length);
-  expect(started.every((event) => event.parentCorrelationId === "corr-prolonged-outage")).toBe(
-    true,
-  );
+  expect(started).toHaveLength(2);
+  expect(started[0]?.parentCorrelationId).toBe("corr-prolonged-outage");
+  expect(started[0]?.extra?.backgroundAttempt).toBe(1);
+  expect(started[1]?.correlationId).toBe("corr-after-outage");
+  expect(started[1]?.extra).not.toHaveProperty("backgroundAttempt");
 });
 
 function chatProbeAnswer(): Response {
@@ -297,7 +268,9 @@ function chatModelReady(deps: UiHandlerDeps): boolean | undefined {
   return deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady;
 }
 
-it("recovers an answered startup rejection in the background without a Settings or chat request", async () => {
+// The 1.1.13 incident without a timer: a gateway that is still starting rejects the startup check,
+// and the person's next page load (the models read with refresh=1) checks the model again.
+it("re-checks a startup rejection on the next page load without a Settings or chat request", async () => {
   const deps = composition();
   vi.useFakeTimers();
   const gateway = { status: 404 };
@@ -305,14 +278,35 @@ it("recovers an answered startup rejection in the background without a Settings 
   vi.stubGlobal("fetch", fetch);
   configure(deps, "corr-startup-rejection");
   await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalled();
+    expect(chatModelReady(deps)).toBe(false);
   });
-  await awaitInitializedConversationReadiness(deps, "chat-model");
-  expect(chatModelReady(deps)).toBe(false);
   gateway.status = 200;
   await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
-  expect(chatModelReady(deps)).toBe(true);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(chatModelReady(deps)).toBe(false);
+  handleModels({ url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext, deps);
+  await vi.waitFor(() => {
+    expect(chatModelReady(deps)).toBe(true);
+  });
   expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+// Auditor round 2 (customer 1.3.4): an expired success is usable, as in Chat, so a page load does
+// not re-probe it; on a large gateway every reload after five idle minutes probed every model.
+it("does not re-check an expired success on a page load", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  const gateway = { status: 200 };
+  const fetch = startingGateway(gateway);
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-startup-success");
+  await vi.waitFor(() => {
+    expect(chatModelReady(deps)).toBe(true);
+  });
+  await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+  handleModels({ url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext, deps);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(fetch).toHaveBeenCalledOnce();
 });
 
 it("re-probes a conclusively failed model on the first conversation request after the cooldown", async () => {
@@ -330,8 +324,8 @@ it("re-probes a conclusively failed model on the first conversation request afte
   await awaitInitializedConversationReadiness(deps, "chat-model");
   expect(chatModelReady(deps)).toBe(false);
 
-  // An answered rejection retains slow background recovery; a request inside the cooldown never
-  // adds a readiness request.
+  // An answered rejection is checked again only by a request after the cooldown; a request inside
+  // the cooldown never adds a readiness request.
   await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-early");
   await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS - 1_000);
   await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-early");
@@ -359,7 +353,7 @@ it("re-probes a conclusively failed model on the first conversation request afte
   expect(completed.at(-1)?.correlationId).toBe("corr-chat-send");
   expect(completed.at(-1)?.extra?.overallStatus).toBe("ready");
 
-  // Fresh readiness avoids one probe per interactive request; background renewal remains bounded.
+  // Fresh readiness avoids one probe per interactive request; nothing renews it in the background.
   for (let request = 0; request < 5; request += 1) {
     await awaitInitializedConversationReadiness(
       deps,
@@ -446,113 +440,23 @@ it("answers a request whose re-probe cannot reach the gateway instead of throwin
   expect(chatModelReady(deps)).toBe(false);
 });
 
-it("renews a healthy model proactively through the existing background queue", async () => {
-  const deps = composition();
-  vi.useFakeTimers();
-  const timers = vi.spyOn(globalThis, "setTimeout");
-  const fetch = vi.fn(() =>
-    Promise.resolve(
-      Response.json({
-        choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
-      }),
-    ),
-  );
-  vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-healthy-renewal");
-  await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  await awaitInitializedConversationReadiness(deps, "chat-model");
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(chatModelReady(deps)).toBe(true);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(timers.mock.calls.some(([, delay]) => Number.isNaN(delay))).toBe(false);
-  expect(vi.getTimerCount()).toBeGreaterThan(0);
-  await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
-  expect(fetch).toHaveBeenCalledTimes(2);
-  await awaitInitializedConversationReadiness(deps, "chat-model");
-  await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
-  expect(fetch).toHaveBeenCalledTimes(3);
-});
-
-// #4103 (owner decision 2026-10-29): a configured model nobody uses is not probed every two minutes
-// for hours. Its startup verification is the only probe; the next request verifies it on demand,
-// and renewal runs while the model is in use.
-it("stops renewing an idle model and renews it again while it is in use", async () => {
-  const sink = createBufferedServerLogSink();
-  setServerLogger(createServerLogger({ sink, level: "info" }));
+it("never renews a healthy model on a timer; its first request after expiry checks it once", async () => {
   const deps = composition();
   vi.useFakeTimers();
   const fetch = vi.fn(() => Promise.resolve(chatProbeAnswer()));
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-idle-renewal");
+  configure(deps, "corr-healthy-model");
   await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(chatModelReady(deps)).toBe(true);
   });
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  expect(fetch).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
   expect(fetch).toHaveBeenCalledOnce();
   expect(currentConversationReady(deps, "chat-model")).toBe(false);
-  expect(vi.getTimerCount()).toBe(0);
-  const paused = sink.events.filter((event) => event.op === "gateway.readiness.renewal.paused");
-  expect(paused).toHaveLength(1);
-  expect(paused[0]?.extra).toMatchObject({ paused: "renewal" });
-  expect(paused[0]?.extra).not.toHaveProperty("idleMs");
-  expect(paused[0]?.parentCorrelationId).toBe("corr-idle-renewal");
-  for (const event of paused) expect(() => validateRegisteredActivityLogEvent(event)).not.toThrow();
-  expect(
-    expectActivityLogProof(
-      "gateway.readiness.renewal.paused.line",
-      formatActivityLogProofLine(paused[0] ?? {}),
-    ),
-  ).toMatchObject({ paused: "renewal" });
-
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-idle-use");
+  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-after-expiry");
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(currentConversationReady(deps, "chat-model")).toBe(true);
-  await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
-  expect(fetch).toHaveBeenCalledTimes(3);
-  await vi.advanceTimersByTimeAsync(60 * 60_000);
-  const inUse = fetch.mock.calls.length;
-  // Renewed every two minutes for the fifteen minutes after the request, then paused again.
-  expect(inUse).toBe(10);
-  await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
-  expect(fetch).toHaveBeenCalledTimes(inUse);
-  const pausedAgain = sink.events.filter(
-    (event) => event.op === "gateway.readiness.renewal.paused",
-  );
-  expect(pausedAgain).toHaveLength(2);
-  expect(pausedAgain[1]?.extra?.idleMs).toBeGreaterThanOrEqual(15 * 60_000);
-  expect(pausedAgain[1]?.parentCorrelationId).toBe("corr-idle-use");
-});
-
-it("stops recovering a verified model that failed while nobody uses it", async () => {
-  const deps = composition();
-  vi.useFakeTimers();
-  const gateway = { status: 200 };
-  const fetch = startingGateway(gateway);
-  vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-idle-recovery");
-  await vi.waitFor(() => {
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-  await vi.advanceTimersByTimeAsync(6 * 60_000);
-  // An answered rejection: a busy status (429/503) would keep the earlier proof (#4115).
-  gateway.status = 404;
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-failed-use");
-  expect(fetch).toHaveBeenCalledTimes(2);
-  expect(chatModelReady(deps)).toBe(false);
-  await vi.advanceTimersByTimeAsync(60 * 60_000);
-  const recovering = fetch.mock.calls.length;
-  // The capped recovery runs while the request is recent, then pauses.
-  expect(recovering).toBeGreaterThan(2);
-  expect(recovering).toBeLessThanOrEqual(10);
-  await vi.advanceTimersByTimeAsync(4 * 60 * 60_000);
-  expect(fetch).toHaveBeenCalledTimes(recovering);
-  gateway.status = 200;
-  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-healed-use");
-  expect(chatModelReady(deps)).toBe(true);
-  expect(fetch).toHaveBeenCalledTimes(recovering + 1);
 });
 
 it("refreshes expired readiness on the same generation and shares the selected model join", async () => {
@@ -748,35 +652,29 @@ it("retains the rotated connection result when an older chat failure finally arr
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
-function slowHealthyRenewal(signal: AbortSignal | null | undefined): Promise<Response> {
-  return new Promise<Response>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", abort);
-      resolve(chatProbeAnswer());
-    }, 119_000);
-    const abort = (): void => {
-      clearTimeout(timer);
-      reject(new DOMException("Synthetic renewal cancelled", "AbortError"));
-    };
-    if (signal?.aborted === true) abort();
-    else signal?.addEventListener("abort", abort, { once: true });
-  });
-}
-
-it("renews early enough for the existing two-minute provider floor before readiness expires", async () => {
+// Customer 1.3.4: every proof another model's check persisted advanced the configuration
+// generation, and startup checked a busy model again for each one, a burst of probes nobody asked
+// for. A model is checked once per connection; a page load still asks again.
+it("does not repeat a startup check when only the generation advanced", async () => {
   const deps = composition();
   vi.useFakeTimers();
-  let calls = 0;
-  const fetch = vi.fn((_input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-    calls += 1;
-    return calls === 1 ? Promise.resolve(chatProbeAnswer()) : slowHealthyRenewal(init?.signal);
-  });
+  const fetch = vi.fn(() => Promise.resolve(new Response("", { status: 503 })));
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-slow-healthy-renewal");
+  configure(deps, "corr-busy-startup");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
   await vi.advanceTimersByTimeAsync(0);
-  await awaitInitializedConversationReadiness(deps, "chat-model");
-  expect(currentConversationReady(deps, "chat-model")).toBe(true);
-  await vi.advanceTimersByTimeAsync(CONVERSATION_READINESS_MAX_AGE_MS + 1);
-  expect(fetch).toHaveBeenCalledTimes(2);
-  expect(currentConversationReady(deps, "chat-model")).toBe(true);
+  const holder = deps.gatewayConfig;
+  const config = holder?.current();
+  if (config === undefined || holder === undefined) throw new TypeError("Expected gateway owner.");
+  const generation = holder.generation();
+  holder.set({ ...config }, true, "corr-proof-persisted");
+  expect(holder.generation()).toBe(generation + 1);
+  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS);
+  expect(fetch).toHaveBeenCalledOnce();
+  initializeConfiguredConversationReadiness(deps, "corr-page-load", true);
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
 });

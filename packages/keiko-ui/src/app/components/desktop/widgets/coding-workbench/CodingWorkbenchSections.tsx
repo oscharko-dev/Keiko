@@ -870,7 +870,9 @@ function CodingModelControl({ input, t }: ControlProps): ReactNode {
         disabled={input.configurationLocked}
         mono
         leadingVisual={<CubeIcon size={14} />}
-        onOpen={requestGatewayModelCatalogRefresh}
+        onOpen={(): void => {
+          requestGatewayModelCatalogRefresh({ check: true });
+        }}
         sections={[{ options }]}
         onValueChange={(value): void => {
           if (input.models.some((model) => model.id === value)) input.onSelectedModelChange(value);

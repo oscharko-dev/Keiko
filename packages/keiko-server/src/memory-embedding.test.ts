@@ -19,6 +19,7 @@ import {
   type MemoryEmbeddingRow,
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
+import { requestOpenAIEmbedding } from "@oscharko-dev/keiko-model-gateway";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,
@@ -45,6 +46,7 @@ import {
   setServerLogger,
   type ServerLogThreshold,
 } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
   expectActivityLogProof,
@@ -244,6 +246,48 @@ describe("embedMemoryText (#204)", () => {
     expect(input?.provider).toBe(memoryEmbeddingProviderIdentity(provider));
     expect(input?.modelId).toBe(EMBEDDING_MODEL);
     expect(input?.vector.length).toBe(3072);
+  });
+
+  it("hands the deps activity-log sink to the embedding transport", async () => {
+    const adapter = okAdapter();
+    const sink = createBufferedServerLogSink();
+    const deps = { ...makeDeps({ embeddingRequest: adapter }), activityLog: sink };
+
+    await embedMemoryText(deps, "The user prefers dark mode");
+
+    expect(adapter).toHaveBeenCalledTimes(1);
+    const [request] = (adapter as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      OpenAIEmbeddingRequest,
+    ];
+    expect(request.log).toBe(sink);
+  });
+
+  it("records a real transport failure on the deps sink instead of port-unwired loss", async () => {
+    const failingFetch: typeof fetch = () => Promise.reject(new Error("no route to gateway"));
+    const sink = createBufferedServerLogSink();
+    const deps = {
+      ...makeDeps({
+        embeddingRequest: (request) =>
+          requestOpenAIEmbedding({ ...request, fetchImpl: failingFetch }),
+      }),
+      activityLog: sink,
+    };
+
+    expect(await embedMemoryText(deps, "The user prefers dark mode")).toBeNull();
+
+    expect(sink.events.some((event) => event.op === "http.gateway.fetch.failed")).toBe(true);
+  });
+
+  it("falls back to the process sink so an unwired deps graph never loses transport lines", async () => {
+    const adapter = okAdapter();
+    const deps = makeDeps({ embeddingRequest: adapter });
+
+    await embedMemoryText(deps, "The user prefers dark mode");
+
+    const [request] = (adapter as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      OpenAIEmbeddingRequest,
+    ];
+    expect(request.log).toBe(processServerLogSink());
   });
 
   it("returns null when no embedding model is configured", async () => {

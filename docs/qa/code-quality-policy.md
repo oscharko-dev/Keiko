@@ -32,7 +32,7 @@ findings per (file, rule). It compares those counts with the committed register
 | A new ledger entry matches no raised count            | Fails as a stale increase                         |
 | An older ledger entry was removed or changed          | Fails as rewritten history                        |
 
-The second output line reports the total before and after, for example `register: 46598 → 45320 (-1278)`.
+The second output line reports the total before and after, for example `register: 46618 → 45340 (-1278)`.
 
 **How to fix a failure.**
 
@@ -53,17 +53,21 @@ The second output line reports the total before and after, for example `register
 **Reviewed increases.** The owner allows a count to rise in four cases, and only through a
 reviewed entry in `scripts/code-quality-register-increases.json`:
 
-| `reason`                     | Use it for                                                                        |
-| ---------------------------- | --------------------------------------------------------------------------------- |
-| `qualified-boundary`         | A validator that a responsibility record adapts                                   |
-| `pending-boundary-migration` | A boundary check that a later reviewed migration moves (see below)                |
-| `test-witness`               | A test or test fixture that exercises hostile input, or a binder-mandated witness |
-| `proof-fixture`              | A proof fixture                                                                   |
+| `reason`                     | Use it for                                                                                                                             |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `qualified-boundary`         | A validator that a responsibility record adapts                                                                                        |
+| `pending-boundary-migration` | A boundary check that a later reviewed migration moves (see below)                                                                     |
+| `test-witness`               | A test or test fixture that exercises hostile input, or a binder-mandated witness                                                      |
+| `proof-fixture`              | A test helper, typed fixture or type-level assertion that builds or checks the expected value of a proof and receives no hostile input |
 
 `pending-boundary-migration` covers findings of the four boundary rules (no-runtime-typeof,
 no-unknown-parameters, no-unsafe-dictionary-type and no-known-value-widening) while those rules are
 not yet active for the file's package. No responsibility record adapts these checks yet, so
 `qualified-boundary` would be untrue for them.
+
+`test-witness` and `proof-fixture` do not overlap. Code that receives hostile input is a test
+witness, even when it sits in a fixture file. A proof fixture only builds or checks an expected
+value. An entry is wrong if any test passes the flagged code a hostile or malformed value.
 
 Each entry has exactly these fields, in this order:
 
@@ -110,7 +114,7 @@ The ledger started empty on `dev`; #4145 adds no entry.
   register (`packages/keiko-ui/eslint-suppressions.json`).
 - The ratchet does not run the epic's responsibility qualifications. A green ratchet means "no new
   findings", not "this code is qualified" or "this rule is enforced".
-- The baseline on `dev` `3a2979be1` was 46,598 findings. Epic workstreams and ordinary `dev` work
+- The baseline on `dev` `7bbca2e34` was 46,618 findings. Epic workstreams and ordinary `dev` work
   prune the register; #3991 removes it at zero and activates full enforcement.
 
 ## Engine
