@@ -208,19 +208,71 @@ export function gradeQualityFindings(answer, truth) {
   };
 }
 
+/** The answer line format S16 asks for: one test case per line. */
+export const TEST_CASE_FORMAT = "TESTFALL <id>/AC<n> | Schritte: <Schritte> | Erwartet: <Ergebnis>";
+const TEST_CASE_LINE = /^\W*TESTFALL\b(.*)$/gimu;
+const STEM_LENGTH = 5;
+
+/** Lowercase word stems of at least `STEM_LENGTH` letters; umlauts are folded. */
+function stems(text) {
+  const folded = text.toLowerCase().normalize("NFD").replaceAll(/\p{M}/gu, "");
+  return new Set((folded.match(/\p{L}{5,}/gu) ?? []).map((word) => word.slice(0, STEM_LENGTH)));
+}
+
+/** The text after `label:` in one `|`-separated test case line, when it has at least three words. */
+function caseField(line, label) {
+  const segment = line
+    .split("|")
+    .find((part) => new RegExp(String.raw`^\s*${label}\s*:`, "iu").test(part));
+  const value = segment?.slice(segment.indexOf(":") + 1).trim() ?? "";
+  return value.split(/\s+/u).filter(Boolean).length >= 3 ? value : undefined;
+}
+
+/** Stems of one criterion that no other criterion of the requirement has. */
+function distinctiveStems(item, number) {
+  const others = new Set(
+    item.acceptance.filter((_, index) => index !== number - 1).flatMap((text) => [...stems(text)]),
+  );
+  return [...stems(item.acceptance[number - 1] ?? "")].filter((stem) => !others.has(stem));
+}
+
+function parseTestCases(answer, item) {
+  const reference = new RegExp(String.raw`${escapeRegExp(item.id)}/AC(\d+)`, "u");
+  return [...answer.matchAll(TEST_CASE_LINE)].map(([, line]) => ({
+    number: Number(line.match(reference)?.[1] ?? Number.NaN),
+    steps: caseField(line, "Schritte"),
+    expected: caseField(line, "Erwartet"),
+  }));
+}
+
+/** A test case is usable when it has steps and an expected result that speak to its criterion. */
+function usable(testCase, item) {
+  if (testCase.steps === undefined || testCase.expected === undefined) return false;
+  const said = stems(`${testCase.steps} ${testCase.expected}`);
+  const distinctive = distinctiveStems(item, testCase.number);
+  return distinctive.length === 0 || distinctive.some((stem) => said.has(stem));
+}
+
 /**
- * S16: one test case per acceptance criterion of the requirement, each carrying the criterion
- * reference `<id>/AC<n>`; a reference beyond the criteria of the requirement is invented.
+ * S16: exactly one usable test case per acceptance criterion, each a `TEST_CASE_FORMAT` line naming
+ * its criterion `<id>/AC<n>`, with steps and an expected result that use a term only that criterion
+ * has. References alone, a refusal, a duplicate case, a case without steps or result and a
+ * reference beyond the criteria of the requirement (invented) do not count.
  */
 export function gradeCriterionTestCases(answer, item) {
-  const escaped = escapeRegExp(item.id);
-  const referenced = new Set(
-    [...answer.matchAll(new RegExp(String.raw`${escaped}/AC(\d+)`, "g"))].map((m) => Number(m[1])),
-  );
+  const cases = parseTestCases(answer, item);
   const expected = Array.from({ length: item.acceptanceCount }, (_, index) => index + 1);
-  const missing = expected.filter((number) => !referenced.has(number));
-  const invented = [...referenced].filter((number) => number < 1 || number > item.acceptanceCount);
-  return { ok: missing.length === 0 && invented.length === 0, missing, invented };
+  const count = (number) => cases.filter((testCase) => testCase.number === number).length;
+  const invented = [...new Set(cases.map((testCase) => testCase.number))].filter(
+    (number) => !expected.includes(number),
+  );
+  const duplicated = expected.filter((number) => count(number) > 1);
+  const unusable = expected.filter((number) =>
+    cases.some((testCase) => testCase.number === number && !usable(testCase, item)),
+  );
+  const missing = expected.filter((number) => count(number) === 0);
+  const ok = [invented, duplicated, unusable, missing].every((list) => list.length === 0);
+  return { ok, missing, invented, duplicated, unusable, cases: cases.length };
 }
 
 /**

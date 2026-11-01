@@ -34,6 +34,7 @@ import {
   gradeRequirementListing,
   sectionsPresent,
   structuredDeviations,
+  TEST_CASE_FORMAT,
   turnIssues,
 } from "./oracles.mjs";
 import { everyFormatUsable } from "./formats.mjs";
@@ -529,13 +530,13 @@ export const JOURNEYS = {
     const item = buildCorpus(1).truth.find((entry) => entry.id === "LH-002");
     const turn = await ctx.turn(
       chat,
-      "Entwirf für die Anforderung LH-002 aus dem Lastenheft zu jedem Abnahmekriterium genau einen Testfall. Nenne bei jedem Testfall die Kriterium-Referenz im Format LH-002/AC1, LH-002/AC2 usw. Lege nichts in Jira an.",
+      `Entwirf für die Anforderung LH-002 aus dem Lastenheft zu jedem Abnahmekriterium genau einen Testfall. Schreibe jeden Testfall in genau eine Zeile im Format \`${TEST_CASE_FORMAT.replace("<id>", "LH-002")}\`, mit der Kriterium-Referenz LH-002/AC1, LH-002/AC2 usw. Lege nichts in Jira an.`,
     );
     const grade = gradeCriterionTestCases(turn.answer, item);
     return result(
       grade.ok ? "green" : "red",
       turn,
-      `${item.acceptanceCount - grade.missing.length}/${item.acceptanceCount} criteria covered, ${grade.invented.length} invented references`,
+      `${grade.cases} test cases for ${item.acceptanceCount} criteria: ${grade.missing.length} missing, ${grade.unusable.length} without usable steps or result, ${grade.duplicated.length} duplicated, ${grade.invented.length} invented references`,
       ["test-case-per-criterion", "traceability"],
     );
   },

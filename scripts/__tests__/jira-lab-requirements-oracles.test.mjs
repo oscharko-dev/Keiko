@@ -35,15 +35,47 @@ describe("quality findings (S15)", () => {
 
 describe("test cases per criterion (S16)", () => {
   const item = TRUTH.find((entry) => entry.id === "LH-002");
+  const valid = [
+    "TESTFALL LH-002/AC1 | Schritte: Als angemeldeter Versicherungsnehmer das Portal öffnen und Einmalcode wählen | Erwartet: Einmalcode ist verfügbar und nutzbar",
+    "TESTFALL LH-002/AC2 | Schritte: Einen fehlerhaften Einmalcode eingeben und Absenden drücken | Erwartet: Die fehlerhafte Eingabe wird vor dem Absenden gemeldet",
+  ];
 
-  it("needs every criterion reference and no invented one", () => {
-    const all = item.acceptance
-      .map((_, index) => `TF ${index + 1}: LH-002/AC${index + 1}`)
-      .join("\n");
+  it("accepts one usable test case per criterion", () => {
+    expect(gradeCriterionTestCases(valid.join("\n"), item)).toMatchObject({ ok: true, cases: 2 });
+    expect(gradeCriterionTestCases(`- **${valid[0]}**\n- ${valid[1]}`, item).ok).toBe(true);
+  });
 
-    expect(gradeCriterionTestCases(all, item).ok).toBe(true);
-    expect(gradeCriterionTestCases("LH-002/AC1", item)).toMatchObject({ ok: false, missing: [2] });
-    expect(gradeCriterionTestCases(`${all}\nLH-002/AC9`, item)).toMatchObject({
+  it("rejects references without test cases and a refusal", () => {
+    const referencesOnly =
+      "No test cases were designed. These are merely references: LH-002/AC1, LH-002/AC2";
+    expect(gradeCriterionTestCases(referencesOnly, item)).toMatchObject({
+      ok: false,
+      missing: [1, 2],
+    });
+    expect(gradeCriterionTestCases("Ich kann keine Testfälle entwerfen.", item).ok).toBe(false);
+  });
+
+  it("rejects duplicate, incomplete, unrelated and invented cases", () => {
+    expect(gradeCriterionTestCases([valid[0], valid[0]].join("\n"), item)).toMatchObject({
+      ok: false,
+      duplicated: [1],
+      missing: [2],
+    });
+    const noResult =
+      "TESTFALL LH-002/AC2 | Schritte: Einen fehlerhaften Einmalcode eingeben und absenden";
+    expect(gradeCriterionTestCases(`${valid[0]}\n${noResult}`, item)).toMatchObject({
+      ok: false,
+      unusable: [2],
+    });
+    const unrelated =
+      "TESTFALL LH-002/AC2 | Schritte: Als angemeldeter Versicherungsnehmer das Portal öffnen | Erwartet: Einmalcode ist verfügbar";
+    expect(gradeCriterionTestCases(`${valid[0]}\n${unrelated}`, item)).toMatchObject({
+      ok: false,
+      unusable: [2],
+    });
+    const invented =
+      "TESTFALL LH-002/AC9 | Schritte: Etwas anderes ausprobieren und prüfen | Erwartet: Es funktioniert wie erwartet";
+    expect(gradeCriterionTestCases([...valid, invented].join("\n"), item)).toMatchObject({
       ok: false,
       invented: [9],
     });
