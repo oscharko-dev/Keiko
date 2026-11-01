@@ -2,13 +2,17 @@
 // there grades the issues that are new since its turn began, so it must not see the other lane's
 // writes: on 2026-11-01 Gemma's S06 counted two epics Qwen's S05 wrote at the same moment as its
 // own template violations. Journeys that write the work project therefore run one at a time across
-// lanes; the report journeys read their own seeded project and stay parallel.
+// lanes. S13 comments on the shared RPT-1 and counts the new comments there, so it is serialized as
+// well. Journeys that write no shared issue (they read RPT or answer from the lane's own Pod and
+// templates) stay parallel.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-/** Journeys that only read the seeded report project (S13 comments there, never in REQ). */
-const REPORT_PROJECT_JOURNEYS = new Set(["S10", "S11", "S12", "S13"]);
+/** Journeys that write no shared Jira issue: they never take the lock. */
+const LANE_LOCAL_JOURNEYS = new Set(["S02", "S03", "S04", "S10", "S11", "S12", "S15", "S16"]);
+/** Journeys that write a shared issue outside REQ: serialized, but REQ is left as it is. */
+const OUTSIDE_WORK_PROJECT = new Set(["S13"]);
 
 const LOCK = "work-project.lock";
 const OWNER = "owner.json";
@@ -45,7 +49,7 @@ function tryAcquire(lock, id) {
 }
 
 /**
- * Runs `run` alone among the lanes sharing `directory` unless the journey reads only RPT.
+ * Runs `run` alone among the lanes sharing `directory` unless the journey writes no shared issue.
  *
  * `prepare` runs once the lock is held, before `run`, and only for a journey that writes the work
  * project: the runner empties REQ there, so every creation journey starts from the seeded state.
@@ -62,11 +66,11 @@ export async function withWorkProjectLock(
   run,
   { pollMs = 5_000, log, onWait, prepare } = {},
 ) {
-  if (REPORT_PROJECT_JOURNEYS.has(id)) return run();
+  if (LANE_LOCAL_JOURNEYS.has(id)) return run();
   const lock = join(directory, LOCK);
   await acquire(lock, id, { pollMs, log, onWait });
   try {
-    await prepare?.();
+    if (!OUTSIDE_WORK_PROJECT.has(id)) await prepare?.();
     return await run();
   } finally {
     rmSync(lock, { recursive: true, force: true });

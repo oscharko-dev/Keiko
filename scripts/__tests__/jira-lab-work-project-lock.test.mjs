@@ -140,6 +140,39 @@ describe("withWorkProjectLock", () => {
     expect(prepared).toBe(false);
   });
 
+  it.each(["S02", "S03", "S04", "S15", "S16"])(
+    "runs %s, which writes no shared issue, beside a lane that holds the lock",
+    async (id) => {
+      const dir = directory();
+      const lock = join(dir, "work-project.lock");
+      mkdirSync(lock);
+      writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, id: "S05" }));
+      await expect(withWorkProjectLock(dir, id, () => Promise.resolve("ran"))).resolves.toBe("ran");
+    },
+  );
+
+  it("serializes S13, which comments on the shared RPT-1, without emptying REQ", async () => {
+    const dir = directory();
+    let prepared = false;
+    let lockedDuringRun = false;
+    await withWorkProjectLock(
+      dir,
+      "S13",
+      () => {
+        lockedDuringRun = existsSync(join(dir, "work-project.lock"));
+        return Promise.resolve();
+      },
+      {
+        prepare: () => {
+          prepared = true;
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(lockedDuringRun).toBe(true);
+    expect(prepared).toBe(false);
+  });
+
   it("never holds the lock for a journey that reads only the report project", async () => {
     const dir = directory();
     const lock = join(dir, "work-project.lock");
