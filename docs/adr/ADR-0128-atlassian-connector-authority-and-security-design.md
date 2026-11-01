@@ -1088,6 +1088,20 @@ was found — `hierarchyDiscovery` `complete|unavailable`, `hierarchyFieldCount`
 to hold none — and rule ids; never scope text, keys, summaries or report content) beside
 the existing `atlassian.action.outcome` line for the call.
 
+**Template coverage and list continuation (#4181, 2026-11-01).** "No deviation" only describes an
+issue something judged. The template checker therefore also reports whether at least one template
+of the issue's project and issue type applies (`covers`, the same matching as the write gate), and
+the report's compliance counts `issuesChecked` as the issues a template judged when the checker is
+`applied`, with `issuesWithoutTemplate` and `withoutTemplateByType` (largest first, then by name)
+for the rest, so a lab project whose Bugs and Sub-tasks have no template no longer reads as
+181 compliant issues. With `none` every issue is without a template and `issuesChecked` is the
+issues read (only required-field rules could have judged them); with `unavailable` coverage is not
+told (0 and an empty list) and the report is incomplete. The per-issue flag `templateJudged`, the
+two counts, the Markdown export and the Jira comment text carry this, and the digest covers it. A
+summary list cut at 15 entries (or 60 statuses) now names its `section` and `nextStartAt`, the
+offset `jiraReportSectionPage` continues from, instead of leaving a weaker model to guess (lab S11:
+an answer after 40 of 46 deviating issues). Lists shown whole carry neither; caps are unchanged.
+
 **Complete, traceable requirement derivation (#4179, 2026-10-31).** Grounded Q&A keeps its ranked
 excerpts for ordinary questions, so a request for _all_ requirements of a specification would
 silently miss some. No keyword rule decides when that matters: the model asks for the full list

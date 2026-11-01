@@ -265,6 +265,35 @@ function containerOf(graph: Graph, key: string): JiraReportContainer {
   };
 }
 
+/** Issues something judged: with a checker, those a template covers; otherwise the issues read. */
+function judgedCount(
+  issues: readonly JiraReportIssue[],
+  checker: JiraReport["compliance"]["checker"],
+): number {
+  return checker === "applied"
+    ? issues.filter((issue) => issue.templateJudged).length
+    : issues.length;
+}
+/** Issues no template judged, per type: all of them with `none`, unknowable with `unavailable`. */
+function withoutTemplateOf(
+  issues: readonly JiraReportIssue[],
+  checker: JiraReport["compliance"]["checker"],
+): Pick<JiraReport["compliance"], "issuesWithoutTemplate" | "withoutTemplateByType"> {
+  const uncovered =
+    checker === "unavailable" ? [] : issues.filter((issue) => !issue.templateJudged);
+  const byType = new Map<string, number>();
+  for (const issue of uncovered) byType.set(issue.typeName, (byType.get(issue.typeName) ?? 0) + 1);
+  return {
+    issuesWithoutTemplate: uncovered.length,
+    withoutTemplateByType: [...byType.entries()]
+      .map(([typeName, count]) => ({ typeName, count }))
+      .sort(
+        (left, right) =>
+          right.count - left.count || compareCodePoints(left.typeName, right.typeName),
+      ),
+  };
+}
+
 function complianceOf(
   issues: readonly JiraReportIssue[],
   input: JiraReportInput,
@@ -298,7 +327,8 @@ function complianceOf(
   return {
     requiredFieldRules: input.requiredFieldRules,
     checker: input.checker,
-    issuesChecked: issues.length,
+    issuesChecked: judgedCount(issues, input.checker),
+    ...withoutTemplateOf(issues, input.checker),
     issuesWithDeviations: deviations.length,
     deviationCount,
     byRule: [...byRule.entries()]

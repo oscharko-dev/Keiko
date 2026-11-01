@@ -33,6 +33,12 @@ export interface JiraReportIssue {
   readonly dueDate: string | undefined;
   readonly estimate: number | undefined;
   readonly deviations: readonly JiraReportDeviation[];
+  /**
+   * Whether at least one issue template applied to this issue and judged it (#4181). `false` when
+   * no template of its project and issue type exists, and whenever no template checker ran, so a
+   * missing deviation never reads as compliance.
+   */
+  readonly templateJudged: boolean;
   /** Declared requirement ids this issue names in its summary, labels or description. */
   readonly requirementIds: readonly string[];
   /** The issue's labels, bounded; the trace a write left on the issue is read back from them. */
@@ -56,6 +62,11 @@ export interface JiraReportIssueFacts {
 export interface JiraReportComplianceChecker {
   readonly fieldIds: readonly string[];
   readonly check: (facts: JiraReportIssueFacts) => readonly JiraReportDeviation[];
+  /**
+   * Whether at least one template applies to the issue, so that `check` actually judged it (#4181).
+   * A checker without it is taken to judge every issue.
+   */
+  readonly covers?: (facts: JiraReportIssueFacts) => boolean;
 }
 
 /** The instance's fields by id and name, for resolving the names a template refers to. */
@@ -195,7 +206,25 @@ export interface JiraReport {
   readonly compliance: {
     readonly requiredFieldRules: "applied" | "partial" | "unavailable" | "not-requested";
     readonly checker: "applied" | "none" | "unavailable";
+    /**
+     * With `checker: "applied"`: the issues at least one template judged. An issue of a type no
+     * template covers is not counted here; it is counted in `issuesWithoutTemplate`, because "no
+     * deviation" is only a statement about an issue something judged (#4181). With `none` or
+     * `unavailable` no template judged anything: the number is the issues read, which only the
+     * required-field rules (`requiredFieldRules`) could have judged.
+     */
     readonly issuesChecked: number;
+    /**
+     * Issues no template judged. With `applied`: those whose project and issue type no template
+     * covers. With `none`: every issue, as there is no template. With `unavailable`: 0, as
+     * coverage cannot be told and the report is incomplete.
+     */
+    readonly issuesWithoutTemplate: number;
+    /** `issuesWithoutTemplate` by issue type, largest first, then by name. */
+    readonly withoutTemplateByType: readonly {
+      readonly typeName: string;
+      readonly count: number;
+    }[];
     readonly issuesWithDeviations: number;
     readonly deviationCount: number;
     /** Issues per rule, each issue once however many of its fields or sections break it. */

@@ -23,6 +23,7 @@ import {
   type JiraIssueTemplateSource,
   type JiraTemplateGateResult,
 } from "./jira-managed-template-gate.js";
+import { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool } from "./jira-report-tool.js";
 import type { JiraReport } from "./jira-report-types.js";
@@ -346,5 +347,157 @@ describe("template field references", () => {
     expect(search).toContain("customfield_10100");
     expect(search).toContain("description");
     expect(search).toContain("labels");
+  });
+});
+
+function bugTemplate(): JiraIssueTemplate {
+  const result = parseJiraIssueTemplate(
+    "---\nkeiko: jira-issue-template\nversion: 1\nproject: REP\nissueType: Bug\nactivateOn: [edit]\n---\n## Steps\n",
+  );
+  if (!result.ok) throw new Error("fixture template must parse");
+  return result.template;
+}
+function countOf(type: string): number {
+  return project().issues.filter((issue) => issue.type === type).length;
+}
+
+describe("an issue no template covers is never reported as checked (#4181)", () => {
+  it("counts the issues of a type without a template apart from the judged ones", async () => {
+    const report = await reportOf(() => SET(template()));
+    const total = project().issues.length;
+    expect(report.compliance).toMatchObject({
+      checker: "applied",
+      issuesChecked: countOf("Story"),
+      issuesWithoutTemplate: total - countOf("Story"),
+    });
+    const byType = report.compliance.withoutTemplateByType;
+    expect(byType).toHaveLength(3);
+    expect(byType).toEqual(
+      expect.arrayContaining([
+        { typeName: "Sub-task", count: countOf("Sub-task") },
+        { typeName: "Bug", count: countOf("Bug") },
+        { typeName: "Epic", count: countOf("Epic") },
+      ]),
+    );
+    const counts = byType.map((item) => item.count);
+    expect(counts).toEqual([...counts].sort((left, right) => right - left));
+    expect(report.rows.filter((row) => row.issue.templateJudged)).toHaveLength(countOf("Story"));
+  });
+
+  it("judges a type once a template covers it", async () => {
+    const report = await reportOf(() => SET(template(), bugTemplate()));
+    expect(report.compliance.issuesChecked).toBe(countOf("Story") + countOf("Bug"));
+    expect(report.compliance.withoutTemplateByType.map((item) => item.typeName)).not.toContain(
+      "Bug",
+    );
+    expect(deviationKeys(report, "section-missing")).toEqual(
+      expect.arrayContaining(
+        project()
+          .issues.filter((i) => i.type === "Bug")
+          .map((i) => i.key),
+      ),
+    );
+  });
+
+  it("does not let a template of another project cover the issues", async () => {
+    const other = parseJiraIssueTemplate(
+      "---\nkeiko: jira-issue-template\nversion: 1\nproject: OTHER\nissueType: Story\nactivateOn: [edit]\n---\n## Context\n",
+    );
+    if (!other.ok) throw new Error("fixture template must parse");
+    const report = await reportOf(() => SET(other.template));
+    expect(report.compliance).toMatchObject({ issuesChecked: 0 });
+  });
+
+  it("states that no template judged anything when none exists", async () => {
+    const report = await reportOf(undefined);
+    const total = project().issues.length;
+    expect(report.compliance).toMatchObject({
+      checker: "none",
+      issuesWithoutTemplate: total,
+    });
+    expect(report.compliance.withoutTemplateByType.reduce((sum, item) => sum + item.count, 0)).toBe(
+      total,
+    );
+    expect(report.rows.some((row) => row.issue.templateJudged)).toBe(false);
+  });
+
+  it("does not guess the coverage when the templates are unreadable", async () => {
+    const broken: JiraIssueTemplateSource = () => ({ templates: [template()], unreadable: 1 });
+    const report = await reportOf(broken);
+    expect(report.compliance).toMatchObject({
+      checker: "unavailable",
+      issuesWithoutTemplate: 0,
+      withoutTemplateByType: [],
+    });
+    expect(report.rows.some((row) => row.issue.templateJudged)).toBe(false);
+  });
+
+  it("carries the figures through the summary and moves the digest with them", async () => {
+    const covered = await runOf(() => SET(template()));
+    const wider = await runOf(() => SET(template(), bugTemplate()));
+    const summary = covered.result.data.report as {
+      compliance: {
+        issuesChecked: number;
+        issuesWithoutTemplate: number;
+        withoutTemplateByType: unknown;
+      };
+    };
+    expect(summary.compliance).toMatchObject({
+      issuesChecked: covered.report.compliance.issuesChecked,
+      issuesWithoutTemplate: covered.report.compliance.issuesWithoutTemplate,
+      withoutTemplateByType: covered.report.compliance.withoutTemplateByType,
+    });
+    expect(covered.report.digest).not.toBe(wider.report.digest);
+  });
+
+  it("names the uncovered issues in the Markdown and the Jira comment", async () => {
+    const report = await reportOf(() => SET(template()));
+    const uncovered = String(report.compliance.issuesWithoutTemplate);
+    const markdown = exportJiraReport(report, "markdown").content;
+    expect(markdown).toContain(`${uncovered} issues are covered by no issue template`);
+    expect(markdown).toContain("Bug");
+    expect(jiraReportCommentText(report)).toContain(
+      `Not judged by any template: ${uncovered} issues`,
+    );
+  });
+});
+
+describe("a cut summary list says how to read on (#4181)", () => {
+  interface Listed {
+    total: number;
+    items: readonly unknown[];
+    section?: string;
+    nextStartAt?: number;
+  }
+  const source: JiraIssueTemplateSource = () => SET(template("requiredLabels: [reviewed]"));
+
+  it("names the section and offset of a list it cut, and the section continues there", async () => {
+    const { result } = await runOf(source);
+    const deviations = (result.data.report as { compliance: { deviations: Listed } }).compliance
+      .deviations;
+    expect(deviations.total).toBeGreaterThan(deviations.items.length);
+    expect(deviations).toMatchObject({
+      section: "deviations",
+      nextStartAt: deviations.items.length,
+    });
+    const next = await runOf(
+      source,
+      {},
+      {
+        section: "deviations",
+        startAt: deviations.nextStartAt ?? 0,
+        maxResults: 100,
+      },
+    );
+    const page = next.result.data.section as { items: readonly unknown[]; total: number };
+    expect(deviations.items.length + page.items.length).toBe(deviations.total);
+  });
+
+  it("carries nothing on a list it shows whole", async () => {
+    const { result } = await runOf(source);
+    const epics = (result.data.report as { epics: Listed }).epics;
+    expect(epics.total).toBe(epics.items.length);
+    expect(epics).not.toHaveProperty("nextStartAt");
+    expect(epics).not.toHaveProperty("section");
   });
 });

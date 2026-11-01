@@ -33,11 +33,23 @@ function progress(value: JiraReportProgress): CatalogJsonObject {
     estimate: { ...value.estimate },
   };
 }
+/**
+ * A summary list cut at `max` says how to read on (#4181): the `section` that pages it and the
+ * `nextStartAt` to pass, as `jiraReportSectionPage` would. `offset` is where the list starts in
+ * that section when the section holds other entries first. A list that is shown whole carries none.
+ */
 function listed(
   items: readonly CatalogJsonValue[],
+  section: JiraReportSection,
   max = JIRA_REPORT_SUMMARY_LIST_MAX,
+  offset = 0,
 ): CatalogJsonObject {
-  return { total: items.length, items: items.slice(0, max) };
+  const shown = items.slice(0, max);
+  return {
+    total: items.length,
+    items: shown,
+    ...(items.length > shown.length ? { section, nextStartAt: offset + shown.length } : {}),
+  };
 }
 /** A list bounded for a tool result, with the true size beside it; the export carries every entry. */
 function capped<Item extends CatalogJsonValue>(
@@ -109,8 +121,9 @@ function requirementsSummary(report: JiraReport): CatalogJsonValue {
   return {
     declared: requirements.declared,
     covered: requirements.covered,
-    uncovered: listed(requirements.uncovered),
-    items: listed(requirementItems(report).filter((item) => item.covered === true)),
+    // The section pages the covered requirements first, then the uncovered ones.
+    uncovered: listed(requirements.uncovered, "requirements", undefined, requirements.items.length),
+    items: listed(requirementItems(report).slice(0, requirements.items.length), "requirements"),
   };
 }
 
@@ -134,24 +147,28 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
     progress: {
       project: progress(report.progress.project),
       byType: report.progress.byType.slice(0, SUMMARY_TYPE_MAX).map((type) => ({ ...type })),
-      byStatus: listed(statusItems(report), JIRA_REPORT_SUMMARY_STATUS_MAX),
+      byStatus: listed(statusItems(report), "statuses", JIRA_REPORT_SUMMARY_STATUS_MAX),
       unassigned: report.progress.unassigned,
       overdue: report.progress.overdue,
     },
-    epics: listed(epicItems(report)),
+    epics: listed(epicItems(report), "epics"),
     compliance: {
       requiredFieldRules: compliance.requiredFieldRules,
       checker: compliance.checker,
       issuesChecked: compliance.issuesChecked,
+      issuesWithoutTemplate: compliance.issuesWithoutTemplate,
+      withoutTemplateByType: compliance.withoutTemplateByType
+        .slice(0, SUMMARY_TYPE_MAX)
+        .map((item) => ({ ...item })),
       issuesWithDeviations: compliance.issuesWithDeviations,
       deviationCount: compliance.deviationCount,
       byRule: compliance.byRule.map((item) => ({ ...item })),
-      deviations: listed(deviationItems(report)),
+      deviations: listed(deviationItems(report), "deviations"),
     },
     coverage: {
       containerRoles: coverage.containerRoles,
-      uncoveredEpics: listed(coverage.uncoveredEpics),
-      orphans: listed(orphanItems(report)),
+      uncoveredEpics: listed(coverage.uncoveredEpics, "uncovered"),
+      orphans: listed(orphanItems(report), "orphans"),
       requirements: requirementsSummary(report),
     },
   };

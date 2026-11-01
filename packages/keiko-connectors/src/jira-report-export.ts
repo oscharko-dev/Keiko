@@ -225,6 +225,15 @@ function complianceSection(report: JiraReport): string {
     "## Compliance\n",
     `Required-field rules: ${compliance.requiredFieldRules}. Template checker: ${compliance.checker}.\n`,
     `${String(compliance.issuesChecked)} issues checked, ${String(compliance.issuesWithDeviations)} with deviations, ${String(compliance.deviationCount)} deviations.\n`,
+    ...(compliance.issuesWithoutTemplate === 0
+      ? []
+      : [
+          `${String(compliance.issuesWithoutTemplate)} issues are covered by no issue template and were not judged against one.\n`,
+          table(
+            ["Issue type without template", "Issues"],
+            compliance.withoutTemplateByType.map((item) => [item.typeName, item.count]),
+          ),
+        ]),
     table(
       ["Rule", "Issues"],
       compliance.byRule.map((item) => [item.ruleId, item.count]),
@@ -348,6 +357,11 @@ export function jiraReportCommentText(report: JiraReport): string {
     `Estimate (${estimateUnitText(report)}): ${String(project.estimate.total)} total, ${String(project.estimate.done)} done, ${String(project.estimate.remaining)} remaining`,
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,
     `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesChecked)} issues deviate (${String(compliance.deviationCount)} deviations)`,
+    ...(compliance.issuesWithoutTemplate === 0
+      ? []
+      : [
+          `Not judged by any template: ${String(compliance.issuesWithoutTemplate)} issues of ${String(compliance.withoutTemplateByType.length)} issue types`,
+        ]),
     ...compliance.byRule.map((item) => `Rule ${item.ruleId}: ${String(item.count)} issues`),
     ...(coverage.containerRoles === "unobserved"
       ? ["Epics without members: not determinable, no issue in this scope holds work"]

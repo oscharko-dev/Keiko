@@ -314,6 +314,7 @@ export function parseJiraReportIssue(
       ...requiredDeviations(fields, typeId, plan),
       ...checkerDeviations(facts, plan),
     ]),
+    templateJudged: plan.checker !== undefined && (plan.checker.covers?.(facts) ?? true),
     requirementIds: referencedRequirements(summary, labels, fields, plan),
     labels,
   };

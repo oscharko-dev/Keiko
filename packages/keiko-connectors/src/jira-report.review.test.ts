@@ -152,6 +152,7 @@ describe("the memory budget is real (review 6)", () => {
         dueDate: undefined,
         estimate: undefined,
         deviations: [],
+        templateJudged: false,
         requirementIds: [],
         labels: [],
       }),

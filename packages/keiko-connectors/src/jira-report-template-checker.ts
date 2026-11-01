@@ -4,6 +4,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   checkJiraIssueTemplates,
+  matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
   type JiraFieldCatalogEntry,
   type JiraTemplateSubject,
@@ -154,6 +155,7 @@ function checkerOf(
 ): JiraReportComplianceChecker {
   return {
     fieldIds: fieldIdsOf(templates, catalog),
+    covers: (facts) => matchingJiraIssueTemplates(templates, subjectOf(facts)).length > 0,
     check: (facts) =>
       checkJiraIssueTemplates(templates, subjectOf(facts), catalog).map((violation) =>
         deviation(violation, catalog),
