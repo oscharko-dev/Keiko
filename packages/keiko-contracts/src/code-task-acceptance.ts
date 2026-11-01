@@ -1,3 +1,9 @@
+import {
+  hasInheritedEnumerableProperty as recordHasInheritedEnumerableProperty,
+  isCodeTaskRecord as isRecord,
+  validateCodeTaskTaggedFact,
+  validateCodeTaskOwnKeys,
+} from "./code-task-record-validation.js";
 // Producer-owned acceptance contribution for Epic #2384 Code-task children (#2385 owns the
 // definition; #2396 consumes and aggregates it and must not redefine it). Every child PR emits
 // one contribution bound to its final source/tree SHA. The payload is content-free by contract:
@@ -78,26 +84,30 @@ const CONTENT_FREE_NOTE_PATTERN = /^[\x20-\x7E]{1,200}$/u;
 const NOTE_SECRET_MARKERS = /(?:secret|token|password|api[-_]?key|bearer |ghp_|-----BEGIN)/iu;
 const GITHUB_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 
+function matchesCodeTaskStringPattern(value: unknown, pattern: RegExp): boolean {
+  return typeof value === "string" && pattern.test(value);
+}
+
 export function isCodeTaskGitCommitSha(value: unknown): value is CodeTaskGitCommitSha {
-  return typeof value === "string" && GIT_SHA_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, GIT_SHA_PATTERN);
 }
 
 export function isCodeTaskGitTreeSha(value: unknown): value is CodeTaskGitTreeSha {
-  return typeof value === "string" && GIT_SHA_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, GIT_SHA_PATTERN);
 }
 
 export function isCodeTaskSha256Digest(value: unknown): value is CodeTaskSha256Digest {
-  return typeof value === "string" && SHA_256_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, SHA_256_PATTERN);
 }
 
 export function isCodeTaskScenarioId(value: unknown): value is CodeTaskScenarioId {
-  return typeof value === "string" && SCENARIO_ID_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, SCENARIO_ID_PATTERN);
 }
 
 /** A governed-tool catalog name (e.g. `keiko_changeset_edit`): content-free by construction, never
  * a prompt, argument, or result. */
 export function isCodeTaskToolName(value: unknown): value is string {
-  return typeof value === "string" && TOOL_NAME_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, TOOL_NAME_PATTERN);
 }
 
 export function isCodeTaskIsoInstant(value: unknown): value is CodeTaskIsoInstant {
@@ -183,13 +193,38 @@ export interface CodeTaskAcceptanceContributionV1 {
 // through the prototype chain. Rejecting any non-default prototype closes this at the single choke
 // point every validator in this file already passes through, rather than only at the specific
 // unknownKeys call sites the finding named.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.getPrototypeOf(value) === Object.prototype
-  );
+function addValidationError(errors: string[], message: string): false {
+  errors.push(message);
+  return false;
+}
+
+function acceptanceArrayMembersAreValid(
+  errors: string[],
+  value: unknown,
+  path: string,
+  validateMember: (member: unknown, index: number) => boolean,
+): boolean {
+  if (!Array.isArray(value)) return addValidationError(errors, `${path} must be an array`);
+  const entries: readonly unknown[] = value;
+  return acceptanceMembersAreValid(errors, entries, path, validateMember);
+}
+
+function acceptanceMembersAreValid(
+  errors: string[],
+  entries: readonly unknown[],
+  path: string,
+  validateMember: (member: unknown, index: number) => boolean,
+): boolean {
+  const length = entries.length;
+  let valid = true;
+  for (let index = 0; index < length; index += 1) {
+    if (!(index in entries)) {
+      return addValidationError(errors, `${path}[${String(index)}] must be an object`);
+    }
+    const member: unknown = entries[index];
+    valid = validateMember(member, index) && valid;
+  }
+  return valid;
 }
 
 function isPositiveInteger(value: unknown): value is number {
@@ -204,7 +239,8 @@ function isNonNegativeAmountUsd(value: unknown): value is number {
 }
 
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
 }
 
 // KEIKO-0302 follow-on: this closed the CONTRIBUTION's outer keys but never the fact object's own
@@ -252,11 +288,9 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 // own prototype is Object.prototype (pair it with isRecord for that) and, per the paragraph above,
 // it only catches an ENUMERABLE inherited property -- ownField is what actually closes the general
 // case; this function alone closes neither.
+// Compatibility delegate: the single implementation now lives with the private record guards.
 export function hasInheritedEnumerableProperty(record: Record<string, unknown>): boolean {
-  for (const key in record) {
-    if (!Object.hasOwn(record, key)) return true;
-  }
-  return false;
+  return recordHasInheritedEnumerableProperty(record);
 }
 
 // Codex P1 3789773829, the terminating fix: a detector inspects a property's descriptor to decide
@@ -274,62 +308,38 @@ export function ownField(record: Record<string, unknown>, key: string): unknown 
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function factErrors(
+function knownFactFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  path: string,
+  isValue: (candidate: unknown) => boolean,
+): boolean {
+  let valid = true;
+  // Collected, not early-returned: an object can carry both an extra own key and an invalid
+  // value, and both are worth reporting (KfQ 3789542365 raised this for the branch below; the
+  // same shape applied here).
+  valid = validateCodeTaskOwnKeys(errors, value, ["outcome", "value"], path) && valid;
+  if (!isValue(ownField(value, "value"))) {
+    valid = addValidationError(errors, `${path}.value is invalid for a known fact`);
+  }
+  return valid;
+}
+
+function factFieldsAreValid(
+  errors: string[],
   value: unknown,
   path: string,
   isValue: (candidate: unknown) => boolean,
-): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be a tagged fact object`];
-  if (hasInheritedEnumerableProperty(value)) {
-    return [`${path} must not resolve any field through its prototype chain`];
-  }
-  const outcome = ownField(value, "outcome");
-  if (outcome === "known") {
-    // Collected, not early-returned: an object can carry both an extra own key and an invalid
-    // value, and both are worth reporting (KfQ 3789542365 raised this for the branch below; the
-    // same shape applied here).
-    const errors = unknownKeys(value, ["outcome", "value"], path);
-    if (!isValue(ownField(value, "value"))) {
-      errors.push(`${path}.value is invalid for a known fact`);
-    }
-    return errors;
-  }
-  if (outcome === "unknown" || outcome === "unavailable" || outcome === "absent") {
-    // KfQ 3789542365: this used to return early on an own "value" field, so unknownKeys never ran
-    // and any OTHER extra own key went unreported. Collected instead, matching the "report every
-    // violation" position already taken for onlyKnownKeys elsewhere in this PR.
-    const errors = unknownKeys(value, ["outcome"], path);
-    if (Object.hasOwn(value, "value")) {
-      errors.push(`${path} must not carry a value for outcome ${outcome}`);
-    }
-    return errors;
-  }
-  return [`${path}.outcome must be known, unknown, unavailable, or absent`];
+): boolean {
+  return validateCodeTaskTaggedFact(errors, value, path, (record) =>
+    knownFactFieldsAreValid(errors, record, path, isValue),
+  );
 }
 
 // Closed key sets. Every peer validator in this territory enforces one and says why — an unexpected
 // field on a documented content-free contract must never ride through into evidence. These four did
 // not, so a payload could carry `promptText` (or any other free-text field) alongside the validated
 // ones and be accepted, then be handed on as `value`. Mirrors code-task-governance.ts's unknownKeys.
-// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching
-// debug/debug-lifecycle.ts's idiom for the same class of threat: Object.keys alone misses a
-// non-enumerable own property; every caller here already passes through the hardened isRecord
-// above, which is what actually closes the prototype case (see its own comment) that neither this
-// nor debug-lifecycle.ts's own-property scan can see on its own.
-function unknownKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-): string[] {
-  const errors = Object.getOwnPropertyNames(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `${path}.${key} is not allowed`);
-  if (Object.getOwnPropertySymbols(value).length > 0) {
-    errors.push(`${path} must not carry symbol-keyed properties`);
-  }
-  return errors;
-}
-
 const CONTRIBUTION_KEYS = [
   "kind",
   "schemaVersion",
@@ -364,148 +374,198 @@ const SALVAGE_KEYS = [
 
 const CLEANUP_KEYS = ["state", "residueCount"] as const;
 
-function scenarioErrors(value: unknown, path: string): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors: string[] = [...unknownKeys(value, SCENARIO_KEYS, path)];
+function scenarioFieldsAreValid(errors: string[], value: unknown, path: string): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid = validateCodeTaskOwnKeys(errors, value, SCENARIO_KEYS, path) && valid;
   if (!isCodeTaskScenarioId(ownField(value, "scenarioId"))) {
-    errors.push(`${path}.scenarioId is invalid`);
+    valid = addValidationError(errors, `${path}.scenarioId is invalid`);
   }
   if (!isOneOf(ownField(value, "evidenceClass"), CODE_TASK_EVIDENCE_CLASSES)) {
-    errors.push(`${path}.evidenceClass is not a registered evidence class`);
+    valid = addValidationError(errors, `${path}.evidenceClass is not a registered evidence class`);
   }
   if (!isOneOf(ownField(value, "platform"), CODE_TASK_EVIDENCE_PLATFORMS)) {
-    errors.push(`${path}.platform is not a supported evidence platform`);
+    valid = addValidationError(errors, `${path}.platform is not a supported evidence platform`);
   }
   if (!isOneOf(ownField(value, "outcome"), CODE_TASK_SCENARIO_OUTCOMES)) {
-    errors.push(`${path}.outcome must be passed, failed, or blocked`);
+    valid = addValidationError(errors, `${path}.outcome must be passed, failed, or blocked`);
   }
   if (!isCodeTaskIsoInstant(ownField(value, "recordedAt"))) {
-    errors.push(`${path}.recordedAt must be an ISO-8601 UTC instant`);
+    valid = addValidationError(errors, `${path}.recordedAt must be an ISO-8601 UTC instant`);
   }
   const artifactDigests = ownField(value, "artifactDigests");
-  if (
-    !Array.isArray(artifactDigests) ||
-    !artifactDigests.every((digest) => isCodeTaskSha256Digest(digest))
-  ) {
-    errors.push(`${path}.artifactDigests must be an array of sha256 digests`);
+  if (!isDigestArray(artifactDigests)) {
+    valid = addValidationError(
+      errors,
+      `${path}.artifactDigests must be an array of sha256 digests`,
+    );
   }
-  errors.push(
-    ...factErrors(
+  valid =
+    factFieldsAreValid(
+      errors,
       ownField(value, "receiptDigest"),
       `${path}.receiptDigest`,
       isCodeTaskSha256Digest,
-    ),
-  );
-  return errors;
+    ) && valid;
+  return valid;
 }
 
-function salvageErrors(value: unknown, path: string): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors: string[] = [...unknownKeys(value, SALVAGE_KEYS, path)];
+function salvageFieldsAreValid(errors: string[], value: unknown, path: string): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid = validateCodeTaskOwnKeys(errors, value, SALVAGE_KEYS, path) && valid;
   if (!isCodeTaskContentFreeNote(ownField(value, "sourceBranch"))) {
-    errors.push(`${path}.sourceBranch must be a bounded content-free reference`);
+    valid = addValidationError(
+      errors,
+      `${path}.sourceBranch must be a bounded content-free reference`,
+    );
   }
   if (!isCodeTaskGitCommitSha(ownField(value, "sourceSha"))) {
-    errors.push(`${path}.sourceSha is invalid`);
+    valid = addValidationError(errors, `${path}.sourceSha is invalid`);
   }
   if (!isCodeTaskRepoRelativePath(ownField(value, "path"))) {
-    errors.push(`${path}.path must be a repo-relative path`);
+    valid = addValidationError(errors, `${path}.path must be a repo-relative path`);
   }
   if (!isOneOf(ownField(value, "disposition"), CODE_TASK_SALVAGE_DISPOSITIONS)) {
-    errors.push(`${path}.disposition must be taken-verbatim, reshaped, or rejected`);
+    valid = addValidationError(
+      errors,
+      `${path}.disposition must be taken-verbatim, reshaped, or rejected`,
+    );
   }
-  errors.push(
-    ...factErrors(ownField(value, "reshaping"), `${path}.reshaping`, isCodeTaskContentFreeNote),
-  );
+  valid =
+    factFieldsAreValid(
+      errors,
+      ownField(value, "reshaping"),
+      `${path}.reshaping`,
+      isCodeTaskContentFreeNote,
+    ) && valid;
   if (!isCodeTaskGitCommitSha(ownField(value, "verifiedAtSha"))) {
-    errors.push(`${path}.verifiedAtSha is invalid`);
+    valid = addValidationError(errors, `${path}.verifiedAtSha is invalid`);
   }
-  return errors;
+  return valid;
 }
 
-function cleanupErrors(value: unknown): readonly string[] {
-  if (!isRecord(value)) return ["cleanup must be an object"];
-  const unknownFieldErrors = unknownKeys(value, CLEANUP_KEYS, "cleanup");
+function cleanupFieldsAreValid(errors: string[], value: unknown): boolean {
+  if (!isRecord(value)) return addValidationError(errors, "cleanup must be an object");
+  const closed = validateCodeTaskOwnKeys(errors, value, CLEANUP_KEYS, "cleanup");
   const state = ownField(value, "state");
   if (state === "complete") {
-    // Was `"residueCount" in value` -- the `in` operator walks the prototype chain exactly like
-    // plain property access does, so it has the identical inherited-field exposure ownField closes
-    // elsewhere in this file. Object.hasOwn is the own-only equivalent.
-    return Object.hasOwn(value, "residueCount")
-      ? [...unknownFieldErrors, "cleanup.residueCount is only valid when incomplete"]
-      : unknownFieldErrors;
+    const fields =
+      !Object.hasOwn(value, "residueCount") ||
+      addValidationError(errors, "cleanup.residueCount is only valid when incomplete");
+    return closed && fields;
   }
   if (state === "incomplete") {
-    return isPositiveInteger(ownField(value, "residueCount"))
-      ? unknownFieldErrors
-      : [...unknownFieldErrors, "cleanup.residueCount must be a positive integer when incomplete"];
+    const fields =
+      isPositiveInteger(ownField(value, "residueCount")) ||
+      addValidationError(errors, "cleanup.residueCount must be a positive integer when incomplete");
+    return closed && fields;
   }
-  return [...unknownFieldErrors, "cleanup.state must be complete or incomplete"];
+  return addValidationError(errors, "cleanup.state must be complete or incomplete");
 }
 
-function contributionHeaderErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [];
-  if (ownField(value, "kind") !== CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND) {
-    errors.push(`kind must be ${CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND}`);
-  }
-  if (ownField(value, "schemaVersion") !== CODE_TASK_ACCEPTANCE_SCHEMA_VERSION) {
-    errors.push("schemaVersion must be the literal 1");
-  }
+// Both acceptance evidence documents bind their claims to the same issue and source revision.
+function sourceProvenanceFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
+  let valid = true;
   if (!isPositiveInteger(ownField(value, "epicIssue"))) {
-    errors.push("epicIssue must be a positive integer");
+    valid = addValidationError(errors, "epicIssue must be a positive integer");
   }
   if (!isPositiveInteger(ownField(value, "childIssue"))) {
-    errors.push("childIssue must be a positive integer");
+    valid = addValidationError(errors, "childIssue must be a positive integer");
   }
   if (!isCodeTaskGitCommitSha(ownField(value, "sourceCommitSha"))) {
-    errors.push("sourceCommitSha is invalid");
+    valid = addValidationError(errors, "sourceCommitSha is invalid");
   }
   if (!isCodeTaskGitTreeSha(ownField(value, "sourceTreeSha")))
-    errors.push("sourceTreeSha is invalid");
-  return errors;
+    valid = addValidationError(errors, "sourceTreeSha is invalid");
+  return valid;
 }
 
-function contributionBodyErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [];
-  const scenarios = ownField(value, "scenarios");
-  if (Array.isArray(scenarios)) {
-    scenarios.forEach((scenario, index) => {
-      errors.push(...scenarioErrors(scenario, `scenarios[${String(index)}]`));
-    });
-  } else {
-    errors.push("scenarios must be an array");
+function acceptanceEvidenceHeaderFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  expectedKind:
+    typeof CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND | typeof CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+  expectedSchemaVersion: typeof CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
+): boolean {
+  let valid = true;
+
+  if (ownField(value, "kind") !== expectedKind) {
+    valid = addValidationError(errors, `kind must be ${expectedKind}`);
   }
+  if (ownField(value, "schemaVersion") !== expectedSchemaVersion) {
+    valid = addValidationError(errors, "schemaVersion must be the literal 1");
+  }
+  return sourceProvenanceFieldsAreValid(errors, value) && valid;
+}
+
+function contributionHeaderFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  return acceptanceEvidenceHeaderFieldsAreValid(
+    errors,
+    value,
+    CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND,
+    CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
+  );
+}
+
+function contributionSalvageFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  let valid = true;
   const salvage = ownField(value, "salvage");
-  if (Array.isArray(salvage)) {
-    salvage.forEach((row, index) => {
-      errors.push(...salvageErrors(row, `salvage[${String(index)}]`));
-    });
-  } else {
-    errors.push("salvage must be an array");
-  }
+  valid =
+    acceptanceArrayMembersAreValid(errors, salvage, "salvage", (row, index): boolean =>
+      salvageFieldsAreValid(errors, row, `salvage[${String(index)}]`),
+    ) && valid;
+  return valid;
+}
+
+function contributionBodyFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
+  let valid = true;
+
+  const scenarios = ownField(value, "scenarios");
+  valid =
+    acceptanceArrayMembersAreValid(errors, scenarios, "scenarios", (scenario, index): boolean =>
+      scenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`),
+    ) && valid;
+  valid = contributionSalvageFieldsAreValid(errors, value) && valid;
   const knownLimitations = ownField(value, "knownLimitations");
-  if (
-    !Array.isArray(knownLimitations) ||
-    !knownLimitations.every((note) => isCodeTaskContentFreeNote(note))
-  ) {
-    errors.push("knownLimitations must be an array of bounded content-free notes");
+  if (!isNoteArray(knownLimitations)) {
+    valid = addValidationError(
+      errors,
+      "knownLimitations must be an array of bounded content-free notes",
+    );
   }
-  errors.push(...cleanupErrors(ownField(value, "cleanup")));
-  return errors;
+  valid = cleanupFieldsAreValid(errors, ownField(value, "cleanup")) && valid;
+  return valid;
+}
+
+function admitCodeTaskAcceptanceContribution(
+  value: unknown,
+  errors: string[],
+): value is CodeTaskAcceptanceContributionV1 {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, "contribution must be an object");
+  valid = [
+    valid,
+    validateCodeTaskOwnKeys(errors, value, CONTRIBUTION_KEYS, "contribution"),
+    contributionHeaderFieldsAreValid(errors, value),
+    contributionBodyFieldsAreValid(errors, value),
+  ].every(Boolean);
+  return valid;
 }
 
 export function validateCodeTaskAcceptanceContribution(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodeTaskAcceptanceContributionV1> {
-  if (!isRecord(value)) return { ok: false, errors: ["contribution must be an object"] };
-  const errors = [
-    ...unknownKeys(value, CONTRIBUTION_KEYS, "contribution"),
-    ...contributionHeaderErrors(value),
-    ...contributionBodyErrors(value),
-  ];
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodeTaskAcceptanceContributionV1 };
+  const errors: string[] = [];
+  return admitCodeTaskAcceptanceContribution(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }
 
 export interface CodeTaskAcceptanceBinding {
@@ -1007,85 +1067,125 @@ const QUALIFICATION_MANIFEST_KEYS = [
 // Split out of qualificationScenarioErrors to keep that function's cyclomatic complexity under
 // the repository ceiling: the blockedReason field has two cross-field rules of its own (known
 // exactly when outcome is "blocked") on top of factErrors' own tagged-fact shape check.
-function qualificationScenarioBlockedReasonErrors(
+function qualificationScenarioBlockedReasonFieldsAreValid(
+  errors: string[],
   outcome: unknown,
   blockedReason: unknown,
   path: string,
-): readonly string[] {
-  const errors: string[] = [
-    ...factErrors(blockedReason, `${path}.blockedReason`, isCodeTaskContentFreeNote),
-  ];
-  if (!isRecord(blockedReason)) return errors;
+): boolean {
+  let valid = true;
+  valid =
+    factFieldsAreValid(errors, blockedReason, `${path}.blockedReason`, isCodeTaskContentFreeNote) &&
+    valid;
+  if (!isRecord(blockedReason)) return valid;
   const reasonOutcome = ownField(blockedReason, "outcome");
   if (outcome === "blocked" && reasonOutcome !== "known") {
-    errors.push(`${path}.blockedReason must be known when outcome is blocked`);
+    valid = addValidationError(
+      errors,
+      `${path}.blockedReason must be known when outcome is blocked`,
+    );
   }
   if (outcome !== "blocked" && reasonOutcome === "known") {
-    errors.push(`${path}.blockedReason must not be known when outcome is not blocked`);
+    valid = addValidationError(
+      errors,
+      `${path}.blockedReason must not be known when outcome is not blocked`,
+    );
   }
-  return errors;
+  return valid;
 }
 
-function qualificationScenarioErrors(value: unknown, path: string): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors: string[] = [...unknownKeys(value, QUALIFICATION_SCENARIO_KEYS, path)];
-  if (!isCodeTaskScenarioId(ownField(value, "scenarioId"))) {
-    errors.push(`${path}.scenarioId is invalid`);
-  }
-  if (!isOneOf(ownField(value, "evidenceClass"), CODE_TASK_EVIDENCE_CLASSES)) {
-    errors.push(`${path}.evidenceClass is not a registered evidence class`);
-  }
-  if (!isOneOf(ownField(value, "platform"), CODE_TASK_EVIDENCE_PLATFORMS)) {
-    errors.push(`${path}.platform is not a supported evidence platform`);
-  }
-  if (!isOneOf(ownField(value, "provenance"), CODE_TASK_QUALIFICATION_PROVENANCES)) {
-    errors.push(`${path}.provenance is invalid`);
-  }
-  const outcome = ownField(value, "outcome");
-  if (!isOneOf(outcome, CODE_TASK_SCENARIO_OUTCOMES)) {
-    errors.push(`${path}.outcome must be passed, failed, or blocked`);
-  }
-  if (!isCodeTaskIsoInstant(ownField(value, "recordedAt"))) {
-    errors.push(`${path}.recordedAt must be an ISO-8601 UTC instant`);
-  }
-  errors.push(
-    ...qualificationScenarioBlockedReasonErrors(outcome, ownField(value, "blockedReason"), path),
-  );
+function qualificationScenarioArtifactFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  path: string,
+): boolean {
+  let valid = true;
   const artifactDigests = ownField(value, "artifactDigests");
-  if (
-    !Array.isArray(artifactDigests) ||
-    !artifactDigests.every((digest) => isCodeTaskSha256Digest(digest))
-  ) {
-    errors.push(`${path}.artifactDigests must be an array of sha256 digests`);
+  if (!isDigestArray(artifactDigests)) {
+    valid = addValidationError(
+      errors,
+      `${path}.artifactDigests must be an array of sha256 digests`,
+    );
   }
-  errors.push(
-    ...factErrors(
+  valid =
+    factFieldsAreValid(
+      errors,
       ownField(value, "receiptDigest"),
       `${path}.receiptDigest`,
       isCodeTaskSha256Digest,
-    ),
-  );
-  return errors;
+    ) && valid;
+  return valid;
 }
 
-function qualificationRequiredCheckCountErrors(
+function qualificationScenarioIdentityFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors: string[] = [];
+): boolean {
+  let valid = true;
+  if (!isCodeTaskScenarioId(ownField(value, "scenarioId"))) {
+    valid = addValidationError(errors, `${path}.scenarioId is invalid`);
+  }
+  if (!isOneOf(ownField(value, "evidenceClass"), CODE_TASK_EVIDENCE_CLASSES)) {
+    valid = addValidationError(errors, `${path}.evidenceClass is not a registered evidence class`);
+  }
+  if (!isOneOf(ownField(value, "platform"), CODE_TASK_EVIDENCE_PLATFORMS)) {
+    valid = addValidationError(errors, `${path}.platform is not a supported evidence platform`);
+  }
+  if (!isOneOf(ownField(value, "provenance"), CODE_TASK_QUALIFICATION_PROVENANCES)) {
+    valid = addValidationError(errors, `${path}.provenance is invalid`);
+  }
+  const outcome = ownField(value, "outcome");
+  if (!isOneOf(outcome, CODE_TASK_SCENARIO_OUTCOMES)) {
+    valid = addValidationError(errors, `${path}.outcome must be passed, failed, or blocked`);
+  }
+  if (!isCodeTaskIsoInstant(ownField(value, "recordedAt"))) {
+    valid = addValidationError(errors, `${path}.recordedAt must be an ISO-8601 UTC instant`);
+  }
+  valid =
+    qualificationScenarioBlockedReasonFieldsAreValid(
+      errors,
+      outcome,
+      ownField(value, "blockedReason"),
+      path,
+    ) && valid;
+  valid = qualificationScenarioArtifactFieldsAreValid(errors, value, path) && valid;
+  return valid;
+}
+
+function qualificationScenarioFieldsAreValid(
+  errors: string[],
+  value: unknown,
+  path: string,
+): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_SCENARIO_KEYS, path) && valid;
+  valid = qualificationScenarioIdentityFieldsAreValid(errors, value, path) && valid;
+  return valid;
+}
+
+function qualificationRequiredCheckCountFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  path: string,
+): boolean {
+  let valid = true;
+
   for (const field of ["total", "passed", "failed", "pending"] as const) {
     const count = ownField(value, field);
     if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
-      errors.push(`${path}.${field} must be a non-negative integer`);
+      valid = addValidationError(errors, `${path}.${field} must be a non-negative integer`);
     }
   }
-  return errors;
+  return valid;
 }
 
-function qualificationRequiredCheckCompletionErrors(
+function qualificationRequiredCheckCompletionFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
+): boolean {
   const total = ownField(value, "total");
   const passed = ownField(value, "passed");
   const failed = ownField(value, "failed");
@@ -1097,141 +1197,177 @@ function qualificationRequiredCheckCompletionErrors(
     typeof pending === "number" &&
     (total <= 0 || failed !== 0 || pending !== 0 || passed !== total)
   ) {
-    return [`${path} must report one or more observed required checks passed`];
+    return addValidationError(
+      errors,
+      `${path} must report one or more observed required checks passed`,
+    );
   }
-  return [];
+  return true;
 }
 
-function qualificationRequiredChecksErrors(value: unknown, path: string): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = [
-    ...unknownKeys(value, QUALIFICATION_REQUIRED_CHECK_KEYS, path),
-    ...qualificationRequiredCheckCountErrors(value, path),
-    ...qualificationRequiredCheckCompletionErrors(value, path),
-  ];
+function qualificationRequiredChecksFieldsAreValid(
+  errors: string[],
+  value: unknown,
+  path: string,
+): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid = [
+    valid,
+    validateCodeTaskOwnKeys(errors, value, QUALIFICATION_REQUIRED_CHECK_KEYS, path),
+    qualificationRequiredCheckCountFieldsAreValid(errors, value, path),
+    qualificationRequiredCheckCompletionFieldsAreValid(errors, value, path),
+  ].every(Boolean);
   if (ownField(value, "observation") !== "observed") {
-    errors.push(`${path}.observation must be observed`);
+    valid = addValidationError(errors, `${path}.observation must be observed`);
   }
   if (!isCodeTaskGitCommitSha(ownField(value, "headSha"))) {
-    errors.push(`${path}.headSha is invalid`);
+    valid = addValidationError(errors, `${path}.headSha is invalid`);
   }
   if (ownField(value, "requirementsVersion") !== "1") {
-    errors.push(`${path}.requirementsVersion must be 1`);
+    valid = addValidationError(errors, `${path}.requirementsVersion must be 1`);
   }
   if (!isCodeTaskSha256Digest(ownField(value, "requirementsDigest"))) {
-    errors.push(`${path}.requirementsDigest is invalid`);
+    valid = addValidationError(errors, `${path}.requirementsDigest is invalid`);
   }
   if (!isGitCiReadinessEvidenceRef(ownField(value, "evidenceRef"))) {
-    errors.push(`${path}.evidenceRef is invalid`);
+    valid = addValidationError(errors, `${path}.evidenceRef is invalid`);
   }
-  return errors;
+  return valid;
 }
 
-function qualificationAuthorityObservationErrors(value: unknown, path: string): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = [...unknownKeys(value, QUALIFICATION_AUTHORITY_OBSERVATION_KEYS, path)];
-  for (const field of QUALIFICATION_AUTHORITY_COUNT_KEYS) {
-    const count = ownField(value, field);
-    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
-      errors.push(`${path}.${field} must be a non-negative safe integer`);
+function qualificationNumericFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  fields: readonly string[],
+  path: string,
+): boolean {
+  let valid = true;
+  for (const field of fields) {
+    const amount = ownField(value, field);
+    if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 0) {
+      valid = addValidationError(errors, `${path}.${field} must be a non-negative safe integer`);
     }
   }
+  return valid;
+}
+
+function qualificationAuthorityObservationFieldsAreValid(
+  errors: string[],
+  value: unknown,
+  path: string,
+): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid =
+    validateCodeTaskOwnKeys(errors, value, QUALIFICATION_AUTHORITY_OBSERVATION_KEYS, path) && valid;
+  valid =
+    qualificationNumericFieldsAreValid(errors, value, QUALIFICATION_AUTHORITY_COUNT_KEYS, path) &&
+    valid;
   for (const field of ["requestedMode", "effectiveMode"] as const) {
     if (!isOneOf(ownField(value, field), QUALIFICATION_MODES)) {
-      errors.push(`${path}.${field} is invalid`);
+      valid = addValidationError(errors, `${path}.${field} is invalid`);
     }
   }
-  errors.push(
-    ...qualificationApprovalRequestErrors(value, path),
-    ...qualificationApprovedProposalErrors(value, path),
-    ...qualificationEffectToolErrors(value, path),
-    ...qualificationAuthorityCountErrors(value, path),
-  );
-  return errors;
+  valid = [
+    valid,
+    qualificationApprovalRequestFieldsAreValid(errors, value, path),
+    qualificationApprovedProposalFieldsAreValid(errors, value, path),
+    qualificationEffectToolFieldsAreValid(errors, value, path),
+    qualificationAuthorityCountFieldsAreValid(errors, value, path),
+  ].every(Boolean);
+  return valid;
 }
 
-function qualificationApprovalRequestErrors(
+function qualificationApprovalRequestFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
+): boolean {
+  let valid = true;
   const requests = ownField(value, "approvalRequests");
-  if (!Array.isArray(requests)) return [`${path}.approvalRequests must be an array`];
-  const errors = requests.flatMap((request, index) => {
-    const itemPath = `${path}.approvalRequests[${String(index)}]`;
-    if (!isRecord(request)) return [`${itemPath} must be an object`];
-    const itemErrors = [...unknownKeys(request, QUALIFICATION_APPROVAL_REQUEST_KEYS, itemPath)];
-    const actionClass = ownField(request, "actionClass");
-    const actionKind = ownField(request, "actionKind");
-    if (!isOneOf(actionClass, CODING_WORKBENCH_ACTION_CLASSES))
-      itemErrors.push(`${itemPath}.actionClass is invalid`);
-    if (!isOneOf(actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS))
-      itemErrors.push(`${itemPath}.actionKind is invalid`);
-    if (
-      isOneOf(actionClass, CODING_WORKBENCH_ACTION_CLASSES) &&
-      isOneOf(actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS) &&
-      permissionKindForSupervisedCodingAction(actionKind) !== actionClass
-    ) {
-      itemErrors.push(`${itemPath} actionClass does not match actionKind`);
-    }
-    if (!positiveSafeInteger(ownField(request, "requestCount")))
-      itemErrors.push(`${itemPath}.requestCount must be a positive safe integer`);
-    return itemErrors;
-  });
+  if (!Array.isArray(requests))
+    return addValidationError(errors, `${path}.approvalRequests must be an array`);
+
+  const entries: readonly unknown[] = requests;
+  valid =
+    acceptanceMembersAreValid(
+      errors,
+      entries,
+      `${path}.approvalRequests`,
+      (request, index): boolean =>
+        qualificationApprovalRequestMemberFieldsAreValid(errors, request, index, path),
+    ) && valid;
   if (hasDuplicateObservedKeys(requests, ["actionClass", "actionKind"])) {
-    errors.push(`${path}.approvalRequests must group each action once`);
+    valid = addValidationError(errors, `${path}.approvalRequests must group each action once`);
   }
   if (sumObservedCounts(requests, "requestCount") !== ownField(value, "approvalRequestCount"))
-    errors.push(`${path}.approvalRequests must account for approvalRequestCount`);
-  return errors;
+    valid = addValidationError(
+      errors,
+      `${path}.approvalRequests must account for approvalRequestCount`,
+    );
+  return valid;
 }
 
-function qualificationApprovedProposalErrors(
+function qualificationApprovedProposalFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
+): boolean {
+  let valid = true;
   const actions = ownField(value, "approvedProposalActions");
-  if (!Array.isArray(actions)) return [`${path}.approvedProposalActions must be an array`];
-  const errors = actions.flatMap((action, index) => {
-    const itemPath = `${path}.approvedProposalActions[${String(index)}]`;
-    if (!isRecord(action)) return [`${itemPath} must be an object`];
-    const itemErrors = [...unknownKeys(action, QUALIFICATION_APPROVED_PROPOSAL_KEYS, itemPath)];
-    if (!isOneOf(ownField(action, "actionKind"), QUALIFICATION_PROPOSAL_ACTION_KINDS))
-      itemErrors.push(`${itemPath}.actionKind is invalid`);
-    if (!positiveSafeInteger(ownField(action, "approvalCount")))
-      itemErrors.push(`${itemPath}.approvalCount must be a positive safe integer`);
-    return itemErrors;
-  });
+  if (!Array.isArray(actions))
+    return addValidationError(errors, `${path}.approvedProposalActions must be an array`);
+
+  const entries: readonly unknown[] = actions;
+  valid =
+    acceptanceMembersAreValid(
+      errors,
+      entries,
+      `${path}.approvedProposalActions`,
+      (action, index): boolean =>
+        qualificationApprovedProposalMemberFieldsAreValid(errors, action, index, path),
+    ) && valid;
   if (hasDuplicateObservedKeys(actions, ["actionKind"])) {
-    errors.push(`${path}.approvedProposalActions must group each action once`);
+    valid = addValidationError(
+      errors,
+      `${path}.approvedProposalActions must group each action once`,
+    );
   }
-  return errors;
+  return valid;
 }
 
-function qualificationEffectToolErrors(
+function qualificationEffectToolFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
+): boolean {
+  let valid = true;
   const tools = ownField(value, "effectStartedTools");
-  if (!Array.isArray(tools)) return [`${path}.effectStartedTools must be an array`];
-  const errors = tools.flatMap((tool, index) => {
-    const itemPath = `${path}.effectStartedTools[${String(index)}]`;
-    if (!isRecord(tool)) return [`${itemPath} must be an object`];
-    const itemErrors = [...unknownKeys(tool, QUALIFICATION_EFFECT_TOOL_KEYS, itemPath)];
-    const canonicalId = ownField(tool, "canonicalId");
-    if (typeof canonicalId !== "string" || !CANONICAL_TOOL_ID_PATTERN.test(canonicalId))
-      itemErrors.push(`${itemPath}.canonicalId is invalid`);
-    if (!positiveSafeInteger(ownField(tool, "contractVersion")))
-      itemErrors.push(`${itemPath}.contractVersion must be a positive safe integer`);
-    if (!positiveSafeInteger(ownField(tool, "invocationCount")))
-      itemErrors.push(`${itemPath}.invocationCount must be a positive safe integer`);
-    return itemErrors;
-  });
+  if (!Array.isArray(tools))
+    return addValidationError(errors, `${path}.effectStartedTools must be an array`);
+
+  const entries: readonly unknown[] = tools;
+  valid =
+    acceptanceMembersAreValid(
+      errors,
+      entries,
+      `${path}.effectStartedTools`,
+      (tool, index): boolean =>
+        qualificationEffectToolMemberFieldsAreValid(errors, tool, index, path),
+    ) && valid;
   if (hasDuplicateObservedKeys(tools, ["canonicalId", "contractVersion"])) {
-    errors.push(`${path}.effectStartedTools must group each tool reference once`);
+    valid = addValidationError(
+      errors,
+      `${path}.effectStartedTools must group each tool reference once`,
+    );
   }
   if (sumObservedCounts(tools, "invocationCount") !== ownField(value, "effectStartedCount"))
-    errors.push(`${path}.effectStartedTools must account for effectStartedCount`);
-  return errors;
+    valid = addValidationError(
+      errors,
+      `${path}.effectStartedTools must account for effectStartedCount`,
+    );
+  return valid;
 }
 
 function positiveSafeInteger(value: unknown): value is number {
@@ -1253,30 +1389,44 @@ function hasDuplicateObservedKeys(values: readonly unknown[], fields: readonly s
   return new Set(keys).size !== keys.length;
 }
 
-function qualificationAuthorityCountErrors(
+function qualificationAuthorityCountFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors: string[] = [];
+): boolean {
+  let valid = true;
+
   if (invalidAuthorityAccounting(value)) {
-    errors.push(`${path} must account for one or more settled tool invocations`);
+    valid = addValidationError(
+      errors,
+      `${path} must account for one or more settled tool invocations`,
+    );
   }
   if (requiresObservedApproval(value)) {
-    errors.push(`${path} must retain at least one approval request`);
+    valid = addValidationError(errors, `${path} must retain at least one approval request`);
   }
   if (nonPositiveObservedCount(value, "effectStartedCount")) {
-    errors.push(`${path} must retain at least one started effect`);
+    valid = addValidationError(errors, `${path} must retain at least one started effect`);
   }
   if (nonPositiveObservedCount(value, "completedToolCount")) {
-    errors.push(`${path} must retain at least one completed tool invocation`);
+    valid = addValidationError(
+      errors,
+      `${path} must retain at least one completed tool invocation`,
+    );
   }
   if (startedEffectsExceedInvocations(value)) {
-    errors.push(`${path}.effectStartedCount cannot exceed toolInvocationCount`);
+    valid = addValidationError(
+      errors,
+      `${path}.effectStartedCount cannot exceed toolInvocationCount`,
+    );
   }
   if (approvedProposalsExceedRequests(value)) {
-    errors.push(`${path}.approvedProposalActions must match observed approval requests`);
+    valid = addValidationError(
+      errors,
+      `${path}.approvedProposalActions must match observed approval requests`,
+    );
   }
-  return errors;
+  return valid;
 }
 
 function approvedProposalsExceedRequests(value: Record<string, unknown>): boolean {
@@ -1332,31 +1482,44 @@ function startedEffectsExceedInvocations(value: Record<string, unknown>): boolea
   return typeof total === "number" && typeof effects === "number" && effects > total;
 }
 
-function qualificationRubricReviewErrors(value: unknown, path: string): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = [...unknownKeys(value, QUALIFICATION_RUBRIC_REVIEW_KEYS, path)];
+function qualificationRubricReviewFieldsAreValid(
+  errors: string[],
+  value: unknown,
+  path: string,
+): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_RUBRIC_REVIEW_KEYS, path) && valid;
   if (!isCodeTaskContentFreeNote(ownField(value, "reviewId"))) {
-    errors.push(`${path}.reviewId must be a bounded content-free reference`);
+    valid = addValidationError(errors, `${path}.reviewId must be a bounded content-free reference`);
   }
   for (const field of ["reviewDigest", "rubricDigest"] as const) {
-    if (!isCodeTaskSha256Digest(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+    if (!isCodeTaskSha256Digest(ownField(value, field)))
+      valid = addValidationError(errors, `${path}.${field} is invalid`);
   }
-  if (ownField(value, "verdict") !== "approved") errors.push(`${path}.verdict must be approved`);
-  errors.push(...qualificationRubricReviewIdentityErrors(value, path));
-  return errors;
+  if (ownField(value, "verdict") !== "approved")
+    valid = addValidationError(errors, `${path}.verdict must be approved`);
+  valid = qualificationRubricReviewIdentityFieldsAreValid(errors, value, path) && valid;
+  return valid;
 }
 
-function qualificationRubricReviewIdentityErrors(
+function qualificationRubricReviewIdentityFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors: string[] = [];
-  if (!isCodeTaskScenarioId(ownField(value, "flowId"))) errors.push(`${path}.flowId is invalid`);
+): boolean {
+  let valid = true;
+
+  if (!isCodeTaskScenarioId(ownField(value, "flowId")))
+    valid = addValidationError(errors, `${path}.flowId is invalid`);
   if (!isCodeTaskContentFreeNote(ownField(value, "taskRunId"))) {
-    errors.push(`${path}.taskRunId must be a bounded content-free reference`);
+    valid = addValidationError(
+      errors,
+      `${path}.taskRunId must be a bounded content-free reference`,
+    );
   }
   if (!GITHUB_REPOSITORY_PATTERN.test(String(ownField(value, "repository")))) {
-    errors.push(`${path}.repository is invalid`);
+    valid = addValidationError(errors, `${path}.repository is invalid`);
   }
   for (const field of [
     "issueNumber",
@@ -1364,108 +1527,121 @@ function qualificationRubricReviewIdentityErrors(
     "criteriaTotal",
     "criteriaPassed",
   ] as const) {
-    if (!isPositiveInteger(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+    if (!isPositiveInteger(ownField(value, field)))
+      valid = addValidationError(errors, `${path}.${field} is invalid`);
   }
   for (const field of ["pullRequestHeadSha", "sourceCommitSha"] as const) {
-    if (!isCodeTaskGitCommitSha(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+    if (!isCodeTaskGitCommitSha(ownField(value, field)))
+      valid = addValidationError(errors, `${path}.${field} is invalid`);
   }
   if (ownField(value, "criteriaPassed") !== ownField(value, "criteriaTotal")) {
-    errors.push(`${path} must report every independent criterion passed`);
+    valid = addValidationError(errors, `${path} must report every independent criterion passed`);
   }
-  return errors;
+  return valid;
 }
 
-function qualificationStageReceiptErrors(
+function qualificationStageReceiptFieldsAreValid(
+  errors: string[],
   value: unknown,
   path: string,
   expectedScenarioId: string,
-): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = [...unknownKeys(value, QUALIFICATION_STAGE_RECEIPT_KEYS, path)];
+): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_STAGE_RECEIPT_KEYS, path) && valid;
   if (
     !isCodeTaskScenarioId(ownField(value, "scenarioId")) ||
     ownField(value, "scenarioId") !== expectedScenarioId
   ) {
-    errors.push(`${path}.scenarioId must be ${expectedScenarioId}`);
+    valid = addValidationError(errors, `${path}.scenarioId must be ${expectedScenarioId}`);
   }
   if (!isCodeTaskSha256Digest(ownField(value, "receiptDigest"))) {
-    errors.push(`${path}.receiptDigest is invalid`);
+    valid = addValidationError(errors, `${path}.receiptDigest is invalid`);
   }
-  return errors;
+  return valid;
 }
 
-function qualificationFlowStageEvidenceErrors(
+function qualificationFlowStageEvidenceFieldsAreValid(
+  errors: string[],
   value: unknown,
   flow: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
+): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
   const mode = ownField(flow, "mode");
   const modeScenario = isOneOf(mode, QUALIFICATION_MODES)
     ? QUALIFICATION_MODE_SCENARIO_IDS[mode]
     : "invalid-mode";
-  const errors = [
-    ...unknownKeys(value, QUALIFICATION_FLOW_STAGE_EVIDENCE_KEYS, path),
-    ...qualificationStageReceiptErrors(
+  valid = [
+    valid,
+    validateCodeTaskOwnKeys(errors, value, QUALIFICATION_FLOW_STAGE_EVIDENCE_KEYS, path),
+    qualificationStageReceiptFieldsAreValid(
+      errors,
       ownField(value, "issueToPr"),
       `${path}.issueToPr`,
       modeScenario,
     ),
-    ...qualificationStageReceiptErrors(
+    qualificationStageReceiptFieldsAreValid(
+      errors,
       ownField(value, "description"),
       `${path}.description`,
       "description-auto-draft-and-apply",
     ),
-    ...qualificationStageReceiptErrors(
+    qualificationStageReceiptFieldsAreValid(
+      errors,
       ownField(value, "markReady"),
       `${path}.markReady`,
       "mark-ready-intent",
     ),
-    ...qualificationStageReceiptErrors(
+    qualificationStageReceiptFieldsAreValid(
+      errors,
       ownField(value, "governedMerge"),
       `${path}.governedMerge`,
       "human-merge-and-closure",
     ),
-  ];
-  errors.push(
-    ...qualificationCiRepairStageErrors(value, path),
-    ...qualificationStageDigestErrors(value, path),
-  );
-  return errors;
+  ].every(Boolean);
+  valid = [
+    valid,
+    qualificationCiRepairStageFieldsAreValid(errors, value, path),
+    qualificationStageDigestFieldsAreValid(errors, value, path),
+  ].every(Boolean);
+  return valid;
 }
 
-function qualificationCiRepairStageErrors(
+function qualificationCiRepairStageFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
+): boolean {
   const ciRepair = ownField(value, "ciRepair");
-  return ciRepair === null
-    ? []
-    : qualificationStageReceiptErrors(ciRepair, `${path}.ciRepair`, "ci-repair-loop");
+  return (
+    ciRepair === null ||
+    qualificationStageReceiptFieldsAreValid(errors, ciRepair, `${path}.ciRepair`, "ci-repair-loop")
+  );
 }
 
-function qualificationStageDigestErrors(
+function qualificationStageDigestFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
+): boolean {
   const stages = QUALIFICATION_FLOW_STAGE_EVIDENCE_KEYS.map((key) => ownField(value, key)).filter(
     isRecord,
   );
   const digests = stages.map((stage) => ownField(stage, "receiptDigest"));
-  return digests.every(isCodeTaskSha256Digest) && new Set(digests).size === digests.length
-    ? []
-    : [`${path} must contain distinct stage receipt digests`];
+  return (
+    (digests.every(isCodeTaskSha256Digest) && new Set(digests).size === digests.length) ||
+    addValidationError(errors, `${path} must contain distinct stage receipt digests`)
+  );
 }
 
-function qualificationFlowSpendErrors(value: unknown, path: string): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = [...unknownKeys(value, QUALIFICATION_FLOW_SPEND_KEYS, path)];
-  for (const field of QUALIFICATION_FLOW_SPEND_KEYS) {
-    const amount = ownField(value, field);
-    if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 0) {
-      errors.push(`${path}.${field} must be a non-negative safe integer`);
-    }
-  }
+function qualificationFlowSpendBalanceFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  path: string,
+): boolean {
+  let valid = true;
   const budget = ownField(value, "budgetNanoUsd");
   const cumulative = ownField(value, "cumulativeChargedNanoUsd");
   const remaining = ownField(value, "remainingNanoUsd");
@@ -1475,21 +1651,40 @@ function qualificationFlowSpendErrors(value: unknown, path: string): readonly st
     typeof remaining === "number" &&
     cumulative + remaining !== budget
   ) {
-    errors.push(`${path} cumulative charge plus remaining amount must equal budget`);
+    valid = addValidationError(
+      errors,
+      `${path} cumulative charge plus remaining amount must equal budget`,
+    );
   }
-  return errors;
+  return valid;
 }
 
-function qualificationFlowUrlErrors(
+function qualificationFlowSpendFieldsAreValid(
+  errors: string[],
+  value: unknown,
+  path: string,
+): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_FLOW_SPEND_KEYS, path) && valid;
+  valid =
+    qualificationNumericFieldsAreValid(errors, value, QUALIFICATION_FLOW_SPEND_KEYS, path) && valid;
+  valid = qualificationFlowSpendBalanceFieldsAreValid(errors, value, path) && valid;
+  return valid;
+}
+
+function qualificationFlowUrlFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors: string[] = [];
+): boolean {
+  let valid = true;
+
   const repository = ownField(value, "repository");
   const issueNumber = ownField(value, "issueNumber");
   const pullRequestNumber = ownField(value, "pullRequestNumber");
   if (typeof repository !== "string" || !GITHUB_REPOSITORY_PATTERN.test(repository)) {
-    errors.push(`${path}.repository must be a GitHub owner/name identity`);
+    valid = addValidationError(errors, `${path}.repository must be a GitHub owner/name identity`);
   }
   if (
     typeof repository === "string" &&
@@ -1497,7 +1692,10 @@ function qualificationFlowUrlErrors(
     ownField(value, "issueReference") !==
       `https://github.com/${repository}/issues/${String(issueNumber)}`
   ) {
-    errors.push(`${path}.issueReference does not match repository and issueNumber`);
+    valid = addValidationError(
+      errors,
+      `${path}.issueReference does not match repository and issueNumber`,
+    );
   }
   if (
     typeof repository === "string" &&
@@ -1505,16 +1703,21 @@ function qualificationFlowUrlErrors(
     ownField(value, "pullRequestReference") !==
       `https://github.com/${repository}/pull/${String(pullRequestNumber)}`
   ) {
-    errors.push(`${path}.pullRequestReference does not match repository and pullRequestNumber`);
+    valid = addValidationError(
+      errors,
+      `${path}.pullRequestReference does not match repository and pullRequestNumber`,
+    );
   }
-  return errors;
+  return valid;
 }
 
-function qualificationFlowReferenceErrors(
+function qualificationFlowReferenceFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors = [...qualificationFlowUrlErrors(value, path)];
+): boolean {
+  let valid = true;
+  valid = qualificationFlowUrlFieldsAreValid(errors, value, path) && valid;
   for (const field of [
     "repository",
     "issueReference",
@@ -1522,38 +1725,48 @@ function qualificationFlowReferenceErrors(
     "pullRequestReference",
   ] as const) {
     if (!isCodeTaskContentFreeNote(ownField(value, field))) {
-      errors.push(`${path}.${field} must be a bounded content-free reference`);
+      valid = addValidationError(
+        errors,
+        `${path}.${field} must be a bounded content-free reference`,
+      );
     }
   }
-  return errors;
+  return valid;
 }
 
-function qualificationFlowIdentityErrors(
+function qualificationFlowIdentityFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors = [...qualificationFlowReferenceErrors(value, path)];
-  if (!isCodeTaskScenarioId(ownField(value, "flowId"))) errors.push(`${path}.flowId is invalid`);
-  if (!isPositiveInteger(ownField(value, "ordinal"))) errors.push(`${path}.ordinal is invalid`);
+): boolean {
+  let valid = true;
+  valid = qualificationFlowReferenceFieldsAreValid(errors, value, path) && valid;
+  if (!isCodeTaskScenarioId(ownField(value, "flowId")))
+    valid = addValidationError(errors, `${path}.flowId is invalid`);
+  if (!isPositiveInteger(ownField(value, "ordinal")))
+    valid = addValidationError(errors, `${path}.ordinal is invalid`);
   if (!isPositiveInteger(ownField(value, "issueNumber"))) {
-    errors.push(`${path}.issueNumber is invalid`);
+    valid = addValidationError(errors, `${path}.issueNumber is invalid`);
   }
   if (!isPositiveInteger(ownField(value, "pullRequestNumber"))) {
-    errors.push(`${path}.pullRequestNumber is invalid`);
+    valid = addValidationError(errors, `${path}.pullRequestNumber is invalid`);
   }
   if (!isOneOf(ownField(value, "mode"), QUALIFICATION_MODES)) {
-    errors.push(`${path}.mode is invalid`);
+    valid = addValidationError(errors, `${path}.mode is invalid`);
   }
-  return errors;
+  return valid;
 }
 
-function qualificationFlowTimestampErrors(
+function qualificationFlowTimestampFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors: string[] = [];
+): boolean {
+  let valid = true;
+
   for (const field of ["issueClosedAt", "pullRequestMergedAt", "observedAt"] as const) {
-    if (!isCodeTaskIsoInstant(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+    if (!isCodeTaskIsoInstant(ownField(value, field)))
+      valid = addValidationError(errors, `${path}.${field} is invalid`);
   }
   const mergedAt = ownField(value, "pullRequestMergedAt");
   const closedAt = ownField(value, "issueClosedAt");
@@ -1564,74 +1777,101 @@ function qualificationFlowTimestampErrors(
     isCodeTaskIsoInstant(observedAt) &&
     (Date.parse(mergedAt) > Date.parse(closedAt) || Date.parse(closedAt) > Date.parse(observedAt))
   ) {
-    errors.push(`${path} lifecycle timestamps are out of causal order`);
+    valid = addValidationError(errors, `${path} lifecycle timestamps are out of causal order`);
   }
-  return errors;
+  return valid;
 }
 
-function qualificationFlowCompletionErrors(
+function qualificationFlowFinalEvidenceFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors: string[] = [];
-  if (ownField(value, "issueState") !== "closed") errors.push(`${path}.issueState must be closed`);
+): boolean {
+  let valid = true;
+  const transitions = ownField(value, "transitions");
+  if (!isQualificationTransitionArray(transitions)) {
+    valid = addValidationError(
+      errors,
+      `${path}.transitions must contain the complete ordered qualification journey`,
+    );
+  }
+  const checks = ownField(value, "requiredChecks");
+  if (isRecord(checks) && ownField(checks, "headSha") !== ownField(value, "pullRequestHeadSha")) {
+    valid = addValidationError(
+      errors,
+      `${path}.requiredChecks.headSha must match pullRequestHeadSha`,
+    );
+  }
+  valid = qualificationFlowEvidenceBindingFieldsAreValid(errors, value, path) && valid;
+  return valid;
+}
+
+function qualificationFlowCompletionFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  path: string,
+): boolean {
+  let valid = true;
+
+  if (ownField(value, "issueState") !== "closed")
+    valid = addValidationError(errors, `${path}.issueState must be closed`);
   if (ownField(value, "pullRequestState") !== "merged") {
-    errors.push(`${path}.pullRequestState must be merged`);
+    valid = addValidationError(errors, `${path}.pullRequestState must be merged`);
   }
-  errors.push(...qualificationFlowTimestampErrors(value, path));
+  valid = qualificationFlowTimestampFieldsAreValid(errors, value, path) && valid;
   for (const field of ["pullRequestHeadSha", "mergeCommitSha", "sourceCommitSha"] as const) {
-    if (!isCodeTaskGitCommitSha(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+    if (!isCodeTaskGitCommitSha(ownField(value, field)))
+      valid = addValidationError(errors, `${path}.${field} is invalid`);
   }
-  errors.push(
-    ...qualificationRequiredChecksErrors(
+  valid = [
+    valid,
+    qualificationRequiredChecksFieldsAreValid(
+      errors,
       ownField(value, "requiredChecks"),
       `${path}.requiredChecks`,
     ),
-    ...qualificationAuthorityObservationErrors(
+    qualificationAuthorityObservationFieldsAreValid(
+      errors,
       ownField(value, "authorityObservation"),
       `${path}.authorityObservation`,
     ),
-    ...qualificationRubricReviewErrors(ownField(value, "rubricReview"), `${path}.rubricReview`),
-    ...qualificationFlowStageEvidenceErrors(
+    qualificationRubricReviewFieldsAreValid(
+      errors,
+      ownField(value, "rubricReview"),
+      `${path}.rubricReview`,
+    ),
+    qualificationFlowStageEvidenceFieldsAreValid(
+      errors,
       ownField(value, "stageEvidence"),
       value,
       `${path}.stageEvidence`,
     ),
-    ...qualificationFlowSpendErrors(ownField(value, "spend"), `${path}.spend`),
-  );
-  const transitions = ownField(value, "transitions");
-  if (
-    !Array.isArray(transitions) ||
-    transitions.length !== CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS.length ||
-    transitions.some(
-      (transition, index) => transition !== CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS[index],
-    )
-  ) {
-    errors.push(`${path}.transitions must contain the complete ordered qualification journey`);
-  }
-  const checks = ownField(value, "requiredChecks");
-  if (isRecord(checks) && ownField(checks, "headSha") !== ownField(value, "pullRequestHeadSha")) {
-    errors.push(`${path}.requiredChecks.headSha must match pullRequestHeadSha`);
-  }
-  errors.push(...qualificationFlowEvidenceBindingErrors(value, path));
-  return errors;
+    qualificationFlowSpendFieldsAreValid(errors, ownField(value, "spend"), `${path}.spend`),
+  ].every(Boolean);
+  valid = qualificationFlowFinalEvidenceFieldsAreValid(errors, value, path) && valid;
+  return valid;
 }
 
-function qualificationFlowEvidenceBindingErrors(
+function qualificationFlowEvidenceBindingFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
   path: string,
-): readonly string[] {
-  const errors: string[] = [];
+): boolean {
+  let valid = true;
+
   const authority = ownField(value, "authorityObservation");
   if (
     isRecord(authority) &&
     (ownField(authority, "requestedMode") !== ownField(value, "mode") ||
       ownField(authority, "effectiveMode") !== ownField(value, "mode"))
   ) {
-    errors.push(`${path}.authorityObservation must match the selected mode without escalation`);
+    valid = addValidationError(
+      errors,
+      `${path}.authorityObservation must match the selected mode without escalation`,
+    );
   }
   const review = ownField(value, "rubricReview");
-  if (!isRecord(review)) return errors;
+  if (!isRecord(review)) return valid;
   const bindings = [
     ["flowId", "flowId"],
     ["taskRunId", "taskRunId"],
@@ -1642,131 +1882,187 @@ function qualificationFlowEvidenceBindingErrors(
     ["sourceCommitSha", "sourceCommitSha"],
   ] as const;
   if (bindings.some(([reviewField, flowField]) => review[reviewField] !== value[flowField])) {
-    errors.push(`${path}.rubricReview must match the completed flow identity`);
+    valid = addValidationError(
+      errors,
+      `${path}.rubricReview must match the completed flow identity`,
+    );
   }
-  return errors;
+  return valid;
 }
 
-function qualificationFlowArtifactErrors(
+function qualificationFlowArtifactFieldsAreValid(
+  errors: string[],
   value: unknown,
   path: string,
   allowedKeys: readonly string[] = QUALIFICATION_FLOW_ARTIFACT_KEYS,
-): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = [...unknownKeys(value, allowedKeys, path)];
+): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid = validateCodeTaskOwnKeys(errors, value, allowedKeys, path) && valid;
   if (ownField(value, "evidenceKind") !== CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND) {
-    errors.push(`${path}.evidenceKind is invalid`);
+    valid = addValidationError(errors, `${path}.evidenceKind is invalid`);
   }
-  if (ownField(value, "schemaVersion") !== 1) errors.push(`${path}.schemaVersion must be 1`);
-  errors.push(
-    ...qualificationFlowIdentityErrors(value, path),
-    ...qualificationFlowCompletionErrors(value, path),
-  );
-  return errors;
+  if (ownField(value, "schemaVersion") !== 1)
+    valid = addValidationError(errors, `${path}.schemaVersion must be 1`);
+  valid = [
+    valid,
+    qualificationFlowIdentityFieldsAreValid(errors, value, path),
+    qualificationFlowCompletionFieldsAreValid(errors, value, path),
+  ].every(Boolean);
+  return valid;
 }
 
-function qualificationFlowErrors(value: unknown, path: string): readonly string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = [...qualificationFlowArtifactErrors(value, path, QUALIFICATION_FLOW_KEYS)];
+function qualificationFlowFieldsAreValid(errors: string[], value: unknown, path: string): boolean {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
+  valid =
+    qualificationFlowArtifactFieldsAreValid(errors, value, path, QUALIFICATION_FLOW_KEYS) && valid;
   if (!isOneOf(ownField(value, "platform"), CODE_TASK_EVIDENCE_PLATFORMS)) {
-    errors.push(`${path}.platform is invalid`);
+    valid = addValidationError(errors, `${path}.platform is invalid`);
   }
   if (ownField(value, "provenance") !== "real-model") {
-    errors.push(`${path}.provenance must be real-model`);
+    valid = addValidationError(errors, `${path}.provenance must be real-model`);
   }
   if (!isCodeTaskIsoInstant(ownField(value, "recordedAt"))) {
-    errors.push(`${path}.recordedAt is invalid`);
+    valid = addValidationError(errors, `${path}.recordedAt is invalid`);
   }
   for (const field of ["artifactDigest", "receiptDigest"] as const) {
-    if (!isCodeTaskSha256Digest(ownField(value, field))) errors.push(`${path}.${field} is invalid`);
+    if (!isCodeTaskSha256Digest(ownField(value, field)))
+      valid = addValidationError(errors, `${path}.${field} is invalid`);
   }
-  return errors;
+  return valid;
+}
+
+function admitCodeTaskQualificationFlowArtifact(
+  value: unknown,
+  errors: string[],
+): value is CodeTaskQualificationFlowArtifactV1 {
+  let valid = true;
+  valid = qualificationFlowArtifactFieldsAreValid(errors, value, "flowArtifact") && valid;
+  return valid;
 }
 
 export function validateCodeTaskQualificationFlowArtifact(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodeTaskQualificationFlowArtifactV1> {
-  const errors = qualificationFlowArtifactErrors(value, "flowArtifact");
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as CodeTaskQualificationFlowArtifactV1 };
+  const errors: string[] = [];
+  return admitCodeTaskQualificationFlowArtifact(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }
 
-function qualificationManifestHeaderErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [];
-  if (ownField(value, "kind") !== CODE_TASK_QUALIFICATION_MANIFEST_KIND) {
-    errors.push(`kind must be ${CODE_TASK_QUALIFICATION_MANIFEST_KIND}`);
-  }
-  if (ownField(value, "schemaVersion") !== CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION) {
-    errors.push("schemaVersion must be the literal 1");
-  }
-  if (!isPositiveInteger(ownField(value, "epicIssue"))) {
-    errors.push("epicIssue must be a positive integer");
-  }
-  if (!isPositiveInteger(ownField(value, "childIssue"))) {
-    errors.push("childIssue must be a positive integer");
-  }
-  if (!isCodeTaskGitCommitSha(ownField(value, "sourceCommitSha"))) {
-    errors.push("sourceCommitSha is invalid");
-  }
-  if (!isCodeTaskGitTreeSha(ownField(value, "sourceTreeSha"))) {
-    errors.push("sourceTreeSha is invalid");
-  }
-  return errors;
+function qualificationManifestHeaderFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  return acceptanceEvidenceHeaderFieldsAreValid(
+    errors,
+    value,
+    CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+    CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+  );
 }
 
 // Split out of qualificationManifestBodyErrors to keep both functions under the repository's
 // per-function line ceiling: this half owns the scalar identity/reference fields, the other half
 // owns the scenarios array and knownLimitations.
-function qualificationManifestReferenceErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [];
-  if (!isCodeTaskContentFreeNote(ownField(value, "runtimeIdentity"))) {
-    errors.push("runtimeIdentity must be a bounded content-free reference");
-  }
-  if (!isCodeTaskContentFreeNote(ownField(value, "modelIdentity"))) {
-    errors.push("modelIdentity must be a bounded content-free reference");
-  }
-  if (!isCodeTaskContentFreeNote(ownField(value, "fixtureRevision"))) {
-    errors.push("fixtureRevision must be a bounded content-free reference");
-  }
-  if (!isCodeTaskSha256Digest(ownField(value, "rubricDigest"))) {
-    errors.push("rubricDigest is invalid");
-  }
-  errors.push(
-    ...factErrors(ownField(value, "issueReference"), "issueReference", isCodeTaskContentFreeNote),
-    ...factErrors(
-      ownField(value, "pullRequestReference"),
-      "pullRequestReference",
+function qualificationManifestAuditFactFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  return [
+    factFieldsAreValid(
+      errors,
+      ownField(value, "auditReference"),
+      "auditReference",
       isCodeTaskContentFreeNote,
     ),
-    ...factErrors(ownField(value, "runReference"), "runReference", isCodeTaskContentFreeNote),
-    ...factErrors(
-      ownField(value, "readinessSnapshotDigest"),
-      "readinessSnapshotDigest",
+    factFieldsAreValid(
+      errors,
+      ownField(value, "auditDigest"),
+      "auditDigest",
       isCodeTaskSha256Digest,
     ),
-    ...factErrors(
-      ownField(value, "journeyOutcomeDigest"),
-      "journeyOutcomeDigest",
-      isCodeTaskSha256Digest,
-    ),
-    ...factErrors(ownField(value, "auditReference"), "auditReference", isCodeTaskContentFreeNote),
-    ...factErrors(ownField(value, "auditDigest"), "auditDigest", isCodeTaskSha256Digest),
-    ...factErrors(
+    factFieldsAreValid(
+      errors,
       ownField(value, "humanMergeAttestationDigest"),
       "humanMergeAttestationDigest",
       isCodeTaskSha256Digest,
     ),
-  );
-  return errors;
+  ].every(Boolean);
 }
 
-function qualificationManifestRequiredToolsErrors(
+function qualificationManifestFactFieldsAreValid(
+  errors: string[],
   value: Record<string, unknown>,
-): readonly string[] {
+): boolean {
+  let valid = true;
+  valid = [
+    valid,
+    factFieldsAreValid(
+      errors,
+      ownField(value, "issueReference"),
+      "issueReference",
+      isCodeTaskContentFreeNote,
+    ),
+    factFieldsAreValid(
+      errors,
+      ownField(value, "pullRequestReference"),
+      "pullRequestReference",
+      isCodeTaskContentFreeNote,
+    ),
+    factFieldsAreValid(
+      errors,
+      ownField(value, "runReference"),
+      "runReference",
+      isCodeTaskContentFreeNote,
+    ),
+    factFieldsAreValid(
+      errors,
+      ownField(value, "readinessSnapshotDigest"),
+      "readinessSnapshotDigest",
+      isCodeTaskSha256Digest,
+    ),
+    factFieldsAreValid(
+      errors,
+      ownField(value, "journeyOutcomeDigest"),
+      "journeyOutcomeDigest",
+      isCodeTaskSha256Digest,
+    ),
+    qualificationManifestAuditFactFieldsAreValid(errors, value),
+  ].every(Boolean);
+  return valid;
+}
+
+function qualificationManifestReferenceFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  let valid = true;
+
+  if (!isCodeTaskContentFreeNote(ownField(value, "runtimeIdentity"))) {
+    valid = addValidationError(errors, "runtimeIdentity must be a bounded content-free reference");
+  }
+  if (!isCodeTaskContentFreeNote(ownField(value, "modelIdentity"))) {
+    valid = addValidationError(errors, "modelIdentity must be a bounded content-free reference");
+  }
+  if (!isCodeTaskContentFreeNote(ownField(value, "fixtureRevision"))) {
+    valid = addValidationError(errors, "fixtureRevision must be a bounded content-free reference");
+  }
+  if (!isCodeTaskSha256Digest(ownField(value, "rubricDigest"))) {
+    valid = addValidationError(errors, "rubricDigest is invalid");
+  }
+  valid = qualificationManifestFactFieldsAreValid(errors, value) && valid;
+  return valid;
+}
+
+function qualificationManifestRequiredToolsFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
   const requiredTools = ownField(value, "requiredTools");
   if (!Array.isArray(requiredTools) || !requiredTools.every((tool) => isCodeTaskToolName(tool))) {
-    return ["requiredTools must be an array of catalog tool names"];
+    return addValidationError(errors, "requiredTools must be an array of catalog tool names");
   }
   if (
     requiredTools.length !== CODE_TASK_QUALIFICATION_REQUIRED_TOOLS.length ||
@@ -1774,71 +2070,100 @@ function qualificationManifestRequiredToolsErrors(
       (expected, index) => requiredTools[index] !== expected,
     )
   ) {
-    return ["requiredTools must exactly match the controlled-journey rubric inventory"];
+    return addValidationError(
+      errors,
+      "requiredTools must exactly match the controlled-journey rubric inventory",
+    );
   }
-  return [];
+  return true;
 }
 
 // #3390 audit F15: the bounded evaluation budget the run was launched with, plus what the gateway
 // actually reported spending. `spendBudgetUsd` is always a known positive amount by construction
 // (the run cannot start without one); `observedSpendUsd` is a tagged fact because a gateway that
 // does not report spend must never be recorded as having spent zero.
-function qualificationManifestSpendErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [];
+function qualificationManifestSpendFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  let valid = true;
+
   const spendBudgetUsd = ownField(value, "spendBudgetUsd");
   if (!isNonNegativeAmountUsd(spendBudgetUsd) || spendBudgetUsd <= 0) {
-    errors.push("spendBudgetUsd must be a positive, bounded USD amount");
+    valid = addValidationError(errors, "spendBudgetUsd must be a positive, bounded USD amount");
   }
-  errors.push(
-    ...factErrors(ownField(value, "observedSpendUsd"), "observedSpendUsd", isNonNegativeAmountUsd),
-  );
-  return errors;
+  valid =
+    factFieldsAreValid(
+      errors,
+      ownField(value, "observedSpendUsd"),
+      "observedSpendUsd",
+      isNonNegativeAmountUsd,
+    ) && valid;
+  return valid;
 }
 
-function qualificationManifestBodyErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [
-    ...qualificationManifestReferenceErrors(value),
-    ...qualificationManifestRequiredToolsErrors(value),
-    ...qualificationManifestSpendErrors(value),
-  ];
-  const scenarios = ownField(value, "scenarios");
-  if (Array.isArray(scenarios)) {
-    scenarios.forEach((scenario, index) => {
-      errors.push(...qualificationScenarioErrors(scenario, `scenarios[${String(index)}]`));
-    });
-  } else {
-    errors.push("scenarios must be an array");
-  }
+function qualificationManifestFlowsFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  let valid = true;
   const flows = ownField(value, "flows");
-  if (Array.isArray(flows)) {
-    flows.forEach((flow, index) => {
-      errors.push(...qualificationFlowErrors(flow, `flows[${String(index)}]`));
-    });
-  } else {
-    errors.push("flows must be an array");
-  }
+  valid =
+    acceptanceArrayMembersAreValid(errors, flows, "flows", (flow, index): boolean =>
+      qualificationFlowFieldsAreValid(errors, flow, `flows[${String(index)}]`),
+    ) && valid;
+  return valid;
+}
+
+function qualificationManifestBodyFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+): boolean {
+  let valid = true;
+  valid = [
+    valid,
+    qualificationManifestReferenceFieldsAreValid(errors, value),
+    qualificationManifestRequiredToolsFieldsAreValid(errors, value),
+    qualificationManifestSpendFieldsAreValid(errors, value),
+  ].every(Boolean);
+  const scenarios = ownField(value, "scenarios");
+  valid =
+    acceptanceArrayMembersAreValid(errors, scenarios, "scenarios", (scenario, index): boolean =>
+      qualificationScenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`),
+    ) && valid;
+  valid = qualificationManifestFlowsFieldsAreValid(errors, value) && valid;
   const knownLimitations = ownField(value, "knownLimitations");
-  if (
-    !Array.isArray(knownLimitations) ||
-    !knownLimitations.every((note) => isCodeTaskContentFreeNote(note))
-  ) {
-    errors.push("knownLimitations must be an array of bounded content-free notes");
+  if (!isNoteArray(knownLimitations)) {
+    valid = addValidationError(
+      errors,
+      "knownLimitations must be an array of bounded content-free notes",
+    );
   }
-  return errors;
+  return valid;
+}
+
+function admitCodeTaskQualificationManifest(
+  value: unknown,
+  errors: string[],
+): value is CodeTaskQualificationManifestV1 {
+  let valid = true;
+  if (!isRecord(value)) return addValidationError(errors, "manifest must be an object");
+  valid = [
+    valid,
+    validateCodeTaskOwnKeys(errors, value, QUALIFICATION_MANIFEST_KEYS, "manifest"),
+    qualificationManifestHeaderFieldsAreValid(errors, value),
+    qualificationManifestBodyFieldsAreValid(errors, value),
+  ].every(Boolean);
+  return valid;
 }
 
 export function validateCodeTaskQualificationManifest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodeTaskQualificationManifestV1> {
-  if (!isRecord(value)) return { ok: false, errors: ["manifest must be an object"] };
-  const errors = [
-    ...unknownKeys(value, QUALIFICATION_MANIFEST_KEYS, "manifest"),
-    ...qualificationManifestHeaderErrors(value),
-    ...qualificationManifestBodyErrors(value),
-  ];
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodeTaskQualificationManifestV1 };
+  const errors: string[] = [];
+  return admitCodeTaskQualificationManifest(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }
 
 function scenarioRegistrationFailure(
@@ -2176,4 +2501,111 @@ export function codeTaskQualificationVerdictFor(
           scenario.evidenceClass === "production-functional")),
   );
   return allQualified ? "qualified" : "blocked";
+}
+
+function qualificationApprovalRequestMemberFieldsAreValid(
+  errors: string[],
+  request: unknown,
+  index: number,
+  path: string,
+): boolean {
+  let valid = true;
+  const itemPath = `${path}.approvalRequests[${String(index)}]`;
+  if (!isRecord(request)) return addValidationError(errors, `${itemPath} must be an object`);
+  valid =
+    validateCodeTaskOwnKeys(errors, request, QUALIFICATION_APPROVAL_REQUEST_KEYS, itemPath) &&
+    valid;
+  const actionClass = ownField(request, "actionClass");
+  const actionKind = ownField(request, "actionKind");
+  if (!isOneOf(actionClass, CODING_WORKBENCH_ACTION_CLASSES))
+    valid = addValidationError(errors, `${itemPath}.actionClass is invalid`);
+  if (!isOneOf(actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS))
+    valid = addValidationError(errors, `${itemPath}.actionKind is invalid`);
+  if (
+    isOneOf(actionClass, CODING_WORKBENCH_ACTION_CLASSES) &&
+    isOneOf(actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS) &&
+    permissionKindForSupervisedCodingAction(actionKind) !== actionClass
+  ) {
+    valid = addValidationError(errors, `${itemPath} actionClass does not match actionKind`);
+  }
+  if (!positiveSafeInteger(ownField(request, "requestCount")))
+    valid = addValidationError(errors, `${itemPath}.requestCount must be a positive safe integer`);
+  return valid;
+}
+
+function qualificationApprovedProposalMemberFieldsAreValid(
+  errors: string[],
+  action: unknown,
+  index: number,
+  path: string,
+): boolean {
+  let valid = true;
+  const itemPath = `${path}.approvedProposalActions[${String(index)}]`;
+  if (!isRecord(action)) return addValidationError(errors, `${itemPath} must be an object`);
+  valid =
+    validateCodeTaskOwnKeys(errors, action, QUALIFICATION_APPROVED_PROPOSAL_KEYS, itemPath) &&
+    valid;
+  if (!isOneOf(ownField(action, "actionKind"), QUALIFICATION_PROPOSAL_ACTION_KINDS))
+    valid = addValidationError(errors, `${itemPath}.actionKind is invalid`);
+  if (!positiveSafeInteger(ownField(action, "approvalCount")))
+    valid = addValidationError(errors, `${itemPath}.approvalCount must be a positive safe integer`);
+  return valid;
+}
+
+function qualificationEffectToolMemberFieldsAreValid(
+  errors: string[],
+  tool: unknown,
+  index: number,
+  path: string,
+): boolean {
+  let valid = true;
+  const itemPath = `${path}.effectStartedTools[${String(index)}]`;
+  if (!isRecord(tool)) return addValidationError(errors, `${itemPath} must be an object`);
+  valid = validateCodeTaskOwnKeys(errors, tool, QUALIFICATION_EFFECT_TOOL_KEYS, itemPath) && valid;
+  const canonicalId = ownField(tool, "canonicalId");
+  if (typeof canonicalId !== "string" || !CANONICAL_TOOL_ID_PATTERN.test(canonicalId))
+    valid = addValidationError(errors, `${itemPath}.canonicalId is invalid`);
+  if (!positiveSafeInteger(ownField(tool, "contractVersion")))
+    valid = addValidationError(
+      errors,
+      `${itemPath}.contractVersion must be a positive safe integer`,
+    );
+  if (!positiveSafeInteger(ownField(tool, "invocationCount")))
+    valid = addValidationError(
+      errors,
+      `${itemPath}.invocationCount must be a positive safe integer`,
+    );
+  return valid;
+}
+
+function isDigestArray(value: unknown): value is readonly CodeTaskSha256Digest[] {
+  if (!Array.isArray(value)) return false;
+  const entries: readonly unknown[] = value;
+  const length = entries.length;
+  for (let index = 0; index < length; index += 1) {
+    if (!isCodeTaskSha256Digest(entries[index])) return false;
+  }
+  return true;
+}
+
+function isNoteArray(value: unknown): value is readonly string[] {
+  if (!Array.isArray(value)) return false;
+  const entries: readonly unknown[] = value;
+  const length = entries.length;
+  for (let index = 0; index < length; index += 1) {
+    if (!isCodeTaskContentFreeNote(entries[index])) return false;
+  }
+  return true;
+}
+
+function isQualificationTransitionArray(
+  value: unknown,
+): value is readonly CodeTaskQualificationFlowTransition[] {
+  if (!Array.isArray(value) || value.length !== CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS.length)
+    return false;
+  const entries: readonly unknown[] = value;
+  for (let index = 0; index < CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS.length; index += 1) {
+    if (entries[index] !== CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS[index]) return false;
+  }
+  return true;
 }

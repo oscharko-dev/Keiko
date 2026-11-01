@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { expectKeyInspectionFailure } from "./__tests__/support/tagged-fact-observations.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
+import {
+  validateAuxiliaryCapabilityRequestV1 as publicAuxiliaryRequest,
+  validateAuxiliaryCapabilityOutcomeV1 as publicAuxiliaryOutcome,
+  type AuxiliaryCapabilityRequestV1 as PublicAuxiliaryCapabilityRequestV1,
+  type AuxiliaryCapabilityOutcomeV1 as PublicAuxiliaryCapabilityOutcomeV1,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 
 import {
   AUXILIARY_CAPABILITIES,
@@ -13,6 +21,7 @@ import {
   type AuxiliaryResearchScopeV1,
 } from "./code-task-auxiliary.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
+import { expectCodeTaskRecordAdmission } from "./__tests__/support/code-task-record-admission.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -647,4 +656,506 @@ describe("ownField makes an inherited field unreadable regardless of descriptor 
   it("still accepts a legitimate request once Object.prototype is restored", () => {
     expect(validateAuxiliaryCapabilityRequestV1(researchRequest())).toMatchObject({ ok: true });
   });
+});
+
+describe("C1A auxiliary concrete admission", () => {
+  it.each(["source", "public"])(
+    "refuses unchecked domain members case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityRequestV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityRequestV1;
+      const request = researchRequest();
+      const domains = ["localhost"];
+      Object.defineProperty(domains, "every", { value: (): boolean => true });
+      expect(validate({ ...request, research: { ...request.research, domains } }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses unchecked domain members case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityRequestV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityRequestV1;
+      const request = researchRequest();
+      expect(
+        validate({ ...request, research: { ...request.research, domains: Array<unknown>(1) } }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "retains request branch, repeated read and identity through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityRequestV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityRequestV1;
+      const request = researchRequest();
+      let reads = 0;
+      Object.defineProperty(request, "capability", {
+        get: (): string => {
+          reads += 1;
+          return "research";
+        },
+      });
+      const result = validate(request);
+      expect(reads).toBe(2);
+      expect(
+        result.ok && result.value === request && result.value.research === request.research,
+      ).toBe(true);
+      // Parent authority fields stay checked through both the source and real public boundary.
+      expect(validate({ ...researchRequest(), taskId: undefined })).toEqual({
+        ok: false,
+        errors: ["taskId is invalid"],
+      });
+      expect(validate({ ...researchRequest(), stateRevision: -1 })).toEqual({
+        ok: false,
+        errors: ["stateRevision must be a non-negative integer"],
+      });
+    },
+  );
+
+  it.each(["source", "public"])(
+    "retains accepted zero-child and rejected outcomes through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityOutcomeV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityOutcomeV1;
+      const accepted = {
+        schemaVersion: 1,
+        status: "accepted",
+        capability: "child-agent",
+        resultDigest: { outcome: "known", value: DIGEST },
+        childResultCount: { outcome: "known", value: 0 },
+      };
+      const rejected = {
+        schemaVersion: 1,
+        status: "denied",
+        capability: "research",
+        reasonCode: "scope-denied",
+      };
+      const first = validate(accepted);
+      const second = validate(rejected);
+      expect(first.ok && first.value === accepted).toBe(true);
+      expect(second.ok && second.value === rejected).toBe(true);
+      expect(validate({ ...accepted, capability: "research" }).ok).toBe(false);
+    },
+  );
+});
+
+describe("C1A finite auxiliary discriminator observations", () => {
+  it.each(["source", "public"])(
+    "refuses an invalid observed child discriminator through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityRequestV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityRequestV1;
+      const input = {
+        ...target(),
+        schemaVersion: 1,
+        capability: "child-agent",
+        childRunId: "chr_1",
+        maxToolCalls: 1,
+      };
+      let reads = 0;
+      Object.defineProperty(input, "capability", {
+        get: (): string => {
+          reads += 1;
+          return reads === 1 ? "child-agent" : "invalid";
+        },
+      });
+      expect(validate(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses a skipped accepted-body branch through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityOutcomeV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityOutcomeV1;
+      const input = {
+        schemaVersion: 1,
+        status: "accepted",
+        capability: "research",
+        resultDigest: 0,
+        childResultCount: 0,
+      };
+      let reads = 0;
+      Object.defineProperty(input, "status", {
+        get: (): string => {
+          reads += 1;
+          return reads === 1 ? "accepted" : "invalid";
+        },
+      });
+      expect(validate(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses an invalid observed accepted capability through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityOutcomeV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityOutcomeV1;
+      const input = {
+        schemaVersion: 1,
+        status: "accepted",
+        capability: "research",
+        resultDigest: { outcome: "known", value: DIGEST },
+        childResultCount: { outcome: "absent" },
+      };
+      let reads = 0;
+      Object.defineProperty(input, "capability", {
+        get: (): string => {
+          reads += 1;
+          return reads === 1 ? "research" : "invalid";
+        },
+      });
+      expect(validate(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "preserves a valid changing request's existing refusal through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityRequestV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityRequestV1;
+      const input = {
+        ...target(),
+        schemaVersion: 1,
+        capability: "child-agent",
+        childRunId: "chr_1",
+        maxToolCalls: 1,
+      };
+      let reads = 0;
+      Object.defineProperty(input, "capability", {
+        get: (): string => {
+          reads += 1;
+          return reads === 1 ? "child-agent" : "skill";
+        },
+      });
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["skillId is invalid", "invocation is invalid"],
+      });
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "preserves valid changing auxiliary fallback observations through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityOutcomeV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityOutcomeV1;
+      const rejected = {
+        schemaVersion: 1,
+        status: "denied",
+        capability: "research",
+        reasonCode: "scope-denied",
+      };
+      let statusReads = 0;
+      Object.defineProperty(rejected, "status", {
+        get: (): string => {
+          statusReads += 1;
+          return statusReads === 1 ? "denied" : "unavailable";
+        },
+      });
+      expect(validate(rejected).ok).toBe(true);
+      expect(statusReads).toBe(2);
+      const accepted = {
+        schemaVersion: 1,
+        status: "accepted",
+        capability: "research",
+        resultDigest: { outcome: "known", value: DIGEST },
+        childResultCount: { outcome: "absent" },
+      };
+      let capabilityReads = 0;
+      Object.defineProperty(accepted, "capability", {
+        get: (): string => {
+          capabilityReads += 1;
+          return capabilityReads === 1 ? "research" : "skill";
+        },
+      });
+      expect(validate(accepted).ok).toBe(true);
+      expect(capabilityReads).toBe(2);
+    },
+  );
+});
+
+describe("C1A preserved auxiliary discriminator diagnostics", () => {
+  it.each(["source", "public"])("reports one stable invalid status through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateAuxiliaryCapabilityOutcomeV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+            .validateAuxiliaryCapabilityOutcomeV1;
+    const input = {
+      schemaVersion: 1,
+      status: "invalid",
+      capability: "research",
+      reasonCode: "policy-denied",
+    };
+    let reads = 0;
+    Object.defineProperty(input, "status", {
+      get: (): string => {
+        reads += 1;
+        return "invalid";
+      },
+    });
+    expect(validate(input)).toEqual({ ok: false, errors: ["status is invalid"] });
+    expect(reads).toBe(2);
+  });
+  it.each(["source", "public"])(
+    "reports one stable invalid accepted capability through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateAuxiliaryCapabilityOutcomeV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+              .validateAuxiliaryCapabilityOutcomeV1;
+      const input = {
+        schemaVersion: 1,
+        status: "accepted",
+        capability: "invalid",
+        resultDigest: { outcome: "known", value: DIGEST },
+        childResultCount: { outcome: "absent" },
+      };
+      let reads = 0;
+      Object.defineProperty(input, "capability", {
+        get: (): string => {
+          reads += 1;
+          return "invalid";
+        },
+      });
+      expect(validate(input)).toEqual({ ok: false, errors: ["capability is invalid"] });
+      expect(reads).toBe(2);
+    },
+  );
+});
+
+type SourceAuxiliaryRequestParse = CodingWorkbenchValidationResult<AuxiliaryCapabilityRequestV1>;
+type PublicAuxiliaryRequestParse =
+  CodingWorkbenchValidationResult<PublicAuxiliaryCapabilityRequestV1>;
+type SourceAuxiliaryOutcomeParse = CodingWorkbenchValidationResult<AuxiliaryCapabilityOutcomeV1>;
+type PublicAuxiliaryOutcomeParse =
+  CodingWorkbenchValidationResult<PublicAuxiliaryCapabilityOutcomeV1>;
+
+export function parsePublicAuxiliaryRequest(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicAuxiliaryCapabilityRequestV1> {
+  const result = publicAuxiliaryRequest(input);
+  return result;
+}
+
+export function parsePublicAuxiliaryOutcome(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicAuxiliaryCapabilityOutcomeV1> {
+  const result = publicAuxiliaryOutcome(input);
+  return result;
+}
+
+describe("auxiliary request public parser (#3918)", () => {
+  it("retains original research scope domain and digest references", () => {
+    const input = researchRequest();
+    const result = parsePublicAuxiliaryRequest(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.capability !== "research")
+      throw new TypeError("healthy public research request refused");
+    expect(result.value).toBe(input);
+    expect(result.value.research).toBe(input.research);
+    expect(result.value.research.domains).toBe(input.research.domains);
+    expect(result.value.research.queryTextDigest).toBe(input.research.queryTextDigest);
+    expect(parsePublicAuxiliaryRequest(null)).toEqual({
+      ok: false,
+      errors: ["auxiliary request must be an object"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateAuxiliaryCapabilityRequestV1,
+    ).returns.toEqualTypeOf<SourceAuxiliaryRequestParse>();
+    expectTypeOf(publicAuxiliaryRequest).returns.toEqualTypeOf<PublicAuxiliaryRequestParse>();
+    expectTypeOf(parsePublicAuxiliaryRequest).returns.toEqualTypeOf<PublicAuxiliaryRequestParse>();
+    const result = parsePublicAuxiliaryRequest(researchRequest());
+    if (!result.ok || result.value.capability !== "research")
+      throw new TypeError("healthy public research request types refused");
+    expectTypeOf(result.value.taskId).toEqualTypeOf<PublicAuxiliaryCapabilityRequestV1["taskId"]>();
+    expectTypeOf(result.value.research.domains).toEqualTypeOf<readonly string[]>();
+    type Failure = Extract<ReturnType<typeof publicAuxiliaryRequest>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("auxiliary outcome public parser (#3918)", () => {
+  it("retains original accepted outcome digest and explicit zero count references", () => {
+    const input = {
+      schemaVersion: 1,
+      status: "accepted",
+      capability: "child-agent",
+      resultDigest: { outcome: "known", value: DIGEST },
+      childResultCount: { outcome: "known", value: 0 },
+    };
+    const result = parsePublicAuxiliaryOutcome(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.status !== "accepted")
+      throw new TypeError("healthy public child outcome refused");
+    expect(result.value).toBe(input);
+    expect(result.value.resultDigest).toBe(input.resultDigest);
+    expect(result.value.childResultCount).toBe(input.childResultCount);
+    expect(parsePublicAuxiliaryOutcome(null)).toEqual({
+      ok: false,
+      errors: ["auxiliary outcome must be an object"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateAuxiliaryCapabilityOutcomeV1,
+    ).returns.toEqualTypeOf<SourceAuxiliaryOutcomeParse>();
+    expectTypeOf(publicAuxiliaryOutcome).returns.toEqualTypeOf<PublicAuxiliaryOutcomeParse>();
+    expectTypeOf(parsePublicAuxiliaryOutcome).returns.toEqualTypeOf<PublicAuxiliaryOutcomeParse>();
+    const result = parsePublicAuxiliaryOutcome({
+      schemaVersion: 1,
+      status: "denied",
+      capability: "research",
+      reasonCode: "scope-denied",
+    });
+    if (!result.ok || result.value.status !== "denied")
+      throw new TypeError("healthy public denied outcome types refused");
+    expectTypeOf(result.value.reasonCode).toEqualTypeOf<string>();
+    type Failure = Extract<ReturnType<typeof publicAuxiliaryOutcome>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+it.each(["source", "public"])(
+  "preserves strict record and own-key admission through %s",
+  async (surface) => {
+    const validate =
+      surface === "source"
+        ? validateAuxiliaryCapabilityRequestV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
+            .validateAuxiliaryCapabilityRequestV1;
+    expectCodeTaskRecordAdmission(
+      validate,
+      researchRequest,
+      (input): object => input,
+      "auxiliaryRequest must not carry symbol-keyed properties",
+      (): readonly [string, string] => [
+        "auxiliaryRequest.fixtureExtra is not allowed",
+        "auxiliaryRequest must not carry symbol-keyed properties",
+      ],
+    );
+  },
+);
+
+describe("auxiliary tagged-fact observation preservation", () => {
+  for (const surface of ["source", "public"]) {
+    const validate =
+      surface === "source" ? validateAuxiliaryCapabilityRequestV1 : publicAuxiliaryRequest;
+
+    it(`${surface} collects known fact key and value diagnostics in order`, () => {
+      const fact = { outcome: "known", value: "short", fixtureExtra: true };
+      Object.defineProperty(fact, Symbol("fixtureExtra"), { value: true });
+      expect(
+        validate({
+          ...researchRequest(),
+          research: { ...researchRequest().research, queryTextDigest: fact },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "researchScope.queryTextDigest.fixtureExtra is not allowed",
+          "researchScope.queryTextDigest must not carry symbol-keyed properties",
+          "researchScope.queryTextDigest.value is invalid",
+        ],
+      });
+    });
+
+    for (const outcome of ["unknown", "unavailable", "absent"]) {
+      it(`${surface} collects ${outcome} key and value-presence diagnostics without reading value`, () => {
+        const fact = {
+          outcome,
+          get value(): never {
+            throw new TypeError("value-free fact must not read its value");
+          },
+          fixtureExtra: true,
+        };
+        Object.defineProperty(fact, Symbol("fixtureExtra"), { value: true });
+        expect(
+          validate({
+            ...researchRequest(),
+            research: { ...researchRequest().research, queryTextDigest: fact },
+          }),
+        ).toEqual({
+          ok: false,
+          errors: [
+            "researchScope.queryTextDigest.value is not allowed",
+            "researchScope.queryTextDigest.fixtureExtra is not allowed",
+            "researchScope.queryTextDigest must not carry symbol-keyed properties",
+            `researchScope.queryTextDigest must not carry a value for outcome ${outcome}`,
+          ],
+        });
+      });
+    }
+
+    it(`${surface} propagates key inspection failure before known value access`, () => {
+      expectKeyInspectionFailure(
+        (fact) =>
+          validate({
+            ...researchRequest(),
+            research: { ...researchRequest().research, queryTextDigest: fact },
+          }),
+        DIGEST,
+      );
+    });
+
+    it(`${surface} preserves the exact known value getter failure`, () => {
+      const failure = new TypeError("opaque known fact value inspection");
+      const trace: string[] = [];
+      const fact = {
+        outcome: "known",
+        get value(): never {
+          trace.push("value");
+          throw failure;
+        },
+      };
+      let observed: unknown;
+      try {
+        validate({
+          ...researchRequest(),
+          research: { ...researchRequest().research, queryTextDigest: fact },
+        });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["value"]);
+    });
+  }
 });

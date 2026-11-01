@@ -1,4 +1,4 @@
-// Shared internal run-result field validators for the governed task-execution wire contracts
+// Shared internal task-execution field validators for the governed task-execution wire contracts
 // (KEIKO-0601). command-runner.ts and container-runtime.ts each parse an independent executor's
 // run-result shape, but the mechanical field-by-field checks for the fields both shapes share
 // (schemaVersion, runId, taskId, kind, failureReason, exitCode, durationMs, truncated, timedOut,
@@ -7,6 +7,9 @@
 // vocabulary and failure-reason vocabulary (`COMMAND_FAILURE_REASONS` and `CONTAINER_FAILURE_REASONS`
 // stay legitimately separate enums — only the checking mechanics are shared) plus an optional hook
 // for a field it validates in between `kind` and `failureReason` (container-runtime's `engine`).
+//
+// The same two executors also share physical task-catalog member and argv admission here. Their
+// executable, image, trust, engine and task-kind fields remain at each executor's own boundary.
 //
 // Leaf-package rules (ADR-0019): no imports, no IO, no clock, no randomness. Intentionally NOT
 // re-exported from index.ts — this is internal wiring between two sibling files in this package,
@@ -17,78 +20,215 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
 }
 
 export function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function validateRunResultIdentity(
-  value: Record<string, unknown>,
-  expectedSchemaVersion: string,
-  kinds: readonly string[],
-  errors: string[],
-): void {
-  if (value.schemaVersion !== expectedSchemaVersion) errors.push("schemaVersion is invalid");
-  if (!isNonEmptyString(value.runId)) errors.push("runId must be a non-empty string");
-  if (!isNonEmptyString(value.taskId)) errors.push("taskId must be a non-empty string");
-  if (!isOneOf(value.kind, kinds)) errors.push("kind is invalid");
+interface RunResultIdentity<Schema extends string, Kind extends string> {
+  readonly schemaVersion: Schema;
+  readonly runId: string;
+  readonly taskId: string;
+  readonly kind: Kind;
 }
 
-function validateRunResultFailureReason(
-  value: Record<string, unknown>,
-  failureReasons: readonly string[],
-  errors: string[],
-): void {
-  if (!isOneOf(value.failureReason, failureReasons)) errors.push("failureReason is invalid");
+function checkField(valid: boolean, error: string, errors: string[]): boolean {
+  if (!valid) errors.push(error);
+  return valid;
 }
 
-export function validateRunResultNumbers(value: Record<string, unknown>, errors: string[]): void {
+function validateRunResultIdentity<Schema extends string, Kind extends string>(
+  value: Record<string, unknown>,
+  expectedSchemaVersion: Schema,
+  kinds: readonly Kind[],
+  errors: string[],
+): value is Record<string, unknown> & RunResultIdentity<Schema, Kind> {
+  const schema = checkField(
+    value.schemaVersion === expectedSchemaVersion,
+    "schemaVersion is invalid",
+    errors,
+  );
+  const run = checkField(isNonEmptyString(value.runId), "runId must be a non-empty string", errors);
+  const task = checkField(
+    isNonEmptyString(value.taskId),
+    "taskId must be a non-empty string",
+    errors,
+  );
+  const kind = checkField(isOneOf(value.kind, kinds), "kind is invalid", errors);
+  return schema && run && task && kind;
+}
+
+function validateRunResultFailureReason<Reason extends string>(
+  value: Record<string, unknown>,
+  failureReasons: readonly Reason[],
+  errors: string[],
+): value is Record<string, unknown> & { readonly failureReason: Reason } {
+  return checkField(
+    isOneOf(value.failureReason, failureReasons),
+    "failureReason is invalid",
+    errors,
+  );
+}
+
+export function validateRunResultNumbers(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & {
+  readonly exitCode: number | null;
+  readonly durationMs: number;
+} {
   const exitCode = value.exitCode;
-  if (exitCode !== null && (typeof exitCode !== "number" || !Number.isInteger(exitCode))) {
-    errors.push("exitCode must be an integer or null");
-  }
+  const exit = checkField(
+    exitCode === null || (typeof exitCode === "number" && Number.isInteger(exitCode)),
+    "exitCode must be an integer or null",
+    errors,
+  );
   const durationMs = value.durationMs;
-  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
-    errors.push("durationMs must be a non-negative finite number");
-  }
+  const duration = checkField(
+    typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs >= 0,
+    "durationMs must be a non-negative finite number",
+    errors,
+  );
+  return exit && duration;
 }
 
 export function validateRunResultFlagsAndText(
   value: Record<string, unknown>,
   errors: string[],
-): void {
-  if (typeof value.truncated !== "boolean") errors.push("truncated must be a boolean");
-  if (typeof value.timedOut !== "boolean") errors.push("timedOut must be a boolean");
-  if (typeof value.stdout !== "string") errors.push("stdout must be a string");
-  if (typeof value.stderr !== "string") errors.push("stderr must be a string");
+): value is Record<string, unknown> & {
+  readonly truncated: boolean;
+  readonly timedOut: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+} {
+  const truncated = checkField(
+    typeof value.truncated === "boolean",
+    "truncated must be a boolean",
+    errors,
+  );
+  const timedOut = checkField(
+    typeof value.timedOut === "boolean",
+    "timedOut must be a boolean",
+    errors,
+  );
+  const stdout = checkField(typeof value.stdout === "string", "stdout must be a string", errors);
+  const stderr = checkField(typeof value.stderr === "string", "stderr must be a string", errors);
+  return truncated && timedOut && stdout && stderr;
 }
 
-// Each executor supplies its own schema-version literal and its own kind/failure-reason
-// vocabulary (e.g. COMMAND_TASK_KINDS vs. CONTAINER_TASK_KINDS); the vocabulary is intentionally
-// widened to `string`/`readonly string[]` here rather than kept generic, since nothing downstream
-// of this internal validator needs the narrowed literal type back (only `boolean` error-collection
-// side effects are observable) and a single-use type parameter is flagged as unnecessary
-// (@typescript-eslint/no-unnecessary-type-parameters).
-export interface RunResultVocabulary {
-  readonly schemaVersion: string;
-  readonly kinds: readonly string[];
-  readonly failureReasons: readonly string[];
+export interface RunResultVocabulary<
+  Schema extends string = string,
+  Kind extends string = string,
+  Reason extends string = string,
+> {
+  readonly schemaVersion: Schema;
+  readonly kinds: readonly Kind[];
+  readonly failureReasons: readonly Reason[];
 }
 
-// Composes the full common field set in the fixed order both executors' tests pin: schemaVersion,
-// runId, taskId, kind, [an executor's own mid-sequence fields via `afterKind`, e.g. container-
-// runtime's `engine`], failureReason, exitCode, durationMs, truncated, timedOut, stdout, stderr.
+// Each concrete phase performs its own checks. All phases run eagerly in the original error
+// order; the optional executor-owned phase validates its fields immediately after kind.
+type CheckedRunResult<Schema extends string, Kind extends string, Reason extends string> = Record<
+  string,
+  unknown
+> &
+  RunResultIdentity<Schema, Kind> & {
+    readonly failureReason: Reason;
+    readonly exitCode: number | null;
+    readonly durationMs: number;
+    readonly truncated: boolean;
+    readonly timedOut: boolean;
+    readonly stdout: string;
+    readonly stderr: string;
+  };
+
+export function validateRunResultCore<
+  Schema extends string,
+  Kind extends string,
+  Reason extends string,
+  Extra extends Record<string, unknown>,
+>(
+  value: Record<string, unknown>,
+  vocabulary: RunResultVocabulary<Schema, Kind, Reason>,
+  errors: string[],
+  afterKind: (value: Record<string, unknown>, errors: string[]) => value is Extra,
+): value is CheckedRunResult<Schema, Kind, Reason> & Extra;
+export function validateRunResultCore<
+  Schema extends string,
+  Kind extends string,
+  Reason extends string,
+>(
+  value: Record<string, unknown>,
+  vocabulary: RunResultVocabulary<Schema, Kind, Reason>,
+  errors: string[],
+  afterKind?: (value: Record<string, unknown>, errors: string[]) => void,
+): value is CheckedRunResult<Schema, Kind, Reason>;
 export function validateRunResultCore(
   value: Record<string, unknown>,
   vocabulary: RunResultVocabulary,
   errors: string[],
-  afterKind?: (value: Record<string, unknown>, errors: string[]) => void,
-): void {
-  validateRunResultIdentity(value, vocabulary.schemaVersion, vocabulary.kinds, errors);
-  afterKind?.(value, errors);
-  validateRunResultFailureReason(value, vocabulary.failureReasons, errors);
-  validateRunResultNumbers(value, errors);
-  validateRunResultFlagsAndText(value, errors);
+  afterKind?: (value: Record<string, unknown>, errors: string[]) => boolean | void,
+): boolean {
+  const identity = validateRunResultIdentity(
+    value,
+    vocabulary.schemaVersion,
+    vocabulary.kinds,
+    errors,
+  );
+  const extra = afterKind === undefined || afterKind(value, errors) !== false;
+  const reason = validateRunResultFailureReason(value, vocabulary.failureReasons, errors);
+  const numbers = validateRunResultNumbers(value, errors);
+  const text = validateRunResultFlagsAndText(value, errors);
+  return identity && extra && reason && numbers && text;
+}
+
+export function validateTaskArguments(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): value is Record<string, unknown> & { readonly args: readonly string[] } {
+  const args = value.args;
+  if (!Array.isArray(args)) {
+    errors.push(`${path}.args must be an array`);
+    return false;
+  }
+  const entries: readonly unknown[] = args;
+  const length = entries.length;
+  for (let index = 0; index < length; index += 1) {
+    if (typeof entries[index] !== "string") {
+      errors.push(`${path}.args must be an array of strings`);
+      return false;
+    }
+  }
+  return true;
+}
+
+export function validateTaskCatalogMembers<Task>(
+  value: Record<string, unknown>,
+  errors: string[],
+  validateTask: (value: unknown, index: number, errors: string[]) => value is Task,
+): value is Record<string, unknown> & { readonly tasks: readonly Task[] } {
+  if (!Array.isArray(value.tasks)) {
+    errors.push("tasks must be an array");
+    return false;
+  }
+  const tasks: unknown = value.tasks;
+  if (!Array.isArray(tasks)) {
+    errors.push("tasks must be an array");
+    return false;
+  }
+  const entries: readonly unknown[] = tasks;
+  const length = entries.length;
+  let valid = true;
+  for (let index = 0; index < length; index += 1) {
+    if (!(index in entries)) {
+      errors.push(`tasks[${String(index)}] must be an object`);
+      return false;
+    }
+    if (!validateTask(entries[index], index, errors)) valid = false;
+  }
+  return valid;
 }

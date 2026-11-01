@@ -1,8 +1,8 @@
 // Governed container engine detection + execution wire contract (Issue #1388, Epic #1491,
 // ADR-0070). This leaf module owns the wire-stable vocabulary for the container runtime pilot only.
-// It is intentionally pure: no IO, no process execution, no clock, no randomness. The ONLY in-package
-// imports are the `CommandRule` shape reused for the defense-in-depth allowlist and the two runtime
-// capability vocabularies reused (aliased, never redefined) for the engine state.
+// It is intentionally pure: no IO, no process execution, no clock, no randomness. In-package
+// helpers share task-field admission, freezing, the defense-in-depth allowlist shape and the
+// runtime capability vocabularies (aliased, never redefined) for the engine state.
 //
 // The runner never accepts free-form argv, image refs, or flags. A request names a `taskId` from a
 // server-frozen catalog; the server resolves that id to a vetted `ContainerTask` whose `image` is in
@@ -17,10 +17,14 @@ import {
   isOneOf,
   isRecord,
   validateRunResultCore,
+  validateTaskArguments,
+  validateTaskCatalogMembers,
 } from "./run-result-validation.js";
-import type {
-  RuntimeCapabilityState,
-  RuntimeCapabilityUnavailableReason,
+import {
+  RUNTIME_CAPABILITY_STATES,
+  RUNTIME_CAPABILITY_UNAVAILABLE_REASONS,
+  type RuntimeCapabilityState,
+  type RuntimeCapabilityUnavailableReason,
 } from "./runtime-capabilities.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────────
@@ -288,171 +292,242 @@ export interface ContainerRunResultParseFail {
 
 export type ContainerRunResultParse = ContainerRunResultParseOk | ContainerRunResultParseFail;
 
-function isPositiveFinite(value: unknown): boolean {
+function isPositiveFinite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function collectOptionalRequestErrors(input: Record<string, unknown>, errors: string[]): void {
-  if (input.timeoutMs !== undefined && !isPositiveFinite(input.timeoutMs)) {
-    errors.push("timeoutMs must be a positive finite number");
-  }
-  if (input.requestId !== undefined && typeof input.requestId !== "string") {
-    errors.push("requestId must be a string");
-  }
+function requestOptionalsAreValid(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & Pick<ContainerRunRequest, "timeoutMs" | "requestId"> {
+  const timeout = input.timeoutMs === undefined || isPositiveFinite(input.timeoutMs);
+  if (!timeout) errors.push("timeoutMs must be a positive finite number");
+  const request = input.requestId === undefined || typeof input.requestId === "string";
+  if (!request) errors.push("requestId must be a string");
+  return timeout && request;
 }
 
-// Parses an incoming run request at the BFF trust boundary. Collects ALL field errors in a fixed
-// order (deterministic strings for test assertions); never throws.
+function requestFieldsAreValid(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & ContainerRunRequest {
+  const project = isNonEmptyString(input.projectId);
+  if (!project) errors.push("projectId must be a non-empty string");
+  const task = isNonEmptyString(input.taskId);
+  if (!task) errors.push("taskId must be a non-empty string");
+  const optional = requestOptionalsAreValid(input, errors);
+  return project && task && optional;
+}
+
 export function parseContainerRunRequest(input: unknown): ContainerRunRequestParse {
   const errors: string[] = [];
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["request must be an object"] };
-  }
-  if (!isNonEmptyString(input.projectId)) {
-    errors.push("projectId must be a non-empty string");
-  }
-  if (!isNonEmptyString(input.taskId)) {
-    errors.push("taskId must be a non-empty string");
-  }
-  collectOptionalRequestErrors(input, errors);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: input as unknown as ContainerRunRequest };
+  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
+  if (!requestFieldsAreValid(input, errors)) return { ok: false, errors };
+  return { ok: true, value: input };
 }
 
 function validateOptionalStringField(
   value: Record<string, unknown>,
-  key: string,
+  key: "version" | "remediationHint",
   path: string,
   errors: string[],
-): void {
+): boolean {
   if (value[key] !== undefined && typeof value[key] !== "string") {
     errors.push(`${path}.${key} must be a string`);
+    return false;
   }
+  return true;
 }
 
-function validateEngineStatus(value: unknown, index: number, errors: string[]): void {
+function engineStateIsValid(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): value is Record<string, unknown> & Pick<ContainerEngineStatus, "state"> {
+  if (typeof value.state !== "string") {
+    errors.push(`${path}.state must be a non-empty string`);
+    return false;
+  }
+  const state = value.state;
+  if (typeof state !== "string" || state.length === 0) {
+    errors.push(`${path}.state must be a non-empty string`);
+    return false;
+  }
+  if (!isOneOf(state, RUNTIME_CAPABILITY_STATES)) {
+    errors.push(`${path}.state is invalid`);
+    return false;
+  }
+  return true;
+}
+
+function engineReasonIsValid(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): value is Record<string, unknown> & Pick<ContainerEngineStatus, "unavailableReason"> {
+  if (value.unavailableReason === undefined) return true;
+  const reason = value.unavailableReason;
+  if (typeof reason !== "string") {
+    errors.push(`${path}.unavailableReason must be a string`);
+    return false;
+  }
+  if (!isOneOf(reason, RUNTIME_CAPABILITY_UNAVAILABLE_REASONS)) {
+    errors.push(`${path}.unavailableReason is invalid`);
+    return false;
+  }
+  return true;
+}
+
+function engineOptionalsAreValid(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): value is Record<string, unknown> &
+  Pick<ContainerEngineStatus, "version" | "unavailableReason" | "remediationHint"> {
+  const version = validateOptionalStringField(value, "version", path, errors);
+  const reason = engineReasonIsValid(value, path, errors);
+  const remediation = validateOptionalStringField(value, "remediationHint", path, errors);
+  return version && reason && remediation;
+}
+
+function validateEngineStatus(
+  value: unknown,
+  index: number,
+  errors: string[],
+): value is ContainerEngineStatus {
   const path = `engines[${String(index)}]`;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
-  if (!isOneOf(value.engine, CONTAINER_ENGINE_IDS)) {
-    errors.push(`${path}.engine is invalid`);
-  }
-  if (typeof value.state !== "string" || value.state.length === 0) {
-    errors.push(`${path}.state must be a non-empty string`);
-  }
-  validateOptionalStringField(value, "version", path, errors);
-  validateOptionalStringField(value, "unavailableReason", path, errors);
-  validateOptionalStringField(value, "remediationHint", path, errors);
+  const engine = isOneOf(value.engine, CONTAINER_ENGINE_IDS);
+  if (!engine) errors.push(`${path}.engine is invalid`);
+  const state = engineStateIsValid(value, path, errors);
+  const optional = engineOptionalsAreValid(value, path, errors);
+  return engine && state && optional;
 }
 
-function validateCapabilityScalars(value: Record<string, unknown>, errors: string[]): void {
-  if (value.schemaVersion !== CONTAINER_RUNTIME_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
-  }
+function capabilityTimesAreValid(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> &
+  Pick<ContainerCapabilityResponse, "generatedAtMs" | "deadlineMs"> {
   const generatedAtMs = value.generatedAtMs;
-  if (
-    typeof generatedAtMs !== "number" ||
-    !Number.isSafeInteger(generatedAtMs) ||
-    generatedAtMs < 0
-  ) {
-    errors.push("generatedAtMs must be a non-negative safe integer");
-  }
+  const generated =
+    typeof generatedAtMs === "number" && Number.isSafeInteger(generatedAtMs) && generatedAtMs >= 0;
+  if (!generated) errors.push("generatedAtMs must be a non-negative safe integer");
   const deadlineMs = value.deadlineMs;
-  if (typeof deadlineMs !== "number" || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1) {
-    errors.push("deadlineMs must be a positive safe integer");
-  }
-  if (typeof value.anyAvailable !== "boolean") {
-    errors.push("anyAvailable must be a boolean");
-  }
+  const deadline =
+    typeof deadlineMs === "number" && Number.isSafeInteger(deadlineMs) && deadlineMs >= 1;
+  if (!deadline) errors.push("deadlineMs must be a positive safe integer");
+  return generated && deadline;
 }
 
-function validateEnginesArray(value: Record<string, unknown>, errors: string[]): void {
+function validateCapabilityScalars(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> &
+  Pick<
+    ContainerCapabilityResponse,
+    "schemaVersion" | "generatedAtMs" | "deadlineMs" | "anyAvailable"
+  > {
+  const schema = value.schemaVersion === CONTAINER_RUNTIME_SCHEMA_VERSION;
+  if (!schema) errors.push("schemaVersion is invalid");
+  const times = capabilityTimesAreValid(value, errors);
+  const available = typeof value.anyAvailable === "boolean";
+  if (!available) errors.push("anyAvailable must be a boolean");
+  return schema && times && available;
+}
+
+function validateEnginesArray(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & Pick<ContainerCapabilityResponse, "engines"> {
   if (!Array.isArray(value.engines)) {
     errors.push("engines must be an array");
-  } else {
-    value.engines.forEach((entry, index) => {
-      validateEngineStatus(entry, index, errors);
-    });
+    return false;
   }
+  const engines: unknown = value.engines;
+  if (!Array.isArray(engines)) {
+    errors.push("engines must be an array");
+    return false;
+  }
+  const entries: readonly unknown[] = engines;
+  const length = entries.length;
+  let valid = true;
+  for (let index = 0; index < length; index += 1) {
+    if (!(index in entries)) {
+      errors.push(`engines[${String(index)}] must be an object`);
+      return false;
+    }
+    if (!validateEngineStatus(entries[index], index, errors)) valid = false;
+  }
+  return valid;
 }
 
 export function validateContainerCapabilityResponse(
   value: unknown,
 ): ContainerCapabilityResponseParse {
   const errors: string[] = [];
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["response must be an object"] };
-  }
-  validateCapabilityScalars(value, errors);
-  validateEnginesArray(value, errors);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: value as unknown as ContainerCapabilityResponse };
+  if (!isRecord(value)) return { ok: false, errors: ["response must be an object"] };
+  const scalars = validateCapabilityScalars(value, errors);
+  const engines = validateEnginesArray(value, errors);
+  if (!scalars || !engines) return { ok: false, errors };
+  return { ok: true, value };
 }
 
-function validateContainerTaskArgs(
+function containerTaskIdentityIsValid(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
-  const args = value.args;
-  if (!Array.isArray(args)) {
-    errors.push(`${path}.args must be an array`);
-    return;
-  }
-  if (!args.every((arg) => typeof arg === "string")) {
-    errors.push(`${path}.args must be an array of strings`);
-  }
+): value is Record<string, unknown> & Pick<ContainerTask, "id" | "label" | "image"> {
+  const id = isNonEmptyString(value.id);
+  if (!id) errors.push(`${path}.id must be a non-empty string`);
+  const label = isNonEmptyString(value.label);
+  if (!label) errors.push(`${path}.label must be a non-empty string`);
+  const image = isNonEmptyString(value.image);
+  if (!image) errors.push(`${path}.image must be a non-empty string`);
+  return id && label && image;
 }
 
-function validateContainerTask(value: unknown, index: number, errors: string[]): void {
+function validateContainerTask(
+  value: unknown,
+  index: number,
+  errors: string[],
+): value is ContainerTask {
   const path = `tasks[${String(index)}]`;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
-  if (!isNonEmptyString(value.id)) errors.push(`${path}.id must be a non-empty string`);
-  if (!isNonEmptyString(value.label)) errors.push(`${path}.label must be a non-empty string`);
-  if (!isNonEmptyString(value.image)) errors.push(`${path}.image must be a non-empty string`);
-  if (!isOneOf(value.kind, CONTAINER_TASK_KINDS)) errors.push(`${path}.kind is invalid`);
-  if (!isOneOf(value.engine, CONTAINER_ENGINE_IDS)) errors.push(`${path}.engine is invalid`);
-  validateContainerTaskArgs(value, path, errors);
+  const identity = containerTaskIdentityIsValid(value, path, errors);
+  const kind = isOneOf(value.kind, CONTAINER_TASK_KINDS);
+  if (!kind) errors.push(`${path}.kind is invalid`);
+  const engine = isOneOf(value.engine, CONTAINER_ENGINE_IDS);
+  if (!engine) errors.push(`${path}.engine is invalid`);
+  const args = validateTaskArguments(value, path, errors);
+  return identity && kind && engine && args;
 }
 
-function validateCatalogScalars(value: Record<string, unknown>, errors: string[]): void {
-  if (value.schemaVersion !== CONTAINER_RUNTIME_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
-  }
-  if (!isNonEmptyString(value.projectId)) {
-    errors.push("projectId must be a non-empty string");
-  }
-  if (typeof value.engineAvailable !== "boolean") {
-    errors.push("engineAvailable must be a boolean");
-  }
+function catalogFieldsAreValid(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & ContainerTaskCatalog {
+  const schema = value.schemaVersion === CONTAINER_RUNTIME_SCHEMA_VERSION;
+  if (!schema) errors.push("schemaVersion is invalid");
+  const project = isNonEmptyString(value.projectId);
+  if (!project) errors.push("projectId must be a non-empty string");
+  const engine = typeof value.engineAvailable === "boolean";
+  if (!engine) errors.push("engineAvailable must be a boolean");
+  const tasks = validateTaskCatalogMembers(value, errors, validateContainerTask);
+  return schema && project && engine && tasks;
 }
 
 export function validateContainerTaskCatalog(value: unknown): ContainerTaskCatalogParse {
   const errors: string[] = [];
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["catalog must be an object"] };
-  }
-  validateCatalogScalars(value, errors);
-  if (!Array.isArray(value.tasks)) {
-    errors.push("tasks must be an array");
-  } else {
-    value.tasks.forEach((task, index) => {
-      validateContainerTask(task, index, errors);
-    });
-  }
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, value: value as unknown as ContainerTaskCatalog };
+  if (!isRecord(value)) return { ok: false, errors: ["catalog must be an object"] };
+  if (!catalogFieldsAreValid(value, errors)) return { ok: false, errors };
+  return { ok: true, value };
 }
 
 // KEIKO-0601: the field-by-field scalar/runtime checks (schemaVersion, runId, taskId, kind,
@@ -463,8 +538,15 @@ export function validateContainerTaskCatalog(value: unknown): ContainerTaskCatal
 // validates it immediately after `kind` so the error order stays schemaVersion, runId, taskId, kind,
 // engine, failureReason, exitCode, durationMs, truncated, timedOut, stdout, stderr, exactly as
 // container-runtime.test.ts's fixed-order test pins.
-function validateEngineField(value: Record<string, unknown>, errors: string[]): void {
-  if (!isOneOf(value.engine, CONTAINER_ENGINE_IDS)) errors.push("engine is invalid");
+function validateEngineField(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & Pick<ContainerRunResult, "engine"> {
+  if (!isOneOf(value.engine, CONTAINER_ENGINE_IDS)) {
+    errors.push("engine is invalid");
+    return false;
+  }
+  return true;
 }
 
 export function validateContainerRunResult(value: unknown): ContainerRunResultParse {
@@ -472,18 +554,19 @@ export function validateContainerRunResult(value: unknown): ContainerRunResultPa
   if (!isRecord(value)) {
     return { ok: false, errors: ["result must be an object"] };
   }
-  validateRunResultCore(
-    value,
-    {
-      schemaVersion: CONTAINER_RUNTIME_SCHEMA_VERSION,
-      kinds: CONTAINER_TASK_KINDS,
-      failureReasons: CONTAINER_FAILURE_REASONS,
-    },
-    errors,
-    validateEngineField,
-  );
-  if (errors.length > 0) {
+  if (
+    !validateRunResultCore(
+      value,
+      {
+        schemaVersion: CONTAINER_RUNTIME_SCHEMA_VERSION,
+        kinds: CONTAINER_TASK_KINDS,
+        failureReasons: CONTAINER_FAILURE_REASONS,
+      },
+      errors,
+      validateEngineField,
+    )
+  ) {
     return { ok: false, errors };
   }
-  return { ok: true, value: value as unknown as ContainerRunResult };
+  return { ok: true, value };
 }

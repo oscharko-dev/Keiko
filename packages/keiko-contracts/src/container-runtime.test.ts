@@ -1,3 +1,13 @@
+import {
+  itAdmitsNativeTaskArrayMembers,
+  observedCatalogIdentityReads,
+  observedIdentityReads,
+} from "./__tests__/support/execution-task-admission.js";
+import {
+  registerPhysicalTaskCatalogContract,
+  type PhysicalTaskCatalogValidator,
+} from "./__tests__/support/physical-task-catalog-contract.js";
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 import { describe, expect, it } from "vitest";
 import {
   CONTAINER_ENGINE_IDS,
@@ -436,3 +446,224 @@ describe("validateContainerRunResult", () => {
     }
   });
 });
+
+// #3918: canonical runtime vocabularies own the capability response's declared output.
+import {
+  RUNTIME_CAPABILITY_STATES,
+  RUNTIME_CAPABILITY_UNAVAILABLE_REASONS,
+} from "./runtime-capabilities.js";
+
+describe("#3918 canonical container capability admission", () => {
+  it("rejects a noncanonical engine state from capability validation", () => {
+    const input = { ...baseCapability(), engines: [{ engine: "docker", state: "future-state" }] };
+    expect(validateContainerCapabilityResponse(input)).toEqual({
+      ok: false,
+      errors: ["engines[0].state is invalid"],
+    });
+  });
+  it("rejects a noncanonical optional engine-unavailable reason", () => {
+    const input = {
+      ...baseCapability(),
+      engines: [{ engine: "docker", state: "missing", unavailableReason: "future-reason" }],
+    };
+    expect(validateContainerCapabilityResponse(input)).toEqual({
+      ok: false,
+      errors: ["engines[0].unavailableReason is invalid"],
+    });
+  });
+  it.each(RUNTIME_CAPABILITY_STATES)(
+    "accepts canonical state %s without a new relational restriction",
+    (state) => {
+      const input = { ...baseCapability(), engines: [{ engine: "docker", state }] };
+      const result = validateContainerCapabilityResponse(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    },
+  );
+  it.each(RUNTIME_CAPABILITY_UNAVAILABLE_REASONS)(
+    "accepts canonical reason %s",
+    (unavailableReason) => {
+      const input = {
+        ...baseCapability(),
+        engines: [{ engine: "docker", state: "missing", unavailableReason }],
+      };
+      const result = validateContainerCapabilityResponse(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    },
+  );
+  it("preserves absent and explicit undefined optionals and ordinary strings", () => {
+    for (const optionals of [
+      {},
+      { version: undefined, unavailableReason: undefined, remediationHint: undefined },
+      { version: "1.0", remediationHint: "Install the optional engine" },
+    ]) {
+      const input = {
+        ...baseCapability(),
+        engines: [{ engine: "docker", state: "missing", ...optionals }],
+      };
+      const result = validateContainerCapabilityResponse(input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    }
+  });
+});
+
+describe("#3918 container checked-phase preservation", () => {
+  it("preserves request identity and optional field observation order", () => {
+    expect(
+      observedIdentityReads(parseContainerRunRequest, {
+        ...baseRequest(),
+        timeoutMs: 12,
+        requestId: "request-1",
+      }),
+    ).toEqual(["projectId", "taskId", "timeoutMs", "timeoutMs", "requestId", "requestId"]);
+  });
+  it("preserves original catalog and nested task/argument identity", () => {
+    expect(
+      observedCatalogIdentityReads(validateContainerTaskCatalog, baseCatalog(), baseTask()),
+    ).toEqual(["schemaVersion", "projectId", "engineAvailable", "tasks", "tasks"]);
+  });
+  it("preserves result identity and eager common-field order", () => {
+    expect(observedIdentityReads(validateContainerRunResult, { ...baseResult() })).toEqual([
+      "schemaVersion",
+      "runId",
+      "taskId",
+      "kind",
+      "engine",
+      "failureReason",
+      "exitCode",
+      "durationMs",
+      "truncated",
+      "timedOut",
+      "stdout",
+      "stderr",
+    ]);
+  });
+});
+
+describe("#3918 native array member admission", () => {
+  itAdmitsNativeTaskArrayMembers({
+    validate: validateContainerTaskCatalog,
+    catalog: baseCatalog,
+    task: baseTask,
+    malformed: { field: "image", error: "tasks[0].image must be a non-empty string" },
+  });
+});
+
+describe("#3918 native engine member admission", () => {
+  it("rejects malformed engines despite an own forEach that skips members", () => {
+    const engines = Object.defineProperty([{ engine: "other", state: "available" }], "forEach", {
+      value: (): void => undefined,
+    });
+    expect(validateContainerCapabilityResponse({ ...baseCapability(), engines })).toEqual({
+      ok: false,
+      errors: ["engines[0].engine is invalid"],
+    });
+  });
+  it("rejects an engine hole that cannot satisfy the member contract", () => {
+    expect(
+      validateContainerCapabilityResponse({ ...baseCapability(), engines: new Array<unknown>(1) }),
+    ).toEqual({ ok: false, errors: ["engines[0] must be an object"] });
+  });
+  it("rejects a nonarray second engine observation with the original two reads", () => {
+    let reads = 0;
+    const input = Object.defineProperty({ ...baseCapability() }, "engines", {
+      get: (): unknown =>
+        ++reads === 1 ? baseCapability().engines : { forEach: (): void => undefined },
+    });
+    expect(validateContainerCapabilityResponse(input)).toEqual({
+      ok: false,
+      errors: ["engines must be an array"],
+    });
+    expect(reads).toBe(2);
+  });
+});
+
+it("#3918 refuses a large sparse engines collection at its first missing member", () => {
+  const result = validateContainerCapabilityResponse({
+    ...baseCapability(),
+    engines: new Array<unknown>(100000),
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toBe("engines[0] must be an object");
+  }
+});
+
+it("#3918 bounds sparse container task diagnostics", () => {
+  const result = validateContainerTaskCatalog({
+    ...baseCatalog(),
+    tasks: new Array<unknown>(100000),
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toBe("tasks[0] must be an object");
+  }
+});
+
+it("#3918 retains inherited present container tasks and engines", () => {
+  const tasks = new Array<unknown>(1);
+  Object.setPrototypeOf(tasks, Object.defineProperty([], "0", { value: baseTask() }));
+  const catalog = { ...baseCatalog(), tasks };
+  const catalogResult = validateContainerTaskCatalog(catalog);
+  expect(catalogResult.ok).toBe(true);
+  if (catalogResult.ok) expect(catalogResult.value).toBe(catalog);
+  const engines = new Array<unknown>(1);
+  Object.setPrototypeOf(
+    engines,
+    Object.defineProperty([], "0", { value: { engine: "docker", state: "available" } }),
+  );
+  const capability = { ...baseCapability(), engines };
+  const capabilityResult = validateContainerCapabilityResponse(capability);
+  expect(capabilityResult.ok).toBe(true);
+  if (capabilityResult.ok) expect(capabilityResult.value).toBe(capability);
+});
+
+it("#3918 preserves dense container task and engine error order", () => {
+  expect(validateContainerTaskCatalog({ ...baseCatalog(), tasks: [null, null] })).toEqual({
+    ok: false,
+    errors: ["tasks[0] must be an object", "tasks[1] must be an object"],
+  });
+  expect(
+    validateContainerCapabilityResponse({ ...baseCapability(), engines: [null, null] }),
+  ).toEqual({
+    ok: false,
+    errors: ["engines[0] must be an object", "engines[1] must be an object"],
+  });
+});
+
+// Characterization of the existing catalog walk on ORIGINAL and SAME, not a new admission rule.
+async function catalogTraversalValidator(
+  surface: "source" | "public",
+): Promise<typeof validateContainerTaskCatalog> {
+  return surface === "source"
+    ? validateContainerTaskCatalog
+    : (await import("@oscharko-dev/keiko-contracts/runtime/container-runtime"))
+        .validateContainerTaskCatalog;
+}
+
+function assertContainerCatalogInspection(
+  validate: PhysicalTaskCatalogValidator,
+  input: unknown,
+  failure: TypeError,
+): void {
+  let caught: unknown;
+  try {
+    validate(input);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(failure);
+}
+
+registerPhysicalTaskCatalogContract(
+  "Container",
+  baseTask,
+  baseCatalog,
+  catalogTraversalValidator,
+  assertContainerCatalogInspection,
+  observeIndexedMembers,
+);

@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { expectKeyInspectionFailure } from "./__tests__/support/tagged-fact-observations.js";
+import { observeFieldReads } from "./__tests__/support/field-read-observations.js";
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND,
@@ -15,8 +18,15 @@ import {
   codeTaskQualificationVerdictFor,
   hasInheritedEnumerableProperty,
   isCodeTaskContentFreeNote,
+  isCodeTaskGitCommitSha,
+  isCodeTaskGitTreeSha,
+  type CodeTaskGitCommitSha,
+  type CodeTaskGitTreeSha,
   isCodeTaskIsoInstant,
   isCodeTaskRepoRelativePath,
+  isCodeTaskScenarioId,
+  isCodeTaskToolName,
+  type CodeTaskScenarioId,
   isCodeTaskSha256Digest,
   type CodeTaskSha256Digest,
   validateCodeTaskAcceptanceContribution,
@@ -29,6 +39,7 @@ import {
   type CodeTaskQualificationFlowArtifactV1,
 } from "./code-task-acceptance.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
+import { expectCodeTaskRecordAdmission } from "./__tests__/support/code-task-record-admission.js";
 
 const COMMIT_SHA = "a".repeat(40);
 const TREE_SHA = "b".repeat(40);
@@ -1587,4 +1598,1863 @@ describe("codeTaskQualificationManifestFailures and codeTaskQualificationVerdict
       ),
     ).toContain("duplicate flow taskRunId");
   });
+});
+
+// C1A proposed controls: execute on original source and freshly built public output before repair.
+describe("C1A concrete acceptance member admission", () => {
+  it.each(["source", "public"])(
+    "refuses skipped contribution members case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const scenarios: unknown[] = [null];
+      Object.defineProperty(scenarios, "forEach", { value: (): void => undefined });
+      expect(validate({ ...validContribution(), scenarios }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped contribution members case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const salvage: unknown[] = [null];
+      Object.defineProperty(salvage, "forEach", { value: (): void => undefined });
+      expect(validate({ ...validContribution(), salvage }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped contribution members case 3 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const scenarios: unknown[] = [null];
+      Object.defineProperty(scenarios, "forEach", { value: (): void => undefined });
+      expect(validate({ ...validContribution(), scenarios: Array<unknown>(1) }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped contribution members case 4 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const salvage: unknown[] = [null];
+      Object.defineProperty(salvage, "forEach", { value: (): void => undefined });
+      expect(validate({ ...validContribution(), salvage: Array<unknown>(1) }).ok).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses skipped digest and note members case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const artifactDigests: unknown[] = [7];
+      Object.defineProperty(artifactDigests, "every", { value: (): boolean => true });
+      expect(
+        validate({
+          ...contribution,
+          scenarios: [{ ...contribution.scenarios[0], artifactDigests }],
+        }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped digest and note members case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const knownLimitations: unknown[] = [7];
+      Object.defineProperty(knownLimitations, "every", { value: (): boolean => true });
+      expect(validate({ ...contribution, knownLimitations }).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped digest and note members case 3 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const artifactDigests: unknown[] = [7];
+      Object.defineProperty(artifactDigests, "every", { value: (): boolean => true });
+      expect(
+        validate({
+          ...contribution,
+          scenarios: [{ ...contribution.scenarios[0], artifactDigests: Array<unknown>(1) }],
+        }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped digest and note members case 4 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const knownLimitations: unknown[] = [7];
+      Object.defineProperty(knownLimitations, "every", { value: (): boolean => true });
+      expect(validate({ ...contribution, knownLimitations: Array<unknown>(1) }).ok).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 1 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const scenarios: unknown[] = [null];
+      Object.defineProperty(scenarios, "forEach", { value: (): void => undefined });
+      expect(validators.validateCodeTaskQualificationManifest({ ...manifest, scenarios }).ok).toBe(
+        false,
+      );
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 2 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const flows: unknown[] = [null];
+      Object.defineProperty(flows, "forEach", { value: (): void => undefined });
+      expect(validators.validateCodeTaskQualificationManifest({ ...manifest, flows }).ok).toBe(
+        false,
+      );
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 3 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const flows: unknown[] = [null];
+      Object.defineProperty(flows, "forEach", { value: (): void => undefined });
+      expect(
+        validators.validateCodeTaskQualificationManifest({ ...manifest, flows: Array<unknown>(1) })
+          .ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 4 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const scenarios: unknown[] = [null];
+      Object.defineProperty(scenarios, "forEach", { value: (): void => undefined });
+      const artifactDigests: unknown[] = [7];
+      Object.defineProperty(artifactDigests, "every", { value: (): boolean => true });
+      expect(
+        validators.validateCodeTaskQualificationManifest({
+          ...manifest,
+          scenarios: [{ ...manifest.scenarios[0], artifactDigests }],
+        }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 5 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const manifest = validQualificationManifest();
+      const knownLimitations: unknown[] = [7];
+      Object.defineProperty(knownLimitations, "every", { value: (): boolean => true });
+      expect(
+        validators.validateCodeTaskQualificationManifest({ ...manifest, knownLimitations }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped manifest and transition members case 6 through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateCodeTaskQualificationManifest, validateCodeTaskQualificationFlowArtifact }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const transitions = CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS.map(() => "wrong");
+      Object.defineProperty(transitions, "some", { value: (): boolean => false });
+      expect(
+        validators.validateCodeTaskQualificationFlowArtifact({
+          ...validQualificationFlow(),
+          transitions,
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses skipped authority fields case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const { approvalRequests } = skippedAuthorityArrays();
+      const authority = flow.authorityObservation;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, approvalRequests } }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped authority fields case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const { approvedProposalActions } = skippedAuthorityArrays();
+      const authority = flow.authorityObservation;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, approvedProposalActions } }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses skipped authority fields case 3 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const { effectStartedTools } = skippedAuthorityArrays();
+      const authority = flow.authorityObservation;
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, effectStartedTools } }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "refuses missing authority slots without changing accounting case 1 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const authority = flow.authorityObservation;
+      const { approvalRequests } = missingAuthoritySlots(authority);
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, approvalRequests } }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses missing authority slots without changing accounting case 2 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const authority = flow.authorityObservation;
+      const { approvedProposalActions } = missingAuthoritySlots(authority);
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, approvedProposalActions } }).ok,
+      ).toBe(false);
+    },
+  );
+  it.each(["source", "public"])(
+    "refuses missing authority slots without changing accounting case 3 through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const authority = flow.authorityObservation;
+      const { effectStartedTools } = missingAuthoritySlots(authority);
+      expect(
+        validate({ ...flow, authorityObservation: { ...authority, effectStartedTools } }).ok,
+      ).toBe(false);
+    },
+  );
+});
+
+function skippedAuthorityArrays(): {
+  approvalRequests: { actionClass: string | number; actionKind: string; requestCount: number }[];
+  approvedProposalActions: { actionKind: string; approvalCount: number }[];
+  effectStartedTools: { canonicalId: number; contractVersion: number; invocationCount: number }[];
+} {
+  const approvalRequests = [
+    { actionClass: 0, actionKind: "file-edit", requestCount: 1 },
+    { actionClass: "delivery-substrate", actionKind: "commit", requestCount: 1 },
+  ];
+  const approvedProposalActions = [{ actionKind: "commit", approvalCount: 0 }];
+  const effectStartedTools = [{ canonicalId: 0, contractVersion: 1, invocationCount: 3 }];
+  for (const entries of [approvalRequests, approvedProposalActions, effectStartedTools]) {
+    Object.defineProperty(entries, "flatMap", { value: (): unknown[] => [] });
+  }
+  return { approvalRequests, approvedProposalActions, effectStartedTools };
+}
+
+function missingAuthoritySlots(
+  authority: CodeTaskQualificationFlowArtifactV1["authorityObservation"],
+): Pick<
+  CodeTaskQualificationFlowArtifactV1["authorityObservation"],
+  "approvalRequests" | "approvedProposalActions" | "effectStartedTools"
+> {
+  const approvalRequests = [...authority.approvalRequests];
+  const approvedProposalActions = [...authority.approvedProposalActions];
+  const effectStartedTools = [...authority.effectStartedTools];
+  approvalRequests.length += 1;
+  approvedProposalActions.length += 1;
+  effectStartedTools.length += 1;
+  return { approvalRequests, approvedProposalActions, effectStartedTools };
+}
+
+describe("C1A acceptance preservation", () => {
+  it.each(["source", "public"])(
+    "retains three accepted roots and nested identities through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? {
+              validateCodeTaskAcceptanceContribution,
+              validateCodeTaskQualificationFlowArtifact,
+              validateCodeTaskQualificationManifest,
+            }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+      const contribution = validContribution();
+      const flow = validQualificationFlow();
+      const manifest = validQualificationManifest();
+      const first = validators.validateCodeTaskAcceptanceContribution(contribution);
+      const second = validators.validateCodeTaskQualificationFlowArtifact(flow);
+      const third = validators.validateCodeTaskQualificationManifest(manifest);
+      expect(
+        first.ok &&
+          first.value === contribution &&
+          first.value.scenarios === contribution.scenarios,
+      ).toBe(true);
+      expect(
+        second.ok &&
+          second.value === flow &&
+          second.value.authorityObservation === flow.authorityObservation,
+      ).toBe(true);
+      expect(
+        third.ok &&
+          third.value === manifest &&
+          third.value.observedSpendUsd === manifest.observedSpendUsd,
+      ).toBe(true);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "retains the whole-flow repository binding backstop through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskQualificationFlowArtifact
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskQualificationFlowArtifact;
+      const flow = validQualificationFlow();
+      const repository = { toString: (): string => flow.repository };
+      const result = validate({ ...flow, rubricReview: { ...flow.rubricReview, repository } });
+      expect(result.ok).toBe(false);
+      if (!result.ok)
+        expect(result.errors).toContain(
+          "flowArtifact.rubricReview must match the completed flow identity",
+        );
+    },
+  );
+
+  it.each(["source", "public"])(
+    "admits inherited present scenario slots through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskAcceptanceContribution
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+              .validateCodeTaskAcceptanceContribution;
+      const contribution = validContribution();
+      const scenarios: unknown[] = Array<unknown>(1);
+      Object.setPrototypeOf(scenarios, [contribution.scenarios[0]]);
+      const input = { ...contribution, scenarios };
+      const result = validate(input);
+      expect(result.ok && result.value === input && result.value.scenarios === scenarios).toBe(
+        true,
+      );
+    },
+  );
+});
+
+import {
+  ownField as publicOwnField,
+  isCodeTaskGitCommitSha as publicCommitShaGuard,
+  isCodeTaskGitTreeSha as publicTreeShaGuard,
+  type CodeTaskGitCommitSha as PublicCommitSha,
+  type CodeTaskGitTreeSha as PublicTreeSha,
+  isCodeTaskSha256Digest as publicDigestGuard,
+  isCodeTaskScenarioId as publicScenarioGuard,
+  isCodeTaskToolName as publicToolGuard,
+  type CodeTaskSha256Digest as PublicDigest,
+  type CodeTaskScenarioId as PublicScenario,
+  validateCodeTaskAcceptanceContribution as publicAcceptanceValidator,
+  validateCodeTaskQualificationFlowArtifact as publicQualificationFlow,
+  validateCodeTaskQualificationManifest as publicQualificationManifest,
+  type CodeTaskQualificationFlowArtifactV1 as PublicCodeTaskQualificationFlowArtifactV1,
+  type CodeTaskQualificationManifestV1 as PublicCodeTaskQualificationManifestV1,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
+import type {
+  CodingWorkbenchValidationResult,
+  CodeTaskAcceptanceContributionV1 as PublicCodeTaskAcceptanceContributionV1,
+} from "@oscharko-dev/keiko-contracts";
+
+export function rawReaderAcceptanceWitness(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicCodeTaskAcceptanceContributionV1> {
+  const result = publicAcceptanceValidator(input);
+  return result;
+}
+
+// The raw result has no domain guarantee. The complete owning validator supplies admission.
+describe("raw own-property reader public contract (#3918)", () => {
+  it("preserves unknown without any at the actual built public reader", () => {
+    expectTypeOf(publicOwnField).returns.toBeUnknown();
+    expectTypeOf(publicOwnField).returns.not.toBeAny();
+    const value = { accepted: false };
+    expect(publicOwnField({ value }, "value")).toBe(value);
+  });
+
+  it("reads own values and refuses inherited and absent values", () => {
+    const record: Record<string, unknown> = { value: 7 };
+    Object.setPrototypeOf(record, { inherited: 9 });
+    expect(publicOwnField(record, "value")).toBe(7);
+    expect(publicOwnField(record, "inherited")).toBeUndefined();
+    expect(publicOwnField(record, "absent")).toBeUndefined();
+  });
+
+  it("propagates an own getter failure and never invokes an inherited getter", () => {
+    const failure = new TypeError("reader fixture");
+    const record: Record<string, unknown> = {};
+    Object.defineProperty(record, "value", {
+      get: (): never => {
+        throw failure;
+      },
+    });
+    expect(() => publicOwnField(record, "value")).toThrow(failure);
+    const inherited: Record<string, unknown> = {};
+    Object.setPrototypeOf(inherited, record);
+    expect(publicOwnField(inherited, "value")).toBeUndefined();
+  });
+
+  it("checks the complete actual owning validator on healthy and malformed facts", () => {
+    expect(rawReaderAcceptanceWitness(validContribution()).ok).toBe(true);
+    expect(rawReaderAcceptanceWitness(withReceiptDigest({ outcome: "known", value: 7 })).ok).toBe(
+      false,
+    );
+    expect(rawReaderAcceptanceWitness(withReceiptDigest({ outcome: "known" })).ok).toBe(false);
+    expect(rawReaderAcceptanceWitness(null).ok).toBe(false);
+  });
+});
+
+import { ownField as sourceOwnField } from "./code-task-acceptance.js";
+
+it("keeps the source reader aligned with the actual public raw observations (#3918)", () => {
+  const record: Record<string, unknown> = { value: { raw: true } };
+  Object.setPrototypeOf(record, { inherited: 1 });
+  expect(sourceOwnField(record, "value")).toBe(record.value);
+  expect(sourceOwnField(record, "inherited")).toBeUndefined();
+  expect(sourceOwnField(record, "absent")).toBeUndefined();
+});
+
+type SourceContributionParse = CodingWorkbenchValidationResult<CodeTaskAcceptanceContributionV1>;
+type PublicContributionParse =
+  CodingWorkbenchValidationResult<PublicCodeTaskAcceptanceContributionV1>;
+type SourceQualificationFlowParse =
+  CodingWorkbenchValidationResult<CodeTaskQualificationFlowArtifactV1>;
+type PublicQualificationFlowParse =
+  CodingWorkbenchValidationResult<PublicCodeTaskQualificationFlowArtifactV1>;
+type SourceQualificationManifestParse =
+  CodingWorkbenchValidationResult<CodeTaskQualificationManifestV1>;
+type PublicQualificationManifestParse =
+  CodingWorkbenchValidationResult<PublicCodeTaskQualificationManifestV1>;
+
+export function parsePublicQualificationFlow(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicCodeTaskQualificationFlowArtifactV1> {
+  const result = publicQualificationFlow(input);
+  return result;
+}
+
+export function parsePublicQualificationManifest(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicCodeTaskQualificationManifestV1> {
+  const result = publicQualificationManifest(input);
+  return result;
+}
+
+describe("acceptance contribution public parser (#3918)", () => {
+  it("retains original contribution and nested evidence through the existing witness", () => {
+    const input = validContribution();
+    const result = rawReaderAcceptanceWitness(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public contribution refused");
+    expect(result.value).toBe(input);
+    expect(result.value.scenarios).toBe(input.scenarios);
+    expect(result.value.salvage).toBe(input.salvage);
+    expect(result.value.cleanup).toBe(input.cleanup);
+    expect(rawReaderAcceptanceWitness(null)).toEqual({
+      ok: false,
+      errors: ["contribution must be an object"],
+    });
+  });
+
+  it("pins source public and existing witness checked return types", () => {
+    expectTypeOf(
+      validateCodeTaskAcceptanceContribution,
+    ).returns.toEqualTypeOf<SourceContributionParse>();
+    expectTypeOf(publicAcceptanceValidator).returns.toEqualTypeOf<PublicContributionParse>();
+    expectTypeOf(rawReaderAcceptanceWitness).returns.toEqualTypeOf<PublicContributionParse>();
+    const result = rawReaderAcceptanceWitness(validContribution());
+    if (!result.ok) throw new TypeError("healthy public contribution types refused");
+    expectTypeOf(result.value.sourceCommitSha).toEqualTypeOf<
+      PublicCodeTaskAcceptanceContributionV1["sourceCommitSha"]
+    >();
+    expectTypeOf(result.value.scenarios).toEqualTypeOf<
+      PublicCodeTaskAcceptanceContributionV1["scenarios"]
+    >();
+    type Failure = Extract<ReturnType<typeof publicAcceptanceValidator>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("qualification flow public parser (#3918)", () => {
+  it("retains original flow authority and transition references", () => {
+    const input = validQualificationFlow();
+    const result = parsePublicQualificationFlow(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public qualification flow refused");
+    expect(result.value).toBe(input);
+    expect(result.value.authorityObservation).toBe(input.authorityObservation);
+    expect(result.value.transitions).toBe(input.transitions);
+    expect(result.value.rubricReview).toBe(input.rubricReview);
+    expect(parsePublicQualificationFlow(null)).toEqual({
+      ok: false,
+      errors: ["flowArtifact must be an object"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodeTaskQualificationFlowArtifact,
+    ).returns.toEqualTypeOf<SourceQualificationFlowParse>();
+    expectTypeOf(publicQualificationFlow).returns.toEqualTypeOf<PublicQualificationFlowParse>();
+    expectTypeOf(
+      parsePublicQualificationFlow,
+    ).returns.toEqualTypeOf<PublicQualificationFlowParse>();
+    const result = parsePublicQualificationFlow(validQualificationFlow());
+    if (!result.ok) throw new TypeError("healthy public qualification flow types refused");
+    expectTypeOf(result.value.flowId).toEqualTypeOf<
+      PublicCodeTaskQualificationFlowArtifactV1["flowId"]
+    >();
+    expectTypeOf(result.value.transitions).toEqualTypeOf<
+      PublicCodeTaskQualificationFlowArtifactV1["transitions"]
+    >();
+    type Failure = Extract<ReturnType<typeof publicQualificationFlow>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("qualification manifest public parser (#3918)", () => {
+  it("retains original manifest scenarios flows and spend references", () => {
+    const input = validQualificationManifest();
+    const result = parsePublicQualificationManifest(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy public qualification manifest refused");
+    expect(result.value).toBe(input);
+    expect(result.value.scenarios).toBe(input.scenarios);
+    expect(result.value.flows).toBe(input.flows);
+    expect(result.value.observedSpendUsd).toBe(input.observedSpendUsd);
+    expect(parsePublicQualificationManifest(null)).toEqual({
+      ok: false,
+      errors: ["manifest must be an object"],
+    });
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodeTaskQualificationManifest,
+    ).returns.toEqualTypeOf<SourceQualificationManifestParse>();
+    expectTypeOf(
+      publicQualificationManifest,
+    ).returns.toEqualTypeOf<PublicQualificationManifestParse>();
+    expectTypeOf(
+      parsePublicQualificationManifest,
+    ).returns.toEqualTypeOf<PublicQualificationManifestParse>();
+    const result = parsePublicQualificationManifest(validQualificationManifest());
+    if (!result.ok) throw new TypeError("healthy public qualification manifest types refused");
+    expectTypeOf(result.value.sourceTreeSha).toEqualTypeOf<
+      PublicCodeTaskQualificationManifestV1["sourceTreeSha"]
+    >();
+    expectTypeOf(result.value.flows).toEqualTypeOf<
+      PublicCodeTaskQualificationManifestV1["flows"]
+    >();
+    type Failure = Extract<ReturnType<typeof publicQualificationManifest>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+it.each(["source", "public"])(
+  "preserves strict record and own-key admission through %s",
+  async (surface) => {
+    const validate =
+      surface === "source"
+        ? validateCodeTaskAcceptanceContribution
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
+            .validateCodeTaskAcceptanceContribution;
+    expectCodeTaskRecordAdmission(
+      validate,
+      validContribution,
+      (input): object => input,
+      "contribution must not carry symbol-keyed properties",
+      (): readonly [string, string] => [
+        "contribution.fixtureExtra is not allowed",
+        "contribution must not carry symbol-keyed properties",
+      ],
+    );
+  },
+);
+
+const EVIDENCE_HEADER_OBSERVATIONS = [
+  "kind",
+  "schemaVersion",
+  "epicIssue",
+  "childIssue",
+  "sourceCommitSha",
+  "sourceTreeSha",
+] as const;
+
+function observeEvidenceHeader(
+  input: CodeTaskAcceptanceContributionV1 | CodeTaskQualificationManifestV1,
+  trace: string[],
+  invalid: boolean,
+): void {
+  const malformed = {
+    kind: "other",
+    schemaVersion: 2,
+    epicIssue: 0,
+    childIssue: 0,
+    sourceCommitSha: "invalid",
+    sourceTreeSha: "invalid",
+  };
+  for (const field of EVIDENCE_HEADER_OBSERVATIONS) {
+    const healthy = input[field];
+    Object.defineProperty(input, field, {
+      enumerable: true,
+      get: (): unknown => {
+        trace.push(field);
+        return invalid ? malformed[field] : healthy;
+      },
+    });
+  }
+}
+
+describe("acceptance evidence source provenance", () => {
+  it.each([
+    ["source", "contribution"],
+    ["public", "contribution"],
+    ["source", "manifest"],
+    ["public", "manifest"],
+  ] as const)("preserves complete header observations through %s %s", async (surface, kind) => {
+    const module =
+      surface === "source"
+        ? await import("./code-task-acceptance.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+    const validate =
+      kind === "contribution"
+        ? module.validateCodeTaskAcceptanceContribution
+        : module.validateCodeTaskQualificationManifest;
+    for (const invalid of [false, true]) {
+      const input = kind === "contribution" ? validContribution() : validQualificationManifest();
+      const trace: string[] = [];
+      observeEvidenceHeader(input, trace, invalid);
+      const result = validate(input);
+      expect(trace).toEqual(EVIDENCE_HEADER_OBSERVATIONS);
+      if (invalid) {
+        expect(result).toEqual({
+          ok: false,
+          errors: [
+            kind === "contribution"
+              ? "kind must be code-task-acceptance-contribution"
+              : "kind must be code-task-qualification-manifest",
+            "schemaVersion must be the literal 1",
+            "epicIssue must be a positive integer",
+            "childIssue must be a positive integer",
+            "sourceCommitSha is invalid",
+            "sourceTreeSha is invalid",
+          ],
+        });
+      } else {
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value).toBe(input);
+      }
+    }
+  });
+
+  it.each([
+    ["source", "contribution"],
+    ["public", "contribution"],
+    ["source", "manifest"],
+    ["public", "manifest"],
+  ] as const)("preserves provenance getter exceptions through %s %s", async (surface, kind) => {
+    const module =
+      surface === "source"
+        ? await import("./code-task-acceptance.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance");
+    const validate =
+      kind === "contribution"
+        ? module.validateCodeTaskAcceptanceContribution
+        : module.validateCodeTaskQualificationManifest;
+    for (const throwingField of [
+      "epicIssue",
+      "childIssue",
+      "sourceCommitSha",
+      "sourceTreeSha",
+    ] as const) {
+      const input = kind === "contribution" ? validContribution() : validQualificationManifest();
+      const trace: string[] = [];
+      const failure = new TypeError("fixture evidence source read refused");
+      for (const field of EVIDENCE_HEADER_OBSERVATIONS) {
+        const healthy = input[field];
+        Object.defineProperty(input, field, {
+          enumerable: true,
+          get: (): unknown => {
+            trace.push(field);
+            if (field === throwingField) throw failure;
+            return healthy;
+          },
+        });
+      }
+      expect(() => validate(input)).toThrow(failure);
+      expect(trace).toEqual(
+        EVIDENCE_HEADER_OBSERVATIONS.slice(
+          0,
+          EVIDENCE_HEADER_OBSERVATIONS.indexOf(throwingField) + 1,
+        ),
+      );
+    }
+  });
+});
+
+const ACCEPTANCE_AUTHORITY_POST_HOLE_TRACE: readonly string[] = [
+  "members:length",
+  "members:has:0",
+  "group",
+  "group:length",
+  "group:has:0",
+  "group:has:1",
+  "group:get:1",
+  "sum",
+  "sum:length",
+  "sum:has:0",
+  "sum:has:1",
+  "sum:get:1",
+  "account",
+  "account:length",
+  "account:get:0",
+  "account:length",
+  "account:get:1",
+  "account:length",
+];
+
+describe("acceptance physical member phase preservation", () => {
+  for (const { surface, validate, validateFlow } of [
+    {
+      surface: "source",
+      validate: validateCodeTaskAcceptanceContribution,
+      validateFlow: validateCodeTaskQualificationFlowArtifact,
+    },
+    {
+      surface: "public",
+      validate: publicAcceptanceValidator,
+      validateFlow: publicQualificationFlow,
+    },
+  ]) {
+    it(`${surface} admits the captured scenario prefix when its first getter grows the array`, () => {
+      const contribution = validContribution();
+      const entries: unknown[] = [...contribution.scenarios];
+      const trace: string[] = [];
+      const scenarios = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          if (key === "0") target.push(null);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const input = { ...contribution, scenarios };
+      const result = validate(input);
+      expect(result.ok && result.value === input && result.value.scenarios === scenarios).toBe(
+        true,
+      );
+      expect(entries).toHaveLength(2);
+      expect(trace).toEqual(["get:length", "has:0", "get:0"]);
+    });
+
+    it(`${surface} stops at a scenario hole while collecting later independent errors`, () => {
+      const trace: string[] = [];
+      const entries = Array<unknown>(2);
+      Object.defineProperty(entries, "1", {
+        get: (): never => {
+          throw new TypeError("later scenario must remain unread");
+        },
+      });
+      const scenarios = observeIndexedMembers(entries, trace);
+      expect(
+        validate({
+          ...validContribution(),
+          scenarios,
+          salvage: [null],
+          knownLimitations: 7,
+          cleanup: null,
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "scenarios[0] must be an object",
+          "salvage[0] must be an object",
+          "knownLimitations must be an array of bounded content-free notes",
+          "cleanup must be an object",
+        ],
+      });
+      expect(trace).toEqual(["get:length", "has:0"]);
+    });
+
+    it(`${surface} continues after an invalid present scenario to the exact later getter error`, () => {
+      const contribution = validContribution();
+      const scenario = contribution.scenarios[0];
+      if (scenario === undefined) throw new TypeError("healthy scenario fixture is missing");
+      const failure = new TypeError("opaque scenario inspection");
+      const trace: string[] = [];
+      const later = {
+        ...scenario,
+        get scenarioId(): never {
+          trace.push("scenarioId");
+          throw failure;
+        },
+      };
+      const scenarios = new Proxy([null, later], {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      let observed: unknown;
+      try {
+        validate({ ...contribution, scenarios });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["get:length", "has:0", "get:0", "has:1", "get:1", "scenarioId"]);
+    });
+
+    it(`${surface} refuses a captured later scenario slot deleted by the first member`, () => {
+      const contribution = validContribution();
+      const scenario = contribution.scenarios[0];
+      if (scenario === undefined) throw new TypeError("healthy scenario fixture is missing");
+      const entries: unknown[] = [scenario, scenario];
+      entries[0] = {
+        ...scenario,
+        get scenarioId(): string {
+          Reflect.deleteProperty(entries, "1");
+          return scenario.scenarioId;
+        },
+      };
+      const trace: string[] = [];
+      const scenarios = observeIndexedMembers(entries, trace);
+      expect(validate({ ...contribution, scenarios })).toEqual({
+        ok: false,
+        errors: ["scenarios[1] must be an object"],
+      });
+      expect(trace).toEqual(["get:length", "has:0", "get:0", "has:1"]);
+    });
+
+    it(`${surface} retains grouping summation and authority reads after the first request hole`, () => {
+      const flow = validQualificationFlow();
+      const request = flow.authorityObservation.approvalRequests[1];
+      if (request === undefined) throw new TypeError("healthy approval request fixture is missing");
+      const entries = Array<unknown>(2);
+      entries[1] = request;
+      const trace: string[] = [];
+      let phase = "members";
+      const approvalRequests = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`${phase}:has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          if (key === "filter" || key === "reduce") {
+            phase = key === "filter" ? "group" : "sum";
+            trace.push(phase);
+          }
+          if (key === Symbol.iterator) {
+            phase = "account";
+            trace.push(phase);
+          }
+          if (key === "length") trace.push(`${phase}:length`);
+          if (key === "0" || key === "1") trace.push(`${phase}:get:${key}`);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const result = validateFlow({
+        ...flow,
+        authorityObservation: { ...flow.authorityObservation, approvalRequests },
+      });
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.authorityObservation.approvalRequests[0] must be an object",
+          "flowArtifact.authorityObservation.approvalRequests must account for approvalRequestCount",
+        ],
+      });
+      expect(trace).toEqual(ACCEPTANCE_AUTHORITY_POST_HOLE_TRACE);
+    });
+
+    it(`${surface} refuses non-array requests before their accounting methods are inspected`, () => {
+      const flow = validQualificationFlow();
+      const approvalRequests = {
+        get filter(): never {
+          throw new TypeError("non-array grouping must remain unread");
+        },
+        get reduce(): never {
+          throw new TypeError("non-array summation must remain unread");
+        },
+        get [Symbol.iterator](): never {
+          throw new TypeError("non-array authority must remain unread");
+        },
+      };
+      const result = validateFlow({
+        ...flow,
+        authorityObservation: { ...flow.authorityObservation, approvalRequests },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new TypeError("non-array approval requests were admitted");
+      expect(result.errors).toContain(
+        "flowArtifact.authorityObservation.approvalRequests must be an array",
+      );
+    });
+  }
+});
+
+const ORDINARY_ACCEPTANCE_ARRAY_CASES = [
+  {
+    kind: "contribution",
+    field: "salvage",
+    errors: [
+      "salvage must be an array",
+      "knownLimitations must be an array of bounded content-free notes",
+      "cleanup must be an object",
+    ],
+    trace: ["salvage", "knownLimitations", "cleanup"],
+  },
+  {
+    kind: "contribution",
+    field: "scenarios",
+    errors: [
+      "scenarios must be an array",
+      "knownLimitations must be an array of bounded content-free notes",
+      "cleanup must be an object",
+    ],
+    trace: ["scenarios", "knownLimitations", "cleanup"],
+  },
+  {
+    kind: "manifest",
+    field: "flows",
+    errors: [
+      "flows must be an array",
+      "knownLimitations must be an array of bounded content-free notes",
+    ],
+    trace: ["flows", "knownLimitations"],
+  },
+  {
+    kind: "manifest",
+    field: "scenarios",
+    errors: [
+      "scenarios must be an array",
+      "knownLimitations must be an array of bounded content-free notes",
+    ],
+    trace: ["scenarios", "knownLimitations"],
+  },
+];
+
+describe("ordinary acceptance array admission preservation", () => {
+  for (const surface of ["source", "public"]) {
+    const contributionValidator =
+      surface === "source" ? validateCodeTaskAcceptanceContribution : publicAcceptanceValidator;
+    const manifestValidator =
+      surface === "source" ? validateCodeTaskQualificationManifest : publicQualificationManifest;
+    for (const entry of ORDINARY_ACCEPTANCE_ARRAY_CASES) {
+      it(`${surface} refuses non-array ${entry.kind}.${entry.field} without inspecting it`, () => {
+        const input =
+          entry.kind === "contribution"
+            ? { ...validContribution() }
+            : { ...validQualificationManifest() };
+        const trace: string[] = [];
+        const nonArray = {
+          get length(): never {
+            throw new TypeError("non-array length must remain unread");
+          },
+          get 0(): never {
+            throw new TypeError("non-array member must remain unread");
+          },
+          get [Symbol.iterator](): never {
+            throw new TypeError("non-array iterator must remain unread");
+          },
+        };
+        Object.defineProperty(input, entry.field, {
+          enumerable: true,
+          get: (): unknown => {
+            trace.push(entry.field);
+            return nonArray;
+          },
+        });
+        Object.defineProperty(input, "knownLimitations", {
+          enumerable: true,
+          get: (): unknown => {
+            trace.push("knownLimitations");
+            return 7;
+          },
+        });
+        if (entry.kind === "contribution") {
+          Object.defineProperty(input, "cleanup", {
+            enumerable: true,
+            get: (): unknown => {
+              trace.push("cleanup");
+              return null;
+            },
+          });
+        }
+        const validate = entry.kind === "contribution" ? contributionValidator : manifestValidator;
+        expect(validate(input)).toEqual({ ok: false, errors: entry.errors });
+        expect(trace).toEqual(entry.trace);
+      });
+    }
+
+    it(`${surface} propagates the own scenario getter error before later contribution fields`, () => {
+      const failure = new TypeError("opaque acceptance field inspection");
+      const trace: string[] = [];
+      const input = {
+        ...validContribution(),
+        get scenarios(): never {
+          trace.push("scenarios");
+          throw failure;
+        },
+        get salvage(): never {
+          trace.push("salvage");
+          throw new TypeError("later salvage must remain unread");
+        },
+        get knownLimitations(): never {
+          trace.push("knownLimitations");
+          throw new TypeError("later notes must remain unread");
+        },
+        get cleanup(): never {
+          trace.push("cleanup");
+          throw new TypeError("later cleanup must remain unread");
+        },
+      };
+      let observed: unknown;
+      try {
+        contributionValidator(input);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["scenarios"]);
+    });
+  }
+});
+
+describe("acceptance tagged-fact observation preservation", () => {
+  for (const surface of ["source", "public"]) {
+    const validate =
+      surface === "source" ? validateCodeTaskAcceptanceContribution : publicAcceptanceValidator;
+
+    it(`${surface} collects known fact key and value diagnostics in order`, () => {
+      const fact = { outcome: "known", value: "short", fixtureExtra: true };
+      Object.defineProperty(fact, Symbol("fixtureExtra"), { value: true });
+      expect(validate(withReceiptDigest(fact))).toEqual({
+        ok: false,
+        errors: [
+          "scenarios[0].receiptDigest.fixtureExtra is not allowed",
+          "scenarios[0].receiptDigest must not carry symbol-keyed properties",
+          "scenarios[0].receiptDigest.value is invalid for a known fact",
+        ],
+      });
+    });
+
+    for (const outcome of ["unknown", "unavailable", "absent"]) {
+      it(`${surface} collects ${outcome} key and value-presence diagnostics without reading value`, () => {
+        const fact = {
+          outcome,
+          get value(): never {
+            throw new TypeError("value-free fact must not read its value");
+          },
+          fixtureExtra: true,
+        };
+        Object.defineProperty(fact, Symbol("fixtureExtra"), { value: true });
+        expect(validate(withReceiptDigest(fact))).toEqual({
+          ok: false,
+          errors: [
+            "scenarios[0].receiptDigest.value is not allowed",
+            "scenarios[0].receiptDigest.fixtureExtra is not allowed",
+            "scenarios[0].receiptDigest must not carry symbol-keyed properties",
+            `scenarios[0].receiptDigest must not carry a value for outcome ${outcome}`,
+          ],
+        });
+      });
+    }
+
+    it(`${surface} propagates key inspection failure before known value access`, () => {
+      expectKeyInspectionFailure((fact) => validate(withReceiptDigest(fact)), DIGEST);
+    });
+
+    it(`${surface} preserves the exact known value getter failure`, () => {
+      const failure = new TypeError("opaque known fact value inspection");
+      const trace: string[] = [];
+      const fact = {
+        outcome: "known",
+        get value(): never {
+          trace.push("value");
+          throw failure;
+        },
+      };
+      let observed: unknown;
+      try {
+        validate(withReceiptDigest(fact));
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["value"]);
+    });
+  }
+});
+
+describe("own-field compatibility delegate observations", () => {
+  for (const surface of ["source", "public"]) {
+    const read = surface === "source" ? sourceOwnField : publicOwnField;
+
+    it(`${surface} checks ownership once before propagating the exact own getter failure`, () => {
+      const failure = new TypeError("opaque own-field getter");
+      const trace: string[] = [];
+      const record = new Proxy(
+        {
+          get value(): never {
+            throw failure;
+          },
+        },
+        {
+          getOwnPropertyDescriptor(target, key): PropertyDescriptor | undefined {
+            trace.push(`own:${String(key)}`);
+            return Reflect.getOwnPropertyDescriptor(target, key);
+          },
+          get(target, key, receiver): unknown {
+            trace.push(`get:${String(key)}`);
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      );
+      let observed: unknown;
+      try {
+        read(record, "value");
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["own:value", "get:value"]);
+    });
+
+    it(`${surface} refuses an inherited getter after only its own-property check`, () => {
+      const trace: string[] = [];
+      const target: Record<string, unknown> = {};
+      Object.setPrototypeOf(target, {
+        get inherited(): never {
+          throw new TypeError("inherited getter must remain unread");
+        },
+      });
+      const record = new Proxy(target, {
+        getOwnPropertyDescriptor(value, key): PropertyDescriptor | undefined {
+          trace.push(`own:${String(key)}`);
+          return Reflect.getOwnPropertyDescriptor(value, key);
+        },
+        get(): never {
+          throw new TypeError("absent own property must not be read");
+        },
+      });
+      expect(read(record, "inherited")).toBeUndefined();
+      expect(trace).toEqual(["own:inherited"]);
+    });
+  }
+});
+
+const NUMERIC_AUTHORITY_FIELDS = [
+  "approvalRequestCount",
+  "toolInvocationCount",
+  "effectStartedCount",
+  "completedToolCount",
+  "deniedToolCount",
+  "failedToolCount",
+  "otherToolCount",
+] as const;
+
+const NUMERIC_AUTHORITY_OBSERVATIONS = [
+  "approvalRequestCount",
+  "toolInvocationCount",
+  "effectStartedCount",
+  "completedToolCount",
+  "deniedToolCount",
+  "failedToolCount",
+  "otherToolCount",
+  "approvalRequestCount",
+  "effectStartedCount",
+  "toolInvocationCount",
+  "completedToolCount",
+  "deniedToolCount",
+  "failedToolCount",
+  "otherToolCount",
+  "approvalRequestCount",
+  "effectStartedCount",
+  "completedToolCount",
+  "toolInvocationCount",
+  "effectStartedCount",
+] as const;
+
+const NUMERIC_SPEND_FIELDS = [
+  "budgetNanoUsd",
+  "chargedDeltaNanoUsd",
+  "cumulativeChargedNanoUsd",
+  "remainingNanoUsd",
+] as const;
+
+const NUMERIC_SPEND_OBSERVATIONS = [
+  "budgetNanoUsd",
+  "chargedDeltaNanoUsd",
+  "cumulativeChargedNanoUsd",
+  "remainingNanoUsd",
+  "budgetNanoUsd",
+  "cumulativeChargedNanoUsd",
+  "remainingNanoUsd",
+] as const;
+
+describe("qualification numeric-field observation preservation", () => {
+  for (const surface of ["source", "public"]) {
+    const validate =
+      surface === "source" ? validateCodeTaskQualificationFlowArtifact : publicQualificationFlow;
+
+    it(`${surface} collects authority key errors before every malformed numeric member`, () => {
+      const flow = validQualificationFlow();
+      expect(
+        validate({
+          ...flow,
+          authorityObservation: {
+            ...flow.authorityObservation,
+            deniedToolCount: "invalid",
+            otherToolCount: false,
+            fixtureExtra: true,
+          },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.authorityObservation.fixtureExtra is not allowed",
+          "flowArtifact.authorityObservation.deniedToolCount must be a non-negative safe integer",
+          "flowArtifact.authorityObservation.otherToolCount must be a non-negative safe integer",
+        ],
+      });
+    });
+
+    it(`${surface} collects spend key errors before every malformed numeric member`, () => {
+      const flow = validQualificationFlow();
+      expect(
+        validate({
+          ...flow,
+          spend: {
+            ...flow.spend,
+            budgetNanoUsd: "invalid",
+            chargedDeltaNanoUsd: -1,
+            cumulativeChargedNanoUsd: 0.5,
+            remainingNanoUsd: false,
+            fixtureExtra: true,
+          },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.spend.fixtureExtra is not allowed",
+          "flowArtifact.spend.budgetNanoUsd must be a non-negative safe integer",
+          "flowArtifact.spend.chargedDeltaNanoUsd must be a non-negative safe integer",
+          "flowArtifact.spend.cumulativeChargedNanoUsd must be a non-negative safe integer",
+          "flowArtifact.spend.remainingNanoUsd must be a non-negative safe integer",
+        ],
+      });
+    });
+
+    it(`${surface} continues authority reads after refusal and propagates the middle getter error`, () => {
+      const flow = validQualificationFlow();
+      const failure = new TypeError("opaque authority count inspection");
+      const trace: string[] = [];
+      const authorityObservation = {
+        ...flow.authorityObservation,
+        get approvalRequestCount(): string {
+          trace.push("approvalRequestCount");
+          return "invalid";
+        },
+        get toolInvocationCount(): number {
+          trace.push("toolInvocationCount");
+          return 4;
+        },
+        get effectStartedCount(): never {
+          trace.push("effectStartedCount");
+          throw failure;
+        },
+        get completedToolCount(): never {
+          throw new TypeError("later count must remain unread");
+        },
+      };
+      let observed: unknown;
+      try {
+        validate({ ...flow, authorityObservation });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["approvalRequestCount", "toolInvocationCount", "effectStartedCount"]);
+    });
+
+    it(`${surface} continues spend reads after refusal and propagates the middle getter error`, () => {
+      const flow = validQualificationFlow();
+      const failure = new TypeError("opaque spend amount inspection");
+      const trace: string[] = [];
+      const spend = {
+        ...flow.spend,
+        get budgetNanoUsd(): string {
+          trace.push("budgetNanoUsd");
+          return "invalid";
+        },
+        get chargedDeltaNanoUsd(): number {
+          trace.push("chargedDeltaNanoUsd");
+          return flow.spend.chargedDeltaNanoUsd;
+        },
+        get cumulativeChargedNanoUsd(): never {
+          trace.push("cumulativeChargedNanoUsd");
+          throw failure;
+        },
+        get remainingNanoUsd(): never {
+          throw new TypeError("later spend must remain unread");
+        },
+      };
+      let observed: unknown;
+      try {
+        validate({ ...flow, spend });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["budgetNanoUsd", "chargedDeltaNanoUsd", "cumulativeChargedNanoUsd"]);
+    });
+
+    it(`${surface} retains healthy authority identity and all later accounting reads`, () => {
+      const flow = validQualificationFlow();
+      const trace: string[] = [];
+      const authorityObservation = { ...flow.authorityObservation };
+      observeFieldReads(authorityObservation, NUMERIC_AUTHORITY_FIELDS, trace);
+      const input = { ...flow, authorityObservation };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy numeric authority fixture refused");
+      expect(result.value).toBe(input);
+      expect(result.value.authorityObservation).toBe(authorityObservation);
+      expect(trace).toEqual(NUMERIC_AUTHORITY_OBSERVATIONS);
+    });
+
+    it(`${surface} retains healthy spend identity and later ordered balance reads`, () => {
+      const flow = validQualificationFlow();
+      const trace: string[] = [];
+      const spend = { ...flow.spend };
+      observeFieldReads(spend, NUMERIC_SPEND_FIELDS, trace);
+      const input = { ...flow, spend };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy numeric spend fixture refused");
+      expect(result.value).toBe(input);
+      expect(result.value.spend).toBe(spend);
+      expect(trace).toEqual(NUMERIC_SPEND_OBSERVATIONS);
+    });
+
+    it(`${surface} still checks authority accounting after numeric refusal`, () => {
+      const flow = validQualificationFlow();
+      expect(
+        validate({
+          ...flow,
+          authorityObservation: { ...flow.authorityObservation, approvalRequestCount: "invalid" },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.authorityObservation.approvalRequestCount must be a non-negative safe integer",
+          "flowArtifact.authorityObservation.approvalRequests must account for approvalRequestCount",
+        ],
+      });
+    });
+
+    it(`${surface} still checks spend balance after numeric refusal`, () => {
+      const flow = validQualificationFlow();
+      expect(
+        validate({
+          ...flow,
+          spend: {
+            ...flow.spend,
+            chargedDeltaNanoUsd: "invalid",
+            remainingNanoUsd: flow.spend.remainingNanoUsd + 1,
+          },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.spend.chargedDeltaNanoUsd must be a non-negative safe integer",
+          "flowArtifact.spend cumulative charge plus remaining amount must equal budget",
+        ],
+      });
+    });
+  }
+});
+
+describe("acceptance evidence header exception identity (#3918)", (): void => {
+  for (const surface of ["source", "public"] as const) {
+    const contributionValidator =
+      surface === "source" ? validateCodeTaskAcceptanceContribution : publicAcceptanceValidator;
+    const manifestValidator =
+      surface === "source" ? validateCodeTaskQualificationManifest : publicQualificationManifest;
+    for (const kind of ["contribution", "manifest"] as const) {
+      const validate = kind === "contribution" ? contributionValidator : manifestValidator;
+
+      it(`${surface} ${kind} preserves a throwing kind or schema getter exactly`, (): void => {
+        for (const field of ["kind", "schemaVersion"] as const) {
+          const input =
+            kind === "contribution" ? validContribution() : validQualificationManifest();
+          const trace: string[] = [];
+          const failure: Error = Object.freeze(new TypeError("synthetic header refusal"));
+          const receivers: unknown[] = [];
+          observeEvidenceHeader(input, trace, true);
+          Object.defineProperty(input, field, {
+            get(this: unknown): never {
+              receivers.push(this);
+              trace.push(field);
+              throw failure;
+            },
+          });
+          let caught: unknown;
+          try {
+            validate(input);
+          } catch (error) {
+            caught = error;
+          }
+          expect(caught).toBe(failure);
+          expect(receivers).toHaveLength(1);
+          expect(receivers[0]).toBe(input);
+          expect(trace).toEqual(field === "kind" ? ["kind"] : ["kind", "schemaVersion"]);
+        }
+      });
+
+      it(`${surface} ${kind} reaches a throwing provenance getter after invalid headers`, (): void => {
+        const input = kind === "contribution" ? validContribution() : validQualificationManifest();
+        const trace: string[] = [];
+        const failure: Error = Object.freeze(new TypeError("synthetic provenance refusal"));
+        const receivers: unknown[] = [];
+        observeEvidenceHeader(input, trace, true);
+        Object.defineProperty(input, "sourceTreeSha", {
+          get(this: unknown): never {
+            receivers.push(this);
+            trace.push("sourceTreeSha");
+            throw failure;
+          },
+        });
+        let caught: unknown;
+        try {
+          validate(input);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBe(failure);
+        expect(receivers).toHaveLength(1);
+        expect(receivers[0]).toBe(input);
+        expect(trace).toEqual(EVIDENCE_HEADER_OBSERVATIONS);
+      });
+    }
+  }
+});
+
+// Observe the actual production receiver without duplicating its lexical formula.
+function captureAcceptanceGitShaPattern(guard: (value: unknown) => boolean, value: string): RegExp {
+  const original = Object.getOwnPropertyDescriptor(RegExp.prototype, "test");
+  if (original === undefined) throw new TypeError("RegExp test descriptor is required");
+  const receivers: RegExp[] = [];
+  try {
+    Object.defineProperty(RegExp.prototype, "test", {
+      configurable: true,
+      writable: true,
+      value: function (this: RegExp): boolean {
+        receivers.push(this);
+        return true;
+      },
+    });
+    guard(value);
+  } finally {
+    Object.defineProperty(RegExp.prototype, "test", original);
+  }
+  const receiver = receivers[0];
+  if (receivers.length !== 1 || receiver === undefined) {
+    throw new TypeError("the guard must make one production regex call");
+  }
+  return receiver;
+}
+
+function restoreAcceptanceGitShaTest(
+  pattern: RegExp,
+  original: PropertyDescriptor | undefined,
+): void {
+  if (original === undefined) {
+    Reflect.deleteProperty(pattern, "test");
+  } else {
+    Object.defineProperty(pattern, "test", original);
+  }
+}
+
+function collectAcceptanceGitShaThrow(
+  guard: (value: unknown) => boolean,
+  value: string,
+  failures: unknown[],
+): void {
+  try {
+    guard(value);
+  } catch (error) {
+    failures.push(error);
+  }
+}
+
+function observeAcceptanceGitShaMethod(
+  commit: (value: unknown) => boolean,
+  tree: (value: unknown) => boolean,
+): void {
+  const contribution = validContribution();
+  const pattern = captureAcceptanceGitShaPattern(commit, contribution.sourceCommitSha);
+  const original = Object.getOwnPropertyDescriptor(pattern, "test");
+  const getters: RegExp[] = [];
+  const receivers: RegExp[] = [];
+  const values: string[] = [];
+  const outcomes: boolean[] = [];
+  try {
+    Object.defineProperty(pattern, "test", {
+      configurable: true,
+      get(this: RegExp): (value: string) => boolean {
+        getters.push(this);
+        return function (this: RegExp, value: string): boolean {
+          receivers.push(this);
+          values.push(value);
+          return values.length === 1;
+        };
+      },
+    });
+    outcomes.push(commit(contribution.sourceCommitSha), tree(contribution.sourceTreeSha));
+    outcomes.push(commit(null), tree({}));
+  } finally {
+    restoreAcceptanceGitShaTest(pattern, original);
+  }
+  expect(outcomes).toEqual([true, false, false, false]);
+  expect(getters).toHaveLength(2);
+  expect(receivers).toHaveLength(2);
+  for (const receiver of [...getters, ...receivers]) expect(receiver).toBe(pattern);
+  expect(values).toEqual([contribution.sourceCommitSha, contribution.sourceTreeSha]);
+}
+
+function observeAcceptanceGitShaThrows(
+  commit: (value: unknown) => boolean,
+  tree: (value: unknown) => boolean,
+): void {
+  const contribution = validContribution();
+  const pattern = captureAcceptanceGitShaPattern(commit, contribution.sourceCommitSha);
+  const original = Object.getOwnPropertyDescriptor(pattern, "test");
+  const failure: Error = Object.freeze(new TypeError("synthetic Git SHA method refusal"));
+  const failures: unknown[] = [];
+  const receivers: RegExp[] = [];
+  const values: string[] = [];
+  try {
+    Object.defineProperty(pattern, "test", {
+      configurable: true,
+      get(this: RegExp): never {
+        receivers.push(this);
+        throw failure;
+      },
+    });
+    collectAcceptanceGitShaThrow(commit, contribution.sourceCommitSha, failures);
+    collectAcceptanceGitShaThrow(tree, contribution.sourceTreeSha, failures);
+    Object.defineProperty(pattern, "test", {
+      configurable: true,
+      value: function (this: RegExp, value: string): never {
+        receivers.push(this);
+        values.push(value);
+        throw failure;
+      },
+    });
+    collectAcceptanceGitShaThrow(commit, contribution.sourceCommitSha, failures);
+    collectAcceptanceGitShaThrow(tree, contribution.sourceTreeSha, failures);
+  } finally {
+    restoreAcceptanceGitShaTest(pattern, original);
+  }
+  expect(failures).toHaveLength(4);
+  for (const caught of failures) expect(caught).toBe(failure);
+  expect(receivers).toHaveLength(4);
+  for (const receiver of receivers) expect(receiver).toBe(pattern);
+  expect(values).toEqual([contribution.sourceCommitSha, contribution.sourceTreeSha]);
+}
+
+const ACCEPTANCE_GIT_SHA_SURFACES = [
+  { name: "source", commit: isCodeTaskGitCommitSha, tree: isCodeTaskGitTreeSha },
+  { name: "public", commit: publicCommitShaGuard, tree: publicTreeShaGuard },
+] as const;
+
+describe("Acceptance Git SHA admission observations (#3918)", () => {
+  it("preserves each source and public nominal predicate contract", (): void => {
+    expectTypeOf(isCodeTaskGitCommitSha).toEqualTypeOf<
+      (value: unknown) => value is CodeTaskGitCommitSha
+    >();
+    expectTypeOf(isCodeTaskGitTreeSha).toEqualTypeOf<
+      (value: unknown) => value is CodeTaskGitTreeSha
+    >();
+    expectTypeOf(publicCommitShaGuard).toEqualTypeOf<
+      (value: unknown) => value is PublicCommitSha
+    >();
+    expectTypeOf(publicTreeShaGuard).toEqualTypeOf<(value: unknown) => value is PublicTreeSha>();
+  });
+
+  for (const surface of ACCEPTANCE_GIT_SHA_SURFACES) {
+    for (const [name, guard] of [
+      ["commit", surface.commit],
+      ["tree", surface.tree],
+    ] as const) {
+      it(`${surface.name} ${name} retains exact lexical bounds and never coerces`, (): void => {
+        const contribution = validContribution();
+        const healthy =
+          name === "commit" ? contribution.sourceCommitSha : contribution.sourceTreeSha;
+        let conversions = 0;
+        const hostile = {
+          [Symbol.toPrimitive](): never {
+            conversions += 1;
+            throw new TypeError("Git SHA input must not be coerced");
+          },
+        };
+        const boxed: unknown = Reflect.construct(String, [healthy]);
+        expect(guard(healthy)).toBe(true);
+        for (const value of [
+          healthy.slice(1),
+          `${healthy}a`,
+          DIGEST,
+          healthy.toUpperCase(),
+          "g".repeat(40),
+          "",
+        ]) {
+          expect(guard(value)).toBe(false);
+        }
+        for (const value of [
+          undefined,
+          null,
+          0,
+          true,
+          Symbol("sha"),
+          [],
+          {},
+          hostile,
+          boxed,
+          (): string => healthy,
+        ]) {
+          expect(guard(value)).toBe(false);
+        }
+        expect(conversions).toBe(0);
+      });
+    }
+    it(`${surface.name} retains late method lookup and the same commit/tree regex receiver`, (): void => {
+      observeAcceptanceGitShaMethod(surface.commit, surface.tree);
+    });
+    it(`${surface.name} propagates exact getter and method failures for both brands`, (): void => {
+      observeAcceptanceGitShaThrows(surface.commit, surface.tree);
+    });
+  }
+});
+
+interface AcceptancePatternCase {
+  readonly name: string;
+  readonly source: (value: unknown) => boolean;
+  readonly public: (value: unknown) => boolean;
+  readonly healthy: readonly string[];
+  readonly refused: readonly string[];
+}
+
+function remainingAcceptancePatternCases(): readonly AcceptancePatternCase[] {
+  const scenario = validContribution().scenarios[0];
+  const tool = CODE_TASK_QUALIFICATION_REQUIRED_TOOLS[0];
+  const digestValue = scenario?.artifactDigests[0];
+  if (scenario === undefined || digestValue === undefined) {
+    throw new TypeError("complete Acceptance fixtures are required");
+  }
+  return [
+    {
+      name: "digest",
+      source: isCodeTaskSha256Digest,
+      public: publicDigestGuard,
+      healthy: [digestValue],
+      refused: [
+        digestValue.slice(1),
+        `${digestValue}a`,
+        COMMIT_SHA,
+        digestValue.toUpperCase(),
+        "g".repeat(64),
+        "",
+      ],
+    },
+    {
+      name: "scenario",
+      source: isCodeTaskScenarioId,
+      public: publicScenarioGuard,
+      healthy: [scenario.scenarioId, "a-b", "1ab", "a".repeat(64)],
+      refused: ["ab", "a".repeat(65), "Aaa", "a_b", ""],
+    },
+    {
+      name: "tool",
+      source: isCodeTaskToolName,
+      public: publicToolGuard,
+      healthy: [tool, "a1", "a_b", "a".repeat(64)],
+      refused: ["a", "a".repeat(65), "1ab", "a-b", "Aaa", ""],
+    },
+  ];
+}
+
+function expectAcceptancePatternNonStrings(
+  guard: (value: unknown) => boolean,
+  healthy: string,
+): void {
+  let conversions = 0;
+  const hostile = {
+    [Symbol.toPrimitive](): never {
+      conversions += 1;
+      throw new TypeError("Acceptance lexical inputs must not be coerced");
+    },
+  };
+  const boxed: unknown = Reflect.construct(String, [healthy]);
+  for (const value of [
+    undefined,
+    null,
+    0,
+    true,
+    Symbol("format"),
+    [],
+    {},
+    hostile,
+    boxed,
+    (): string => healthy,
+  ]) {
+    expect(guard(value)).toBe(false);
+  }
+  expect(conversions).toBe(0);
+}
+
+function expectAcceptancePatternLanguage(
+  policy: AcceptancePatternCase,
+  guard: (value: unknown) => boolean,
+): void {
+  const first = policy.healthy[0];
+  if (first === undefined) throw new TypeError("a native healthy control is required");
+  for (const value of policy.healthy) expect(guard(value)).toBe(true);
+  for (const value of policy.refused) expect(guard(value)).toBe(false);
+  expectAcceptancePatternNonStrings(guard, first);
+}
+
+describe("Acceptance remaining pattern admission observations (#3918)", () => {
+  it("preserves each source and public digest, scenario and tool predicate contract", (): void => {
+    expectTypeOf(isCodeTaskSha256Digest).toEqualTypeOf<
+      (value: unknown) => value is CodeTaskSha256Digest
+    >();
+    expectTypeOf(isCodeTaskScenarioId).toEqualTypeOf<
+      (value: unknown) => value is CodeTaskScenarioId
+    >();
+    expectTypeOf(isCodeTaskToolName).toEqualTypeOf<(value: unknown) => value is string>();
+    expectTypeOf(publicDigestGuard).toEqualTypeOf<(value: unknown) => value is PublicDigest>();
+    expectTypeOf(publicScenarioGuard).toEqualTypeOf<(value: unknown) => value is PublicScenario>();
+    expectTypeOf(publicToolGuard).toEqualTypeOf<(value: unknown) => value is string>();
+  });
+
+  for (const policy of remainingAcceptancePatternCases()) {
+    for (const surface of [
+      { name: "source", guard: policy.source },
+      { name: "public", guard: policy.public },
+    ]) {
+      it(`${surface.name} ${policy.name} retains its own native language and refuses coercion`, (): void => {
+        expectAcceptancePatternLanguage(policy, surface.guard);
+      });
+      it(`${surface.name} ${policy.name} retains late lookup, arguments and its actual receiver`, (): void => {
+        // Controlled primitive strings observe forwarding separately from native-language admission.
+        observeAcceptanceGitShaMethod(surface.guard, surface.guard);
+      });
+      it(`${surface.name} ${policy.name} propagates exact getter and method failures`, (): void => {
+        observeAcceptanceGitShaThrows(surface.guard, surface.guard);
+      });
+    }
+  }
 });

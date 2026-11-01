@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
+import type {
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import {
+  itAdmitsNativeTaskArrayMembers,
+  observedCatalogIdentityReads,
+  observedIdentityReads,
+} from "./__tests__/support/execution-task-admission.js";
+import {
+  registerPhysicalTaskCatalogContract,
+  type PhysicalTaskCatalogValidator,
+} from "./__tests__/support/physical-task-catalog-contract.js";
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  MAX_PROJECT_ID_LENGTH,
+  MAX_TASK_ID_LENGTH,
+  MAX_REQUEST_ID_LENGTH,
   COMMAND_FAILURE_REASONS,
   COMMAND_RUNNER_EVENT_KINDS,
   COMMAND_RUNNER_SCHEMA_VERSION,
@@ -479,3 +496,412 @@ describe("validateRunResultCore (shared with container-runtime.ts, KEIKO-0601)",
     expect(errors).toEqual(["engine is invalid", "failureReason is invalid"]);
   });
 });
+
+describe("#3918 command checked-phase preservation", () => {
+  it("preserves request identity and optional field observation order", () => {
+    expect(
+      observedIdentityReads(parseCommandTaskRunRequest, {
+        ...baseRequest(),
+        timeoutMs: 12,
+        requestId: "request-1",
+      }),
+    ).toEqual(["projectId", "taskId", "timeoutMs", "timeoutMs", "requestId", "requestId"]);
+  });
+  it("preserves original catalog and nested task/argument identity", () => {
+    expect(
+      observedCatalogIdentityReads(validateCommandTaskCatalog, baseCatalog(), baseTask()),
+    ).toEqual(["schemaVersion", "projectId", "tasks", "tasks"]);
+  });
+  it("preserves result identity and eager common-field order", () => {
+    expect(observedIdentityReads(validateCommandTaskRunResult, { ...baseResult() })).toEqual([
+      "schemaVersion",
+      "runId",
+      "taskId",
+      "kind",
+      "failureReason",
+      "exitCode",
+      "durationMs",
+      "truncated",
+      "timedOut",
+      "stdout",
+      "stderr",
+    ]);
+  });
+});
+
+describe("#3918 native array member admission", () => {
+  itAdmitsNativeTaskArrayMembers({
+    validate: validateCommandTaskCatalog,
+    catalog: baseCatalog,
+    task: baseTask,
+    malformed: { field: "id", error: "tasks[0].id must be a non-empty string" },
+  });
+});
+
+it("#3918 refuses a large sparse tasks collection at its first missing member", () => {
+  const result = validateCommandTaskCatalog({
+    ...baseCatalog(),
+    tasks: new Array<unknown>(100000),
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toBe("tasks[0] must be an object");
+  }
+});
+
+it("#3918 retains inherited present tasks and their original references", () => {
+  const tasks = new Array<unknown>(1);
+  Object.setPrototypeOf(tasks, Object.defineProperty([], "0", { value: baseTask() }));
+  const input = { ...baseCatalog(), tasks };
+  const result = validateCommandTaskCatalog(input);
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.value).toBe(input);
+});
+
+it("#3918 preserves dense task error order", () => {
+  expect(validateCommandTaskCatalog({ ...baseCatalog(), tasks: [null, null] })).toEqual({
+    ok: false,
+    errors: ["tasks[0] must be an object", "tasks[1] must be an object"],
+  });
+});
+
+import {
+  parseCommandTaskRunRequest as publicCommandRequest,
+  validateCommandTaskCatalog as publicCommandCatalog,
+  validateCommandTaskRunResult as publicCommandResult,
+  type CommandTaskRunRequestParse as PublicCommandRequestParse,
+  type CommandTaskCatalogParse as PublicCommandCatalogParse,
+  type CommandTaskRunResultParse as PublicCommandResultParse,
+} from "@oscharko-dev/keiko-contracts/runtime/command-runner";
+
+export function parsePublicCommandRequest(input: unknown): PublicCommandRequestParse {
+  const result = publicCommandRequest(input);
+  return result;
+}
+export function parsePublicCommandCatalog(input: unknown): PublicCommandCatalogParse {
+  const result = publicCommandCatalog(input);
+  return result;
+}
+export function parsePublicCommandResult(input: unknown): PublicCommandResultParse {
+  const result = publicCommandResult(input);
+  return result;
+}
+
+function throwingCommandField(field: string, thrown: unknown): unknown {
+  return Object.defineProperty({}, field, {
+    enumerable: true,
+    get: (): never => {
+      throw thrown;
+    },
+  });
+}
+function commandInspectionInputs(field: string): readonly unknown[] {
+  const error = Object.defineProperty(new Error("fixture-private-message"), "name", {
+    value: "fixture-private-name",
+  });
+  const privateAccess = Object.defineProperties(new Error(), {
+    name: {
+      get: (): never => {
+        throw new Error("private name inspected");
+      },
+    },
+    message: {
+      get: (): never => {
+        throw new Error("private message inspected");
+      },
+    },
+    stack: {
+      get: (): never => {
+        throw new Error("private stack inspected");
+      },
+    },
+  });
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  return [
+    throwingCommandField(field, error),
+    throwingCommandField(field, undefined),
+    throwingCommandField(field, null),
+    throwingCommandField(field, "fixture-private-thrown-string"),
+    throwingCommandField(field, privateAccess),
+    new Proxy(
+      {},
+      {
+        ownKeys: (): never => {
+          throw error;
+        },
+      },
+    ),
+    revoked.proxy,
+  ];
+}
+
+describe("Command request public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseCommandTaskRunRequest,
+        typeof publicCommandRequest,
+        typeof parsePublicCommandRequest
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PublicCommandRequestParse,
+        PublicCommandRequestParse,
+        PublicCommandRequestParse
+      >
+    >();
+    expectTypeOf(publicCommandRequest).toEqualTypeOf<typeof parseCommandTaskRunRequest>();
+  });
+  it("preserves request identity optionals and owning field observation order", () => {
+    expect(
+      observedIdentityReads(parsePublicCommandRequest, {
+        ...baseRequest(),
+        timeoutMs: 12,
+        requestId: "request-1",
+      }),
+    ).toEqual(["projectId", "taskId", "timeoutMs", "timeoutMs", "requestId", "requestId"]);
+    const absent = baseRequest();
+    const explicit = { ...baseRequest(), timeoutMs: undefined, requestId: undefined };
+    for (const input of [absent, explicit])
+      expect(parsePublicCommandRequest(input)).toEqual({ ok: true, value: input });
+  });
+  it("enforces producer owned identifier bounds and timer safety", () => {
+    expect(
+      parsePublicCommandRequest({
+        projectId: "x".repeat(MAX_PROJECT_ID_LENGTH),
+        taskId: "x".repeat(MAX_TASK_ID_LENGTH),
+        requestId: "x".repeat(MAX_REQUEST_ID_LENGTH),
+      }).ok,
+    ).toBe(true);
+    for (const input of [
+      { ...baseRequest(), projectId: "x".repeat(MAX_PROJECT_ID_LENGTH + 1) },
+      { ...baseRequest(), taskId: "x".repeat(MAX_TASK_ID_LENGTH + 1) },
+      { ...baseRequest(), requestId: "x".repeat(MAX_REQUEST_ID_LENGTH + 1) },
+      { ...baseRequest(), taskId: "private-task\ncontrol" },
+      { ...baseRequest(), timeoutMs: 0.5 },
+      { ...baseRequest(), timeoutMs: Number.MAX_SAFE_INTEGER + 1 },
+    ])
+      expect(parsePublicCommandRequest(input).ok).toBe(false);
+  });
+  it("preserves ordered closed field refusals and rejects extra data", () => {
+    const healthy = baseRequest();
+    expect(parseCommandTaskRunRequest(healthy)).toEqual({ ok: true, value: healthy });
+    expect(parsePublicCommandRequest(healthy)).toEqual({ ok: true, value: healthy });
+    for (const parse of [parseCommandTaskRunRequest, parsePublicCommandRequest]) {
+      expect(parse({ taskId: "npm-script:test" })).toEqual({
+        ok: false,
+        errors: ["projectId must be a non-empty string"],
+      });
+      expect(parse({ ...baseRequest(), projectId: 42 })).toEqual({
+        ok: false,
+        errors: ["projectId must be a non-empty string"],
+      });
+    }
+    expect(
+      parsePublicCommandRequest({
+        extra: "fixture-private-body",
+        projectId: "",
+        taskId: "",
+        timeoutMs: 0,
+        requestId: 2,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "request.extra is not allowed",
+        "projectId must be a non-empty string",
+        `taskId must be a non-empty string of up to ${String(MAX_TASK_ID_LENGTH)} characters`,
+        "timeoutMs must be a positive finite number",
+        `requestId must be a token of 1-${String(MAX_REQUEST_ID_LENGTH)} characters`,
+      ],
+    });
+    for (const input of [null, [], 7])
+      expect(parsePublicCommandRequest(input)).toEqual({
+        ok: false,
+        errors: ["request must be an object"],
+      });
+  });
+  it("closes hostile getters undefined throws and revoked proxies without private error inspection", () => {
+    for (const input of commandInspectionInputs("projectId")) {
+      const expected = { ok: false, errors: ["payload could not be inspected"] };
+      expect(parseCommandTaskRunRequest(input)).toEqual(expected);
+      expect(parsePublicCommandRequest(input)).toEqual(expected);
+    }
+  });
+});
+
+describe("Command catalog public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateCommandTaskCatalog,
+        typeof publicCommandCatalog,
+        typeof parsePublicCommandCatalog
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PublicCommandCatalogParse,
+        PublicCommandCatalogParse,
+        PublicCommandCatalogParse
+      >
+    >();
+    expectTypeOf(publicCommandCatalog).toEqualTypeOf<typeof validateCommandTaskCatalog>();
+  });
+  it("preserves original catalog task argument identity and admission reads", () => {
+    expect(
+      observedCatalogIdentityReads(parsePublicCommandCatalog, baseCatalog(), baseTask()),
+    ).toEqual(["schemaVersion", "projectId", "tasks", "tasks"]);
+  });
+  it("refuses unknown and malformed catalog task fields", () => {
+    const healthy = baseCatalog();
+    expect(validateCommandTaskCatalog(healthy)).toEqual({ ok: true, value: healthy });
+    expect(parsePublicCommandCatalog(healthy)).toEqual({ ok: true, value: healthy });
+    for (const input of [
+      null,
+      3,
+      { ...baseCatalog(), schemaVersion: "unsupported" },
+      { ...baseCatalog(), projectId: "" },
+      { ...baseCatalog(), tasks: "fixture-private-body" },
+      { ...baseCatalog(), extra: "fixture-private-body" },
+      { ...baseCatalog(), tasks: [{ ...baseTask(), extra: "fixture-private-body" }] },
+      { ...baseCatalog(), tasks: [{ ...baseTask(), executable: 4 }] },
+      { ...baseCatalog(), tasks: [{ ...baseTask(), trustState: "unknown-state" }] },
+    ])
+      expect(parsePublicCommandCatalog(input).ok).toBe(false);
+  });
+  it("validates physical task and argument members despite replaced callbacks", () => {
+    const tasks = Object.defineProperty([{ ...baseTask(), id: 0 }], "forEach", {
+      value: (): void => undefined,
+    });
+    expect(parsePublicCommandCatalog({ ...baseCatalog(), tasks })).toEqual({
+      ok: false,
+      errors: ["tasks[0].id must be a non-empty string"],
+    });
+    const args = Object.defineProperty([1], "every", { value: (): boolean => true });
+    expect(
+      parsePublicCommandCatalog({ ...baseCatalog(), tasks: [{ ...baseTask(), args }] }),
+    ).toEqual({ ok: false, errors: ["tasks[0].args must be an array of strings"] });
+    expect(
+      parsePublicCommandCatalog({
+        ...baseCatalog(),
+        tasks: [{ ...baseTask(), args: new Array<unknown>(1) }],
+      }).ok,
+    ).toBe(false);
+  });
+  it("preserves inherited tasks sparse first hole and changing second observation", () => {
+    const tasks = new Array<unknown>(1);
+    Object.setPrototypeOf(tasks, Object.defineProperty([], "0", { value: baseTask() }));
+    const input = { ...baseCatalog(), tasks };
+    const parsed = parsePublicCommandCatalog(input);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value).toBe(input);
+    const sparse = parsePublicCommandCatalog({
+      ...baseCatalog(),
+      tasks: new Array<unknown>(100000),
+    });
+    expect(sparse).toEqual({ ok: false, errors: ["tasks[0] must be an object"] });
+    let reads = 0;
+    const changing = Object.defineProperty({ ...baseCatalog() }, "tasks", {
+      get: (): unknown => (++reads === 1 ? [baseTask()] : { forEach: (): void => undefined }),
+    });
+    expect(parsePublicCommandCatalog(changing)).toEqual({
+      ok: false,
+      errors: ["tasks must be an array"],
+    });
+    expect(reads).toBe(2);
+  });
+  it("closes hostile getters undefined throws and revoked proxies without private error inspection", () => {
+    for (const input of commandInspectionInputs("schemaVersion")) {
+      const expected = { ok: false, errors: ["payload could not be inspected"] };
+      expect(validateCommandTaskCatalog(input)).toEqual(expected);
+      expect(parsePublicCommandCatalog(input)).toEqual(expected);
+    }
+  });
+});
+
+describe("Command result public parser (#3918)", () => {
+  it("pins source public and forwarding unknown inputs and checked results", () => {
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof validateCommandTaskRunResult,
+        typeof publicCommandResult,
+        typeof parsePublicCommandResult
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        PublicCommandResultParse,
+        PublicCommandResultParse,
+        PublicCommandResultParse
+      >
+    >();
+    expectTypeOf(publicCommandResult).toEqualTypeOf<typeof validateCommandTaskRunResult>();
+  });
+  it("preserves result identity nullable exits and eager common field order", () => {
+    expect(observedIdentityReads(parsePublicCommandResult, { ...baseResult() })).toEqual([
+      "schemaVersion",
+      "runId",
+      "taskId",
+      "kind",
+      "failureReason",
+      "exitCode",
+      "durationMs",
+      "truncated",
+      "timedOut",
+      "stdout",
+      "stderr",
+    ]);
+    expect(parsePublicCommandResult({ ...baseResult(), exitCode: null }).ok).toBe(true);
+  });
+  it("refuses malformed result scalars vocabulary and extra fields", () => {
+    for (const input of [
+      null,
+      1,
+      { ...baseResult(), schemaVersion: "unsupported" },
+      { ...baseResult(), runId: "" },
+      { ...baseResult(), kind: "arbitrary" },
+      { ...baseResult(), failureReason: "arbitrary" },
+      { ...baseResult(), exitCode: "0" },
+      { ...baseResult(), durationMs: -1 },
+      { ...baseResult(), stdout: 1 },
+      { ...baseResult(), truncated: "false" },
+      { ...baseResult(), timedOut: "false" },
+      { ...baseResult(), extra: "fixture-private-body" },
+    ])
+      expect(parsePublicCommandResult(input).ok).toBe(false);
+  });
+  it("closes hostile getters undefined throws and revoked proxies without private error inspection", () => {
+    for (const input of commandInspectionInputs("schemaVersion")) {
+      const expected = { ok: false, errors: ["payload could not be inspected"] };
+      expect(validateCommandTaskRunResult(input)).toEqual(expected);
+      expect(parsePublicCommandResult(input)).toEqual(expected);
+    }
+  });
+});
+
+// Characterization of the existing catalog walk on ORIGINAL and SAME, not a new admission rule.
+async function catalogTraversalValidator(
+  surface: "source" | "public",
+): Promise<typeof validateCommandTaskCatalog> {
+  return surface === "source"
+    ? validateCommandTaskCatalog
+    : (await import("@oscharko-dev/keiko-contracts/runtime/command-runner"))
+        .validateCommandTaskCatalog;
+}
+
+function assertCommandCatalogInspection(
+  validate: PhysicalTaskCatalogValidator,
+  input: unknown,
+): void {
+  expect(validate(input)).toEqual({ ok: false, errors: ["payload could not be inspected"] });
+}
+
+registerPhysicalTaskCatalogContract(
+  "Command",
+  baseTask,
+  baseCatalog,
+  catalogTraversalValidator,
+  assertCommandCatalogInspection,
+  observeIndexedMembers,
+);

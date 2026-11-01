@@ -22,8 +22,7 @@
  *    local-knowledge-api passes its friendly message — uiux-fix F033/C064).
  *  - `opts.enrichError` runs on the thrown ApiError before it is raised, with the parsed envelope
  *    (or `undefined` on a parse failure), so task-workspace-api can attach `.failureClass`.
- *  - 204 → `undefined as T` (always; folding this into the three former non-204 modules — memory,
- *    quality-intelligence, figma — is a safe-forward improvement).
+ *  - 204 → undefined for ordinary receipts; supplied validators must admit that absent body.
  *  - On 2xx with a body: `res.json()`, optionally routed through `opts.validator` so Git routes keep
  *    contract-validating (throwing `ApiError('CONTRACT_VALIDATION_FAILED', …, 502)`).
  *  - On a 403 `DENIED`: a restarted BFF invalidates its in-memory app session (ADR-0141 D5), so a
@@ -51,6 +50,7 @@ import {
   type ClientDiagnosticSessionRepairReport,
 } from "./client-diagnostics";
 import { clientErrorSummary } from "./client-error-summary";
+import { clientErrorEvidence } from "./client-error-evidence";
 
 // Re-exported for the consumers that import these from "./http" (SelectionAwareWorkspaceHosts.tsx,
 // coding-app-session-channel-api.ts, GitClientWindow.tsx, AddRepositoryDialog.tsx). The
@@ -200,11 +200,7 @@ async function performBffFetch<T>(
     throw error;
   }
 
-  if (res.status === 204) {
-    return undefined as T;
-  }
-
-  const value = (await res.json()) as unknown;
+  const value: unknown = res.status === 204 ? undefined : await res.json();
   recordResponseCorrelationId(value, res.headers.get(CORRELATION_HEADER));
   if (opts?.validator === undefined) return value as T;
   try {
@@ -217,6 +213,14 @@ async function performBffFetch<T>(
     // with no support id at all.
     if (error instanceof ApiError && error.correlationId === undefined) {
       error.correlationId = res.headers.get(CORRELATION_HEADER) ?? correlationId;
+    }
+    if (res.status === 204) {
+      reportClientDiagnostic("bff:contract-validation-failed", {
+        kind: "other",
+        errorKind: "validation-failed",
+        correlationId: res.headers.get(CORRELATION_HEADER) ?? correlationId,
+        errorEvidence: clientErrorEvidence(error),
+      });
     }
     throw error;
   }

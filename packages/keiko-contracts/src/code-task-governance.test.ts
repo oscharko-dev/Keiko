@@ -1,4 +1,28 @@
-import { describe, expect, it } from "vitest";
+import {
+  expectHeaderGetterRefusals,
+  expectHealthyHeaderReads,
+  observeHeaderFields,
+} from "./__tests__/support/identity-header-observations.js";
+import { validateCodeTaskOwnKeys } from "./code-task-record-validation.js";
+import { validateCodeTaskParentTarget } from "./code-task-target-validation.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
+import {
+  isCodeTaskTaskId as publicTaskId,
+  isCodeTaskRunId as publicRunId,
+  isCodeTaskWorkspaceId as publicWorkspaceId,
+  isCodeTaskGrantId as publicGrantId,
+  isCodeTaskIdempotencyKey as publicIdempotencyKey,
+  type CodeTaskTaskId as PublicTaskId,
+  type CodeTaskRunId as PublicRunId,
+  type CodeTaskWorkspaceId as PublicWorkspaceId,
+  type CodeTaskGrantId as PublicGrantId,
+  type CodeTaskIdempotencyKey as PublicIdempotencyKey,
+  validateGovernedActionV1 as publicGovernedAction,
+  validateCodeTaskExecutionV1 as publicCodeTaskExecution,
+  type GovernedActionV1 as PublicGovernedActionV1,
+  type CodeTaskExecutionV1 as PublicCodeTaskExecutionV1,
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-governance";
 
 import {
   CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
@@ -20,6 +44,7 @@ import {
   type GovernedActionV1,
 } from "./code-task-governance.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
+import { expectCodeTaskRecordAdmission } from "./__tests__/support/code-task-record-admission.js";
 
 const DIGEST = "a".repeat(64);
 const INSTANT = "2026-07-16T00:00:00.000Z";
@@ -933,5 +958,624 @@ describe("governedActionRefErrors's decision read is unreachable-with-undefined 
       validateGovernedActionV1(withoutDecision),
     );
     expect(result).toEqual({ ok: false, errors: ["decision is invalid"] });
+  });
+});
+
+describe("C1A governed output preservation", () => {
+  it.each(["source", "public"])(
+    "retains both governed output identities through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateGovernedActionV1, validateCodeTaskExecutionV1 }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance");
+      const action = allowedAction();
+      const input = execution();
+      const first = validators.validateGovernedActionV1(action);
+      const second = validators.validateCodeTaskExecutionV1(input);
+      expect(first.ok && first.value === action && first.value.grant === action.grant).toBe(true);
+      expect(second.ok && second.value === input && second.value.failure === input.failure).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(["source", "public"])("retains dense eager errors through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateGovernedActionV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+            .validateGovernedActionV1;
+    const result = validate({
+      ...allowedAction(),
+      taskId: 0,
+      stateRevision: -1,
+      actionKind: "bogus",
+    });
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        "taskId is invalid",
+        "stateRevision must be a non-negative integer",
+        "actionKind is invalid",
+        "grant is not permitted on a structurally ungrantable action kind",
+      ],
+    });
+  });
+
+  it.each(["source", "public"])(
+    "retains finite repeated decision observations through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateGovernedActionV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+              .validateGovernedActionV1;
+      const action = allowedAction();
+      let reads = 0;
+      Object.defineProperty(action, "decision", {
+        get: (): string => {
+          reads += 1;
+          return "allowed";
+        },
+      });
+      const result = validate(action);
+      expect(result.ok && result.value === action).toBe(true);
+      expect(reads).toBe(2);
+    },
+  );
+});
+
+describe("C1A finite governed discriminator observations", () => {
+  it.each(["source", "public"])("refuses an invalid observed decision through %s", async (seam) => {
+    const validate =
+      seam === "source"
+        ? validateGovernedActionV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+            .validateGovernedActionV1;
+    const input = {
+      ...allowedAction(),
+      grant: { outcome: "absent" },
+      question: { outcome: "absent" },
+    };
+    let reads = 0;
+    Object.defineProperty(input, "decision", {
+      get: (): string => {
+        reads += 1;
+        return reads === 1 ? "allowed" : "invalid";
+      },
+    });
+    expect(validate(input).ok).toBe(false);
+    expect(reads).toBe(2);
+  });
+
+  it.each(["source", "public"])(
+    "refuses an invalid observed execution state through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodeTaskExecutionV1
+          : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+              .validateCodeTaskExecutionV1;
+      const input = {
+        ...execution(),
+        state: "failed",
+        failure: { outcome: "known", value: "runtime-failed" },
+      };
+      let reads = 0;
+      Object.defineProperty(input, "state", {
+        get: (): unknown => {
+          reads += 1;
+          return reads === 1 ? "failed" : 0;
+        },
+      });
+      expect(validate(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"])(
+    "preserves valid changing governed branch observations through %s",
+    async (seam) => {
+      const validators =
+        seam === "source"
+          ? { validateGovernedActionV1, validateCodeTaskExecutionV1 }
+          : await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance");
+      const action = {
+        ...allowedAction(),
+        grant: { outcome: "absent" },
+        question: { outcome: "absent" },
+      };
+      let decisionReads = 0;
+      Object.defineProperty(action, "decision", {
+        get: (): string => {
+          decisionReads += 1;
+          return decisionReads === 1 ? "allowed" : "denied";
+        },
+      });
+      expect(validators.validateGovernedActionV1(action).ok).toBe(true);
+      expect(decisionReads).toBe(2);
+      const input = { ...execution(), failure: { outcome: "known", value: "runtime-failed" } };
+      let stateReads = 0;
+      Object.defineProperty(input, "state", {
+        get: (): string => {
+          stateReads += 1;
+          return stateReads === 1 ? "failed" : "recovery-required";
+        },
+      });
+      expect(validators.validateCodeTaskExecutionV1(input).ok).toBe(true);
+      expect(stateReads).toBe(2);
+    },
+  );
+});
+
+type SourceGovernedActionParse = CodingWorkbenchValidationResult<GovernedActionV1>;
+type SourceCodeTaskExecutionParse = CodingWorkbenchValidationResult<CodeTaskExecutionV1>;
+type PublicGovernedActionParse = CodingWorkbenchValidationResult<PublicGovernedActionV1>;
+type PublicCodeTaskExecutionParse = CodingWorkbenchValidationResult<PublicCodeTaskExecutionV1>;
+
+export function parsePublicGovernedAction(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicGovernedActionV1> {
+  const result = publicGovernedAction(input);
+  return result;
+}
+
+export function parsePublicCodeTaskExecution(
+  input: unknown,
+): CodingWorkbenchValidationResult<PublicCodeTaskExecutionV1> {
+  const result = publicCodeTaskExecution(input);
+  return result;
+}
+
+describe("governed action public parser (#3918)", () => {
+  it("retains original and nested identities with absent fact values omitted", () => {
+    const action = allowedAction();
+    const result = parsePublicGovernedAction(action);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy governed action refused");
+    expect(result.value).toBe(action);
+    expect(result.value.grant).toBe(action.grant);
+    expect(result.value.question).toBe(action.question);
+    expect(Object.hasOwn(result.value.question, "value")).toBe(false);
+    expect(
+      parsePublicGovernedAction({ ...action, question: { outcome: "absent", value: undefined } })
+        .ok,
+    ).toBe(false);
+  });
+
+  it("refuses malformed actions with exact eager ordered diagnostics", () => {
+    expect(parsePublicGovernedAction(null)).toEqual({
+      ok: false,
+      errors: ["governed action must be an object"],
+    });
+    expect(
+      parsePublicGovernedAction({
+        ...allowedAction(),
+        taskId: 0,
+        stateRevision: -1,
+        actionKind: "bogus",
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "taskId is invalid",
+        "stateRevision must be a non-negative integer",
+        "actionKind is invalid",
+        "grant is not permitted on a structurally ungrantable action kind",
+      ],
+    });
+  });
+
+  it("retains the second observed decision refusal", () => {
+    const input = {
+      ...allowedAction(),
+      grant: { outcome: "absent" },
+      question: { outcome: "absent" },
+    };
+    let reads = 0;
+    Object.defineProperty(input, "decision", {
+      get: (): string => {
+        reads += 1;
+        return reads === 1 ? "allowed" : "invalid";
+      },
+    });
+    expect(parsePublicGovernedAction(input)).toEqual({
+      ok: false,
+      errors: ["decision is invalid"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf<{
+      readonly validateGovernedActionV1: ReturnType<typeof validateGovernedActionV1>;
+      readonly publicGovernedAction: ReturnType<typeof publicGovernedAction>;
+      readonly parsePublicGovernedAction: ReturnType<typeof parsePublicGovernedAction>;
+    }>().toEqualTypeOf<{
+      readonly validateGovernedActionV1: SourceGovernedActionParse;
+      readonly publicGovernedAction: PublicGovernedActionParse;
+      readonly parsePublicGovernedAction: PublicGovernedActionParse;
+    }>();
+    const result = parsePublicGovernedAction(allowedAction());
+    if (!result.ok) throw new TypeError("healthy governed action types refused");
+    expectTypeOf(result.value.taskId).toEqualTypeOf<PublicGovernedActionV1["taskId"]>();
+    expectTypeOf(result.value.decision).toEqualTypeOf<PublicGovernedActionV1["decision"]>();
+    type Failure = Extract<ReturnType<typeof publicGovernedAction>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("code task execution public parser (#3918)", () => {
+  it("retains original and nested identities with absent failure values omitted", () => {
+    const input = execution();
+    const result = parsePublicCodeTaskExecution(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("healthy code task execution refused");
+    expect(result.value).toBe(input);
+    expect(result.value.failure).toBe(input.failure);
+    expect(Object.hasOwn(result.value.failure, "value")).toBe(false);
+    expect(
+      parsePublicCodeTaskExecution({ ...input, failure: { outcome: "absent", value: undefined } })
+        .ok,
+    ).toBe(false);
+  });
+
+  it("refuses malformed executions with exact eager ordered diagnostics", () => {
+    expect(parsePublicCodeTaskExecution(null)).toEqual({
+      ok: false,
+      errors: ["code-task execution must be an object"],
+    });
+    expect(
+      parsePublicCodeTaskExecution({
+        ...execution(),
+        stateRevision: -1,
+        runEpoch: -1,
+        objectiveDigest: 7,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "stateRevision must be a non-negative integer",
+        "runEpoch must be a non-negative integer",
+        "objectiveDigest must be a sha256 digest",
+      ],
+    });
+  });
+
+  it("retains the second observed state refusal", () => {
+    const input = {
+      ...execution(),
+      state: "failed",
+      failure: { outcome: "known", value: "runtime-failed" },
+    };
+    let reads = 0;
+    Object.defineProperty(input, "state", {
+      get: (): unknown => {
+        reads += 1;
+        return reads === 1 ? "failed" : 0;
+      },
+    });
+    expect(parsePublicCodeTaskExecution(input)).toEqual({
+      ok: false,
+      errors: ["state is invalid"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(validateCodeTaskExecutionV1).returns.toEqualTypeOf<SourceCodeTaskExecutionParse>();
+    expectTypeOf(publicCodeTaskExecution).returns.toEqualTypeOf<PublicCodeTaskExecutionParse>();
+    expectTypeOf(
+      parsePublicCodeTaskExecution,
+    ).returns.toEqualTypeOf<PublicCodeTaskExecutionParse>();
+    const result = parsePublicCodeTaskExecution(execution());
+    if (!result.ok) throw new TypeError("healthy code task execution types refused");
+    expectTypeOf(result.value.runId).toEqualTypeOf<PublicCodeTaskExecutionV1["runId"]>();
+    expectTypeOf(result.value.effectiveMode).toEqualTypeOf<
+      PublicCodeTaskExecutionV1["effectiveMode"]
+    >();
+    type Failure = Extract<ReturnType<typeof publicCodeTaskExecution>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+});
+
+describe("validateCodeTaskParentTarget", () => {
+  it("accepts a complete parent target", () => {
+    const errors: string[] = [];
+    expect(
+      validateCodeTaskParentTarget(errors, {
+        taskId: "task-1",
+        runId: "run-1",
+        workspaceId: "workspace-1",
+        stateRevision: 0,
+      }),
+    ).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps malformed parent-field errors ordered", () => {
+    const errors: string[] = [];
+    expect(
+      validateCodeTaskParentTarget(errors, {
+        taskId: "",
+        runId: null,
+        workspaceId: false,
+        stateRevision: -1,
+      }),
+    ).toBe(false);
+    expect(errors).toEqual([
+      "taskId is invalid",
+      "runId is invalid",
+      "workspaceId is invalid",
+      "stateRevision must be a non-negative integer",
+    ]);
+  });
+});
+
+it.each(["source", "public"])(
+  "preserves strict record and own-key admission through %s",
+  async (surface) => {
+    const validate =
+      surface === "source"
+        ? validateGovernedActionV1
+        : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
+            .validateGovernedActionV1;
+    expectCodeTaskRecordAdmission(
+      validate,
+      allowedAction,
+      (input): object => input.grant,
+      "grant must not carry symbol-keyed properties",
+      (): readonly [string, string] => [
+        "grant.fixtureExtra is not allowed",
+        "grant must not carry symbol-keyed properties",
+      ],
+    );
+  },
+);
+
+function invokeOwnKeyValidation(errors: string[], value: Record<string, unknown>): boolean {
+  return validateCodeTaskOwnKeys(errors, value, [], "fixture");
+}
+
+function invokeParentTargetValidation(errors: string[], value: Record<string, unknown>): boolean {
+  return validateCodeTaskParentTarget(errors, value);
+}
+
+function observedValidationErrors(trace: string[]): string[] {
+  const errors: string[] = ["earlier diagnostic"];
+  return new Proxy(errors, {
+    get(target, key, receiver): unknown {
+      if (key === "push") {
+        return (...messages: string[]): number => {
+          trace.push(`push:${String(messages.length)}`);
+          return target.push(...messages);
+        };
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+}
+
+describe("code-task validation collection settlement", () => {
+  it.each([false, true])("gathers closed-own-key diagnostics before appending: %s", (invalid) => {
+    const trace: string[] = [];
+    const target = invalid ? { extra: true, [Symbol("fixture")]: true } : {};
+    const value = new Proxy(target, {
+      ownKeys(current): (string | symbol)[] {
+        trace.push("keys");
+        return Reflect.ownKeys(current);
+      },
+    });
+    const errors = observedValidationErrors(trace);
+    expect(invokeOwnKeyValidation(errors, value)).toBe(!invalid);
+    expect(trace).toEqual(["keys", "keys", invalid ? "push:2" : "push:0"]);
+    expect(errors).toEqual(
+      invalid
+        ? [
+            "earlier diagnostic",
+            "fixture.extra is not allowed",
+            "fixture must not carry symbol-keyed properties",
+          ]
+        : ["earlier diagnostic"],
+    );
+  });
+
+  it("does not append a partial collection when symbol enumeration throws", () => {
+    const trace: string[] = [];
+    const failure = new TypeError("fixture symbol enumeration refused");
+    const value = new Proxy(
+      { extra: true },
+      {
+        ownKeys(current): (string | symbol)[] {
+          trace.push("keys");
+          if (trace.length === 2) throw failure;
+          return Reflect.ownKeys(current);
+        },
+      },
+    );
+    const errors = observedValidationErrors(trace);
+    expect(() => invokeOwnKeyValidation(errors, value)).toThrow(failure);
+    expect(trace).toEqual(["keys", "keys"]);
+    expect(errors).toEqual(["earlier diagnostic"]);
+  });
+
+  it.each([false, true])("settles parent-field reads before appending: %s", (throws) => {
+    const trace: string[] = [];
+    const failure = new TypeError("fixture revision read refused");
+    const target = { taskId: "", runId: null, workspaceId: false, stateRevision: -1 };
+    const value = new Proxy(target, {
+      get(current, key, receiver): unknown {
+        trace.push(String(key));
+        if (throws && key === "stateRevision") throw failure;
+        return Reflect.get(current, key, receiver);
+      },
+    });
+    const errors = observedValidationErrors(trace);
+    if (throws) {
+      expect(() => invokeParentTargetValidation(errors, value)).toThrow(failure);
+      expect(errors).toEqual(["earlier diagnostic"]);
+    } else {
+      expect(invokeParentTargetValidation(errors, value)).toBe(false);
+      expect(errors).toEqual([
+        "earlier diagnostic",
+        "taskId is invalid",
+        "runId is invalid",
+        "workspaceId is invalid",
+        "stateRevision must be a non-negative integer",
+      ]);
+    }
+    expect(trace).toEqual([
+      "taskId",
+      "runId",
+      "workspaceId",
+      "stateRevision",
+      ...(throws ? [] : ["push:4"]),
+    ]);
+  });
+});
+
+const PUBLIC_CODE_TASK_ID_VALIDATORS = [
+  ["task", isCodeTaskTaskId, publicTaskId],
+  ["run", isCodeTaskRunId, publicRunId],
+  ["workspace", isCodeTaskWorkspaceId, publicWorkspaceId],
+  ["grant", isCodeTaskGrantId, publicGrantId],
+  ["idempotency", isCodeTaskIdempotencyKey, publicIdempotencyKey],
+] as const;
+
+describe("public CodeTask ID validator ownership", () => {
+  it("retains actual predicate signatures", () => {
+    expectTypeOf(publicTaskId).toEqualTypeOf<(value: unknown) => value is PublicTaskId>();
+    expectTypeOf(publicRunId).toEqualTypeOf<(value: unknown) => value is PublicRunId>();
+    expectTypeOf(publicWorkspaceId).toEqualTypeOf<(value: unknown) => value is PublicWorkspaceId>();
+    expectTypeOf(publicGrantId).toEqualTypeOf<(value: unknown) => value is PublicGrantId>();
+    expectTypeOf(publicIdempotencyKey).toEqualTypeOf<
+      (value: unknown) => value is PublicIdempotencyKey
+    >();
+  });
+
+  it.each(PUBLIC_CODE_TASK_ID_VALIDATORS)(
+    "admits actual %s IDs through source and public",
+    (_kind, source, publicGuard) => {
+      for (const guard of [source, publicGuard]) {
+        expect(guard("A")).toBe(true);
+        expect(guard("a0._:-")).toBe(true);
+        expect(guard("A".repeat(128))).toBe(true);
+      }
+    },
+  );
+
+  it.each(PUBLIC_CODE_TASK_ID_VALIDATORS)(
+    "refuses malformed %s IDs through source and public",
+    (_kind, source, publicGuard) => {
+      const hostile = new Proxy(
+        {},
+        {
+          get(): never {
+            throw new TypeError("non-string ID must not be inspected");
+          },
+        },
+      );
+      const invalid: readonly unknown[] = [
+        "",
+        "A".repeat(129),
+        "_leading",
+        "contains space",
+        "line\nbreak",
+        "null\0byte",
+        null,
+        undefined,
+        false,
+        7,
+        [],
+        hostile,
+      ];
+      for (const guard of [source, publicGuard]) {
+        for (const value of invalid) expect(guard(value)).toBe(false);
+      }
+    },
+  );
+});
+
+describe("public CodeTask ID consumer", () => {
+  it.each([
+    ["task", "taskId", "taskId is invalid"],
+    ["run", "runId", "runId is invalid"],
+    ["workspace", "workspaceId", "workspaceId is invalid"],
+  ] as const)("refuses invalid %s identity", (_kind, field, diagnostic) => {
+    for (const validate of [validateCodeTaskExecutionV1, publicCodeTaskExecution]) {
+      const input = execution();
+      const accepted = validate(input);
+      expect(accepted.ok).toBe(true);
+      if (accepted.ok) expect(accepted.value).toBe(input);
+      expect(validate({ ...input, [field]: "" })).toEqual({ ok: false, errors: [diagnostic] });
+    }
+  });
+
+  it("refuses an invalid grant ID", () => {
+    for (const validate of [validateGovernedActionV1, publicGovernedAction]) {
+      const input = allowedAction();
+      const accepted = validate(input);
+      expect(accepted.ok).toBe(true);
+      if (accepted.ok) expect(accepted.value).toBe(input);
+      expect(
+        validate({
+          ...input,
+          grant: { outcome: "known", value: { grantId: "", grantScope: "task" } },
+        }),
+      ).toEqual({ ok: false, errors: ["grant.value.grantId is invalid"] });
+    }
+  });
+});
+
+const EXECUTION_IDENTITY_HEADER_FIELDS = [
+  "kind",
+  "schemaVersion",
+  "taskId",
+  "runId",
+  "workspaceId",
+] as const;
+
+describe.each([
+  ["source", validateCodeTaskExecutionV1],
+  ["public", publicCodeTaskExecution],
+] as const)("%s identity-header observations", (_surface, validate): void => {
+  it("reads the healthy header and local suffix once in order with original receivers", (): void => {
+    expectHealthyHeaderReads(validate, execution(), EXECUTION_IDENTITY_HEADER_FIELDS, [
+      "kind",
+      "schemaVersion",
+      "taskId",
+      "runId",
+      "workspaceId",
+    ]);
+  });
+
+  it("retains earlier own-key errors and eagerly checks every refused prefix and local suffix", (): void => {
+    const input = {
+      ...execution(),
+      kind: "foreign",
+      schemaVersion: 2,
+      taskId: 0,
+      runId: "",
+      workspaceId: false,
+      fixtureExtra: true,
+    };
+    const { trace } = observeHeaderFields(input, EXECUTION_IDENTITY_HEADER_FIELDS);
+    expect(validate(input)).toEqual({
+      ok: false,
+      errors: [
+        "codeTaskExecution.fixtureExtra is not allowed",
+        "kind must be code-task-execution",
+        "schemaVersion must be the literal 1",
+        "taskId is invalid",
+        "runId is invalid",
+        "workspaceId is invalid",
+      ],
+    });
+    expect(trace).toEqual(["kind", "schemaVersion", "taskId", "runId", "workspaceId"]);
+  });
+
+  it("propagates each opaque header getter refusal without later observations", (): void => {
+    expectHeaderGetterRefusals(validate, execution, EXECUTION_IDENTITY_HEADER_FIELDS);
   });
 });

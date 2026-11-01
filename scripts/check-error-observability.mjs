@@ -319,6 +319,12 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
     "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile":
       "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+    "packages/keiko-contracts/src/command-runner.ts:parseCommandTaskRunRequest":
+      "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskCatalog":
+      "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
+    "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskRunResult":
+      "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
     "packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass":
       "Pure leaf error classification performs no I/O and returns a fixed unknown fallback without inspecting the caught inspection failure. The parser propagates its existing closed rejection to the consumer diagnostic boundary; no separate logged fact is emitted.",
     "packages/keiko-contracts/src/observability.ts:completeRegistrationShape":
