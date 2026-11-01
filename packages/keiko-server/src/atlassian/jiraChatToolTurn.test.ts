@@ -489,6 +489,18 @@ function expectUnchangedJiraOffer(calls: readonly GatewayCallRequest[]): void {
   expect(second.projection).toEqual(first.projection);
   expect(second.offered.toolRefs).toEqual(first.offered.toolRefs);
 }
+
+// The Jira rules every tool shares reach the model once per round, in the system instruction.
+function expectSharedGuidanceOncePerRound(calls: readonly GatewayCallRequest[]): void {
+  for (const call of calls.filter((request) => request.toolCatalog?.kind === "bound")) {
+    const shared = call.messages.filter(
+      (message) =>
+        typeof message.content === "string" && message.content.includes(JIRA_TOOL_GUIDANCE),
+    );
+    expect(shared).toEqual([expect.objectContaining({ role: "system" })]);
+  }
+}
+
 describe("normal buffered Chat through the owned Jira catalog", () => {
   it("keeps hostile Jira metadata outside catalog, binding, credential and consent controls", async () => {
     const f = fixture();
@@ -633,14 +645,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     expect(completed.status).toBe(200);
     expect((completed.body as DesktopChatSendResponse).messages[0]?.turnState).toBe("completed");
     expect(f.requests()).toBe(1);
-    // The Jira rules every tool shares reach the model once per round, in the system instruction.
-    for (const call of f.calls.filter((request) => request.toolCatalog?.kind === "bound")) {
-      const shared = call.messages.filter(
-        (message) =>
-          typeof message.content === "string" && message.content.includes(JIRA_TOOL_GUIDANCE),
-      );
-      expect(shared).toEqual([expect.objectContaining({ role: "system" })]);
-    }
+    expectSharedGuidanceOncePerRound(f.calls);
     expect(
       f.calls[1]?.messages.some(
         (message) => message.role === "tool" && message.toolCallId === "call-1",
