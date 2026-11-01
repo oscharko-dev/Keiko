@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  JIRA_DRAFT_ITEMS_MAX,
-  JIRA_DRAFT_STAGE_BYTES_MAX,
-} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JIRA_DRAFT_STAGE_BYTES_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { trimOwnedBytes } from "./jira-store-bounds.js";
 
@@ -33,8 +30,7 @@ export type JiraDraftAppend =
   | { readonly ok: true; readonly draft: StagedJiraDraft }
   | {
       readonly ok: false;
-      readonly refusal:
-        "draft-not-found" | "connection-changed" | "duplicate-ref" | "too-many-items" | "too-large";
+      readonly refusal: "draft-not-found" | "connection-changed" | "duplicate-ref" | "too-large";
     };
 
 export interface JiraDraftStore {
@@ -53,6 +49,8 @@ export interface JiraDraftStore {
 }
 
 export interface JiraDraftStoreOptions {
+  /** Retained bytes one draft may hold; defaults to the contract's resource bound. */
+  readonly maxDraftBytes?: number;
   readonly now?: () => number;
   readonly newId?: () => string;
   readonly idleTtlMs?: number;
@@ -62,7 +60,7 @@ export interface JiraDraftStoreOptions {
 
 export const JIRA_DRAFT_IDLE_TTL_MS = 4 * 60 * 60 * 1000;
 /** Retained size of all staged drafts together; a memory safety bound, never a draft limit. */
-export const JIRA_DRAFT_STORE_MAX_BYTES = 64 * 1024 * 1024;
+export const JIRA_DRAFT_STORE_MAX_BYTES = 96 * 1024 * 1024;
 export const JIRA_DRAFT_OWNER_DRAFTS_MAX = 8;
 
 type Drafts = Map<string, StagedJiraDraft>;
@@ -98,13 +96,13 @@ function appendRefusal(
   fingerprint: string,
   page: readonly StagedJiraDraftItem[],
   bytes: number,
+  maxDraftBytes: number,
 ): AppendRefusal | undefined {
   if (current !== undefined && current.fingerprint !== fingerprint) return "connection-changed";
   const held = current?.items ?? [];
   const refs = refsOf(held);
   if (page.some((item) => refs.has(String(item.ref)))) return "duplicate-ref";
-  if (held.length + page.length > JIRA_DRAFT_ITEMS_MAX) return "too-many-items";
-  return bytes > JIRA_DRAFT_STAGE_BYTES_MAX ? "too-large" : undefined;
+  return bytes > maxDraftBytes ? "too-large" : undefined;
 }
 function extendedDraft(
   current: StagedJiraDraft | undefined,
@@ -128,6 +126,7 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
   const newId = options.newId ?? randomUUID;
   const idleTtlMs = options.idleTtlMs ?? JIRA_DRAFT_IDLE_TTL_MS;
   const maxTotalBytes = options.maxTotalBytes ?? JIRA_DRAFT_STORE_MAX_BYTES;
+  const maxDraftBytes = options.maxDraftBytes ?? JIRA_DRAFT_STAGE_BYTES_MAX;
   const perOwner = options.maxDraftsPerOwner ?? JIRA_DRAFT_OWNER_DRAFTS_MAX;
   const drafts: Drafts = new Map();
   const sweep = (): void => {
@@ -146,7 +145,7 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
       if (draftId !== undefined && current === undefined)
         return { ok: false, refusal: "draft-not-found" };
       const bytes = (current?.bytes ?? 0) + pageBytes(page);
-      const refusal = appendRefusal(current, fingerprint, page, bytes);
+      const refusal = appendRefusal(current, fingerprint, page, bytes, maxDraftBytes);
       if (refusal !== undefined) return { ok: false, refusal };
       const draft = extendedDraft(current, page, {
         id: current?.id ?? newId(),

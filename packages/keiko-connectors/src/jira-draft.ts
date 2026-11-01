@@ -4,7 +4,6 @@
 // approval and authority stay server-owned: every item runs as its own journaled `jira.create`.
 
 import {
-  JIRA_DRAFT_ITEMS_MAX,
   JIRA_FIELD_ID_PATTERN,
   isJiraDraftRef,
   isSafeAtlassianIdentifier,
@@ -233,8 +232,7 @@ function dependencyOrder(
 export function parseJiraDraft(args: Readonly<Record<string, unknown>>): JiraDraft | undefined {
   if (!onlyKeys(args, new Set(["items"]))) return undefined;
   const input = asArray(args.items);
-  if (input === undefined || input.length === 0 || input.length > JIRA_DRAFT_ITEMS_MAX)
-    return undefined;
+  if (input === undefined || input.length === 0) return undefined;
   const items = input.map(parseItem);
   if (!items.every((item) => item !== undefined)) return undefined;
   if (new Set(items.map((item) => item.ref)).size !== items.length) return undefined;
@@ -247,9 +245,8 @@ export function excludedJiraDraftRefs(
   draft: JiraDraft,
   deselected: readonly string[],
 ): ReadonlySet<string> {
-  const excluded = new Set(
-    deselected.filter((ref) => draft.items.some((item) => item.ref === ref)),
-  );
+  const refs = new Set(draft.items.map((item) => item.ref));
+  const excluded = new Set(deselected.filter((ref) => refs.has(ref)));
   for (const item of draft.items)
     if (jiraDraftDependencies(item).some((ref) => excluded.has(ref))) excluded.add(item.ref);
   return excluded;

@@ -155,6 +155,9 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
         context,
         connection: jiraChatDraftConnection(deps, current.credential),
         openTrace: () => openTraceSession(deps, turn),
+        activity: (activity): void => {
+          recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
+        },
       });
     }
     return executeTracedMutation(deps, turn, operation, args, (trace) =>

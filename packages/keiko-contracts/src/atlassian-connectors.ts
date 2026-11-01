@@ -1539,7 +1539,7 @@ export {
   isJiraAttachmentName,
   isJiraAttachmentPreview,
   type JiraAttachmentPreview,
-  JIRA_DRAFT_ITEMS_MAX,
+  JIRA_DRAFT_RESULT_ROWS_MAX,
   JIRA_DRAFT_STAGE_BYTES_MAX,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   JIRA_DRAFT_ID_PATTERN,

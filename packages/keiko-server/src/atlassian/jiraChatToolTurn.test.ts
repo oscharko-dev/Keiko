@@ -1083,7 +1083,8 @@ it("executes only the selected backlog items and persists the deselection throug
 describe("a staged backlog draft of any size is approved once (#4178)", () => {
   const EPICS = 5;
   const STORIES = 65;
-  function backlog(): Record<string, unknown>[] {
+  const LARGE = { epics: 12, stories: 1188 };
+  function backlog(epics: number, stories: number): Record<string, unknown>[] {
     const item = (ref: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
       ref,
       projectId: "10000",
@@ -1092,18 +1093,21 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
       ...extra,
     });
     return [
-      ...Array.from({ length: EPICS }, (_, index) => item(`e${String(index)}`)),
-      ...Array.from({ length: STORIES }, (_, index) =>
+      ...Array.from({ length: epics }, (_, index) => item(`e${String(index)}`)),
+      ...Array.from({ length: stories }, (_, index) =>
         item(`s${String(index)}`, {
-          parent: { fieldId: "parent", ref: `e${String(index % EPICS)}` },
+          parent: { fieldId: "parent", ref: `e${String(index % epics)}` },
         }),
       ),
     ];
   }
-  function staged(f: ReturnType<typeof fixture>): Record<string, unknown> {
+  function staged(
+    f: ReturnType<typeof fixture>,
+    size: { epics: number; stories: number },
+  ): Record<string, unknown> {
     const store = f.deps.jiraDraftStore;
     if (store === undefined) throw new Error("Missing draft store");
-    const items = backlog();
+    const items = backlog(size.epics, size.stories);
     let draftId: string | undefined;
     for (let from = 0; from < items.length; from += 50) {
       const appended = store.append(f.chatId, draftId, "fingerprint", items.slice(from, from + 50));
@@ -1114,15 +1118,18 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     if (draft === undefined) throw new Error("Expected a staged draft");
     return { draftId: draft.id, draftDigest: draft.digest };
   }
-  function stagedFixture(): { f: ReturnType<typeof fixture>; reference: Record<string, unknown> } {
+  function stagedFixture(size = { epics: EPICS, stories: STORIES }): {
+    f: ReturnType<typeof fixture>;
+    reference: Record<string, unknown>;
+  } {
     const holder: { reference: Record<string, unknown> } = { reference: {} };
     const f = fixture(true, undefined, true, false, () => holder.reference);
-    holder.reference = staged(f);
+    holder.reference = staged(f, size);
     return { f, reference: holder.reference };
   }
 
-  it("creates all 70 items behind one approval", async () => {
-    const { f } = stagedFixture();
+  it("creates all 1,200 items behind one approval, past any count the old bounds allowed", async () => {
+    const { f } = stagedFixture(LARGE);
     const approvals: string[] = [];
     const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
     vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
@@ -1136,13 +1143,14 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     await approveReadForWrite(f);
     await decidePendingWrite(f, "approve");
     expect((await pending).status).toBe(200);
-    expect(f.jira.issues).toHaveLength(EPICS + STORIES);
+    expect(f.jira.issues).toHaveLength(LARGE.epics + LARGE.stories);
     expect(approvals).toEqual(["pending", "approved", "claimed"]);
     const exchange = firstToolExchange(f);
     expect(exchange.mutationOutcome).toBe("succeeded");
     expect(exchange.approval).toMatchObject({ operation: "jira.draft", state: "claimed" });
-    expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":70');
-  });
+    expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":1200');
+    expect(JSON.stringify(exchange.result?.data)).toContain('"compact":true');
+  }, 180_000);
 
   it("carries a deselection of more than 32 items and leaves them out", async () => {
     const { f } = stagedFixture();

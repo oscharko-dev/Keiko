@@ -1,6 +1,5 @@
 import {
   JIRA_DRAFT_ID_PATTERN,
-  JIRA_DRAFT_ITEMS_MAX,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -16,9 +15,7 @@ const DESCRIPTION =
   String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
   " items per call, in the same item form as jira.draft; the first call returns a draftId, later calls pass it to append. " +
   "Every item is checked against the issue templates when it is appended, and a violating page is refused whole with the violations to correct. " +
-  "Items may name items of later pages by ref. Each result reports the itemCount (at most " +
-  String(JIRA_DRAFT_ITEMS_MAX) +
-  "), the unresolvedRefs still to be written and a draftDigest. " +
+  "Items may name items of later pages by ref. Each result reports the itemCount, the unresolvedRefs still to be written and a draftDigest. " +
   "When unresolvedRefCount is 0, call jira.draft once with only draftId and the draftDigest of the last result: the human then approves the whole draft once. " +
   "This tool changes nothing in Jira and asks for no approval; appending after the digest was read makes that digest stale.";
 
@@ -47,11 +44,10 @@ export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.fr
         draftId: text(64),
         draftDigest: text(64),
         newDraft: { type: "boolean" },
-        itemCount: { type: "integer", minimum: 0, maximum: JIRA_DRAFT_ITEMS_MAX },
-        pageCount: { type: "integer", minimum: 0, maximum: JIRA_DRAFT_ITEMS_MAX },
-        itemLimit: { type: "integer", minimum: 0, maximum: JIRA_DRAFT_ITEMS_MAX },
-        byteLimit: { type: "integer", minimum: 0, maximum: 1073741824 },
-        unresolvedRefCount: { type: "integer", minimum: 0, maximum: JIRA_DRAFT_ITEMS_MAX },
+        itemCount: { type: "integer", minimum: 0 },
+        pageCount: { type: "integer", minimum: 0 },
+        guidance: text(1024),
+        unresolvedRefCount: { type: "integer", minimum: 0 },
         unresolvedRefs: { type: "array", maxItems: 32, items: text(32) },
         ref: text(32),
         violations: JIRA_VIOLATIONS_SCHEMA,

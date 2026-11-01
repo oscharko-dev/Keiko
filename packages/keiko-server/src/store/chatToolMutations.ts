@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import {
-  JIRA_DRAFT_ITEMS_MAX,
-  type JiraMutationOutcome,
-} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UiStoreError } from "./errors.js";
@@ -178,15 +175,10 @@ function observedWithinNativeCall(
     prior.callId === current.callId
   );
 }
-function turnRecords(
-  db: DatabaseSync,
-  intent: { readonly chatId: string; readonly turnRef: string },
-): readonly ChatToolMutationRecord[] {
-  return db
-    .prepare(`SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ?`)
-    .all(intent.chatId, intent.turnRef)
-    .map(rowRecord)
-    .filter((row): row is ChatToolMutationRecord => row !== undefined);
+const TURN = "chat_id = ? AND turn_ref = ?";
+interface TurnKey {
+  readonly chatId: string;
+  readonly turnRef: string;
 }
 function hasInflightBarrier(
   rows: readonly ChatToolMutationRecord[],
@@ -199,29 +191,50 @@ function hasInflightBarrier(
   );
 }
 /**
- * Whether a record may have reached the provider. The turn bound limits writes, so a record that
- * settled as a local refusal before dispatch (an existing draft item, a value refused before
+ * What stops further writes in a turn: an effect of unknown outcome, or a write in flight. Only
+ * those rows are read, so admitting the next item of a large approved draft does not re-read every
+ * record the turn already holds.
+ */
+function turnBarrier(
+  db: DatabaseSync,
+  intent: TurnKey & Pick<ChatToolMutationIntent, "consumer" | "invocationId">,
+): "unknown-effect" | "in-flight" | undefined {
+  const unknown = db
+    .prepare(
+      `SELECT 1 FROM chat_tool_mutations WHERE ${TURN} AND outcome IN ('unknown','succeeded-unconfirmed') LIMIT 1`,
+    )
+    .get(intent.chatId, intent.turnRef);
+  if (unknown !== undefined) return "unknown-effect";
+  const open = db
+    .prepare(
+      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE ${TURN} AND phase IN ('dispatched','acknowledged')`,
+    )
+    .all(intent.chatId, intent.turnRef)
+    .map(rowRecord)
+    .filter((row): row is ChatToolMutationRecord => row !== undefined);
+  return hasInflightBarrier(open, intent) ? "in-flight" : undefined;
+}
+/**
+ * Whether a record may have reached the provider. The turn bound limits single writes, so a record
+ * that settled as a local refusal before dispatch (an existing draft item, a value refused before
  * sending) does not use it up (#4175, #4178). The settlement rules admit those two outcomes only
  * without a provider response; every other record counts.
  */
-function heldWrite(row: ChatToolMutationRecord): boolean {
-  return !(
-    row.phase === "settled" &&
-    (row.outcome === "not-dispatched" || row.outcome === "rejected")
-  );
-}
+const HELD_SINGLE_WRITES = `SELECT COUNT(*) AS held FROM chat_tool_mutations WHERE ${TURN}
+  AND batch_digest IS NULL AND NOT (phase = 'settled' AND outcome IN ('not-dispatched','rejected'))`;
 function blockedTurn(
   db: DatabaseSync,
   intent: ChatToolMutationIntent,
 ): ChatToolMutationPreparation | undefined {
-  const rows = turnRecords(db, intent);
-  if (rows.some((row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed"))
-    return { kind: "blocked", reason: "unknown-effect" };
-  if (hasInflightBarrier(rows, intent)) return { kind: "blocked", reason: "in-flight" };
-  const held = rows.filter((row) => heldWrite(row) && row.batchDigest === intent.batchDigest);
-  const limit = intent.batchDigest === undefined ? MAX_MUTATIONS_PER_TURN : JIRA_DRAFT_ITEMS_MAX;
-  if (held.length >= limit) return { kind: "blocked", reason: "capacity" };
-  return undefined;
+  const barrier = turnBarrier(db, intent);
+  if (barrier !== undefined) return { kind: "blocked", reason: barrier };
+  // The items of one approved draft are their own batch: the draft authorizes exactly its own
+  // items, and its size is bounded in bytes where it is staged, not by this per-turn count (#4178).
+  if (intent.batchDigest !== undefined) return undefined;
+  const row = db.prepare(HELD_SINGLE_WRITES).get(intent.chatId, intent.turnRef);
+  return Number(row?.held ?? 0) >= MAX_MUTATIONS_PER_TURN
+    ? { kind: "blocked", reason: "capacity" }
+    : undefined;
 }
 function retryableAttachment(
   prior: ChatToolMutationRecord,
@@ -358,14 +371,7 @@ class MutationStore implements ChatToolMutationStore {
         const current = this.requireRecord(invocationId);
         if (current.phase !== "prepared") return undefined;
         assertCurrentTurn(this.db, current);
-        const rows = turnRecords(this.db, current);
-        if (
-          rows.some(
-            (row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed",
-          ) ||
-          hasInflightBarrier(rows, current)
-        )
-          return undefined;
+        if (turnBarrier(this.db, current) !== undefined) return undefined;
         // A synchronous guard may atomically redeem an approval in this same transaction.
         if (!guardApproved(guard())) throw new GuardDenied();
         this.db

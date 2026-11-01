@@ -1143,7 +1143,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["staged", "submitted", "refused"],
+        values: ["staged", "submitted", "refused", "progress", "executed"],
       },
       refusal: {
         type: "string",
@@ -1155,7 +1155,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "draft-not-found",
           "connection-changed",
           "duplicate-ref",
-          "too-many-items",
           "too-large",
           "template-violation",
           "draft-changed",
@@ -1196,6 +1195,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      settledCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      pendingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       durationMs: {
         type: "integer",

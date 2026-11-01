@@ -4,11 +4,11 @@ import {
   JIRA_ATTACHMENT_SOURCE_KINDS,
   JIRA_DRAFT_DIGEST_PATTERN,
   JIRA_DRAFT_ID_PATTERN,
-  JIRA_DRAFT_ITEMS_MAX,
   JIRA_DRAFT_ITEM_STATES,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   JIRA_DRAFT_REF_PATTERN,
   JIRA_DRAFT_REFUSALS,
+  JIRA_DRAFT_RESULT_ROWS_MAX,
   JIRA_FIELD_ID_PATTERN,
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_DETAIL_LIMITS,
@@ -193,7 +193,9 @@ export const JIRA_VIOLATIONS_SCHEMA = {
     ["ruleId", "subject", "template"],
   ),
 };
-const DRAFT_COUNT = { type: "integer", minimum: 0, maximum: JIRA_DRAFT_ITEMS_MAX };
+const DRAFT_COUNT = { type: "integer", minimum: 0 };
+// Exact key ranges such as `PROJ-3..PROJ-40`: what a large draft created or found, in a few bytes.
+const KEY_RANGES = { type: "array", maxItems: JIRA_DRAFT_RESULT_ROWS_MAX, items: text(600) };
 const DRAFT_RESULT_SCHEMA = object(
   {
     outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
@@ -201,7 +203,7 @@ const DRAFT_RESULT_SCHEMA = object(
     guidance: text(512),
     items: {
       type: "array",
-      maxItems: JIRA_DRAFT_ITEMS_MAX,
+      maxItems: JIRA_DRAFT_RESULT_ROWS_MAX,
       items: object(
         {
           ref: text(32),
@@ -229,6 +231,14 @@ const DRAFT_RESULT_SCHEMA = object(
     uncertainCount: DRAFT_COUNT,
     skippedCount: DRAFT_COUNT,
     excludedCount: DRAFT_COUNT,
+    pendingCount: DRAFT_COUNT,
+    // A large result lists only the items that need attention; what was created or found is
+    // reported as exact key ranges, and what did not fit as a count.
+    compact: { type: "boolean" },
+    omittedRowCount: DRAFT_COUNT,
+    createdRanges: KEY_RANGES,
+    existingRanges: KEY_RANGES,
+    rangesTruncated: { type: "boolean" },
   },
   ["outcome"],
 );
@@ -354,15 +364,13 @@ const DEFINITIONS: Readonly<
     description:
       "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped, and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created. A draft of up to " +
       String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
-      " items can be sent here as items. A larger draft (up to " +
-      String(JIRA_DRAFT_ITEMS_MAX) +
-      " items) is written first, in pages, with jira.draft-stage; then call jira.draft once with only the draftId and the draftDigest of the last staging result, so the whole draft is approved once. Never split one backlog into several approvals.",
+      " items can be sent here as items. A larger draft, of any size, is written first, in pages, with jira.draft-stage; then call jira.draft once with only the draftId and the draftDigest of the last staging result, so the whole draft is approved once. Never split one backlog into several approvals. A very large draft may not finish within one run: the result then lists the items not started as pending, and calling jira.draft again with the same draftId and draftDigest continues with them without creating anything twice.",
     input: object(
       {
         items: {
           type: "array",
           minItems: 1,
-          maxItems: JIRA_DRAFT_ITEMS_MAX,
+          maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
           items: JIRA_DRAFT_ITEM_SCHEMA,
         },
         draftId: { ...text(36), pattern: JIRA_DRAFT_ID_PATTERN },
@@ -371,11 +379,12 @@ const DEFINITIONS: Readonly<
       [],
     ),
     result: DRAFT_RESULT_SCHEMA,
-    // One result per item: the draft's own item bound, not a single issue (#4178).
+    // Up to one result row per item, within the catalog's result ceilings; a larger result is
+    // reported by counts and key ranges, never cut (#4178).
     bounds: {
       maxResultBytes: 262144,
       maxDurationMs: 3000000,
-      maxResultCount: JIRA_DRAFT_ITEMS_MAX,
+      maxResultCount: JIRA_DRAFT_RESULT_ROWS_MAX,
     },
   },
 };

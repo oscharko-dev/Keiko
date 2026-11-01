@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0c8d3f3af652c3c2341b04fb9afea1fd084eeaa5766700d697ea7c7844eebd60",
+    "catalogDigest": "fb2adbe0dca1347f6f069c4abc35f79390b7b8ace12c34b55db10edb7cd3a679",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1202,7 +1202,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["staged", "submitted", "refused"]
+            "values": ["staged", "submitted", "refused", "progress", "executed"]
           },
           "refusal": {
             "type": "string",
@@ -1214,7 +1214,6 @@
               "draft-not-found",
               "connection-changed",
               "duplicate-ref",
-              "too-many-items",
               "too-large",
               "template-violation",
               "draft-changed",
@@ -1255,6 +1254,16 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "settledCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "pendingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           },
           "durationMs": {
             "type": "integer",
@@ -3354,8 +3363,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.context-fitted.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:229",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:263"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:233",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:267"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3442,8 +3451,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-turn.ended.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:162",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:205"]
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:166",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:209"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -57209,6 +57218,12 @@
                   "required": true
                 },
                 {
+                  "name": "pendingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "phase",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -57218,6 +57233,12 @@
                   "name": "refusal",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "settledCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
@@ -107351,13 +107372,13 @@
     {
       "op": "chat.tool-turn.context-fitted",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:232",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:236",
       "package": "keiko-server"
     },
     {
       "op": "chat.tool-turn.ended",
       "category": "process",
-      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:165",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:169",
       "package": "keiko-server"
     },
     {
@@ -109747,7 +109768,7 @@
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:244",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:270",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

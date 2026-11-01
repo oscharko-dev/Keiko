@@ -1,9 +1,7 @@
 import {
   JIRA_DRAFT_DIGEST_PATTERN,
   JIRA_DRAFT_ID_PATTERN,
-  JIRA_DRAFT_ITEMS_MAX,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
-  JIRA_DRAFT_STAGE_BYTES_MAX,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -29,13 +27,13 @@ export type JiraDraftRefusal =
   | "draft-not-found"
   | "connection-changed"
   | "duplicate-ref"
-  | "too-many-items"
   | "too-large"
   | "template-violation";
 
 /** Body-free facts about one staging call; the composing server maps them to its log. */
 export interface JiraDraftActivity {
-  readonly phase: "staged" | "refused";
+  /** staged/refused: one staging call; progress/executed: the approved draft's run (#4178). */
+  readonly phase: "staged" | "refused" | "progress" | "executed";
   readonly refusal?: JiraDraftRefusal;
   readonly newDraft: boolean;
   readonly pageItemCount: number;
@@ -45,6 +43,9 @@ export interface JiraDraftActivity {
   readonly unresolvedRefCount: number;
   readonly violationCount: number;
   readonly durationMs: number;
+  /** A run only: items created, reconciled or deselected so far, and items not yet started. */
+  readonly settledCount?: number;
+  readonly pendingCount?: number;
 }
 
 export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> {
@@ -128,7 +129,6 @@ function stagedView(draft: StagedJiraDraft, newDraft: boolean): ManagedMcpToolRe
       newDraft,
       itemCount: draft.items.length,
       pageCount: draft.pageCount,
-      itemLimit: JIRA_DRAFT_ITEMS_MAX,
       unresolvedRefCount: unresolved.length,
       unresolvedRefs: unresolved.slice(0, UNRESOLVED_LISTED_MAX),
     },
@@ -149,9 +149,17 @@ function activityOf(
     ...extra,
   };
 }
-function limitsOf(refusal: JiraDraftRefusal): Record<string, number> {
-  if (refusal === "too-many-items") return { itemLimit: JIRA_DRAFT_ITEMS_MAX };
-  return refusal === "too-large" ? { byteLimit: JIRA_DRAFT_STAGE_BYTES_MAX } : {};
+/**
+ * The fixed instruction for the one bound a draft has: its size in bytes. It is plain language for
+ * a person who is not a developer, and it always leaves a way forward - several smaller drafts.
+ */
+export const JIRA_DRAFT_TOO_LARGE_GUIDANCE =
+  "This backlog is larger than a single draft can hold, so nothing more was added to it. " +
+  "Tell the user in plain language that the backlog is too big to approve in one piece, that the items already written are still saved, " +
+  "and offer to split the rest into several smaller drafts, for example one per epic or theme, each approved on its own. " +
+  "Do not show this message, an error code or any numbers.";
+function guidanceOf(refusal: JiraDraftRefusal): Record<string, string> {
+  return refusal === "too-large" ? { guidance: JIRA_DRAFT_TOO_LARGE_GUIDANCE } : {};
 }
 
 interface StageRun<Context extends ManagedMcpInvocationContext> {
@@ -181,7 +189,7 @@ function refuseStage<Context extends ManagedMcpInvocationContext>(
     context,
   );
   const failure = jiraReadFailure(refusal);
-  return { ...failure, data: { ...failure.data, ...limitsOf(refusal) } };
+  return { ...failure, data: { ...failure.data, ...guidanceOf(refusal) } };
 }
 function templateRefusalResult(refusal: TemplateRefusal): ManagedMcpToolResult {
   return {

@@ -99,8 +99,9 @@ function countDraftItem(result: Tally, item: ChatToolDraftReceipt, label: string
     result.refused++;
     result.notDone.push(label);
   }
-  // A skipped item was blocked by a failed or uncertain one; only an excluded item is deselected.
-  else if (item.state === "skipped") result.notDone.push(label);
+  // A skipped item was blocked by a failed or uncertain one and a pending item never started
+  // before the run's time ended; only an excluded item is deselected.
+  else if (item.state === "skipped" || item.state === "pending") result.notDone.push(label);
 }
 /** A backlog draft reports each item: created or reconciled items completed, uncertain ones sent. */
 function countDraft(result: Tally, exchange: ChatToolExchange): boolean {
@@ -150,7 +151,10 @@ export function chatToolTurnPartialAnswer(
     ...bullets("Completed in this turn:", counts.succeeded),
     ...bullets("Sent but not confirmed — check these in Jira before retrying:", counts.unconfirmed),
     ...bullets("Started but not settled — check these in Jira before retrying:", counts.unsettled),
-    ...bullets("Not done — refused by Jira, or blocked by an earlier item:", counts.notDone),
+    ...bullets(
+      "Not done — refused by Jira, blocked by an earlier item, or not started in time:",
+      counts.notDone,
+    ),
     `Reads completed: ${String(counts.reads)}. Refused or failed tool calls: ${String(counts.refused)}.`,
     "",
     "The rest of the request was not done. Send a follow-up message to continue from here; completed writes are not repeated unless you ask for them again.",

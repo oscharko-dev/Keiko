@@ -4,10 +4,7 @@ import type {
   ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
 import { parseJiraDraft, parseJiraDraftReference } from "@oscharko-dev/keiko-connectors";
-import {
-  isJiraDraftRef,
-  JIRA_DRAFT_ITEMS_MAX,
-} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { isJiraDraftRef } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 
 const APPROVAL_STATES: Readonly<
@@ -41,7 +38,6 @@ function validDeselection(excluded: readonly string[], call: ChatToolExchange["c
   if (parseJiraDraftReference(call.arguments) !== undefined)
     return (
       excluded.length > 0 &&
-      excluded.length <= JIRA_DRAFT_ITEMS_MAX &&
       new Set(excluded).size === excluded.length &&
       excluded.every(isJiraDraftRef)
     );

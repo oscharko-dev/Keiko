@@ -1,6 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { jiraDraftIdentity, parseJiraDraft } from "@oscharko-dev/keiko-connectors";
+import {
+  jiraDraftIdentity,
+  parseJiraDraft,
+  type JiraDraftActivity,
+} from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { buildUiStoreOverDatabase } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
@@ -23,6 +27,7 @@ import type { TraceSession } from "../requirement-trace.js";
 import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
+  JIRA_DRAFT_PENDING_GUIDANCE,
   jiraDraftOutcome,
   observedJiraDraftOutcome,
   type JiraChatDraftExecution,
@@ -463,6 +468,117 @@ describe("executeJiraChatDraft (#4178)", () => {
     expect(rerun.data).toMatchObject({ createdCount: 0, failedCount: 0 });
     expect(jira.issues).toHaveLength(70);
     expect(jira.posts()).toHaveLength(postsAfterFirstRun);
+  });
+
+  describe("a draft of any size (epic #4173, #4178)", () => {
+    const largeDraft = (count: number): CatalogJsonObject => {
+      const epics = Math.ceil(count / 100);
+      return {
+        items: [
+          ...Array.from({ length: epics }, (_, index) => item(`epic${String(index)}`)),
+          ...Array.from({ length: count - epics }, (_, index) =>
+            item(`story${String(index)}`, {
+              parent: { fieldId: "parent", ref: `epic${String(index % epics)}` },
+            }),
+          ),
+        ],
+      } as unknown as CatalogJsonObject;
+    };
+
+    it("creates all 1,200 items of one approved draft and reports them compactly and exactly", async () => {
+      const jira = syntheticJira();
+      const result = await executeJiraChatDraft(execution(jira, largeDraft(1200)));
+      expect(result.isError).toBeUndefined();
+      expect(result.data).toMatchObject({
+        outcome: "succeeded",
+        createdCount: 1200,
+        failedCount: 0,
+        pendingCount: 0,
+        compact: true,
+        items: [],
+        createdRanges: ["SYN-1..SYN-1200"],
+      });
+      expect(jira.issues).toHaveLength(1200);
+      // Within the tool catalog's 256 KiB result ceiling, however many items were created.
+      expect(Buffer.byteLength(JSON.stringify(result.data))).toBeLessThan(262_144);
+    });
+
+    it("creates zero new issues when the executed 1,200-item draft is run again", async () => {
+      const jira = syntheticJira();
+      await executeJiraChatDraft(execution(jira, largeDraft(1200)));
+      const postsAfterFirstRun = jira.posts().length;
+      const rerun = await executeJiraChatDraft(execution(jira, largeDraft(1200)));
+      expect(rerun.isError).toBeUndefined();
+      expect(rerun.data).toMatchObject({
+        outcome: "not-dispatched",
+        createdCount: 0,
+        existingCount: 1200,
+        existingRanges: ["SYN-1..SYN-1200"],
+      });
+      expect(jira.issues).toHaveLength(1200);
+      expect(jira.posts()).toHaveLength(postsAfterFirstRun);
+    });
+
+    it("keeps a run time-bounded, reports the unfinished items honestly and finishes them on a re-run", async () => {
+      const args = largeDraft(40);
+      const jira = syntheticJira();
+      let tick = 0;
+      const clock = (): number => (tick += 1000);
+      const activity: JiraDraftActivity[] = [];
+      const first = await executeJiraChatDraft({
+        ...execution(jira, args),
+        now: clock,
+        budget: { writeMs: 20_000, totalMs: 3_600_000 },
+        activity: (entry) => activity.push(entry),
+      });
+      const created = jira.issues.length;
+      expect(created).toBeGreaterThan(0);
+      expect(created).toBeLessThan(40);
+      expect(first.isError).toBe(true);
+      expect(first.data).toMatchObject({
+        outcome: "succeeded",
+        createdCount: created,
+        pendingCount: 40 - created,
+        guidance: JIRA_DRAFT_PENDING_GUIDANCE,
+      });
+      // The keys created in this run are listed exactly, none missing and none invented.
+      const rows = first.data.items as { state: string; issueKey?: string }[];
+      expect(rows.filter((row) => row.state === "created").map((row) => row.issueKey)).toEqual(
+        jira.issues.map((issue) => issue.key),
+      );
+      expect(rows.filter((row) => row.state === "pending")).toHaveLength(40 - created);
+      expect(activity.at(-1)).toMatchObject({
+        phase: "executed",
+        itemCount: 40,
+        settledCount: created,
+        pendingCount: 40 - created,
+      });
+      // The same draft again, in a later turn: what exists is recognised, the rest is created.
+      const rerun = await executeJiraChatDraft(execution(jira, args));
+      expect(rerun.isError).toBeUndefined();
+      expect(rerun.data).toMatchObject({
+        createdCount: 40 - created,
+        existingCount: created,
+        pendingCount: 0,
+      });
+      expect(jira.issues).toHaveLength(40);
+      expect(new Set(jira.issues.map((issue) => issue.fields.summary)).size).toBe(40);
+    });
+
+    it("records progress every 100 attempted items, counts only", async () => {
+      const activity: JiraDraftActivity[] = [];
+      await executeJiraChatDraft({
+        ...execution(syntheticJira(), largeDraft(250)),
+        activity: (entry) => activity.push(entry),
+      });
+      expect(
+        activity.map((entry) => [entry.phase, entry.settledCount, entry.pendingCount]),
+      ).toEqual([
+        ["progress", 100, 150],
+        ["progress", 200, 50],
+        ["executed", 250, 0],
+      ]);
+    });
   });
 
   it("keeps the per-turn bound for single writes after a large draft ran in the same turn", async () => {

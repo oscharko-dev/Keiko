@@ -142,7 +142,7 @@ describe("chatToolTurnPartialAnswer", () => {
     const answer = chatToolTurnPartialAnswer([draft], "deadline");
     expect(answer).toContain("- jira_draft REQ-31 (created)");
     expect(answer).toContain(
-      "Not done — refused by Jira, or blocked by an earlier item:\n" +
+      "Not done — refused by Jira, blocked by an earlier item, or not started in time:\n" +
         "- jira_draft (item 2, no key) (failed)\n" +
         "- jira_draft (item 3, no key) (failed)\n" +
         "- jira_draft (item 4, no key) (skipped)\n",

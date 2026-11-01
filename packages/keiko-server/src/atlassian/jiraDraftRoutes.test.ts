@@ -126,11 +126,11 @@ describe("Jira draft activity (#4178)", () => {
     expect(analyzeLogText(line).timelines).toHaveLength(1);
   });
 
-  it("records a draft refused above its resource bound as a warning with a closed reason", () => {
+  it("records a draft refused above its byte bound as a warning with a closed reason", () => {
     const logs = createBufferedServerLogSink();
     recordJiraDraftActivity(logs, "correlation-3", {
       phase: "refused",
-      refusal: "too-many-items",
+      refusal: "too-large",
       newDraft: false,
       pageItemCount: 50,
       itemCount: 0,
@@ -142,10 +142,34 @@ describe("Jira draft activity (#4178)", () => {
     });
     expect(expectActivityLogProof("atlassian.jira-draft.line", onlyLine(logs))).toMatchObject({
       phase: "refused",
-      refusal: "too-many-items",
+      refusal: "too-large",
       level: "warn",
       errorKind: "invalid-request",
       pageItemCount: 50,
+    });
+  });
+
+  it("records a run's progress and end as counts only", () => {
+    const logs = createBufferedServerLogSink();
+    recordJiraDraftActivity(logs, "correlation-4", {
+      phase: "executed",
+      newDraft: false,
+      pageItemCount: 0,
+      itemCount: 1200,
+      pageCount: 0,
+      byteCount: 0,
+      unresolvedRefCount: 0,
+      violationCount: 0,
+      settledCount: 800,
+      pendingCount: 400,
+      durationMs: 600_000,
+    });
+    expect(expectActivityLogProof("atlassian.jira-draft.line", onlyLine(logs))).toMatchObject({
+      phase: "executed",
+      level: "info",
+      itemCount: 1200,
+      settledCount: 800,
+      pendingCount: 400,
     });
   });
 });

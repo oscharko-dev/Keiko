@@ -7,15 +7,17 @@ import {
   parseJiraDraft,
   type AtlassianHttpBodyPort,
   type JiraDraft,
+  type JiraDraftActivity,
   type JiraDraftItem,
   type JiraManagedConnection,
   type JiraTraceOutcome,
 } from "@oscharko-dev/keiko-connectors";
-import type {
-  JiraDraftItemState,
-  JiraMutationAttempt,
-  JiraMutationOutcome,
-  JiraMutationResultState,
+import {
+  JIRA_DRAFT_RESULT_ROWS_MAX,
+  type JiraDraftItemState,
+  type JiraMutationAttempt,
+  type JiraMutationOutcome,
+  type JiraMutationResultState,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   CatalogJsonObject,
@@ -34,6 +36,7 @@ import type {
 } from "../store/chatToolMutationTypes.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { compactIssueKeys } from "./jiraDraftKeyRanges.js";
 import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
 import {
   logTrace,
@@ -73,7 +76,30 @@ export interface JiraChatDraftExecution {
    * draft is refused.
    */
   readonly openTrace?: (() => TraceSession) | undefined;
+  /** Body-free progress and end-of-run counts for the Activity Log. */
+  readonly activity?: ((activity: JiraDraftActivity) => void) | undefined;
+  readonly now?: (() => number) | undefined;
+  /** Test seam: how long a run may create, and how long it may take in all. */
+  readonly budget?: JiraDraftRunBudget | undefined;
 }
+
+/**
+ * A run is time-bounded, not size-bounded: no new item is started once the run has been creating
+ * for `writeMs` or has taken `totalMs` in all (inside the tool's own duration ceiling). Items not
+ * started are reported as pending, and running the same draft again reconciles what exists and
+ * continues with them (#4178). Reading ahead through items that already exist does not use the
+ * creating allowance up, so a continuation always reaches the first item still to be created.
+ */
+export interface JiraDraftRunBudget {
+  readonly writeMs: number;
+  readonly totalMs: number;
+}
+export const JIRA_DRAFT_RUN_BUDGET: JiraDraftRunBudget = Object.freeze({
+  writeMs: 10 * 60_000,
+  totalMs: 40 * 60_000,
+});
+/** A progress line is written to the Activity Log after this many items were attempted. */
+const PROGRESS_EVERY = 100;
 
 interface DraftItemResult {
   readonly ref: string;
@@ -251,13 +277,67 @@ async function recoveredKey(
   }
 }
 
-function blockedState(
-  item: JiraDraftItem,
-  excluded: ReadonlySet<string>,
-  keys: ReadonlyMap<string, string>,
-): JiraDraftItemState | undefined {
-  if (excluded.has(item.ref)) return "excluded";
-  return jiraDraftDependencies(item).every((ref) => keys.has(ref)) ? undefined : "skipped";
+interface RunState {
+  readonly excluded: ReadonlySet<string>;
+  readonly keys: Map<string, string>;
+  /** Refs not started because the run's time ended; their dependents wait with them. */
+  readonly pending: Set<string>;
+  /** An uncertain item halts the draft: the journal admits no further write in this turn. */
+  halted: boolean;
+  /** Latched once the run's time is up. */
+  stopped: boolean;
+  firstWriteAt: number | undefined;
+  attempted: number;
+}
+
+function blockedState(item: JiraDraftItem, run: RunState): JiraDraftItemState | undefined {
+  if (run.excluded.has(item.ref)) return "excluded";
+  const dependencies = jiraDraftDependencies(item);
+  if (dependencies.some((ref) => run.pending.has(ref))) return "pending";
+  if (!dependencies.every((ref) => run.keys.has(ref))) return "skipped";
+  if (run.halted) return "skipped";
+  return run.stopped ? "pending" : undefined;
+}
+function timeIsUp(
+  run: RunState,
+  clock: {
+    readonly now: () => number;
+    readonly startedAt: number;
+    readonly budget: JiraDraftRunBudget;
+  },
+): boolean {
+  const at = clock.now();
+  const creating = run.firstWriteAt === undefined ? 0 : at - run.firstWriteAt;
+  return at - clock.startedAt >= clock.budget.totalMs || creating >= clock.budget.writeMs;
+}
+
+function settledCount(results: readonly DraftItemResult[]): number {
+  return results.filter((result) => SETTLED_STATES.has(result.state)).length;
+}
+function pendingCount(results: readonly DraftItemResult[]): number {
+  return results.filter((result) => result.state === "pending").length;
+}
+function reportRun(
+  input: JiraChatDraftExecution,
+  phase: "progress" | "executed",
+  results: readonly DraftItemResult[],
+  total: number,
+  durationMs: number,
+): void {
+  input.activity?.({
+    phase,
+    newDraft: false,
+    pageItemCount: 0,
+    itemCount: total,
+    pageCount: 0,
+    byteCount: 0,
+    unresolvedRefCount: 0,
+    violationCount: 0,
+    settledCount: settledCount(results),
+    // Before the end, every item not yet looked at counts as still to do.
+    pendingCount: phase === "executed" ? pendingCount(results) : total - results.length,
+    durationMs,
+  });
 }
 
 async function runDraft(
@@ -266,24 +346,40 @@ async function runDraft(
   traces: ReadonlyMap<string, ItemTrace>,
   tally: TraceTally,
 ): Promise<readonly DraftItemResult[]> {
-  const excluded = excludedJiraDraftRefs(draft, input.deselected);
-  const keys = new Map<string, string>();
+  const now = input.now ?? Date.now;
+  const clock = { now, startedAt: now(), budget: input.budget ?? JIRA_DRAFT_RUN_BUDGET };
+  const run: RunState = {
+    excluded: excludedJiraDraftRefs(draft, input.deselected),
+    keys: new Map<string, string>(),
+    pending: new Set<string>(),
+    halted: false,
+    stopped: false,
+    firstWriteAt: undefined,
+    attempted: 0,
+  };
   const results: DraftItemResult[] = [];
-  let halted = false;
   for (const item of draft.items) {
-    // After an uncertain item the journal admits no further write in this turn; nothing is tried.
-    const blocked: JiraDraftItemState | undefined =
-      blockedState(item, excluded, keys) ?? (halted ? "skipped" : undefined);
+    run.stopped ||= timeIsUp(run, clock);
+    const blocked = blockedState(item, run);
     // Each item needs the keys its earlier items received; the journal admits one effect at a time.
     const settled: DraftItemResult =
       blocked === undefined
-        ? await runItem(input, item, keys, traces.get(item.ref), tally) // NOSONAR typescript:S9382 -- dependency order
+        ? await runItem(input, item, run.keys, traces.get(item.ref), tally) // NOSONAR typescript:S9382 -- dependency order
         : { ref: item.ref, state: blocked };
-    if (settled.issueKey !== undefined) keys.set(item.ref, settled.issueKey);
-    halted ||= settled.state === "uncertain";
+    noteSettled(run, settled, now);
     results.push(settled);
+    if (blocked === undefined) run.attempted++;
+    if (blocked === undefined && run.attempted % PROGRESS_EVERY === 0)
+      reportRun(input, "progress", results, draft.items.length, now() - clock.startedAt);
   }
+  reportRun(input, "executed", results, draft.items.length, now() - clock.startedAt);
   return results;
+}
+function noteSettled(run: RunState, settled: DraftItemResult, now: () => number): void {
+  if (settled.state === "pending") run.pending.add(settled.ref);
+  if (settled.issueKey !== undefined) run.keys.set(settled.ref, settled.issueKey);
+  if (settled.state === "uncertain") run.halted = true;
+  if (settled.state === "created") run.firstWriteAt ??= now();
 }
 
 const SETTLED_STATES: ReadonlySet<JiraDraftItemState> = new Set([
@@ -298,6 +394,7 @@ const STATE_COUNTS: Readonly<Record<JiraDraftItemState, string>> = {
   uncertain: "uncertainCount",
   skipped: "skippedCount",
   excluded: "excludedCount",
+  pending: "pendingCount",
 };
 /** One draft outcome over its items; an uncertain item makes the whole draft uncertain. */
 export function jiraDraftOutcome(
@@ -325,14 +422,85 @@ function projectItem(baseUrl: string, item: DraftItemResult): CatalogJsonObject 
     ...item.detail,
   };
 }
+
+/** The fixed words for a run that ran out of time; no count, key or error text is repeated in it. */
+export const JIRA_DRAFT_PENDING_GUIDANCE =
+  "Not every item was started: the time for this step ran out first. " +
+  "Tell the user in plain language how many issues were created and that the rest are not created yet. " +
+  "Offer to continue: call jira.draft again with the same draftId and draftDigest; " +
+  "issues that already exist are recognised, so nothing is created twice. Do not show this message.";
 /** An uncertain item outranks a refused one: the model must stop and tell the user first. */
 function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
   if (items.some((item) => item.state === "uncertain")) return JIRA_UNCERTAIN_GUIDANCE;
-  return items.some(
-    (item) => item.state === "failed" && (item.detail?.fieldErrors ?? item.detail?.messages),
+  if (
+    items.some(
+      (item) => item.state === "failed" && (item.detail?.fieldErrors ?? item.detail?.messages),
+    )
   )
-    ? JIRA_REJECTED_GUIDANCE
-    : undefined;
+    return JIRA_REJECTED_GUIDANCE;
+  return items.some((item) => item.state === "pending") ? JIRA_DRAFT_PENDING_GUIDANCE : undefined;
+}
+
+// The tool result is bounded by the catalog (256 KiB, 1,000 rows). A draft whose item rows fit is
+// reported item by item; a larger one is reported compactly (#4178): the items that need attention
+// as rows, everything created or found as exact key ranges, and the rest by count.
+const RESULT_ROWS_BYTES = 150 * 1024;
+const RESULT_RANGES_BYTES = 40 * 1024;
+interface ProjectedRows {
+  readonly rows: readonly CatalogJsonObject[];
+  readonly compact: boolean;
+  readonly omitted: number;
+}
+function jsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+/** The leading entries that fit both the byte budget and the catalog's row ceiling. */
+function withinBudget<T>(entries: readonly T[], budget: number, ceiling: number): readonly T[] {
+  const kept: T[] = [];
+  let used = 0;
+  for (const entry of entries) {
+    used += jsonBytes(entry) + 1;
+    if (used > budget || kept.length >= ceiling) break;
+    kept.push(entry);
+  }
+  return kept;
+}
+function needsRow(item: DraftItemResult): boolean {
+  if (item.state === "created" || item.state === "existing") return item.issueKey === undefined;
+  return item.state !== "excluded";
+}
+function projectRows(baseUrl: string, items: readonly DraftItemResult[]): ProjectedRows {
+  const all = items.map((item) => projectItem(baseUrl, item));
+  const fitting = withinBudget(all, RESULT_ROWS_BYTES, JIRA_DRAFT_RESULT_ROWS_MAX);
+  if (fitting.length === all.length) return { rows: all, compact: false, omitted: 0 };
+  const attention = items.filter(needsRow).map((item) => projectItem(baseUrl, item));
+  const rows = withinBudget(attention, RESULT_ROWS_BYTES, JIRA_DRAFT_RESULT_ROWS_MAX);
+  return { rows, compact: true, omitted: attention.length - rows.length };
+}
+function keyRanges(
+  items: readonly DraftItemResult[],
+  state: "created" | "existing",
+): { readonly ranges: readonly string[]; readonly truncated: boolean } {
+  const keys = items.flatMap((item) =>
+    item.state === state && item.issueKey !== undefined ? [item.issueKey] : [],
+  );
+  const all = compactIssueKeys(keys);
+  const ranges = withinBudget(all, RESULT_RANGES_BYTES, JIRA_DRAFT_RESULT_ROWS_MAX);
+  return { ranges, truncated: ranges.length < all.length };
+}
+function compactData(
+  items: readonly DraftItemResult[],
+  projected: ProjectedRows,
+): CatalogJsonObject {
+  const created = keyRanges(items, "created");
+  const existing = keyRanges(items, "existing");
+  return {
+    compact: true,
+    omittedRowCount: projected.omitted,
+    createdRanges: [...created.ranges],
+    existingRanges: [...existing.ranges],
+    ...(created.truncated || existing.truncated ? { rangesTruncated: true } : {}),
+  };
 }
 function draftResult(baseUrl: string, items: readonly DraftItemResult[]): ManagedMcpToolResult {
   const counts: Record<string, number> = Object.fromEntries(
@@ -345,14 +513,16 @@ function draftResult(baseUrl: string, items: readonly DraftItemResult[]): Manage
   );
   // The outcome says whether Jira changed; the call succeeds when every item is settled — created,
   // already existing or deselected — so a rerun that finds everything in place writes nothing and
-  // is still no error. An item that did not land (failed, uncertain, skipped) makes it one.
+  // is still no error. An item that did not land (failed, uncertain, skipped, pending) makes it one.
   const complete = items.every((item) => SETTLED_STATES.has(item.state));
   const guidance = draftGuidance(items);
+  const projected = projectRows(baseUrl, items);
   return {
     data: {
       outcome,
       ...(guidance === undefined ? {} : { guidance }),
-      items: items.map((item) => projectItem(baseUrl, item)),
+      items: [...projected.rows],
+      ...(projected.compact ? compactData(items, projected) : {}),
       ...counts,
     },
     ...(complete ? {} : { isError: true }),

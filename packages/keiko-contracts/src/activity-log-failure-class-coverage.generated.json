@@ -1672,6 +1672,12 @@
               "required": true
             },
             {
+              "name": "pendingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "phase",
               "type": "string",
               "dataClass": "closed-enum",
@@ -1681,6 +1687,12 @@
               "name": "refusal",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "settledCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

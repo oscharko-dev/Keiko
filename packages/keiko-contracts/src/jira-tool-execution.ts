@@ -20,13 +20,17 @@ export type JiraMutationOperation = (typeof JIRA_MUTATION_OPERATIONS)[number];
  * A large draft is assembled in pages in a server-held draft session (`jira.draft-stage`) and
  * approved once as a whole.
  */
-// A resource bound, not a product limit: one approved draft authorizes exactly its own items as one
-// bounded batch, so the per-turn bound on single writes does not cut it. Above it the draft fails
-// closed (it is never truncated). It is sized for a few hundred items whose sequential creates
-// still finish within one tool call.
-export const JIRA_DRAFT_ITEMS_MAX = 500;
+// There is no cap on the number of items. The only bound on a draft is a resource bound in bytes:
+// the retained size of its items as canonical JSON, sized so that tens of thousands of ordinary
+// backlog items fit. Above it staging refuses with a closed reason and fixed guidance for the
+// model to offer splitting the backlog into several drafts; a draft is never truncated.
 /** The retained size of one staged draft's items, measured as canonical JSON bytes. */
-export const JIRA_DRAFT_STAGE_BYTES_MAX = 2 * 1024 * 1024;
+export const JIRA_DRAFT_STAGE_BYTES_MAX = 16 * 1024 * 1024;
+/**
+ * Rows one `jira.draft` result can carry: the tool catalog's array ceiling (ADR-0175). It bounds
+ * the report, not the draft; a larger result is reported by counts and compact key ranges.
+ */
+export const JIRA_DRAFT_RESULT_ROWS_MAX = 1000;
 /** Items one `jira.draft-stage` call appends; larger drafts arrive in several pages. */
 export const JIRA_DRAFT_PAGE_ITEMS_MAX = 50;
 /** A staged draft is addressed by an opaque server-minted id and committed to by its digest. */
@@ -46,7 +50,9 @@ export function isJiraDraftRef(value: unknown): value is string {
  * created: Jira acknowledged this item's create; existing: an issue with this item's draft
  * identity already existed, so nothing was sent; failed: refused before or by Jira; uncertain:
  * sent without an authoritative outcome (never retried automatically); skipped: an item it depends
- * on did not produce a key; excluded: deselected by the human, directly or through a dependency.
+ * on did not produce a key; excluded: deselected by the human, directly or through a dependency;
+ * pending: not started because the time allowed for this run ended - running the same draft again
+ * reconciles what exists and continues with these.
  */
 export const JIRA_DRAFT_ITEM_STATES = [
   "created",
@@ -55,6 +61,7 @@ export const JIRA_DRAFT_ITEM_STATES = [
   "uncertain",
   "skipped",
   "excluded",
+  "pending",
 ] as const;
 export type JiraDraftItemState = (typeof JIRA_DRAFT_ITEM_STATES)[number];
 /**

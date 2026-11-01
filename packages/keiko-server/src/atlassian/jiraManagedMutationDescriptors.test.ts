@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { JIRA_DRAFT_ITEMS_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { JIRA_DRAFT_RESULT_ROWS_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   CatalogDigest,
   CatalogJsonObject,
@@ -15,16 +15,17 @@ function draftDescriptor(): (typeof JIRA_MUTATION_DECLARATIONS)[number]["descrip
   return declaration.descriptor;
 }
 
-function completedDraft(count: number): unknown {
+function completedDraft(count: number, extra: CatalogJsonObject = {}, rows = count): unknown {
   const descriptor = draftDescriptor();
   const data: CatalogJsonObject = {
     outcome: "succeeded",
-    items: Array.from({ length: count }, (_, index) => ({
+    items: Array.from({ length: rows }, (_, index) => ({
       ref: `item${String(index)}`,
       state: "created",
       issueKey: `REQ-${String(index + 1)}`,
     })),
     createdCount: count,
+    ...extra,
   };
   return {
     schemaVersion: 1,
@@ -39,7 +40,7 @@ function completedDraft(count: number): unknown {
     metrics: {
       inputBytes: 10,
       outputBytes: catalogJsonBytes(data),
-      resultCount: count,
+      resultCount: rows,
       durationMs: 10,
     },
   };
@@ -48,7 +49,7 @@ function completedDraft(count: number): unknown {
 // #4178 (lab S17): every mutation declared at most one result, so a draft that created several
 // issues failed its own result contract after Jira had created them, and the model created them
 // all again. A draft reports one result per item, up to the draft's own item bound.
-it.each([2, 8, JIRA_DRAFT_ITEMS_MAX])(
+it.each([2, 8, JIRA_DRAFT_RESULT_ROWS_MAX])(
   "accepts a completed backlog draft with %i created items under its own contract",
   (count) => {
     const binding = { descriptor: draftDescriptor(), projectionDigest: PROJECTION };
@@ -59,10 +60,26 @@ it.each([2, 8, JIRA_DRAFT_ITEMS_MAX])(
   },
 );
 
-it("still refuses a draft result that reports more items than a draft may hold", () => {
+it("accepts the compact result of a draft with thousands of created items", () => {
+  const binding = { descriptor: draftDescriptor(), projectionDigest: PROJECTION };
+  const compact = completedDraft(
+    5000,
+    {
+      compact: true,
+      omittedRowCount: 0,
+      createdRanges: ["REQ-1..REQ-4990", "REQ-4995..REQ-5004"],
+      existingRanges: [],
+      pendingCount: 0,
+    },
+    0,
+  );
+  expect(validateToolResultEnvelope(compact, binding)).toMatchObject({ status: "completed" });
+});
+
+it("still refuses a draft result with more rows than the catalog carries (a larger result is compact)", () => {
   const binding = { descriptor: draftDescriptor(), projectionDigest: PROJECTION };
   expect(() =>
-    validateToolResultEnvelope(completedDraft(JIRA_DRAFT_ITEMS_MAX + 1), binding),
+    validateToolResultEnvelope(completedDraft(JIRA_DRAFT_RESULT_ROWS_MAX + 1), binding),
   ).toThrow();
 });
 

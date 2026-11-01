@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  JIRA_DRAFT_ITEMS_MAX,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
@@ -10,9 +9,10 @@ import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/
 import { field, response } from "../../../tests/support/jira-managed-remote.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { parseJiraDraft } from "./jira-draft.js";
-import { createJiraDraftStore } from "./jira-draft-store.js";
+import { createJiraDraftStore, type JiraDraftStoreOptions } from "./jira-draft-store.js";
 import {
   executeJiraDraftStageTool,
+  JIRA_DRAFT_TOO_LARGE_GUIDANCE,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
   type JiraDraftToolDeps,
@@ -79,7 +79,10 @@ function connection(
     ...(templates === undefined ? {} : { issueTemplates: (): JiraIssueTemplateSet => templates }),
   };
 }
-function harness(templates?: JiraIssueTemplateSet): {
+function harness(
+  templates?: JiraIssueTemplateSet,
+  storeOptions: JiraDraftStoreOptions = {},
+): {
   readonly activity: JiraDraftActivity[];
   readonly deps: JiraDraftToolDeps<ManagedMcpInvocationContext>;
   readonly stage: (
@@ -87,7 +90,7 @@ function harness(templates?: JiraIssueTemplateSet): {
     owner?: string,
   ) => ReturnType<typeof executeJiraDraftStageTool>;
 } {
-  const store = createJiraDraftStore();
+  const store = createJiraDraftStore(storeOptions);
   const activity: JiraDraftActivity[] = [];
   const base: JiraDraftToolDeps<ManagedMcpInvocationContext> = {
     store,
@@ -166,26 +169,43 @@ describe("jira.draft-stage (#4178)", () => {
     expect(second.data).toMatchObject({ unresolvedRefCount: 0, unresolvedRefs: [] });
   });
 
-  it("refuses a draft above its resource bound whole and keeps what was staged", async () => {
+  it("has no item-count limit: 1,200 items stage in pages and resolve to exactly those items", async () => {
     const h = harness();
     let draftId: string | undefined;
-    for (let from = 0; from < JIRA_DRAFT_ITEMS_MAX; from += JIRA_DRAFT_PAGE_ITEMS_MAX) {
+    for (let from = 0; from < 1200; from += JIRA_DRAFT_PAGE_ITEMS_MAX) {
       const staged = await h.stage(
         draftId === undefined
           ? { items: page(from, JIRA_DRAFT_PAGE_ITEMS_MAX) }
           : { draftId, items: page(from, JIRA_DRAFT_PAGE_ITEMS_MAX) },
       ); // NOSONAR typescript:S9382 -- each page extends the draft the previous page returned
+      expect(staged.isError).toBeUndefined();
       draftId = text(staged.data.draftId);
     }
-    const before = h.deps.store.peek(text(draftId), "chat-1");
-    expect(before?.items).toHaveLength(JIRA_DRAFT_ITEMS_MAX);
-    const refused = await h.stage({ draftId: text(draftId), items: page(9000, 1) });
+    const staged = h.deps.store.peek(text(draftId), "chat-1");
+    expect(staged?.items).toHaveLength(1200);
+    const resolved = resolveJiraDraftArguments(
+      { draftId: text(draftId), draftDigest: staged?.digest ?? "" },
+      (id) => h.deps.store.get(id, "chat-1"),
+    );
+    const draft = resolved?.ok === true ? parseJiraDraft(resolved.arguments) : undefined;
+    expect(draft?.items).toHaveLength(1200);
+  });
+
+  it("refuses a draft above its byte bound whole, keeps what was staged and gives the model fixed guidance", async () => {
+    const h = harness(undefined, { maxDraftBytes: 5_000 });
+    const first = await h.stage({ items: page(0, 20) });
+    expect(first.isError).toBeUndefined();
+    const draftId = text(first.data.draftId);
+    const before = h.deps.store.peek(draftId, "chat-1");
+    const refused = await h.stage({ draftId, items: page(20, 50) });
     expect(refused).toMatchObject({
       isError: true,
-      data: { outcome: "failed", reason: "too-many-items", itemLimit: JIRA_DRAFT_ITEMS_MAX },
+      data: { outcome: "failed", reason: "too-large", guidance: JIRA_DRAFT_TOO_LARGE_GUIDANCE },
     });
-    expect(h.deps.store.peek(text(draftId), "chat-1")?.digest).toBe(before?.digest);
-    expect(h.activity.at(-1)).toMatchObject({ phase: "refused", refusal: "too-many-items" });
+    expect(JSON.stringify(refused.data)).not.toMatch(/\d{4,}/u);
+    expect(JIRA_DRAFT_TOO_LARGE_GUIDANCE).toMatch(/split/u);
+    expect(h.deps.store.peek(draftId, "chat-1")?.digest).toBe(before?.digest);
+    expect(h.activity.at(-1)).toMatchObject({ phase: "refused", refusal: "too-large" });
   });
 
   it("refuses a page with a template violation whole, naming the item and the rule", async () => {

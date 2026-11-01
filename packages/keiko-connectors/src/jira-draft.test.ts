@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { JIRA_DRAFT_ITEMS_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import {
   JIRA_DRAFT_IDENTITY_PREFIX,
@@ -92,11 +91,9 @@ describe("parseJiraDraft", () => {
     expect(parseJiraDraft({ items })).toBeUndefined();
   });
 
-  it("refuses more than the item ceiling and unknown top-level keys", () => {
-    const many = Array.from({ length: JIRA_DRAFT_ITEMS_MAX + 1 }, (_, index) =>
-      item(`i${String(index)}`),
-    );
-    expect(parseJiraDraft({ items: many })).toBeUndefined();
+  it("has no item-count limit, and refuses unknown top-level keys", () => {
+    const many = Array.from({ length: 1500 }, (_, index) => item(`i${String(index)}`));
+    expect(parseJiraDraft({ items: many })?.items).toHaveLength(1500);
     expect(parseJiraDraft({ items: [item("a")], extra: 1 })).toBeUndefined();
   });
 });

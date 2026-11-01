@@ -1115,6 +1115,7 @@
     "keiko-server/atlassian/jiraChatWriteApproval",
     "keiko-server/atlassian/jiraDraftActivity",
     "keiko-server/atlassian/jiraDraftDescriptor",
+    "keiko-server/atlassian/jiraDraftKeyRanges",
     "keiko-server/atlassian/jiraDraftRoutes",
     "keiko-server/atlassian/jiraManagedMutationDescriptors",
     "keiko-server/atlassian/jiraManagedProvider",

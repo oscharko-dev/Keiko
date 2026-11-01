@@ -1,5 +1,4 @@
 import {
-  JIRA_DRAFT_ITEMS_MAX,
   JIRA_MUTATION_OPERATIONS,
   isJiraAttachmentPreview,
   isJiraDraftRef,
@@ -393,12 +392,7 @@ export interface ChatToolWriteApprovalDecision {
   readonly excludedItemRefs?: readonly string[];
 }
 function validateExcludedItemRefs(value: unknown, path: string, errors: string[]): void {
-  if (
-    !Array.isArray(value) ||
-    value.length > JIRA_DRAFT_ITEMS_MAX ||
-    !value.every(isJiraDraftRef) ||
-    new Set(value).size !== value.length
-  )
+  if (!Array.isArray(value) || !value.every(isJiraDraftRef) || new Set(value).size !== value.length)
     errors.push(`${path} is invalid`);
 }
 const WRITE_APPROVAL_KEYS = [

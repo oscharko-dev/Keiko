@@ -679,11 +679,17 @@ the page keeps its prefix bound and `nextStartAt` continuation.
 
 **Backlog drafts (#4178, 2026-10-31; paged drafts 2026-11-01).** `jira.draft` maps to
 `create-issue` (high): it proposes related issues that reference each other by a local `ref` and
-are approved once, whatever their number. A draft is bounded by a resource ceiling, not a product
-limit: at most 500 items (`JIRA_DRAFT_ITEMS_MAX`) and 2 MiB of canonical item JSON
-(`JIRA_DRAFT_STAGE_BYTES_MAX`); above either the draft fails closed — it is refused whole, never
-truncated, with a body-free `atlassian.jira-draft` line. The earlier ceiling of 32 items was the
-journal's per-turn bound on single writes and is superseded (below).
+are approved once, whatever their number. **There is no limit on the number of items.** The only
+bound on a draft is a resource bound in bytes — 16 MiB of canonical item JSON
+(`JIRA_DRAFT_STAGE_BYTES_MAX`, tens of thousands of ordinary backlog items, held in memory like a
+report session, so far below what the process may safely hold). Past it the staging call is refused
+whole — nothing is truncated, what was staged stays — with the closed reason `too-large`, a
+body-free `atlassian.jira-draft` warning, and fixed guidance for the model
+(`JIRA_DRAFT_TOO_LARGE_GUIDANCE`): tell the user in plain language that the backlog is too big to
+approve in one piece, that the items already written are saved, and offer to split the rest into
+several drafts (for example one per epic), each approved on its own. A count limit must not return
+under another name. The earlier ceilings of 32 items (the journal's per-turn bound on single
+writes) and of 500 items are superseded.
 
 *Paged drafts.* One model call cannot carry hundreds of items, and the model's output is bounded,
 so a large draft is written in pages through `jira.draft-stage`, a read-class tool (row 21: it
@@ -694,7 +700,7 @@ Chat that started it, expiring when idle, and bounded per Chat and in total, exa
 item count and the `unresolvedRefs` still to be written. Every appended item first passes the
 customer-template dry run of a create (#4177); a violating page is refused whole with the violations
 and nothing of it is staged. When the draft is complete the model calls `jira.draft` once with only
-`{draftId, draftDigest}` (a call may instead carry up to 500 `items` itself). The call's arguments
+`{draftId, draftDigest}` (a call may instead carry one page of `items` itself). The call's arguments
 are those two members, so the action digest the approval is bound to commits to the digest of the
 whole item list: a draft extended after its digest was read resolves to nothing (`draft-changed`),
 an unknown or foreign draft to `draft-not-found`, and one that cannot run (an unknown relation, a
@@ -713,15 +719,41 @@ The draft's one approval is claimed once at the first item's dispatch and covers
 items; Full access admits the draft under its envelope exactly as it admits a single create. The
 journal's bound of 32 single writes per turn counts records that may have reached Jira and does not
 count the items of an approved draft: each child record carries the digest of the approved draft
-action as `batch_digest` (schema 58), and a batch is bounded by its own 500-item ceiling. A record
-settled as a local refusal before dispatch (`not-dispatched`, such as a reconciled existing item, or
-`rejected` before sending) uses neither bound up. Barriers are unchanged: an `unknown` or
+action as `batch_digest` (schema 58), and a batch has no count bound at all: the approved draft
+authorizes exactly its own items, whose number the draft's byte bound already limits. Admitting the
+next item reads only the turn's barrier rows (unknown or in-flight writes) and, for single writes,
+their count, so a draft of thousands of items does not re-read every record it has already
+written. A record settled as a local refusal before dispatch (`not-dispatched`, such as a
+reconciled existing item, or `rejected` before sending) uses the single-write bound up for no one.
+
+*Time-bounded runs.* A run is bounded by time, never by size: no new item is started after the run
+has been creating for 10 minutes or has taken 40 minutes in all (`JIRA_DRAFT_RUN_BUDGET`, inside the
+tool's 50-minute duration ceiling); reading ahead through items that already exist does not use
+the creating allowance up. Items not started are reported honestly as `pending` (a dependent of a
+pending item is pending too), the result lists the keys created in this run exactly, and fixed
+guidance (`JIRA_DRAFT_PENDING_GUIDANCE`) tells the model to say so in plain language and offer to
+call `jira.draft` again with the same `draftId` and `draftDigest`. That re-run reconciles every
+item by its deterministic identity — what exists is `existing`, nothing is created twice — and
+continues with the pending items, so any number of runs finishes a draft of any size with zero
+duplicates. The Activity Log records `phase=progress` (every 100 attempted items) and
+`phase=executed` on `atlassian.jira-draft` with the settled and pending counts and the duration,
+never an item, key or ref.
+
+*Compact results.* The tool result is bounded by the catalog (256 KiB, 1,000 rows,
+`JIRA_DRAFT_RESULT_ROWS_MAX`), which bounds the report, not the draft. A draft whose item rows fit
+150 KiB is reported item by item as before. A larger one is reported compactly (`compact: true`):
+one row for each item that needs attention (failed, uncertain, skipped, pending), the created and
+the reconciled issues as exact key ranges (`createdRanges`, `existingRanges`, such as
+`SYN-3..SYN-940`, one entry for every consecutive run), and the counts for everything else; rows
+that did not fit are counted in `omittedRowCount`, and `rangesTruncated` is set if the ranges
+themselves did not fit. The model-history receipts and the partial answer of an ended turn read
+the same ranges, so created keys are never lost to compaction. Barriers are unchanged: an `unknown` or
 `succeeded-unconfirmed` record or an in-flight write blocks every further write of the turn, batch
 or not, so an uncertain item still stops the draft (#2953).
 
 *Deselection.* The approving human may deselect items; the deselection is bound into the approval
 proof and extends to every item that depends on a deselected one. The stored approval view carries
-it as `excludedItemRefs` (up to the draft ceiling), and the transcript store admits exactly one
+it as `excludedItemRefs` (a subset of the draft, so no count of its own), and the transcript store admits exactly one
 change besides the state: the pending-to-approved transition of a `jira.draft` may add a non-empty,
 unique subset of the reviewed draft's own item refs. Every other difference still conflicts:
 another operation, a deselection added at any other transition or on a first save, and a
@@ -730,10 +762,10 @@ subset rule before any state changes, against the draft's item refs recorded pri
 pending entry (resolved from the staged draft the call names), so a decision naming unknown or
 repeated refs is refused (409, logged as an invalid write-approval) and the registry and transcript
 stay pending together. A transcript whose call names a staged draft carries no items, so its
-store-level check is the form of the deselection (unique, valid refs within the ceiling); the
+store-level check is the form of the deselection (unique, valid refs); the
 registry's subset rule is what binds it to the reviewed items. The action digest and subject
-identity checks are unchanged. Draft results report one row per item, so the tool's
-`maxResultCount` is the item ceiling. Before creating an item the connector searches by a
+identity checks are unchanged. The tool's `maxResultCount` is the catalog's row ceiling
+(`JIRA_DRAFT_RESULT_ROWS_MAX`), see compact results. Before creating an item the connector searches by a
 deterministic identity label
 (`keiko-draft-<20 hex>` from project, issue type, normalized summary and the item's relation
 scope — its parent field and target, and its links, each resolved to the existing issue's key or to
@@ -752,7 +784,8 @@ A page that fails any of this, or a candidate without those identities, is refus
 `malformed-payload` before any write, never read as "no match". A replayed
 item keeps its journal outcome: a created item and a reconciled (`existing`) item both recover their
 key through the same read-only lookup, so dependents resolve without resending any mutation. The
-draft call is an error only when an item did not settle (`failed`, `uncertain`, `skipped`); when
+draft call is an error only when an item did not settle (`failed`, `uncertain`, `skipped`,
+`pending`); when
 every item is created, already existing or deselected it succeeds, and a draft that wrote nothing
 reports the truthful `not-dispatched` outcome. An item whose parent or linked item has no key is
 skipped; an item whose outcome is uncertain stops the draft, because the journal admits no further
@@ -999,7 +1032,7 @@ keeps the completed answer instead of failing the turn.
   them only where the create screen offers the fields; on edit it reads the issue, replaces
   `keiko-rev-*` and rewrites the footer in place. What the instance dropped is returned in the tool
   result as `trace {labelsApplied, footerApplied, droppedLabels}` and counted on the log. The item
-  identity, the journal and the approval are unaffected; `jira.draft` keeps its resource ceiling (500 items).
+  identity, the journal and the approval are unaffected; `jira.draft` keeps its byte bound and no item-count limit.
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
   template that governs `description` or `labels` sees the final values, not the model's draft; the
   pre-approval dry run of a create or edit judges the values as the model wrote them.

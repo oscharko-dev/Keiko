@@ -1,6 +1,5 @@
 import {
   JIRA_DRAFT_ITEM_STATES,
-  JIRA_DRAFT_ITEMS_MAX,
   type JiraDraftItemState,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -11,7 +10,10 @@ import { jiraMutationToolId } from "./atlassian/jiraMutationToolId.js";
  * single issue key of an ordinary write, or the per-item keys and states of a backlog draft
  * (#4178). Recovery answers and compacted continuations repeat only these, never result text.
  */
-const ISSUE_KEY = /^[A-Z][A-Z0-9_]{0,254}-[1-9]\d{0,17}$/u;
+const KEY_PATTERN = "[A-Z][A-Z0-9_]{0,254}-[1-9]\\d{0,17}";
+const ISSUE_KEY = new RegExp(`^${KEY_PATTERN}$`, "u");
+/** A compact result names a run of created keys as `PROJ-3..PROJ-40` (#4178). */
+const ISSUE_KEY_RANGE = new RegExp(`^${KEY_PATTERN}\\.\\.${KEY_PATTERN}$`, "u");
 const DRAFT_STATES: ReadonlySet<unknown> = new Set(JIRA_DRAFT_ITEM_STATES);
 const DRAFT_TOOL_ID = jiraMutationToolId("jira.draft");
 
@@ -41,6 +43,17 @@ function draftReceipt(value: unknown): ChatToolDraftReceipt | undefined {
   };
 }
 
+/** The compact result's exact key ranges, each as one receipt that names its whole range. */
+function rangeReceipts(state: "created" | "existing", ranges: unknown): ChatToolDraftReceipt[] {
+  if (!Array.isArray(ranges)) return [];
+  return ranges
+    .filter(
+      (range): range is string =>
+        typeof range === "string" && (ISSUE_KEY.test(range) || ISSUE_KEY_RANGE.test(range)),
+    )
+    .map((issueKey) => ({ state, issueKey }));
+}
+
 /**
  * Undefined unless the exchange is the managed `jira.draft` write itself: its validated result names
  * that tool and the mutation journal classified it. Any other result, including a read or an MCP
@@ -53,13 +66,22 @@ export function chatToolDraftReceipts(
   // Read defensively: a transcript stored by an older build is data, not a validated envelope.
   const result = record(exchange.result);
   if (record(result?.toolRef)?.canonicalId !== DRAFT_TOOL_ID) return undefined;
-  const items = record(result?.data)?.items;
-  if (!Array.isArray(items)) return undefined;
-  const receipts = items
-    .slice(0, JIRA_DRAFT_ITEMS_MAX)
-    .map(draftReceipt)
-    .filter((receipt): receipt is ChatToolDraftReceipt => receipt !== undefined);
+  const receipts = draftRowReceipts(record(result?.data));
   return receipts.length === 0 ? undefined : receipts;
+}
+/** The receipts of a result's key ranges and of its rows; none for a result without rows. */
+function draftRowReceipts(
+  data: Readonly<Record<string, unknown>> | undefined,
+): ChatToolDraftReceipt[] {
+  const items = data?.items;
+  if (!Array.isArray(items)) return [];
+  return [
+    ...rangeReceipts("created", data?.createdRanges),
+    ...rangeReceipts("existing", data?.existingRanges),
+    ...items
+      .map(draftReceipt)
+      .filter((receipt): receipt is ChatToolDraftReceipt => receipt !== undefined),
+  ];
 }
 
 const REQUIREMENT_REFERENCE = /^[0-9a-f]{8}:[A-Za-z0-9._-]{1,80}$/u;

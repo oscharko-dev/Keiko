@@ -2,10 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  JIRA_DRAFT_ITEMS_MAX,
-  type JiraMutationOutcome,
-} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   expectActivityLogProof,
@@ -326,7 +323,7 @@ describe("durable mutation admission", () => {
       ).toBe("prepared");
     expect(f.journal.prepare(f.intent)).toEqual({ kind: "blocked", reason: "capacity" });
   });
-  it("refuses an item past the batch's resource bound and a replay under another batch", () => {
+  it("has no item-count limit for a batch, and refuses a replay under another batch", () => {
     const f = fixture();
     const batch = "e".repeat(64);
     const item = (index: number): ChatToolMutationIntent => ({
@@ -335,11 +332,8 @@ describe("durable mutation admission", () => {
       actionDigest: (index + 1).toString(16).padStart(64, "0"),
       batchDigest: batch,
     });
-    for (let index = 0; index < JIRA_DRAFT_ITEMS_MAX; index++) f.journal.prepare(item(index));
-    expect(f.journal.prepare(item(JIRA_DRAFT_ITEMS_MAX))).toEqual({
-      kind: "blocked",
-      reason: "capacity",
-    });
+    for (let index = 0; index < 1200; index++)
+      expect(f.journal.prepare(item(index)).kind).toBe("prepared");
     expect(() => f.journal.prepare({ ...item(0), batchDigest: "f".repeat(64) })).toThrow();
     expect(() => f.journal.prepare({ ...item(0), batchDigest: "not-a-digest" })).toThrow();
   });
