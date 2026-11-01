@@ -159,10 +159,11 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. A verified model nobody asked for in 15 minutes is neither renewed nor recovered in
-the background; `gateway.readiness.renewal.paused` records that pause (`paused`: `renewal`,
-`recovery`; optional `idleMs`), and the model's next conversation request verifies it on demand
-(#4103). See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. Each chat model is checked once per configuration generation at startup; nothing
+renews or recovers a model on a timer. A conversation request, a Workbench read or a page load
+checks a model that is not ready now, within the 30 s not-ready cooldown. The Workbench profile
+describes the model chosen in its picker (`modelId`), and its `verification` is that model's own
+observation, not the gateway-wide state (customer 1.3.4). See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and

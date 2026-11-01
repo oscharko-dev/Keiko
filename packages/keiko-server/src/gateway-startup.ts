@@ -60,8 +60,9 @@ class GatewayStartupChecks {
     deps: UiHandlerDeps,
     correlationId: string,
     parentCorrelationId: string | undefined,
+    recheck = false,
   ): void {
-    initializeConfiguredConversationReadiness(deps, parentCorrelationId ?? correlationId);
+    initializeConfiguredConversationReadiness(deps, parentCorrelationId ?? correlationId, recheck);
   }
 
   public start(parentCorrelationId?: string): void {
@@ -94,7 +95,8 @@ class GatewayStartupChecks {
     }
     const correlationId = newCorrelationId();
     const deps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
-    this.initializeConversationReadiness(deps, correlationId, parentCorrelationId);
+    // A page load is the person asking again: models that are not ready now are checked again.
+    this.initializeConversationReadiness(deps, correlationId, parentCorrelationId, true);
     const task = this.catalog(deps, correlationId)
       .finally(() => {
         this.refreshingGenerations.delete(generation);

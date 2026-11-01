@@ -336,7 +336,10 @@ it("reports background verification as pending while a fresh model has not prove
       expect(isLiteLlmCodingReadinessPending(deps)).toBe(true);
     });
     const result = await handleCodingSidecarGatewayProfile(
-      { correlationId: "corr-startup-pending" } as RouteContext,
+      {
+        correlationId: "corr-startup-pending",
+        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      } as RouteContext,
       deps,
     );
     expect(result.body).toMatchObject({
@@ -2136,7 +2139,10 @@ it("keeps a newly discovered embedding model out of the Chat and Coding pickers"
   ]);
   expect(probedModels).not.toContain("text-embedding-house");
   const profile = await handleCodingSidecarGatewayProfile(
-    { correlationId: "corr-embedding-separation" } as RouteContext,
+    {
+      correlationId: "corr-embedding-separation",
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+    } as RouteContext,
     deps,
   );
   expect(profile.body).toMatchObject({ status: "available", modelAlias: "chat-model" });

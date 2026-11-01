@@ -3984,10 +3984,11 @@ describe("coding-sidecar gateway", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  // F-01: `status: "available"` describes the stored configuration. A deps assembly with no probe
-  // record must therefore publish `verification: "unverified"` — the Workbench renders this field,
-  // and a missing one would let it keep reading a configured source as a healthy one.
-  it("publishes the last probe outcome alongside the config-derived profile", async () => {
+  // F-01: `status: "available"` describes the stored configuration, so the profile also publishes
+  // the model's live verification. Customer 1.3.4: the field used to be the gateway-wide word of the
+  // LAST probe of ANY model, so a busy neighbour's failed probe read as "failed" for a model that had
+  // just answered, and the Workbench kept saying it was still checking the model source.
+  it("publishes the selected model's own readiness, not another model's last probe", async () => {
     const context = {
       req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
       res: mockResponse().res,
@@ -3997,20 +3998,62 @@ describe("coding-sidecar gateway", () => {
     } satisfies RouteContext;
     const config = configValue(provider(), capability());
     const holder = freshServingHolder(config);
-    const unprobed = await handleCodingSidecarGatewayProfile(context, {
+    holder.recordVerification("failed");
+
+    const profile = await handleCodingSidecarGatewayProfile(context, {
       ...depsValue(config),
       gatewayConfig: holder,
     });
 
-    expect(unprobed.body).toMatchObject({ status: "available", verification: "unverified" });
-
-    holder.recordVerification("verified");
-    const verified = await handleCodingSidecarGatewayProfile(context, {
-      ...depsValue(config),
-      gatewayConfig: holder,
+    expect(profile.body).toMatchObject({
+      status: "available",
+      modelAlias: "azure-coding-model",
+      verification: "verified",
     });
+  });
 
-    expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
+  // The owner's model picker (customer 1.3.4): the profile describes the model the person chose,
+  // not the default the server would elect; an id the gateway does not configure is ignored.
+  it("describes the model chosen in the picker through the modelId query", async () => {
+    const second = "second-coding-model";
+    const config: GatewayConfig = {
+      ...configValue(provider(), capability()),
+      providers: [provider(), provider({ modelId: second })],
+      capabilities: [capability(), capability({ id: second })],
+    };
+    const holder = freshServingHolder(config);
+    const read = async (query: string): Promise<unknown> =>
+      (
+        await handleCodingSidecarGatewayProfile(
+          {
+            req: mockRequest({ method: "GET", url: `/api/coding-sidecar/gateway/profile${query}` }),
+            res: mockResponse().res,
+            params: {},
+            url: new URL(`http://127.0.0.1/api/coding-sidecar/gateway/profile${query}`),
+            correlationId: undefined,
+          } satisfies RouteContext,
+          { ...depsValue(config), gatewayConfig: holder },
+        )
+      ).body;
+
+    expect(await read(`?modelId=${second}`)).toMatchObject({
+      status: "available",
+      modelAlias: second,
+      verification: "verified",
+    });
+    const elected = await read("");
+    expect(await read("?modelId=not-configured")).toEqual(elected);
+
+    holder.recordVerifiedCapability(
+      second,
+      { conversationReady: false },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+    expect(await read(`?modelId=${second}`)).toMatchObject({
+      status: "unavailable",
+      reason: "conversation-not-ready",
+    });
   });
 
   // #3907 AC3: an expired success read as `model-verification-pending` while nothing checked the
@@ -10278,7 +10321,10 @@ describe("pending readiness original cause evidence", () => {
       const probe = initializeLiteLlmCodingReadiness(deps, "corr-stored-shortfall");
       try {
         const read = handleCodingSidecarGatewayProfile(
-          { correlationId: "corr-shortfall-read" } as RouteContext,
+          {
+            correlationId: "corr-shortfall-read",
+            url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+          } as RouteContext,
           deps,
         );
         await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);

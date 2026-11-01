@@ -511,6 +511,26 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
+  // Customer 1.3.4: the Workbench judged the server's default model while the person had chosen
+  // another one. The profile read carries the chosen model, and choosing reads it again.
+  it("reads the gateway profile for the model chosen in the picker", async () => {
+    installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+    const activeWorkspace = workspace();
+    const view = renderHook(() => useCodingWorkbenchRuntime({ workspace: activeWorkspace }));
+    await waitFor(() => expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalled());
+    expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls[0]?.[1]).toBeUndefined();
+
+    act(() => view.result.current.actions.setSelectedModel("model-chosen"));
+
+    await waitFor(() =>
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenLastCalledWith(
+        expect.any(String),
+        "model-chosen",
+      ),
+    );
+    view.unmount();
+  });
+
   it("keeps Start blocked when a registered workspace is ready but the browser is unpaired", async () => {
     manifestAccessMock.mockResolvedValue({ session: "unpaired", manifests: [] });
     installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));

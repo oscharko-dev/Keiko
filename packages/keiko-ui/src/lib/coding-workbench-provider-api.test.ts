@@ -65,6 +65,20 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     );
   });
 
+  it("asks for the model chosen in the picker, encoded as one query value", async () => {
+    const unavailable = { status: "unavailable", reason: "conversation-not-ready" };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(unavailable));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchCodingWorkbenchSidecarGatewayProfile(undefined, "team/gpt coding&x=1"),
+    ).resolves.toEqual(unavailable);
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      "/api/coding-sidecar/gateway/profile?modelId=team%2Fgpt%20coding%26x%3D1",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
   it("rejects malformed sidecar gateway profile responses", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({

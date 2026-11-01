@@ -177,7 +177,10 @@ function stubGateway(toolAnswer: ToolAnswer, gate?: Promise<void>): StubbedGatew
 }
 
 function profileContext(correlationId = PROFILE_CORRELATION): RouteContext {
-  return { correlationId } as RouteContext;
+  return {
+    correlationId,
+    url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+  } as RouteContext;
 }
 
 function storedChat(deps: UiHandlerDeps): ModelCapability {
